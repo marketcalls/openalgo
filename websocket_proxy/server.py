@@ -6,7 +6,6 @@ import socket
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, Optional, Set, Tuple
 
 import websockets
 import zmq
@@ -22,6 +21,8 @@ from .base_adapter import BaseBrokerWebSocketAdapter
 from .broker_factory import create_broker_adapter
 from .mode_utils import (
     MODE_BY_UPPER_LABEL as _MODE_BY_UPPER_LABEL,
+)
+from .mode_utils import (
     normalize_mode,
     normalize_mode_or_none,
 )
@@ -144,7 +145,7 @@ class WebSocketProxy:
             loop = aio.get_running_loop()
 
             # Create the ZMQ listener task
-            zmq_task = loop.create_task(self.zmq_listener())
+            _zmq_task = loop.create_task(self.zmq_listener())
 
             # Start WebSocket server
             stop = aio.Future()  # Used to stop the server
@@ -526,10 +527,19 @@ class WebSocketProxy:
                 continue
             self._last_stale_warn[user_id] = current_time
             broker = self.user_broker_mapping.get(user_id, "unknown")
-            logger.warning(
+            # Debug, not warning. A subscribed feed is legitimately silent every
+            # night, every weekend and every trading holiday, and this check
+            # cannot tell that apart from a dead socket without an
+            # exchange-aware calendar. Logging it at warning meant hours of
+            # identical lines whenever the market was simply shut, which buries
+            # the entries that do need attention. The signal is still available
+            # when it is wanted: get_adapter_health() reports seconds since the
+            # last tick per user, and raising the log level surfaces this again.
+            logger.debug(
                 f"Stale feed: {broker} adapter for user {user_id} reports connected "
-                f"but no ticks for {silent_for:.0f}s while subscribed. If this persists, "
-                f"the broker WebSocket may be silently dead (reconnect/restart may be needed)."
+                f"but no ticks for {silent_for:.0f}s while subscribed. Expected "
+                f"outside market hours; if it persists during a session the "
+                f"broker WebSocket may be silently dead."
             )
 
     def get_adapter_health(self) -> dict:
@@ -621,93 +631,131 @@ class WebSocketProxy:
         Args:
             client_id: Client ID to clean up
         """
-        # Remove client from tracking
-        if client_id in self.clients:
-            del self.clients[client_id]
+        self.clients.pop(client_id, None)
+        user_id = self.user_mapping.get(client_id)
+        adapter = self.broker_adapters.get(user_id) if user_id else None
+        release_failed = False
 
-        # Clean up subscriptions
-        if client_id in self.subscriptions:
-            subscriptions = self.subscriptions[client_id]
-            # Unsubscribe from all subscriptions
-            for sub_json in subscriptions:
-                try:
-                    # Parse the JSON string to get the subscription info
-                    sub_info = json.loads(sub_json)
-                    symbol = sub_info.get("symbol")
-                    exchange = sub_info.get("exchange")
-                    mode = sub_info.get("mode")
-
-                    # OPTIMIZATION: Remove from subscription index
-                    sub_key = (symbol, exchange, mode)
-                    should_unsubscribe_from_adapter = False
-                    if sub_key in self.subscription_index:
-                        self.subscription_index[sub_key].discard(client_id)
-                        # Clean up empty entries and mark for adapter unsubscription
-                        if not self.subscription_index[sub_key]:
-                            del self.subscription_index[sub_key]
-                            # Only unsubscribe from adapter when last client unsubscribes
-                            should_unsubscribe_from_adapter = True
-
-                    # Get the user's broker adapter
-                    # Only unsubscribe from adapter if this was the last client for this symbol
-                    user_id = self.user_mapping.get(client_id)
-                    if (
-                        should_unsubscribe_from_adapter
-                        and user_id
-                        and user_id in self.broker_adapters
-                    ):
-                        adapter = self.broker_adapters[user_id]
-                        adapter.unsubscribe(symbol, exchange, mode)
-                        logger.debug(
-                            f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
-                        )
-                except json.JSONDecodeError as e:
-                    logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
-                except Exception as e:
-                    logger.exception(f"Error processing subscription: {e}")
+        parsed_subscriptions, rows_by_key = self._indexed_client_subscriptions(client_id)
+        processed_keys = set()
+        processed_count = 0
+        for _sub_info, sub_key, _mode_label, mode_error in parsed_subscriptions:
+            try:
+                if mode_error is not None or sub_key is None or sub_key in processed_keys:
                     continue
-
-            del self.subscriptions[client_id]
-
-        # Remove from user mapping
-        if client_id in self.user_mapping:
-            user_id = self.user_mapping[client_id]
-
-            # Clean up order-update subscription
-            if user_id in self.order_subscribers:
-                self.order_subscribers[user_id].discard(client_id)
-                if not self.order_subscribers[user_id]:
-                    del self.order_subscribers[user_id]
-
-            # Check if this was the last client for this user
-            is_last_client = True
-            for other_client_id, other_user_id in self.user_mapping.items():
-                if other_client_id != client_id and other_user_id == user_id:
-                    is_last_client = False
-                    break
-
-            # If this was the last client for this user, handle the adapter state
-            if is_last_client and user_id in self.broker_adapters:
-                adapter = self.broker_adapters[user_id]
-                broker_name = self.user_broker_mapping.get(user_id)
-
-                # For Flattrade and Shoonya, keep the connection alive and just unsubscribe from data
-                if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
-                    logger.info(
-                        f"{broker_name.title()} adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting."
+                processed_keys.add(sub_key)
+                symbol, exchange, mode = sub_key
+                stored_rows = rows_by_key[sub_key]
+                if adapter is None:
+                    self._drop_subscription_ownership(
+                        client_id, sub_key, stored_rows
                     )
-                    adapter.unsubscribe_all()
                 else:
-                    # For all other brokers, disconnect the adapter completely
-                    logger.info(
-                        f"Last client for user {user_id} disconnected. Disconnecting {broker_name or 'unknown broker'} adapter."
+                    ok, error = self._unsubscribe_owned_subscription(
+                        client_id,
+                        adapter,
+                        symbol,
+                        exchange,
+                        mode,
+                        stored_rows=stored_rows,
                     )
-                    adapter.disconnect()
-                    del self.broker_adapters[user_id]
-                    if user_id in self.user_broker_mapping:
-                        del self.user_broker_mapping[user_id]
+                    if not ok:
+                        release_failed = True
+                        logger.error(
+                            "Disconnect could not release %s:%s mode %s exactly: %s",
+                            symbol,
+                            exchange,
+                            mode,
+                            error,
+                        )
+            except Exception as e:
+                logger.exception(f"Error processing subscription: {e}")
+                release_failed = True
+            finally:
+                processed_count += 1
+                if processed_count % 128 == 0:
+                    # Keep the single event loop responsive during a maximum
+                    # 3,000-symbol teardown. No thread or executor is created.
+                    await aio.sleep(0)
 
-            del self.user_mapping[client_id]
+        if user_id in self.order_subscribers:
+            self.order_subscribers[user_id].discard(client_id)
+            if not self.order_subscribers[user_id]:
+                del self.order_subscribers[user_id]
+
+        has_other_live_client = bool(
+            user_id
+            and any(
+                other_client_id in self.clients
+                and other_user_id == user_id
+                for other_client_id, other_user_id in self.user_mapping.items()
+                if other_client_id != client_id
+            )
+        )
+
+        if user_id and adapter is not None and not has_other_live_client:
+            broker_name = self.user_broker_mapping.get(user_id)
+            keep_special_adapter = False
+            if broker_name in ["flattrade", "shoonya"] and hasattr(
+                adapter, "unsubscribe_all"
+            ):
+                logger.info(
+                    "%s adapter for user %s: last client disconnected. "
+                    "Unsubscribing all symbols instead of disconnecting.",
+                    broker_name.title(),
+                    user_id,
+                )
+                try:
+                    response = adapter.unsubscribe_all()
+                    keep_special_adapter = bool(
+                        isinstance(response, dict)
+                        and response.get("status") == "success"
+                    )
+                    if not keep_special_adapter:
+                        logger.error(
+                            "%s unsubscribe_all was not acknowledged for user %s: %r",
+                            broker_name.title(),
+                            user_id,
+                            response,
+                        )
+                except Exception:
+                    logger.exception(
+                        "%s unsubscribe_all raised for user %s",
+                        broker_name.title(),
+                        user_id,
+                    )
+
+            if not keep_special_adapter:
+                logger.info(
+                    "Last client for user %s disconnected. Disconnecting %s adapter.",
+                    user_id,
+                    broker_name or "unknown broker",
+                )
+                try:
+                    adapter.disconnect()
+                except Exception:
+                    logger.exception(
+                        "Error disconnecting %s adapter for user %s",
+                        broker_name or "unknown broker",
+                        user_id,
+                    )
+                finally:
+                    self.broker_adapters.pop(user_id, None)
+                    self.user_broker_mapping.pop(user_id, None)
+
+        elif release_failed:
+            # Another live client still owns this user's shared adapter.  The
+            # broker-side row remains bounded by that adapter's symbol limit
+            # and is reclaimed by the authoritative last-client teardown.  A
+            # disconnected client must never remain as a registry owner.
+            logger.error(
+                "Dropping failed exact-release ownership for disconnected client %s; "
+                "the shared adapter will reclaim it at last-client teardown",
+                client_id,
+            )
+
+        self._purge_client_subscription_ownership(client_id)
+        self.user_mapping.pop(client_id, None)
 
     async def process_client_message(self, client_id, message):
         """
@@ -935,7 +983,7 @@ class WebSocketProxy:
                 # - ConnectionPool format: {"success": False, "error": "..."}
                 is_error = (
                     (connect_result and connect_result.get("status") == "error") or
-                    (connect_result and connect_result.get("success") == False)
+                    (connect_result and connect_result.get("success") is False)
                 )
                 if is_error:
                     error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect to broker"))
@@ -969,7 +1017,7 @@ class WebSocketProxy:
                         # Handle both response formats
                         init_is_error = (
                             (init_retry_result and init_retry_result.get("status") == "error") or
-                            (init_retry_result and init_retry_result.get("success") == False)
+                            (init_retry_result and init_retry_result.get("success") is False)
                         )
                         if init_is_error:
                             error_msg = init_retry_result.get("message", init_retry_result.get("error", "Failed to re-initialize"))
@@ -983,7 +1031,7 @@ class WebSocketProxy:
                         # Handle both response formats
                         connect_is_error = (
                             (connect_result and connect_result.get("status") == "error") or
-                            (connect_result and connect_result.get("success") == False)
+                            (connect_result and connect_result.get("success") is False)
                         )
                         if connect_is_error:
                             error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect after retry"))
@@ -1025,14 +1073,14 @@ class WebSocketProxy:
                             # Handle both response formats
                             init_is_error = (
                                 (initialization_result and initialization_result.get("status") == "error") or
-                                (initialization_result and initialization_result.get("success") == False)
+                                (initialization_result and initialization_result.get("success") is False)
                             )
                             if not init_is_error:
                                 connect_result = adapter.connect()
                                 # Handle both response formats
                                 connect_is_error = (
                                     (connect_result and connect_result.get("status") == "error") or
-                                    (connect_result and connect_result.get("success") == False)
+                                    (connect_result and connect_result.get("success") is False)
                                 )
                                 if not connect_is_error:
                                     self.broker_adapters[user_id] = adapter
@@ -1168,13 +1216,21 @@ class WebSocketProxy:
         """
         # Check if the client is authenticated
         if client_id not in self.user_mapping:
-            await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
+            await self.send_error(
+                client_id, "NOT_AUTHENTICATED", "You must authenticate first", request_id=data.get("request_id")
+            )
             return
 
         # Get subscription parameters
         symbols = data.get("symbols") or []  # Handle array of symbols
         raw_mode = data.get("mode", "Quote")  # Accepts 1/2/3 or LTP/Quote/Depth (any case)
-        depth_level = data.get("depth", 5)  # Default to 5 levels
+        # The chart library sent the level as "depth_level" through 2.0.0 and
+        # the proxy never read it, so accept either key before defaulting to 5.
+        depth_level = data.get("depth")
+        if depth_level is None:
+            depth_level = data.get("depth_level")
+        if depth_level is None:
+            depth_level = 5
         # Optional request_id (issue #1376): when the client supplies one, we
         # echo it back in the response so the client can correlate this ack
         # with the originating request and learn per-symbol success/failure
@@ -1188,7 +1244,9 @@ class WebSocketProxy:
         try:
             mode, mode_label = normalize_mode(raw_mode)
         except (ValueError, TypeError) as e:
-            await self.send_error(client_id, "INVALID_MODE", str(e))
+            await self.send_error(
+                client_id, "INVALID_MODE", str(e), request_id=data.get("request_id")
+            )
             return
         mode_str = mode_label  # Canonical label echoed back in subscribe response
 
@@ -1198,14 +1256,16 @@ class WebSocketProxy:
 
         if not symbols:
             await self.send_error(
-                client_id, "INVALID_PARAMETERS", "At least one symbol must be specified"
+                client_id, "INVALID_PARAMETERS", "At least one symbol must be specified", request_id=data.get("request_id")
             )
             return
 
         # Get the user's broker adapter
         user_id = self.user_mapping[client_id]
         if user_id not in self.broker_adapters:
-            await self.send_error(client_id, "BROKER_ERROR", "Broker adapter not found")
+            await self.send_error(
+                client_id, "BROKER_ERROR", "Broker adapter not found", request_id=data.get("request_id")
+            )
             return
 
         adapter = self.broker_adapters[user_id]
@@ -1280,6 +1340,126 @@ class WebSocketProxy:
             response["request_id"] = request_id
         await self.send_message(client_id, response)
 
+    def _matching_client_subscriptions(self, client_id, sub_key):
+        """Stored JSON rows owned by one client for an exact subscription key."""
+        matches = []
+        for sub_json in self.subscriptions.get(client_id, ()):
+            try:
+                sub_data = json.loads(sub_json)
+            except json.JSONDecodeError:
+                continue
+            if (
+                sub_data.get("symbol"),
+                sub_data.get("exchange"),
+                sub_data.get("mode"),
+            ) == sub_key:
+                matches.append(sub_json)
+        return matches
+
+    def _indexed_client_subscriptions(self, client_id):
+        """Parse one client's stored rows once and index them by exact key."""
+        parsed = []
+        rows_by_key = defaultdict(list)
+        for sub_json in self.subscriptions.get(client_id, ()):
+            try:
+                sub_data = json.loads(sub_json)
+            except json.JSONDecodeError as exc:
+                logger.error("Failed to parse subscription %r: %s", sub_json, exc)
+                continue
+
+            try:
+                mode, mode_label = normalize_mode(sub_data.get("mode"))
+                mode_error = None
+            except (ValueError, TypeError) as exc:
+                mode = None
+                mode_label = None
+                mode_error = str(exc)
+
+            symbol = sub_data.get("symbol")
+            exchange = sub_data.get("exchange")
+            sub_key = (symbol, exchange, mode) if symbol and exchange and mode is not None else None
+            parsed.append((sub_data, sub_key, mode_label, mode_error))
+            if sub_key is not None:
+                rows_by_key[sub_key].append(sub_json)
+        return parsed, rows_by_key
+
+    def _drop_subscription_ownership(self, client_id, sub_key, stored_rows):
+        """Commit an acknowledged local ownership release."""
+        owners = self.subscription_index.get(sub_key)
+        if owners is not None:
+            owners.discard(client_id)
+            if not owners:
+                del self.subscription_index[sub_key]
+        client_subscriptions = self.subscriptions.get(client_id)
+        if client_subscriptions is not None:
+            for sub_json in stored_rows:
+                client_subscriptions.discard(sub_json)
+
+    def _purge_client_subscription_ownership(self, client_id):
+        """Remove every local registry reference to a disconnected client."""
+        for sub_key, owners in list(self.subscription_index.items()):
+            owners.discard(client_id)
+            if not owners:
+                del self.subscription_index[sub_key]
+        self.subscriptions.pop(client_id, None)
+
+    def _unsubscribe_owned_subscription(
+        self,
+        client_id,
+        adapter,
+        symbol,
+        exchange,
+        mode,
+        *,
+        stored_rows=None,
+    ):
+        """Release one exact owner, committing only after the broker ack.
+
+        When another client still owns the same broker subscription there is
+        no broker call to acknowledge: removing this caller is a local commit.
+        For the final owner, both registries remain intact until the adapter
+        explicitly answers success.  That retained ownership is what makes a
+        retry or disconnect able to release a feed the broker still holds.
+        """
+        sub_key = (symbol, exchange, mode)
+        if stored_rows is None:
+            stored_rows = self._matching_client_subscriptions(client_id, sub_key)
+        owners = self.subscription_index.get(sub_key, set())
+        owns_subscription = bool(stored_rows) or client_id in owners
+        if not owns_subscription:
+            return True, None
+
+        if owners - {client_id}:
+            self._drop_subscription_ownership(client_id, sub_key, stored_rows)
+            return True, None
+
+        try:
+            response = adapter.unsubscribe(symbol, exchange, mode)
+        except Exception as exc:
+            logger.exception(
+                "Broker unsubscribe raised for %s:%s mode %s",
+                symbol,
+                exchange,
+                mode,
+            )
+            return False, str(exc) or "Unsubscription failed"
+
+        if not isinstance(response, dict) or response.get("status") != "success":
+            message = (
+                response.get("message")
+                if isinstance(response, dict)
+                else "Invalid response from broker"
+            )
+            return False, message or "Unsubscription failed"
+
+        self._drop_subscription_ownership(client_id, sub_key, stored_rows)
+        logger.debug(
+            "Last client unsubscribed from %s:%s, unsubscribing from adapter",
+            symbol,
+            exchange,
+        )
+        return True, None
+
     async def unsubscribe_client(self, client_id, data):
         """
         Unsubscribe a client from market data
@@ -1290,7 +1470,9 @@ class WebSocketProxy:
         """
         # Check if the client is authenticated
         if client_id not in self.user_mapping:
-            await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
+            await self.send_error(
+                client_id, "NOT_AUTHENTICATED", "You must authenticate first", request_id=data.get("request_id")
+            )
             return
 
         # Check if this is an unsubscribe_all request
@@ -1309,7 +1491,9 @@ class WebSocketProxy:
             try:
                 _mode_int, _ = normalize_mode(data.get("mode", 2))
             except (ValueError, TypeError) as e:
-                await self.send_error(client_id, "INVALID_MODE", str(e))
+                await self.send_error(
+                client_id, "INVALID_MODE", str(e), request_id=data.get("request_id")
+            )
                 return
             symbols = [
                 {
@@ -1322,14 +1506,16 @@ class WebSocketProxy:
         # If no symbols provided and not unsubscribe_all, return error
         if not symbols and not is_unsubscribe_all:
             await self.send_error(
-                client_id, "INVALID_PARAMETERS", "Either symbols or unsubscribe_all is required"
+                client_id, "INVALID_PARAMETERS", "Either symbols or unsubscribe_all is required", request_id=data.get("request_id")
             )
             return
 
         # Get the user's broker adapter
         user_id = self.user_mapping[client_id]
         if user_id not in self.broker_adapters:
-            await self.send_error(client_id, "BROKER_ERROR", "Broker adapter not found")
+            await self.send_error(
+                client_id, "BROKER_ERROR", "Broker adapter not found", request_id=data.get("request_id")
+            )
             return
 
         adapter = self.broker_adapters[user_id]
@@ -1341,78 +1527,88 @@ class WebSocketProxy:
 
         # Handle unsubscribe_all case
         if is_unsubscribe_all:
-            # Get all current subscriptions
             if client_id in self.subscriptions:
-                # Convert all stored subscription strings back to dictionaries
-                all_subscriptions = []
-                for sub_json in self.subscriptions[client_id]:
-                    try:
-                        sub_dict = json.loads(sub_json)
-                        all_subscriptions.append(sub_dict)
-                    except json.JSONDecodeError:
-                        logger.error(f"Failed to parse subscription: {sub_json}")
-
-                # Unsubscribe from each subscription
-                for sub in all_subscriptions:
+                parsed_subscriptions, rows_by_key = self._indexed_client_subscriptions(client_id)
+                processed_keys = set()
+                for index, (sub, sub_key, mode_label, mode_error) in enumerate(
+                    parsed_subscriptions,
+                    start=1,
+                ):
                     symbol = sub.get("symbol")
                     exchange = sub.get("exchange")
-                    mode = sub.get("mode")
+                    if index % 128 == 0:
+                        await aio.sleep(0)
+                    if mode_error is not None:
+                        failed_unsubscriptions.append(
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "mode": None,
+                                "status": "error",
+                                "message": mode_error,
+                                "broker": broker_name,
+                            }
+                        )
+                        continue
 
-                    if symbol and exchange:
-                        # Remove from subscription index and check if we should unsubscribe from adapter
-                        sub_key = (symbol, exchange, mode)
-                        should_unsubscribe_from_adapter = False
-                        if sub_key in self.subscription_index:
-                            self.subscription_index[sub_key].discard(client_id)
-                            # Only unsubscribe from adapter when last client unsubscribes
-                            if not self.subscription_index[sub_key]:
-                                del self.subscription_index[sub_key]
-                                should_unsubscribe_from_adapter = True
-
-                        # Only call adapter.unsubscribe if this was the last client for this symbol
-                        if should_unsubscribe_from_adapter:
-                            response = adapter.unsubscribe(symbol, exchange, mode)
-                            logger.debug(
-                                f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
+                    if sub_key is not None and sub_key not in processed_keys:
+                        processed_keys.add(sub_key)
+                        mode = sub_key[2]
+                        ok, error = self._unsubscribe_owned_subscription(
+                            client_id,
+                            adapter,
+                            symbol,
+                            exchange,
+                            mode,
+                            stored_rows=rows_by_key[sub_key],
+                        )
+                        if not ok:
+                            failed_unsubscriptions.append(
+                                {
+                                    "symbol": symbol,
+                                    "exchange": exchange,
+                                    "mode": mode_label,
+                                    "status": "error",
+                                    "message": error,
+                                    "broker": broker_name,
+                                }
                             )
-
-                            if response.get("status") != "success":
-                                failed_unsubscriptions.append(
-                                    {
-                                        "symbol": symbol,
-                                        "exchange": exchange,
-                                        "status": "error",
-                                        "message": response.get("message", "Unsubscription failed"),
-                                        "broker": broker_name,
-                                    }
-                                )
-                                continue
+                            continue
 
                         successful_unsubscriptions.append(
                             {
                                 "symbol": symbol,
                                 "exchange": exchange,
+                                "mode": mode_label,
                                 "status": "success",
                                 "broker": broker_name,
                             }
                         )
-
-                # Clear all subscriptions for this client
-                self.subscriptions[client_id].clear()
         else:
             # Process specific symbols
             for symbol_info in symbols:
                 symbol = symbol_info.get("symbol")
                 exchange = symbol_info.get("exchange")
                 # Normalize mode (accepts 1/2/3 or LTP/Quote/Depth case-insensitive).
-                # Default to Quote mode (2) if absent.
+                # A per-symbol mode is the most specific value.  Array-form
+                # requests historically ignored their documented top-level
+                # mode and silently defaulted every item to Quote, which could
+                # answer success while leaving an LTP/Depth subscription live.
+                # Fall back to the request mode, then Quote only when neither
+                # spelling supplied one.
                 try:
-                    mode, _ = normalize_mode(symbol_info.get("mode", 2))
+                    raw_mode = (
+                        symbol_info["mode"]
+                        if "mode" in symbol_info
+                        else data.get("mode", 2)
+                    )
+                    mode, mode_label = normalize_mode(raw_mode)
                 except (ValueError, TypeError) as e:
                     failed_unsubscriptions.append(
                         {
                             "symbol": symbol,
                             "exchange": exchange,
+                            "mode": None,
                             "status": "error",
                             "message": str(e),
                             "broker": broker_name,
@@ -1423,58 +1619,27 @@ class WebSocketProxy:
                 if not symbol or not exchange:
                     continue  # Skip invalid symbols
 
-                # Remove from subscription index and check if we should unsubscribe from adapter
-                sub_key = (symbol, exchange, mode)
-                should_unsubscribe_from_adapter = False
-                if sub_key in self.subscription_index:
-                    self.subscription_index[sub_key].discard(client_id)
-                    # Only unsubscribe from adapter when last client unsubscribes
-                    if not self.subscription_index[sub_key]:
-                        del self.subscription_index[sub_key]
-                        should_unsubscribe_from_adapter = True
-
-                # Remove from client's subscription list
-                if client_id in self.subscriptions:
-                    # Remove any matching subscription (with or without broker info)
-                    subscriptions_to_remove = []
-                    for sub_json in self.subscriptions[client_id]:
-                        try:
-                            sub_data = json.loads(sub_json)
-                            if (
-                                sub_data.get("symbol") == symbol
-                                and sub_data.get("exchange") == exchange
-                                and sub_data.get("mode") == mode
-                            ):
-                                subscriptions_to_remove.append(sub_json)
-                        except json.JSONDecodeError:
-                            continue
-
-                    for sub_json in subscriptions_to_remove:
-                        self.subscriptions[client_id].discard(sub_json)
-
-                # Only call adapter.unsubscribe if this was the last client for this symbol
-                if should_unsubscribe_from_adapter:
-                    response = adapter.unsubscribe(symbol, exchange, mode)
-                    logger.debug(
-                        f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
+                ok, error = self._unsubscribe_owned_subscription(
+                    client_id, adapter, symbol, exchange, mode
+                )
+                if not ok:
+                    failed_unsubscriptions.append(
+                        {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "mode": mode_label,
+                            "status": "error",
+                            "message": error,
+                            "broker": broker_name,
+                        }
                     )
-
-                    if response.get("status") != "success":
-                        failed_unsubscriptions.append(
-                            {
-                                "symbol": symbol,
-                                "exchange": exchange,
-                                "status": "error",
-                                "message": response.get("message", "Unsubscription failed"),
-                                "broker": broker_name,
-                            }
-                        )
-                        continue
+                    continue
 
                 successful_unsubscriptions.append(
                     {
                         "symbol": symbol,
                         "exchange": exchange,
+                        "mode": mode_label,
                         "status": "success",
                         "broker": broker_name,
                     }
@@ -1513,7 +1678,9 @@ class WebSocketProxy:
             data: Subscription data (optional request_id)
         """
         if client_id not in self.user_mapping:
-            await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
+            await self.send_error(
+                client_id, "NOT_AUTHENTICATED", "You must authenticate first", request_id=data.get("request_id")
+            )
             return
 
         user_id = self.user_mapping[client_id]
@@ -1539,7 +1706,9 @@ class WebSocketProxy:
             data: Unsubscription data (optional request_id)
         """
         if client_id not in self.user_mapping:
-            await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
+            await self.send_error(
+                client_id, "NOT_AUTHENTICATED", "You must authenticate first", request_id=data.get("request_id")
+            )
             return
 
         user_id = self.user_mapping[client_id]
@@ -1574,7 +1743,7 @@ class WebSocketProxy:
             except websockets.exceptions.ConnectionClosed:
                 logger.info(f"Connection closed while sending message to client {client_id}")
 
-    async def send_error(self, client_id, code, message):
+    async def send_error(self, client_id, code, message, request_id=None):
         """
         Send an error message to a client
 
@@ -1582,8 +1751,17 @@ class WebSocketProxy:
             client_id: ID of the client
             code: Error code
             message: Error message
+            request_id: The request this error answers, when it answers one.
+                Success responses have echoed it since issue #1376 so a caller
+                can correlate an ack; errors did not, so a client awaiting an
+                ack had nothing to match it against and waited out its own
+                timeout for a reply that had already arrived. Always pass it
+                from a handler that was given one.
         """
-        await self.send_message(client_id, {"status": "error", "code": code, "message": message})
+        payload = {"status": "error", "code": code, "message": message}
+        if request_id is not None:
+            payload["request_id"] = request_id
+        await self.send_message(client_id, payload)
 
     def _handle_cache_invalidation(self, topic_str: str, data_str: str):
         """

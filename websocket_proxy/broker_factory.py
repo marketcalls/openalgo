@@ -1,5 +1,4 @@
 import importlib
-from typing import Dict, Optional, Type
 
 from utils.logging import get_logger
 
@@ -73,7 +72,7 @@ def _get_adapter_class(broker_name: str) -> type[BaseBrokerWebSocketAdapter]:
 
     except (ImportError, AttributeError) as e:
         logger.exception(f"Failed to load adapter for broker {broker_name}: {e}")
-        raise ValueError(f"Unsupported broker: {broker_name}. No adapter available.")
+        raise ValueError(f"Unsupported broker: {broker_name}. No adapter available.") from e
 
 
 def create_broker_adapter(
@@ -197,7 +196,8 @@ class _PooledAdapterWrapper:
     def unsubscribe_all(self):
         """Unsubscribe from all symbols"""
         if self._pool:
-            self._pool.unsubscribe_all()
+            return self._pool.unsubscribe_all()
+        return {"status": "error", "message": "Not initialized"}
 
     def get_stats(self) -> dict:
         """Get pool statistics"""

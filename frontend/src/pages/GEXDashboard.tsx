@@ -193,8 +193,8 @@ export default function GEXDashboard() {
           ? 'rgba(180,160,255,0.1)'
           : 'rgba(255,255,255,0.1)'
         : 'rgba(0,0,0,0.08)',
-      ceBar: '#ef4444',
-      peBar: '#22c55e',
+      ceBar: '#22c55e',
+      peBar: '#ef4444',
       positiveGex: '#3b82f6',
       negativeGex: '#f97316',
       atmLine: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',

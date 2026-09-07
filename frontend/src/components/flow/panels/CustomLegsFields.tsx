@@ -26,20 +26,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { PRICE_TYPES, PRODUCT_TYPES, STRIKE_OFFSETS } from '@/lib/flow/constants'
+import { PRICE_TYPES, PRODUCT_TYPES, strikeOffsetOptions } from '@/lib/flow/constants'
 import {
   type CustomLeg,
   describeLeg,
   EMPTY_CUSTOM_LEG,
+  hasVariableReference,
   type LegProblems,
   MAX_CUSTOM_LEGS,
   NEEDS_PRICE,
   NEEDS_TRIGGER,
-  hasVariableReference,
   parseCustomLegs,
+  type StrikeMode,
   seedLegsFromStrategy,
   serializeCustomLegs,
-  type StrikeMode,
   validateCustomLeg,
   validateCustomLegs,
 } from '@/lib/flow/customLegs'
@@ -254,8 +254,7 @@ function LegRow({
   // side share one request through the query key.
   const listing = useQuery({
     queryKey: flowQueryKeys.optionStrikes(underlying, expiryKey ?? '', leg.optionType),
-    queryFn: () =>
-      getOptionStrikes({ underlying, ...expiryParams, optionType: leg.optionType }),
+    queryFn: () => getOptionStrikes({ underlying, ...expiryParams, optionType: leg.optionType }),
     enabled: open && Boolean(underlying),
     // The master contract changes on a contract revision, not within a session.
     staleTime: 1000 * 60 * 30,
@@ -266,6 +265,16 @@ function LegRow({
   const listedExpiries = listing.data?.expiries ?? []
   const selectedStrike = listedStrikes.find((row) => String(row.strike) === leg.strike)
 
+  // The chain comes back as a window around ATM (OPTION_STRIKE_WINDOW), so a
+  // leg deliberately pinned far out of the money has no row to select and the
+  // control comes up empty - after which the next strike picked silently
+  // replaces one the author chose. Keep it selectable, for the same reason the
+  // expiry below keeps a date the contract no longer lists.
+  const strikeOptions =
+    leg.strike && !selectedStrike
+      ? [{ strike: Number(leg.strike), symbol: null, label: '' }, ...listedStrikes]
+      : listedStrikes
+
   // A typed value stays typed. The picker is an aid, not a cage: a strike or
   // expiry carrying a {{variable}} is resolved at run time and has no listing to
   // choose from, and the editor has to stay usable when the lookup fails - no
@@ -273,8 +282,7 @@ function LegRow({
   // carry - or a workflow could not be edited at all.
   const [typeStrike, setTypeStrike] = useState(false)
   const [typeExpiry, setTypeExpiry] = useState(false)
-  const pickStrike =
-    !typeStrike && listedStrikes.length > 0 && !hasVariableReference(leg.strike)
+  const pickStrike = !typeStrike && listedStrikes.length > 0 && !hasVariableReference(leg.strike)
 
   // Expiry is a plain list of the dates the exchange lists, the way the
   // Strategy Builder's leg row reads. No mode step and no "same as node" entry:
@@ -377,9 +385,7 @@ function LegRow({
       </div>
 
       {!open && hasProblem && (
-        <p className="mt-1 pl-5 text-[10px] text-destructive">
-          {Object.values(problems)[0]}
-        </p>
+        <p className="mt-1 pl-5 text-[10px] text-destructive">{Object.values(problems)[0]}</p>
       )}
 
       {open && (
@@ -460,7 +466,7 @@ function LegRow({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {STRIKE_OFFSETS.map((offset) => (
+                  {strikeOffsetOptions(leg.offset).map((offset) => (
                     <SelectItem key={offset.value} value={offset.value}>
                       {offset.label}
                     </SelectItem>
@@ -473,7 +479,7 @@ function LegRow({
                   <SelectValue placeholder="Pick a listed strike" />
                 </SelectTrigger>
                 <SelectContent>
-                  {listedStrikes.map((row) => (
+                  {strikeOptions.map((row) => (
                     <SelectItem key={row.strike} value={String(row.strike)}>
                       <span className="flex w-full items-center justify-between gap-3">
                         <span className="font-mono">{row.strike}</span>
@@ -724,8 +730,8 @@ function ContractHint({
     // and this is the ordinary case when no broker session is live.
     return (
       <p className="text-[10px] text-muted-foreground">
-        Listed contracts unavailable, so strike and expiry are typed here. They are checked
-        when the workflow is saved.
+        Listed contracts unavailable, so strike and expiry are typed here. They are checked when the
+        workflow is saved.
       </p>
     )
   }

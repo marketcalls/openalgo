@@ -247,7 +247,12 @@ export function useLivePrice<T extends PriceableItem>(
 
       // For closed positions (qty=0), preserve ALL REST API values including LTP
       // This ensures P&L% calculation remains stable (realized values don't change)
-      if (qty === 0) {
+      //
+      // Gated on the field being PRESENT, not just falsy. `quantity` is optional
+      // on PriceableItem, and an item that never carried one is not a position
+      // at all -- a watchlist row, say. Those must still take live prices, and
+      // `item.quantity || 0` reads the same 0 for both cases.
+      if (item.quantity !== undefined && qty === 0) {
         return {
           ...item,
           // Keep item.ltp from REST API - don't update with live data

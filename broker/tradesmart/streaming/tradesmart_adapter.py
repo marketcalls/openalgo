@@ -6,7 +6,6 @@ via ZeroMQ. Mirrors the flattrade adapter (same Noren JSON protocol).
 """
 
 import json
-import logging
 import os
 import sys
 import threading
@@ -16,6 +15,7 @@ from typing import Any
 
 from broker.tradesmart.api.baseurl import parse_auth, resolve_uid
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports FIRST
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -108,7 +108,7 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("tradesmart_websocket")
+        self.logger = get_logger("tradesmart_websocket")
 
         self.user_id = None
         self.broker_name = "tradesmart"

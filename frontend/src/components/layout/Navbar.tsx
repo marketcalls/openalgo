@@ -27,7 +27,21 @@ import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
-export function Navbar() {
+interface NavbarProps {
+  /**
+   * Span the full viewport instead of the centred, width-capped container.
+   *
+   * Pages rendered inside Layout share its `container mx-auto`, so the nav
+   * lines up with the content below it and this stays false. Full-bleed pages
+   * under FullWidthLayout render this navbar themselves and have no such
+   * container, so a capped nav floats inset above edge-to-edge content -- on a
+   * 1920px screen Tailwind caps `container` at 1536px, leaving ~192px of gutter
+   * each side while the page fills the width.
+   */
+  fluid?: boolean
+}
+
+export function Navbar({ fluid = false }: NavbarProps = {}) {
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -73,7 +87,12 @@ export function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container mx-auto px-4 flex h-14 items-center">
+      <div
+        className={cn(
+          'px-4 flex h-14 items-center',
+          fluid ? 'w-full' : 'container mx-auto'
+        )}
+      >
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild className="md:hidden">

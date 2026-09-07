@@ -1,6 +1,5 @@
 import base64
 import json
-import logging
 import ssl
 import time
 from typing import Dict, List, Optional
@@ -9,6 +8,8 @@ from urllib.parse import quote
 import logzero
 import websocket
 from logzero import logger
+
+from utils.logging import get_logger
 
 # WebSocket hosts, keyed by the RedirectServer claim in the access-token JWT.
 # 5Paisa shards the feed: order updates are only pushed on the host matching
@@ -100,7 +101,7 @@ class FivePaisaWebSocket:
         self.connected = False
 
         # Setup logging
-        self.logger = logging.getLogger("fivepaisa_websocket")
+        self.logger = get_logger("fivepaisa_websocket")
 
         # Decode token to get redirect server
         self.redirect_server = self._decode_token(access_token)
@@ -161,10 +162,8 @@ class FivePaisaWebSocket:
         Connection URL format: wss://[server].5paisa.com/feeds/api/chat?Value1={{access_token}}|{{clientcode}}
         """
         connection_url = f"{self.websocket_url}?Value1={self.access_token}|{self.client_code}"
-        self.logger.debug(f"Connecting to: {connection_url[:80]}...")
+        self.logger.debug(f"Connecting to: {self.websocket_url}")
         self.logger.debug(f"Client Code: {self.client_code}")
-        self.logger.debug(f"Token prefix: {self.access_token[:50]}...")
-        self.logger.debug(f"Token suffix: ...{self.access_token[-50:]}")
 
         try:
             self.wsapp = websocket.WebSocketApp(

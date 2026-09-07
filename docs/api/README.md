@@ -1,6 +1,6 @@
 # OpenAlgo API Documentation
 
-This directory documents the registered OpenAlgo v1 REST API and the separate WebSocket protocol. The source of truth for REST registration is `restx_api/__init__.py`; request validation is defined in `restx_api/schemas.py`, `restx_api/data_schemas.py`, and `restx_api/account_schema.py`.
+This directory documents the registered OpenAlgo v1 REST API and the separate WebSocket protocol. The source of truth for REST registration is `restx_api/__init__.py`; request validation is defined in `restx_api/schemas.py`, `restx_api/data_schemas.py`, `restx_api/account_schema.py`, and `restx_api/strategy_schema.py`.
 
 ## Base URLs
 
@@ -25,7 +25,7 @@ Never put broker credentials or broker access tokens in these requests. The Open
 
 ## Registered REST Inventory
 
-The current v1 surface contains **57 method/path pairs**. A resource with both GET and POST counts as two endpoints.
+The current v1 surface contains **66 method/path pairs**. A resource with both GET and POST counts as two endpoints.
 
 ### Order Management
 
@@ -98,6 +98,26 @@ The current v1 surface contains **57 method/path pairs**. A resource with both G
 | POST | `/ping` | [Authenticated ping](./utility-services/ping.md) |
 
 There is no public `/api/v1/checkholiday` endpoint. Use `/market/timings` for a date; its response identifies holiday/closed sessions through the returned market schedule.
+
+### Strategy Module
+
+Multi-leg options strategies with end-to-end risk management, plus a signal-driven mode for TradingView alerts. Lifecycle and reads only: nothing here can create a strategy, edit its configuration, enable live trading, rotate a webhook token, or delete anything. See the [strategy module API](./strategy-services/README.md) for the shared conventions and vocabularies.
+
+| Method | Path | Documentation |
+|---|---|---|
+| POST | `/strategy/list` | [List strategies](./strategy-services/list.md) |
+| POST | `/strategy/status` | [Strategy status](./strategy-services/status.md) |
+| POST | `/strategy/start` | [Start a run](./strategy-services/start.md) |
+| POST | `/strategy/stop` | [Stop the current run](./strategy-services/stop.md) |
+| POST | `/strategy/close_all` | [Close every leg](./strategy-services/close_all.md) |
+| POST | `/strategy/close_leg` | [Close one leg](./strategy-services/close_leg.md) |
+| POST | `/strategy/runs` | [Run history](./strategy-services/runs.md) |
+| POST | `/strategy/orders` | [Order history](./strategy-services/orders.md) |
+| POST | `/strategy/events` | [Risk-event audit trail](./strategy-services/events.md) |
+
+`mode` is required on `/strategy/start` and is never defaulted; omitting it is a 400, not a live order. Live trading is opt-in per strategy, and a strategy that is not yours returns 404 rather than 403.
+
+The module also exposes a public webhook at `POST /strategy/webhook/<token>`, which is **not** under `/api/v1` and takes no `apikey`: the URL token identifies the strategy. It is documented on the [webhook page](./strategy-services/webhook.md) and is not counted in the v1 inventory above.
 
 ### Messaging
 

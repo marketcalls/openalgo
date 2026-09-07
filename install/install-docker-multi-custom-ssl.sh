@@ -14,6 +14,10 @@ NC='\033[0m' # No Color
 INSTALL_BASE="/opt/openalgo"
 START_FLASK_PORT=5000
 START_WS_PORT=8765
+# Overridable so the deployment failure path can be exercised by tests without
+# writing to the real Nginx configuration.
+NGINX_SITES_AVAILABLE="${NGINX_SITES_AVAILABLE:-/etc/nginx/sites-available}"
+NGINX_SITES_ENABLED="${NGINX_SITES_ENABLED:-/etc/nginx/sites-enabled}"
 
 # Script Banner
 echo -e "${BLUE}"
@@ -91,6 +95,54 @@ get_next_ports() {
     # Return next available pair
     echo "$((max_flask + 1)) $((max_ws + 1))"
 }
+
+# An instance's reachability depends on two generated files agreeing: the port
+# mappings in its compose file, and the upstreams in its Nginx vhost. Both are
+# rewritten before the image is built, and the single Nginx reload at the end of
+# the run activates whatever is on disk by then. When a build fails we skip
+# `docker compose up -d`, so the running container keeps the ports it already
+# had -- and without putting these files back, that reload would point the
+# domain at ports nothing is listening on, taking a working instance offline.
+snapshot_instance_config() {
+    local instance_dir="$1" domain="$2"
+    discard_instance_snapshot "$instance_dir" "$domain"
+    if [ -f "$instance_dir/docker-compose.yaml" ]; then
+        cp -p "$instance_dir/docker-compose.yaml" "$instance_dir/docker-compose.yaml.pre-deploy"
+    fi
+    if [ -f "$NGINX_SITES_AVAILABLE/$domain" ]; then
+        cp -p "$NGINX_SITES_AVAILABLE/$domain" "$NGINX_SITES_AVAILABLE/$domain.pre-deploy"
+    fi
+    return 0
+}
+
+restore_instance_config() {
+    local instance_dir="$1" domain="$2"
+    if [ -f "$instance_dir/docker-compose.yaml.pre-deploy" ]; then
+        mv -f "$instance_dir/docker-compose.yaml.pre-deploy" "$instance_dir/docker-compose.yaml"
+    fi
+    if [ -f "$NGINX_SITES_AVAILABLE/$domain.pre-deploy" ]; then
+        mv -f "$NGINX_SITES_AVAILABLE/$domain.pre-deploy" "$NGINX_SITES_AVAILABLE/$domain"
+    else
+        # Fresh install: there is no working configuration to return to, so
+        # leave no vhost behind pointing at a port that will never be served.
+        rm -f "$NGINX_SITES_ENABLED/$domain" "$NGINX_SITES_AVAILABLE/$domain"
+    fi
+    return 0
+}
+
+discard_instance_snapshot() {
+    local instance_dir="$1" domain="$2"
+    rm -f "$instance_dir/docker-compose.yaml.pre-deploy" \
+          "$NGINX_SITES_AVAILABLE/$domain.pre-deploy"
+    return 0
+}
+
+# Tests source this script to exercise the helpers above in isolation:
+#   OPENALGO_INSTALLER_LIB_ONLY=1 source install-docker-multi-custom-ssl.sh
+# Nothing past this point runs in that mode.
+if [ "${OPENALGO_INSTALLER_LIB_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # -----------------
 # System Prep
@@ -708,6 +760,10 @@ EOF
     fi
 fi
 
+# Instances whose image failed to build. Collected so one bad instance does
+# not abort the others, and so the final banner can tell the truth.
+FAILED_DOMAINS=()
+
 for i in "${!CONF_DOMAINS[@]}"; do
     DOMAIN="${CONF_DOMAINS[$i]}"
     BROKER="${CONF_BROKERS[$i]}"
@@ -887,6 +943,11 @@ for i in "${!CONF_DOMAINS[@]}"; do
     fi
 
     # 6. Docker Compose
+    # Both files below are about to be regenerated, possibly onto new ports.
+    # Keep a copy so a failed build can hand the instance back its working
+    # routing before the shared Nginx reload at the end of the run.
+    snapshot_instance_config "$INSTANCE_DIR" "$DOMAIN"
+
     cat <<EOF > "$INSTANCE_DIR/docker-compose.yaml"
 services:
   openalgo:
@@ -941,7 +1002,7 @@ volumes:
 EOF
 
     # 7. Nginx Config
-    cat <<EOF > "/etc/nginx/sites-available/$DOMAIN"
+    cat <<EOF > "$NGINX_SITES_AVAILABLE/$DOMAIN"
 upstream openalgo_flask_${SANITIZED_NAME} {
     server 127.0.0.1:${FLASK_PORT};
     keepalive 64;
@@ -955,12 +1016,26 @@ upstream openalgo_websocket_${SANITIZED_NAME} {
 server {
     listen 80;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: suppress URL-secret routes before redirect logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
     return 301 https://\$host\$request_uri;
 }
 
 server {
     listen 443 ssl http2;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
 
     ssl_certificate $SSL_DIR/fullchain.pem;
     ssl_certificate_key $SSL_DIR/privkey.pem;
@@ -1034,14 +1109,44 @@ server {
 EOF
     
     # Activate Nginx
-    ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/"
+    ln -sf "$NGINX_SITES_AVAILABLE/$DOMAIN" "$NGINX_SITES_ENABLED/"
     
     # 8. Service Start
     log "Starting Container for $DOMAIN..." "$BLUE"
     log "Building Docker image (includes automated frontend build, may take 2-5 minutes)..." "$YELLOW"
     cd "$INSTANCE_DIR"
-    docker compose build
-    docker compose up -d
+    # Never start a container from a stale image. A failed build leaves the
+    # PREVIOUS image still tagged, so an unconditional `docker compose up -d`
+    # restarts the old code and every later message -- including
+    # "INSTALLATION COMPLETE" -- reports success while nothing was updated.
+    if ! docker compose build; then
+        # Put the previous compose/Nginx files back before the reload, so this
+        # domain keeps pointing at the ports its container is actually on.
+        restore_instance_config "$INSTANCE_DIR" "$DOMAIN"
+        log "Error: Docker image build FAILED for $DOMAIN." "$RED"
+        if [ "$IS_UPDATE_MODE" == "true" ]; then
+            log "       This instance was NOT updated. Its previous configuration" "$RED"
+            log "       has been restored, so the container that was already" "$RED"
+            log "       running stays reachable on its existing ports." "$RED"
+        else
+            log "       This instance was NOT installed. No container exists for" "$RED"
+            log "       it, and its Nginx site has been removed." "$RED"
+        fi
+        FAILED_DOMAINS+=("$DOMAIN")
+        continue
+    fi
+    # Deliberately no restore here. Compose has already acted on the new file,
+    # so a container may exist -- stopped, or partially recreated -- on the new
+    # ports. Reverting Nginx alone would guarantee a mismatch, and we cannot
+    # claim the previous image is still serving.
+    if ! docker compose up -d; then
+        discard_instance_snapshot "$INSTANCE_DIR" "$DOMAIN"
+        log "Error: Container failed to start for $DOMAIN." "$RED"
+        log "       Check: cd $INSTANCE_DIR && docker compose logs" "$RED"
+        FAILED_DOMAINS+=("$DOMAIN")
+        continue
+    fi
+    discard_instance_snapshot "$INSTANCE_DIR" "$DOMAIN"
     
 done
 
@@ -1130,9 +1235,20 @@ EOF
 chmod +x /usr/local/bin/openalgo-ctl
 
 
-log "\n==============================================" "$GREEN"
-log " INSTALLATION COMPLETE" "$GREEN"
-log "==============================================" "$GREEN"
+if [ ${#FAILED_DOMAINS[@]} -gt 0 ]; then
+    log "\n==============================================" "$RED"
+    log " INSTALLATION COMPLETED WITH ERRORS" "$RED"
+    log "==============================================" "$RED"
+    log "The following instances did not deploy successfully:" "$RED"
+    for FAILED in "${FAILED_DOMAINS[@]}"; do
+        log "  - $FAILED" "$RED"
+    done
+    log "Scroll up for the build error, fix it, then re-run this script." "$YELLOW"
+else
+    log "\n==============================================" "$GREEN"
+    log " INSTALLATION COMPLETE" "$GREEN"
+    log "==============================================" "$GREEN"
+fi
 log "Management Command: openalgo-ctl" "$BLUE"
 log "  openalgo-ctl list" "$BLUE"
 log "  openalgo-ctl restart <domain.com>" "$BLUE"
@@ -1149,3 +1265,7 @@ if [[ $INSTALL_PORTAINER =~ ^[Yy]$ ]]; then
     fi
 fi
 log "\nAccess your instances via their respective HTTPS domains." "$GREEN"
+
+if [ ${#FAILED_DOMAINS[@]} -gt 0 ]; then
+    exit 1
+fi

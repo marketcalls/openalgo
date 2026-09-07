@@ -61,7 +61,7 @@ def setup_test_smtp():
         return False
 
 
-def test_smtp_connection():
+def check_smtp_connection():
     """Test SMTP connection without sending email"""
     print("\n Testing SMTP Connection...")
 
@@ -166,7 +166,7 @@ def main():
 
     # Test connection if requested
     if args.test_connection:
-        success = test_smtp_connection()
+        success = check_smtp_connection()
         if not success:
             return 1
 

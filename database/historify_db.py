@@ -240,19 +240,10 @@ def init_database():
             )
         """)
 
-        # Create indexes for common query patterns
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_market_data_timestamp
-            ON market_data (timestamp)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_market_data_exchange_time
-            ON market_data (exchange, timestamp)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_market_data_interval_time
-            ON market_data (interval, timestamp)
-        """)
+        # No secondary indexes on market_data: every query leads with
+        # `symbol`, DuckDB serves range scans from per-row-group zone maps,
+        # and ART index memory stays fully resident as the table grows,
+        # which OOMs large 1m backfills. See #1779.
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_job_items_job_id
             ON job_items (job_id)

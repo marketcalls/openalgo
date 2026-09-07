@@ -76,16 +76,16 @@ describe('OrderPriceFields', () => {
 })
 
 describe('Options Multi strategy pricing transition', () => {
-  it.each(['SL', 'SL-M'] as const)(
-    'normalizes custom %s pricing when switching to a generated strategy',
-    (priceType) => {
-      const current = { strategy: 'custom', priceType }
+  it.each([
+    'SL',
+    'SL-M',
+  ] as const)('normalizes custom %s pricing when switching to a generated strategy', (priceType) => {
+    const current = { strategy: 'custom', priceType }
 
-      const update = getOptionsMultiStrategyUpdate(current, 'iron_condor')
+    const update = getOptionsMultiStrategyUpdate(current, 'iron_condor')
 
-      expect(update).toEqual({ strategy: 'iron_condor', priceType: 'MARKET' })
-    }
-  )
+    expect(update).toEqual({ strategy: 'iron_condor', priceType: 'MARKET' })
+  })
 
   it('preserves LIMIT pricing when switching to a generated strategy', () => {
     const current = { strategy: 'custom', priceType: 'LIMIT' as const }

@@ -26,7 +26,6 @@ SCOPED_SESSION_MODULES = [
     ("database.latency_db", "latency_session"),
     ("database.health_db", "health_session"),
     ("database.settings_db", "db_session"),
-    ("database.strategy_db", "db_session"),
     ("database.user_db", "db_session"),
     ("database.action_center_db", "db_session"),
     ("database.qty_freeze_db", "db_session"),
@@ -36,14 +35,17 @@ SCOPED_SESSION_MODULES = [
     ("database.chartink_db", "db_session"),
     ("database.flow_db", "db_session"),
     ("database.scalping_db", "db_session"),
+    ("database.watchlist_db", "db_session"),
     ("database.leverage_db", "db_session"),
     ("database.strategy_portfolio_db", "db_session"),
     ("database.market_calendar_db", "db_session"),
     ("database.telegram_db", "db_session"),
     ("database.symbol", "db_session"),
     ("database.strategy_book_db", "db_session"),
+    ("database.strategy_module_db", "db_session"),
     ("database.oauth_db", "db_session"),
     ("database.whatsapp_db", "db_session"),
+    ("database.agent_db", "db_session"),
 ]
 
 

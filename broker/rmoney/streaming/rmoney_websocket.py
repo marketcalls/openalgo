@@ -16,7 +16,6 @@ Exchange Segments (Numeric):
 """
 
 import json
-import logging
 import struct
 from typing import Dict, List
 from urllib.parse import urlencode
@@ -25,6 +24,7 @@ import requests
 import socketio
 
 from broker.rmoney.baseurl import MARKET_DATA_BASE_URL
+from utils.logging import get_logger
 
 
 class RMoneyWebSocketClient:
@@ -127,7 +127,7 @@ class RMoneyWebSocketClient:
         self.on_message = None
 
         # Logger
-        self.logger = logging.getLogger("rmoney_websocket")
+        self.logger = get_logger("rmoney_websocket")
 
         # Subscriptions tracking
         self.subscriptions = {}

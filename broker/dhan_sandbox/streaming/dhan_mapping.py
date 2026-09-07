@@ -15,6 +15,7 @@ OPENALGO_TO_DHAN_EXCHANGE = {
     "CDS": "NSE_CURRENCY",
     "BCD": "BSE_CURRENCY",
     "MCX": "MCX_COMM",
+    "NCO": "NSE_COMM",  # NSE Commodity (undocumented but API-accepted)
     "NSE_INDEX": "IDX_I",
     "BSE_INDEX": "IDX_I",
 }

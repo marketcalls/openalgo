@@ -18,7 +18,6 @@ subscriber would publish those as zero.
 """
 
 import json
-import logging
 import threading
 import time
 from typing import Any
@@ -31,6 +30,7 @@ from broker.deltaexchange.streaming.delta_mapping import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol
+from utils.logging import get_logger
 
 import sys
 import os
@@ -61,7 +61,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger       = logging.getLogger("delta_websocket_adapter")
+        self.logger       = get_logger("delta_websocket_adapter")
         self.ws_client    = None   # private endpoint: orders / positions / margins
         self.public_ws    = None   # public endpoint: ticker / ob_l2
         self.user_id      = None

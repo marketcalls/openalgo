@@ -93,10 +93,7 @@ def authenticate_broker(password=None, twofa=None, twofa_type=None):
             if api_key == (os.getenv("BROKER_API_KEY") or "").strip()
             else "BROKER_API_SECRET"
         )
-        logger.info(
-            f"Tradejini login: api_key from {source} ({api_key[:4]}...{api_key[-2:]}), "
-            f"twoFaTyp={twofa_type}"
-        )
+        logger.info(f"Tradejini login: api_key from {source}, twoFaTyp={twofa_type}")
 
         url = f"{BASE_URL}/api-gw/oauth/individual-token-v2"
 
@@ -118,7 +115,7 @@ def authenticate_broker(password=None, twofa=None, twofa_type=None):
 
         # Print the full response for debugging
         logger.info(f"Tradejini Response Status: {response.status_code}")
-        logger.info(f"Tradejini Response Headers: {dict(response.headers)}")
+        logger.info(f"Tradejini Response header fields: {list(response.headers)}")
         logger.info(f"Tradejini Response Data: {response_data}")
 
         if response.status_code == 200:

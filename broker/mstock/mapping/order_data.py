@@ -29,6 +29,34 @@ def map_broker_exchange_to_openalgo(broker_exchange, instrumenttype=""):
     return broker_exchange
 
 
+def map_order_type_to_openalgo(ordertype):
+    """
+    Maps an mStock Type B order type to the OpenAlgo pricetype.
+
+    mStock is inconsistent about stop-loss spellings: the Orders glossary uses
+    STOPLOSS_LIMIT/STOPLOSS_MARKET, the place/modify field tables use
+    STOP_LOSS/STOP_LOSS_MARKET, and the order book sample echoes a bare "SL".
+    All known spellings are accepted so the order book renders correctly
+    whichever form the API returns.
+
+    Parameters:
+    - ordertype: Order type string from the mStock API
+
+    Returns:
+    - OpenAlgo pricetype ('MARKET', 'LIMIT', 'SL', 'SL-M'), or the original
+      value unchanged when it is not a recognised stop-loss spelling
+    """
+    order_type_mapping = {
+        "STOPLOSS_LIMIT": "SL",
+        "STOP_LOSS": "SL",
+        "SL": "SL",
+        "STOPLOSS_MARKET": "SL-M",
+        "STOP_LOSS_MARKET": "SL-M",
+        "SL-M": "SL-M",
+    }
+    return order_type_mapping.get(ordertype, ordertype)
+
+
 def map_order_data(order_data):
     """
     Processes and modifies order data from mStock Type B API.
@@ -174,11 +202,7 @@ def transform_order_data(orders):
             continue
 
         # Map order type to OpenAlgo format
-        ordertype = order.get("ordertype", "")
-        if ordertype == "STOP_LOSS":
-            ordertype = "SL"
-        elif ordertype == "STOPLOSS_MARKET":
-            ordertype = "SL-M"
+        ordertype = map_order_type_to_openalgo(order.get("ordertype", ""))
 
         # Normalize status to OpenAlgo format (lowercase)
         status = order.get("status", "")

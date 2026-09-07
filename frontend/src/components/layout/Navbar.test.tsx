@@ -14,10 +14,10 @@ vi.mock('@/hooks/useProfileMenuItems', () => ({
   ],
 }))
 
-function renderNavbar(pathname: string) {
+function renderNavbar(pathname: string, props: { fluid?: boolean } = {}) {
   return render(
     <MemoryRouter initialEntries={[pathname]}>
-      <Navbar />
+      <Navbar {...props} />
     </MemoryRouter>
   )
 }
@@ -29,20 +29,20 @@ function currentLinks(container: HTMLElement) {
 }
 
 describe('Navbar', () => {
-  it('marks only the nested Strategy route as current in desktop navigation', () => {
-    renderNavbar('/strategy/builder')
+  it('marks only the active route as current in desktop navigation', () => {
+    renderNavbar('/positions')
 
-    const strategy = screen.getByRole('link', { name: 'Strategy' })
+    const positions = screen.getByRole('link', { name: 'Positions' })
     const dashboard = screen.getByRole('link', { name: 'Dashboard' })
 
-    expect(strategy).toHaveAttribute('aria-current', 'page')
+    expect(positions).toHaveAttribute('aria-current', 'page')
     expect(dashboard).not.toHaveAttribute('aria-current')
     const desktopNav = screen
       .getAllByRole('navigation')
       .find((nav) => nav.classList.contains('md:flex'))
 
     expect(desktopNav).toBeDefined()
-    expect(currentLinks(desktopNav!)).toEqual([strategy])
+    expect(currentLinks(desktopNav!)).toEqual([positions])
   })
 
   it('marks only the active sheet navigation link as current', async () => {
@@ -73,5 +73,38 @@ describe('Navbar', () => {
     expect(profile).toHaveAttribute('aria-current', 'page')
     expect(trading).not.toHaveAttribute('aria-current')
     expect(currentLinks(sheet)).toEqual([profile])
+  })
+})
+
+describe('Navbar width', () => {
+  /**
+   * The bar itself is always w-full; what changes is the inner wrapper. Pages
+   * under Layout share its `container mx-auto`, so the default has to keep
+   * that or every ordinary page's nav stops lining up with its content.
+   * Full-bleed pages like /trading render this navbar themselves with no such
+   * container, and a capped nav floats inset above an edge-to-edge chart.
+   */
+  function innerWrapper(container: HTMLElement) {
+    const nav = container.querySelector('nav')
+    if (!nav) throw new Error('no nav element rendered')
+    return nav.firstElementChild as HTMLElement
+  }
+
+  it('is centred and width-capped by default, matching Layout', () => {
+    const { container } = renderNavbar('/dashboard')
+    const inner = innerWrapper(container)
+
+    expect(inner.className).toContain('container')
+    expect(inner.className).toContain('mx-auto')
+    expect(inner.className).not.toContain('w-full')
+  })
+
+  it('spans the viewport when fluid, for full-bleed pages', () => {
+    const { container } = renderNavbar('/trading', { fluid: true })
+    const inner = innerWrapper(container)
+
+    expect(inner.className).toContain('w-full')
+    expect(inner.className).not.toContain('container')
+    expect(inner.className).not.toContain('mx-auto')
   })
 })

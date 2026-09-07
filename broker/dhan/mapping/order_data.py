@@ -49,7 +49,7 @@ def map_order_data(order_data):
                     order["productType"] = "MIS"
 
                 elif (
-                    order["exchangeSegment"] in ["NFO", "MCX", "BFO", "CDS"]
+                    order["exchangeSegment"] in ["NFO", "MCX", "BFO", "CDS", "BCD", "NCO"]
                     and order["productType"] == "MARGIN"
                 ):
                     order["productType"] = "NRML"

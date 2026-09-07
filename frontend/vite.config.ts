@@ -42,6 +42,12 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
+      // User indicator modules are served by Flask from strategies/indicators,
+      // never bundled, so the dev server has to pass them through too.
+      '/custom-indicators': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
     },
   },
   build: {

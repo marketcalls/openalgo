@@ -3,6 +3,7 @@
 // weight when the whole row opens menus, and it reads as a dated form
 // control. Reserve the glyph for where it distinguishes something.
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
+import type { LinkGroup } from 'openalgo-charts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,12 +23,12 @@ import {
   type DrawSelection,
   type DrawStats,
   type IndicatorSettingsRequest,
+  type OrderTicketRequest,
   type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
   TradingTerminal,
 } from '@/lib/trading/terminal'
-import type { LinkGroup } from 'openalgo-charts'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
@@ -36,9 +37,47 @@ import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
+import { PlaceOrderDialog } from './PlaceOrderDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 /** Camera (screenshot) glyph. */
+/** Hand-drawn to sit at the same 1.7 stroke as the camera beside them. */
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M12 3v11m0 0 4-4m-4 4-4-4" />
+      <path d="M4 17v3h16v-3" />
+    </svg>
+  )
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 5.5H6A1.5 1.5 0 0 0 4.5 7v10" />
+    </svg>
+  )
+}
+
 function CameraIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -182,12 +221,35 @@ interface Props {
    */
   sharedTool?: string | null
   sharedMagnet?: boolean
+  sharedStay?: boolean
   /** This pane became the drawing target (pointer went down inside it). */
-  onFocusPane?(terminal: TradingTerminal | null): void
+  onFocusPane?(terminal: TradingTerminal | null, paneId?: string): void
+  /**
+   * Reports this pane's instrument as `EXCHANGE:SYMBOL`, so the page can show
+   * which watchlist row is charted here. Fires on every load, not only on
+   * focus: a pane can change symbol from its own toolbar, from a linked group
+   * or from a panel click, and the highlight has to follow all three.
+   */
+  onSymbolChange?(paneId: string, key: string | null): void
+  /**
+   * Announces this pane's terminal to the page as it is built, and passes null
+   * as it is torn down. The page-level side panels act on a pane rather than
+   * owning one, so without this they would have nothing to act on until the
+   * user had clicked a chart -- a watchlist whose search returned no results
+   * and whose rows charted nothing, on a page that looks perfectly ready.
+   */
+  onTerminalChange?(paneId: string, terminal: TradingTerminal | null): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
   linkGroup?: LinkGroup | null
+  /**
+   * One-Click, from the page's switch. Off (the default), the on-chart Buy
+   * and Sell and the context-menu rows open an order ticket in this pane; on,
+   * they place at once. One switch for every pane, like sync: a grid where
+   * one chart fires and the next one asks is a grid that will be misread.
+   */
+  armed?: boolean
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
@@ -212,9 +274,13 @@ export function ChartPane({
   style,
   sharedTool,
   sharedMagnet,
+  sharedStay,
   onFocusPane,
+  onSymbolChange,
+  onTerminalChange,
   onDrawStats,
   linkGroup,
+  armed = false,
   onToggleRail,
   railVisible,
   layoutPicker,
@@ -231,6 +297,18 @@ export function ChartPane({
   const aliveRef = useRef(true)
   const statsCbRef = useRef(onDrawStats)
   statsCbRef.current = onDrawStats
+  // Held in a ref for the same reason as statsCbRef: the terminal's callbacks
+  // are captured once when it boots, so reading the prop directly would pin
+  // the first render's closure for the life of the pane.
+  const symbolCbRef = useRef(onSymbolChange)
+  symbolCbRef.current = onSymbolChange
+  const terminalCbRef = useRef(onTerminalChange)
+  terminalCbRef.current = onTerminalChange
+  // The flag as it stands when the terminal boots; the effect below tracks it
+  // from then on. Read through a ref so the boot effect does not re-run and
+  // rebuild the terminal on every toggle.
+  const armedRef = useRef(armed)
+  armedRef.current = armed
   const { mode, appMode } = useThemeStore()
 
   const [ready, setReady] = useState(false)
@@ -268,6 +346,27 @@ export function ChartPane({
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
   const [volumeOn, setVolumeOn] = useState(true)
+  /**
+   * The snapshot menu: saving and pasting are both wanted, so the camera asks.
+   *
+   * Held as viewport coordinates rather than opened as an absolutely positioned
+   * child, because the toolbar row scrolls horizontally: `overflow-x: auto`
+   * forces the other axis to `auto` as well, and the row is only 111px tall, so
+   * an absolute child was clipped to a three-pixel sliver. Nothing inside a
+   * scrolling strip can hang below it.
+   */
+  const [snapOpen, setSnapOpen] = useState(false)
+  const [snapAt, setSnapAt] = useState<{ top: number; right: number } | null>(null)
+  const snapBtnRef = useRef<HTMLButtonElement>(null)
+
+  const openSnapMenu = useCallback(() => {
+    const r = snapBtnRef.current?.getBoundingClientRect()
+    if (!r) return
+    // Right-aligned to the button, so the menu opens inward and cannot run off
+    // the window edge the camera sits near.
+    setSnapAt({ top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) })
+    setSnapOpen(true)
+  }, [])
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
   // Read from the chart each time the gear is clicked rather than held: the
@@ -277,9 +376,20 @@ export function ChartPane({
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  /**
+   * The order ticket, while One-Click is off. The terminal validates the
+   * click and hands over what it would have sent; the same dialog the option
+   * chain opens confirms it, so a chart button starts an order but never
+   * places one until the trader says so.
+   */
+  const [ticket, setTicket] = useState<OrderTicketRequest | null>(null)
   // Null whenever the chart is live. The transport bar renders only while
   // replay owns the data, so there is nothing to hide when it does not.
   const [replay, setReplay] = useState<ReplayState | null>(null)
+  /** True while a start bar is being chosen, before replay owns the data. */
+  const [picking, setPicking] = useState(false)
+  /** The confirm shown on leaving: the playhead is the only record of the walk. */
+  const [confirmLeave, setConfirmLeave] = useState(false)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
@@ -304,6 +414,7 @@ export function ChartPane({
         if (!aliveRef.current) return
         setSym(view)
         setQty(1)
+        symbolCbRef.current?.(paneId, `${view.exchange}:${view.symbol}`)
       },
       onLtp: () => {}, // legend overlay + canvas render the live price
       onDrawChange: (s) => {
@@ -314,7 +425,15 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
-      onReplayChange: (state) => aliveRef.current && setReplay(state),
+      // The legend readout is a second switch for the same thing as the context
+      // menu row, so the menu label has to follow it.
+      onVolumeChange: (on) => aliveRef.current && setVolumeOn(on),
+      onReplayChange: (state) => {
+        if (!aliveRef.current) return
+        setReplay(state)
+        setPicking(terminalRef.current?.replayPickingBar() ?? false)
+        if (state === null) setConfirmLeave(false)
+      },
       onDrawTextEdit: (r) => {
         if (!aliveRef.current) return
         // The ref, not the local: `terminal` is still unassigned while this
@@ -322,6 +441,7 @@ export function ChartPane({
         const style = terminalRef.current?.drawTextStyle(r.id)
         if (style) setTextReq({ id: r.id, tool: r.tool, style })
       },
+      onOrderTicket: (req) => aliveRef.current && setTicket(req),
     }
 
     if (chartRef.current && legendRef.current) {
@@ -338,6 +458,8 @@ export function ChartPane({
         callbacks,
       })
       terminalRef.current = terminal
+      terminalCbRef.current?.(paneId, terminal)
+      terminal.setArmed(armedRef.current)
       terminal.init()
       terminal.setLinkGroup(linkGroup ?? null)
       const stats0 = terminal.drawStats()
@@ -349,6 +471,7 @@ export function ChartPane({
 
     return () => {
       aliveRef.current = false
+      terminalCbRef.current?.(paneId, null)
       terminal?.destroy()
       terminalRef.current = null
     }
@@ -365,6 +488,15 @@ export function ChartPane({
     if (sharedMagnet === undefined) return
     terminalRef.current?.setMagnet(sharedMagnet)
   }, [sharedMagnet])
+
+  useEffect(() => {
+    if (sharedStay === undefined) return
+    terminalRef.current?.setDrawStay(sharedStay)
+  }, [sharedStay])
+  /* ── follow the page-level One-Click switch ───────────────────────────── */
+  useEffect(() => {
+    terminalRef.current?.setArmed(armed)
+  }, [armed])
 
   /* ── keep the canvas theme in sync with the app theme ─────────────────── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: mode/appMode are the trigger — the effect re-themes the canvas whenever the app theme changes
@@ -474,7 +606,6 @@ export function ChartPane({
 
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
-
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -639,10 +770,19 @@ export function ChartPane({
         <Button
           variant="outline"
           size="sm"
-          className={cn('h-8 shrink-0 gap-1', replay && 'border-primary text-primary')}
-          onClick={() => terminalRef.current?.startReplay()}
-          disabled={!!replay}
-          title={replay ? 'Replay is running' : 'Replay this session'}
+          className={cn('h-8 shrink-0 gap-1', (replay || picking) && 'border-primary text-primary')}
+          onClick={() => {
+            if (replay) setConfirmLeave(true)
+            else if (picking) terminalRef.current?.cancelReplayPick()
+            else terminalRef.current?.startReplay()
+          }}
+          title={
+            replay
+              ? 'Leave replay'
+              : picking
+                ? 'Cancel bar selection'
+                : 'Replay this session from a bar you pick'
+          }
         >
           <ReplayIcon className="h-4 w-4" />
           <span className="hidden sm:inline">Replay</span>
@@ -696,18 +836,67 @@ export function ChartPane({
           >
             <FullscreenIcon className="h-[17px] w-[17px]" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => {
-              void terminalRef.current?.screenshot()
-            }}
-            title="Save chart screenshot"
-            aria-label="Save chart screenshot"
-          >
-            <CameraIcon className="h-[17px] w-[17px]" />
-          </Button>
+          {/* Positioned, so the menu below anchors to the camera and not to
+              whatever ancestor happens to be relative. */}
+          <div className="relative">
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn('h-8 w-8', snapOpen && 'text-primary')}
+              ref={snapBtnRef}
+              onClick={(e) => {
+                // Shift skips the menu and saves, for anyone who only ever saves.
+                if (e.shiftKey) {
+                  void terminalRef.current?.screenshot()
+                  return
+                }
+                if (snapOpen) setSnapOpen(false)
+                else openSnapMenu()
+              }}
+              title="Chart snapshot"
+              aria-label="Chart snapshot"
+            >
+              <CameraIcon className="h-[17px] w-[17px]" />
+            </Button>
+            {snapOpen && (
+              <>
+                {/* Catches the click that dismisses, so the menu closes on any
+                  outside press without a document listener that would also
+                  swallow the press that opened it. */}
+                <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
+                <div
+                  className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
+                  style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
+                >
+                  <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Chart snapshot
+                  </div>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => {
+                      setSnapOpen(false)
+                      void terminalRef.current?.screenshot()
+                    }}
+                  >
+                    <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
+                    Download image
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => {
+                      setSnapOpen(false)
+                      void terminalRef.current?.copyScreenshot()
+                    }}
+                  >
+                    <CopyIcon className="h-3.5 w-3.5 opacity-70" />
+                    Copy image
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -760,7 +949,7 @@ export function ChartPane({
           ref={chartRef}
           className="absolute inset-0"
           onContextMenu={onContextMenu}
-          onPointerDownCapture={() => onFocusPane?.(terminalRef.current)}
+          onPointerDownCapture={() => onFocusPane?.(terminalRef.current, paneId)}
         />
 
         {!ready && (
@@ -775,12 +964,64 @@ export function ChartPane({
           replay owns the chart's data: `replay` is null the moment we are live
           again, which is also the signal that Exit has done its work.
         */}
+        {/*
+          Step one of replay. The bar you start from is the whole premise of the
+          exercise, so it is picked rather than guessed at from the viewport, and
+          everything to its right is greyed while it is being picked: choosing a
+          start with the next twenty bars readable is choosing on hindsight.
+        */}
+        {picking && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-popover/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
+            <span>
+              <span className="font-medium">Select a bar</span>{' '}
+              <span className="text-muted-foreground">to replay from</span>
+            </span>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-1 hover:bg-accent"
+              onClick={() => terminalRef.current?.cancelReplayPick()}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {confirmLeave && (
+          <div className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45">
+            <div className="w-[340px] rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">Leave replay?</h4>
+              <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+                The chart goes back to the live session and the playhead is lost.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setConfirmLeave(false)}
+                >
+                  Stay
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                  onClick={() => {
+                    setConfirmLeave(false)
+                    terminalRef.current?.stopReplay()
+                  }}
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {replay && (
           <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
             <button
               type="button"
               className="rounded px-2 py-1 text-xs hover:bg-accent"
-              title="Step back one bar"
+              title={`Step back ${replay.subSteps > 1 ? 'one step of the forming bar' : 'one bar'}`}
               onClick={() => terminalRef.current?.replayStepBack()}
             >
               Prev
@@ -800,7 +1041,7 @@ export function ChartPane({
             <button
               type="button"
               className="rounded px-2 py-1 text-xs hover:bg-accent"
-              title="Step forward one bar"
+              title={`Step forward ${replay.subSteps > 1 ? 'one step of the forming bar' : 'one bar'}`}
               onClick={() => terminalRef.current?.replayStep()}
             >
               Next
@@ -819,6 +1060,13 @@ export function ChartPane({
             <span className="tabular-nums text-[11px] text-muted-foreground">
               {replay.index + 1} / {replay.total}
             </span>
+            {/* Only while a bar actually forms over several steps, so a plain
+                whole-bar replay does not carry a permanent "1/1". */}
+            {replay.subSteps > 1 && (
+              <span className="tabular-nums text-[11px] text-primary">
+                {replay.subIndex + 1}/{replay.subSteps}
+              </span>
+            )}
 
             <select
               className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
@@ -837,7 +1085,7 @@ export function ChartPane({
               type="button"
               className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
               title="Leave replay and return to the live chart"
-              onClick={() => terminalRef.current?.stopReplay()}
+              onClick={() => setConfirmLeave(true)}
             >
               Exit
             </button>
@@ -980,6 +1228,38 @@ export function ChartPane({
         }
         onPick={(row) => terminalRef.current?.loadSymbol(row)}
         initialQuery={sym?.symbol}
+      />
+
+      {/* The order ticket One-Click off opens: the same dialog the option chain
+          and pages/OptionChain.tsx use, so quantity, product and price are
+          confirmed in one place and analyze mode is honoured the same way.
+          A success needs no toast here; the socket provider shows the broker's
+          order event once, for every surface. The confirmed order goes out
+          through the terminal's own feed, never straight to the API: the
+          feed asserts the page's mode against the server first, the way the
+          armed path does. Portalled into the pane while it is the fullscreen
+          element, as the menus are, or it would open unseen behind it. */}
+      <PlaceOrderDialog
+        open={ticket !== null}
+        onOpenChange={(next) => !next && setTicket(null)}
+        container={menuHost}
+        place={(order) => {
+          const terminal = terminalRef.current
+          if (!terminal) return Promise.reject(new Error('chart is not ready'))
+          return terminal.placeTicket(order)
+        }}
+        symbol={ticket?.symbol}
+        exchange={ticket?.exchange}
+        action={ticket?.action}
+        quantity={ticket?.quantity}
+        lotSize={ticket?.lotSize}
+        tickSize={ticket?.tickSize}
+        product={ticket?.product}
+        priceType={ticket?.priceType}
+        price={ticket?.price}
+        triggerPrice={ticket?.triggerPrice}
+        strategy={ticket?.strategy}
+        onSuccess={() => setTicket(null)}
       />
     </section>
   )

@@ -294,7 +294,7 @@ Adding crypto exchanges is **additive** -- hardcoded exchange whitelists mean ex
 | NSE default exchange | `flow_executor_service.py` (20+ places) | None | Confusing errors |
 | UI exchange dropdowns | `frontend/src/lib/flow/constants.ts:8-18` | None | Crypto not selectable |
 
-### 6 Independently Duplicated Exchange Lists (Maintenance Risk)
+### 5 Independently Duplicated Exchange Lists (Maintenance Risk)
 
 These lists are NOT centralized via `VALID_EXCHANGES` import. Missing any one causes crypto to work in some endpoints but fail in others:
 
@@ -303,7 +303,6 @@ These lists are NOT centralized via `VALID_EXCHANGES` import. Missing any one ca
 | Central constant | `utils/constants.py` | 18-29 | NSE, NFO, CDS, BSE, BFO, BCD, MCX, NCDEX, NSE_INDEX, BSE_INDEX |
 | Margin schema | `restx_api/schemas.py` | 289 | NSE, BSE, NFO, BFO, CDS, MCX |
 | Instruments schema | `restx_api/data_schemas.py` | 202 | NSE, BSE, NFO, BFO, BCD, CDS, MCX, NSE_INDEX, BSE_INDEX |
-| Strategy blueprint | `blueprints/strategy.py` | 70 | NSE, BSE, NFO, CDS, BFO, BCD, MCX, NCDEX |
 | Market calendar | `database/market_calendar_db.py` | 50 | NSE, BSE, NFO, BFO, MCX, BCD, CDS |
 | Sandbox order mgr | `sandbox/order_manager.py` | 1086 | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NCDEX |
 

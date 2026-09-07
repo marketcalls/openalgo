@@ -6,19 +6,20 @@ Uses the same sync pattern as Angel/Dhan adapters to avoid asyncio event loop
 conflicts with eventlet in gunicorn deployments.
 """
 import json
-import logging
 import ssl
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 import websocket
 from google.protobuf.json_format import MessageToDict
 
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 from . import MarketDataFeedV3_pb2
 
@@ -50,7 +51,7 @@ class UpstoxWebSocketClient:
         # construction-time token.
         self.user_id = user_id
         self.ws: websocket.WebSocketApp | None = None
-        self.logger = logging.getLogger("upstox_websocket")
+        self.logger = get_logger("upstox_websocket")
         self._subscriptions: set = set()
         self.running = False
         self._ws_thread: threading.Thread | None = None
@@ -422,7 +423,9 @@ class UpstoxWebSocketClient:
             auth_data = response.json()
             ws_url = auth_data.get("data", {}).get("authorized_redirect_uri")
             if ws_url:
-                self.logger.debug(f"Received WebSocket URL: {ws_url}")
+                self.logger.debug(
+                    f"Received WebSocket URL: {urlsplit(ws_url)._replace(query='').geturl()}"
+                )
                 return ws_url
             else:
                 self.logger.error("No WebSocket URL in auth response")

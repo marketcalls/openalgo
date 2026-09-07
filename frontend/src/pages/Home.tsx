@@ -71,7 +71,7 @@ const platformDesks = [
   {
     icon: CandlestickChart,
     title: 'Charting platform',
-    desc: 'Chart-based trading in the built-in terminal: fire and manage orders from the chart itself, with 91 indicators on real market data.',
+    desc: 'Chart-based trading in the built-in terminal: fire and manage orders from the chart itself, with 102 indicators on real market data.',
   },
   {
     icon: Blocks,

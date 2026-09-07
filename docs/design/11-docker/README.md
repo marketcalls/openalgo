@@ -13,7 +13,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Stage 1: Python Builder                               │
-│                        (python:3.12-bullseye)                                │
+│                        (python:3.12-trixie)                                  │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Install build dependencies (curl, build-essential)                │  │
@@ -26,7 +26,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
                                      │
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Stage 2: Frontend Builder                             │
-│                        (node:22-bullseye-slim)                               │
+│                        (node:22-trixie-slim)                                 │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Copy frontend/package*.json                                       │  │
@@ -39,7 +39,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Stage 3: Production                                   │
-│                        (python:3.12-slim-bullseye)                           │
+│                        (python:3.12-slim-trixie)                             │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Set timezone to IST (Asia/Kolkata)                                │  │

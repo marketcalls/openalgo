@@ -12,10 +12,12 @@ classes, and singleton accessors directly instead of making HTTP calls back into
 the same OpenAlgo process. The document does not replace request schemas in
 [`docs/api`](../api/README.md) when a service also has a public endpoint.
 
-The current service layer contains 71 Python modules under `services/`. Some
-services back REST endpoints, while others run internal workflows, schedulers,
-streaming, analytics, alerts, or risk management. Do not assume that every
-service:
+The current tree contains 80 direct `services/*.py` modules and 103 Python
+modules recursively under `services/`. The direct count is the inventory used
+by this page; subpackages such as `services/strategy_module/` have their own
+reference. Some services back REST endpoints, while others run internal
+workflows, schedulers, streaming, analytics, alerts, or risk management. Do not
+assume that every service:
 
 - has a public REST endpoint;
 - accepts the same arguments as the OpenAlgo SDK;
@@ -41,7 +43,21 @@ Related references:
 - [EventBus design](../design/53-event-bus/README.md)
 - [Order constants](order-constants.md)
 - [Symbol format](symbol-format.md)
+- [Strategy module and RMS](strategy_rms_documentation.md)
 - [Flow import format](flow-import-format.md)
+
+The strategy subpackage is intentionally documented separately. This page
+defines the account-service boundary it reuses; do not copy its engine, state,
+recovery or risk contracts here. Its broker-backed book views call the existing
+authenticated orderbook, tradebook and positionbook services with internal
+credentials: `services/strategy_module/views.py` exposes `strategy_orderbook`,
+`strategy_tradebook` and `strategy_positions`, which reuse
+`get_orderbook_with_auth`, `get_tradebook_with_auth` and
+`get_positionbook_with_auth` for live runs (and the matching sandbox book
+services for sandbox runs). The run's own mode selects live versus sandbox; the platform-wide
+analyzer toggle cannot divert a live strategy, and sandbox never reads the real
+account. Broker rows are narrowed by durable strategy order ids/contracts and
+the browser labels recorded order rows as local audit rather than broker truth.
 
 ## Architecture
 

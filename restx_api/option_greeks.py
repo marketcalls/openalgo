@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 from flask import jsonify, make_response, request
@@ -113,7 +114,7 @@ class OptionGreeks(Resource):
 
             # Verify API key
             if not verify_api_key(api_key):
-                logger.warning(f"Invalid API key used for option greeks: {api_key[:10]}...")
+                logger.warning(f"Invalid API key used for option greeks: sha256:{hashlib.sha256(api_key.encode()).hexdigest()[:12]}")
                 return make_response(
                     jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
                 )

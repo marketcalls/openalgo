@@ -422,6 +422,13 @@ server {
     server_name $NEW_DOMAIN;
     root /var/www/html;
 
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${NEW_DOMAIN}_access.log combined if=\$openalgo_loggable;
+
     location / {
         try_files \$uri \$uri/ =404;
     }
@@ -491,6 +498,13 @@ server {
     listen [::]:80;
     server_name $NEW_DOMAIN;
 
+    # OPENALGO_WEBHOOK_LOG_GUARD: suppress URL-secret routes before redirect logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${NEW_DOMAIN}_access.log combined if=\$openalgo_loggable;
+
     # WebSocket path exceptions to avoid 301 redirect loop
     location = /ws {
         return 301 https://\$host\$request_uri;
@@ -511,6 +525,13 @@ server {
     listen [::]:443 ssl;
 
     server_name $NEW_DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${NEW_DOMAIN}_access.log combined if=\$openalgo_loggable;
 
     ssl_certificate /etc/letsencrypt/live/$NEW_DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$NEW_DOMAIN/privkey.pem;

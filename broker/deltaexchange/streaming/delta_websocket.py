@@ -46,7 +46,6 @@ References: https://docs.delta.exchange/#public-channels
 import hashlib
 import hmac
 import json
-import logging
 import os
 import ssl
 import threading
@@ -54,7 +53,9 @@ import time
 
 import websocket
 
-logger = logging.getLogger("delta_websocket")
+from utils.logging import get_logger
+
+logger = get_logger("delta_websocket")
 
 
 class DeltaWebSocket:

@@ -148,7 +148,7 @@ def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
                     )
                     continue
                 raise Exception("Angel API rate limit exceeded. Please retry shortly.")
-            logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+            logger.debug(f"Debug - API returned 403 Forbidden. Header fields: {sorted(headers)}")
             logger.debug(f"Debug - Response text: {body_text}")
             raise Exception("Authentication failed. Please check your API key and auth token.")
 

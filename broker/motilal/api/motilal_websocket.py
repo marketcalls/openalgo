@@ -20,6 +20,8 @@ import websocket
 
 from utils.logging import get_logger
 
+from .baseurl import get_ws_feed_url
+
 logger = get_logger(__name__)
 
 
@@ -30,10 +32,16 @@ class MotilalWebSocket:
     and message parsing for market data.
     """
 
-    # WebSocket endpoints
-    # Market Data Broadcast WebSocket (uses BINARY packets)
-    PRIMARY_URL = "wss://ws1feed.motilaloswal.com/jwebsocket/jwebsocket"
-    UAT_URL = "wss://ws1feed.motilaloswal.com/jwebsocket/jwebsocket"  # UAT URL may differ
+    # WebSocket endpoints. Both live in baseurl.py so the plugin has a single
+    # source of truth for hosts.
+    #
+    # The broadcast (market data) feed is NOT documented: doc 33-websocket-
+    # broadcast.md only shows SDK calls (Mofsl.connect(), Mofsl.Register(...))
+    # and the decoded Python dicts they yield -- no URL, no wire format, no
+    # heartbeat interval. The ``ws1feed`` host below comes from the official
+    # SDK's jWebSocket transport, not from the docs.
+    PRIMARY_URL = get_ws_feed_url(use_uat=False)
+    UAT_URL = get_ws_feed_url(use_uat=True)
 
     # Note: Trade/Order WebSocket is at wss://openapi.motilaloswal.com/ws (uses JSON)
 
@@ -57,7 +65,7 @@ class MotilalWebSocket:
         Args:
             client_id (str): Motilal Oswal client ID
             auth_token (str): Authentication token obtained from login
-            api_key (str): API key (BROKER_API_SECRET)
+            api_key (str): App API key (BROKER_API_KEY)
             use_uat (bool): Whether to use UAT environment (default: False)
             token_provider (callable): Optional zero-arg callable returning a fresh
                 auth token from the database. Invoked before each reconnect attempt
@@ -67,7 +75,19 @@ class MotilalWebSocket:
         self.auth_token = auth_token
         self.api_key = api_key
         self.token_provider = token_provider
-        self.ws_url = self.UAT_URL if use_uat else self.PRIMARY_URL
+        self.use_uat = use_uat
+        self.ws_url = get_ws_feed_url(use_uat)
+        if use_uat:
+            # The broadcast feed host is undocumented (see class docstring), so
+            # the UAT host below is inferred, not verified. Say so loudly rather
+            # than silently connecting somewhere the caller did not ask for --
+            # the previous code aliased UAT to production, which meant
+            # use_uat=True quietly streamed live production data.
+            logger.warning(
+                "Motilal broadcast feed UAT host %s is NOT documented and is unverified; "
+                "if it fails, no UAT market-data feed is known to exist.",
+                self.ws_url,
+            )
 
         # Connection state
         self.ws = None
@@ -79,13 +99,37 @@ class MotilalWebSocket:
         # Subscription tracking
         self.subscribed_scrips = {}  # Format: "exchange|exchange_type|scripcode" -> instrument info
         self.subscribed_indices = set()  # Set of subscribed indices (NSE, BSE)
-        self.subscriptions = {}  # Dictionary to track subscribed instruments
+        self.subscriptions = {}  # "<MOTILAL_EXCHANGE>|<scrip>" -> instrument info
+
+        # KEY SCHEME (read this before touching any store below)
+        # -----------------------------------------------------
+        # Every store is keyed "<MOTILAL_EXCHANGE_NAME>:<scrip_code>", e.g.
+        # "NSE:2885" / "NSEFO:35001" / "MCX:239484". The full Motilal exchange
+        # name is used -- NOT the single wire character -- because NSE and NSEFO
+        # share the wire character 'N' (they are told apart on the wire only by
+        # the CASH/DERIVATIVES segment character, which the inbound broadcast
+        # packet header does not carry). Keying on 'N' collided cash and F&O
+        # tokens, and it also made the parser look up subscriptions under "NSE|"
+        # while register_scrip() had stored them under "NSEFO|", so every F&O
+        # packet resolved to symbol=None.
+        #
+        # data.py and motilal_adapter.py call get_quote()/get_market_depth()/
+        # get_open_interest()/get_index() with the full Motilal exchange name,
+        # so those accessors build the same key directly.
+        #
+        # Inbound packets carry only the wire character, so _scrip_exchange
+        # below maps (wire_char, scrip_code) -> full exchange name using what
+        # register_scrip() recorded. Registering the same numeric token under
+        # both NSE and NSEFO is genuinely unresolvable from the packet alone;
+        # the first registration wins and a warning is logged (in practice NSE
+        # cash and NFO token ranges are disjoint).
+        self._scrip_exchange = {}  # (exchange_char, scrip_code) -> exchange name
 
         # Data storage
-        self.last_quotes = {}  # exchange:token -> quote data
-        self.last_depth = {}  # exchange:token -> depth data
-        self.last_oi = {}  # exchange:token -> OI data
-        self.last_index = {}  # exchange:token -> index data
+        self.last_quotes = {}  # EXCHANGE:token -> quote data
+        self.last_depth = {}  # EXCHANGE:token -> depth data
+        self.last_oi = {}  # EXCHANGE:token -> OI data
+        self.last_index = {}  # EXCHANGE:token -> index data
 
         # Threading
         self._connect_thread = None
@@ -227,7 +271,13 @@ class MotilalWebSocket:
 
         if self.ws:
             logger.info("Closing Motilal WebSocket connection")
-            # Send logout message before closing
+            # Send logout message before closing.
+            # UNVERIFIED FRAME: this JSON is copied from doc 34-trade-websocket.md,
+            # which describes the *trade* socket (wss://openapi.motilaloswal.com/ws).
+            # The broadcast feed here is a different, binary transport and the docs
+            # define no logout frame for it, so the server may well ignore this.
+            # It is harmless (we close the socket immediately after) and is kept
+            # only because nothing better is documented.
             try:
                 logout_msg = {"clientid": self.client_id, "action": "logout"}
                 self.ws.send(json.dumps(logout_msg))
@@ -270,7 +320,34 @@ class MotilalWebSocket:
     def on_open(self, ws):
         """
         Called when the WebSocket connection is established.
-        Sends BINARY login packet to authenticate.
+        Sends the BINARY 'Q' login packet that identifies this session.
+
+        What the 'Q' packet actually carries (audited field by field against the
+        struct format below): message type 'Q', a fixed 111, then the client code
+        twice -- once length-prefixed in a 15-byte field and again length-prefixed
+        in a 30-byte field -- then three flag bytes, the length-prefixed 10-byte
+        client version, five more flag bytes and 45 bytes of spaces. 114 bytes
+        total. So the frame DOES convey identity (the client code), but it does
+        NOT carry ``self.auth_token`` or ``self.api_key``.
+
+        Why no JSON auth frame is sent here:
+          * doc 33-websocket-broadcast.md says "AuthValidation is necessary before
+            using OpenAPI WebSocket Broadcast", i.e. you must have completed the
+            REST login first -- it does not describe an in-band handshake, and it
+            never shows one.
+          * The only concrete handshake in the docs,
+            {"clientid", "authtoken", "apikey"}, belongs to doc 34, which documents
+            the *trade* socket at wss://openapi.motilaloswal.com/ws. That is a
+            different transport (JSON), a different host and a different feed.
+          * This binary socket currently works: the server answers the 'Q' packet
+            with binary frames, which is what marks us authenticated in
+            on_message(). Injecting a text frame the server was never documented
+            to expect risks a protocol error / disconnect on a working path.
+        Left as-is deliberately. If the feed ever starts rejecting logins, the
+        30-byte field is the prime suspect: it is length-prefixed separately from
+        the 15-byte client-code field, which is the shape of a credential slot
+        (the SDK likely puts a password/token there) yet this code fills it with
+        the client code again.
 
         Args:
             ws: WebSocket instance
@@ -408,28 +485,31 @@ class MotilalWebSocket:
                 # Parse body (20 bytes) based on message type
                 body = packet[10:30]
 
-                # Create key for storing data
-                key = f"{exchange_byte}:{scrip}"
+                # Resolve the wire character back to the full Motilal exchange
+                # name recorded at registration time, so the store key matches
+                # what register_scrip() used and what the accessors look up.
+                # See the KEY SCHEME note in __init__.
+                exchange_name = self._resolve_exchange_name(exchange_byte, scrip)
+                key = self._store_key(exchange_name, scrip)
 
                 # Look up the original subscription to get the symbol
-                subscription_key = f"{self._map_exchange_back(exchange_byte)}|{scrip}"
+                subscription_key = f"{exchange_name}|{scrip}"
                 symbol = None
                 with self.lock:
-                    if subscription_key in self.subscriptions:
-                        symbol = self.subscriptions[subscription_key].symbol
+                    subscription = self.subscriptions.get(subscription_key)
+                    if subscription is not None:
+                        symbol = subscription.symbol
 
                 # Log what we're parsing
                 logger.debug(
-                    f"Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
+                    f"Parsing packet: Exchange={exchange_byte}({exchange_name}), Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
                 )
 
                 # Detailed logging for subscribed scrips to analyze unknown packets
-                subscription_key_check = f"{self._map_exchange_back(exchange_byte)}|{scrip}"
-                with self.lock:
-                    if subscription_key_check in self.subscriptions:
-                        logger.debug(
-                            f"SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
-                        )
+                if subscription is not None:
+                    logger.debug(
+                        f"SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
+                    )
 
                 # Parse based on message type
                 # Message types from Motilal SDK:
@@ -453,7 +533,8 @@ class MotilalWebSocket:
                     logger.debug(f"Parsing OI packet for {key}")
                     self._parse_oi_packet(body, key, symbol)
                 elif msgtype == "W":  # DPR (circuit limits)
-                    logger.debug(f"Skipping DPR packet for {key}")
+                    logger.debug(f"Parsing DPR packet for {key}")
+                    self._parse_dpr_packet(body, key, symbol)
                 elif msgtype == "1":  # Heartbeat
                     logger.debug("Heartbeat received")
                 elif msgtype == "X":  # Unknown - need to investigate
@@ -465,17 +546,51 @@ class MotilalWebSocket:
                 elif msgtype == "Y":  # Uppercase 'Y' - exchange-specific data
                     logger.debug(f"Packet 'Y' for {key}: {body.hex()}")
                 else:
-                    logger.warning(
-                        f"Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}"
+                    # Debug, not warning: Motilal's broadcast feed carries
+                    # undocumented supplementary packet types ('M' on index
+                    # tokens, etc.) alongside the ones parsed above. They arrive
+                    # per tick, so warning-level logging floods the log with
+                    # thousands of identical lines while the feed is working
+                    # perfectly - every field OpenAlgo needs comes from the
+                    # packet types handled above. Kept at debug so the raw body
+                    # is still recoverable when a new packet type has to be
+                    # reverse-engineered (the feed protocol is undocumented -
+                    # see this module's docstring).
+                    logger.debug(
+                        f"Unhandled message type '{msgtype}' "
+                        f"(ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, "
+                        f"body: {body.hex()}"
                     )
 
         except Exception as e:
             logger.error(f"Error parsing binary market data: {str(e)}")
 
     def _map_exchange_back(self, exchange_char: str) -> str:
-        """Map single character back to full exchange name"""
+        """Map single wire character back to a full exchange name.
+
+        Lossy by construction: 'N' is used on the wire by both NSE and NSEFO,
+        so this returns "NSE". Only used as the fallback for packets that were
+        never registered as scrips (e.g. index broadcasts). Registered scrips
+        go through _resolve_exchange_name(), which is exact.
+        """
         mapping = {"N": "NSE", "B": "BSE", "M": "MCX", "C": "NSECD", "D": "NCDEX", "G": "BSEFO"}
         return mapping.get(exchange_char, exchange_char)
+
+    @staticmethod
+    def _store_key(exchange_name: str, scrip_code) -> str:
+        """Canonical key for last_quotes / last_depth / last_oi / last_index."""
+        return f"{str(exchange_name).upper()}:{scrip_code}"
+
+    def _resolve_exchange_name(self, exchange_char: str, scrip_code: int) -> str:
+        """Full Motilal exchange name for an inbound packet's wire character.
+
+        Uses the (char, scrip) -> exchange map that register_scrip() fills, so
+        an NSEFO packet is stored under "NSEFO:<token>" and not "NSE:<token>".
+        Falls back to the lossy character mapping for unregistered scrips.
+        """
+        with self.lock:
+            resolved = self._scrip_exchange.get((exchange_char, scrip_code))
+        return resolved or self._map_exchange_back(exchange_char)
 
     def _parse_depth_level_packet(self, body: bytes, key: str, symbol: str, level: int):
         """
@@ -488,18 +603,22 @@ class MotilalWebSocket:
             level: Depth level (1-5)
         """
         try:
-            # Market depth format:
+            # Market depth format (doc 33 MarketDepth field order:
+            # BidRate, BidQty, BidOrder, OfferRate, OfferQty, OfferOrder):
             # Bytes 0-3: BidRate (float)
             # Bytes 4-7: BidQty (int)
             # Bytes 8-9: BidOrder (short)
             # Bytes 10-13: OfferRate (float)
             # Bytes 14-17: OfferQty (int)
             # Bytes 18-19: OfferOrder (short)
+            # Rates are already in rupees (doc 33 sample: 'BidRate': 3636.8) --
+            # do NOT divide by 100 here; the paisa scaling in doc 26 applies to
+            # the REST LTP endpoint only.
 
-            bid_rate = unpack("f", body[0:4])[0]
+            bid_rate = unpack("<f", body[0:4])[0]
             bid_qty = int.from_bytes(body[4:8], byteorder="little", signed=True)
             bid_order = int.from_bytes(body[8:10], byteorder="little", signed=True)
-            offer_rate = unpack("f", body[10:14])[0]
+            offer_rate = unpack("<f", body[10:14])[0]
             offer_qty = int.from_bytes(body[14:18], byteorder="little", signed=True)
             offer_order = int.from_bytes(body[18:20], byteorder="little", signed=True)
 
@@ -534,28 +653,85 @@ class MotilalWebSocket:
             logger.error(f"Error parsing depth level {level} packet: {str(e)}")
 
     def _parse_ltp_packet(self, body: bytes, key: str, symbol: str):
-        """Parse LTP packet"""
+        """Parse LTP packet (20 bytes = five 4-byte fields).
+
+        doc 33-websocket-broadcast.md LTP structure, in this exact order:
+            LTP_Rate            3636.8   -> float, rupees
+            LTP_Qty             4        -> int, LAST TRADED quantity
+            LTP_Cumulative Qty  75937    -> int, the day's cumulative volume
+            LTP_AvgTradePrice   3627.39  -> float, rupees
+            LTP_Open Interest   0        -> int
+
+        Note the second field is the last traded quantity, NOT volume: volume is
+        the third field. This parser previously read only the first two fields
+        and stored LTP_Qty as "volume", so "volume" carried a single trade's size
+        and the average price / OI never arrived at all.
+        """
         try:
-            rate = unpack("f", body[0:4])[0]
-            qty = int.from_bytes(body[4:8], byteorder="little", signed=True)
+            rate = unpack("<f", body[0:4])[0]
+            ltq = int.from_bytes(body[4:8], byteorder="little", signed=True)
+            cumulative_qty = int.from_bytes(body[8:12], byteorder="little", signed=True)
+            avg_trade_price = unpack("<f", body[12:16])[0]
+            open_interest = int.from_bytes(body[16:20], byteorder="little", signed=True)
 
             with self.lock:
                 if key not in self.last_quotes:
                     self.last_quotes[key] = {"symbol": symbol}
-                self.last_quotes[key]["ltp"] = round(rate, 2)
-                self.last_quotes[key]["volume"] = qty
+                self.last_quotes[key].update(
+                    {
+                        "ltp": round(rate, 2),
+                        "ltq": ltq,
+                        "volume": cumulative_qty,
+                        "avg_trade_price": round(avg_trade_price, 2),
+                        # Both spellings: motilal_adapter.py reads "oi",
+                        # broker/motilal/api/data.py reads "open_interest".
+                        "oi": open_interest,
+                        "open_interest": open_interest,
+                    }
+                )
 
-            logger.debug(f"LTP updated for {key}: {rate}@{qty}")
+            logger.debug(
+                f"LTP updated for {key}: ltp={rate} ltq={ltq} volume={cumulative_qty} "
+                f"avg={avg_trade_price} oi={open_interest}"
+            )
         except Exception as e:
             logger.error(f"Error parsing LTP packet: {str(e)}")
 
-    def _parse_ohlc_packet(self, body: bytes, key: str, symbol: str):
-        """Parse OHLC packet"""
+    def _parse_dpr_packet(self, body: bytes, key: str, symbol: str):
+        """Parse DPR (Daily Price Range / circuit limits) packet.
+
+        doc 33 DPR structure: {'UpperCktLimit': 3959.9, 'LowerCktLimit': 3240.0}
+        -- two floats in rupees, in that order.
+        """
         try:
-            open_price = unpack("f", body[0:4])[0]
-            high_price = unpack("f", body[4:8])[0]
-            low_price = unpack("f", body[8:12])[0]
-            close_price = unpack("f", body[12:16])[0]
+            upper_circuit = unpack("<f", body[0:4])[0]
+            lower_circuit = unpack("<f", body[4:8])[0]
+
+            with self.lock:
+                if key not in self.last_quotes:
+                    self.last_quotes[key] = {"symbol": symbol}
+                self.last_quotes[key].update(
+                    {
+                        "upper_circuit": round(upper_circuit, 2),
+                        "lower_circuit": round(lower_circuit, 2),
+                    }
+                )
+
+            logger.debug(f"DPR updated for {key}: upper={upper_circuit} lower={lower_circuit}")
+        except Exception as e:
+            logger.error(f"Error parsing DPR packet: {str(e)}")
+
+    def _parse_ohlc_packet(self, body: bytes, key: str, symbol: str):
+        """Parse Day OHLC packet.
+
+        doc 33 DayOHLC structure: Open, High, Low, PrevDayClose -- four floats
+        in rupees ('Open': 3610.0), in that order.
+        """
+        try:
+            open_price = unpack("<f", body[0:4])[0]
+            high_price = unpack("<f", body[4:8])[0]
+            low_price = unpack("<f", body[8:12])[0]
+            close_price = unpack("<f", body[12:16])[0]
 
             with self.lock:
                 if key not in self.last_quotes:
@@ -574,270 +750,82 @@ class MotilalWebSocket:
             logger.error(f"Error parsing OHLC packet: {str(e)}")
 
     def _parse_oi_packet(self, body: bytes, key: str, symbol: str):
-        """Parse Open Interest packet"""
+        """Parse Open Interest packet.
+
+        doc 33 OpenInterest structure, in this order:
+            'Open Interest', 'Open Interest High', 'Open Interest Low'
+        -- three ints. Only the first was read before, so the high/low were lost.
+        """
         try:
             oi = int.from_bytes(body[0:4], byteorder="little", signed=True)
+            oi_high = int.from_bytes(body[4:8], byteorder="little", signed=True)
+            oi_low = int.from_bytes(body[8:12], byteorder="little", signed=True)
 
             with self.lock:
-                self.last_oi[key] = {"symbol": symbol, "oi": oi}
+                self.last_oi[key] = {
+                    "symbol": symbol,
+                    # Both spellings: motilal_adapter.py reads "oi",
+                    # broker/motilal/api/data.py reads "open_interest".
+                    "oi": oi,
+                    "open_interest": oi,
+                    "oi_high": oi_high,
+                    "oi_low": oi_low,
+                }
 
-            logger.debug(f"OI updated for {key}: {oi}")
+                # Keep the quote view in sync for consumers that read OI there.
+                if key in self.last_quotes:
+                    self.last_quotes[key]["oi"] = oi
+                    self.last_quotes[key]["open_interest"] = oi
+
+            logger.debug(f"OI updated for {key}: oi={oi} high={oi_high} low={oi_low}")
         except Exception as e:
             logger.error(f"Error parsing OI packet: {str(e)}")
 
     def _parse_index_packet(self, body: bytes, key: str, symbol: str):
-        """Parse Index data packet (for index symbols like NIFTY, SENSEX)"""
+        """Parse Index data packet (for index symbols like NIFTY, SENSEX).
+
+        doc 33 Index structure: {'Rate': 16284.25} -- a single float in rupees.
+        Written to both last_index (read by get_index()/data.py as "rate") and
+        last_quotes (read as "ltp"). Previously only last_quotes was written
+        while get_index() read last_index, so get_index() always returned None.
+        """
         try:
-            # Index packet format (typically contains index value as float)
-            index_value = unpack("f", body[0:4])[0]
+            index_value = round(unpack("<f", body[0:4])[0], 2)
 
             with self.lock:
                 if key not in self.last_quotes:
                     self.last_quotes[key] = {"symbol": symbol}
-                self.last_quotes[key]["ltp"] = round(index_value, 2)
+                self.last_quotes[key]["ltp"] = index_value
+
+                self.last_index[key] = {
+                    "symbol": symbol,
+                    "rate": index_value,
+                    "ltp": index_value,
+                    "timestamp": datetime.now().isoformat(),
+                }
 
             logger.debug(f"Index value updated for {key}: {index_value}")
         except Exception as e:
             logger.error(f"Error parsing index packet: {str(e)}")
 
-    def _process_market_data(self, data: dict):
-        """
-        Process market data messages from WebSocket.
-
-        Motilal provides different message types:
-        - DayOHLC: Open, High, Low, PrevDayClose
-        - LTP: Last Traded Price and related data
-        - DPR: Daily Price Range (circuit limits)
-        - MarketDepth: Bid/Ask levels
-        - OpenInterest: OI data for derivatives
-        - Index: Index values
-
-        Args:
-            data (dict): Market data from WebSocket
-        """
-        try:
-            # Determine message type based on fields present
-            exchange = data.get("Exchange", "")
-            scrip_code = data.get("Scrip Code", "")
-            timestamp = data.get("Time", "")
-
-            if not exchange or not scrip_code:
-                logger.debug("Message does not contain Exchange or Scrip Code, skipping")
-                return
-
-            # Create a unique key for this instrument (use single-char exchange to match binary parser)
-            exchange_char = self._map_exchange_to_char(exchange)
-            key = f"{exchange_char}:{scrip_code}"
-
-            # Look up the original subscription to get the correct symbol
-            subscription_key = f"{exchange}|{scrip_code}"
-            original_instrument = None
-            with self.lock:
-                original_instrument = self.subscriptions.get(subscription_key)
-
-            # Use subscription symbol if available
-            symbol = None
-            if original_instrument and hasattr(original_instrument, "symbol"):
-                symbol = original_instrument.symbol
-                logger.debug(f"Using subscription symbol: {symbol} for {subscription_key}")
-            else:
-                logger.warning(f"No subscription symbol found for {subscription_key}")
-
-            # Process DayOHLC data
-            if "Open" in data or "High" in data or "Low" in data or "PrevDayClose" in data:
-                self._process_dayohlc(data, key, symbol)
-
-            # Process LTP data
-            if "LTP_Rate" in data:
-                self._process_ltp(data, key, symbol)
-
-            # Process DPR data (circuit limits)
-            if "UpperCktLimit" in data or "LowerCktLimit" in data:
-                self._process_dpr(data, key, symbol)
-
-            # Process Market Depth data
-            if "BidRate" in data or "OfferRate" in data:
-                self._process_depth(data, key, symbol)
-
-            # Process Open Interest data
-            if "Open Interest" in data:
-                self._process_oi(data, key, symbol)
-
-            # Process Index data
-            if (
-                "Rate" in data and "LTP_Rate" not in data
-            ):  # Rate field without LTP_Rate indicates index
-                self._process_index(data, key, symbol)
-
-        except Exception as e:
-            logger.error(f"Error processing market data: {str(e)}")
-
-    def _process_dayohlc(self, data: dict, key: str, symbol: str = None):
-        """Process Day OHLC data"""
-        try:
-            ohlc_data = {
-                "exchange": data.get("Exchange", ""),
-                "scrip_code": data.get("Scrip Code", ""),
-                "symbol": symbol,
-                "time": data.get("Time", ""),
-                "open": float(data.get("Open", 0)) / 100.0,  # Convert paisa to rupees
-                "high": float(data.get("High", 0)) / 100.0,
-                "low": float(data.get("Low", 0)) / 100.0,
-                "prev_close": float(data.get("PrevDayClose", 0)) / 100.0,
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            with self.lock:
-                if key not in self.last_quotes:
-                    self.last_quotes[key] = {}
-                self.last_quotes[key].update(ohlc_data)
-
-            logger.debug(f"Updated OHLC data for {key}")
-        except Exception as e:
-            logger.error(f"Error processing Day OHLC data: {str(e)}")
-
-    def _process_ltp(self, data: dict, key: str, symbol: str = None):
-        """Process LTP (Last Traded Price) data"""
-        try:
-            ltp_data = {
-                "exchange": data.get("Exchange", ""),
-                "scrip_code": data.get("Scrip Code", ""),
-                "symbol": symbol,
-                "time": data.get("Time", ""),
-                "ltp": float(data.get("LTP_Rate", 0)) / 100.0,  # Convert paisa to rupees
-                "ltp_qty": int(data.get("LTP_Qty", 0)),
-                "cumulative_qty": int(data.get("LTP_Cumulative Qty", 0)),
-                "avg_trade_price": float(data.get("LTP_AvgTradePrice", 0)) / 100.0,
-                "open_interest": int(data.get("LTP_Open Interest", 0)),
-                "volume": int(data.get("LTP_Cumulative Qty", 0)),  # Use cumulative qty as volume
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            with self.lock:
-                if key not in self.last_quotes:
-                    self.last_quotes[key] = {}
-                self.last_quotes[key].update(ltp_data)
-
-            logger.debug(
-                f"Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}"
-            )
-        except Exception as e:
-            logger.error(f"Error processing LTP data: {str(e)}")
-
-    def _process_dpr(self, data: dict, key: str, symbol: str = None):
-        """Process DPR (Daily Price Range - circuit limits) data"""
-        try:
-            dpr_data = {
-                "exchange": data.get("Exchange", ""),
-                "scrip_code": data.get("Scrip Code", ""),
-                "symbol": symbol,
-                "time": data.get("Time", ""),
-                "upper_circuit": float(data.get("UpperCktLimit", 0)) / 100.0,
-                "lower_circuit": float(data.get("LowerCktLimit", 0)) / 100.0,
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            with self.lock:
-                if key not in self.last_quotes:
-                    self.last_quotes[key] = {}
-                self.last_quotes[key].update(dpr_data)
-
-            logger.debug(f"Updated DPR data for {key}")
-        except Exception as e:
-            logger.error(f"Error processing DPR data: {str(e)}")
-
-    def _process_depth(self, data: dict, key: str, symbol: str = None):
-        """Process Market Depth data"""
-        try:
-            # Motilal provides depth data level by level
-            # Each message contains one level of market depth
-            level = int(data.get("Level", 1))
-
-            bid_data = {
-                "price": float(data.get("BidRate", 0)) / 100.0,
-                "quantity": int(data.get("BidQty", 0)),
-                "orders": int(data.get("BidOrder", 0)),
-            }
-
-            ask_data = {
-                "price": float(data.get("OfferRate", 0)) / 100.0,
-                "quantity": int(data.get("OfferQty", 0)),
-                "orders": int(data.get("OfferOrder", 0)),
-            }
-
-            with self.lock:
-                if key not in self.last_depth:
-                    self.last_depth[key] = {
-                        "exchange": data.get("Exchange", ""),
-                        "scrip_code": data.get("Scrip Code", ""),
-                        "symbol": symbol,
-                        "time": data.get("Time", ""),
-                        "bids": [],
-                        "asks": [],
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-                # Ensure we have enough levels
-                while len(self.last_depth[key]["bids"]) < level:
-                    self.last_depth[key]["bids"].append({"price": 0, "quantity": 0, "orders": 0})
-                while len(self.last_depth[key]["asks"]) < level:
-                    self.last_depth[key]["asks"].append({"price": 0, "quantity": 0, "orders": 0})
-
-                # Update the specific level (1-indexed, so subtract 1)
-                self.last_depth[key]["bids"][level - 1] = bid_data
-                self.last_depth[key]["asks"][level - 1] = ask_data
-                self.last_depth[key]["time"] = data.get("Time", "")
-                self.last_depth[key]["timestamp"] = datetime.now().isoformat()
-
-            logger.debug(f"Updated market depth level {level} for {key} - Symbol: {symbol}")
-        except Exception as e:
-            logger.error(f"Error processing market depth data: {str(e)}")
-
-    def _process_oi(self, data: dict, key: str, symbol: str = None):
-        """Process Open Interest data"""
-        try:
-            oi_data = {
-                "exchange": data.get("Exchange", ""),
-                "scrip_code": data.get("Scrip Code", ""),
-                "symbol": symbol,
-                "time": data.get("Time", ""),
-                "open_interest": int(data.get("Open Interest", 0)),
-                "oi_high": int(data.get("Open Interest High", 0)),
-                "oi_low": int(data.get("Open Interest Low", 0)),
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            with self.lock:
-                self.last_oi[key] = oi_data
-
-                # Also update in quotes if exists
-                if key in self.last_quotes:
-                    self.last_quotes[key]["open_interest"] = oi_data["open_interest"]
-
-            logger.debug(
-                f"Updated OI data for {key} - OI: {oi_data['open_interest']}, Symbol: {symbol}"
-            )
-        except Exception as e:
-            logger.error(f"Error processing OI data: {str(e)}")
-
-    def _process_index(self, data: dict, key: str, symbol: str = None):
-        """Process Index data"""
-        try:
-            index_data = {
-                "exchange": data.get("Exchange", ""),
-                "scrip_code": data.get("Scrip Code", ""),
-                "symbol": symbol,
-                "time": data.get("Time", ""),
-                "rate": float(data.get("Rate", 0)) / 100.0,  # Convert paisa to rupees
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            with self.lock:
-                self.last_index[key] = index_data
-
-            logger.debug(f"Updated index data for {key} - Rate: {index_data['rate']}")
-        except Exception as e:
-            logger.error(f"Error processing index data: {str(e)}")
+    # ------------------------------------------------------------------
+    # REMOVED: a dead parallel JSON implementation (_process_market_data and
+    # its _process_dayohlc / _process_ltp / _process_dpr / _process_depth /
+    # _process_oi / _process_index helpers). It had ZERO callers anywhere in
+    # the repo -- this broadcast feed is binary, so nothing ever handed it a
+    # dict -- yet it divided every price by 100 while the live binary parsers
+    # above divide nothing. That contradiction inside one file was an invitation
+    # to "fix" the live path in the wrong direction, so the dead path is gone.
+    #
+    # The live no-division path is the correct one: doc 33-websocket-broadcast.md
+    # quotes rupees throughout ('LTP_Rate': 3636.8, 'Open': 3610.0,
+    # 'BidRate': 3636.8, 'Rate': 16284.25). The paisa note in doc 26 applies to
+    # the REST LTP endpoint, not to this feed.
+    #
+    # The one thing worth keeping was its field-name knowledge, now recorded in
+    # the docstrings of the live parsers above -- in particular
+    # volume == LTP_Cumulative Qty (not LTP_Qty), see _parse_ltp_packet.
+    # ------------------------------------------------------------------
 
     def on_error(self, ws, error):
         """
@@ -886,12 +874,20 @@ class MotilalWebSocket:
                     return
                 self.connect()
 
-            t = threading.Thread(target=delayed_reconnect, daemon=True)
             with self._reconnect_threads_lock:
                 # prune dead refs to keep the list bounded
                 self._reconnect_threads = [
                     th for th in self._reconnect_threads if th.is_alive()
                 ]
+                # One pending reconnect is all that is ever useful: connect()
+                # short-circuits while a connect thread is alive, so a burst of
+                # on_close events (several WebSocketApps unwinding together, a
+                # flapping link) would otherwise leave N threads sleeping on a
+                # backoff of up to 30s each to accomplish one reconnect.
+                if self._reconnect_threads:
+                    logger.debug("A Motilal reconnect is already pending; not scheduling another")
+                    return
+                t = threading.Thread(target=delayed_reconnect, daemon=True)
                 self._reconnect_threads.append(t)
             t.start()
 
@@ -910,20 +906,25 @@ class MotilalWebSocket:
         Returns:
             bool: True if registration successful, False otherwise
         """
+        exchange_upper = exchange.upper()
+        scrip_code = int(scrip_code)
+
         with self.lock:
             if not self.is_connected:
                 logger.error("Cannot register scrip: WebSocket is not connected")
                 return False
 
-            # Create subscription key
-            subscription_key = f"{exchange}|{scrip_code}"
+            # Create subscription key. Uses the full Motilal exchange name, which
+            # is exactly what _parse_binary_market_data() resolves inbound packets
+            # to -- see the KEY SCHEME note in __init__.
+            subscription_key = f"{exchange_upper}|{scrip_code}"
 
             # Store subscription
             self.subscriptions[subscription_key] = type(
                 "obj",
                 (object,),
                 {
-                    "exchange": exchange,
+                    "exchange": exchange_upper,
                     "exchange_type": exchange_type,
                     "scrip_code": scrip_code,
                     "symbol": symbol,
@@ -931,25 +932,38 @@ class MotilalWebSocket:
             )()
 
             # Also store in subscribed_scrips for resubscription
-            full_key = f"{exchange}|{exchange_type}|{scrip_code}"
+            full_key = f"{exchange_upper}|{exchange_type}|{scrip_code}"
             self.subscribed_scrips[full_key] = {
-                "exchange": exchange,
+                "exchange": exchange_upper,
                 "exchange_type": exchange_type,
                 "scrip_code": scrip_code,
                 "symbol": symbol,
             }
 
-            # Map exchange to single character
-            # N=NSE, B=BSE, M=MCX, C=NSECD, D=NCDEX, G=BSEFO
-            exchange_upper = exchange.upper()
-            if exchange_upper == "NSECD":
-                exchange_char = "C"
-            elif exchange_upper == "NCDEX":
-                exchange_char = "D"
-            elif exchange_upper == "BSEFO":
-                exchange_char = "G"
-            else:
-                exchange_char = exchange_upper[0]  # First character
+            # Map exchange to the single wire character.
+            # N=NSE and NSEFO, B=BSE, M=MCX, C=NSECD, D=NCDEX, G=BSEFO.
+            exchange_char = self._map_exchange_to_char(exchange_upper)
+
+            # Record how to resolve inbound packets for this scrip back to the
+            # full exchange name (the packet header carries only the character).
+            existing = self._scrip_exchange.get((exchange_char, scrip_code))
+            if existing is None:
+                self._scrip_exchange[(exchange_char, scrip_code)] = exchange_upper
+            elif existing != exchange_upper:
+                # e.g. the same numeric token registered under both NSE (CASH)
+                # and NSEFO (DERIVATIVES). The broadcast header has no segment
+                # byte, so the two are indistinguishable on the wire; keep the
+                # first registration and say so rather than silently mixing them.
+                logger.warning(
+                    "Motilal scrip %s on wire exchange '%s' is already registered as %s; "
+                    "%s packets cannot be told apart and will be stored under %s:%s",
+                    scrip_code,
+                    exchange_char,
+                    existing,
+                    exchange_upper,
+                    existing,
+                    scrip_code,
+                )
 
             # Map exchange type to single character (C=CASH, D=DERIVATIVES)
             exchange_type_char = exchange_type.upper()[0]
@@ -993,30 +1007,43 @@ class MotilalWebSocket:
         Returns:
             bool: True if unregistration successful, False otherwise
         """
+        exchange_upper = exchange.upper()
+        scrip_code = int(scrip_code)
+
         with self.lock:
             if not self.is_connected:
                 logger.error("Cannot unregister scrip: WebSocket is not connected")
                 return False
 
-            # Remove from subscriptions
-            subscription_key = f"{exchange}|{scrip_code}"
+            # Remove from subscriptions (same key scheme as register_scrip)
+            subscription_key = f"{exchange_upper}|{scrip_code}"
             if subscription_key in self.subscriptions:
                 del self.subscriptions[subscription_key]
 
-            full_key = f"{exchange}|{exchange_type}|{scrip_code}"
+            full_key = f"{exchange_upper}|{exchange_type}|{scrip_code}"
             if full_key in self.subscribed_scrips:
                 del self.subscribed_scrips[full_key]
 
-            # Map exchange to single character
-            exchange_upper = exchange.upper()
-            if exchange_upper == "NSECD":
-                exchange_char = "C"
-            elif exchange_upper == "NCDEX":
-                exchange_char = "D"
-            elif exchange_upper == "BSEFO":
-                exchange_char = "G"
-            else:
-                exchange_char = exchange_upper[0]
+            # Map exchange to the single wire character
+            exchange_char = self._map_exchange_to_char(exchange_upper)
+
+            # Drop the packet-resolution entry only if it still points at us, so
+            # unregistering NSE does not orphan an NSEFO registration sharing 'N'.
+            if self._scrip_exchange.get((exchange_char, scrip_code)) == exchange_upper:
+                del self._scrip_exchange[(exchange_char, scrip_code)]
+
+            # Drop the cached tick data for this scrip. These three dicts are
+            # written on every inbound packet and used to be purged nowhere: the
+            # entry outlived the subscription. That was survivable while each
+            # request abandoned its own short-lived client, but the socket is
+            # pooled per session now (see data.py's _WS_REGISTRY), so the caches
+            # live as long as the login and would otherwise accumulate one entry
+            # per distinct scrip ever quoted - an option-chain sweep touches
+            # hundreds of strikes per refresh.
+            store_key = self._store_key(exchange_upper, scrip_code)
+            self.last_quotes.pop(store_key, None)
+            self.last_depth.pop(store_key, None)
+            self.last_oi.pop(store_key, None)
 
             # Map exchange type to single character
             exchange_type_char = exchange_type.upper()[0]
@@ -1049,11 +1076,25 @@ class MotilalWebSocket:
         """
         Register an index for market data updates.
 
+        UNVERIFIED FRAME. doc 33-websocket-broadcast.md documents only the SDK
+        call ``Mofsl.IndexRegister("NSE")`` -- it never shows the frame that call
+        puts on the wire. The JSON below is an invention: it is sent as text on a
+        socket whose every other message (login 'Q', scrip register 'D', all
+        inbound quotes) is binary, and "IndexRegister" does not appear in doc 34's
+        exhaustive action list (TradeSubscribe, TradeUnsubscribe, OrderSubscribe,
+        OrderUnsubscribe, logout, heartbeat) either. The real frame is most likely
+        a binary packet analogous to register_scrip()'s, but its layout is not
+        documented anywhere, so it cannot be derived -- this is left as-is rather
+        than replaced with a different guess.
+
+        The signature is part of this module's contract: broker/motilal/api/data.py
+        calls register_index(exchange) for NSE_INDEX / BSE_INDEX symbols.
+
         Args:
             exchange (str): Exchange code (NSE, BSE)
 
         Returns:
-            bool: True if registration successful, False otherwise
+            bool: True if the frame was sent (NOT that the server accepted it)
         """
         with self.lock:
             if not self.is_connected:
@@ -1062,8 +1103,7 @@ class MotilalWebSocket:
 
             self.subscribed_indices.add(exchange)
 
-            # Send index registration message
-            # Format: Mofsl.IndexRegister("NSE")
+            # Send index registration message (unverified, see docstring)
             index_msg = {
                 "clientid": self.client_id,
                 "action": "IndexRegister",
@@ -1082,11 +1122,15 @@ class MotilalWebSocket:
         """
         Unregister an index from market data updates.
 
+        UNVERIFIED FRAME -- same caveat as register_index(): doc 33 shows only
+        ``Mofsl.IndexUnregister("NSE")``, never the wire frame, and this JSON
+        action name is invented.
+
         Args:
             exchange (str): Exchange code (NSE, BSE)
 
         Returns:
-            bool: True if unregistration successful, False otherwise
+            bool: True if the frame was sent (NOT that the server accepted it)
         """
         with self.lock:
             if not self.is_connected:
@@ -1095,7 +1139,7 @@ class MotilalWebSocket:
 
             self.subscribed_indices.discard(exchange)
 
-            # Send index unregistration message
+            # Send index unregistration message (unverified, see docstring)
             index_msg = {
                 "clientid": self.client_id,
                 "action": "IndexUnregister",
@@ -1136,8 +1180,14 @@ class MotilalWebSocket:
         Start heartbeat thread to keep connection alive.
         Note: Disabled for now as Motilal's binary protocol heartbeat format is unclear.
         """
-        # Heartbeat disabled - Motilal's market data WebSocket may not need it
-        # The official SDK uses auto-reconnection instead
+        # Heartbeat disabled - Motilal's market data WebSocket may not need it.
+        # The official SDK uses auto-reconnection instead, and doc 33 specifies
+        # no ping/pong or interval for the broadcast feed (doc 34's
+        # {"action": "heartbeat"} belongs to the trade socket).
+        # Caveat worth knowing: is_websocket_connected() declares the socket dead
+        # after 60s without an inbound message, which is exactly how an illiquid
+        # scrip with no keepalive looks. If spurious reconnects show up on quiet
+        # instruments, this is the first place to look.
         logger.debug("Heartbeat disabled for binary WebSocket")
 
     def is_websocket_connected(self):
@@ -1169,9 +1219,7 @@ class MotilalWebSocket:
         Returns:
             dict: Latest quote data or None if not available
         """
-        # Convert exchange to single char for key lookup (binary parser stores with single-char exchange)
-        exchange_char = self._map_exchange_to_char(exchange)
-        key = f"{exchange_char}:{scrip_code}"
+        key = self._store_key(exchange, scrip_code)
         with self.lock:
             quote = self.last_quotes.get(key)
             if quote:
@@ -1184,7 +1232,12 @@ class MotilalWebSocket:
             return quote
 
     def _map_exchange_to_char(self, exchange: str) -> str:
-        """Map full exchange name to single character"""
+        """Map full exchange name to the single WIRE character.
+
+        Used only when building outbound binary packets. It is deliberately NOT
+        used to build storage keys: NSE and NSEFO share 'N', so keys built from
+        it collided cash and F&O tokens (see the KEY SCHEME note in __init__).
+        """
         mapping = {
             "NSE": "N",
             "BSE": "B",
@@ -1208,9 +1261,7 @@ class MotilalWebSocket:
         Returns:
             dict: Latest market depth data or None if not available
         """
-        # Convert exchange to single char for key lookup
-        exchange_char = self._map_exchange_to_char(exchange)
-        key = f"{exchange_char}:{scrip_code}"
+        key = self._store_key(exchange, scrip_code)
         logger.debug(f"Looking up depth with key: {key}")
 
         with self.lock:
@@ -1265,9 +1316,7 @@ class MotilalWebSocket:
         Returns:
             dict: Latest OI data or None if not available
         """
-        # Convert exchange to single char for key lookup
-        exchange_char = self._map_exchange_to_char(exchange)
-        key = f"{exchange_char}:{scrip_code}"
+        key = self._store_key(exchange, scrip_code)
 
         with self.lock:
             oi = self.last_oi.get(key)
@@ -1290,9 +1339,7 @@ class MotilalWebSocket:
         Returns:
             dict: Latest index data or None if not available
         """
-        # Convert exchange to single char for key lookup (binary parser stores with single-char exchange)
-        exchange_char = self._map_exchange_to_char(exchange)
-        key = f"{exchange_char}:{index_code}"
+        key = self._store_key(exchange, index_code)
         with self.lock:
             index = self.last_index.get(key)
             if index:

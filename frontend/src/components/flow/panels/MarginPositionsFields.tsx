@@ -25,11 +25,11 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  defaultProductForExchange,
   EXCHANGES,
   ORDER_ACTIONS,
   PRICE_TYPES,
   PRODUCT_TYPES,
-  defaultProductForExchange,
 } from '@/lib/flow/constants'
 import {
   EMPTY_LEG,

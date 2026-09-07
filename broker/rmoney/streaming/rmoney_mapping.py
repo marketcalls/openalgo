@@ -1,5 +1,9 @@
 import logging
 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class RMoneyExchangeMapper:
     """Maps between OpenAlgo exchange codes and RMoney XTS specific exchange types"""
@@ -52,7 +56,7 @@ class RMoneyExchangeMapper:
             int: Exchange type code for RMoney XTS API
         """
         if exchange is None:
-            logging.warning("Exchange is None, defaulting to NSE (1)")
+            logger.warning("Exchange is None, defaulting to NSE (1)")
             return 1
 
         # Convert to string and uppercase
@@ -92,11 +96,11 @@ class RMoneyExchangeMapper:
         exchange_code = all_exchange_mappings.get(exchange)
 
         if exchange_code is not None:
-            logging.debug(f"Mapped exchange '{exchange}' to code {exchange_code}")
+            logger.debug(f"Mapped exchange '{exchange}' to code {exchange_code}")
             return exchange_code
 
         # If we get here, log a warning and default to NSE
-        logging.warning(f"Unknown exchange '{exchange}', defaulting to NSE (1)")
+        logger.warning(f"Unknown exchange '{exchange}', defaulting to NSE (1)")
         return 1
 
     @staticmethod

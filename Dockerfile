@@ -2,7 +2,13 @@
 # (see marketcalls/openalgo#1857). To refresh a pin after a deliberate version
 # bump: `docker buildx imagetools inspect <tag>` and copy the reported Digest.
 # ------------------------------ Python Builder Stage ----------------------- #
-FROM python:3.12-bullseye@sha256:7cc929040c5e8cf6036c5099d62a83708427c131fb7a7c965b5ba51e995eea1c AS python-builder
+# Base images track Debian 13 "trixie". Debian 11 "bullseye" reached end of LTS
+# on 2026-08-31 and its security pool was drained days later, so every build
+# began failing with 404s on systemd, tzdata, libtiff5 and libgbm1 while the
+# package index still advertised them. Debian 12 "bookworm" is not the fix --
+# its regular security support ended 2026-07-11 and it is already LTS-only.
+# Trixie has security support to 2028-08-09 (LTS to 2030-06-30).
+FROM python:3.12-trixie@sha256:cd7c412d000912f29075a1b8803e43cb2f38bb67f104019df526df5ceaf30569 AS python-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -13,11 +19,11 @@ RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install "gunicorn>=25.0,<26" eventlet && \
+    uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2" && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:22-bullseye-slim@sha256:97924c8c7170c7a4c4464a281cc1f9569816496e546afbac17c4f2723397e116 AS frontend-builder
+FROM node:22-trixie-slim@sha256:7b8a0c89c54499bee567618f96578e1a12a800f062fbdbfd1fb6a443fa6f6284 AS frontend-builder
 WORKDIR /app
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm ci
@@ -26,7 +32,7 @@ RUN cd frontend && npm run build
 
 # --------------------------------------------------------------------------- #
 # ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-bullseye@sha256:411fa4dcfdce7e7a3057c45662beba9dcd4fa36b2e50a2bfcd6c9333e59bf0db AS production
+FROM python:3.12-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS production
 # 0 – set timezone to IST (Asia/Kolkata) & install runtime dependencies
 #     chromium + fonts-liberation are required by Kaleido 1.x (plotly static
 #     image export) which drives a real headless Chromium via choreographer.

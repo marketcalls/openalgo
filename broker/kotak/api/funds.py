@@ -69,16 +69,26 @@ def get_margin_data(auth_token):
             logger.error(f"Kotak Limits API error: {error_msg}")
             return {}
 
-        # Process and return the margin data
-        # Note: Based on the API docs, the response fields are at root level
-        # Available Balance = CollateralValue + RmsPayInAmt - RmsPayOutAmt + Collateral
-        collateral_value = float(margin_data.get("CollateralValue", 0))
-        pay_in = float(margin_data.get("RmsPayInAmt", 0))
-        pay_out = float(margin_data.get("RmsPayOutAmt", 0))
+        # Process and return the margin data.
+        #
+        # "availablecash" is cash only. Collateral is reported as its own field,
+        # so folding it into availablecash double-counts (issue #1582 -- same bug
+        # class fixed for other brokers there, never touched here).
+        #
+        # Kotak's cash-balance field in /quick/user/limits is "CollateralValue"
+        # -- misleadingly named: it does NOT track pledged collateral. Verified on
+        # a real account before and after pledging two holdings: CollateralValue
+        # stayed on cash (179542.8 both times), "Collateral" carried the
+        # pledged-shares margin (0 -> 222565.5), and "Net" == CollateralValue +
+        # Collateral - MarginUsed (179542.8 + 222565.5 - 0.2 = 402108.1, matching
+        # the Kotak app's "Available margin"). "RmsPayInAmt - RmsPayOutAmt" is
+        # only the current day's fund pay-in/pay-out delta -- 0 unless the account
+        # was funded that same day -- so it is not a cash source either.
+        cash = float(margin_data.get("CollateralValue", 0))
         collateral = float(margin_data.get("Collateral", 0))
 
         processed_margin_data = {
-            "availablecash": f"{collateral_value + pay_in - pay_out + collateral:.2f}",
+            "availablecash": f"{cash:.2f}",
             "collateral": f"{collateral:.2f}",
             "m2munrealized": f"{float(margin_data.get('UnrealizedMtomPrsnt', 0)):.2f}",
             "m2mrealized": f"{float(margin_data.get('RealizedMtomPrsnt', 0)):.2f}",

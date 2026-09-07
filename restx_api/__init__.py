@@ -52,6 +52,7 @@ from .positionbook import api as positionbook_ns
 from .quotes import api as quotes_ns
 from .search import api as search_ns
 from .split_order import api as split_order_ns
+from .strategy import api as strategy_ns
 from .symbol import api as symbol_ns
 from .synthetic_future import api as synthetic_future_ns
 from .telegram_bot import api as telegram_ns
@@ -107,3 +108,4 @@ api.add_namespace(place_gtt_order_ns, path="/placegttorder")
 api.add_namespace(modify_gtt_order_ns, path="/modifygttorder")
 api.add_namespace(cancel_gtt_order_ns, path="/cancelgttorder")
 api.add_namespace(gtt_orderbook_ns, path="/gttorderbook")
+api.add_namespace(strategy_ns, path="/strategy")

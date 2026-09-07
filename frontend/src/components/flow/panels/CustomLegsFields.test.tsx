@@ -54,7 +54,9 @@ let saved: unknown[] = []
 
 function Harness({ initial }: { initial?: unknown[] }) {
   const [legs, setLegs] = useState<unknown[]>(
-    initial ?? [{ strikeMode: 'OFFSET', offset: 'ATM', optionType: 'CE', action: 'BUY', quantity: 1 }]
+    initial ?? [
+      { strikeMode: 'OFFSET', offset: 'ATM', optionType: 'CE', action: 'BUY', quantity: 1 },
+    ]
   )
   return (
     <CustomLegsFields
@@ -108,11 +110,7 @@ describe('the expiry control', () => {
     await user.click(screen.getByLabelText('Expiry'))
     const options = await screen.findAllByRole('option')
 
-    expect(options.map((option) => option.textContent)).toEqual([
-      '25AUG26',
-      '01SEP26',
-      '29SEP26',
-    ])
+    expect(options.map((option) => option.textContent)).toEqual(['25AUG26', '01SEP26', '29SEP26'])
   })
 
   it('shows the node expiry for a leg that has none of its own', async () => {
@@ -132,9 +130,7 @@ describe('the expiry control', () => {
     await choose(user, 'Expiry', /^01SEP26$/)
 
     expect((saved[0] as { expiry?: string }).expiry).toBe('01SEP26')
-    await waitFor(() =>
-      expect(screen.getByLabelText('Expiry').textContent).toContain('01SEP26')
-    )
+    await waitFor(() => expect(screen.getByLabelText('Expiry').textContent).toContain('01SEP26'))
   })
 
   it('leaves an untouched leg following the node so a scheduled basket rolls', async () => {
@@ -301,5 +297,55 @@ describe('when the contract lookup fails', () => {
 
     expect(await screen.findByText(/Listed contracts unavailable/)).toBeTruthy()
     expect(screen.getByLabelText('Expiry')).toBeTruthy()
+  })
+})
+
+describe('a leg naming a strike the picker does not list', () => {
+  it('shows a far offset instead of an empty control', async () => {
+    /** The reported import bug: the executor accepts OTM1-OTM50, the dropdown
+     * stopped at OTM10, and a generated workflow reaching for a far strike
+     * came up blank - so the next value picked silently replaced it. */
+    await mount([
+      { strikeMode: 'OFFSET', offset: 'OTM12', optionType: 'PE', action: 'SELL', quantity: 1 },
+    ])
+    await waitFor(() => expect(screen.getByText(/ATM 24200/)).toBeTruthy())
+
+    expect(screen.getByLabelText('Strike offset').textContent).toContain('OTM12')
+  })
+
+  it('offers the far offsets to pick in the first place', async () => {
+    const user = await mount()
+    await waitFor(() => expect(screen.getByText(/ATM 24200/)).toBeTruthy())
+
+    await user.click(screen.getByLabelText('Strike offset'))
+    const offered = (await screen.findAllByRole('option')).map((o) => o.textContent)
+
+    expect(offered).toContain('OTM12')
+    expect(offered).toContain('OTM25')
+    expect(offered).toContain('ITM8')
+    expect(offered).not.toContain('OTM26')
+  })
+
+  it('keeps an offset outside the contract visible rather than dropping it', async () => {
+    /** Hand-written or from an older build. Shown as stored so the author can
+     * see and correct it, the way parseCustomLegs carries unknown values. */
+    await mount([
+      { strikeMode: 'OFFSET', offset: 'OTM60', optionType: 'CE', action: 'BUY', quantity: 1 },
+    ])
+    await waitFor(() => expect(screen.getByText(/ATM 24200/)).toBeTruthy())
+
+    expect(screen.getByLabelText('Strike offset').textContent).toContain('OTM60')
+  })
+
+  it('keeps a strike outside the chain window selectable', async () => {
+    /** The chain arrives as a window around ATM, so a leg pinned far out of
+     * the money has no row of its own - the same failure, and the same fix the
+     * expiry control already had for a date the contract no longer lists. */
+    await mount([
+      { strikeMode: 'STRIKE', strike: 21000, optionType: 'PE', action: 'SELL', quantity: 1 },
+    ])
+    await waitFor(() => expect(screen.getByText(/ATM 24200/)).toBeTruthy())
+
+    expect(screen.getByLabelText('Strike price').textContent).toContain('21000')
   })
 })

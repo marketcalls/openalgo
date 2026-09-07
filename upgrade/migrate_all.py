@@ -17,6 +17,7 @@ Works for:
 - Existing users on any version (skips already applied migrations)
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -43,6 +44,17 @@ PROJECT_ROOT = os.path.dirname(UPGRADE_DIR)
 # password reset for every user. That is operator-controlled work, not
 # something to run unattended on every update. Operators run it explicitly:
 #   cd upgrade && uv run rotate_pepper.py
+#
+# upgrade/migrate_drop_legacy_strategy.py is absent for the same reason. It
+# drops the retired `strategies` and `strategy_symbol_mappings` tables, whose
+# rows are user-authored trading configuration: which symbols a strategy
+# traded, at what quantity, with what product. It exports every row to JSON
+# before dropping and refuses to drop if that export fails, but an export is
+# not consent. Deleting a user's saved configuration during a routine upgrade
+# is exactly the class of surprise this list exists to prevent, so the operator
+# runs it when they have decided they no longer need the data:
+#   cd upgrade && uv run migrate_drop_legacy_strategy.py --status
+#   cd upgrade && uv run migrate_drop_legacy_strategy.py
 MIGRATIONS = [
     # Legacy migrations (for users upgrading from older versions)
     ("add_feed_token.py", "Feed Token Support"),
@@ -71,7 +83,19 @@ MIGRATIONS = [
     ("migrate_zerodha_new_exchanges.py", "Zerodha NCO/GLOBAL_INDEX & GIFTNIFTY Cleanup"),
     ("add_totp_purpose_flags.py", "Per-Purpose 2FA Flags (login/MCP/reset)"),
     ("migrate_gtt_sandbox.py", "Sandbox GTT Support & CAS F&O Close (15:40)"),
+    ("migrate_historify_drop_indexes.py", "Historify Unused Index Removal (#1779)"),
+    ("migrate_watchlist.py", "Charting Terminal Watchlists"),
+    ("migrate_strategy_module.py", "Strategy Module (multi-leg options + RMS)"),
+    ("migrate_strategy_universe_tab.py", "Strategy Module Universe Tab Normalization"),
+    ("migrate_agent.py", "Agent Module (LLM chat and chart surfaces)"),
 ]
+
+# Legacy migrations historically used non-zero exits for best-effort warnings,
+# so changing every entry to fail-stop would break established upgrades. New
+# required schema migrations are listed explicitly: their failure must reach
+# this runner's summary and process exit code instead of being reported as a
+# successful warning.
+REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
 
 
 def run_migration(script_name, description):
@@ -80,6 +104,9 @@ def run_migration(script_name, description):
 
     # Check if script exists
     if not os.path.exists(script_path):
+        if script_name in REQUIRED_MIGRATIONS:
+            print(f"  [X] {script_name} - Required script not found")
+            return False
         print(f"  [SKIP] {script_name} - Script not found")
         return True  # Not an error, might be removed in future
 
@@ -97,9 +124,12 @@ def run_migration(script_name, description):
         if result.returncode == 0:
             print(f"[OK] {description} - Completed")
             return True
-        else:
-            print(f"[!] {description} - Completed with warnings")
-            return True  # Continue even with warnings
+        if script_name in REQUIRED_MIGRATIONS:
+            print(f"[X] {description} - Failed (exit code {result.returncode})")
+            return False
+
+        print(f"[!] {description} - Completed with warnings")
+        return True  # Preserve legacy best-effort migration behavior.
 
     except Exception as e:
         print(f"[X] {description} - Error: {e}")
@@ -108,6 +138,11 @@ def run_migration(script_name, description):
 
 def main():
     """Run all migrations"""
+    parser = argparse.ArgumentParser(
+        description="Run every OpenAlgo migration. This command has no status/preview mode."
+    )
+    parser.parse_args()
+
     print()
     print("#" * 60)
     print("#" + " " * 58 + "#")

@@ -6,6 +6,21 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _to_float(value, default=0.0):
+    """Kite leaves holdings numerics null on stock it cannot price -- freshly
+    transferred shares, suspended scrips -- so coerce rather than trust. One
+    such row used to raise TypeError and take the whole holdings call down.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value, default=0):
+    return int(_to_float(value, default))
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -215,26 +230,32 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    for holdings in holdings_data:
+    for holdings in holdings_data or []:
         # Handle zero average price case
-        average_price = float(holdings.get("average_price") or 0.0)
-        if average_price == 0:
+        average_price = _to_float(holdings.get("average_price"))
+        last_price = _to_float(holdings.get("last_price"))
+        if average_price == 0 or last_price == 0:
+            # A missing last_price coerces to 0, and dividing by the average
+            # then reported a flat -100% loss on stock Kite simply had no
+            # price for. Report nothing rather than a fabricated wipeout.
             logger.debug(
-                f"Encountering zero average price for symbol: {holdings.get('tradingsymbol', 'Unknown')}"
+                f"Missing average or last price for symbol: {holdings.get('tradingsymbol', 'Unknown')}"
             )
             pnlpercent = 0.0
         else:
-            pnlpercent = round(
-                (holdings.get("last_price", 0) - average_price) / average_price * 100, 2
-            )
+            pnlpercent = round((last_price - average_price) / average_price * 100, 2)
 
         transformed_position = {
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
-            "quantity": holdings.get("quantity", 0),
+            "quantity": _to_int(holdings.get("quantity", 0)),
             "product": holdings.get("product", ""),
             "average_price": average_price,
-            "pnl": round(holdings.get("pnl", 0.0), 2),  # Rounded to two decimals
+            # Kite calls it last_price. It was already being read to derive
+            # pnlpercent and then thrown away, which left the holdings page
+            # showing a dash in the LTP column for every Zerodha user.
+            "ltp": last_price,
+            "pnl": round(_to_float(holdings.get("pnl")), 2),  # Rounded to two decimals
             "pnlpercent": pnlpercent,  # Rounded to two decimals
         }
         transformed_data.append(transformed_position)
@@ -251,31 +272,41 @@ def map_portfolio_data(portfolio_data):
     Returns:
     - The modified portfolio_data with  'product' fields.
     """
-    # Check if 'data' is None
-    if portfolio_data["data"] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
+    # Check if 'data' is None. A response that never carried the key at all --
+    # anything unexpected coming back from Kite -- used to raise KeyError here.
+    if portfolio_data.get("data") is None:
         logger.info("No data available.")
-        portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
+        portfolio_data = []  # holdings are a list, so stay one even when empty
     else:
         portfolio_data = portfolio_data["data"]
 
-    if portfolio_data:
-        for portfolio in portfolio_data:
-            if portfolio["product"] == "CNC":
-                portfolio["product"] = "CNC"
-
-            else:
-                logger.info("Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
+    for portfolio in portfolio_data or []:
+        if portfolio.get("product") != "CNC":
+            logger.info(
+                "Zerodha Portfolio - unexpected product %r, mapping to CNC.",
+                portfolio.get("product"),
+            )
+        # Holdings sit in the demat account, so CNC whatever Kite labels them.
+        # The old branch assigned "CNC" to itself and let anything else through
+        # raw, which no product in OpenAlgo would have matched.
+        portfolio["product"] = "CNC"
 
     return portfolio_data
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item["last_price"] * item["quantity"] for item in holdings_data)
-    totalinvvalue = sum(item["average_price"] * item["quantity"] for item in holdings_data)
-    totalprofitandloss = sum(item["pnl"] for item in holdings_data)
+    # Runs on the raw Kite rows, before transform_holdings_data has coerced
+    # anything, so it has to do its own coercing -- a single null last_price
+    # or pnl used to fail the entire holdings request rather than one row.
+    holdings_data = holdings_data or []
+    totalholdingvalue = sum(
+        _to_float(item.get("last_price")) * _to_int(item.get("quantity")) for item in holdings_data
+    )
+    totalinvvalue = sum(
+        _to_float(item.get("average_price")) * _to_int(item.get("quantity"))
+        for item in holdings_data
+    )
+    totalprofitandloss = sum(_to_float(item.get("pnl")) for item in holdings_data)
 
     # To avoid division by zero in the case when total_investment_value is 0
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0

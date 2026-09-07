@@ -30,7 +30,6 @@ def _patch_common(monkeypatch, emitted):
     )
     monkeypatch.setattr("database.master_contract_cache_hook.clear_cache_on_logout", lambda: None)
     monkeypatch.setattr("database.settings_db.clear_settings_cache", lambda: None)
-    monkeypatch.setattr("database.strategy_db.clear_strategy_cache", lambda: None)
     monkeypatch.setattr("database.telegram_db.clear_telegram_cache", lambda: None)
 
 

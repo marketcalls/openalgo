@@ -1451,15 +1451,20 @@ describe('StrategyBuilder identity orchestration', () => {
       status: number
       data: { status: string; data: { total_margin_required: number } }
     }>()
+    // The post-reset request is deferred too, so the assertion below is not
+    // racing it. Returning an immediate 20,000 here made the tile appear on its
+    // own once the margin effect's 400ms debounce fired, which is what the
+    // slower `vitest --coverage` run was losing to.
+    const freshMargin = deferred<{
+      status: number
+      data: { status: string; data: { total_margin_required: number } }
+    }>()
     let marginRequestCount = 0
     mocks.apiPost.mockImplementation(async (url: string) => {
       if (url === '/margin') {
         marginRequestCount += 1
         if (marginRequestCount === 1) return staleMargin.promise
-        return {
-          status: 200,
-          data: { status: 'success', data: { total_margin_required: 20_000 } },
-        }
+        return freshMargin.promise
       }
       if (url === '/optiongreeks') {
         return { status: 200, data: { status: 'success', implied_volatility: 12 } }
@@ -1492,8 +1497,26 @@ describe('StrategyBuilder identity orchestration', () => {
     })
 
     await addOneLeg()
+
+    // With the post-reset request still in flight, nothing legitimate can
+    // populate this tile: its presence could only mean the stale in-flight
+    // response repopulated state after the identity reset.
     expect(screen.queryByText('Margin Req.')).not.toBeInTheDocument()
-  })
+
+    // Non-vacuity: the tile is absent because the stale response was discarded,
+    // not because nothing is able to render it. Let the fresh request land and
+    // the fresh figure appears - never the stale 10,000.
+    await act(async () => {
+      freshMargin.resolve({
+        status: 200,
+        data: { status: 'success', data: { total_margin_required: 20_000 } },
+      })
+      await freshMargin.promise
+    })
+    const marginTile = (await screen.findByText('Margin Req.')).closest('div')
+    await waitFor(() => expect(marginTile).toHaveTextContent('₹20,000.00'))
+    expect(marginTile).not.toHaveTextContent('₹10,000.00')
+  }, SLOW_INTEGRATION_TEST_TIMEOUT)
 
   it('hydrates a saved non-default identity and legs before defaulting or fetch effects run', async () => {
     const portfolio = deferred<PortfolioEntry>()

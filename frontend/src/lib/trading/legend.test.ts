@@ -29,8 +29,7 @@ function input(patch: Partial<LegendInput> = {}): LegendInput {
     exchange: 'NFO',
     lotsize: 65,
     bar: { open: 24456.3, high: 24459.5, low: 24443.7, close: 24451, volume: 12000 },
-    ltp: 24451,
-    changePct: -0.02,
+    prevClose: 24455.5,
     fmt,
     fmtVolume,
     ...patch,
@@ -48,14 +47,15 @@ describe('buildChartLegend', () => {
     expect(flat(input())).toContain('NIFTY25AUG26FUT · 15m · NFO')
   })
 
-  it('carries every O/H/L/C/V reading plus the LTP', () => {
+  it('carries every O/H/L/C/V reading for the bar it describes', () => {
     const text = flat(input())
     expect(text).toContain('O 24456.30')
     expect(text).toContain('H 24459.50')
     expect(text).toContain('L 24443.70')
     expect(text).toContain('C 24451.00')
     expect(text).toContain('V 12K')
-    expect(text).toContain('LTP 24451.00')
+    // No LTP and no day change: every number in the line belongs to this bar.
+    expect(text).not.toContain('LTP')
   })
 
   it('shows the lot size only for a lot-based instrument', () => {
@@ -72,7 +72,7 @@ describe('buildChartLegend', () => {
   })
 
   it('still names the instrument before any bar or price has arrived', () => {
-    const runs = buildChartLegend(input({ bar: null, ltp: null, changePct: null }))
+    const runs = buildChartLegend(input({ bar: null, prevClose: null }))
     expect(runs.map((r) => r.text)).toEqual(['NIFTY25AUG26FUT', '· 15m · NFO · lot 65'])
   })
 
@@ -83,11 +83,20 @@ describe('buildChartLegend', () => {
     expect(down.find((r) => r.text.startsWith('O'))?.tone).toBe('down')
   })
 
-  it('signs the change and tones it by direction', () => {
-    const gain = buildChartLegend(input({ changePct: 1.234 })).at(-1)
-    const loss = buildChartLegend(input({ changePct: -0.02 })).at(-1)
-    expect(gain).toEqual({ text: '+1.23%', tone: 'up' })
-    expect(loss).toEqual({ text: '-0.02%', tone: 'down' })
+  it("reports the bar's own change, absolute and percent, signed and toned", () => {
+    // close 24451 against a previous close of 24455.5: down 4.50, or 0.02%.
+    expect(buildChartLegend(input()).at(-1))
+      .toEqual({ text: '-4.50 (-0.02%)', tone: 'down' })
+    // close 24451 against 24400: up 51.00, or 0.21%.
+    expect(buildChartLegend(input({ prevClose: 24400 })).at(-1))
+      .toEqual({ text: '+51.00 (+0.21%)', tone: 'up' })
+  })
+
+  it('shows no change at all when there is no bar behind this one', () => {
+    // The first bar of the loaded history. A change from zero would be a lie,
+    // and a change of zero would claim the price did not move.
+    const runs = buildChartLegend(input({ prevClose: null }))
+    expect(runs.some((r) => r.text.includes('%'))).toBe(false)
   })
 
   it('carries no padding of its own, so both renderers space the runs', () => {
@@ -146,5 +155,65 @@ describe('lotInfoText', () => {
 
   it('has nothing to say without an instrument', () => {
     expect(lotInfoText(null, 1)).toBe('')
+  })
+})
+
+/**
+ * The volume readout is also the switch for the bars it reads.
+ *
+ * A toggle existed all along, in the right-click menu, which is a place you
+ * have to already suspect it to find: it was reported as "no provision to turn
+ * off the volume". Splitting the volume off the OHLC run is what lets it carry
+ * a control, so the two must stay separate.
+ */
+describe('volume is its own legend run', () => {
+  const input = (over: Partial<Parameters<typeof buildChartLegend>[0]> = {}) => ({
+    symbol: 'RELIANCE',
+    interval: '5m',
+    exchange: 'NSE',
+    lotsize: null,
+    bar: { open: 100, high: 104, low: 99, close: 103, volume: 126_300 },
+    prevClose: 99,
+    fmt: (n: number) => n.toFixed(2),
+    fmtVolume: () => '126.30K',
+    ...over,
+  })
+
+  it('does not fuse the volume into the OHLC run', () => {
+    const runs = buildChartLegend(input() as Parameters<typeof buildChartLegend>[0])
+    const ohlc = runs.find((r) => r.text.startsWith('O '))
+    expect(ohlc?.text).not.toContain('V ')
+    const vol = runs.find((r) => r.action === 'volume')
+    expect(vol?.text).toBe('V 126.30K')
+  })
+
+  it('renders the volume run as a control, and the others as plain text', () => {
+    const html = legendHtml(buildChartLegend(input() as Parameters<typeof buildChartLegend>[0]))
+    expect(html).toContain('data-legend-action="volume"')
+    expect(html).toContain('Hide volume')
+    // One control only: the readout must not become a row of buttons.
+    expect(html.match(/data-legend-action/g)).toHaveLength(1)
+  })
+
+  it('says which way the switch is set when the bars are off', () => {
+    const runs = buildChartLegend(
+      input({ volumeHidden: true }) as Parameters<typeof buildChartLegend>[0]
+    )
+    expect(runs.find((r) => r.action === 'volume')?.dim).toBe(true)
+    const html = legendHtml(runs)
+    expect(html).toContain('line-through')
+    expect(html).toContain('Show volume')
+  })
+
+  it('emits no volume run at all on a transformed chart type', () => {
+    // Renko and point-and-figure elements are not one bar each, so there is no
+    // volume to read and nothing to switch.
+    const runs = buildChartLegend(
+      input({ bar: { open: 100, high: 104, low: 99, close: 103 } }) as Parameters<
+        typeof buildChartLegend
+      >[0]
+    )
+    expect(runs.some((r) => r.action === 'volume')).toBe(false)
+    expect(legendHtml(runs)).not.toContain('data-legend-action')
   })
 })

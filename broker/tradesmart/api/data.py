@@ -10,7 +10,7 @@ import pandas as pd
 from broker.tradesmart.api.baseurl import parse_auth, post, resolve_uid
 from broker.tradesmart.api.rate_limiter import (
     MAX_RETRIES,
-    TRADESMART_MAX_PER_SECOND,
+    TRADESMART_QUOTE_MAX_PER_SECOND,
     apply_rate_limit,
     is_rate_limit_error,
     retry_delay,
@@ -49,8 +49,9 @@ def _normalize_data_exchange(exchange):
 def _get_api_response(endpoint, auth, payload, retry_count=0):
     """Rate-limited POST returning parsed JSON (dict or list).
 
-    Paced by the shared per-user gate (see broker.tradesmart.api.rate_limiter):
-    every endpoint bills against the same 10/sec + 120/min budget.
+    Paced by the gates in broker.tradesmart.api.rate_limiter: quote endpoints
+    against their own 100/sec budget, every other endpoint against the shared
+    10/sec + 120/min per-user budget.
 
     Retries with exponential backoff when TradeSmart reports a rate-limit hit,
     so a burst of quote requests (e.g. a 90+ symbol option chain or the OI
@@ -77,13 +78,12 @@ def _get_api_response(endpoint, auth, payload, retry_count=0):
 # WebSocket-backed bulk quotes
 #
 # Why this exists:
-# TradeSmart caps REST at 10 requests/sec and 120/min *per user* (see
-# ``broker.tradesmart.api.rate_limiter``), and Noren exposes no batch-quote
-# endpoint -- ``/GetQuotes`` takes exactly one token. An option chain of 41
-# strikes is 82 legs, so the REST path costs 82 calls: about 10 seconds against
-# the per-second gate, and 164 calls/minute against a 110/minute budget once the
-# UI refreshes every 30 seconds. It cannot be tuned into working; there is no
-# pacing of 82 calls that fits a 120/minute ceiling twice a minute.
+# Noren exposes no batch-quote endpoint -- ``/GetQuotes`` takes exactly one
+# token. An option chain of 41 strikes is 82 legs, so the REST path costs 82
+# separate round trips per refresh. Quotes are metered at 100/sec (see
+# ``broker.tradesmart.api.rate_limiter``), so the pacing gate no longer blocks
+# that, but 82 sequential HTTP requests every 30 seconds is still 82 requests'
+# worth of latency and connection overhead for data one subscribe delivers.
 #
 # The streaming API has no such problem. One subscribe message carries every
 # token::
@@ -516,7 +516,10 @@ class BrokerData:
             return results
 
         logger.info(f"Fetching {len(pending)} TradeSmart quotes over REST")
-        with ThreadPoolExecutor(max_workers=TRADESMART_MAX_PER_SECOND) as executor:
+        # Sized to the quote budget (100/sec), not the general one: threads are
+        # spawned lazily, so a short list still costs only len(pending) threads.
+        max_workers = min(TRADESMART_QUOTE_MAX_PER_SECOND, len(pending))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {executor.submit(self._fetch_single_quote, item): item for item in pending}
             for future in as_completed(future_map):
                 item = future_map[future]

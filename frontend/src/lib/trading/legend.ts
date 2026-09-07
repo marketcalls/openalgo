@@ -27,6 +27,20 @@ export type LegendTone = 'symbol' | 'meta' | 'up' | 'down' | 'ltp'
 export interface LegendRun {
   text: string
   tone: LegendTone
+  /**
+   * Makes this run a control in the HTML legend, addressed by this name.
+   *
+   * The volume readout is the only one so far. A toggle for it existed all
+   * along, in the right-click menu, which is a place you have to already
+   * suspect it to find: it was reported as "no provision to turn off the
+   * volume". The readout is where the eye already is when the question comes
+   * up, so it is where the switch belongs.
+   *
+   * Ignored by the canvas exporter, which paints a picture and has no clicks.
+   */
+  action?: 'volume'
+  /** Drawn at reduced strength: the thing this run describes is switched off. */
+  dim?: boolean
 }
 
 /** The bar the readout describes (the crosshair bar, else the latest one). */
@@ -45,22 +59,37 @@ export interface LegendInput {
   /** Contract lot size, or null for an instrument quoted in shares. */
   lotsize: number | null
   bar: LegendBar | null
-  ltp: number | null
-  /** Percent change against the previous close, or null when unavailable. */
-  changePct: number | null
+  /**
+   * Close of the bar before `bar`, which is what the readout measures against.
+   *
+   * The legend describes **one bar**, and every number in it has to belong to
+   * that same bar or the line reports two different moments at once. It used to
+   * carry the live LTP and the day's change beside a crosshair bar's O/H/L/C, so
+   * hovering a candle from three weeks ago printed that candle's prices next to
+   * today's price and today's percentage, which is what made the LTP hard to
+   * read. The live price and the day change belong in the watchlist row, where
+   * they are always about now.
+   *
+   * Null when there is no earlier bar (the first bar of the loaded history), in
+   * which case no change is shown at all rather than a change from zero.
+   */
+  prevClose: number | null
   /** Price formatter bound to the instrument tick. */
   fmt(value: number): string
   /** Compact volume formatter (e.g. 1.20M). */
   fmtVolume(value: number): string
+  /** The bars are switched off, so their readout says so rather than lying. */
+  volumeHidden?: boolean
 }
 
 /**
  * Build the readout: symbol, then its meta (interval, exchange, lot size), the
- * bar's O/H/L/C/V, the last traded price, and the day's change.
+ * bar's O/H/L/C/V, and that bar's own change against the close before it.
  *
- * Every section is optional except the symbol and its meta -- a freshly loaded
- * chart has no crosshair bar, an index has no LTP stream, and a first-listing
- * day has no previous close to compare against.
+ * Everything here describes a single bar, so the whole line moves together as
+ * the crosshair moves. Every section past the symbol and its meta is optional: a
+ * freshly loaded chart has no crosshair bar, and the first bar of the loaded
+ * history has nothing behind it to measure against.
  */
 export function buildChartLegend(input: LegendInput): LegendRun[] {
   const runs: LegendRun[] = [{ text: input.symbol, tone: 'symbol' }]
@@ -72,21 +101,33 @@ export function buildChartLegend(input: LegendInput): LegendRun[] {
     let text =
       `O ${input.fmt(bar.open)} H ${input.fmt(bar.high)} ` +
       `L ${input.fmt(bar.low)} C ${input.fmt(bar.close)}`
+    const tone = bar.close >= bar.open ? 'up' : 'down'
+    runs.push({ text, tone })
     // Volume is absent on the transformed chart types (renko, point-and-figure),
     // whose elements are not one bar each, so it is shown only when it is real.
+    // Split into its own run rather than concatenated, so it can carry the
+    // switch for the bars it is reading.
     if (typeof bar.volume === 'number' && Number.isFinite(bar.volume) && bar.volume > 0) {
-      text += ` V ${input.fmtVolume(bar.volume)}`
+      runs.push({
+        text: `V ${input.fmtVolume(bar.volume)}`,
+        tone,
+        action: 'volume',
+        dim: input.volumeHidden === true,
+      })
     }
-    runs.push({ text, tone: bar.close >= bar.open ? 'up' : 'down' })
   }
 
-  if (input.ltp != null) runs.push({ text: `LTP ${input.fmt(input.ltp)}`, tone: 'ltp' })
-
-  if (input.changePct != null) {
-    const sign = input.changePct >= 0 ? '+' : ''
+  // The bar's own change, against the close before it. Absolute first, percent
+  // in parentheses, which is how a reader compares two instruments at a glance:
+  // the points say how far it moved, the percent says how much that was.
+  if (bar && input.prevClose != null && input.prevClose !== 0) {
+    const change = bar.close - input.prevClose
+    const pct = (change / input.prevClose) * 100
+    const sign = change >= 0 ? '+' : '-'
+    const mag = Math.abs(change)
     runs.push({
-      text: `${sign}${input.changePct.toFixed(2)}%`,
-      tone: input.changePct >= 0 ? 'up' : 'down',
+      text: `${sign}${input.fmt(mag)} (${sign}${Math.abs(pct).toFixed(2)}%)`,
+      tone: change >= 0 ? 'up' : 'down',
     })
   }
   return runs
@@ -127,6 +168,28 @@ export function legendHtml(runs: readonly LegendRun[]): string {
   return runs
     .map((run) => {
       const style = HTML_TONE_STYLE[run.tone]
+      if (run.action !== undefined) {
+        // Underlined on hover rather than boxed: it sits inside a line of
+        // readout text, and a button there would read as chrome the rest of the
+        // line does not have. Struck through when off, which says which way the
+        // switch is set without a second glyph.
+        const off = run.dim === true
+        const bits = [
+          style ?? '',
+          'cursor:pointer',
+          'text-decoration:' + (off ? 'line-through' : 'none'),
+          'text-underline-offset:3px',
+          off ? 'opacity:.5' : '',
+        ].filter(Boolean).join(';')
+        const title = off ? 'Show volume' : 'Hide volume'
+        return (
+          `<span data-legend-action="${run.action}" role="button" tabindex="0"` +
+          ` title="${title}" aria-label="${title}" style="${bits}"` +
+          ` onmouseover="this.style.textDecoration='underline'${off ? " + ' line-through'" : ''}"` +
+          ` onmouseout="this.style.textDecoration='${off ? 'line-through' : 'none'}'"` +
+          `>${esc(run.text)}</span>`
+        )
+      }
       const attr = style ? ` style="${style}"` : ''
       const tag = run.tone === 'symbol' ? 'b' : 'span'
       return `<${tag}${attr}>${esc(run.text)}</${tag}>`

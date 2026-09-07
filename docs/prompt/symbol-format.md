@@ -1,5 +1,23 @@
 # Symbol Format
 
+## Strategy Module Contract Use
+
+The `/strategy` module treats an OpenAlgo `(symbol, exchange)` pair as an exact
+contract identity, not a display label:
+
+* A batch leg may be configured relatively (ATM offset, outright strike and
+  expiry rank), but it resolves once at run start. The concrete symbol and
+  resolved expiry are persisted; every exit uses the symbol actually held and
+  never re-resolves an ATM expression later in the session.
+* A signal leg on a derivatives exchange must name an exact listed contract. A
+  base symbol plus expiry rank is refused rather than guessed. Decimal strikes
+  remain part of the exact OpenAlgo symbol.
+* Fills, recovery and broker-book filtering match the exact symbol **and**
+  exchange, together with the order/position reference where one exists.
+* A broker position row is account-level per contract. If a manual order or a
+  second strategy shares the same pair, the quantity cannot be divided safely;
+  it is reported as shared and strategy P&L comes from the strategy's own fills.
+
 #### OpenAlgo Symbol Format Standardization
 
 OpenAlgo standardizes financial instrument identification via a common symbol format across all exchanges and brokers, enhancing compatibility and simplifying automated trading. This uniform symbology eliminates the need for traders to adapt to varied broker-specific formats, streamlining algorithm development and execution. The format integrates key identifiers such as the base symbol, expiration date, and option type, ensuring consistent and error-free communication within trading systems. With OpenAlgo, developers can efficiently extend platform capabilities while traders focus on strategy, not syntax.

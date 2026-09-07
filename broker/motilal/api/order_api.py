@@ -1,10 +1,11 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.motilal.api.baseurl import get_base_url, get_common_headers, get_url
 from broker.motilal.mapping.transform_data import (
     map_exchange,
     map_product_type,
@@ -20,39 +21,114 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Exchanges where a lot size other than 1 is the norm. A missing/invalid lot
+# size for these must fail closed: silently assuming 1 turns a 75-share NIFTY
+# option order into quantityinlot=75 (= 5625 shares) which Motilal will accept.
+DERIVATIVE_EXCHANGES = {"NFO", "CDS", "MCX", "BFO", "NSEFO", "NSECD", "BSEFO"}
+
+
+class ErrorResponse:
+    """Minimal stand-in for an ``httpx.Response``.
+
+    ``place_order_api`` must never return ``None`` as its first element:
+    services/place_order_service.py reads ``res.status`` *outside* its
+    try/except, so a ``None`` there raises AttributeError instead of surfacing
+    the real validation message. This exposes the same attributes the callers
+    touch (``.status``, ``.status_code``, ``.text``) with a 4xx status.
+    """
+
+    def __init__(self, status_code=400, text=""):
+        self.status_code = status_code
+        self.status = status_code
+        self.text = text
+
+    def json(self):
+        try:
+            return json.loads(self.text) if self.text else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def __repr__(self):
+        return f"<ErrorResponse status={self.status_code}>"
+
+
+def _error_result(message, errorcode, status_code=400):
+    """Build the 3-tuple ``place_order_api`` returns on a validation failure."""
+    body = {"status": "error", "message": message, "errorcode": errorcode}
+    return ErrorResponse(status_code, json.dumps(body)), body, None
+
+
+def _resolve_lotsize(symbol, exchange):
+    """Return ``(lotsize, error_message)``.
+
+    Cash equity legitimately has a lot size of 1, so a lookup miss there falls
+    back to 1. For derivative exchanges a missing or invalid lot size is a hard
+    error - guessing 1 silently multiplies the order size by the real lot.
+    """
+    symbol_info = get_symbol_info(symbol, exchange)
+    raw_lotsize = getattr(symbol_info, "lotsize", None) if symbol_info else None
+
+    try:
+        lotsize = int(raw_lotsize) if raw_lotsize is not None else 0
+    except (TypeError, ValueError):
+        lotsize = 0
+
+    if lotsize > 0:
+        logger.debug(f"Lot size for {symbol}: {lotsize}")
+        return lotsize, None
+
+    if str(exchange).upper() in DERIVATIVE_EXCHANGES:
+        return None, (
+            f"Lot size not found for {symbol} on {exchange}. Refusing to place the order: "
+            f"assuming a lot size of 1 for a derivative would multiply the order size by the "
+            f"real lot size. Refresh the symbol master and retry."
+        )
+
+    # Cash segment: lot size 1 is correct.
+    logger.debug(f"Lot size for {symbol} not found; using 1 (cash segment {exchange})")
+    return 1, None
+
+
+def _surface_broker_error(parsed, context):
+    """Normalise a documented FAILURE envelope into OpenAlgo's error shape.
+
+    Doc 04 defines ``status`` as SUCCESS/FAILURE, but the service layer tests
+    for ``status == "error"`` - so a FAILURE (expired token, MO2012, ...) used
+    to surface as "no orders"/"no positions". Message/errorcode/data from the
+    broker are preserved.
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+
+    status = str(parsed.get("status", "")).upper()
+    if not status or status == "SUCCESS":
+        return parsed
+
+    errorcode = parsed.get("errorcode", "")
+    message = parsed.get("message") or "Motilal API returned FAILURE"
+    logger.error(f"Motilal {context} failed: status={parsed.get('status')}, "
+                 f"message={message}, errorcode={errorcode}")
+
+    result = dict(parsed)
+    result["status"] = "error"
+    result["message"] = f"{message} (errorcode: {errorcode})" if errorcode else message
+    return result
+
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
-    AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_SECRET")
+    """Call a Motilal REST endpoint.
 
+    ``endpoint`` is a baseurl.ENDPOINTS key (preferred). A raw path starting
+    with "/" is still accepted for compatibility.
+    """
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    # Motilal Oswal Header Parameters as per documentation
-    headers = {
-        "Authorization": AUTH_TOKEN,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "MOSL/V.1.1.0",
-        "ApiKey": api_key,
-        "ClientLocalIp": "1.2.3.4",
-        "ClientPublicIp": "1.2.3.4",
-        "MacAddress": "00:00:00:00:00:00",
-        "SourceId": "WEB",
-        "vendorinfo": os.getenv("BROKER_VENDOR_CODE", ""),
-        "osname": "Windows 10",
-        "osversion": "10.0.19041",
-        "devicemodel": "AHV",
-        "manufacturer": "DELL",
-        "productname": "OpenAlgo",
-        "productversion": "1.0.0",
-        "browsername": "Chrome",
-        "browserversion": "120.0",
-    }
+    # Documented common headers (05-header-parameters.md). Handles Authorization,
+    # the optional accesstoken/apisecretkey and the mandatory vendorinfo.
+    headers = get_common_headers(auth)
 
-    # Use Production or UAT URL based on environment
-    base_url = os.getenv("BROKER_API_URL", "https://openapi.motilaloswal.com")
-    url = f"{base_url}{endpoint}"
+    url = f"{get_base_url()}{endpoint}" if str(endpoint).startswith("/") else get_url(endpoint)
 
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -66,40 +142,93 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     # Handle empty response
     if not response.text:
-        return {}
+        logger.error(f"Empty response from {endpoint} (HTTP {response.status_code})")
+        return {
+            "status": "error",
+            "message": f"Empty response from Motilal (HTTP {response.status_code})",
+            "errorcode": "",
+        }
 
     try:
-        return json.loads(response.text)
+        parsed = json.loads(response.text)
     except json.JSONDecodeError:
         logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
-        return {}
+        return {
+            "status": "error",
+            "message": f"Invalid JSON response from Motilal (HTTP {response.status_code})",
+            "errorcode": "",
+        }
+
+    return _surface_broker_error(parsed, endpoint)
 
 
 def get_order_book(auth):
-    return get_api_response("/rest/book/v2/getorderbook", auth, method="POST")
+    return get_api_response("getorderbook", auth, method="POST")
 
 
 def get_trade_book(auth):
-    return get_api_response("/rest/book/v1/gettradebook", auth, method="POST")
+    response = get_api_response("gettradebook", auth, method="POST")
+
+    # Raw-response diagnostics: the price scale of this book is decided by the
+    # per-row `precision` field (doc 18), which live responses have been seen to
+    # omit or report as 0. Log the untouched first row so the real shape is
+    # visible instead of inferred.
+    try:
+        rows = response.get("data") if isinstance(response, dict) else None
+        logger.info(
+            "Motilal Trade Book raw response: status=%s, message=%s, errorcode=%s, rows=%s",
+            response.get("status") if isinstance(response, dict) else type(response).__name__,
+            response.get("message") if isinstance(response, dict) else "",
+            response.get("errorcode") if isinstance(response, dict) else "",
+            len(rows) if isinstance(rows, list) else 0,
+        )
+        if isinstance(rows, list) and rows:
+            first = rows[0]
+            logger.info("Motilal Trade Book raw row[0]: %s", json.dumps(first, default=str))
+            if isinstance(first, dict):
+                logger.info(
+                    "Motilal Trade Book price fields: precision=%r (%s), tradeprice=%r (%s), "
+                    "tradevalue=%r, tradeqty=%r",
+                    first.get("precision"),
+                    type(first.get("precision")).__name__,
+                    first.get("tradeprice"),
+                    type(first.get("tradeprice")).__name__,
+                    first.get("tradevalue"),
+                    first.get("tradeqty"),
+                )
+    except Exception as exc:  # diagnostics must never break the trade book
+        logger.debug("Trade book diagnostics failed: %s", exc)
+
+    return response
 
 
 def get_positions(auth):
-    return get_api_response("/rest/book/v1/getposition", auth, method="POST")
+    return get_api_response("getposition", auth, method="POST")
+
+
+def get_order_detail(orderid, auth):
+    """Fetch a single order by uniqueorderid (doc 19-order-detail.md).
+
+    NOTE: this endpoint reports some fields with a different shape than the
+    order book does (``"ordertype": "C"`` + ``"booktype": "Market"`` vs the
+    order book's ``"ordertype": "Market"``), so its rows must NOT be fed into
+    the orderbook mapping. Read only the specific fields you need.
+    """
+    payload = json.dumps({"uniqueorderid": orderid})
+    return get_api_response("getorderdetail", auth, method="POST", payload=payload)
 
 
 def get_holdings(auth):
     """
     Fetch holdings/DP holdings from Motilal Oswal.
-    Motilal API endpoint: /rest/report/v1/getdpholding (POST)
+    Motilal API endpoint: /rest/report/v3/getdpholding (POST)
     Request body: {} (empty JSON for non-dealer accounts)
     """
     # Motilal requires POST with JSON body (empty for non-dealer accounts)
     payload = json.dumps({})
 
     logger.debug("Fetching holdings from Motilal API...")
-    response = get_api_response(
-        "/rest/report/v1/getdpholding", auth, method="POST", payload=payload
-    )
+    response = get_api_response("getdpholding", auth, method="POST", payload=payload)
 
     # Log the raw response for debugging
     logger.debug(
@@ -166,8 +295,18 @@ def _invalidate_position_cache(auth):
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
-    # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+    # Match on symboltoken, not on the name. Motilal's brsymbol is the raw
+    # scripname ("INFY EQ", "BANKNIFTY 03-Feb-2022 PE 32300") while the position
+    # book (doc 22) returns "symbol": "INFY" with "series": "EQ" separate - the
+    # name comparison could never match, so net_qty was always "0".
+    token = get_token(tradingsymbol, exchange)
+    if not token:
+        logger.error(
+            f"Failed to get token for symbol: {tradingsymbol}, exchange: {exchange}; "
+            f"treating position as flat"
+        )
+        return "0"
+
     # Map exchange from OpenAlgo format to Motilal format for comparison
     motilal_exchange = map_exchange(exchange)
     positions_data = _get_cached_positions(auth)
@@ -179,12 +318,13 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     # Motilal returns status as "SUCCESS" string, not boolean
     if positions_data and positions_data.get("status") == "SUCCESS" and positions_data.get("data"):
         for position in positions_data["data"]:
-            # Motilal uses 'symbol' not 'tradingsymbol' and 'productname' not 'producttype'
-            # Since Motilal uses DELIVERY for both CNC and MIS in cash segment,
-            # we need to match positions based on Motilal's product type
-            # Compare with motilal_exchange since positions are in Motilal format
+            # doc 22 returns symboltoken as an unquoted number while the token DB
+            # stores strings - coerce both sides.
+            # Motilal uses 'productname' not 'producttype'; since Motilal uses
+            # DELIVERY for both CNC and MIS in the cash segment, positions are
+            # matched on Motilal's product type (already mapped by the caller).
             if (
-                position.get("symbol") == tradingsymbol
+                str(position.get("symboltoken")) == str(token)
                 and position.get("exchange") == motilal_exchange
                 and position.get("productname") == producttype
             ):
@@ -199,8 +339,16 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
-    BROKER_API_SECRET = os.getenv("BROKER_API_SECRET")
-    data["apikey"] = BROKER_API_SECRET
+    # Standard OpenAlgo credential convention (kept identical across brokers):
+    #   BROKER_API_KEY    = App API Key -> "Api Key of App" (doc 05) and the
+    #                       SHA-256(password + APIKey) login hash (doc 08)
+    #   BROKER_API_SECRET = App API Secret -> apisecretkey (doc 09)
+    # The Motilal client code is NOT an env var: it is the login ID entered on
+    # the TOTP page, persisted at login and read via baseurl.get_client_code().
+    # Keep this consistent with baseurl.get_common_headers(), auth_api.py and
+    # data.py. `apikey` is not in doc 14's documented body but is carried
+    # through transform_data(), so the value still has to be right.
+    data["apikey"] = os.getenv("BROKER_API_KEY")
     token = get_token(data["symbol"], data["exchange"])
 
     logger.debug(
@@ -211,46 +359,18 @@ def place_order_api(data, auth):
         logger.error(
             f"Failed to get token for symbol: {data['symbol']}, exchange: {data['exchange']}"
         )
-        return (
-            None,
-            {
-                "status": "ERROR",
-                "message": "Invalid symbol or token not found",
-                "errorcode": "TOKEN_NOT_FOUND",
-            },
-            None,
-        )
+        return _error_result("Invalid symbol or token not found", "TOKEN_NOT_FOUND")
 
-    # Get symbol info to get lot size for quantity conversion
-    symbol_info = get_symbol_info(data["symbol"], data["exchange"])
-    lotsize = 1  # Default to 1 for cash segment
-    if symbol_info and symbol_info.lotsize:
-        lotsize = symbol_info.lotsize
-        logger.debug(f"Lot size for {data['symbol']}: {lotsize}")
+    # Get lot size for the shares -> lots conversion. Fails closed on derivatives.
+    lotsize, lotsize_error = _resolve_lotsize(data["symbol"], data["exchange"])
+    if lotsize_error:
+        logger.error(lotsize_error)
+        return _error_result(lotsize_error, "LOTSIZE_NOT_FOUND")
 
     newdata = transform_data(data, token, auth_token=AUTH_TOKEN)
 
-    # Motilal Oswal Header Parameters
-    headers = {
-        "Authorization": AUTH_TOKEN,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "MOSL/V.1.1.0",
-        "ApiKey": BROKER_API_SECRET,
-        "ClientLocalIp": "1.2.3.4",
-        "ClientPublicIp": "1.2.3.4",
-        "MacAddress": "00:00:00:00:00:00",
-        "SourceId": "WEB",
-        "vendorinfo": os.getenv("BROKER_VENDOR_CODE", ""),
-        "osname": "Windows 10",
-        "osversion": "10.0.19041",
-        "devicemodel": "AHV",
-        "manufacturer": "DELL",
-        "productname": "OpenAlgo",
-        "productversion": "1.0.0",
-        "browsername": "Chrome",
-        "browserversion": "120.0",
-    }
+    # Motilal Oswal common header parameters (doc 05)
+    headers = get_common_headers(AUTH_TOKEN)
 
     # Motilal Oswal Place Order Payload
     # Build payload with only non-empty optional fields
@@ -264,11 +384,7 @@ def place_order_api(data, auth):
             f"Valid quantities: {lotsize}, {lotsize * 2}, {lotsize * 3}, etc."
         )
         logger.error(error_msg)
-        return (
-            None,
-            {"status": "ERROR", "message": error_msg, "errorcode": "INVALID_QUANTITY"},
-            None,
-        )
+        return _error_result(error_msg, "INVALID_QUANTITY")
 
     quantity_in_lots = actual_quantity // lotsize  # Integer division to get number of lots
     logger.debug(
@@ -307,18 +423,29 @@ def place_order_api(data, auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    # Use Production or UAT URL based on environment
-    base_url = os.getenv("BROKER_API_URL", "https://openapi.motilaloswal.com")
-
-    # Make the request using the shared client
-    response = client.post(f"{base_url}/rest/trans/v1/placeorder", headers=headers, content=payload)
+    # Make the request using the shared client (doc 14: /rest/trans/v2/placeorder)
+    response = client.post(get_url("placeorder"), headers=headers, content=payload)
 
     # Add status attribute to make response compatible with http.client response
     # as the rest of the codebase expects .status instead of .status_code
     response.status = response.status_code
 
     # Parse the JSON response
-    response_data = response.json()
+    try:
+        response_data = response.json()
+    except (json.JSONDecodeError, ValueError):
+        logger.error(
+            f"Invalid JSON in place order response (HTTP {response.status_code}): {response.text}"
+        )
+        return (
+            response,
+            {
+                "status": "error",
+                "message": f"Invalid response from Motilal (HTTP {response.status_code})",
+                "errorcode": "",
+            },
+            None,
+        )
 
     # Log the full response for debugging
     logger.debug(f"Motilal Place Order Response: {response_data}")
@@ -326,6 +453,7 @@ def place_order_api(data, auth):
 
     # Motilal returns status as "SUCCESS" string, not boolean
     if response_data.get("status") == "SUCCESS":
+        # doc 14: uniqueorderid is at the TOP LEVEL of the place order response
         orderid = response_data.get("uniqueorderid")
         logger.debug(f"Order placed successfully. Order ID: {orderid}")
     else:
@@ -353,9 +481,12 @@ def place_smartorder_api(data, auth):
     with symbol_lock:
         position_size = int(data.get("position_size", "0"))
 
-        # Get current open position for the symbol
+        # Get current open position for the symbol.
+        # The exchange MUST be passed: placement uses the exchange-aware map,
+        # where MIS -> NORMAL for NFO/MCX/CDS/BFO but MIS -> VALUEPLUS otherwise.
+        # Without it F&O MIS positions never matched.
         current_position = int(
-            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            get_open_position(symbol, exchange, map_product_type(product, exchange), AUTH_TOKEN)
         )
 
         logger.debug(f"position_size : {position_size}")
@@ -434,6 +565,14 @@ def close_all_positions(current_api_key, auth):
 
     positions_response = get_positions(AUTH_TOKEN)
 
+    # Surface a broker-side failure (expired token, MO2012, ...) instead of
+    # reporting it as "no positions".
+    if positions_response.get("status") == "error":
+        return {
+            "status": "error",
+            "message": positions_response.get("message", "Failed to fetch positions"),
+        }, 500
+
     # Check if the positions data is null or empty - Motilal uses 'SUCCESS' string
     if (
         positions_response.get("status") != "SUCCESS"
@@ -462,8 +601,9 @@ def close_all_positions(current_api_key, auth):
             motilal_exchange = position["exchange"]
             openalgo_exchange = reverse_map_exchange(motilal_exchange)
 
-            # Get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position["symboltoken"], openalgo_exchange)
+            # Get openalgo symbol to send to placeorder function.
+            # doc 22 returns symboltoken as a number; the token DB stores strings.
+            symbol = get_symbol(str(position["symboltoken"]), openalgo_exchange)
             logger.debug(f"The Symbol is {symbol}")
 
             if not symbol:
@@ -480,6 +620,8 @@ def close_all_positions(current_api_key, auth):
                 "action": action,
                 "exchange": openalgo_exchange,  # Use OpenAlgo exchange format
                 "pricetype": "MARKET",
+                # Exchange-aware reverse map: NORMAL means MIS on F&O, and
+                # DELIVERY/VALUEPLUS mean CNC/MIS on cash.
                 "product": reverse_map_product_type(position["productname"], openalgo_exchange),
                 "quantity": str(quantity),
             }
@@ -501,67 +643,123 @@ def close_all_positions(current_api_key, auth):
 def cancel_order(orderid, auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_SECRET")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    # Motilal Oswal Header Parameters
-    headers = {
-        "Authorization": AUTH_TOKEN,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "MOSL/V.1.1.0",
-        "ApiKey": api_key,
-        "ClientLocalIp": "1.2.3.4",
-        "ClientPublicIp": "1.2.3.4",
-        "MacAddress": "00:00:00:00:00:00",
-        "SourceId": "WEB",
-        "vendorinfo": os.getenv("BROKER_VENDOR_CODE", ""),
-        "osname": "Windows 10",
-        "osversion": "10.0.19041",
-        "devicemodel": "AHV",
-        "manufacturer": "DELL",
-        "productname": "OpenAlgo",
-        "productversion": "1.0.0",
-        "browsername": "Chrome",
-        "browserversion": "120.0",
-    }
+    # Motilal Oswal common header parameters (doc 05)
+    headers = get_common_headers(AUTH_TOKEN)
 
-    # Prepare the payload - Motilal uses uniqueorderid
+    # Prepare the payload - Motilal uses uniqueorderid (doc 16)
     payload = json.dumps({"uniqueorderid": orderid})
 
-    # Use Production or UAT URL based on environment
-    base_url = os.getenv("BROKER_API_URL", "https://openapi.motilaloswal.com")
-
-    # Make the request using the shared client
-    response = client.post(
-        f"{base_url}/rest/trans/v1/cancelorder", headers=headers, content=payload
-    )
+    # Make the request using the shared client (doc 16: /rest/trans/v2/cancelorder)
+    response = client.post(get_url("cancelorder"), headers=headers, content=payload)
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    try:
+        data = json.loads(response.text) if response.text else {}
+    except json.JSONDecodeError:
+        logger.error(
+            f"Invalid JSON in cancel order response (HTTP {response.status_code}): {response.text}"
+        )
+        data = {}
 
     # Motilal returns status as "SUCCESS" string
     if data.get("status") == "SUCCESS":
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
-    else:
-        # Return an error response
-        return {
-            "status": "error",
-            "message": data.get("message", "Failed to cancel order"),
-        }, response.status
+
+    # Return an error response, including the documented errorcode (doc 31)
+    message = data.get("message", "Failed to cancel order")
+    errorcode = data.get("errorcode", "")
+    return {
+        "status": "error",
+        "message": f"{message} (errorcode: {errorcode})" if errorcode else message,
+    }, response.status
+
+
+def _resolve_lastmodifiedtime(order_details):
+    """Pick a usable ``lastmodifiedtime`` for the modify request.
+
+    Doc 15 marks lastmodifiedtime mandatory in "dd-MMM-yyyy HH:mm:ss" format,
+    but the order book returns "0" for a never-modified order while the same
+    record carries a correctly formatted ``recordinserttime``. Sending "0"
+    triggers MO1089 (Invalid Input ModifyOrder LastModifiedTimeStr).
+    """
+    def _clean(value):
+        return str(value).strip() if value is not None else ""
+
+    lastmodifiedtime = _clean(order_details.get("lastmodifiedtime"))
+    if lastmodifiedtime and lastmodifiedtime != "0":
+        return lastmodifiedtime
+
+    for fallback_field in ("recordinserttime", "entrydatetime"):
+        fallback = _clean(order_details.get(fallback_field))
+        if fallback and fallback != "0":
+            logger.warning(
+                f"lastmodifiedtime is {lastmodifiedtime!r}; falling back to "
+                f"{fallback_field}={fallback!r} for the modify request"
+            )
+            return fallback
+
+    logger.warning(
+        "No usable lastmodifiedtime/recordinserttime/entrydatetime found for the order; "
+        "the modify request may be rejected with MO1089"
+    )
+    return lastmodifiedtime
+
+
+def _fetch_order_details(orderid, auth):
+    """Fetch the fields modify needs for one order.
+
+    Prefers the by-id endpoint (doc 19), falling back to an order book scan
+    (doc 17) if it errors. Only lastmodifiedtime / qtytradedtoday / the time
+    fallbacks are read - doc 19 reports other fields in a different shape
+    (``"ordertype": "C"`` + ``"booktype"``) and must not reach the mapping.
+    """
+    try:
+        detail_response = get_order_detail(orderid, auth)
+    except Exception as exc:  # network / client error - fall back to the book
+        logger.warning(f"getorderdetailbyuniqueorderid failed ({exc}); falling back to order book")
+        detail_response = None
+
+    if detail_response and detail_response.get("status") == "SUCCESS":
+        rows = detail_response.get("data") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if not row.get("uniqueorderid") or str(row.get("uniqueorderid")) == str(orderid):
+                return row, None
+        logger.warning(f"Order {orderid} not present in getorderdetail data; falling back to book")
+    elif detail_response is not None:
+        logger.warning(
+            f"getorderdetailbyuniqueorderid returned "
+            f"{detail_response.get('message', 'an error')}; falling back to order book"
+        )
+
+    # Fallback: scan the order book
+    order_book_response = get_order_book(auth)
+    if order_book_response.get("status") != "SUCCESS" or not order_book_response.get("data"):
+        message = order_book_response.get("message") or "Failed to fetch order book"
+        logger.error(f"Failed to fetch order book: {message}")
+        return None, message
+
+    for order in order_book_response.get("data", []):
+        if order.get("uniqueorderid") == orderid:
+            return order, None
+
+    return None, f"Order {orderid} not found in order book"
 
 
 def modify_order(data, auth):
     """
     Modifies an existing order for Motilal Oswal.
 
-    Motilal API requires lastmodifiedtime and qtytradedtoday fields which must be fetched
-    from the order book before modifying.
+    Motilal API requires lastmodifiedtime and qtytradedtoday fields which must be
+    fetched from the order detail endpoint (or the order book) before modifying.
 
     Args:
         data: Order modification data containing orderid, symbol, exchange, quantity, price, etc.
@@ -572,36 +770,27 @@ def modify_order(data, auth):
     """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_SECRET")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    # First, fetch the order details from order book to get lastmodifiedtime and qtytradedtoday
+    # First, fetch the order details to get lastmodifiedtime and qtytradedtoday
     orderid = data.get("orderid")
     logger.debug(f"Fetching order details for orderid: {orderid}")
 
-    order_book_response = get_order_book(AUTH_TOKEN)
-
-    # Check if order book was fetched successfully
-    if order_book_response.get("status") != "SUCCESS" or not order_book_response.get("data"):
-        logger.error("Failed to fetch order book")
-        return {"status": "error", "message": "Failed to fetch order book"}, 500
-
-    # Find the order in the order book
-    order_details = None
-    for order in order_book_response.get("data", []):
-        if order.get("uniqueorderid") == orderid:
-            order_details = order
-            break
+    order_details, fetch_error = _fetch_order_details(orderid, AUTH_TOKEN)
 
     if not order_details:
-        logger.error(f"Order with orderid {orderid} not found in order book")
-        return {"status": "error", "message": f"Order {orderid} not found in order book"}, 404
+        logger.error(fetch_error)
+        status_code = 404 if "not found" in str(fetch_error).lower() else 500
+        return {"status": "error", "message": fetch_error}, status_code
 
-    # Extract required fields from order book
-    lastmodifiedtime = order_details.get("lastmodifiedtime", "")
-    qtytradedtoday = int(order_details.get("qtytradedtoday", 0))  # Motilal uses 'qtytradedtoday'
+    # Extract required fields
+    lastmodifiedtime = _resolve_lastmodifiedtime(order_details)
+    try:
+        qtytradedtoday = int(order_details.get("qtytradedtoday", 0) or 0)
+    except (TypeError, ValueError):
+        qtytradedtoday = 0
 
     logger.debug(
         f"Order details: lastmodifiedtime={lastmodifiedtime}, qtytradedtoday={qtytradedtoday}"
@@ -609,12 +798,15 @@ def modify_order(data, auth):
 
     token = get_token(data["symbol"], data["exchange"])
 
-    # Get symbol info to get lot size for quantity conversion
-    symbol_info = get_symbol_info(data["symbol"], data["exchange"])
-    lotsize = 1  # Default to 1 for cash segment
-    if symbol_info and symbol_info.lotsize:
-        lotsize = symbol_info.lotsize
-        logger.debug(f"Lot size for {data['symbol']}: {lotsize}")
+    # Get lot size for the shares -> lots conversion. Fails closed on derivatives.
+    lotsize, lotsize_error = _resolve_lotsize(data["symbol"], data["exchange"])
+    if lotsize_error:
+        logger.error(lotsize_error)
+        return {
+            "status": "error",
+            "message": lotsize_error,
+            "errorcode": "LOTSIZE_NOT_FOUND",
+        }, 400
 
     # Convert quantity to lots for modify order
     if "quantity" in data:
@@ -640,44 +832,26 @@ def modify_order(data, auth):
     # Pass the order details to the transformation function
     transformed_data = transform_modify_order_data(data, token, lastmodifiedtime, qtytradedtoday)
 
-    # Motilal Oswal Header Parameters
-    headers = {
-        "Authorization": AUTH_TOKEN,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "MOSL/V.1.1.0",
-        "ApiKey": api_key,
-        "ClientLocalIp": "1.2.3.4",
-        "ClientPublicIp": "1.2.3.4",
-        "MacAddress": "00:00:00:00:00:00",
-        "SourceId": "WEB",
-        "vendorinfo": os.getenv("BROKER_VENDOR_CODE", ""),
-        "osname": "Windows 10",
-        "osversion": "10.0.19041",
-        "devicemodel": "AHV",
-        "manufacturer": "DELL",
-        "productname": "OpenAlgo",
-        "productversion": "1.0.0",
-        "browsername": "Chrome",
-        "browserversion": "120.0",
-    }
+    # Motilal Oswal common header parameters (doc 05)
+    headers = get_common_headers(AUTH_TOKEN)
     payload = json.dumps(transformed_data)
 
     logger.debug(f"Motilal Modify Order Request Payload: {transformed_data}")
     logger.debug(f"Payload JSON: {payload}")
 
-    # Use Production or UAT URL based on environment
-    base_url = os.getenv("BROKER_API_URL", "https://openapi.motilaloswal.com")
-
-    # Make the request using the shared client
-    response = client.post(
-        f"{base_url}/rest/trans/v2/modifyorder", headers=headers, content=payload
-    )
+    # Make the request using the shared client (doc 15: /rest/trans/v5/modifyorder)
+    response = client.post(get_url("modifyorder"), headers=headers, content=payload)
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    response_data = json.loads(response.text)
+    try:
+        response_data = json.loads(response.text) if response.text else {}
+    except json.JSONDecodeError:
+        logger.error(
+            f"Invalid JSON in modify order response (HTTP {response.status_code}): {response.text}"
+        )
+        response_data = {}
 
     # Log the response for debugging
     logger.debug(f"Motilal Modify Order Response: {response_data}")
@@ -685,12 +859,17 @@ def modify_order(data, auth):
 
     # Motilal returns status as "SUCCESS" string
     if response_data.get("status") == "SUCCESS":
-        return {"status": "success", "orderid": response_data.get("uniqueorderid")}, 200
-    else:
-        return {
-            "status": "error",
-            "message": response_data.get("message", "Failed to modify order"),
-        }, response.status
+        # doc 15's success body is status/message/errorcode only - it never
+        # returns a uniqueorderid. Keep the key for compatibility, sourced from
+        # the request's orderid.
+        return {"status": "success", "orderid": orderid}, 200
+
+    message = response_data.get("message", "Failed to modify order")
+    errorcode = response_data.get("errorcode", "")
+    return {
+        "status": "error",
+        "message": f"{message} (errorcode: {errorcode})" if errorcode else message,
+    }, response.status
 
 
 def cancel_all_orders_api(data, auth):
@@ -702,14 +881,19 @@ def cancel_all_orders_api(data, auth):
     # logger.debug(f"{order_book_response}")
     # Motilal returns status as "SUCCESS" string
     if order_book_response.get("status") != "SUCCESS":
+        logger.error(
+            f"Failed to fetch order book for cancel-all: "
+            f"{order_book_response.get('message', 'unknown error')}"
+        )
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
-    # Filter orders that are in 'open' or 'trigger pending' state
-    # Motilal uses 'orderstatus' field and 'Confirm', 'Sent' statuses for open orders
+    # Filter orders that are still live and therefore cancellable.
+    # Motilal statuses (doc 32): Unknown, Sent, Confirm, Cancel, Partial,
+    # Traded, Rejected, Error. "Partial" is partially filled and still open.
     orders_to_cancel = [
         order
         for order in order_book_response.get("data", [])
-        if order.get("orderstatus", "").lower() in ["confirm", "sent", "open"]
+        if order.get("orderstatus", "").lower() in ["confirm", "sent", "open", "partial"]
     ]
     # logger.debug(f"{orders_to_cancel}")
     canceled_orders = []

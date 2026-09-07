@@ -249,7 +249,13 @@ _SERIES_PARAM_TO_COLUMN = {
 # A handful of required (no-default) scalar params that would otherwise raise
 # TypeError if the caller's `params` doesn't set them. Applied only when the
 # caller hasn't already supplied the key.
-_REQUIRED_PARAM_DEFAULTS = {
+#
+# Public because it is a fact about the pinned `openalgo` library rather than
+# about Flow: the agent's indicator tools fill the same 14 gaps for the same
+# reason, and a second copy of this table would drift the moment one of them
+# changed. Verified against the agent registry: these are exactly the 14 `ta`
+# methods with a required scalar parameter, no more and no fewer.
+REQUIRED_PARAM_DEFAULTS = {
     "sma": {"period": 14},
     "ema": {"period": 14},
     "wma": {"period": 14},
@@ -369,6 +375,30 @@ def resolve_indicator_inputs(
     return cols, [df[c] for c in cols]
 
 
+def calendar_days_for_bars(bars: int, interval: str) -> int:
+    """Calendar days that should cover `bars` candles at `interval`.
+
+    The 1.6 factor is the weekend-and-holiday allowance: NSE trades about five
+    days in seven, so a straight bars/bars-per-day division comes up short.
+
+    Lifted out of `history_window` because a second caller needs the same
+    arithmetic with a different ceiling: the agent's indicator tools size their
+    own fetch from an indicator's measured warm-up, and `beta` alone needs 253
+    daily bars, past the MAX_HISTORY_BARS ceiling Flow's node applies here. Two
+    copies of this would drift, and the copy that goes wrong is the one nobody
+    is watching.
+
+    Args:
+        bars: How many candles the caller wants.
+        interval: The candle interval, in OpenAlgo's own vocabulary.
+
+    Returns:
+        A calendar-day span, unclamped. The caller applies its own ceiling.
+    """
+    bars_per_day = _BARS_PER_DAY.get(str(interval).lower(), 75)
+    return int((bars / bars_per_day) * 1.6) + 5
+
+
 def history_window(
     lookback_bars: int = 100,
     lookback_days: int | None = None,
@@ -388,8 +418,7 @@ def history_window(
     # Clamp here, not just when trimming the response: sizing the window from
     # an unclamped bar count is what would issue the multi-year download.
     bars = clamp_bars(lookback_bars, "history bars")
-    bars_per_day = _BARS_PER_DAY.get(interval.lower(), 75)
-    calendar_days = int((bars / bars_per_day) * 1.6) + 5
+    calendar_days = calendar_days_for_bars(bars, interval)
     if calendar_days > MAX_HISTORY_CALENDAR_DAYS:
         logger.info(
             f"{bars} {interval} bars would span {calendar_days} days; capping the request "
@@ -428,7 +457,7 @@ def clamp_history_range(start_date: str, end_date: str, interval: str) -> tuple[
 
 def _resolve_params(name: str, params: dict[str, Any] | None) -> dict[str, Any]:
     resolved = dict(params or {})
-    for key, value in _REQUIRED_PARAM_DEFAULTS.get(name, {}).items():
+    for key, value in REQUIRED_PARAM_DEFAULTS.get(name, {}).items():
         resolved.setdefault(key, value)
     return resolved
 

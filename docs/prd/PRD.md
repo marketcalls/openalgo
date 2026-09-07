@@ -4,7 +4,7 @@ This document describes OpenAlgo as it exists in the current source tree. It is 
 
 ## Product Overview And Purpose
 
-OpenAlgo is a self-hosted trading application for retail algo traders. It exposes a Flask and Flask-RESTX backend, a React frontend when `frontend/dist` exists, broker plugins, REST APIs, webhook automation, a Flow workflow builder, Python strategy hosting, analyzer/sandbox mode, market data APIs, and a separate WebSocket proxy. The documented HTTP surface is 57 RESTX `/api/v1` endpoints, 459 Flask blueprint routes, and 1 app-level route, for 517 documented HTTP endpoints. Discovery source: `DISCOVERY_MAP.md` sections `Discovery Summary`, `Entry Points And Runtime`, `RESTX API V1`, and `Flask Blueprint Route Inventory`.
+OpenAlgo is a self-hosted trading application for retail algo traders. It exposes a Flask and Flask-RESTX backend, a React frontend when `frontend/dist` exists, broker plugins, REST APIs, webhook automation, a Flow workflow builder, Python strategy hosting, analyzer/sandbox mode, market data APIs, and a separate WebSocket proxy. The documented HTTP surface is 57 RESTX `/api/v1` endpoints, 442 Flask blueprint routes, and 1 app-level route, for 500 documented HTTP endpoints. Discovery source: `DISCOVERY_MAP.md` sections `Discovery Summary`, `Entry Points And Runtime`, `RESTX API V1`, and `Flask Blueprint Route Inventory`.
 
 Current dependency snapshot: OpenAlgo application `2.0.1.4`, OpenAlgo Python SDK `2.0.2`, Python `>=3.12`, React `19.2.3`, React Router `7.15`, TypeScript `5.9.3`, Vite `8.0.16`, and pytest `9.1.1`. The RESTX Swagger UI is intentionally disabled with `doc=False`; `/api/docs` is not a supported surface and must not be enabled merely to satisfy documentation navigation.
 
@@ -13,7 +13,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 ## Target Users And Primary Use Cases
 
 - Retail algo trader: connects a broker, manages an API key, places regular, smart, basket, split, options, and GTT orders, reviews orders in semi-auto mode, and monitors orders, positions, holdings, funds, and margin.
-- Strategy user: routes external webhook signals from Chartink, Strategy webhooks, TradingView JSON, GoCharting JSON, Flow, or Python Strategy into OpenAlgo order flows.
+- Strategy user: routes external webhook signals from Chartink, TradingView JSON, GoCharting JSON, Flow, or Python Strategy into OpenAlgo order flows.
 - Market data consumer: requests quotes, multiquotes, depth, history, option chains, option symbols, and WebSocket subscriptions for live market data.
 - Sandbox user: turns on analyzer mode, routes supported calls to sandbox services, reviews sandbox orders, trades, positions, holdings, funds, daily PnL, and configuration.
 - Local operator: configures environment, session security, broker credentials, notifications, health, traffic logs, latency logs, security controls, and optional Remote MCP.
@@ -115,8 +115,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 ### Automation, Flow, And Python Strategy
 
 - FR-060: Chartink webhooks must parse scan-name action keywords, validate strategy state and intraday windows, map symbols, and queue regular or smart orders. Trace: `DISCOVERY_MAP.md` `Automation Surfaces`; BDD: `docs/bdd/automation_webhooks.feature`.
-- FR-061: Chartink and Strategy queues must process one smart order per second and up to ten regular orders per second. Trace: `DISCOVERY_MAP.md` `Automation Surfaces`; BDD: `docs/bdd/automation_webhooks.feature`.
-- FR-062: Strategy webhooks must validate strategy mode, trading hours, symbol mappings, and API key presence before queueing order payloads. Trace: `DISCOVERY_MAP.md` `Automation Surfaces`; BDD: `docs/bdd/automation_webhooks.feature`.
+- FR-061: The Chartink queue must process one smart order per second and up to ten regular orders per second. Trace: `DISCOVERY_MAP.md` `Automation Surfaces`; BDD: `docs/bdd/automation_webhooks.feature`.
 - FR-063: TradingView JSON and GoCharting JSON routes must exist as automation entry points. Trace: `DISCOVERY_MAP.md` `Flask Blueprint Route Inventory`; BDD: `docs/bdd/automation_webhooks.feature`.
 - FR-064: Flow must support workflow CRUD, activation, webhook management, manual execution, import, export, and monitor status under `/flow`. Trace: `DISCOVERY_MAP.md` `Automation Surfaces`; BDD: `docs/bdd/flow_workflows.feature`.
 - FR-065: Flow must store graph JSON, webhook token, webhook secret, webhook auth type, active flag, scheduler job ID, encrypted API key, and execution records. Trace: `DISCOVERY_MAP.md` `Automation Surfaces`; BDD: `docs/bdd/flow_workflows.feature`.

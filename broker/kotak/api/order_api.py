@@ -60,8 +60,104 @@ def get_trade_book(auth_token):
     return get_api_response("/quick/user/trades", auth_token)
 
 
+def _backfill_ltp(response, auth_token):
+    """Kotak's positions payload never includes a live price field at all,
+    for an open position or a closed one - confirmed against the raw
+    endpoint response and against Kotak's own SDK docs, whose "Profit N
+    Loss" formula treats LTP as an external input the caller must supply,
+    not something this endpoint returns. Zerodha's equivalent positions API
+    does return one (`last_price`, straight from Kite) - transform_positions_data
+    just reads it - so this is a Kotak-specific gap, not a display bug in
+    any consumer.
+
+    Batch-fetches one quote per distinct position via the same multiquotes
+    endpoint the option chain/quotes routes already use, and stamps each
+    raw row with an "_ltp" scratch field for transform_positions_data to
+    pick up. Deliberately not the final "ltp" key: this runs before
+    map_position_data's exchange/symbol resolution, so trdSym/exSeg here
+    are still Kotak's raw broker-native values, not OpenAlgo's - resolving
+    them again independently (not mutating the row) keeps get_positions()'s
+    contract of returning raw, unmapped data intact for its other caller
+    (map_position_data itself, called right after this by
+    services/positionbook_service.py).
+
+    Best-effort and non-fatal: any failure here (a bad auth token, the
+    quotes endpoint being down, a symbol that can't be resolved) just
+    leaves positions without a price, exactly as before this function
+    existed - it must never break the positions endpoint itself.
+    """
+    try:
+        # Inside the try, not ahead of it: this is the one statement that can
+        # reach a payload Kotak did not shape as an object (an error body that
+        # decodes to a list, say), and the docstring's promise that positions
+        # never break on our account has to cover it too.
+        positions = response.get("data")
+        if not positions:
+            return
+
+        from broker.kotak.api.data import BrokerData
+        from broker.kotak.mapping.order_data import _openalgo_symbol
+
+        resolved = []
+        for position in positions:
+            oa_exchange = map_exchange(position.get("exSeg", ""))
+            oa_symbol = _openalgo_symbol(position, oa_exchange) or position.get("trdSym", "")
+            if oa_symbol:
+                resolved.append((position, oa_symbol, oa_exchange))
+        if not resolved:
+            return
+
+        broker_data = BrokerData(auth_token)
+        # One quote per *distinct* instrument. The same symbol is routinely
+        # held under two products (MIS and NRML), and one entry per position
+        # would send it twice in the same request - wasted room against a
+        # batch cap that get_multiquotes splits at 25. dict.fromkeys keeps
+        # the first-seen order; the price is matched back per position below,
+        # so both rows still get stamped.
+        symbols = [
+            {"symbol": s, "exchange": e} for s, e in dict.fromkeys((s, e) for _, s, e in resolved)
+        ]
+        # One batched call for every position (get_multiquotes splits at
+        # Kotak's own sub-50 cap internally, 25 per request since #1961) -
+        # not one call per position, which is the per-symbol-latency concern
+        # that stalled an earlier, unrelated Kotak P&L PR (#1224).
+        quotes = broker_data.get_multiquotes(symbols)
+
+        ltp_by_key = {}
+        for item in quotes or []:
+            data = item.get("data") or {}
+            ltp = data.get("ltp")
+            if ltp:
+                ltp_by_key[(item.get("symbol"), item.get("exchange"))] = float(ltp)
+
+        for position, oa_symbol, oa_exchange in resolved:
+            ltp = ltp_by_key.get((oa_symbol, oa_exchange))
+            if ltp:
+                position["_ltp"] = ltp
+    except Exception as e:
+        logger.warning(f"Could not backfill LTP for positions: {e}")
+
+
 def get_positions(auth_token):
-    return get_api_response("/quick/user/positions", auth_token)
+    response = get_api_response("/quick/user/positions", auth_token)
+    if not isinstance(response, dict):
+        # Every caller indexes this as an object - the positionbook mapping,
+        # the smart-order position lookup, close_all_positions - so a payload
+        # that is not one can only fail. Failing here names it; letting it
+        # through surfaced as "list indices must be integers" from inside the
+        # mapping layer, several frames from the cause.
+        #
+        # Deliberately NOT normalized to an empty book. close_all_positions
+        # reads a response with no positions in it as "No Open Positions Found"
+        # and returns 200, which close_position_service reports as a successful
+        # square-off - so quietly standing in for a failed read would tell an
+        # operator their positions were closed while the broker still held them.
+        # A read that did not work has to say so.
+        raise Exception(
+            f"Kotak returned a positions payload that is not an object: {type(response).__name__}"
+        )
+    _backfill_ltp(response, auth_token)
+    return response
 
 
 def get_holdings(auth_token):
@@ -174,7 +270,7 @@ def place_order_api(data, auth_token):
 
     try:
         response = client.post(url, headers=headers, content=payload)
-        logger.debug(f"PLACE ORDER API Response: {response.status_code} {response.text}")
+        logger.info(f"PLACE ORDER API Response: {response.status_code} {response.text}")
 
         # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code

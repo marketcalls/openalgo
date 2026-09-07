@@ -1,7 +1,7 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Motilal Oswal Parameters - See Motilal_Oswal.md documentation
 
-from database.token_db import get_br_symbol, get_symbol_info
+from database.token_db import get_symbol_info
 from utils.logging import get_logger
 from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
 
@@ -54,7 +54,9 @@ def transform_data(data, token, auth_token=None):
         MARKET -> LIMIT  at LTP +/- slab%
         SL-M   -> STOPLOSS (SL) at trigger +/- slab%
     """
-    symbol = get_br_symbol(data["symbol"], data["exchange"])
+    # Note: no get_br_symbol() lookup here. Motilal identifies the instrument by
+    # `symboltoken` alone (doc 14), so resolving the broker tradingsymbol was a
+    # per-order database round-trip whose result was never sent.
     openalgo_exchange = data["exchange"]
     motilal_exchange = map_exchange(openalgo_exchange)
     action = data["action"].upper()
@@ -214,45 +216,71 @@ def map_order_type(pricetype):
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
 
 
+# ---------------------------------------------------------------------------
+# Product type mapping
+#
+# Motilal product vocabulary (doc 32-parameters-constants.md):
+#     NORMAL, DELIVERY, VALUEPLUS, SELLFROMDP, BTST
+# FAQ Q7 confirms the API accepts Normal / Delivery / Value Plus.
+# FAQ Q10 defines the semantics:
+#     NORMAL    -> "NRML (Normal): You can carry forward positions to the next
+#                   trading day" i.e. the CARRY FORWARD product  -> OpenAlgo NRML
+#     VALUEPLUS -> "Stands for Margin Intraday Square Off (MIS)"  -> OpenAlgo MIS
+#     DELIVERY  -> cash delivery                                  -> OpenAlgo CNC
+# SELLFROMDP (sell out of demat holdings) and BTST (buy today, sell tomorrow)
+# are delivery-settled cash products with no distinct OpenAlgo equivalent, so
+# they read back as CNC. They are never produced by the forward map.
+#
+# map_product_type() and reverse_map_product_type() are inverses of each other
+# per exchange, with ONE documented exception (see the F&O note below).
+# ---------------------------------------------------------------------------
+
+_CASH_EXCHANGES = ("NSE", "BSE")
+_FO_EXCHANGES = ("NFO", "MCX", "CDS", "BFO", "NCDEX", "NSEFO", "NSECD", "BSEFO")
+
+
 def map_product_type(product, exchange=None):
     """
-    Maps OpenAlgo product type to Motilal Oswal product type based on exchange.
-    Motilal supports: NORMAL, DELIVERY, VALUEPLUS, SELLFROMDP, BTST, MTF
+    Maps an OpenAlgo product type to the Motilal Oswal product type for `exchange`.
 
-    Product type mapping:
-    For Cash Segment (NSE, BSE):
-        - CNC (Cash and Carry) → DELIVERY (for delivery/holdings)
-        - MIS (Margin Intraday Square off) → VALUEPLUS (for intraday margin trading)
-        - NRML → VALUEPLUS (fallback for cash segment with margin)
+    Cash segment (NSE, BSE) - a true bijection:
+        CNC  -> DELIVERY
+        MIS  -> VALUEPLUS
+        NRML -> NORMAL      (carry forward; doc 17 shows a BSE cash order with
+                             producttype "NORMAL", so NORMAL is valid on cash)
 
-    For F&O Segment (NFO, MCX, CDS, BFO):
-        - NRML (Normal for F&O) → NORMAL
-        - MIS → NORMAL (intraday F&O)
-        - CNC → NORMAL (fallback for F&O segment)
+    F&O segment (NFO, CDS, MCX, BFO):
+        NRML -> NORMAL
+        MIS  -> NORMAL      <-- COLLAPSE
+        CNC  -> NORMAL      <-- COLLAPSE
 
-    Note: VALUEPLUS is Motilal's margin product for intraday trading.
-    Accounts may have specific product authorizations based on their configuration.
+        All three OpenAlgo products are placed as NORMAL on derivatives, so the
+        reverse direction cannot be unique. reverse_map_product_type() resolves
+        NORMAL -> NRML (the carry-forward product per FAQ Q10), which means an
+        F&O order sent as MIS or CNC reads back from the order/position book as
+        NRML. Only NRML round-trips on F&O; this is a limitation of the forward
+        collapse, not of the reverse map.
 
     Args:
         product: OpenAlgo product type (CNC, MIS, NRML)
         exchange: OpenAlgo exchange name (NSE, BSE, NFO, CDS, MCX, BFO)
-    """
-    # Determine if this is a cash segment or derivative segment
-    # Using OpenAlgo exchange names
-    is_cash_segment = exchange in ["NSE", "BSE"]
-    is_fo_segment = exchange in ["NFO", "MCX", "CDS", "BFO", "NSEFO", "NSECD", "BSEFO"]
 
-    if is_cash_segment:
-        # For cash segment: CNC = DELIVERY, MIS = VALUEPLUS (margin intraday)
+    Returns:
+        A Motilal product constant from doc 32.
+    """
+    product = str(product or "").upper()
+    exchange = str(exchange or "").upper() or None
+
+    if exchange in _CASH_EXCHANGES:
         cash_mapping = {
-            "CNC": "DELIVERY",  # Delivery for holdings
-            "MIS": "VALUEPLUS",  # Margin intraday for MIS
-            "NRML": "VALUEPLUS",  # Fallback to margin
+            "CNC": "DELIVERY",  # cash delivery
+            "MIS": "VALUEPLUS",  # margin intraday square off
+            "NRML": "NORMAL",  # carry forward
         }
         return cash_mapping.get(product, "VALUEPLUS")
 
-    elif is_fo_segment:
-        # For F&O segment, use NORMAL
+    if exchange in _FO_EXCHANGES:
+        # Derivatives: everything is placed as NORMAL (see COLLAPSE note above).
         fo_mapping = {
             "NRML": "NORMAL",
             "MIS": "NORMAL",
@@ -260,58 +288,63 @@ def map_product_type(product, exchange=None):
         }
         return fo_mapping.get(product, "NORMAL")
 
-    else:
-        # Default fallback based on product
-        default_mapping = {
-            "CNC": "DELIVERY",
-            "MIS": "VALUEPLUS",
-            "NRML": "NORMAL",
-        }
-        return default_mapping.get(product, "VALUEPLUS")
+    # No / unknown exchange context: map on product semantics alone. This is the
+    # exact inverse of the no-exchange branch of reverse_map_product_type().
+    default_mapping = {
+        "CNC": "DELIVERY",
+        "MIS": "VALUEPLUS",
+        "NRML": "NORMAL",
+    }
+    return default_mapping.get(product, "VALUEPLUS")
 
 
 def reverse_map_product_type(product, exchange=None):
     """
-    Reverse maps Motilal Oswal product type to OpenAlgo product type.
-    Context:
-    - Motilal uses DELIVERY for cash delivery (CNC)
-    - Motilal uses VALUEPLUS for margin intraday (MIS)
-    - Motilal uses NORMAL for F&O segment
+    Reverse maps a Motilal Oswal product type to the OpenAlgo product type.
 
-    Without exchange context:
-        DELIVERY → CNC (delivery product)
-        VALUEPLUS → MIS (margin intraday)
-        NORMAL → MIS (F&O intraday)
+    This is the single source of truth for reading Motilal products back out of
+    the order book, trade book, position book and holdings. Do not inline this
+    mapping anywhere else.
 
-    With exchange context:
-        For NSE/BSE:
-            DELIVERY → CNC (delivery)
-            VALUEPLUS → MIS (margin intraday)
-        For NSEFO/MCX:
-            NORMAL → MIS (intraday F&O)
+    Cash segment (NSE, BSE) - exact inverse of map_product_type():
+        DELIVERY   -> CNC
+        VALUEPLUS  -> MIS
+        NORMAL     -> NRML
+        SELLFROMDP -> CNC   (sold out of demat holdings; delivery settled)
+        BTST       -> CNC   (buy today sell tomorrow; delivery settled)
+        MTF        -> NRML  (margin trading facility; funded carry forward)
+
+    F&O segment (NFO, CDS, MCX, BFO):
+        NORMAL     -> NRML  (carry forward product, FAQ Q10)
+        VALUEPLUS  -> MIS   (margin intraday square off, FAQ Q10)
+        DELIVERY   -> CNC   (defensive; not expected on derivatives)
+        SELLFROMDP -> CNC
+        BTST       -> CNC
+        MTF        -> NRML
+
+    Args:
+        product: Motilal product type (NORMAL, DELIVERY, VALUEPLUS, ...)
+        exchange: OpenAlgo exchange name (NSE, BSE, NFO, CDS, MCX, BFO)
+
+    Returns:
+        An OpenAlgo product type (CNC, MIS, NRML). Unknown Motilal products fall
+        back to MIS so the books never carry broker-native vocabulary.
     """
-    # Default reverse mapping without exchange context
-    if exchange is None:
-        reverse_product_type_mapping = {
-            "DELIVERY": "CNC",  # Delivery product
-            "VALUEPLUS": "MIS",  # Margin intraday
-            "NORMAL": "MIS",  # F&O intraday
-            "BTST": "MIS",
-            "MTF": "NRML",
-        }
-        return reverse_product_type_mapping.get(product, "MIS")
+    product = str(product or "").upper()
+    # `exchange` is part of the contract (callers pass the OpenAlgo exchange and
+    # it keeps the signature symmetric with map_product_type) but the reverse
+    # direction is decided by the Motilal product name alone.
+    _ = exchange
 
-    # With exchange context, provide accurate mapping
-    is_cash_segment = exchange in ["NSE", "BSE"]
+    common_mapping = {
+        "DELIVERY": "CNC",
+        "VALUEPLUS": "MIS",
+        "NORMAL": "NRML",
+        "SELLFROMDP": "CNC",
+        "BTST": "CNC",
+        "MTF": "NRML",
+    }
 
-    if is_cash_segment:
-        # For cash segment: VALUEPLUS = MIS, DELIVERY = CNC
-        cash_reverse_mapping = {"DELIVERY": "CNC", "VALUEPLUS": "MIS", "BTST": "MIS"}
-        return cash_reverse_mapping.get(product, "MIS")
-    else:
-        # For F&O segment: NORMAL is used
-        reverse_fo_mapping = {
-            "NORMAL": "MIS",
-            "VALUEPLUS": "NRML",
-        }
-        return reverse_fo_mapping.get(product, "MIS")
+    # The Motilal product name alone is unambiguous in the reverse direction, so
+    # the same table serves cash, F&O and a missing/unknown exchange.
+    return common_mapping.get(product, "MIS")

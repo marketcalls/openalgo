@@ -1,0 +1,126 @@
+# Chart indicator catalogue
+
+GENERATED FILE. Do not edit by hand.
+Run `node frontend/scripts/generate-chart-indicators.mjs` to regenerate.
+
+These are the indicators the `/trading` chart can DRAW, from `openalgo-charts`.
+They are not the same set as the Python `openalgo.ta` indicators, which compute
+VALUES and answer questions like "what is the RSI now". A name in one list is
+not necessarily in the other.
+
+102 indicators.
+
+## Momentum
+
+- `awesome-oscillator` Awesome Oscillator (own pane)
+- `balance-of-power` Balance of Power (own pane)
+- `cci` CCI (own pane)
+- `chande-momentum` Chande Momentum Oscillator (own pane)
+- `connors-rsi` Connors RSI (own pane)
+- `coppock-curve` Coppock Curve (own pane)
+- `dpo` Detrended Price Oscillator (own pane)
+- `fisher-transform` Fisher Transform (own pane)
+- `know-sure-thing` Know Sure Thing (own pane)
+- `macd` MACD (own pane)
+- `mfi` Money Flow Index (own pane)
+- `momentum` Momentum (own pane)
+- `ppo` Percentage Price Oscillator (own pane)
+- `relative-vigor-index` Relative Vigor Index (own pane)
+- `roc` Rate Of Change (own pane)
+- `rsi` RSI (own pane)
+- `rsi-divergence` RSI Divergence Indicator (own pane)
+- `smi` Stochastic Momentum Index (own pane)
+- `smi-ergodic-indicator` SMI Ergodic Indicator (own pane)
+- `smi-ergodic-oscillator` SMI Ergodic Oscillator (own pane)
+- `special-k` Pring's Special K (own pane)
+- `stochastic` Stochastic (own pane)
+- `stochastic-rsi` Stochastic RSI (own pane)
+- `trix` TRIX (own pane)
+- `tsi` True Strength Index (own pane)
+- `ultimate-oscillator` Ultimate Oscillator (own pane)
+- `wavetrend` WaveTrend Pro (own pane)
+- `williams-percent-r` Williams Percent Range (own pane)
+- `woodies-cci` Woodies CCI (own pane)
+
+## Trend
+
+- `adx` ADX / DMI (own pane)
+- `alligator` Williams Alligator (on the price)
+- `alma` Arnaud Legoux Moving Average (on the price)
+- `alphatrend` AlphaTrend (on the price)
+- `aroon` Aroon (own pane)
+- `aroon-oscillator` Aroon Oscillator (own pane)
+- `chande-kroll-stop` Chande Kroll Stop (on the price)
+- `chandelier-exit` Chandelier Exit (on the price)
+- `consolidation-breakout` Consolidation and Breakout (on the price)
+- `cpr` CPR with Floor Pivot (on the price)
+- `dema` Double EMA (on the price)
+- `ema` EMA (on the price)
+- `halftrend` HalfTrend (on the price)
+- `hma` Hull Moving Average (on the price)
+- `hull-suite` Hull Suite (on the price)
+- `ichimoku` Ichimoku Cloud (on the price)
+- `kama` Kaufman's Adaptive Moving Average (on the price)
+- `linreg-slope` Linear Regression Slope (own pane)
+- `lsma` Least Squares Moving Average (on the price)
+- `ma-cross` MA Cross (on the price)
+- `ma-ribbon` Moving Average Ribbon (on the price)
+- `mcginley-dynamic` McGinley Dynamic (on the price)
+- `median` Median (on the price)
+- `parabolic-sar` Parabolic SAR (on the price)
+- `seasonality` Seasonality (own pane)
+- `sma` SMA (on the price)
+- `smma` Smoothed Moving Average (on the price)
+- `supertrend` Supertrend (on the price)
+- `t3` T3 Average (on the price)
+- `tema` Triple EMA (on the price)
+- `trend-strength-index` Trend Strength Index (own pane)
+- `twap` Time Weighted Average Price (on the price)
+- `volatility-stop` Volatility Stop (on the price)
+- `vortex` Vortex Indicator (own pane)
+- `williams-fractals` Williams Fractals (on the price)
+- `wma` WMA (on the price)
+
+## Volatility
+
+- `atr` ATR (own pane)
+- `average-daily-range` Average Daily Range (own pane)
+- `bb-trend` BBTrend (own pane)
+- `bollinger` Bollinger Bands (on the price)
+- `bollinger-bandwidth` Bollinger BandWidth (own pane)
+- `bollinger-percent-b` Bollinger Bands %b (own pane)
+- `chaikin-volatility` Chaikin Volatility (own pane)
+- `chop-zone` Chop Zone (own pane)
+- `choppiness-index` Choppiness Index (own pane)
+- `donchian` Donchian Channels (on the price)
+- `envelope` Envelope (on the price)
+- `historical-volatility` Historical Volatility (own pane)
+- `keltner-channel` Keltner Channels (on the price)
+- `ma-channel` Moving Average Channel (on the price)
+- `mass-index` Mass Index (own pane)
+- `range-analysis` Range Analysis (own pane)
+- `relative-volatility-index` Relative Volatility Index (own pane)
+- `standard-deviation` Standard Deviation (own pane)
+- `standard-error` Standard Error (own pane)
+- `standard-error-bands` Standard Error Bands (on the price)
+- `ulcer-index` Ulcer Index (own pane)
+- `williams-vix-fix` William VIX FIX (own pane)
+
+## Volume
+
+- `adl` Accumulation/Distribution (own pane)
+- `chaikin-money-flow` Chaikin Money Flow (own pane)
+- `chaikin-oscillator` Chaikin Oscillator (own pane)
+- `ease-of-movement` Ease of Movement (own pane)
+- `elder-force-index` Elder Force Index (own pane)
+- `klinger-oscillator` Klinger Oscillator (own pane)
+- `net-volume` Net Volume (own pane)
+- `nvi` Negative Volume Index (own pane)
+- `obv` On-Balance Volume (own pane)
+- `pvi` Positive Volume Index (own pane)
+- `pvo` Percentage Volume Oscillator (own pane)
+- `pvt` Price Volume Trend (own pane)
+- `volume` Volume (own pane)
+- `vwap` VWAP (on the price)
+- `vwma` Volume Weighted Moving Average (on the price)
+

@@ -173,6 +173,38 @@ def get_open_position(tradingsymbol, exchange, product, auth):
         return "0"
 
 
+class _ErrorResponse:
+    """Minimal stand-in so callers can rely on the .status contract."""
+
+    def __init__(self, status):
+        self.status = status
+        self.status_code = status
+
+
+def _extract_error(response):
+    """Flatten an Upstox error body into OpenAlgo's {status, message} shape.
+
+    Upstox returns errors as {"status": "error", "errors": [{"errorCode": ..,
+    "message": ..}]} with no top-level message, which the service layer expects.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return {"status": "error", "message": response.text or "Failed to place order."}
+
+    errors = body.get("errors") or []
+    if errors:
+        parts = []
+        for err in errors:
+            code = err.get("errorCode") or err.get("error_code")
+            msg = err.get("message", "Unknown error")
+            parts.append(f"{code}: {msg}" if code else msg)
+        body["message"] = " | ".join(parts)
+    elif "message" not in body:
+        body["message"] = "Failed to place order."
+    return body
+
+
 def place_order_api(data, auth):
     """
     Places an order using the Upstox API.
@@ -236,11 +268,13 @@ def place_order_api(data, auth):
             return response, response_data, None
 
     except httpx.HTTPStatusError as e:
-        logger.exception(f"HTTP error placing order: {e.response.text}")
-        return e.response, e.response.json(), None
+        logger.error(f"HTTP error placing order: {e.response.text}")
+        # Preserve the .status contract expected by place_order_service.py
+        e.response.status = e.response.status_code
+        return e.response, _extract_error(e.response), None
     except Exception as e:
         logger.exception("Unexpected error in place_order_api")
-        return None, {"status": "error", "message": str(e)}, None
+        return _ErrorResponse(500), {"status": "error", "message": str(e)}, None
 
 
 def place_smartorder_api(data, auth):

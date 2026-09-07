@@ -348,11 +348,25 @@ def check_database(env):
     # NullPool is a correctness AND availability control (see CLAUDE.md).
     ef = REPO / "database" / "engine_factory.py"
     if ef.exists():
-        t = ef.read_text(errors="replace")
-        ok = "NullPool" in t and "StaticPool" not in t
+        # Match how the pool is actually configured, not any mention of it. A
+        # plain `"StaticPool" not in text` test fails on this file's own
+        # docstring, which exists to say StaticPool must never be used: the
+        # check reported the documentation as the defect that documentation
+        # warns against. Look for the assignment and the import instead, with
+        # line comments stripped so a commented-out example cannot trip it.
+        code = "\n".join(
+            ln for ln in ef.read_text(errors="replace").splitlines()
+            if not ln.lstrip().startswith("#")
+        )
+        uses_null = re.search(r"poolclass\s*=\s*NullPool", code) is not None
+        uses_static = bool(
+            re.search(r"poolclass\s*=\s*StaticPool", code)
+            or re.search(r"^\s*from\s+sqlalchemy\.pool\s+import\s+[^\n]*StaticPool", code, re.M)
+        )
+        ok = uses_null and not uses_static
         add("Database: NullPool (not StaticPool)", "MEDIUM", "PASS" if ok else "FAIL",
-            "engine_factory uses NullPool" if ok
-            else "StaticPool present -- corrupts cursor state under concurrency",
+            "engine_factory configures poolclass=NullPool" if ok
+            else "StaticPool configured -- corrupts cursor state under concurrency",
             "" if ok else "Revert to NullPool; see CLAUDE.md")
 
     # Direct create_engine calls bypass the hardened factory.

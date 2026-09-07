@@ -166,6 +166,11 @@ def _invalidate_position_cache(auth):
 
 def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    # securityId is the authoritative match: tradingSymbol is identical across
+    # NSE series, so matching on it alone could read a warrant's position for
+    # an equity order (#1930). Keep the symbol as a fallback for when the
+    # master contract has no token for the symbol.
+    security_id = get_token(tradingsymbol, exchange)
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
     net_qty = "0"
@@ -185,10 +190,15 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     if positions_data and isinstance(positions_data, list):
         for position in positions_data:
             if (
-                position.get("tradingSymbol") == tradingsymbol
-                and position.get("exchangeSegment") == map_exchange_type(exchange)
-                and position.get("productType") == product
+                position.get("exchangeSegment") != map_exchange_type(exchange)
+                or position.get("productType") != product
             ):
+                continue
+            if security_id is not None:
+                matched = str(position.get("securityId", "")) == str(security_id)
+            else:
+                matched = position.get("tradingSymbol") == tradingsymbol
+            if matched:
                 net_qty = position.get("netQty", "0")
                 break  # Assuming you need the first match
 

@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import sys
 import threading
@@ -10,6 +9,7 @@ from dotenv import load_dotenv
 
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Load environment variables
 load_dotenv()
@@ -29,7 +29,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("firstock_websocket")
+        self.logger = get_logger("firstock_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "firstock"

@@ -11,7 +11,7 @@
  *
  * // With category (respects user settings)
  * showToast.success('Order placed', 'orders')
- * showToast.error('Failed to save', 'strategy')
+ * showToast.error('Failed to save', 'flow')
  *
  * // Without category (always shows if master toggle enabled)
  * showToast.success('Copied to clipboard')

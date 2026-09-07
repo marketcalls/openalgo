@@ -228,6 +228,9 @@ class BrokerData:
             quote_data = fetched[0]
 
             # Return in OpenAlgo standard format
+            # OHLC mode returns only ltp/open/high/low/close, so bid, ask,
+            # volume and oi are not available from this endpoint. volume is
+            # still read defensively in case the API starts returning it.
             return {
                 "bid": 0,  # Not provided in OHLC mode
                 "ask": 0,  # Not provided in OHLC mode
@@ -588,9 +591,19 @@ class BrokerData:
                     f"Interval '{interval}' not supported. Supported intervals: {', '.join(supported)}"
                 )
 
+            # mStock rate limits Data APIs to 1 request per second, so pace the
+            # chunk requests. The delay is applied before every request except
+            # the first so a single-chunk fetch is not slowed down.
+            RATE_LIMIT_DELAY = 1.0
+            first_chunk = True
+
             # Process data in chunks
             current_start = from_date
             while current_start <= to_date:
+                if not first_chunk:
+                    time.sleep(RATE_LIMIT_DELAY)
+                first_chunk = False
+
                 # Calculate chunk end date
                 current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
 

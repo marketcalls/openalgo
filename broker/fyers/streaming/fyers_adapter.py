@@ -4,7 +4,6 @@ Handles WebSocket streaming for all exchanges: NSE, NFO, BSE, BFO, MCX
 Uses HSM binary protocol for real-time data
 """
 
-import logging
 import threading
 import time
 from collections import defaultdict
@@ -12,6 +11,7 @@ from collections.abc import Callable
 from typing import Any, Dict, List, Optional
 
 from database.token_db import get_br_symbol
+from utils.logging import get_logger
 
 from .fyers_hsm_websocket import FyersHSMWebSocket
 from .fyers_mapping import FyersDataMapper
@@ -34,7 +34,7 @@ class FyersAdapter:
         """
         self.access_token = access_token
         self.userid = userid
-        self.logger = logging.getLogger("fyers_adapter")
+        self.logger = get_logger("fyers_adapter")
 
         # Initialize components
         self.token_converter = FyersTokenConverter(access_token)
@@ -619,9 +619,7 @@ class FyersAdapter:
             self.disconnect(clear_mappings=True)
         except Exception as e:
             # Fallback logging if self.logger is not available
-            import logging
-
-            logger = logging.getLogger("fyers_adapter")
+            logger = get_logger("fyers_adapter")
             logger.error(f"Error in FyersAdapter destructor: {e}")
 
     def force_cleanup(self):

@@ -2,8 +2,239 @@
 
 All notable changes to OpenAlgo will be documented in this file.
 
-Point releases between minor versions are documented in
-[docs/releases](releases/) rather than here.
+Each release adds a stanza here summarising what changed and who contributed.
+The full notes for a release, with commit SHAs and the reasoning behind each
+fix, live in [docs/releases](releases/).
+
+## [Unreleased]
+
+## [2.0.2.3] - 2026-09-06
+
+### Strategy Module, Agent and Charting Release
+
+217 commits since 2.0.2.2. Full notes: [version-2.0.2.3-released.md](releases/version-2.0.2.3-released.md).
+
+---
+
+### Highlights
+
+- **Strategy Module and RMS at `/strategy`** - multi-leg options strategies with stop loss, target and trailing stop per leg and in aggregate, driven by the live tick feed. Two kinds share one engine: `batch` enters and exits every leg together, `signal` moves one leg per alert, so a TradingView alert can trade a single leg. Kill switch flattens, crash recovery and checkpointing survive a restart mid-run, and the books are served from the broker rather than from stored rows
+- **A broker-agnostic risk core in `services/risk/`** - decides stops, targets, trailing and aggregate limits, and performs no I/O of any kind, so it is exercised by golden vectors rather than a running platform. The four defects in the evaluator it replaced are each pinned by a test marked `PORTED DEFECT`
+- **Order-path safety** - a claim is written under the same lock that checks it and before dispatch, a fill is matched to its order rather than to its leg, and a caller that has already resolved the pipe says so, so an analyzer toggle mid-run cannot send live exits to the sandbox. A stop whose exits were refused leaves the run open and managed
+- **The OpenAlgo Agent at `/agent`** - an LLM assistant wired to OpenAlgo's service layer, reading order book, positions, holdings, funds, quotes, history, indicators, Greeks and payoff diagrams, and placing orders only when the operator turns trading on. Runs on any LiteLLM provider, or on a ChatGPT Plus or Pro subscription by OAuth device flow (#1997)
+- **Charting terminal on openalgo-charts 2.0.2** - a bottom dock for orders, positions, trades and GTT across every symbol; one-click trading as an explicit armed mode, off by default; watchlist and option chain side panels; and a chart-side agent panel
+- **Kotak Neo historical data** - the plugin previously served none. Now 1m to 30m, 1h, D and W across NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX, as a direct REST integration. MCX and CDS are refused by the broker and error clearly rather than returning an empty series (#2008, #2010)
+- **Broker fixes** - Fyers HSM authentication timeout (#1950), Shoonya socket and thread leak (#1988), mstock subscribe recovery (#1983, #1974), Upstox order-type price fields (#1966), Flattrade order socket evicting the feed (#1961)
+
+---
+
+### Charting Terminal
+
+- **One-click trading is now an explicit armed mode, and it is off by default.**
+  A click on the chart used to send a live market order with no confirmation and
+  no way to switch that off. Disarmed, the same click opens an order ticket
+  prefilled with what the chart would have sent. Arming gates new risk only:
+  closing a position, cancelling an order and dragging one to a new price work
+  either way.
+- **A bottom dock shows orders, positions, trades and GTT across every symbol.**
+  Working orders and the open position previously existed only as lines on the
+  charted symbol. Rows update live from the account order stream and reconcile
+  against the broker book. Cancel, modify and per-position close act on one row;
+  cancel all and close all sit behind a confirmation. Every write refuses while a
+  pane is replaying.
+- **A drawing tool can stay armed.** A padlock beside the magnet keeps the tool
+  after a drawing instead of returning to the cursor.
+- **The Delete key removes the selected drawing**, and brings duplicate and
+  arrow-key nudge with it. The host never asked the drawing tier what a key
+  meant, so only the rail button worked.
+- **Alt+V and Alt+H arm the vertical and horizontal line tools only.** Both were
+  bound twice, so one press moved a grid line and armed a tool. The grid stays on
+  the toolbar button and the right-click menu.
+- **A double-click on the chart no longer resets the view.** Reset fits every
+  loaded bar, which lands on the oldest one and woke the history loader, so the
+  gesture quietly fetched another page. It now maximizes the pane under the
+  pointer, and a second press puts the stack back. Reset stays on the toolbar
+  button, the right-click menu and Home. Double-clicking a text drawing still
+  opens its editor.
+- **Upgraded to openalgo-charts 2.0.2** from 1.9.2. Drawings saved by the old
+  version are upgraded on load, with their text, styling and Fibonacci ratios
+  intact.
+- **CRYPTO is treated as a derivative segment**, so a Delta Exchange contract is
+  offered NRML rather than CNC and takes quantity in lots.
+- **The user guide gains a chapter for the terminal**, covering one-click, the
+  dock, drawing tools and every keyboard shortcut:
+  [32 - Charting Terminal](userguide/32-charting-terminal/README.md).
+
+### WebSocket Proxy
+
+- **A depth subscription is read under either key.** The proxy read the requested
+  book depth from `depth` only, while the chart library sent `depth_level`, so a
+  client asking for 20, 30 or 50 levels was served 5 with no error.
+
+### Brokers
+
+- **Kotak Neo serves historical data.** `get_history` was a placeholder returning
+  an empty frame and the interval lists were empty. Now 1m, 3m, 5m, 10m, 15m,
+  30m, 1h, D and W across NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX, as a
+  direct REST integration on the shared pooled client rather than an SDK wrapper.
+  Paced at four requests per second against a measured ceiling of five, with an
+  empty range recognised as a 400 fault rather than treated as a failure
+  (#2008, #2010).
+- **MCX and CDS have no Kotak historical data.** The broker refuses both segments
+  outright, so the request errors clearly instead of returning an empty series
+  that would read as a market holiday. Quotes, depth, orders and streaming are
+  unaffected.
+- **Kotak account data** - positions backfill LTP via batched multiquotes
+  (#1973), realized P&L is reported for fully-closed positions (#1971),
+  `availablecash` reports cash only (#1955), and the scripmaster fallback check
+  uses a ranged GET instead of HEAD (#1730).
+- **Fyers** HSM WebSocket authentication timeout resolved (#1950).
+- **Shoonya** abandoned WebSocket clients no longer leak sockets and threads
+  (#1988), and `get_history` raises on session errors instead of returning an
+  empty success (#1952).
+- **mstock** recovers dropped subscribes and stands down on dead tokens (#1983),
+  with corrected order handling and the one-off quote socket closed on every exit
+  path (#1974).
+- **Upstox** sends price and trigger price only where the order type allows
+  (#1966).
+- **Flattrade** order socket no longer evicts the market-data feed (#1961).
+
+### Dependencies
+
+- **New**: `litellm==1.99.0`, `agno==3.0.5`, `ddgs>=9.16.0`, all for the Agent
+- `openalgo-charts`: **1.8.2** to **2.0.2**
+- Docker base images moved from EOL bullseye to trixie (#2004)
+- npm and pip advisories flagged by Dependabot patched (#1968)
+- The pinned `openalgo` SDK stays at **2.0.3**
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; the Strategy Module and RMS including the risk core, signal mode, webhook, scheduler, crash recovery and order-path safety (#1976); the OpenAlgo Agent with ChatGPT subscription support (#1997); the charting terminal upgrade to openalgo-charts 2.0.2 with the bottom dock, armed one-click trading and side panels; Kotak Neo historical data (#2008, #2010); retirement of the legacy `/strategy` module
+- **@Kalaiviswa** - Fyers HSM authentication timeout (#1950); Shoonya socket and thread leak (#1988) and `get_history` session errors (#1952); mstock subscribe recovery (#1983) and quote socket cleanup (#1974); Upstox order-type price fields (#1966); Flattrade order socket and Kotak multiquote batching (#1961); Flow strike offsets and QA fixture cleanup (#1953); underlying picker on cash exchanges (#1989); Kotak follow-ups (#1985); Dependabot advisory patches (#1968)
+- **@arsalanansari17** - Kotak LTP backfill via batched multiquotes (#1973), realized P&L for closed positions (#1971), `availablecash` as cash only (#1955), ranged GET for the scripmaster check (#1730)
+- **@aravindgandavadi (Aravind Gandavadi)** - Docker base images from EOL bullseye to trixie (#2004)
+
+## [2.0.2.2] - 2026-08-29
+
+### Stability and Security Release
+
+143 commits since 2.0.2.1. Full notes: [version-2.0.2.2-released.md](releases/version-2.0.2.2-released.md).
+
+---
+
+### Highlights
+
+- **The eventlet boundary closed** - the "first order works, next one hangs the app" reports (#1402, #1473, #1569) were four defects: a real thread contending on a green lock, a green logging handler lock, `PRAGMA busy_timeout` waiting inside C while holding the hub, and `run_coroutine_threadsafe` never waking its caller
+- **Broker credentials swept out of the logs** - 73 bare `logging.getLogger()` call sites bypassing redaction across 30 plugins, credentials interpolated into messages in 12 plugins, 35 sites leaking a secret inside a URL, payload, headers dict or exception message, and a defect in the `Bearer` pattern itself
+- **Dhan symbol mapping routed orders to the wrong instrument** - 8,642 security ids resolved to two contracts each, and equity symbols ignored `SEM_SERIES` so an order could reach a warrant (#1929, #1930)
+- **User chart indicators, loaded at runtime** - drop a `.js` file in `strategies/indicators/` and it appears in the `/trading` picker. No build step, no Node.js, no restart (#1923)
+- **Motilal Oswal repaired and modernised** - every endpoint on its documented version, smart orders that can see a position, and four WebSocket leaks closed (#1912)
+- **GTT extended to Angel One, Fyers and Upstox** (#1922)
+- **Flow nodes stop acting on data they do not have** - conditions answered on failed broker reads, an errored condition settled a gate into a real order, and `httpRequest` had two injection paths
+- **A fresh install clones 20 MB instead of 276 MB** - 165 MB of committed compression artifacts removed and all clone paths made partial (#1896, #1897, #1898)
+
+---
+
+### New Features
+
+- User chart indicators in `strategies/indicators/*.js`, served by `blueprints/custom_indicators.py` and loaded after the built-in tier, with in-browser validation (#1923)
+- Charting terminal: market replay, a settings dialog rendered from the engine schema, chart sync groups, a warm-load history cache, drawing undo and redo, and an indicator browser with categories, favourites and recents
+- GTT order support for Angel One, Fyers and Upstox, each registering itself by shipping `api/gtt_api.py` plus `mapping/gtt_data.py` (#1922)
+- Every Flow order field accepts a `{{reference}}`, not just `symbol`
+- Flow schedule trigger exposes its market-hours window and calendar exchange; interval schedules anchor to the clock with `FLOW_INTERVAL_ALIGN_OFFSET`
+- Flow supports MCX commodity options and leg-by-leg multi-leg baskets (#1904)
+- Flow defaults to NRML on NFO, BFO, CDS, BCD, MCX, NCDEX and NCO rather than storing MIS on every node (#1909)
+- TradeSmart tags placed orders as `openalgo` and gives quotes their own 100/sec budget (#1928)
+- Motilal Oswal order-update WebSocket adapter, bringing `_BROKER_FACTORIES` to 17 (#1912)
+- `chart-indicator`, `flow-builder` and `verify` skills
+
+### Stability Fixes
+
+- Four eventlet boundary crossings fixed via `utils/real_threading`, `Handler.createLock` patching, a green-thread callback drain and a Python-side SQLite lock retry (#1402, #1473, #1569)
+- Subscribe acks resolve immediately instead of waiting out a 12-second timeout; proxy error replies now echo `request_id`
+- Motilal Oswal: market-data socket pooled per session, cold-start registration race, duplicate poll threads and unbounded tick caches (#1912)
+- Dhan `unsubscribe()` reaches the broker instead of only clearing local tracking; `dhan_sandbox` stops sending the invalid `RequestCode: 0` (#1924)
+- A silent feed logs at debug rather than warning every two minutes outside market hours
+- Test suite database isolation no longer depends on module import order
+
+### Security Fixes
+
+- Broker loggers routed through `get_logger` so `SensitiveDataFilter` applies: 73 call sites in 60 files across 30 plugins
+- Credential values removed from log messages in 12 plugins, and from URLs, payloads, headers dicts and exception messages at 35 sites in 15 plugins (#1854, #1855)
+- `SensitiveDataFilter` Bearer pattern extended to composite credentials, `cookie` added to the key alternation, and `utils/logging.py` given its first tests
+- `CORS_ENABLED=FALSE` disables CORS instead of falling through to the flask-cors `origins="*"` default; the enabled-but-unconfigured case fails closed (#1848)
+- Client error reports no longer persist a reset-password token or broker OAuth code into `log/errors.jsonl`, sanitized on both boundaries (#1851)
+- The frontend fails a mutating request rather than sending it with no CSRF token
+- Password login clears the session before writing any authenticated value
+
+### Platform Fixes
+
+- Option resolver validates the strike interval and option type, so a `strike_int` of 0 or an option type of "CALL" is refused rather than returning the put strike (#1829)
+- Sandbox position book, MIS square-off and T+1 settlement boundaries resolved in the database clock rather than naive local time (#1789, #1801)
+- Sandbox serializes concurrent same-symbol position updates (#1808)
+- An out-of-range `SESSION_EXPIRY_TIME` falls back rather than silently disabling the MIS square-off
+- `get_history()` rejects an unsupported source at the entry point (#1826); market calendar helpers return 400 for a non-string date (#1824)
+- Multi-option Greeks batch state keyed by leg index (#1819)
+- Frontend rate limiter expires calls at the window boundary (#1830)
+- Navigation links declare `aria-current="page"` (#1833)
+- Frontend compression artifacts generated at startup rather than committed, and all install paths use `--filter=blob:none` (#1896, #1897, #1898)
+- Ten routine startup log lines moved from INFO to debug
+- CI runs `backend-test` on Python 3.12, 3.13 and 3.14 and the frontend jobs on Node 20, 22 and 24 (#1894)
+
+### Flow Fixes
+
+- `priceCondition`, `positionCheck` and `fundCheck` check the broker response status, so a 401 no longer reads as LTP 0.0 with `status: success`
+- An errored condition leaves its gate pending instead of settling it to `False` and driving a real order
+- A condition reachable by two paths runs once; gates honour `inputCount`
+- `timeWindow` crosses midnight; `waitUntil` over 30 minutes points at a schedule trigger
+- Websocket subscriptions are tracked per workflow and released on deactivate or delete; a specific-mode `unsubscribe` no longer falls through to `unsubscribe_all`
+- `httpRequest` resolves its URL once and after parsing, closing two injection paths
+- Broker rejections surface their real reason instead of "node failed"
+- Import format docs corrected on gate wiring, `marketHoursOnly`, `days`, strike offset ranges and `optionsMultiOrder.strategy`
+
+### Broker Fixes
+
+- Dhan: master contract gated on `SEM_SEGMENT`, NSE segment M mapped to NCO, symbols built from `SEM_SERIES` and `SEM_STRIKE_PRICE`, `securityId`-first position matching, and the inverted INTRADAY reverse mapping. **Breaking: 7,190 NSE equity symbols gain a series suffix** (#1929, #1930, #1932)
+- Shoonya: `GetQuotes` refuses a quote echoing a different instrument, measured at 9% of replies on the live API (#1904)
+- Angel and Zerodha: holdings return LTP and average price, and one null row no longer fails the whole call (#1917, #1919)
+- Flattrade: pledged holdings reported as collateral from the `collateral` field rather than `brkcollamt` (#1936)
+- Motilal Oswal: endpoints on their documented versions, correct API key and secret convention, client code persisted from the TOTP page, smart orders matching on `symboltoken` (#1912)
+
+### Documentation
+
+- Broker plugin counts synchronised to 36 across 17 files, the FAQ, the devsprint guide and the design docs (#1844, #1906, #1910)
+- Documentation-only contribution workflow (#1846), completed CONTRIBUTING table of contents (#1883), contributor test commands aligned with CI (#1841), corrected frontend build and Node guidance (#1842), obsolete `/react` routes replaced (#1840)
+- The eventlet boundary rules recorded in CLAUDE.md, both directions, with the threads that are genuinely real named
+- Sandbox margin PRD states that short options are not SPAN margined (#1795)
+
+### Dependencies
+
+- `openalgo-charts`: **1.6.0** to **1.8.2**, pinned exactly rather than with a caret
+- `zmq==0.0.0` removed from all three dependency lists: a placeholder package shipping no code, with `pyzmq` already pinned (#1895)
+- No other Python dependencies changed; the pinned `openalgo` SDK stays at 2.0.3
+
+### Contributors
+
+- **@marketcalls (Rajandran)** - release management; eventlet boundary sweep and regression suites (#1402, #1473, #1569); broker credential redaction across 30 plugins; Dhan master contract, symbol construction, NCO and unsubscribe (#1929, #1930, #1932, #1934); runtime-loaded chart indicators (#1923); charting terminal 1.6.0 to 1.8.2 with replay, settings, sync, history cache and the indicator browser; Flow node-contract audit, payload-driven order fields and clock-anchored schedules; sandbox clock boundaries; Flattrade collateral (#1936); repository size work (#1896, #1897, #1898); Motilal Oswal WebSocket pooling; CI version matrix (#1894); test isolation; three new skills
+- **@Kalaiviswa** - Motilal Oswal plugin repair (#1912); GTT for Angel One, Fyers and Upstox (#1922); Angel and Zerodha holdings (#1917, #1919); Dhan PRs (#1932, #1934); TradeSmart tagging and quote budget (#1928); Flow MCX options, multi-leg baskets and NRML defaults (#1904, #1909); Shoonya wrong-instrument quote guard
+- **@santhiprakash (Santhi Prakash)** - sandbox position-book session boundary (#1789), MIS square-off boundary (#1801), concurrent position updates (#1808), Historify index cleanup (#1803)
+- **@siddharthg2309 (Siddharth Gouthaman)** - history source allowlist (#1875), client error URL sanitization (#1886), `aria-current` navigation (#1880), option chain view mode coverage (#1876)
+- **@solstxce** - API key redaction in core service logs (#1914), credential removal from broker logs (#1916)
+- **@nightcityblade** - client errors for invalid calendar dates (#1861), CONTRIBUTING table of contents (#1883)
+- **@WilliamK112 (Ching Wei Kang)** - documentation-only contribution workflow (#1907), rate limiter window boundary (#1868)
+- **@ANONYMOUSZED-beep (Arun)** - `CORS_ENABLED=FALSE` honoured (#1860)
+- **@Narasimha722 (NarasimhaReddy)** - option resolver strike interval and option type validation (#1829)
+- **@Pragitics (Pragit R V)** - multi-option Greeks batch state by leg index (#1885)
+- **@Meraj-08 (Md Meraj Alam)** - contradictory broker plugin counts eliminated (#1906)
+- **@K-PRAGALATHAN (PRAGALATHAN K)** - history format script converted to pytest coverage (#1887)
+- **@NavadeepDj (NavadeepDJ)** - type hints for the data schema validators (#1864)
+- **@suhaslord (Suhas)** - contributor test commands aligned with CI (#1889)
+- **@thaildhe172591 (Luu Thai)** - frontend build-artifact and Node guidance (#1863)
+- **@yiheng-kkk** - obsolete frontend routes replaced (#1867)
+- **@PadmaBalajiL (Padma Balaji Leelavinodhan)** - devsprint participants (#1814)
+- **@cracker314** - devsprint participants (#1817)
+
+---
 
 ## [2.0.2.1] - 2026-08-21
 

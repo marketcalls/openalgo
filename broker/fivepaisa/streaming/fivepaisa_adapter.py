@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 import sys
@@ -12,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from broker.fivepaisa.streaming.fivepaisa_websocket import FivePaisaWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -47,7 +47,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("fivepaisa_websocket")
+        self.logger = get_logger("fivepaisa_websocket")
         self.ws_client = None
         self.user_id = None
         self.client_code = None

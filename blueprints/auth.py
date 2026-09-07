@@ -320,6 +320,26 @@ def login():
 
         if authenticate_user(username, password):
             logger.info(f"[LOGIN] Password auth success for: {username}")
+            # Start every authenticated session from a clean slate.
+            #
+            # This runs after the password check but BEFORE any authenticated
+            # value is written: session["user"] is set immediately below, and
+            # "logged_in" is not set until broker auth completes in
+            # handle_auth_success(). So nothing authenticated is discarded here.
+            #
+            # This is state hygiene, not a session-fixation fix. Flask signs the
+            # whole session into the cookie (SecureCookieSessionInterface), so
+            # there is no server-side session id an attacker could pre-plant and
+            # later reuse. What it does prevent is leftovers from an abandoned
+            # earlier flow surviving into the authenticated session: a
+            # password-reset token, a stale broker key, or a half-finished TOTP
+            # park being layered under the new values instead of replaced.
+            #
+            # Safe for CSRF: POST /auth/login is exempt (no session exists yet)
+            # and the frontend re-fetches a token from /auth/csrf-token before
+            # each mutating request. session.permanent is set in
+            # handle_auth_success() once broker auth succeeds.
+            session.clear()
 
             # If the user has 2FA enabled for login, defer setting session["user"]
             # until TOTP is verified. This is the gate that prevents an attacker

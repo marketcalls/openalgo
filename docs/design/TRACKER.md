@@ -43,7 +43,6 @@ This tracker records the July 2026 code-backed sweep. `Current` means the docume
 | 36 | Rate Limiting | Reviewed | 2026-07-10 |
 | 37 | API Key And Playground | Reviewed | 2026-07-10 |
 | 38 | Python Strategies | Reviewed | 2026-07-10 |
-| 39 | Strategy Module | Reviewed | 2026-07-10 |
 | 40 | Logout And Session Lifecycle | Current | 2026-07-10 |
 | 41 | MCP Architecture | Current | 2026-07-10 |
 | 42 | Action Center | Reviewed | 2026-07-10 |
