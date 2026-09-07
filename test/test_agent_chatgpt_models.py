@@ -114,8 +114,17 @@ class TestTheEntriesThemselves:
     def test_the_refused_models_are_not_offered(self):
         # Measured against a real subscription: these are rejected by the
         # backend by name. gpt-5.6 being refused while three of its variants
-        # work is why the list is enumerated, not derived.
-        for refused in ("gpt-5.6", "gpt-5.6-cyber", "gpt-5.5-pro", "gpt-5.6-codex"):
+        # work, and gpt-6 refused while gpt-6-astra answers, is why the list is
+        # enumerated, not derived.
+        for refused in (
+            "gpt-5.6",
+            "gpt-5.6-cyber",
+            "gpt-5.5-pro",
+            "gpt-5.6-codex",
+            "gpt-6",
+            "gpt-6-pro",
+            "gpt-6-astra-codex",
+        ):
             assert refused not in chatgpt_models.SUPPLEMENTAL
 
 
