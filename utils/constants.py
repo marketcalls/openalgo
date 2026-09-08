@@ -27,7 +27,7 @@ CRYPTO_EXCHANGES: set[str] = {EXCHANGE_CRYPTO}
 # Set of broker names that map to crypto exchanges.
 # Used to select the correct download cutoff timezone (UTC vs IST).
 # Add new crypto brokers here — the smart download logic picks this up automatically.
-CRYPTO_BROKERS: set[str] = {"deltaexchange"}
+CRYPTO_BROKERS: set[str] = {"deltaexchange", "deltaexchange_demo"}
 
 # Instrument type for crypto perpetual futures (used in symbol DB queries).
 INSTRUMENT_PERPFUT: str = "PERPFUT"
