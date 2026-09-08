@@ -2,8 +2,10 @@ import { Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { parseExpiryDate } from '@/lib/strategyMath'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { DERIVATIVE_EXCHANGES } from '@/types/strategy'
 
 /**
  * Symbol search modal for the /trading page.
@@ -80,6 +82,17 @@ const EXCHANGE_RANK: Record<string, number> = {
   CRYPTO: 0,
 }
 
+function expiryMs(symbol: string): number {
+  const match = /(\d{1,2})([A-Z]{3})(\d{2})/.exec(symbol)
+  if (!match) return Infinity
+  const expiry = parseExpiryDate(match[0])
+  return expiry ? expiry.getTime() : Infinity
+}
+
+function isDerivativeExchange(exchange: string): boolean {
+  return (DERIVATIVE_EXCHANGES as readonly string[]).includes(exchange)
+}
+
 /** 0 = exact symbol match, 1 = prefix, 2 = substring, 3 = matched on name only. */
 function matchScore(symbol: string, q: string): number {
   if (!q) return 3
@@ -100,6 +113,10 @@ function compareRows(a: SearchRow, b: SearchRow, q: string): number {
   if (scoreDiff) return scoreDiff
   const exDiff = (EXCHANGE_RANK[exA] ?? 9) - (EXCHANGE_RANK[exB] ?? 9)
   if (exDiff) return exDiff
+  if (isDerivativeExchange(exA) && isDerivativeExchange(exB)) {
+    const expDiff = expiryMs(String(a.symbol)) - expiryMs(String(b.symbol))
+    if (expDiff) return expDiff
+  }
   const lenDiff = String(a.symbol).length - String(b.symbol).length
   if (lenDiff) return lenDiff
   return String(a.symbol).localeCompare(String(b.symbol))
