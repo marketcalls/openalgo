@@ -30,7 +30,6 @@ This file records unresolved implementation/documentation conflicts and delibera
 
 - RESTX Swagger is disabled with `doc=False`. `/api/docs` is intentionally absent and must not be treated as a broken route.
 - `mcp/mcpserver.py::check_holiday` is registered as an MCP tool but calls the absent `/api/v1/checkholiday` route. The internal `services.market_calendar_service.check_holiday()` function exists; the public REST contract does not. MCP/user documentation omits this tool until its implementation uses a supported path or service.
-- Analyzer GTT place, modify, cancel, and orderbook return 501 even though sandbox GTT tables exist.
 - Blueprint-route BDD coverage is representative. The complete 57-method RESTX inventory and all 36 broker plugins have explicit scenario-outline rows.
 
 ## Resolved During This Sweep

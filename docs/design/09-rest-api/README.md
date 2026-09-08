@@ -48,7 +48,7 @@ All are environment/configuration values; compound limits are supported.
 
 - Live mode resolves `broker.<key>` modules through the active API-key session.
 - Analyzer mode routes supported order/account operations to the sandbox engine.
-- Analyzer GTT place/modify/cancel/orderbook is not implemented and returns 501.
+- Analyzer GTT place/modify/cancel/orderbook are served by the sandbox GTT manager (sandbox/gtt_manager.py) and answer with mode analyze; the orderbook accepts status active (default) or all.
 - Semi-auto mode queues eligible execution in Action Center and blocks defined destructive operations.
 - `/pnl/symbols` is analyzer-only.
 

@@ -561,6 +561,12 @@ class CancelGTTOrderSchema(Schema):
 
 
 class GTTOrderBookSchema(Schema):
-    """Schema for listing all GTT triggers for a user."""
+    """Schema for listing GTT triggers for a user.
+
+    ``status`` defaults to ``active``, the shape every consumer relied on before
+    the field existed. ``all`` adds the history (triggered, cancelled, expired,
+    rejected) so a caller can see what fired and what it produced.
+    """
 
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    status = fields.Str(load_default="active", validate=validate.OneOf(["active", "all"]))

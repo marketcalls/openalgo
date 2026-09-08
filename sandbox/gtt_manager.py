@@ -684,6 +684,9 @@ class GTTManager:
                     "price": float(leg.price or 0),
                     "pricetype": leg.pricetype,
                     "product": leg.product,
+                    # The sandbox order this leg placed when it fired; null
+                    # until then. Lets the GTT tab show what a trigger produced.
+                    "triggered_order_id": leg.triggered_order_id,
                 }
                 for leg in gtt.legs
             ],

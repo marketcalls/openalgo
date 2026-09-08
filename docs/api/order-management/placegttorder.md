@@ -185,6 +185,8 @@ LTP is currently below 1450 → trigger sits **above** LTP → use `triggerprice
 - **`last_price` is fetched server-side** from the broker's quotes endpoint. You don't need to send it.
 - **MARKET handling**: some brokers' GTT APIs only accept LIMIT child orders. When that's the case, OpenAlgo automatically converts a MARKET request into a Market-Price-Protected LIMIT (a slab-based buffer around LTP for SINGLE, or around each leg's trigger for OCO) so the submitted `pricetype=MARKET` works uniformly across brokers.
 - **OCO direction**: stoploss-leg trigger must be **below** target-leg trigger (`triggerprice_sl < triggerprice_tg`). The `action` (BUY or SELL) applies to both legs.
+- **Analyzer (sandbox) mode** places the GTT in the sandbox instead of at the broker: the response carries `"mode": "analyze"` and a `GTT-...` trigger id, margin is reserved at placement, and the trigger fires against live LTP exactly as it would at the broker, placing a sandbox order. See [GTTOrderBook](./gttorderbook.md) for how to read what fired.
+- **Analyzer (sandbox) mode** places the GTT in the sandbox instead of at the broker: the response carries `"mode": "analyze"` and a `GTT-...` trigger id, margin is reserved at placement, and the trigger fires against live LTP exactly as it would at the broker, placing a sandbox order. See [GTTOrderBook](./gttorderbook.md) for how to read what fired.
 - **Symbol format**:
   - Equity: `RELIANCE`
   - Futures: `NIFTY25AUG26FUT`
@@ -225,7 +227,6 @@ Two further consequences on Upstox:
 | `GTT supports only CNC (delivery) or NRML (overnight F&O); MIS is intraday-only.` | `product=MIS` submitted |
 | `Fractional quantity is not allowed for non-crypto exchanges` | Non-integer qty on equity/F&O |
 | `GTT orders are not supported for broker 'X' yet` (501) | Broker doesn't ship a `gtt_api` module |
-| `Sandbox GTT support not yet implemented` (501) | Analyzer mode is enabled |
 | `UDAPI100500: EDIS is not validated...` (Upstox) | The OCO entry leg is a delivery sell. Authorise EDIS once via Upstox Pro — and see [Upstox — OCO opens a position](#upstox--oco-opens-a-position), since the entry leg may not be what you intended |
 
 ---

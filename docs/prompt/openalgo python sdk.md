@@ -748,12 +748,20 @@ Cancelling an OCO removes both legs atomically; there is no per-leg cancel.
 
 ### GTTOrderBook Example
 
-Lists **active** triggers only. Triggered, cancelled, expired and rejected GTTs are
-filtered out at the broker layer, so every row returned is one that can still fire.
+By default this lists **active** triggers only, the ones that can still fire. Pass
+`status="all"` to include the history as well (triggered, cancelled, expired,
+rejected), ordered active first; in analyzer mode a fired leg also carries the
+`triggered_order_id` of the sandbox order it placed.
 
 ```python
+# Active triggers only (default)
 response = client.gttorderbook()
 print(response)
+
+# Active triggers first, then the triggered / cancelled / expired history
+response = client.gttorderbook(status="all")
+for gtt in response["data"]:
+    print(gtt["trigger_id"], gtt["status"], gtt["symbol"], gtt["trigger_prices"])
 ```
 
 GTTOrderBook Response:

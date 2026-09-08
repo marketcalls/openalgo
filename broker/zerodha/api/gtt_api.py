@@ -232,7 +232,7 @@ def cancel_gtt_order(trigger_id, auth):
     }, response.status_code
 
 
-def get_gtt_book(auth):
+def get_gtt_book(auth, include_history=False):
     """List all GTTs for the user. Returns (response_dict, status_code).
 
     The returned dict has ``status`` and ``data`` where ``data`` is a list of
@@ -253,4 +253,4 @@ def get_gtt_book(auth):
             "message": raw.get("message", "Failed to fetch GTT book"),
         }, response.status_code
 
-    return {"status": "success", "data": map_gtt_book(raw)}, 200
+    return {"status": "success", "data": map_gtt_book(raw, include_history=include_history)}, 200

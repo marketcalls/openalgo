@@ -25,7 +25,9 @@ class GTTOrderBook(Resource):
             book_data = gtt_book_schema.load(request.json or {})
             api_key = book_data["apikey"]
 
-            success, response_data, status_code = get_gtt_orderbook(api_key=api_key)
+            success, response_data, status_code = get_gtt_orderbook(
+                api_key=api_key, status=book_data.get("status") or "active"
+            )
             return make_response(jsonify(response_data), status_code)
 
         except ValidationError as err:

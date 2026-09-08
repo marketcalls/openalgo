@@ -117,7 +117,9 @@ export default function GttTab({ refuse }: GttTabProps = {}) {
       }
       if (showRefresh) setIsRefreshing(true)
       try {
-        const response = await tradingApi.getGttOrderbook(apiKey)
+        // History included: a fired or cancelled trigger stays visible with
+        // its status badge instead of vanishing from the tab.
+        const response = await tradingApi.getGttOrderbook(apiKey, 'all')
         if (response.status === 'success') {
           setGtts((response.data as GttOrder[]) ?? [])
           setError(null)
@@ -415,6 +417,11 @@ export default function GttTab({ refuse }: GttTabProps = {}) {
                                 <span className="text-xs text-muted-foreground">
                                   {leg.pricetype} · {leg.product}
                                 </span>
+                                {leg.triggered_order_id && (
+                                  <span className="font-mono text-xs text-muted-foreground">
+                                    order {leg.triggered_order_id}
+                                  </span>
+                                )}
                               </div>
                             ))}
                           </div>

@@ -358,7 +358,9 @@ def cancel_gtt_order(trigger_id, auth):
         return {"status": "error", "message": f"General error: {e}"}, 500
 
 
-def get_gtt_book(auth):
+def get_gtt_book(auth, include_history=False):
+    # include_history is accepted for interface parity; this mapper still
+    # returns active triggers only until its status vocabulary is mapped.
     """List the user's GTTs. Returns ``(response_dict, status_code)``.
 
     ``data`` is a list of OpenAlgo-normalised GTT objects (see

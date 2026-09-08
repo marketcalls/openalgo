@@ -466,7 +466,9 @@ def cancel_gtt_order(trigger_id, auth):
     return {"status": "success", "trigger_id": _encode_trigger_id(cancelled_ids)}, 200
 
 
-def get_gtt_book(auth):
+def get_gtt_book(auth, include_history=False):
+    # include_history is accepted for interface parity; this mapper still
+    # returns active triggers only until its status vocabulary is mapped.
     """List the user's live GTTs. Returns ``(response_dict, status_code)``.
 
     Angel's ``ruleList`` takes the status filter in the request body, so only

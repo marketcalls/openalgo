@@ -174,6 +174,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifygttorder \
 - **OCO modify atomicity**: OpenAlgo aims to update both legs of an OCO atomically; some brokers expose a per-leg modify under the hood and may, in rare failure cases, leave the OCO in a half-modified state — re-issue the modify or cancel and re-place if the response indicates partial failure.
 - **MARKET handling**: same auto-conversion behaviour as [PlaceGTTOrder](./placegttorder.md#notes) — broker-specific quirks are absorbed in the broker layer.
 - **Semi-auto mode** blocks GTT modify (parity with `ModifyOrder`) — switch to Auto mode if you see a 403.
+- **Analyzer (sandbox) mode** modifies the sandbox trigger and answers with `"mode": "analyze"`. The same immutability rules apply: trigger type, symbol, exchange and action cannot change.
+- **Analyzer (sandbox) mode** modifies the sandbox trigger and answers with `"mode": "analyze"`. The same immutability rules apply: trigger type, symbol, exchange and action cannot change.
 
 ## Error Scenarios
 
@@ -184,7 +186,6 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifygttorder \
 | `triggerprice_sl: Stoploss trigger must be less than target trigger` | OCO with `triggerprice_sl >= triggerprice_tg` |
 | `GTT supports only CNC (delivery) or NRML (overnight F&O); MIS is intraday-only.` | `product=MIS` submitted |
 | `Failed to fetch last_price from broker quotes` (502) | Broker quotes endpoint unavailable |
-| `Sandbox GTT support not yet implemented` (501) | Analyzer mode is enabled |
 | `GTT orders are not supported for broker 'X' yet` (501) | Broker capability gate |
 
 ---
