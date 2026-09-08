@@ -5,7 +5,7 @@
  * simulation, so re-fetching per tab would risk two tabs disagreeing about
  * the same portfolio.
  */
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -51,6 +51,10 @@ export default function PortfolioBacktester() {
   const navigate = useNavigate()
   const { apiKey } = useAuthStore()
   const setBacktestResult = usePortfolioBacktestStore((s) => s.setResult)
+  const startDateId = useId()
+  const endDateId = useId()
+  const sourceId = useId()
+  const riskFreeId = useId()
 
   const [holdings, setHoldings] = useState<PortfolioHolding[]>([
     { symbol: 'NIFTYBEES', exchange: 'NSE', weight: 60 },
@@ -260,16 +264,22 @@ export default function PortfolioBacktester() {
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-2">
             <div>
-              <Label className="text-xs">Start</Label>
+              <Label htmlFor={startDateId} className="text-xs">
+                Start
+              </Label>
               <Input
+                id={startDateId}
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
               />
             </div>
             <div>
-              <Label className="text-xs">End</Label>
+              <Label htmlFor={endDateId} className="text-xs">
+                End
+              </Label>
               <Input
+                id={endDateId}
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
@@ -339,9 +349,11 @@ export default function PortfolioBacktester() {
 
             <div className="flex flex-wrap items-end gap-4 border-t pt-3">
               <div>
-                <Label className="text-xs">Data source</Label>
+                <Label htmlFor={sourceId} className="text-xs">
+                  Data source
+                </Label>
                 <Select value={source} onValueChange={(v) => setSource(v as PriceSource)}>
-                  <SelectTrigger className="w-40">
+                  <SelectTrigger id={sourceId} className="w-40">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -351,8 +363,11 @@ export default function PortfolioBacktester() {
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Risk-free rate (%)</Label>
+                <Label htmlFor={riskFreeId} className="text-xs">
+                  Risk-free rate (%)
+                </Label>
                 <Input
+                  id={riskFreeId}
                   className="w-28"
                   type="number"
                   step="0.1"
