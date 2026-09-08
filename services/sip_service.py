@@ -15,6 +15,7 @@ for the same question.
 from __future__ import annotations
 
 import dataclasses
+import math
 from datetime import date, datetime
 from typing import Any
 
@@ -40,13 +41,14 @@ from sip.analytics import (
 )
 from sip.crisis import crisis_sip_analysis, crisis_summary
 from sip.engine import SipError, run_sip
-from sip.schedule import FREQUENCIES, ScheduleError
+from sip.schedule import FREQUENCIES, MAX_DAY_OF_MONTH, ScheduleError
 from sip.xirr import xirr_or_none
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 MAX_SIP_YEARS = 30
+INVALID_AMOUNT_MESSAGE = "amount must be a positive number"
 
 
 def _error(message: str, status: int = 400) -> tuple[bool, dict[str, Any], int]:
@@ -144,9 +146,12 @@ def run_sip_backtest(
             (the base symbol -- ``INFY``, ``SBIN``, ``TATAMOTORS``).
         start_date, end_date: ``YYYY-MM-DD``. ``start_date`` is the date the
             SIP begins; the first installment lands on or after it.
-        amount: the installment before any step-up.
+        amount: the installment before any step-up. Direct callers must provide
+            a finite, positive number or receive a 400 response.
         frequency: weekly, fortnightly, monthly or quarterly.
-        day_of_month: target day for monthly and quarterly SIPs, 1-28.
+        day_of_month: target day for monthly and quarterly SIPs. Direct callers
+            must provide an integer from 1 through 28 or receive a 400 response
+            before prices are loaded.
         step_up_percent: annual increase applied on each anniversary.
         brokerage_percent, brokerage_flat: charged per installment.
         benchmark, benchmark_exchange: an index to run the *same schedule*
@@ -168,10 +173,20 @@ def run_sip_backtest(
         return _error("end_date must be after start_date")
     if (end - start).days > MAX_SIP_YEARS * 366:
         return _error(f"SIP window cannot exceed {MAX_SIP_YEARS} years")
-    if amount is None or float(amount) <= 0:
-        return _error("amount must be a positive number")
+    try:
+        investment_amount = float(amount)
+    except (TypeError, ValueError, OverflowError):
+        return _error(INVALID_AMOUNT_MESSAGE)
+    if not math.isfinite(investment_amount) or investment_amount <= 0:
+        return _error(INVALID_AMOUNT_MESSAGE)
     if frequency not in FREQUENCIES:
         return _error(f"frequency must be one of {', '.join(FREQUENCIES)}")
+    if frequency in ("monthly", "quarterly") and (
+        isinstance(day_of_month, bool)
+        or not isinstance(day_of_month, int)
+        or not 1 <= day_of_month <= MAX_DAY_OF_MONTH
+    ):
+        return _error(f"day_of_month must be an integer between 1 and {MAX_DAY_OF_MONTH}")
     exchange = (exchange or "NSE").upper()
     if exchange not in SUPPORTED_EXCHANGES:
         return _error(
@@ -225,7 +240,7 @@ def run_sip_backtest(
 
     try:
         result = run_sip(
-            closes, symbol, exchange, start, end, float(amount),
+            closes, symbol, exchange, start, end, investment_amount,
             warnings=[str(w) for w in warnings], **sip_kw,
         )
     except (SipError, ScheduleError) as exc:
@@ -238,7 +253,7 @@ def run_sip_backtest(
             "exchange": exchange,
             "start_date": str(start),
             "end_date": str(end),
-            "amount": float(amount),
+            "amount": investment_amount,
             "frequency": frequency,
             "day_of_month": day_of_month,
             "step_up_percent": step_up_percent,
@@ -264,7 +279,7 @@ def run_sip_backtest(
             "exchange": cost_exchange,
         },
         "frequency_comparison": frequency_comparison(
-            closes, start, end, float(amount),
+            closes, start, end, investment_amount,
             **{k: v for k, v in sip_kw.items() if k != "frequency"},
         ),
         "curves": {
@@ -289,24 +304,24 @@ def run_sip_backtest(
     }
 
     if include_grids:
-        payload["rolling_xirr"] = rolling_xirr(closes, float(amount), **sip_kw)
+        payload["rolling_xirr"] = rolling_xirr(closes, investment_amount, **sip_kw)
         payload["start_date_heatmap"] = start_date_heatmap(
-            closes, float(amount), **sip_kw
+            closes, investment_amount, **sip_kw
         )
-        crisis_rows = crisis_sip_analysis(closes, float(amount), sip_kw=sip_kw)
+        crisis_rows = crisis_sip_analysis(closes, investment_amount, sip_kw=sip_kw)
         payload["crisis"] = {
             "summary": crisis_summary(crisis_rows),
             "periods": crisis_rows,
         }
         payload["sip_date_heatmap"] = (
-            sip_date_heatmap(closes, start, end, float(amount), **sip_kw)
+            sip_date_heatmap(closes, start, end, investment_amount, **sip_kw)
             if frequency in ("monthly", "quarterly")
             else None
         )
 
     if benchmark:
         payload["benchmark"] = _benchmark_sip(
-            benchmark, benchmark_exchange.upper(), start, end, float(amount),
+            benchmark, benchmark_exchange.upper(), start, end, investment_amount,
             result, source, creds, sip_kw,
         )
 
