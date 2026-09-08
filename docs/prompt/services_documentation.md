@@ -291,7 +291,7 @@ place_gtt_order(order_data, api_key=None, auth_token=None, broker=None)
 modify_gtt_order(order_data, api_key=None, auth_token=None, broker=None)
 cancel_gtt_order(trigger_id, api_key=None, auth_token=None, broker=None,
                  strategy=None)
-get_gtt_orderbook(api_key=None, auth_token=None, broker=None)
+get_gtt_orderbook(api_key=None, auth_token=None, broker=None, status="active")  # status: "active" | "all"
 ```
 
 ### Order and account queries

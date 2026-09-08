@@ -32,11 +32,13 @@ from decimal import Decimal
 from sqlalchemy import select, update
 
 from database.sandbox_db import (
+    IST,
     SandboxGTT,
     SandboxGTTLeg,
     SandboxOrders,
     db_session,
     get_config,
+    ist_now,
 )
 from sandbox.fund_manager import FundManager
 from sandbox.order_manager import OrderManager
@@ -53,7 +55,8 @@ DEFAULT_CLAIM_TIMEOUT_SEC = 60
 
 
 def _now() -> datetime:
-    return datetime.now()
+    # Naive IST, the sandbox's one clock (see database.sandbox_db.ist_now).
+    return ist_now()
 
 
 def _generate_gtt_id() -> str:
@@ -95,12 +98,12 @@ def _resolve_expiry(supplied) -> datetime:
             except (TypeError, ValueError):
                 continue
             if parsed.tzinfo is not None:
-                # The column is a naive DateTime compared against
-                # datetime.now(), so an offset-carrying value must be converted
-                # to local time first. Storing the wall-clock digits unchanged
-                # would treat 13:00Z and 13:00+05:30 as the same instant when
-                # they are five and a half hours apart.
-                parsed = parsed.astimezone().replace(tzinfo=None)
+                # The column is naive IST compared against _now(), so an
+                # offset-carrying value must be converted to IST first. Storing
+                # the wall-clock digits unchanged would treat 13:00Z and
+                # 13:00+05:30 as the same instant when they are five and a
+                # half hours apart.
+                parsed = parsed.astimezone(IST).replace(tzinfo=None)
             return parsed
         logger.warning(f"Unparseable GTT expires_at {supplied!r}; using the default")
     return _now() + timedelta(days=DEFAULT_EXPIRY_DAYS)
@@ -761,7 +764,7 @@ def try_claim_trigger(leg_id: int) -> bool:
                 ~sibling_busy,
                 parent_active,
             )
-            .values(leg_status="triggering", claimed_at=datetime.now())
+            .values(leg_status="triggering", claimed_at=_now())
         )
         db_session.commit()
         won = result.rowcount == 1
@@ -1206,7 +1209,7 @@ def reclaim_stranded_legs() -> int:
         How many legs were reverted.
     """
     try:
-        cutoff = datetime.now() - timedelta(seconds=_claim_timeout_seconds())
+        cutoff = _now() - timedelta(seconds=_claim_timeout_seconds())
         result = db_session.execute(
             update(SandboxGTTLeg)
             .where(
@@ -1396,7 +1399,7 @@ def expire_due_gtts() -> int:
         due = SandboxGTT.query.filter(
             SandboxGTT.gtt_status == "active",
             SandboxGTT.expires_at.isnot(None),
-            SandboxGTT.expires_at < datetime.now(),
+            SandboxGTT.expires_at < _now(),
         ).all()
         for gtt in due:
             released = Decimal(str(gtt.margin_blocked or 0))

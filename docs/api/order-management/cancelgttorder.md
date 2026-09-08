@@ -61,7 +61,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/cancelgttorder \
 
 - Only **active** GTTs can be cancelled. Already-triggered, expired, or previously cancelled GTTs cannot be cancelled again.
 - Cancelling an **OCO** removes both legs (stoploss + target) atomically — there is no per-leg cancel.
-- Cancellation is broker-side; once acknowledged, the trigger is removed and won't appear in subsequent `GTTOrderBook` calls (the orderbook is filtered to active-only).
+- Cancellation is broker-side; once acknowledged, the trigger is removed and won't appear in subsequent default `GTTOrderBook` calls, which list active triggers only; send `status: all` to see it in the history as `cancelled`.
 - **Idempotency**: cancelling an already-cancelled trigger returns the broker's native response, which may be either `success` or an error like "Trigger not found" depending on the broker.
 - **Analyzer (sandbox) mode** cancels the sandbox trigger, releases its reserved margin and answers with `"mode": "analyze"`. Cancelling a trigger that is no longer active is a 404: `No active GTT with trigger_id '...'`.
 - **Analyzer (sandbox) mode** cancels the sandbox trigger, releases its reserved margin and answers with `"mode": "analyze"`. Cancelling a trigger that is no longer active is a 404: `No active GTT with trigger_id '...'`.
