@@ -133,6 +133,16 @@ import {
   legendToneStyle,
   lotInfoText,
 } from './legend'
+import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
+import { ProfileLayer } from './profileLayer'
+import {
+  isProfileKind,
+  type ProfileKind,
+  profileDefaults,
+  profileValues,
+  readProfileSettings,
+} from './profileSettings'
+import { profileSettingsView } from './profileSettingsView'
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
@@ -235,6 +245,7 @@ export interface ConfirmedOrder {
 
 export interface TerminalCallbacks {
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
+  onIntervalChange?(interval: string): void
   onToast(msg: string, kind: ToastKind): void
   onWsState(state: string): void
   onSymbolLoaded(view: SymbolView): void
@@ -325,6 +336,7 @@ export type ChartSettingsField = IndicatorField | ChartSettingsPairField
 export interface ChartSettingsTabView {
   id: string
   label: string
+  description?: string
   inputs: ChartSettingsField[]
 }
 
@@ -689,6 +701,8 @@ export class TradingTerminal {
    * {@link snapshotChartDefaults}.
    */
   private chartDefaults: Record<string, string | number | boolean> = {}
+  private profileLayer: ProfileLayer | null = null
+  private availableIntervals: string[] = ['1m', '5m', '15m', '1h', 'D']
   /** The workspace link group this pane belongs to, if sync is on. */
   private link: LinkGroup | null = null
   /** Non-null only while the chart is showing a replayed prefix. */
@@ -700,7 +714,9 @@ export class TradingTerminal {
   private replayShades: ReplayShade[] = []
   private replayMark: TextWatermark | null = null
   /** Base-interval bars under the displayed ones, for intra-bar replay. */
-  private replaySub: { interval: string; bars: Bar[] } | null = null
+  private replaySub: { interval: string; symbol: string; exchange: string; bars: Bar[] } | null =
+    null
+  private replayLoadTicket = 0
   /** The price axis's autoscale state before replay forced it on. */
   private replayAutoScale = true
   /** Held so it can be moved to whichever pane is currently at the bottom. */
@@ -856,6 +872,7 @@ export class TradingTerminal {
       this.shownBars = this.rawBars
     }
     this.shownCount = this.shownBars.length
+    this.profileLayer?.refresh(true)
   }
 
   /**
@@ -892,6 +909,7 @@ export class TradingTerminal {
     // place, so only the count can have moved.
     this.shownBars = this.rawBars
     this.shownCount = this.rawBars.length
+    this.profileLayer?.refresh()
     return true
   }
 
@@ -978,7 +996,7 @@ export class TradingTerminal {
   private legendModel(bar: Bar | null): LegendRun[] {
     const sym = this.sym
     if (!sym) return []
-    return buildChartLegend({
+    const runs = buildChartLegend({
       symbol: sym.symbol,
       interval: this.interval,
       exchange: sym.exchange,
@@ -989,6 +1007,13 @@ export class TradingTerminal {
       fmtVolume: compactVolume,
       volumeHidden: !this.volumeOn,
     })
+    if (isProfileKind(this.ctype)) {
+      runs.splice(2, 0, { text: CHART_TYPES[this.ctype].label, tone: 'meta' })
+      return runs.map((run) =>
+        run.action === 'volume' ? { ...run, action: undefined, dim: false } : run
+      )
+    }
+    return runs
   }
 
   /* ── order lines / position marker ────────────────────────────────────── */
@@ -1242,7 +1267,68 @@ export class TradingTerminal {
   }
 
   /* ── chart build + interaction wiring ─────────────────────────────────── */
+  private profileBlockMinutes(): number {
+    return readProfileSettings('tpo', this.chartSettingsSaved).blockMinutes
+  }
+
+  private compatibleProfileInterval(kind: ProfileKind): string | null {
+    return selectProfileInterval(
+      kind,
+      this.interval,
+      this.profileBlockMinutes(),
+      this.availableIntervals
+    )
+  }
+
+  private hideProfileSeries(): void {
+    if (!isProfileKind(this.ctype)) return
+    // Retain OHLC data for the timeline, crosshair, replay and visible autoscale.
+    this.price?.applyOptions({
+      visible: true,
+      bodyVisible: false,
+      borderVisible: false,
+      wickVisible: false,
+    })
+    this.volume?.applyOptions({ visible: false })
+  }
+
+  private installProfile(): void {
+    this.profileLayer?.dispose()
+    this.profileLayer = null
+    const chart = this.chart
+    const price = this.price
+    const kind = this.ctype
+    if (!chart || !price || !isProfileKind(kind) || this.destroyed) return
+    const settings = readProfileSettings(kind, this.chartSettingsSaved)
+    const context = {
+      tickSize: this.tick(),
+      exchange: this.sym?.exchange ?? 'NSE',
+      timezone: chart.timezone(),
+      intervalSeconds: intervalSeconds(this.interval) ?? 300,
+      priceScale: () => price.priceScale(),
+    }
+    this.hideProfileSeries()
+    this.profileLayer = new ProfileLayer({
+      host: {
+        addPrimitive: (primitive) => chart.addPrimitive(primitive, 0),
+        removePrimitive: (primitive) => chart.removePrimitive(primitive),
+      },
+      load: async () => {
+        const { createChartProfile } = await import('./chartProfiles')
+        return createChartProfile(kind, settings, context)
+      },
+      // getData includes the current partial replay bar; rawBars includes future bars.
+      readBars: () => price.getData(),
+      onError: (error) =>
+        this.toast(`Profile could not be rendered: ${this.cleanError(error)}`, 'err'),
+      onWarning: (message) => this.toast(message, ''),
+    })
+  }
+
   private buildChart() {
+    this.stopReplay()
+    this.profileLayer?.dispose()
+    this.profileLayer = null
     // Snapshot drawings before the chart they live on goes away.
     this.detachDrawing()
     if (this.chart) this.chart.destroy()
@@ -1332,7 +1418,7 @@ export class TradingTerminal {
     this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
-    if (!this.volumeOn) this.volume.applyOptions({ visible: false })
+    if (!this.volumeOn || isProfileKind(this.ctype)) this.volume.applyOptions({ visible: false })
     // Same reasoning for the settings patch: a chart-type or theme switch
     // rebuilds the chart, and without this the user's colours, timezone and
     // scale options would silently revert to the engine defaults.
@@ -1349,6 +1435,7 @@ export class TradingTerminal {
     // of the group it still believes it is in.
     this.joinLink()
     this.setPriceData()
+    this.installProfile()
 
     this.applyDefaultViewport()
 
@@ -2255,9 +2342,11 @@ export class TradingTerminal {
    * zone the chart is already in.
    */
   async chartSettings(): Promise<ChartSettingsRequest | null> {
-    if (!this.chart) return null
+    const chart = this.chart
+    if (!chart) return null
     const { chartSettingsSchema, readChartSettings } = await import('openalgo-charts')
-    const tabs = chartSettingsSchema(this.chart).map((t) => ({
+    if (chart !== this.chart || this.destroyed) return null
+    const tabs = chartSettingsSchema(chart).map((t) => ({
       id: t.id,
       label: t.label,
       inputs: t.inputs.map((i) =>
@@ -2266,11 +2355,15 @@ export class TradingTerminal {
           : toField(i as { key: string; type: string; label?: string; group?: string })
       ),
     }))
-    return {
-      tabs,
-      values: { ...readChartSettings(this.chart) },
-      defaults: { ...this.chartDefaults },
-    }
+    return profileSettingsView(
+      {
+        tabs,
+        values: { ...readChartSettings(chart) },
+        defaults: { ...this.chartDefaults },
+      },
+      this.ctype,
+      this.chartSettingsSaved
+    )
   }
 
   /**
@@ -2315,19 +2408,56 @@ export class TradingTerminal {
    * what "default" has to mean for the reset to be worth having.
    */
   async applyChartSettings(patch: Record<string, string | number | boolean>): Promise<void> {
-    if (!this.chart) return
+    const chart = this.chart
+    if (!chart) return
     const { applyChartSettings } = await import('openalgo-charts')
-    applyChartSettings(this.chart, patch)
+    if (chart !== this.chart || this.destroyed) return
+    const enginePatch = Object.fromEntries(
+      Object.entries(patch).filter(([key]) => !key.startsWith('profiles.'))
+    )
     const merged = { ...this.chartSettingsSaved, ...patch }
+    if (
+      isProfileKind(this.ctype) &&
+      !selectProfileInterval(
+        this.ctype,
+        this.interval,
+        readProfileSettings('tpo', merged).blockMinutes,
+        this.availableIntervals
+      )
+    ) {
+      this.toast('The broker has no interval compatible with this TPO block size', 'err')
+      return
+    }
+    applyChartSettings(chart, enginePatch)
+    const defaults = {
+      ...this.chartDefaults,
+      ...profileDefaults('tpo'),
+      ...profileDefaults('session-volume-profile'),
+    }
+    for (const kind of ['tpo', 'session-volume-profile'] as const) {
+      const normalized = profileValues(kind, merged)
+      for (const key of Object.keys(normalized)) {
+        if (key in merged) merged[key] = normalized[key]
+      }
+    }
     const kept: Record<string, string | number | boolean> = {}
     for (const [k, v] of Object.entries(merged)) {
       // A key absent from the baseline is kept: an unrecognised control is not
       // evidence that its value is the default one.
-      if (!(k in this.chartDefaults) || this.chartDefaults[k] !== v) kept[k] = v
+      if (!(k in defaults) || defaults[k] !== v) kept[k] = v
     }
     this.chartSettingsSaved = kept
     this.lsSet('chartsettings', JSON.stringify(kept))
     this.adoptGridFromPatch(patch)
+    if (isProfileKind(this.ctype)) {
+      const interval = this.compatibleProfileInterval(this.ctype)
+      if (interval && interval !== this.interval) {
+        this.setInterval(interval)
+        this.toast(`Using ${interval} bars for the selected profile block size`, '')
+      } else {
+        this.installProfile()
+      }
+    }
   }
 
   /**
@@ -2360,10 +2490,18 @@ export class TradingTerminal {
    * terminal booting.
    */
   private async restoreChartSettings(): Promise<void> {
-    if (!this.chart || !Object.keys(this.chartSettingsSaved).length) return
+    const chart = this.chart
+    if (!chart || !Object.keys(this.chartSettingsSaved).length) return
     try {
       const { applyChartSettings } = await import('openalgo-charts')
-      applyChartSettings(this.chart, this.chartSettingsSaved)
+      if (chart !== this.chart || this.destroyed) return
+      applyChartSettings(
+        chart,
+        Object.fromEntries(
+          Object.entries(this.chartSettingsSaved).filter(([key]) => !key.startsWith('profiles.'))
+        )
+      )
+      this.installProfile()
     } catch {
       /* ignore */
     }
@@ -2550,7 +2688,7 @@ export class TradingTerminal {
    */
   setVolumeVisible(on: boolean): void {
     this.volumeOn = on
-    this.volume?.applyOptions({ visible: on })
+    this.volume?.applyOptions({ visible: on && !isProfileKind(this.ctype) })
     this.lsSet('vol', on ? '1' : '0')
   }
 
@@ -2721,6 +2859,9 @@ export class TradingTerminal {
    */
   private async beginReplayAt(startIndex: number): Promise<void> {
     if (this.replay || !this.chart || !this.price || this.shownBars.length < 2) return
+    const chart = this.chart
+    const price = this.price
+    const ticket = ++this.replayLoadTicket
     this.replayPicking = false
     this.setReplayShade(null)
     const driven = this.volume ? [this.price, this.volume] : [this.price]
@@ -2736,13 +2877,23 @@ export class TradingTerminal {
     const from = Math.max(0, Math.min(bars.length - 1, Math.floor(startIndex)))
     const sub = await this.loadReplaySubBars()
     // The await above yields, and the user may have left in the meantime.
-    if (!this.chart || !this.price || this.replay) return
+    if (
+      this.destroyed ||
+      chart !== this.chart ||
+      price !== this.price ||
+      ticket !== this.replayLoadTicket ||
+      this.replay
+    )
+      return
     this.replay = new ReplayController(this.chart, {
       series: driven,
       bars,
       startIndex: from,
       subBars: sub ?? undefined,
-      onFrame: (state) => this.cb.onReplayChange?.(state),
+      onFrame: (state) => {
+        this.profileLayer?.refresh(true)
+        this.cb.onReplayChange?.(state)
+      },
     })
     this.showReplayMark(true)
     this.showTradeButtons(false)
@@ -2778,22 +2929,29 @@ export class TradingTerminal {
    * whole-bar steps, which is what it did before this existed.
    */
   private async loadReplaySubBars(): Promise<Bar[] | null> {
-    const finer = TradingTerminal.REPLAY_SUB[this.interval]
+    const interval = this.interval
+    const finer = TradingTerminal.REPLAY_SUB[interval]
     const sym = this.sym
     const rest = this.rest
     if (!finer || !sym || !rest) return null
-    if (this.replaySub && this.replaySub.interval === this.interval) return this.replaySub.bars
+    if (
+      this.replaySub?.interval === interval &&
+      this.replaySub.symbol === sym.symbol &&
+      this.replaySub.exchange === sym.exchange
+    )
+      return this.replaySub.bars
     try {
       const to = this.gridNow()
       const bars = await rest.getBars({
         symbol: sym.symbol,
         exchange: sym.exchange,
         interval: finer,
-        from: to - lookbackDays(this.interval) * 86400,
+        from: to - lookbackDays(interval) * 86400,
         to,
       })
-      if (!bars.length) return null
-      this.replaySub = { interval: this.interval, bars }
+      if (!bars.length || this.destroyed || this.sym !== sym || this.interval !== interval)
+        return null
+      this.replaySub = { interval, symbol: sym.symbol, exchange: sym.exchange, bars }
       return bars
     } catch {
       return null
@@ -2835,6 +2993,7 @@ export class TradingTerminal {
 
   /** Leave replay and put the live chart back exactly where the user left it. */
   stopReplay(): void {
+    this.replayLoadTicket++
     this.cancelReplayPick()
     if (!this.replay) return
     this.replay.stop()
@@ -3239,17 +3398,41 @@ export class TradingTerminal {
   }
 
   /* ── toolbar setters (called by the React page) ───────────────────────── */
-  setInterval(iv: string) {
+  setInterval(iv: string): string {
+    if (
+      isProfileKind(this.ctype) &&
+      !profileIntervalSupported(this.ctype, iv, this.profileBlockMinutes())
+    ) {
+      this.toast(
+        this.ctype === 'tpo'
+          ? 'Choose an intraday interval that divides the TPO block size'
+          : 'Session Volume Profile requires an intraday interval',
+        'err'
+      )
+      return this.interval
+    }
     this.stopReplay() // same reason as loadSymbol: the bars are about to change
     this.interval = iv
     this.lsSet('interval', iv)
+    this.cb.onIntervalChange?.(iv)
     if (this.sym) this.reloadCurrent()
+    return iv
   }
-  setChartType(v: string) {
-    if (!CHART_TYPES[v]) return
+  setChartType(v: string): string {
+    if (!CHART_TYPES[v]) return this.ctype
+    const interval = isProfileKind(v) ? this.compatibleProfileInterval(v) : this.interval
+    if (!interval) {
+      this.toast('The broker has no intraday interval compatible with this profile', 'err')
+      return this.ctype
+    }
+    this.stopReplay()
     this.ctype = v
     this.lsSet('ctype', v)
-    if (this.rawBars.length) this.buildChart()
+    if (interval !== this.interval) {
+      this.setInterval(interval)
+      this.toast(`Using ${interval} bars for ${CHART_TYPES[v].label}`, '')
+    } else if (this.rawBars.length) this.buildChart()
+    return v
   }
   setProduct(p: string) {
     this.product = p
@@ -3508,6 +3691,20 @@ export class TradingTerminal {
 
   /* ── right-click order menu ───────────────────────────────────────────── */
   private ctxPrice = 0
+  /** Per-session profile actions are available for quote-only instruments too. */
+  profileContextMenuAt(localX: number, localY: number) {
+    const chart = this.chart
+    if (!chart || !this.profileLayer) return null
+    const maximized = chart.maximizedPane()
+    if (maximized !== null && maximized !== 0) return null
+    // Native primitives receive plot coordinates; a left price axis adds an
+    // origin offset to the container coordinates used by the React menu.
+    const time = chart.dataLayer.indexToTime(0)
+    if (time === undefined) return null
+    const plotLeft = chart.timeToCoordinate(time) - chart.timeScale.indexToX(0)
+    return this.profileLayer.contextMenuAt(localX - plotLeft, localY)
+  }
+
   /** Build the context-menu items for a right-click at container-local y. */
   contextMenuAt(localY: number): { price: number; items: CtxItem[] } | null {
     if (!this.chart || !this.sym || this.sym.quoteOnly) return null
@@ -3560,6 +3757,12 @@ export class TradingTerminal {
       groups = intervalGroups({ minutes: ['1m', '5m', '15m'], hours: ['1h'], days: ['D'] })
     }
     this.interval = pickInterval(groups, this.lsGet('interval'))
+    this.availableIntervals = groups.flatMap((group) => group.items)
+    if (isProfileKind(this.ctype)) {
+      const interval = this.compatibleProfileInterval(this.ctype)
+      if (interval) this.interval = interval
+      else this.ctype = 'candlestick'
+    }
     this.cb.onReady({ intervalGroups: groups, interval: this.interval, chartType: this.ctype })
 
     // one WebSocket for ticks + the account-level order stream.
@@ -3657,6 +3860,8 @@ export class TradingTerminal {
     } catch {
       /* nothing to leave */
     }
+    this.profileLayer?.dispose()
+    this.profileLayer = null
     try {
       this.chart?.destroy()
     } catch {

@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+import {
+  type ProfileKind,
+  profileDefaults,
+  profileFields,
+  profileValues,
+} from '@/lib/trading/profileSettings'
 import type { ChartSettingsRequest } from '@/lib/trading/terminal'
 import { render, screen, userEvent } from '@/test/test-utils'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
@@ -175,5 +181,135 @@ describe('ChartSettingsDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onApply).not.toHaveBeenCalled()
+  })
+})
+
+function profileRequest(
+  kind: ProfileKind,
+  stored: Record<string, string | number | boolean> = {}
+): ChartSettingsRequest {
+  return {
+    tabs: REQ.tabs.map((tab) =>
+      tab.id === 'price' ? { ...tab, inputs: profileFields(kind) } : tab
+    ),
+    values: { ...REQ.values, ...stored, ...profileValues(kind, stored) },
+    defaults: { ...REQ.defaults, ...profileDefaults(kind) },
+  }
+}
+
+describe('profile chart settings', () => {
+  it('edits custom session hours as text without discarding the time separator', async () => {
+    const user = userEvent.setup()
+    const onApply = renderDialog(vi.fn(), profileRequest('session-volume-profile'))
+    await user.selectOptions(screen.getByLabelText('Sessions'), 'custom')
+    const start = screen.getByRole('textbox', { name: 'Session start (HH:mm)' })
+    expect(start).toHaveValue('09:15')
+    await user.clear(start)
+    await user.type(start, '23:00')
+    await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith({
+      'profiles.svp.sessionMode': 'custom',
+      'profiles.svp.sessionStart': '23:00',
+    })
+  })
+
+  it('replaces Price controls when the selected profile changes and keeps the other tabs', async () => {
+    const user = userEvent.setup()
+    const onApply = vi.fn()
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <ChartSettingsDialog req={REQ} onApply={onApply} onClose={onClose} />
+    )
+    expect(screen.getByLabelText('Body Up')).toBeInTheDocument()
+    rerender(
+      <ChartSettingsDialog req={profileRequest('tpo')} onApply={onApply} onClose={onClose} />
+    )
+    expect(screen.queryByLabelText('Body Up')).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Block size' })).toHaveValue('30')
+    expect(screen.getByLabelText('Period')).toHaveValue('day')
+    expect(screen.queryByLabelText('Width (%)')).not.toBeInTheDocument()
+    rerender(
+      <ChartSettingsDialog
+        req={profileRequest('session-volume-profile')}
+        onApply={onApply}
+        onClose={onClose}
+      />
+    )
+    expect(screen.queryByRole('combobox', { name: 'Block size' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Width (%)')).toHaveValue(100)
+    expect(screen.getByLabelText('Number of rows')).toHaveValue(24)
+    await user.click(screen.getByRole('button', { name: 'Axes' }))
+    expect(screen.getByLabelText('Timezone')).toHaveValue('Asia/Kolkata')
+  })
+
+  it('applies only the edited profile keys and restores each type when reopened', async () => {
+    const user = userEvent.setup()
+    const onApply = vi.fn()
+    const onClose = vi.fn()
+    const stored = { 'profiles.tpo.blockMinutes': 45, 'profiles.svp.widthPercent': 65 }
+    const { rerender } = render(
+      <ChartSettingsDialog
+        req={profileRequest('tpo', stored)}
+        onApply={onApply}
+        onClose={onClose}
+      />
+    )
+    expect(screen.getByRole('combobox', { name: 'Block size' })).toHaveValue('45')
+    await user.selectOptions(screen.getByLabelText('Period'), 'week')
+    await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith({ 'profiles.tpo.periodUnit': 'week' })
+    rerender(
+      <ChartSettingsDialog
+        req={profileRequest('session-volume-profile', stored)}
+        onApply={onApply}
+        onClose={onClose}
+      />
+    )
+    expect(screen.getByLabelText('Width (%)')).toHaveValue(65)
+    rerender(
+      <ChartSettingsDialog
+        req={profileRequest('tpo', stored)}
+        onApply={onApply}
+        onClose={onClose}
+      />
+    )
+    expect(screen.getByRole('combobox', { name: 'Block size' })).toHaveValue('45')
+  })
+
+  it('resets the active profile without replacing the saved other profile', async () => {
+    const user = userEvent.setup()
+    const onApply = renderDialog(
+      vi.fn(),
+      profileRequest('session-volume-profile', {
+        'profiles.tpo.blockMinutes': 45,
+        'profiles.svp.widthPercent': 65,
+      })
+    )
+    await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith({ 'profiles.svp.widthPercent': 100 })
+  })
+
+  it('preserves a block size selected through the string-emitting control', async () => {
+    const user = userEvent.setup()
+    const onApply = renderDialog(vi.fn(), profileRequest('tpo', {}))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Block size' }), '60')
+    await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith({ 'profiles.tpo.blockMinutes': '60' })
+    expect(profileValues('tpo', onApply.mock.calls[0][0])['profiles.tpo.blockMinutes']).toBe(60)
+  })
+
+  it('opens corrupt persisted settings using valid form values', () => {
+    renderDialog(
+      vi.fn(),
+      profileRequest('session-volume-profile', {
+        'profiles.svp.rowCount': -500,
+        'profiles.svp.placement': 'invalid',
+        'profiles.svp.upColor': 'invalid',
+      })
+    )
+    expect(screen.getByLabelText('Number of rows')).toHaveValue(10)
+    expect(screen.getByLabelText('Placement')).toHaveValue('left')
+    expect(screen.getByLabelText('Outside value area Up')).toHaveValue('#248fa0')
   })
 })

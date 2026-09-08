@@ -172,6 +172,9 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
 
         {/* Fields */}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {tab.description && (
+            <p className="mb-4 text-xs leading-relaxed text-muted-foreground">{tab.description}</p>
+          )}
           <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
             {groupsOf(tab.inputs).map(([heading, group]) => (
               <FieldGroup
