@@ -288,7 +288,9 @@ def cancel_gtt_order(trigger_id, auth):
     )
 
 
-def get_gtt_book(auth):
+def get_gtt_book(auth, include_history=False):
+    # include_history is accepted for interface parity; this mapper still
+    # returns active triggers only until its status vocabulary is mapped.
     """List all GTTs for the user. Returns ``(response_dict, status_code)``.
 
     ``GET /v3/order/gtt`` without ``gtt_order_id`` returns the whole book. The

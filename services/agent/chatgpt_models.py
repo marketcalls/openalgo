@@ -16,11 +16,13 @@ and returned content; every name rejected was rejected by the backend in its own
 words, `The '<model>' model is not supported when using Codex with a ChatGPT
 account`:
 
-    available    gpt-5.5, gpt-5.6-sol, gpt-5.6-luna, gpt-5.6-terra
-    refused      gpt-5.6, gpt-5.6-cyber, gpt-5.5-pro, gpt-5.5-codex, gpt-5.6-codex
+    available    gpt-5.5, gpt-5.6-sol, gpt-5.6-luna, gpt-5.6-terra, gpt-6-astra
+    refused      gpt-5.6, gpt-5.6-cyber, gpt-5.5-pro, gpt-5.5-codex, gpt-5.6-codex,
+                 gpt-6, gpt-6-pro, gpt-6-astra-codex
 
-`gpt-5.6` being refused while three of its variants work is genuinely how the
-backend behaves, so the list is enumerated rather than derived from a pattern.
+`gpt-5.6` being refused while three of its variants work, and `gpt-6` refused
+while `gpt-6-astra` answers, is genuinely how the backend behaves, so the list is
+enumerated rather than derived from a pattern.
 
 **A plan is not an entitlement.** These are the models the *provider* serves;
 which of them a given plan may use is between the operator and OpenAI, and a
@@ -67,6 +69,7 @@ SUPPLEMENTAL: dict[str, dict[str, Any]] = {
     "gpt-5.6-sol": {"max_input_tokens": 922000},
     "gpt-5.6-luna": {"max_input_tokens": 922000},
     "gpt-5.6-terra": {"max_input_tokens": 922000},
+    "gpt-6-astra": {"max_input_tokens": 922000},
 }
 
 
@@ -153,7 +156,7 @@ def register(litellm: Any) -> tuple[str, ...]:
             )
     except Exception:
         # Advisory, never fatal. A LiteLLM whose registry has a different shape
-        # costs the operator these four models, not a working agent.
+        # costs the operator these few models, not a working agent.
         logger.exception("Could not register the supplemental ChatGPT models")
         return ()
 

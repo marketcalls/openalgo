@@ -81,7 +81,7 @@ def transform_modify_gtt(data):
     return transform_place_gtt(data)
 
 
-def map_gtt_book(gtt_data):
+def map_gtt_book(gtt_data, include_history=False):
     """Normalise Kite's GET /gtt/triggers response into an OpenAlgo-shaped list.
 
     Kite returns ``{"status": "success", "data": [{...}, ...]}``. Each GTT has
@@ -95,12 +95,12 @@ def map_gtt_book(gtt_data):
     data = gtt_data.get("data") or []
     normalised = []
 
-    # Active-only filter: drop triggered/disabled/expired/cancelled/rejected/
-    # deleted at the broker mapper so the orderbook UI shows only triggers
-    # that can still fire. Kite's GTT statuses: active, triggered, disabled,
-    # expired, cancelled, rejected, deleted.
+    # Active-only by default so the book lists triggers that can still fire.
+    # With include_history the rest come through too, carrying Kite's own
+    # status (triggered, disabled, expired, cancelled, rejected, deleted) so
+    # the tab can show what fired.
     for gtt in data:
-        if (gtt.get("status") or "").lower() != "active":
+        if not include_history and (gtt.get("status") or "").lower() != "active":
             continue
         condition = gtt.get("condition") or {}
         orders = gtt.get("orders") or []

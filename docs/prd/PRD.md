@@ -196,7 +196,7 @@ The WebSocket proxy uses an action envelope with the documented actions `authent
 
 ## Operational Modes
 
-Live mode sends supported order and data requests to broker-specific modules resolved from the active broker session. Analyzer mode routes supported trading and account calls to sandbox managers after API key verification. Analyzer order placement, smart orders, basket orders, and split orders use sandbox paths. Analyzer GTT place, modify, cancel, and orderbook currently return 501. Semi-auto mode queues eligible order types into Action Center for approval; close, cancel, cancel-all, modify, modify-GTT, and cancel-GTT are blocked by their services in semi-auto live mode.
+Live mode sends supported order and data requests to broker-specific modules resolved from the active broker session. Analyzer mode routes supported trading and account calls to sandbox managers after API key verification. Analyzer order placement, smart orders, basket orders, and split orders use sandbox paths. Analyzer GTT place, modify, cancel, and orderbook route to the sandbox GTT manager, which reserves margin at placement, fires triggers against live LTP and places sandbox orders. Semi-auto mode queues eligible order types into Action Center for approval; close, cancel, cancel-all, modify, modify-GTT, and cancel-GTT are blocked by their services in semi-auto live mode.
 
 ## Security Model And Posture
 
@@ -232,7 +232,6 @@ OpenAlgo is configured as a self-hosted application with session routes and API-
 - Broker-specific response payload shapes are not exhaustively verified for all 36 brokers.
 - Static route inventory may differ from runtime registration when Remote MCP is disabled or `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in implementation need review before one env var is documented as authoritative.
-- Sandbox GTT tables exist, but analyzer GTT services return 501.
 - `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 36 plugin directories.
 - Blueprint-route BDD coverage remains representative rather than one scenario per route. The RESTX method/path inventory and broker-plugin inventory are explicitly covered by scenario outlines.
 - `/pnltracker/legacy` references a template that is absent from the current source tree and is not a supported fallback UI.

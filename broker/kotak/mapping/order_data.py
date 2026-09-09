@@ -226,6 +226,17 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get("avgPrc", 0.0),
             "trade_value": float(trade.get("fldQty", 0.0)) * float(trade.get("avgPrc", 0.0)),
             "orderid": trade.get("nOrdNo", ""),
+            # "flId" is Kotak's own per-fill trade ID (Kotak-Neo/kotak-neo-api-v2
+            # docs/Trade_report.md - two fills under the same order carry two
+            # distinct flId values). Previously dropped entirely, leaving no
+            # stable per-fill identity for a consumer to dedup repeated
+            # tradebook pulls against - only "orderid", shared by every fill
+            # under one order. Emitted under OpenAlgo's own established key
+            # "tradeid" (no underscore) - the documented tradebook contract
+            # (docs/prompt/flow-import-format.md) and existing consumers
+            # (services/telegram_bot_service*.py, broker/groww's own
+            # adapter) already expect that exact key.
+            "tradeid": trade.get("flId", ""),
             "timestamp": trade.get("exTm", ""),
         }
         transformed_data.append(transformed_trade)
@@ -382,6 +393,10 @@ def transform_holdings_data(holdings_data):
             "exchange": holding.get("exchangeSegment", ""),
             "quantity": holding.get("quantity", 0),
             "product": holding.get("instrumentType", ""),
+            # Kotak's holdings API does return a per-share averagePrice
+            # directly -- unlike LTP (deliberately omitted, see order_api.py's
+            # _backfill_ltp), so no workaround is needed here.
+            "average_price": round(float(holding.get("averagePrice", 0.0)), 2),
             "pnl": round(
                 (float(holding.get("mktValue", 0.0)) - float(holding.get("holdingCost", 0.0))), 2
             ),

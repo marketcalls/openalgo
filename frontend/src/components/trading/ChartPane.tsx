@@ -17,6 +17,8 @@ import { Input } from '@/components/ui/input'
 import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
+import type { ProfileMenuAction } from '@/lib/trading/profileLayer'
+import { isProfileKind } from '@/lib/trading/profileSettings'
 import {
   type ChartSettingsRequest,
   type CtxItem,
@@ -375,7 +377,12 @@ export function ChartPane({
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
-  const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  const [ctx, setCtx] = useState<{
+    x: number
+    y: number
+    items: CtxItem[]
+    profile: ProfileMenuAction | null
+  } | null>(null)
   /**
    * The order ticket, while One-Click is off. The terminal validates the
    * click and hands over what it would have sent; the same dialog the option
@@ -409,6 +416,7 @@ export function ChartPane({
         else if (kind === 'err') showToast.error(msg)
         else showToast.info(msg)
       },
+      onIntervalChange: (iv) => aliveRef.current && setIntervalState(iv),
       onWsState: (s) => aliveRef.current && setWsState(s),
       onSymbolLoaded: (view) => {
         if (!aliveRef.current) return
@@ -506,12 +514,10 @@ export function ChartPane({
 
   /* ── toolbar actions ──────────────────────────────────────────────────── */
   const changeInterval = (iv: string) => {
-    setIntervalState(iv)
-    terminalRef.current?.setInterval(iv)
+    setIntervalState(terminalRef.current?.setInterval(iv) ?? iv)
   }
   const changeChartType = (v: string) => {
-    setChartTypeState(v)
-    terminalRef.current?.setChartType(v)
+    setChartTypeState(terminalRef.current?.setChartType(v) ?? v)
   }
   const changeProduct = (p: string) => {
     if (!sym) return
@@ -532,12 +538,15 @@ export function ChartPane({
     // Order rows need a tradeable instrument; the view actions below them do
     // not, so a quote-only index still gets the menu, just without them.
     const res = t.contextMenuAt(e.clientY - rect.top)
+    const profile = t.profileContextMenuAt(e.clientX - rect.left, e.clientY - rect.top)
+    // Capture prevents the engine's native-menu snapshot from freezing overlays.
     e.preventDefault()
     setGridSub(false)
     setCtx({
       x: Math.min(e.clientX, window.innerWidth - 240),
-      y: Math.min(e.clientY, window.innerHeight - 360),
+      y: Math.max(0, Math.min(e.clientY, window.innerHeight - (profile ? 425 : 360))),
       items: res ? res.items : [],
+      profile,
     })
   }
   useEffect(() => {
@@ -546,11 +555,16 @@ export function ChartPane({
       setGridSub(false)
       setCtx(null)
     }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
     window.addEventListener('click', close)
     window.addEventListener('scroll', close, true)
+    window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('click', close)
       window.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', onKeyDown)
     }
   }, [ctx])
 
@@ -685,7 +699,7 @@ export function ChartPane({
               <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="w-52">
+          <DropdownMenuContent container={menuHost} align="start" className="w-60">
             {CHART_TYPE_GROUPS.map((group, gi) => (
               <div key={group[0].value}>
                 {gi > 0 && <DropdownMenuSeparator />}
@@ -948,7 +962,7 @@ export function ChartPane({
         <div
           ref={chartRef}
           className="absolute inset-0"
-          onContextMenu={onContextMenu}
+          onContextMenuCapture={onContextMenu}
           onPointerDownCapture={() => onFocusPane?.(terminalRef.current, paneId)}
         />
 
@@ -1097,6 +1111,17 @@ export function ChartPane({
             className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
             style={{ left: ctx.x, top: ctx.y }}
           >
+            {ctx.profile && (
+              <>
+                <div className="px-2 py-1 text-xs text-muted-foreground">
+                  {ctx.profile.sessionLabel}
+                </div>
+                <button type="button" className={ctxRow} onClick={() => run(ctx.profile!.run)}>
+                  {ctx.profile.label}
+                </button>
+                <div className="my-1 h-px bg-border" />
+              </>
+            )}
             {ctx.items.map((it) => (
               <button
                 type="button"
@@ -1152,20 +1177,22 @@ export function ChartPane({
                 {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
               </button>
             )}
-            <button
-              type="button"
-              className={ctxRow}
-              onClick={() =>
-                run(() => {
-                  const next = !volumeOn
-                  terminalRef.current?.setVolumeVisible(next)
-                  setVolumeOn(next)
-                })
-              }
-            >
-              <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
-              {volumeOn ? 'Hide volume' : 'Show volume'}
-            </button>
+            {!isProfileKind(chartType) && (
+              <button
+                type="button"
+                className={ctxRow}
+                onClick={() =>
+                  run(() => {
+                    const next = !volumeOn
+                    terminalRef.current?.setVolumeVisible(next)
+                    setVolumeOn(next)
+                  })
+                }
+              >
+                <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
+                {volumeOn ? 'Hide volume' : 'Show volume'}
+              </button>
+            )}
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
                 type="button"

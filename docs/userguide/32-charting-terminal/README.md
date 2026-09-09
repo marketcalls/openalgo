@@ -4,7 +4,7 @@
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
 it. It is powered by the `openalgo-charts` package: a from-scratch canvas
-charting engine with 15 chart types, 102 built-in indicators plus any you write
+charting engine with 17 chart types, 102 built-in indicators plus any you write
 yourself, and 51 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
@@ -32,6 +32,50 @@ says so and links to `/apikey`.
 
 The chart grid takes whatever the rails and panels leave. Only the right panel
 and the dock can be resized; the panes follow the layout preset you pick.
+
+## Session Profiles
+
+Choose **Time Price Opportunity** or **Session Volume Profile** from the chart
+type menu. Right-click the chart and open **Chart settings...**. The existing
+**Price** tab changes to the selected profile's settings. Switching back to
+candles restores the candle controls. Each pane remembers both profile types'
+settings independently; **Reset to defaults** resets the active profile and
+the shared chart settings.
+
+**Session Volume Profile** draws one horizontal volume distribution per session.
+Set its width as a percentage of the session, placement, total/up-down/delta
+display, row count or ticks per row, colors, and POC/VAH/VAL lines. Value-area
+colors, volume values, a histogram background, line extensions, and developing
+POC/value area are available in the same tab. Developing lines use a bounded
+sample of cumulative snapshots over each session.
+
+**Time Price Opportunity (TPO)** counts time blocks at each price. Set the
+day/week/month period, number of periods to combine, block size, automatic or
+manual rows, value-area percentage, letters/blocks, gradient colors and split
+layout. The tab also controls initial balance, single prints, poor extremes,
+session open/close, midpoint, and an optional volume profile with its own levels.
+
+To split one TPO session, right-click its letters or blocks and choose **Split
+this session**. Other sessions keep their layout. Right-click the same session
+and choose **Unsplit this session** to collapse it again. The selection follows
+that session through live updates and replay. The split setting in the Price tab
+sets the default layout for all sessions; changing it resets individual overrides.
+Individual splits last for the current chart view and reset when the chart is rebuilt.
+
+Both types use loaded intraday history and follow live updates and replay.
+Selecting a profile from a daily chart switches to a compatible broker interval,
+preferring five minutes. TPO requires a source interval that divides the block
+size. Indian exchange sessions use Asia/Kolkata even when the display timezone
+changes. Choose **Custom hours** to filter a session; the start/end also support
+overnight sessions.
+
+Volume is estimated by distributing each OHLCV bar's volume across its price
+range. Up/down volume follows candle direction, and delta is the difference
+between those estimates. Smaller source intervals provide more detail; these
+values are not historical bid/ask trade classifications. Instruments without
+volume have no volume distribution. Load earlier history to include additional
+sessions. Very fine rows or large TPO composites may reach the calculation limit;
+the terminal reports this so you can increase row size or reduce the period.
 
 ## One-Click Trading
 
