@@ -4,12 +4,20 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { Footer } from './Footer'
 
 function mockAppInfoResponse(data: unknown) {
+  const json = vi.fn().mockResolvedValue(data)
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue({
-      json: () => Promise.resolve(data),
+      json,
     })
   )
+  return json
+}
+
+function separatorCount() {
+  return Array.from(screen.getByRole('contentinfo').querySelectorAll('span')).filter(
+    (element) => element.textContent === '|'
+  ).length
 }
 
 describe('Footer', () => {
@@ -44,32 +52,38 @@ describe('Footer', () => {
   })
 
   it('omits version and session badges when optional fields are missing', async () => {
-    mockAppInfoResponse({ status: 'success' })
+    const json = mockAppInfoResponse({ status: 'success' })
 
     render(<Footer />)
 
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/auth/app-info'))
+    await waitFor(() => expect(json).toHaveBeenCalled())
     expect(screen.queryByText(/session/)).not.toBeInTheDocument()
     expect(screen.getByText('Open Source Algo Platform for Everyone')).toBeInTheDocument()
+    expect(separatorCount()).toBe(1)
   })
 
   it('renders sessions without a version badge when version is absent', async () => {
-    mockAppInfoResponse({ status: 'success' })
+    const json = mockAppInfoResponse({ status: 'success' })
     useSessionStore.setState({ activeSessionCount: 3 })
 
     render(<Footer />)
 
-    expect(await screen.findByText('3 sessions')).toBeInTheDocument()
+    await waitFor(() => expect(json).toHaveBeenCalled())
+    expect(screen.getByText('3 sessions')).toBeInTheDocument()
     expect(screen.queryByText('v')).not.toBeInTheDocument()
+    expect(separatorCount()).toBe(2)
   })
 
   it('survives a failed app-info request', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
+    const request = Promise.reject(new Error('network error'))
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(request))
 
     render(<Footer />)
 
+    await request.catch(() => undefined)
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/auth/app-info'))
     expect(screen.getByText('Copyright 2026')).toBeInTheDocument()
     expect(screen.getByText('Open Source Algo Platform for Everyone')).toBeInTheDocument()
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/auth/app-info'))
+    expect(separatorCount()).toBe(1)
   })
 })
