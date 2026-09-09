@@ -174,3 +174,74 @@ class TestWebsocketApiKeyHeaders:
             assert resp.headers["Cache-Control"] == "no-store, max-age=0"
             assert resp.headers["Pragma"] == "no-cache"
             assert resp.get_json()["api_key"] == FAKE_KEY
+
+
+class TestSessionStatusApiKeyHeaders:
+    """GET /auth/session-status must not cache its API-key response."""
+
+    def test_authenticated_broker_session_has_no_store(self):
+        from blueprints.auth import auth_bp
+
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test"
+        app.register_blueprint(auth_bp)
+
+        with (
+            patch("blueprints.auth._touch_session_heartbeat"),
+            patch("database.auth_db.get_auth_token", return_value="test-token-not-real"),
+            patch("database.auth_db.get_api_key_for_tradingview", return_value=FAKE_KEY),
+            patch("database.auth_db.get_active_sessions", return_value=[{"id": "test-session"}]),
+        ):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["user"] = FAKE_USER
+                    sess["logged_in"] = True
+                    sess["broker"] = "test-broker"
+                resp = client.get("/auth/session-status")
+
+            assert resp.status_code == 200
+            assert resp.headers["Cache-Control"] == "no-store, max-age=0"
+            assert resp.headers["Pragma"] == "no-cache"
+            assert resp.get_json() == {
+                "status": "success",
+                "authenticated": True,
+                "logged_in": True,
+                "user": FAKE_USER,
+                "broker": "test-broker",
+                "api_key": FAKE_KEY,
+                "active_sessions": 1,
+            }
+
+
+class TestBrokerConfigApiKeyHeaders:
+    """GET /auth/broker-config must not cache authenticated broker config."""
+
+    def test_authenticated_config_has_no_store(self):
+        from blueprints.auth import auth_bp
+
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test"
+        app.register_blueprint(auth_bp)
+
+        redirect_url = "https://example.test/test-broker/callback"
+        broker_api_key = "test-broker-api-key-not-real"
+        with patch.dict(
+            os.environ,
+            {"REDIRECT_URL": redirect_url, "BROKER_API_KEY": broker_api_key},
+        ):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["user"] = FAKE_USER
+                resp = client.get("/auth/broker-config")
+
+            assert resp.status_code == 200
+            assert resp.headers["Cache-Control"] == "no-store, max-age=0"
+            assert resp.headers["Pragma"] == "no-cache"
+            assert resp.get_json() == {
+                "status": "success",
+                "broker_name": "test-broker",
+                "broker_api_key": broker_api_key,
+                "redirect_url": redirect_url,
+            }

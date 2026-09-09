@@ -35,6 +35,7 @@ from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
+from utils.security_headers import no_store_response
 from utils.session import check_session_validity, is_session_valid, revoke_user_tokens
 
 # Initialize logger
@@ -133,13 +134,15 @@ def get_broker_config():
     # Return full config only for authenticated users
     if "user" in session:
         BROKER_API_KEY = os.getenv("BROKER_API_KEY")
-        return jsonify(
-            {
-                "status": "success",
-                "broker_name": broker_name,
-                "broker_api_key": BROKER_API_KEY,
-                "redirect_url": REDIRECT_URL,
-            }
+        return no_store_response(
+            jsonify(
+                {
+                    "status": "success",
+                    "broker_name": broker_name,
+                    "broker_api_key": BROKER_API_KEY,
+                    "redirect_url": REDIRECT_URL,
+                }
+            )
         )
 
     # Unauthenticated: return broker name only so the login button is visible
@@ -1062,16 +1065,18 @@ def get_session_status():
         from database.auth_db import get_active_sessions
         active_count = len(get_active_sessions(session.get("user")))
 
-        return jsonify(
-            {
-                "status": "success",
-                "authenticated": True,
-                "logged_in": session.get("logged_in", False),
-                "user": session.get("user"),
-                "broker": session.get("broker"),
-                "api_key": api_key,
-                "active_sessions": active_count,
-            }
+        return no_store_response(
+            jsonify(
+                {
+                    "status": "success",
+                    "authenticated": True,
+                    "logged_in": session.get("logged_in", False),
+                    "user": session.get("user"),
+                    "broker": session.get("broker"),
+                    "api_key": api_key,
+                    "active_sessions": active_count,
+                }
+            )
         )
 
     # Include active session count
