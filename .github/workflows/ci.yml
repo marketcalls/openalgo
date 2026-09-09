@@ -55,7 +55,7 @@ jobs:
             test/test_logout_csrf.py test/test_auth_logout.py \
             test/test_auth_resume.py test/test_auth_upsert_multisession.py \
             test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
-            test/test_telegram_api_contract.py test/test_cors_config.py \
+            test/test_telegram_api_contract.py test/test_cors_config.py test/test_dockerfile_pins.py \
             test/test_market_calendar_validation.py \
             test/test_admin_client_error_url.py \
             test/test_core_credential_logging.py \
