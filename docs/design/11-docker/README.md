@@ -352,6 +352,12 @@ docker stop openalgo
 docker rm openalgo
 ```
 
+> **Host `.env` permissions:** the container runs as `appuser` (UID/GID 1000) and v2.0.0.8+ automatic key rotation writes to the mounted `.env`, so the host file must be writable by that UID:
+>
+> ```bash
+> chown 1000:1000 .env && chmod 600 .env
+> ```
+
 ## Docker Compose Commands
 
 ```bash
@@ -456,7 +462,7 @@ fi
 | Aspect | Implementation |
 |--------|----------------|
 | Non-root user | Runs as `appuser` |
-| `.env` mount | Writable so v2.0.0.8+ automatic `APP_KEY`/`FERNET_SALT` key-rotation can persist new keys to `.env`. The rewrite normally goes through a temp file + atomic rename, but when `.env` is a single-file bind mount (`./.env:/app/.env`) `utils/env_check.py` detects the cross-device case and deliberately rewrites the file in place through the host inode instead — persistence is guaranteed, atomicity is not. Mounting it `:ro` would crash the worker in a restart loop. If you don't use auto-rotation, apply host-side `chmod 600` and rely on filesystem permissions for at-rest confidentiality. |
+| `.env` mount | Writable so v2.0.0.8+ automatic `APP_KEY`/`FERNET_SALT` key-rotation can persist new keys to `.env`. The rewrite normally goes through a temp file + atomic rename, but when `.env` is a single-file bind mount (`./.env:/app/.env`) `utils/env_check.py` detects the cross-device case and deliberately rewrites the file in place through the host inode instead — atomicity is not guaranteed, and persistence can still fail if the host file isn't writable by the container's UID 1000 `appuser`. A `:ro` mount makes every `.env` write fail, and the failure mode is asymmetric: an unwritable `FERNET_SALT` only logs a warning (the app continues with an in-memory salt), while a failed placeholder `APP_KEY`/`API_KEY_PEPPER` rotation exits before startup completes. Keep the host side owned by that UID and private (`chown 1000:1000 .env && chmod 600 .env`); if you don't use auto-rotation at all, `chmod 600` alone covers at-rest confidentiality. |
 | Keys directory | 700 permissions |
 | No build tools | Slim production image |
 | Minimal packages | Only runtime dependencies |
