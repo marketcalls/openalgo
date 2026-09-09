@@ -34,7 +34,7 @@ else
         cat > "$ENV_FILE" << EOF
 # OpenAlgo Environment Configuration File
 # Auto-generated from environment variables
-ENV_CONFIG_VERSION = '${ENV_CONFIG_VERSION:-1.0.4}'
+ENV_CONFIG_VERSION = '${ENV_CONFIG_VERSION:-1.0.7}'
 
 # Broker Configuration
 BROKER_API_KEY = '${BROKER_API_KEY}'
@@ -51,8 +51,14 @@ REDIRECT_URL = '${REDIRECT_URL}'
 VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha}'
 
 # Security Configuration
+# FERNET_SALT is written directly below API_KEY_PEPPER so that
+# utils/env_check.py finds it adjacent (its adjacency check relocates or
+# rewrites the .env otherwise). Without this line it rotates a fresh salt on
+# every boot in env-driven deployments (Docker/PaaS/Kubernetes) and
+# Fernet-encrypted data becomes undecryptable.
 APP_KEY = '${APP_KEY}'
 API_KEY_PEPPER = '${API_KEY_PEPPER}'
+FERNET_SALT = '${FERNET_SALT:-OPENALGO_PLACEHOLDER_FERNET_SALT_REGENERATE_BEFORE_USE}'
 
 # Database Configuration
 DATABASE_URL = '${DATABASE_URL:-sqlite:///db/openalgo.db}'

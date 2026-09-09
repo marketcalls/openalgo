@@ -1,0 +1,16 @@
+# Per-instance non-sensitive config. Patch targets use the PRE-prefix base
+# names — kustomize applies patches before transformers.
+#
+# Do NOT set CORS_ALLOWED_ORIGINS or WEBSOCKET_URL: start.sh derives both from
+# HOST_SERVER.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openalgo-config
+data:
+  HOST_SERVER: "https://CHANGE_ME.example.com"
+  VALID_BROKERS: "CHANGE_ME"
+  # Must match the callback URL registered in the broker's developer app.
+  REDIRECT_URL: "https://CHANGE_ME.example.com/CHANGE_ME/callback"
+  SESSION_COOKIE_NAME: "oa-CHANGE_ME-session"
+  CSRF_COOKIE_NAME: "oa-CHANGE_ME-csrf"

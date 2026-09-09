@@ -64,7 +64,27 @@ jobs:
             test/test_precompress_assets.py \
             test/test_broker_credential_logging.py \
             test/test_option_symbol_service_validation.py \
+            test/test_dockerignore_secret_inputs.py \
+            --deselect test/test_dockerignore_secret_inputs.py::test_docker_build_context_excludes_secret_inputs \
             -v --timeout=60
+
+  # Docker build-context guard: the .dockerignore rules that keep Kubernetes
+  # deployment secret inputs (deploy/k8s/overlays/<broker>/secret.env and
+  # friends) out of locally built images. The daemon-backed synthetic-marker
+  # build runs here, once (ubuntu-latest ships a working Docker daemon),
+  # instead of in the backend-test matrix above.
+  dockerignore-marker-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync
+      - name: Run synthetic-marker context check (real Docker build)
+        run: uv run pytest test/test_dockerignore_secret_inputs.py::test_docker_build_context_excludes_secret_inputs -v --timeout=900
 
   # Frontend linting
   frontend-lint:

@@ -1,0 +1,9 @@
+# Fall back to the cluster's default StorageClass (omit storageClassName).
+# Enable via the overlay kustomization as a JSON6902 patch:
+#   patches:
+#   - path: patches/storage-default-class.json6902.yaml
+#     target:
+#       kind: StatefulSet
+#       name: openalgo
+- op: remove
+  path: /spec/volumeClaimTemplates/0/spec/storageClassName

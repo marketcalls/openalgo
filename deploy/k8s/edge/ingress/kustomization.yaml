@@ -1,0 +1,9 @@
+# Ingress API edge variant (default; works with the Traefik bundled in k3s).
+#
+# This directory is a sibling library consumed by overlays
+# (resources: [../../base, ../../edge/ingress]) — do not list ../../base here
+# and do not set namespace:; the consuming overlay supplies both.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ingress.yaml

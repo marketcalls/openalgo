@@ -1,0 +1,26 @@
+# Shared-Gateway pattern (Gateway API variant, optional).
+#
+# By default each overlay creates its own namespaced Gateway (its own
+# controller-managed LoadBalancer). To share ONE cluster-level Gateway across
+# instances:
+#
+#   1. Install the shared Gateway once (e.g. in a dedicated namespace) with
+#      listeners for your wildcard hostname and
+#      spec.listeners[].allowedRoutes.namespaces.from: All (or a Selector).
+#   2. Replace the HTTPRoute parentRef with the shared Gateway — note a
+#      cross-namespace parentRef must carry the namespace:
+#        spec:
+#          parentRefs:
+#          - name: my-shared-gateway
+#            namespace: gateway-system
+#            sectionName: https
+#   3. Enable this delete patch in the overlay kustomization so the
+#      per-overlay Gateway is not created.
+#
+# No ReferenceGrant is needed for parentRefs (only for cross-namespace
+# backendRefs, which this package never uses).
+$patch: delete
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: openalgo
