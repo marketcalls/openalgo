@@ -2,7 +2,7 @@ import json
 import os
 import time
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import numpy as np
@@ -19,6 +19,12 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Upstox stamps every candle in IST. Building a timestamp by adding 5h30m to a
+# naive datetime is not a timezone conversion -- .timestamp() then reads the
+# result in whatever zone the host runs in, so the value moves with the
+# deployment. Attach the offset instead.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # /v3/market-quote/quotes accepts at most 500 instrument keys per call (UDAPI100042)
 FULL_QUOTE_BATCH_SIZE = 500
@@ -825,15 +831,19 @@ class BrokerData:
                                         )
 
                                 if not is_stale:
-                                    # Create today's daily candle with midnight timestamp
-                                    today_ts = int(
-                                        (
-                                            datetime.combine(today, datetime.min.time())
-                                            + timedelta(hours=5, minutes=30)
-                                        ).timestamp()
-                                    )
+                                    # Stamp the synthetic bar exactly as Upstox stamps a real
+                                    # daily candle -- IST midnight, ISO 8601 with the offset --
+                                    # so both paths carry one convention into
+                                    # safe_to_datetime(). The previous form added 5h30m to a
+                                    # naive datetime and let .timestamp() interpret it locally,
+                                    # which was 19800s out on an IST host and 39600s out in a
+                                    # UTC container; it only ever looked correct because the
+                                    # interval == "D" branch normalises through .date() and
+                                    # discards the error.
                                     today_candle = [
-                                        today_ts * 1000,  # Upstox uses milliseconds
+                                        datetime.combine(
+                                            today, datetime.min.time(), tzinfo=IST
+                                        ).isoformat(),
                                         quotes.get("open", quotes.get("ltp", 0)),
                                         quotes.get("high", quotes.get("ltp", 0)),
                                         quotes.get("low", quotes.get("ltp", 0)),
