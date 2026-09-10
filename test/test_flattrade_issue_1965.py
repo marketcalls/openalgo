@@ -19,6 +19,9 @@ endless:
   2. The adapter called ws_client.stop() while holding self.lock, and stop()
      joins the reader thread that runs the adapter's own _on_close, which takes
      that same lock - so teardown and reconnect each waited out a join timeout.
+  3. reconnect_attempts is reset by every successful connect, so an evicted
+     session re-armed a flat 5s retry forever: OpenAlgo hammered a broker that
+     was rejecting it and nothing in the log said why.
 
 These tests are self-contained: no socket, port or broker call. Threads are
 real (the bugs are threading bugs) but bounded and joined.
@@ -302,3 +305,85 @@ class TestAdapterLockIsNotHeldAcrossBlockingCalls:
         # Published before connect(): _on_open -> _resubscribe_all() sends
         # through self.ws_client on the reader thread.
         assert adapter.ws_client is new_clients[0]
+
+
+class TestFlapBackoff:
+    """An evicted session must not re-arm the same short retry forever."""
+
+    def test_short_sessions_escalate_the_reconnect_delay(self, adapter):
+        module = _adapter_module()
+        config = module.Config
+
+        delays: list[float] = []
+        adapter._schedule_reconnection = lambda: delays.append(
+            min(
+                config.BASE_RECONNECT_DELAY
+                * (2 ** max(adapter.reconnect_attempts, adapter._backoff_level)),
+                config.MAX_RECONNECT_DELAY,
+            )
+        )
+
+        for _ in range(4):
+            # Session opens, is evicted a fraction of a second later.
+            adapter._session_started_at = time.monotonic() - 0.2
+            adapter._record_session_end()
+            adapter._schedule_reconnection()
+
+        assert delays == sorted(delays), f"delay did not grow across flaps: {delays}"
+        assert delays[-1] > delays[0], (
+            f"every eviction re-armed the same {delays[0]}s retry: {delays}"
+        )
+        assert delays[-1] <= config.MAX_RECONNECT_DELAY
+
+    def test_a_healthy_session_clears_the_flap_backoff(self, adapter):
+        module = _adapter_module()
+        config = module.Config
+
+        adapter._session_started_at = time.monotonic() - 0.2
+        adapter._record_session_end()
+        assert adapter._backoff_level > 0
+
+        # A session that stayed up is an ordinary drop: retry promptly.
+        adapter._session_started_at = time.monotonic() - config.STABLE_SESSION_SECONDS - 1
+        adapter._record_session_end()
+
+        assert adapter._backoff_level == 0
+        assert adapter._short_session_count == 0
+
+    def test_flapping_names_the_single_session_constraint(self, adapter, caplog):
+        module = _adapter_module()
+        config = module.Config
+
+        with caplog.at_level("ERROR", logger="flattrade_test"):
+            for _ in range(config.FLAP_ALERT_THRESHOLD):
+                adapter._session_started_at = time.monotonic() - 0.2
+                adapter._record_session_end()
+
+        assert "one websocket session per uid" in caplog.text.lower()
+
+    def test_a_close_before_the_open_callback_leaves_the_backoff_alone(self, adapter):
+        """Nothing to judge: the socket never reported a live session."""
+        adapter._backoff_level = 2
+        adapter._session_started_at = None
+
+        adapter._record_session_end()
+
+        assert adapter._backoff_level == 2
+
+    def test_flap_backoff_does_not_consume_the_give_up_budget(self, adapter):
+        """A contended session must keep retrying slowly, not stop for good.
+
+        reconnect_attempts is what trips "Maximum reconnection attempts reached"
+        and sets running=False; the flap counter is deliberately separate.
+        """
+        for _ in range(20):
+            adapter._session_started_at = time.monotonic() - 0.2
+            adapter._record_session_end()
+
+        assert adapter.reconnect_attempts == 0
+        assert adapter._backoff_level <= module_max_attempts()
+
+
+def module_max_attempts() -> int:
+    module = _adapter_module()
+    return module.Config.MAX_RECONNECT_ATTEMPTS

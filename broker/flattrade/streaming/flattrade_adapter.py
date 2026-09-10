@@ -41,6 +41,15 @@ class Config:
     MAX_RECONNECT_ATTEMPTS = 10
     BASE_RECONNECT_DELAY = 5
     MAX_RECONNECT_DELAY = 60
+
+    # A session that survives this long counts as healthy: it clears the flap
+    # backoff below. Anything shorter is a flap - the socket authenticated and
+    # was then dropped, which for PiConnect means something else authenticated
+    # with the same uid/accesstoken and evicted us (issue #1965).
+    STABLE_SESSION_SECONDS = 60
+    # Consecutive flaps before the log stops reporting an ordinary reconnect and
+    # names the single-session constraint as the likely cause.
+    FLAP_ALERT_THRESHOLD = 3
     CACHE_COMPLETENESS_THRESHOLD = 0.3
     WEBSOCKET_TIMEOUT = 30
 
@@ -359,6 +368,19 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # effective April 1, 2026).
         self.auth_refresh_retries = 0
         self.max_auth_refresh_retries = 3
+
+        # Flap tracking. reconnect_attempts above is reset by every successful
+        # connect, so on its own it can never escalate the delay when the broker
+        # keeps evicting an authenticated session: each eviction re-armed a flat
+        # 5s retry and OpenAlgo hammered PiConnect indefinitely (issue #1965).
+        # _backoff_level is reset only by a session that actually stayed up for
+        # Config.STABLE_SESSION_SECONDS, so a flap escalates 5 -> 10 -> 20 ...
+        # while a genuine network blip after a healthy session still retries in
+        # 5s. It is deliberately NOT wired into MAX_RECONNECT_ATTEMPTS: a
+        # contended session must keep retrying (slowly), not give up for good.
+        self._session_started_at = None
+        self._short_session_count = 0
+        self._backoff_level = 0
 
         # Batch subscription management - coalesce rapid subscribe calls into a
         # single touchline/depth message to avoid hammering the WebSocket
@@ -814,6 +836,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Handle WebSocket connection open"""
         self.logger.info("Connected to Flattrade WebSocket")
         self.connected = True
+        self._session_started_at = time.monotonic()
         self._resubscribe_all()
 
     def _on_error(self, ws, error):
@@ -835,6 +858,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.batch_timer.cancel()
                 self.batch_timer = None
             self.subscription_queue.clear()
+            self._record_session_end()
 
         if self.running:
             if self.ws_client and getattr(self.ws_client, "auth_failed", False):
@@ -891,6 +915,45 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self._schedule_reconnection()
 
+    def _record_session_end(self) -> None:
+        """Classify the session that just ended as healthy or a flap.
+
+        Caller must hold self.lock. Sets up the delay _schedule_reconnection()
+        will use: a session that lived at least Config.STABLE_SESSION_SECONDS
+        clears the flap backoff, a shorter one escalates it.
+        """
+        started_at = self._session_started_at
+        self._session_started_at = None
+        if started_at is None:
+            # The socket closed before the connect callback ran - nothing to
+            # judge, so leave the existing backoff untouched.
+            return
+
+        duration = time.monotonic() - started_at
+        if duration >= Config.STABLE_SESSION_SECONDS:
+            self._short_session_count = 0
+            self._backoff_level = 0
+            return
+
+        self._short_session_count += 1
+        self._backoff_level = min(self._backoff_level + 1, Config.MAX_RECONNECT_ATTEMPTS)
+
+        if self._short_session_count == Config.FLAP_ALERT_THRESHOLD:
+            self.logger.error(
+                f"Flattrade market-data session dropped {self._short_session_count} times in a "
+                f"row within {Config.STABLE_SESSION_SECONDS}s (last one lasted {duration:.1f}s). "
+                "PiConnect allows ONE WebSocket session per uid/accesstoken, so this almost "
+                "always means another client is authenticating with the same Flattrade "
+                "credentials - a second OpenAlgo instance, a leftover process, or a separate "
+                "app/script. Reconnect delay is being backed off; close the other session to "
+                "restore a stable feed."
+            )
+        elif self._short_session_count > Config.FLAP_ALERT_THRESHOLD:
+            self.logger.warning(
+                f"Flattrade market-data session dropped again after {duration:.1f}s "
+                f"(flap {self._short_session_count})"
+            )
+
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
         # Use lock to prevent race with disconnect()
@@ -905,8 +968,11 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.running = False
                 return
 
+            # Back off on whichever is worse: failed connect attempts, or
+            # sessions that connected and were evicted seconds later.
+            backoff_level = max(self.reconnect_attempts, self._backoff_level)
             delay = min(
-                Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts), Config.MAX_RECONNECT_DELAY
+                Config.BASE_RECONNECT_DELAY * (2**backoff_level), Config.MAX_RECONNECT_DELAY
             )
 
             self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
