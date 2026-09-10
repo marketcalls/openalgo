@@ -35,8 +35,12 @@ and the dock can be resized; the panes follow the layout preset you pick.
 
 ## Session Profiles
 
-Choose **Time Price Opportunity** or **Session Volume Profile** from the chart
-type menu. Right-click the chart and open **Chart settings...**. The existing
+**Time Price Opportunity** and **Session Volume Profile** are no longer offered
+in the chart type menu. The engine still supports both, so a saved layout that
+already selects one keeps drawing it, but there is currently no way to pick one
+from the UI. The rest of this section describes how they behave when selected.
+
+Right-click the chart and open **Chart settings...**. The existing
 **Price** tab changes to the selected profile's settings. Switching back to
 candles restores the candle controls. Each pane remembers both profile types'
 settings independently; **Reset to defaults** resets the active profile and
