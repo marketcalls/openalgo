@@ -379,7 +379,7 @@ jobs:
           docker buildx imagetools inspect ${{ secrets.DOCKERHUB_USERNAME }}/openalgo:${{ steps.meta.outputs.version }}
 
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/openalgo:latest
           exit-code: '0'
