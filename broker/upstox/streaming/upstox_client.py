@@ -378,7 +378,23 @@ class UpstoxWebSocketClient:
             self.logger.error(f"Failed to parse JSON message: {e}")
 
     def _decode_protobuf_to_dict(self, buffer: bytes) -> dict[str, Any]:
-        """Decode protobuf FeedResponse to dictionary"""
+        """Decode protobuf FeedResponse to dictionary.
+
+        The default `MessageToDict` options are load-bearing — do not add
+        `always_print_fields_with_no_presence` / `including_default_value_fields`
+        or `preserving_proto_field_name` here:
+
+        - Keys stay camelCase (`marketOHLC`, `bidAskQuote`, `iiqTotal`), which is
+          what every consumer in upstox_adapter reads.
+        - Defaulted proto3 scalars are omitted, so the CAS / pre-open fields
+          (iep, rp, ieq, iiqTotal, iiqM, casEligible) are simply absent outside an
+          auction window instead of arriving as a misleading 0 / False.
+        - `LTPC.iep` is a DoubleValue wrapper, so json_format emits it if and only
+          if `HasField('iep')` is true and flattens it to the bare `.value`;
+          printing no-presence fields would destroy that signal.
+        - int64 fields render as strings (`"vtt"`, `"ltt"`, `"iiqTotal"`); the
+          adapter int()s them, which preserves a negative iiqTotal.
+        """
         feed_response = MarketDataFeedV3_pb2.FeedResponse()
         feed_response.ParseFromString(buffer)
         return MessageToDict(feed_response)

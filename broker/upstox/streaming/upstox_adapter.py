@@ -272,6 +272,34 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Unsubscribe error: {e}")
             return self._create_error_response("UNSUBSCRIBE_ERROR", str(e))
 
+    def get_market_status(self) -> dict[str, Any]:
+        """Return the last `marketInfo` snapshot as Upstox sent it.
+
+        Shape: {"segmentStatus": {...}, "casMarketStatus": {...},
+        "preOpenSessionStatus": {...}} — each map keyed by segment, and each
+        only present once Upstox has sent it at least once.
+        """
+        return dict(self.market_status)
+
+    def get_cas_phase(self, segment: str) -> str | None:
+        """Current Closing Auction Session phase for a segment (e.g. "NSE_EQ").
+
+        One of CTS_CLOSE (~15:15, continuous trading ends), CAS_LM_START (~15:20,
+        auction opens to limit + market orders), CAS_M_STOP (~15:25, limit only),
+        CAS_STOP (15:28-15:30, randomised end of order entry), or None when no
+        CAS update has been received for that segment.
+        """
+        return self._phase_from_map("casMarketStatus", segment)
+
+    def get_pre_open_phase(self, segment: str) -> str | None:
+        """Current pre-open session phase for a segment, or None if unknown."""
+        return self._phase_from_map("preOpenSessionStatus", segment)
+
+    def _phase_from_map(self, map_name: str, segment: str) -> str | None:
+        """Read StatusInfo.status out of one of the marketInfo status maps."""
+        info = (self.market_status.get(map_name) or {}).get(segment)
+        return info.get("status") if isinstance(info, dict) else None
+
     def disconnect(self) -> None:
         """Disconnect from WebSocket and cleanup resources"""
         try:
@@ -441,11 +469,49 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Market data handler error: {e}")
 
     def _handle_market_info(self, data: dict[str, Any]):
-        """Handle market info messages"""
-        if "marketInfo" in data:
-            self.market_status = data["marketInfo"]
-            if "segmentStatus" in self.market_status:
-                self.logger.debug(f"Market status update: {self.market_status['segmentStatus']}")
+        """Handle market info messages.
+
+        `marketInfo` carries three maps keyed by segment ("NSE_EQ", "NSE_FO", ...):
+        `segmentStatus` (the MarketStatus enum), plus `casMarketStatus` and
+        `preOpenSessionStatus` (StatusInfo: status + updatedTime), both added by
+        Upstox on 2026-09-04. Upstox sends only the map that changed, so a CAS
+        phase transition arrives with `casMarketStatus` alone — merge per map
+        instead of replacing wholesale, otherwise the segmentStatus already
+        learned is dropped the first time a CAS update lands.
+        """
+        market_info = data.get("marketInfo")
+        if not market_info:
+            return
+
+        previous = {
+            key: dict(self.market_status.get(key) or {})
+            for key in ("casMarketStatus", "preOpenSessionStatus")
+        }
+
+        for key, incoming in market_info.items():
+            existing = self.market_status.get(key)
+            if isinstance(incoming, dict) and isinstance(existing, dict):
+                merged = dict(existing)
+                merged.update(incoming)
+                self.market_status[key] = merged
+            else:
+                self.market_status[key] = incoming
+
+        if "segmentStatus" in market_info:
+            self.logger.debug(f"Market status update: {self.market_status['segmentStatus']}")
+
+        # The CAS phases (CTS_CLOSE -> CAS_LM_START -> CAS_M_STOP -> CAS_STOP) are
+        # NOT part of the MarketStatus enum — they only ever arrive through these
+        # StatusInfo maps, which is why the maps exist. Log a genuine transition at
+        # INFO (a handful per session, and repeats of an unchanged phase stay
+        # silent) so the current auction phase is visible without a debug build.
+        for key in ("casMarketStatus", "preOpenSessionStatus"):
+            for segment, info in (market_info.get(key) or {}).items():
+                if not isinstance(info, dict):
+                    continue
+                status = info.get("status")
+                if status and status != (previous[key].get(segment) or {}).get("status"):
+                    self.logger.info(f"{key} {segment}: {status}")
 
     def _process_feed(self, feed_key: str, feed_data: dict[str, Any], current_ts: int):
         """Process individual feed data"""
@@ -530,7 +596,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return {}
 
         # Carry-forward: if the extractor produced an empty dict (no fullFeed
-        # wrapper) or its `ltp` is 0/missing, splice in the cached LTPC.
+        # wrapper) or its `ltp` is 0/missing, splice in the cached LTPC. Only the
+        # trade fields are carried forward — a cached `iep` is deliberately not,
+        # because an indicative auction price is only valid for the tick that
+        # carried it and a stale one would look like a live auction.
         if not result:
             cached = self._last_ltpc.get(instrument_key)
             if cached:
@@ -563,6 +632,73 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         ltpc = ff.get("ltpc") or {}
         return ltpc if isinstance(ltpc, dict) else {}
 
+    @staticmethod
+    def _read_optional_double(value: Any) -> float | None:
+        """Read a possibly-absent double out of a protobuf-as-dict.
+
+        Returns None when the field was not on the wire, so callers can omit the
+        key rather than publish a misleading 0.0.
+
+        `LTPC.iep` is a `google.protobuf.DoubleValue` **wrapper**, i.e. it has
+        explicit presence. `MessageToDict` walks `ListFields()`, which yields a
+        message field only when `HasField()` is true, and flattens a wrapper to
+        its bare `.value` — so key-presence here is exactly `HasField('iep')`
+        and `value` is exactly `.value` (an explicit 0.0 IS emitted, which is the
+        point of the wrapper). The dict form {"value": <double>} is accepted too
+        so a differently-configured json_format cannot silently drop the field.
+        """
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            value = value.get("value")
+            if value is None:
+                return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_cas_fields(self, ff: dict[str, Any]) -> dict[str, Any]:
+        """Extract the Closing Auction Session / pre-open extras from a
+        MarketFullFeed-as-dict (added by Upstox on 2026-09-04).
+
+        Every one of these is additive and only populated while a pre-open or
+        closing auction is actually running. Outside an auction window Upstox
+        leaves them at their proto3 defaults and `MessageToDict` (default
+        options) omits defaulted scalars entirely, so this returns an empty dict
+        and the published payload is exactly what subscribers already receive.
+
+        Absent fields are deliberately NOT defaulted to 0/0.0/False: during an
+        auction a real zero is meaningful, so a synthetic one would be
+        indistinguishable from "no auction running".
+        """
+        cas: dict[str, Any] = {}
+
+        # iep arrives either on the full feed (MarketFullFeed.iep, a plain
+        # double) or on the nested LTPC (a presence-tracked DoubleValue wrapper).
+        iep = self._read_optional_double(ff.get("iep"))
+        if iep is None:
+            iep = self._read_optional_double((ff.get("ltpc") or {}).get("iep"))
+        if iep is not None:
+            cas["indicative_equilibrium_price"] = iep
+
+        if "rp" in ff:
+            cas["reference_price"] = float(ff["rp"])
+        if "ieq" in ff:
+            cas["indicative_equilibrium_quantity"] = int(ff["ieq"])
+        # iiqTotal is a SIGNED net imbalance — negative means more sell than buy
+        # quantity is left unmatched at the IEP. json_format renders int64 as a
+        # string, and int() on "-4200" keeps the sign: never abs() or cast this
+        # unsigned, the direction of the imbalance is the whole signal.
+        if "iiqTotal" in ff:
+            cas["indicative_imbalance_quantity_total"] = int(ff["iiqTotal"])
+        if "iiqM" in ff:
+            cas["indicative_imbalance_quantity_market"] = int(ff["iiqM"])
+        if "casEligible" in ff:
+            cas["cas_eligible"] = bool(ff["casEligible"])
+
+        return cas
+
     def _extract_ltp_data(
         self, feed_data: dict[str, Any], base_data: dict[str, Any]
     ) -> dict[str, Any]:
@@ -579,6 +715,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "cp": float(ltpc.get("cp", 0)),
                 }
             )
+            # LTPC carries the wrapper-typed iep; the other CAS fields exist only
+            # on the full feed, so ltpc mode can gain this one and nothing else.
+            iep = self._read_optional_double(ltpc.get("iep"))
+            if iep is not None:
+                market_data["indicative_equilibrium_price"] = iep
 
         return market_data
 
@@ -623,6 +764,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
         )
 
+        # Additive CAS/pre-open extras — an empty merge outside an auction window.
+        market_data.update(self._extract_cas_fields(ff))
+
         return market_data
 
     def _extract_depth_data(self, feed_data: dict[str, Any], current_ts: int) -> dict[str, Any]:
@@ -658,9 +802,16 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         buy_levels.extend([{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(buy_levels)))
         sell_levels.extend([{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(sell_levels)))
 
-        return {
+        depth_data = {
             "buy": buy_levels[:5],
             "sell": sell_levels[:5],
             "timestamp": current_ts,
             "ltp": ltp,
         }
+
+        # Additive CAS/pre-open extras — an empty merge outside an auction window.
+        # They sit beside `depth` in the published payload, not inside it, since
+        # they describe the auction rather than a price level.
+        depth_data.update(self._extract_cas_fields(market_ff))
+
+        return depth_data
