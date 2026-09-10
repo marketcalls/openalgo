@@ -28,15 +28,26 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     - Compatible with eventlet/gunicorn deployments
     """
 
-    # Thread cleanup timeout
-    THREAD_JOIN_TIMEOUT = 5
-
+    # NOTE: there is deliberately no THREAD_JOIN_TIMEOUT here. Nothing in this
+    # package joins a thread — join() under eventlet becomes a green wait that
+    # raises Timeout (see UpstoxWebSocketClient.disconnect) — so a constant
+    # advertising a join bound the code does not implement was only misleading.
+    #
     # NOTE on Upstox V3 connection limits:
     #   Standard tier: 2 connections per user
     #   Plus tier:     5 connections per user
     # The pool size is driven by the MAX_WEBSOCKET_CONNECTIONS environment
-    # variable in .env (default 3) — set it to 2 if you are on Standard,
-    # or up to 5 on Plus. See upstox-api-docs/21a-websocket-market-data-v3.md.
+    # variable in .env — set it to 2 if you are on Standard, or up to 5 on Plus.
+    # Its generic default of 3 is ONE TOO MANY for a Standard account: the pool
+    # happily builds a 3rd adapter, Upstox refuses it, and nothing about that is
+    # obvious from this side (connect() returns success because the handshake runs
+    # in a background thread), so UpstoxWebSocketClient names the cause explicitly
+    # once a socket has failed to open several times in a row.
+    #
+    # The per-mode KEY caps from the same table live in UpstoxWebSocketClient
+    # (MODE_KEY_LIMITS / MODE_COMBINED_LIMITS) and are enforced there, because
+    # every subscribe — batched, replayed or direct — passes through its
+    # subscribe(). See upstox-api-docs/21a-websocket-market-data-v3.md.
 
     def __init__(self):
         super().__init__()
@@ -57,11 +68,20 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.batch_timer: threading.Timer | None = None
         self.batch_delay = 0.5  # seconds — long enough to absorb the WS handshake
 
+        # Bumped by every teardown and by the handshake replay. A Timer stamps
+        # the value it was armed with and refuses to act on a mismatch, which is
+        # the only way to stop one that fired before cancel() could reach it.
+        self._batch_generation = 0
+
         # Per-instrument LTPC cache. Upstox V3 sends incremental ticks where
         # `fullFeed.marketFF.ltpc` may be absent on packets that only update
         # `marketLevel`. We cache the last LTPC so quote/depth packets can
         # carry forward a non-zero LTP into validation downstream.
         self._last_ltpc: dict[str, dict[str, Any]] = {}
+
+        # One-shot flag so a deeper-than-5 depth request reports its downgrade once
+        # rather than on every symbol (see _get_upstox_mode for why it downgrades).
+        self._depth_downgrade_warned = False
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, Any] | None = None
@@ -73,15 +93,18 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not auth_token:
                 return self._create_error_response("AUTH_ERROR", "No authentication token found")
 
+            # initialize() is unconditional and callers do re-run it on an
+            # existing adapter (websocket_proxy/server.py re-initializes one that
+            # reported an error). Dropping the reference to a client whose
+            # _run_websocket loop is alive would orphan its socket and its thread
+            # permanently — the same unrecoverable leak connect() guards against,
+            # through a different door — so stop the old one before replacing it.
+            self._release_ws_client()
+
             # Pass user_id so the client can re-read a fresh bearer token from
             # the database on reconnect (tokens roll over daily at ~3 AM IST).
             self.ws_client = UpstoxWebSocketClient(auth_token, user_id=user_id)
-            self.ws_client.callbacks = {
-                "on_connect": self._on_connect,
-                "on_message": self._on_market_data,
-                "on_error": self._on_error,
-                "on_close": self._on_close,
-            }
+            self._wire_callbacks()
 
             self.logger.debug("UpstoxWebSocketClient initialized successfully")
             return self._create_success_response("Initialized Upstox WebSocket adapter")
@@ -100,6 +123,25 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return self._create_error_response(
                     "NOT_INITIALIZED", "WebSocket client not initialized"
                 )
+
+            # `self.connected` goes False the moment the socket drops and the
+            # client's backoff holds it there for up to 30s — the same window
+            # subscribe() documents below. Without this second test a caller
+            # landing in it starts a SECOND _run_websocket loop, which overwrites
+            # the client's `ws` slot and orphans the first socket and thread
+            # beyond any reach. The client refuses re-entry too; this keeps the
+            # adapter's own flags honest and reports the truth to the caller.
+            if self.ws_client.running:
+                self.running = True
+                return self._create_success_response("Connect already in progress")
+
+            # A previous disconnect() released the ZMQ publisher (see
+            # _ensure_zmq_publisher for why it has to). Restore it before the
+            # feed starts, otherwise this connect reports success, opens a real
+            # socket and burns an Upstox connection slot while every tick is
+            # dropped into a closed publisher.
+            self._ensure_zmq_publisher()
+            self._wire_callbacks()
 
             success = self.ws_client.connect()
 
@@ -126,12 +168,27 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "INVALID_MODE", f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)"
             )
 
-        if not self.connected:
-            return self._create_error_response("NOT_CONNECTED", "WebSocket is not connected")
-
         if not self.ws_client:
             return self._create_error_response(
                 "NOT_INITIALIZED", "WebSocket client not initialized"
+            )
+
+        # `self.connected` goes False the moment the socket drops, and the client's
+        # backoff can hold it there for up to 30s. Rejecting during that window
+        # would fail a subscribe that the existing replay machinery is already able
+        # to honour: the subscription is recorded, and _on_connect re-issues
+        # everything in self.subscriptions on the next handshake. So accept while
+        # the client is still running (connected or reconnecting) and only refuse
+        # once it has actually been stopped.
+        if not (self.connected or self.ws_client.running):
+            return self._create_error_response("NOT_CONNECTED", "WebSocket is not connected")
+
+        if mode == 3 and depth_level > 5 and not self._depth_downgrade_warned:
+            self._depth_downgrade_warned = True
+            self.logger.warning(
+                f"Depth {depth_level} requested; Upstox is served as 5-level `full` depth. "
+                f"Upstox's 30-level feed (`full_d30`) is Plus-only and capped at 50 keys "
+                f"per connection — see _get_upstox_mode."
             )
 
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
@@ -184,23 +241,45 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if self.batch_timer is not None:
                 self.batch_timer.cancel()
-            self.batch_timer = threading.Timer(
-                self.batch_delay, self._process_batch_subscriptions
+            timer = threading.Timer(
+                self.batch_delay,
+                self._process_batch_subscriptions,
+                args=(self._batch_generation,),
             )
-            self.batch_timer.daemon = True
-            self.batch_timer.start()
+            timer.daemon = True
+            self.batch_timer = timer
+            timer.start()
 
-    def _process_batch_subscriptions(self) -> None:
+    def _process_batch_subscriptions(self, generation: int | None = None) -> None:
         """Drain the subscription queue and send one bulk-subscribe per mode.
 
         Upstox V3's `instrumentKeys` field accepts an array, so N symbols of
         the same mode collapse to a single message. Modes 2 and 3 both map
         to Upstox's `full` feed, so they coalesce into the same message.
+
+        `generation` is the value `self._batch_generation` held when this timer
+        was armed; every teardown bumps it. cancel() cannot stop a Timer that
+        has already passed its cancel point, so the stamp is what keeps such a
+        timer from acting against a torn-down adapter. It is None when the body
+        is invoked directly rather than by a Timer, which always proceeds.
         """
         # Snapshot under lock — release before the WS send to avoid blocking
         # subsequent subscribe() calls during network I/O.
         with self.lock:
-            self.batch_timer = None
+            # Clear the handle only if it is OURS. Clearing it unconditionally
+            # let a timer that had passed its cancel point discard the handle to
+            # whatever _start_batch_timer armed in the meantime, leaving that
+            # newer timer invisible to every cancel path. A Timer IS its own
+            # thread, so identity against current_thread() is the whole test.
+            if self.batch_timer is threading.current_thread():
+                self.batch_timer = None
+
+            if generation is not None and generation != self._batch_generation:
+                # Teardown (or a handshake replay) happened between this timer
+                # firing and it reaching the lock. Whatever it was going to send
+                # has already been dealt with by whoever bumped the generation.
+                return
+
             queue = self.subscription_queue[:]
             self.subscription_queue.clear()
 
@@ -211,7 +290,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # replay every recorded subscription from self.subscriptions (which
         # already includes everything we just dequeued).
         if not (self.ws_client and getattr(self.ws_client, "_connected", False)):
-            self.logger.debug(
+            # INFO, not DEBUG: if the socket never opens (the classic case being a
+            # connection over the Upstox per-user limit), this line is the only
+            # trace that a "successfully queued" subscription was never sent.
+            self.logger.info(
                 f"Batch deferred: WS not connected yet. {len(queue)} subscription(s) "
                 f"will be sent from _on_connect."
             )
@@ -301,14 +383,27 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return info.get("status") if isinstance(info, dict) else None
 
     def disconnect(self) -> None:
-        """Disconnect from WebSocket and cleanup resources"""
+        """Stop streaming and release every OS resource this adapter owns.
+
+        The adapter stays REUSABLE: `ws_client` is kept and connect() will bring
+        the feed and the ZMQ publisher back. Only cleanup() drops the client.
+
+        This is the teardown path, not a half-measure. `.cleanup()` has no caller
+        anywhere in the repository outside each broker's own destructor, and the
+        destructor cannot run while the socket thread is alive because that
+        thread reaches back to the adapter through the client's callbacks — so
+        anything left for cleanup() to release would simply never be released.
+        Everything that costs a descriptor is therefore released here.
+        """
         try:
             self.running = False
             self.connected = False
 
             # Cancel any pending batch-subscribe timer so it doesn't fire
-            # against a half-torn-down adapter.
+            # against a half-torn-down adapter, and bump the generation so one
+            # that already slipped past its cancel point refuses to act.
             with self.lock:
+                self._batch_generation += 1
                 if self.batch_timer is not None:
                     self.batch_timer.cancel()
                     self.batch_timer = None
@@ -334,43 +429,93 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.connected = False
 
     def cleanup(self) -> None:
-        """Clean up all resources"""
+        """Full teardown: stop streaming, then drop the client itself.
+
+        A strict superset of disconnect(). The client reference is the only
+        thing left for it to release, and a disconnected client holds no socket
+        and no thread — which is what makes it safe that no caller invokes this.
+        """
         try:
-            if self.ws_client:
-                try:
-                    self.ws_client.disconnect()
-                except Exception as ws_err:
-                    self.logger.error(f"Error stopping WebSocket client during cleanup: {ws_err}")
-                finally:
-                    self.ws_client = None
-
-            with self.lock:
-                self.running = False
-                self.connected = False
-                self.subscriptions.clear()
-                self.subscription_queue.clear()
-                self._last_ltpc.clear()
-                if self.batch_timer is not None:
-                    self.batch_timer.cancel()
-                    self.batch_timer = None
-
-            self.cleanup_zmq()
-            self.logger.info("Upstox adapter cleaned up completely")
-
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
+            self.disconnect()
+        finally:
+            self._release_ws_client()
+            # Idempotent; only does anything if disconnect() failed before
+            # reaching it.
             try:
                 self.cleanup_zmq()
             except Exception as zmq_err:
                 self.logger.error(f"Error cleaning up ZMQ during final cleanup attempt: {zmq_err}")
+            self.logger.info("Upstox adapter cleaned up completely")
 
-    def __del__(self):
-        try:
-            self.cleanup()
-        except Exception:
-            pass
+    # NOTE: no __del__ here on purpose. The base class already releases ZMQ from
+    # its destructor, and an Upstox-specific one only added a garbage-collection-
+    # time ws_client.disconnect() on an arbitrary thread — measured unreachable
+    # in exactly the case it existed for (the socket thread holds a reference to
+    # the adapter through the callbacks, so the adapter cannot be collected while
+    # that thread lives). Teardown is deterministic: disconnect().
 
     # Private helper methods
+    def _wire_callbacks(self) -> None:
+        """Point the client's callbacks at this adapter."""
+        if not self.ws_client:
+            return
+        self.ws_client.callbacks = {
+            "on_connect": self._on_connect,
+            "on_message": self._on_market_data,
+            "on_error": self._on_error,
+            "on_close": self._on_close,
+        }
+
+    def _release_ws_client(self) -> None:
+        """Stop the current client, sever its callbacks and drop the reference.
+
+        Severing matters as much as stopping: the callbacks are the edges that
+        keep a replaced client able to write `connected = False` into an adapter
+        that has since built a new one, and they are the reference cycle
+        (adapter -> client -> bound method -> adapter) that keeps a dropped
+        adapter alive until a gc pass.
+        """
+        client = self.ws_client
+        if client is None:
+            return
+        self.ws_client = None
+        try:
+            client.disconnect()
+        except Exception as e:
+            self.logger.warning(f"Error stopping previous WebSocket client: {e}")
+        finally:
+            client.callbacks = dict.fromkeys(client.callbacks, None)
+
+    def _ensure_zmq_publisher(self) -> None:
+        """Re-create the ZMQ PUB socket if a previous disconnect() released it.
+
+        disconnect() has to release it: nothing outside this package ever calls
+        cleanup(), so leaving the release to cleanup()/__del__ would swap a
+        dropped-tick bug for a ZMQ leak. Making the release reversible is the
+        other half. Without this, a reconnected adapter returns success, opens a
+        real socket, starts a real thread and holds one of the 2-or-5 Upstox
+        per-user connection slots while every tick lands in a closed publisher
+        and is logged away as "No ZMQ socket available for publishing".
+        """
+        if not getattr(self, "_zmq_cleaned_up", False):
+            return
+
+        # A pooled adapter publishes through the shared publisher, which
+        # cleanup_zmq() deliberately leaves open — it only gave back the
+        # instance count — so there is no socket to rebuild, just bookkeeping.
+        if not getattr(self, "_uses_shared_zmq", False):
+            self._initialize_shared_context()
+            self.socket = self._create_socket()
+            self.zmq_port = self._connect_to_zmq_bus()
+
+        # Symmetric with the decrement cleanup_zmq() performed; without it the
+        # count drifts down and a later cleanup could term() the shared context
+        # out from under this socket.
+        with self._context_lock:
+            BaseBrokerWebSocketAdapter._instance_count += 1
+        self._zmq_cleaned_up = False
+        self.logger.info("ZMQ publisher re-established for adapter reuse")
+
     def _get_auth_token(self, auth_data: dict[str, Any] | None, user_id: str) -> str | None:
         """Get authentication token from auth_data or database"""
         if auth_data and "auth_token" in auth_data:
@@ -386,7 +531,23 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return f"{brexchange}|{token}"
 
     def _get_upstox_mode(self, mode: int, depth_level: int) -> str:
-        """Convert internal mode to Upstox mode string"""
+        """Convert internal mode to Upstox mode string.
+
+        `depth_level` is deliberately NOT mapped onto Upstox's `full_d30`, and this
+        is the mapping to get right before touching any cap:
+
+        - OpenAlgo mode 3 (depth) maps to `full`, whose cap is 2000 keys. Capping
+          depth subscriptions at `full_d30`'s 50 keys because "depth means d30"
+          would throttle every depth feed to 1/40th of what Upstox allows.
+        - `full_d30` is Plus-only, so emitting it for a Standard account would turn
+          a working 5-level depth feed into a rejected subscription.
+        - `_extract_depth_data` publishes 5 levels regardless, so `full_d30` would
+          buy 30 levels of bandwidth and throw 25 of them away.
+
+        A request for more than 5 levels is therefore served as 5 (reported once by
+        subscribe()). If full_d30 is ever wired up, the client's MODE_KEY_LIMITS
+        already carries its 50-key cap and enforcement follows automatically.
+        """
         mode_map = {1: "ltpc", 2: "full", 3: "full"}
         return mode_map.get(mode, "ltpc")
 
@@ -412,13 +573,14 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # and merge with the persistent record; on reconnect, queue is empty
         # but self.subscriptions still has every active subscription.
         with self.lock:
+            self._batch_generation += 1
             if self.batch_timer is not None:
                 self.batch_timer.cancel()
                 self.batch_timer = None
             self.subscription_queue.clear()
             all_subs = list(self.subscriptions.values())
 
-        if not all_subs:
+        if not all_subs or not self.ws_client:
             return
 
         keys_by_mode: dict[str, list[str]] = {}
