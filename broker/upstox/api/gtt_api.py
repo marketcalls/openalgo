@@ -34,6 +34,7 @@
 
 import json
 
+from broker.upstox.api.rate_limiter import apply_rate_limit
 from broker.upstox.mapping.gtt_data import (
     map_gtt_book,
     transform_modify_gtt,
@@ -48,6 +49,14 @@ logger = get_logger(__name__)
 # Same host the rest of broker/upstox/api uses (order_api.get_api_response).
 _BASE = "https://api.upstox.com"
 _GTT_BASE = f"{_BASE}/v3/order/gtt"
+
+# Every request in this file draws on the ORDER budget, not the standard one:
+# 04-rate-limits.md scopes the order table to "Place, Modify, Cancel, Multi
+# Order, and GTT Order endpoints", and names no separate allowance for reading
+# the GTT book, so the book read is charged there too rather than assumed free.
+# 8/sec, 475/min, 1900/30min shared with place/modify/cancel in order_api.py --
+# see broker/upstox/api/rate_limiter.py.
+_RATE_LIMIT_CATEGORY = "order"
 
 
 class _FakeResponse:
@@ -188,6 +197,7 @@ def place_gtt_order(data, auth):
     payload = json.dumps(transform_place_gtt(data))
     logger.info(f"Upstox place_gtt payload: {payload}")
 
+    apply_rate_limit(_RATE_LIMIT_CATEGORY)
     client = get_httpx_client()
     response = client.post(f"{_GTT_BASE}/place", headers=_headers(auth), content=payload)
     response.status = response.status_code  # parity with other order APIs
@@ -231,6 +241,7 @@ def modify_gtt_order(data, auth):
     payload = json.dumps(transform_modify_gtt(data))
     logger.info(f"Upstox modify_gtt payload ({trigger_id}): {payload}")
 
+    apply_rate_limit(_RATE_LIMIT_CATEGORY)
     client = get_httpx_client()
     response = client.put(f"{_GTT_BASE}/modify", headers=_headers(auth), content=payload)
     logger.info(f"Upstox modify_gtt raw: status={response.status_code}, body={response.text}")
@@ -265,6 +276,7 @@ def cancel_gtt_order(trigger_id, auth):
     payload = json.dumps({"gtt_order_id": str(trigger_id)})
     logger.info(f"Upstox cancel_gtt payload: {payload}")
 
+    apply_rate_limit(_RATE_LIMIT_CATEGORY)
     client = get_httpx_client()
     response = client.request(
         "DELETE", f"{_GTT_BASE}/cancel", headers=_headers(auth), content=payload
@@ -298,6 +310,7 @@ def get_gtt_book(auth, include_history=False):
     OpenAlgo-normalised GTT objects (see :func:`map_gtt_book`), already
     filtered to triggers that can still fire.
     """
+    apply_rate_limit(_RATE_LIMIT_CATEGORY)
     client = get_httpx_client()
     response = client.get(_GTT_BASE, headers=_headers(auth))
     logger.info(f"Upstox gtt_book raw: status={response.status_code}, body={response.text}")

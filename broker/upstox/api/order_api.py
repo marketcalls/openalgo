@@ -1,10 +1,16 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.upstox.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from broker.upstox.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -24,8 +30,40 @@ UPSTOX_BASE_URL = "https://api.upstox.com"
 # positions, holdings) has no v3 equivalent and stays on UPSTOX_BASE_URL.
 UPSTOX_HFT_BASE_URL = "https://api-hft.upstox.com"
 
+# Order-mutating path fragments. Upstox's rate-limit table (04-rate-limits.md)
+# scopes the tighter order budget to Place, Modify, Cancel and Multi Order; the
+# order book, trade book, positions and holdings reads below are Standard APIs
+# even though they live in this file, and must not be charged to the order
+# bucket or a squareoff would be queued behind the polling the UI does anyway.
+_ORDER_PATH_FRAGMENTS = (
+    "/order/place",
+    "/order/modify",
+    "/order/cancel",
+    "/order/multi",
+    "/order/exit",
+    "/order/gtt",
+)
 
-def get_api_response(endpoint, auth, method="GET", payload="", base_url=UPSTOX_BASE_URL):
+
+def _rate_limit_category(endpoint, base_url):
+    """Which of Upstox's two published budgets this request draws on.
+
+    Order place/modify/cancel are the only endpoints served from the api-hft
+    host, so the host alone answers it today; the path check is kept so a v2
+    order endpoint added later is categorised correctly rather than silently
+    charged to the standard budget.
+    """
+    if base_url == UPSTOX_HFT_BASE_URL:
+        return "order"
+    lowered = (endpoint or "").lower()
+    if any(fragment in lowered for fragment in _ORDER_PATH_FRAGMENTS):
+        return "order"
+    return "standard"
+
+
+def get_api_response(
+    endpoint, auth, method="GET", payload="", base_url=UPSTOX_BASE_URL, retry_count=0
+):
     """
     A wrapper to send requests to the Upstox API and handle responses.
     Args:
@@ -34,10 +72,13 @@ def get_api_response(endpoint, auth, method="GET", payload="", base_url=UPSTOX_B
         method (str): The HTTP method (GET, POST, PUT, DELETE).
         payload (str): The JSON payload for POST and PUT requests.
         base_url (str): The API host, only overridden for the v3 api-hft endpoints.
+        retry_count (int): Internal; how many 429 retries have already been spent.
     Returns:
         dict: The JSON response from the API, or an error dictionary.
     """
     logger.debug(f"Requesting {method} on endpoint: {endpoint}")
+    category = _rate_limit_category(endpoint, base_url)
+    apply_rate_limit(category)
     try:
         api_key = os.getenv("BROKER_API_KEY")
         if not api_key:
@@ -71,6 +112,26 @@ def get_api_response(endpoint, auth, method="GET", payload="", base_url=UPSTOX_B
 
     except httpx.HTTPStatusError as e:
         error_response = e.response.text
+        # Reactive rate-limit handling. Only the read endpoints retry: this
+        # function also carries order modify and cancel, and a 429 cannot be
+        # distinguished from a response lost after Upstox accepted the request,
+        # so a mutation surfaces the error and lets the caller decide. The
+        # proactive pacer is what is meant to keep mutations out of this branch.
+        if is_rate_limited(e.response.status_code):
+            if category == "standard" and retry_count < MAX_RETRIES:
+                delay = retry_delay_from_headers(e.response.headers, retry_count)
+                logger.warning(
+                    f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
+                    f"(attempt {retry_count + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(delay)
+                return get_api_response(
+                    endpoint, auth, method, payload, base_url, retry_count + 1
+                )
+            logger.warning(
+                f"Upstox rate limit hit on {endpoint} (category={category}); not retrying"
+            )
+
         logger.exception(f"HTTP error on {endpoint}: {error_response}")
         try:
             return e.response.json()
@@ -278,6 +339,13 @@ def place_order_api(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        # Order budget: 10/sec, 500/min, 2000/30min, five times tighter than
+        # the standard one. close_all_positions() loops straight through here,
+        # one call per open position, so this is the pacer that matters most.
+        # No 429 retry: a rejected place is indistinguishable from a response
+        # lost after Upstox accepted it, and a duplicate order is far worse
+        # than a failed one.
+        apply_rate_limit("order")
         response = client.post(
             f"{UPSTOX_HFT_BASE_URL}/v3/order/place", headers=headers, content=payload
         )

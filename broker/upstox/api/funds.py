@@ -6,6 +6,7 @@ import os
 import httpx
 
 from broker.upstox.api.order_api import get_positions
+from broker.upstox.api.rate_limiter import apply_rate_limit
 from broker.upstox.mapping.order_data import map_order_data
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -39,6 +40,11 @@ def get_margin_data(auth_token):
         url = "https://api.upstox.com/v3/user/get-funds-and-margin"
         logger.debug(f"Requesting funds and margin data from {url}")
 
+        # Funds is a Standard API (04-rate-limits.md lists it alongside
+        # holdings/positions), so it shares the standard budget with data.py
+        # and the order-book reads rather than getting an unpaced pass. The
+        # get_positions() call further down paces itself through order_api.
+        apply_rate_limit("standard")
         response = client.get(url, headers=headers)
         response.raise_for_status()
 

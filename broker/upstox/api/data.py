@@ -8,6 +8,12 @@ import httpx
 import numpy as np
 import pandas as pd
 
+from broker.upstox.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -18,9 +24,16 @@ logger = get_logger(__name__)
 FULL_QUOTE_BATCH_SIZE = 500
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
-    """Common function to make API calls to Upstox v3 using httpx with connection pooling"""
+def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
+    """Common function to make API calls to Upstox v3 using httpx with connection pooling
+
+    Every call here is a Standard API (quotes, historical candles, depth), so it
+    draws on the standard budget -- see broker/upstox/api/rate_limiter.py.
+    """
     AUTH_TOKEN = auth
+
+    # Pace against the shared, process-wide standard budget before the request.
+    apply_rate_limit("standard")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -43,7 +56,30 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     # Add status attribute for compatibility with existing code that expects http.client response
     response.status = response.status_code
 
-    return response.json()
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+
+    # Reactive handling: the proactive pacer is an estimate, Upstox's clock is
+    # the truth. These are all read-only endpoints, so retrying is safe.
+    if is_rate_limited(response.status_code, body):
+        if retry_count < MAX_RETRIES:
+            delay = retry_delay_from_headers(response.headers, retry_count)
+            logger.warning(
+                f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
+                f"(attempt {retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+        logger.warning(
+            f"Upstox rate limit still hit after {MAX_RETRIES} retries on {endpoint}; giving up"
+        )
+
+    if body is None:
+        # Preserve the previous behaviour of raising on an unparseable body.
+        return response.json()
+    return body
 
 
 class BrokerData:
@@ -253,8 +289,14 @@ class BrokerData:
         Fetch LTP for a single GLOBAL_INDICATOR instrument via /v2/market-quote/ltp.
         Upstox does not expose OHLC/depth/OI for indicators, so the returned
         quote has only ltp populated; all other fields are 0.
+
+        This builds its own request rather than going through get_api_response
+        (it is v2, not v3), so it has to pace itself -- the standard budget is
+        shared, and an indicator loop that skipped it would spend quota the
+        rest of this file thinks it still has.
         """
         encoded = urllib.parse.quote(instrument_key)
+        apply_rate_limit("standard")
         client = get_httpx_client()
         headers = {
             "Authorization": f"Bearer {self.auth_token}",
@@ -303,7 +345,15 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = FULL_QUOTE_BATCH_SIZE  # Upstox API limit per request
-            RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 500 symbols/sec
+
+            # There used to be a local RATE_LIMIT_DELAY = 1.0 slept between
+            # batches here. It is gone: every request each batch issues now
+            # goes through the shared standard-budget limiter in
+            # broker/upstox/api/rate_limiter.py, which knows what the rest of
+            # the process has already spent. Two uncoordinated pacers is worse
+            # than one -- the flat 1s gap both throttled batches to a fifth of
+            # Upstox's documented 50/sec and did nothing about the concurrent
+            # order-book, funds and history calls sharing the same budget.
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -320,10 +370,6 @@ class BrokerData:
                     # Process this batch
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
