@@ -445,9 +445,16 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.batch_timer = None
             self.subscription_queue.clear()
 
-            if self.ws_client:
-                self.ws_client.stop()
-                self.ws_client = None
+            ws_client = self.ws_client
+            self.ws_client = None
+
+        # stop() closes the socket and joins the websocket-client reader thread,
+        # and that thread runs our _on_close, which takes self.lock. Calling it
+        # while holding the lock deadlocks the two until stop()'s join expires,
+        # so every teardown paid THREAD_JOIN_TIMEOUT and logged "WebSocket thread
+        # did not terminate within timeout" (issue #1965).
+        if ws_client:
+            ws_client.stop()
 
         # Clean up market data cache (outside lock - has its own lock)
         self.market_cache.clear()
@@ -914,7 +921,14 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
-        """Attempt to reconnect to WebSocket"""
+        """Attempt to reconnect to WebSocket.
+
+        Only the bookkeeping runs under self.lock. Stopping the old client joins
+        the reader thread that runs our _on_close, and connecting the new one
+        makes that thread run our _on_open -> _resubscribe_all(); both take
+        self.lock, so doing either while holding it stalls the reconnect until a
+        join times out instead of proceeding (issue #1965).
+        """
         # Use lock to prevent race with disconnect()
         with self.lock:
             # Clear timer reference since we're now executing
@@ -927,48 +941,60 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             self.reconnect_attempts += 1
 
+            # CRITICAL: Clean up old WebSocket client to prevent FD leaks. Detach
+            # it here so nothing else can reach a client that is about to close.
+            old_client = self.ws_client
+            self.ws_client = None
+
+        if old_client:
+            self.logger.debug("Cleaning up old WebSocket client before reconnection")
             try:
-                # CRITICAL: Clean up old WebSocket client to prevent FD leaks
-                if self.ws_client:
-                    self.logger.debug("Cleaning up old WebSocket client before reconnection")
-                    try:
-                        self.ws_client.stop()
-                    except Exception as cleanup_err:
-                        self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
-                    self.ws_client = None
+                old_client.stop()
+            except Exception as cleanup_err:
+                self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
 
-                # Re-read fresh auth token from database before reconnecting.
-                # Flattrade tokens roll over daily at ~3 AM IST; reusing the
-                # construction-time token would reconnect with a dead token.
-                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
-                if fresh_token:
-                    self.accesstoken = fresh_token
-                else:
-                    self.logger.warning(
-                        "Could not fetch fresh auth token on reconnect; using existing token"
-                    )
-
-                # Recreate WebSocket client
-                self.ws_client = FlattradeWebSocket(
-                    user_id=self.actid,
-                    actid=self.actid,
-                    accesstoken=self.accesstoken,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open,
+        try:
+            # Re-read fresh auth token from database before reconnecting.
+            # Flattrade tokens roll over daily at ~3 AM IST; reusing the
+            # construction-time token would reconnect with a dead token.
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if fresh_token:
+                self.accesstoken = fresh_token
+            else:
+                self.logger.warning(
+                    "Could not fetch fresh auth token on reconnect; using existing token"
                 )
 
-                if self.ws_client.connect():
-                    self.connected = True
-                    self.reconnect_attempts = 0
-                    self.auth_refresh_retries = 0
-                    self.logger.info("Reconnected successfully")
-                else:
-                    self.logger.error("Reconnection failed")
+            # Recreate WebSocket client
+            ws_client = FlattradeWebSocket(
+                user_id=self.actid,
+                actid=self.actid,
+                accesstoken=self.accesstoken,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open,
+            )
 
-            except Exception as e:
-                self.logger.error(f"Reconnection error: {e}")
+            with self.lock:
+                # disconnect() may have run while the old client was closing.
+                if not self.running:
+                    self.logger.debug("Reconnection cancelled - adapter no longer running")
+                    return
+                # Publish before connecting: _on_open fires on the reader thread
+                # and _resubscribe_all() sends through self.ws_client.
+                self.ws_client = ws_client
+
+            if ws_client.connect():
+                self.connected = True
+                self.reconnect_attempts = 0
+                self.auth_refresh_retries = 0
+                self.logger.info("Reconnected successfully")
+            else:
+                self.logger.error("Reconnection failed")
+
+        except Exception as e:
+            self.logger.error(f"Reconnection error: {e}")
 
     def _resubscribe_all(self):
         """Resubscribe to all active subscriptions after reconnect"""
