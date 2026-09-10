@@ -104,8 +104,13 @@ class FlattradeWebSocket:
         self.on_close = on_close
         self.on_open = on_open
 
-        # Heartbeat management
+        # Heartbeat management. _heartbeat_stop is replaced with a FRESH Event
+        # for every connection rather than cleared and reused: a worker left over
+        # from a previous socket keeps a reference to its own event, so it can
+        # never be re-armed (and kept alive) by the next connect. See
+        # _stop_heartbeat/_heartbeat_worker.
         self._heartbeat_thread = None
+        self._heartbeat_stop = threading.Event()
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
 
@@ -195,6 +200,10 @@ class FlattradeWebSocket:
         self.running = False
         self.connected = False
         self._stop_event.set()
+        # Wake the heartbeat worker up front: _close_websocket() below makes the
+        # reader thread run _on_close -> _stop_heartbeat, and that must not have
+        # to wait out an interval-long sleep while stop() joins the reader.
+        self._heartbeat_stop.set()
 
         self._close_websocket()
         self._wait_for_thread_completion()
@@ -467,32 +476,63 @@ class FlattradeWebSocket:
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             return
 
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+        stop_event = threading.Event()
+        self._heartbeat_stop = stop_event
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_worker, args=(stop_event,), daemon=True
+        )
         self._heartbeat_thread.start()
         self.logger.debug("Heartbeat thread started")
 
     def _stop_heartbeat(self) -> None:
-        """Stop heartbeat monitoring thread and wait for it to terminate"""
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+        """Stop heartbeat monitoring thread and wait for it to terminate.
+
+        The worker sleeps on its own stop Event, so SETTING IT FIRST is what
+        makes the join below return at once. Clearing self.connected is not
+        enough - the worker only re-reads it after its sleep - so a close used
+        to block the websocket-client reader thread here for the full
+        HEARTBEAT_JOIN_TIMEOUT, log "Heartbeat thread did not terminate within
+        timeout", and still leave the worker running (issue #1965). That delay
+        landed in front of _call_external_callback(on_close), i.e. in front of
+        the adapter's reconnect scheduling, so it was pure added feed downtime.
+        """
+        # Set before the is_alive() check: even a worker that is between
+        # iterations must see this and exit rather than start another sleep.
+        self._heartbeat_stop.set()
+
+        thread = self._heartbeat_thread
+        if thread and thread.is_alive():
+            if thread is threading.current_thread():
+                # _check_connection_health() closes the socket from inside the
+                # worker, which can route back here on the same thread. Joining
+                # self would raise RuntimeError; the event above already tells
+                # the loop to stop.
+                self._heartbeat_thread = None
+                return
+
             self.logger.debug("Waiting for heartbeat thread to stop")
-            # Thread checks self.running and self.connected, which should be False now
-            self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
-            if self._heartbeat_thread.is_alive():
+            thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
                 # Safe to clear the reference even if the join timed out: the
-                # thread is daemon=True so it cannot block process exit, and
-                # _start_heartbeat() overwrites this attribute with a brand-new
-                # thread object on the next connect regardless. With the
-                # _stop_event fix below, the join should reliably complete
-                # near-instantly in practice anyway.
+                # thread is daemon=True so it cannot block process exit, it is
+                # bound to the stop Event that was just set (so it exits as soon
+                # as it is scheduled), and _start_heartbeat() installs a
+                # brand-new thread object on the next connect regardless.
         # Clear reference unconditionally - see comment above
         self._heartbeat_thread = None
 
-    def _heartbeat_worker(self) -> None:
-        """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
-        while self.running and self.connected:
+    def _heartbeat_worker(self, stop_event: threading.Event) -> None:
+        """Heartbeat worker thread - sends periodic heartbeats and monitors connection.
+
+        Sleeps on the Event it was STARTED with, not on self._heartbeat_stop:
+        that attribute is rebound on every connect, so reading it here would let
+        a leftover worker from the previous socket be re-armed by the new
+        connection and go on heartbeating a dead session forever.
+        """
+        while self.running and self.connected and not stop_event.is_set():
             try:
-                if self._stop_event.wait(self.HEARTBEAT_INTERVAL):
+                if stop_event.wait(self.HEARTBEAT_INTERVAL) or self._stop_event.is_set():
                     break
 
                 if self.running and self.connected:

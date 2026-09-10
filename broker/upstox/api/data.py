@@ -8,16 +8,32 @@ import httpx
 import numpy as np
 import pandas as pd
 
+from broker.upstox.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# /v3/market-quote/quotes accepts at most 500 instrument keys per call (UDAPI100042)
+FULL_QUOTE_BATCH_SIZE = 500
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
-    """Common function to make API calls to Upstox v3 using httpx with connection pooling"""
+
+def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
+    """Common function to make API calls to Upstox v3 using httpx with connection pooling
+
+    Every call here is a Standard API (quotes, historical candles, depth), so it
+    draws on the standard budget -- see broker/upstox/api/rate_limiter.py.
+    """
     AUTH_TOKEN = auth
+
+    # Pace against the shared, process-wide standard budget before the request.
+    apply_rate_limit("standard")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -40,7 +56,30 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     # Add status attribute for compatibility with existing code that expects http.client response
     response.status = response.status_code
 
-    return response.json()
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+
+    # Reactive handling: the proactive pacer is an estimate, Upstox's clock is
+    # the truth. These are all read-only endpoints, so retrying is safe.
+    if is_rate_limited(response.status_code, body):
+        if retry_count < MAX_RETRIES:
+            delay = retry_delay_from_headers(response.headers, retry_count)
+            logger.warning(
+                f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
+                f"(attempt {retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+        logger.warning(
+            f"Upstox rate limit still hit after {MAX_RETRIES} retries on {endpoint}; giving up"
+        )
+
+    if body is None:
+        # Preserve the previous behaviour of raising on an unparseable body.
+        return response.json()
+    return body
 
 
 class BrokerData:
@@ -160,14 +199,15 @@ class BrokerData:
             encoded_symbol = urllib.parse.quote(instrument_key)
 
             # GLOBAL_INDICATOR feeds (USDINR, BRENTOIL, WTIOIL) are LTP-only on
-            # Upstox — /v3/market-quote/ohlc and /v2/market-quote/quotes both
+            # Upstox — the OHLC and full-quote endpoints (v2 and v3 alike) all
             # return UDAPI100500 for them. Short-circuit to /v2/market-quote/ltp
             # and return a quote dict with only ltp populated.
             if instrument_key.startswith("GLOBAL_INDICATOR|"):
                 return self._get_indicator_ltp(instrument_key)
 
-            # Use v3 OHLC endpoint
-            url = f"/market-quote/ohlc?instrument_key={encoded_symbol}&interval=1d"
+            # Full Market Quotes V3 returns OHLC, depth, OI and prev_close_price in a
+            # single call, so the old v3-OHLC + v2-quotes pair is no longer needed.
+            url = f"/market-quote/quotes?instrument_key={encoded_symbol}"
             response = get_api_response(url, self.auth_token)
 
             if response.get("status") != "success":
@@ -186,11 +226,12 @@ class BrokerData:
 
             # Get quote data for the symbol
             quote_data = response.get("data", {})
-            logger.debug(f"V3 OHLC raw response data: {quote_data}")
+            logger.debug(f"V3 full quote raw response data: {quote_data}")
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
 
-            # Find the quote data - v3 OHLC uses the original instrument key format
+            # Find the quote data - v3 keys the dict by "<EXCHANGE>:<TRADING_SYMBOL>",
+            # so match on the inner instrument_token rather than the outer key
             quote = None
             for key, value in quote_data.items():
                 logger.debug(
@@ -204,87 +245,58 @@ class BrokerData:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
 
             logger.debug(f"Quote data found: {quote}")
-
-            # Extract OHLC data from v3 response
-            live_ohlc = quote.get("live_ohlc", {})
-            prev_ohlc = quote.get("prev_ohlc", {})
-            logger.info(f"live_ohlc: {live_ohlc}, prev_ohlc: {prev_ohlc}")
-
-            # Handle None values
-            if live_ohlc is None:
-                live_ohlc = {}
-            if prev_ohlc is None:
-                prev_ohlc = {}
-
-            # Try to get bid/ask, OI and prev_close from v2 quotes endpoint
-            bid_price = 0
-            ask_price = 0
-            oi_value = 0
-            prev_close_v2 = 0
-            try:
-                # Use v2 quotes endpoint for bid/ask, OI and prev_close data
-                v2_url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
-                client = get_httpx_client()
-                headers = {
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "Accept": "application/json",
-                }
-                full_url = f"https://api.upstox.com{v2_url}"
-                v2_response = client.get(full_url, headers=headers)
-                v2_data = v2_response.json()
-                logger.debug(f"V2 quotes response: {v2_data}")
-
-                if v2_data.get("status") == "success":
-                    v2_quote_data = v2_data.get("data", {})
-                    for key, value in v2_quote_data.items():
-                        if value.get("instrument_token") == instrument_key:
-                            depth = value.get("depth", {})
-                            if depth:
-                                best_bid = depth.get("buy", [{}])[0] if depth.get("buy") else {}
-                                best_ask = depth.get("sell", [{}])[0] if depth.get("sell") else {}
-                                bid_price = best_bid.get("price", 0)
-                                ask_price = best_ask.get("price", 0)
-                            oi_value = value.get("oi", 0)
-                            # Get prev_close from v2 ohlc.close (previous day's close)
-                            ohlc = value.get("ohlc", {})
-                            if ohlc:
-                                prev_close_v2 = ohlc.get("close", 0)
-                                logger.info(f"Got prev_close from v2 ohlc: {prev_close_v2}")
-                            break
-            except Exception as e:
-                logger.debug(f"Could not get bid/ask/OI/prev_close from v2 endpoint: {e}")
-
-            # Return standard quote data format using live_ohlc for current data
-            # Use prev_close from v2 ohlc.close, fallback to v3 prev_ohlc.close
-            prev_close_final = (
-                prev_close_v2
-                if prev_close_v2
-                else (prev_ohlc.get("close", 0) if prev_ohlc.get("close") else 0)
+            logger.info(
+                f"ohlc: {quote.get('ohlc')}, prev_close_price: {quote.get('prev_close_price')}"
             )
 
-            return {
-                "ask": float(ask_price) if ask_price else 0,
-                "bid": float(bid_price) if bid_price else 0,
-                "high": float(live_ohlc.get("high", 0)) if live_ohlc.get("high") else 0,
-                "low": float(live_ohlc.get("low", 0)) if live_ohlc.get("low") else 0,
-                "ltp": float(quote.get("last_price", 0)) if quote.get("last_price") else 0,
-                "open": float(live_ohlc.get("open", 0)) if live_ohlc.get("open") else 0,
-                "prev_close": float(prev_close_final) if prev_close_final else 0,
-                "volume": int(live_ohlc.get("volume", 0)) if live_ohlc.get("volume") else 0,
-                "oi": int(oi_value) if oi_value else 0,
-            }
+            return self._quote_from_full_v3(quote)
 
         except Exception:
             logger.exception(f"Error fetching quotes for {symbol} on {exchange}")
             raise
+
+    def _quote_from_full_v3(self, quote: dict) -> dict:
+        """
+        Map one /v3/market-quote/quotes entry onto OpenAlgo's standard quote dict.
+        Shared by get_quotes() and _process_quotes_batch() so a symbol reports the
+        same values — prev_close above all — whichever path it is fetched through.
+        """
+        ohlc = quote.get("ohlc") or {}
+        depth = quote.get("depth") or {}
+
+        best_bid = depth.get("buy", [{}])[0] if depth.get("buy") else {}
+        best_ask = depth.get("sell", [{}])[0] if depth.get("sell") else {}
+
+        # v3 states the previous session's close explicitly as prev_close_price, so
+        # nothing has to be inferred from a live ohlc.close or a prev_ohlc fallback.
+        prev_close = quote.get("prev_close_price", 0)
+
+        return {
+            "ask": float(best_ask.get("price", 0)) if best_ask.get("price") else 0,
+            "bid": float(best_bid.get("price", 0)) if best_bid.get("price") else 0,
+            "high": float(ohlc.get("high", 0)) if ohlc.get("high") else 0,
+            "low": float(ohlc.get("low", 0)) if ohlc.get("low") else 0,
+            "ltp": float(quote.get("last_price", 0)) if quote.get("last_price") else 0,
+            "open": float(ohlc.get("open", 0)) if ohlc.get("open") else 0,
+            "prev_close": float(prev_close) if prev_close else 0,
+            # top-level volume is the day's traded volume; ohlc.volume is only the candle's
+            "volume": int(quote.get("volume", 0)) if quote.get("volume") else 0,
+            "oi": int(quote.get("oi", 0)) if quote.get("oi") else 0,
+        }
 
     def _get_indicator_ltp(self, instrument_key: str) -> dict:
         """
         Fetch LTP for a single GLOBAL_INDICATOR instrument via /v2/market-quote/ltp.
         Upstox does not expose OHLC/depth/OI for indicators, so the returned
         quote has only ltp populated; all other fields are 0.
+
+        This builds its own request rather than going through get_api_response
+        (it is v2, not v3), so it has to pace itself -- the standard budget is
+        shared, and an indicator loop that skipped it would spend quota the
+        rest of this file thinks it still has.
         """
         encoded = urllib.parse.quote(instrument_key)
+        apply_rate_limit("standard")
         client = get_httpx_client()
         headers = {
             "Authorization": f"Bearer {self.auth_token}",
@@ -332,8 +344,16 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 500  # Upstox API limit per request
-            RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 500 symbols/sec
+            BATCH_SIZE = FULL_QUOTE_BATCH_SIZE  # Upstox API limit per request
+
+            # There used to be a local RATE_LIMIT_DELAY = 1.0 slept between
+            # batches here. It is gone: every request each batch issues now
+            # goes through the shared standard-budget limiter in
+            # broker/upstox/api/rate_limiter.py, which knows what the rest of
+            # the process has already spent. Two uncoordinated pacers is worse
+            # than one -- the flat 1s gap both throttled batches to a fifth of
+            # Upstox's documented 50/sec and did nothing about the concurrent
+            # order-book, funds and history calls sharing the same budget.
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -350,10 +370,6 @@ class BrokerData:
                     # Process this batch
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -436,10 +452,6 @@ class BrokerData:
         if not instrument_keys:
             return skipped_symbols + indicator_results
 
-        # Build comma-separated instrument keys and URL encode
-        keys_param = ",".join(instrument_keys)
-        encoded_keys = urllib.parse.quote(keys_param)
-
         logger.info(f"Requesting quotes for {len(instrument_keys)} instruments")
         logger.debug(
             f"Instrument keys: {instrument_keys[:5]}..."
@@ -447,45 +459,33 @@ class BrokerData:
             else f"Instrument keys: {instrument_keys}"
         )
 
-        # Use v3 OHLC endpoint for multiple instruments
-        url = f"/market-quote/ohlc?instrument_key={encoded_keys}&interval=1d"
-        response = get_api_response(url, self.auth_token)
+        # Full Market Quotes V3 caps a request at 500 instrument keys. get_multiquotes()
+        # already batches to that size, but chunk here too so a direct caller cannot
+        # trip UDAPI100042. Lookup is keyed by instrument_token because v3's outer keys
+        # are "<EXCHANGE>:<TRADING_SYMBOL>".
+        quotes_by_key = {}
+        for offset in range(0, len(instrument_keys), FULL_QUOTE_BATCH_SIZE):
+            chunk = instrument_keys[offset : offset + FULL_QUOTE_BATCH_SIZE]
+            encoded_keys = urllib.parse.quote(",".join(chunk))
 
-        if response.get("status") != "success":
-            error_msg = response.get("message", "Unknown error")
-            if "errors" in response and response["errors"]:
-                error = response["errors"][0]
-                error_msg = error.get("message", error_msg)
-            logger.error(f"API Error: {error_msg}")
-            raise Exception(f"API Error: {error_msg}")
+            url = f"/market-quote/quotes?instrument_key={encoded_keys}"
+            response = get_api_response(url, self.auth_token)
 
-        # Also fetch v2 quotes for bid/ask/OI data (and prev_close — see below)
-        v2_quotes = {}
-        try:
-            client = get_httpx_client()
-            headers = {"Authorization": f"Bearer {self.auth_token}", "Accept": "application/json"}
-            v2_url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={encoded_keys}"
-            v2_response = client.get(v2_url, headers=headers)
-            v2_data = v2_response.json()
+            if response.get("status") != "success":
+                error_msg = response.get("message", "Unknown error")
+                if "errors" in response and response["errors"]:
+                    error = response["errors"][0]
+                    error_msg = error.get("message", error_msg)
+                logger.error(f"API Error: {error_msg}")
+                raise Exception(f"API Error: {error_msg}")
 
-            if v2_data.get("status") == "success":
-                for key, value in v2_data.get("data", {}).items():
-                    inst_key = value.get("instrument_token")
-                    if inst_key:
-                        v2_quotes[inst_key] = value
-        except Exception as e:
-            logger.debug(f"Could not get v2 quotes data: {e}")
+            for value in (response.get("data") or {}).values():
+                inst_key = value.get("instrument_token")
+                if inst_key:
+                    quotes_by_key[inst_key] = value
 
         # Parse response and build results
         results = []
-        quote_data = response.get("data", {})
-
-        # Build lookup by instrument_token
-        quotes_by_key = {}
-        for key, value in quote_data.items():
-            inst_key = value.get("instrument_token")
-            if inst_key:
-                quotes_by_key[inst_key] = value
 
         # Build results from key_map
         for instrument_key, original in key_map.items():
@@ -502,39 +502,12 @@ class BrokerData:
                 )
                 continue
 
-            # Extract OHLC data from v3 response
-            live_ohlc = quote.get("live_ohlc") or {}
-            prev_ohlc = quote.get("prev_ohlc") or {}
-
-            # Get bid/ask/OI from v2 data if available
-            v2_quote = v2_quotes.get(instrument_key, {})
-            depth = v2_quote.get("depth", {})
-            best_bid = depth.get("buy", [{}])[0] if depth.get("buy") else {}
-            best_ask = depth.get("sell", [{}])[0] if depth.get("sell") else {}
-
-            # prev_close: v3's batch OHLC endpoint often returns an EMPTY prev_ohlc
-            # (unlike the single-symbol get_quotes() path above, which is why single
-            # quotes work but multiquotes came back with prev_close=0 for every
-            # symbol — breaking any %-change screener/ticker). Mirror get_quotes()'s
-            # fallback: prefer v2's ohlc.close, fall back to v3's prev_ohlc.close.
-            v2_ohlc = v2_quote.get("ohlc", {}) or {}
-            prev_close_v2 = v2_ohlc.get("close", 0)
-            prev_close_final = prev_close_v2 or prev_ohlc.get("close", 0)
-
+            # Same mapper as get_quotes(), so prev_close cannot diverge between the
+            # single-quote and multiquote paths again
             result_item = {
                 "symbol": original["symbol"],
                 "exchange": original["exchange"],
-                "data": {
-                    "ask": float(best_ask.get("price", 0)) if best_ask.get("price") else 0,
-                    "bid": float(best_bid.get("price", 0)) if best_bid.get("price") else 0,
-                    "high": float(live_ohlc.get("high", 0)) if live_ohlc.get("high") else 0,
-                    "low": float(live_ohlc.get("low", 0)) if live_ohlc.get("low") else 0,
-                    "ltp": float(quote.get("last_price", 0)) if quote.get("last_price") else 0,
-                    "open": float(live_ohlc.get("open", 0)) if live_ohlc.get("open") else 0,
-                    "prev_close": float(prev_close_final) if prev_close_final else 0,
-                    "volume": int(live_ohlc.get("volume", 0)) if live_ohlc.get("volume") else 0,
-                    "oi": int(v2_quote.get("oi", 0)) if v2_quote.get("oi") else 0,
-                },
+                "data": self._quote_from_full_v3(quote),
             }
             results.append(result_item)
 
@@ -1047,14 +1020,10 @@ class BrokerData:
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
 
-            # Use v2 quotes endpoint for depth data (v3 OHLC doesn't provide depth)
-            url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
-            # For depth, we still need to use v2 endpoint directly
-            client = get_httpx_client()
-            headers = {"Authorization": f"Bearer {self.auth_token}", "Accept": "application/json"}
-            full_url = f"https://api.upstox.com{url}"
-            response = client.get(full_url, headers=headers)
-            response = response.json()
+            # Full Market Quotes V3 carries depth, live OHLC, OI and prev_close_price
+            # together, so depth no longer needs the v2 quotes + v3 OHLC pair
+            url = f"/market-quote/quotes?instrument_key={encoded_symbol}"
+            response = get_api_response(url, self.auth_token)
 
             if response.get("status") != "success":
                 error_msg = response.get("message", "Unknown error")
@@ -1072,7 +1041,8 @@ class BrokerData:
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
 
-            # Find the quote data - Upstox uses exchange:symbol format for the key
+            # Find the quote data - v3 keys the dict by exchange:symbol, so match on
+            # the inner instrument_token
             quote = None
             for key, value in quote_data.items():
                 if value.get("instrument_token") == instrument_key:
@@ -1082,40 +1052,9 @@ class BrokerData:
             if not quote:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
 
-            # Get depth data from v2 response
+            # Get depth and live-session OHLC from the same v3 payload
             depth = quote.get("depth", {})
-
-            # Also try to get enhanced OHLC data from v3 API
-            ohlc_data = {}
-            try:
-                # Use v3 OHLC endpoint for better OHLC data
-                v3_url = f"/market-quote/ohlc?instrument_key={encoded_symbol}&interval=1d"
-                v3_response = get_api_response(v3_url, self.auth_token)
-
-                if v3_response.get("status") == "success":
-                    v3_quote_data = v3_response.get("data", {})
-                    for key, value in v3_quote_data.items():
-                        if value.get("instrument_token") == instrument_key:
-                            live_ohlc = value.get("live_ohlc", {})
-                            prev_ohlc = value.get("prev_ohlc", {})
-
-                            # Handle None values
-                            if live_ohlc is None:
-                                live_ohlc = {}
-                            if prev_ohlc is None:
-                                prev_ohlc = {}
-
-                            ohlc_data = {
-                                "high": live_ohlc.get("high", 0),
-                                "low": live_ohlc.get("low", 0),
-                                "open": live_ohlc.get("open", 0),
-                                "prev_close": prev_ohlc.get("close", 0),
-                                "volume": live_ohlc.get("volume", 0),
-                                "ltp": value.get("last_price", 0),
-                            }
-                            break
-            except Exception as e:
-                logger.debug(f"Could not get v3 OHLC data: {e}")
+            ohlc = quote.get("ohlc") or {}
 
             # Return standard depth data format
             return {
@@ -1127,16 +1066,22 @@ class BrokerData:
                     {"price": order.get("price", 0), "quantity": order.get("quantity", 0)}
                     for order in depth.get("buy", [])
                 ],
-                "high": ohlc_data.get("high", quote.get("ohlc", {}).get("high", 0)),
-                "low": ohlc_data.get("low", quote.get("ohlc", {}).get("low", 0)),
-                "ltp": ohlc_data.get("ltp", quote.get("last_price", 0)),
+                "high": ohlc.get("high", 0),
+                "low": ohlc.get("low", 0),
+                "ltp": quote.get("last_price", 0),
+                # last_quantity is documented by neither the v2 nor the v3 full-quote
+                # schema, so this has always been a best-effort read that falls back to
+                # 0. Kept as-is by the v3 migration rather than dropped, in case Upstox
+                # returns it undocumented.
                 "ltq": quote.get("last_quantity", 0),
                 "oi": quote.get("oi", 0),
-                "open": ohlc_data.get("open", quote.get("ohlc", {}).get("open", 0)),
-                "prev_close": ohlc_data.get("prev_close", quote.get("ohlc", {}).get("close", 0)),
+                "open": ohlc.get("open", 0),
+                # prev_close_price is the previous session's close; v3's ohlc.close is
+                # the live session's, so it must not be used here
+                "prev_close": quote.get("prev_close_price", 0),
                 "totalbuyqty": quote.get("total_buy_quantity", 0),
                 "totalsellqty": quote.get("total_sell_quantity", 0),
-                "volume": ohlc_data.get("volume", quote.get("volume", 0)),
+                "volume": quote.get("volume", 0),
             }
 
         except Exception:
