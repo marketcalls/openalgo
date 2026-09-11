@@ -20,6 +20,7 @@ const PANELS = [
   // so it is last rather than wedged between two that are.
   { id: 'watchlist', label: 'Watchlist', icon: List },
   { id: 'options', label: 'Option chain', icon: Table2 },
+  { id: 'objects', label: 'Objects', text: true },
   { id: 'agent', label: 'Assistant', icon: Bot },
 ] as const
 
@@ -69,7 +70,9 @@ export function RightRail({ active, onSelect }: Props) {
 
   return (
     <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 no-scrollbar overflow-y-auto border-l bg-background/40 py-1">
-      {PANELS.map(({ id, label, icon: Icon }) => {
+      {PANELS.map((panel) => {
+        const { id, label } = panel
+        const Icon = 'icon' in panel ? panel.icon : null
         const isOpen = active === id
         return (
           <div key={id} className="group relative">
@@ -82,14 +85,28 @@ export function RightRail({ active, onSelect }: Props) {
               // only way back to a full-width chart, so the button that opened
               // a panel has to be the button that puts it away.
               onClick={() => onSelect(isOpen ? null : id)}
-              className={cn(RAIL_BTN, isOpen && RAIL_BTN_ON)}
+              className={cn(
+                RAIL_BTN,
+                'text-[11px]',
+                Icon === null && 'h-[68px]',
+                isOpen && RAIL_BTN_ON
+              )}
               aria-label={label}
               aria-expanded={isOpen}
               // Only while the panel exists. Pointing aria-controls at an id
               // that is not in the document is worse than omitting it.
               aria-controls={isOpen ? `oa-panel-${id}` : undefined}
             >
-              <Icon className="h-[18px] w-[18px]" strokeWidth={RAIL_ICON_STROKE} />
+              {Icon ? (
+                <Icon className="h-[18px] w-[18px]" strokeWidth={RAIL_ICON_STROKE} />
+              ) : (
+                <span
+                  className="leading-none tracking-wide"
+                  style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                >
+                  {label}
+                </span>
+              )}
             </button>
             {/* Opens left: this rail is against the viewport edge, so a tip
                 opening right would be clipped. */}

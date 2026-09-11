@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { CandleBuilder } from 'openalgo-charts'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { priceDp } from './format'
 import {
@@ -26,7 +26,10 @@ import {
   orderUnits,
   productOptionsFor,
   resolveTick,
+  sameIndicatorRecords,
+  sameIndicatorInstances,
   type SymbolView,
+  TradingTerminal,
   usesLots,
 } from './terminal'
 
@@ -230,6 +233,148 @@ describe('dedupeIndicators', () => {
 
   it('leaves an empty list alone', () => {
     expect(dedupeIndicators([])).toEqual([])
+  })
+
+  it('preserves the optional visibility carried by a saved instance', () => {
+    const hidden = { ...ema(20), visible: false }
+    expect(dedupeIndicators([hidden])).toEqual([hidden])
+  })
+})
+
+describe('sameIndicatorRecords', () => {
+  it('ignores object notifications that did not change indicator persistence', () => {
+    const saved = [{ indicatorId: 'ema', settings: { period: 20 }, visible: true }]
+    expect(sameIndicatorRecords(saved, [{ ...saved[0], settings: { period: 20 } }])).toBe(true)
+  })
+
+  it('detects visibility and settings changes', () => {
+    const saved = [{ indicatorId: 'ema', settings: { period: 20 }, visible: true }]
+    expect(sameIndicatorRecords(saved, [{ ...saved[0], visible: false }])).toBe(false)
+    expect(sameIndicatorRecords(saved, [{ ...saved[0], settings: { period: 50 } }])).toBe(false)
+  })
+})
+
+describe('sameIndicatorInstances', () => {
+  it('detects a rebuilt instance even when its descriptor and settings are unchanged', () => {
+    expect(
+      sameIndicatorInstances(
+        [{ id: 'ema-1', name: 'EMA' }],
+        [{ id: 'ema-2', name: 'EMA' }]
+      )
+    ).toBe(false)
+  })
+
+  it('ignores unrelated object notifications for the same live instances', () => {
+    const current = [{ id: 'ema-2', name: 'EMA' }]
+    expect(sameIndicatorInstances(current, current.map((item) => ({ ...item })))).toBe(true)
+  })
+})
+
+describe('chart object lifecycle', () => {
+  const methods = TradingTerminal.prototype as unknown as {
+    applyIndicators(this: unknown): Promise<void>
+    syncIndicators(this: unknown): void
+    destroy(this: unknown): void
+  }
+
+  it('restores saved visibility and treats a legacy record as visible', async () => {
+    const visibilities: boolean[] = []
+    const addIndicator = vi.fn((_id: string, _settings: Record<string, unknown>) => ({
+      setVisible: (visible: boolean) => visibilities.push(visible),
+    }))
+    const syncIndicators = vi.fn()
+    const terminal = Object.assign(Object.create(TradingTerminal.prototype), {
+      chart: { addIndicator },
+      destroyed: false,
+      activeIndicators: [
+        { indicatorId: 'ema', settings: { period: 9 }, visible: false },
+        { indicatorId: 'sma', settings: { period: 20 } },
+      ],
+      restoringIndicatorsOn: null,
+      applyingIndicators: false,
+      loadIndicators: vi.fn().mockResolvedValue(undefined),
+      syncIndicators,
+    })
+
+    await methods.applyIndicators.call(terminal)
+
+    expect(addIndicator.mock.calls.map(([id]) => id)).toEqual(['ema', 'sma'])
+    expect(visibilities).toEqual([false, true])
+    expect(syncIndicators).toHaveBeenCalledOnce()
+    expect(terminal.restoringIndicatorsOn).toBeNull()
+  })
+
+  it('disposes inventory observation before drawing and chart teardown', () => {
+    const order: string[] = []
+    const terminal = Object.assign(Object.create(TradingTerminal.prototype), {
+      destroyed: false,
+      onVisibilityChange: () => {},
+      offData: null,
+      data: null,
+      objects: { destroy: () => order.push('objects') },
+      cb: { onObjectsChange: () => {} },
+      offProfileObject: null,
+      detachDrawing: () => order.push('drawing'),
+      bookTimer: null,
+      stopLtpFallback: () => {},
+      offLtp: null,
+      offDepth: null,
+      offWsState: null,
+      offWsControl: null,
+      offOrderUpdate: null,
+      offReplayPointer: null,
+      offLegendActions: null,
+      ws: null,
+      stopReplay: () => {},
+      profileLayer: null,
+      chart: { destroy: () => order.push('chart') },
+      screenshotExcluded: [],
+    })
+
+    methods.destroy.call(terminal)
+
+    expect(order).toEqual(['objects', 'drawing', 'chart'])
+    expect(terminal.objects).toBeNull()
+    expect(terminal.chart).toBeNull()
+  })
+
+  it('clears a rejected lazy-load guard so a later sync persists live state', async () => {
+    const persisted = vi.fn()
+    const indicator = {
+      id: 'ema-next',
+      indicatorId: 'ema',
+      name: 'EMA',
+      settings: () => ({ period: 9 }),
+      visible: () => false,
+    }
+    const chart = { indicators: () => [indicator] }
+    const terminal = Object.assign(Object.create(TradingTerminal.prototype), {
+      chart,
+      destroyed: false,
+      activeIndicators: [],
+      announcedIndicators: [{ id: indicator.id, name: indicator.name }],
+      restoringIndicatorsOn: null,
+      applyingIndicators: false,
+      loadIndicators: vi.fn().mockRejectedValue(new Error('chunk failed')),
+      cleanError: () => 'chunk failed',
+      toast: vi.fn(),
+      lsSet: persisted,
+    })
+
+    await methods.applyIndicators.call(terminal)
+
+    expect(terminal.restoringIndicatorsOn).toBeNull()
+    expect(terminal.toast).toHaveBeenCalledWith('Indicators could not be restored: chunk failed', 'err')
+
+    methods.syncIndicators.call(terminal)
+
+    expect(persisted).toHaveBeenCalledWith(
+      'indicators',
+      JSON.stringify([{ indicatorId: 'ema', settings: { period: 9 }, visible: false }])
+    )
+    expect(terminal.activeIndicators).toEqual([
+      { indicatorId: 'ema', settings: { period: 9 }, visible: false },
+    ])
   })
 })
 

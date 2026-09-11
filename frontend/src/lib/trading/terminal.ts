@@ -13,11 +13,12 @@
  * cancel, real-time order stream, REST fallback) is unchanged.
  */
 
-import type { LinkGroup } from 'openalgo-charts'
+import type { ChartObjectSnapshot, LinkGroup } from 'openalgo-charts'
 import {
   type Bar,
   BuySellButtons,
   CandleBuilder,
+  ChartObjects,
   type ChartTheme,
   compactVolume,
   createChart,
@@ -111,6 +112,7 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
+import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import {
   buildChartTheme,
   isLightTheme,
@@ -261,6 +263,10 @@ export interface TerminalCallbacks {
    * canvas-only and ships no DOM, so the form is ours to render.
    */
   onIndicatorSettings?(req: IndicatorSettingsRequest): void
+  /** The current chart generation's shared object inventory. */
+  onObjectsChange?(objects: ChartObjects | null): void
+  /** Opens this pane's existing chart settings dialog. */
+  onChartSettings?(req: ChartSettingsRequest): void
   /** A drawing was selected (or deselected), for the style popover. */
   onDrawSelect?(sel: DrawSelection | null): void
   /**
@@ -478,6 +484,28 @@ export function dedupeIndicators<T extends { indicatorId: string; settings: unkn
     return true
   })
 }
+
+export interface SavedIndicatorRecord {
+  indicatorId: string
+  settings: Record<string, unknown>
+  /** Missing in saves written before visibility persistence. */
+  visible?: boolean
+}
+
+/** Avoid storage and React work for generic object events that changed no indicator. */
+export function sameIndicatorRecords(
+  left: readonly SavedIndicatorRecord[],
+  right: readonly SavedIndicatorRecord[]
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+export function sameIndicatorInstances(
+  left: readonly { id: string; name: string }[],
+  right: readonly { id: string; name: string }[]
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
 const STRATEGY = 'chart-trading'
 /**
  * Minimum gap between two armed fires, the scalping terminal's figure. A
@@ -589,6 +617,9 @@ export class TradingTerminal {
      interval / chart-type / theme change, so both round-trip through plain
      data here and are re-applied to the new chart. */
   private draw: DrawingControllerInstance | null = null
+  private readonly objectDrawings = new CurrentDrawingSource()
+  private objects: ChartObjects | null = null
+  private offProfileObject: (() => void) | null = null
   private drawJson: DrawingsDocument = emptyDrawings()
   /**
    * A 1.9.x save (a bare array) waiting for the draw tier to migrate it. The
@@ -603,10 +634,14 @@ export class TradingTerminal {
   private drawStay = false
   /** True once a drawing control has been touched — gates the lazy tier fetch. */
   private drawEnabled = false
-  private activeIndicators: { indicatorId: string; settings: Record<string, unknown> }[] = []
+  private activeIndicators: SavedIndicatorRecord[] = []
   private indicatorsLoaded = false
   /** Guards syncIndicators while applyIndicators is mid-flight. */
   private applyingIndicators = false
+  /** The generation whose saved instances are still crossing an async tier load. */
+  private restoringIndicatorsOn: ChartInstance | null = null
+  /** Last live instance identities sent to the pane toolbar. */
+  private announcedIndicators: { id: string; name: string }[] = []
   /** History paging: in-flight guard, and whether the broker ran out. */
   private loadingOlder: { chart: ReturnType<typeof createChart>; ticket: number } | null = null
   private noMoreHistory = false
@@ -1386,6 +1421,8 @@ export class TradingTerminal {
   }
 
   private installProfile(): void {
+    this.offProfileObject?.()
+    this.offProfileObject = null
     this.profileLayer?.dispose()
     this.profileLayer = null
     const chart = this.chart
@@ -1416,10 +1453,58 @@ export class TradingTerminal {
         this.toast(`Profile could not be rendered: ${this.cleanError(error)}`, 'err'),
       onWarning: (message) => this.toast(message, ''),
     })
+    this.offProfileObject =
+      this.objects?.register(profileObjectProvider(kind, () => this.requestChartSettings())) ?? null
+  }
+
+  /** Open the pane-owned chart dialog from the canvas or object inventory. */
+  private requestChartSettings(): void {
+    void this.chartSettings().then((request) => {
+      if (request) this.cb.onChartSettings?.(request)
+    })
+  }
+
+  /** Reuse the existing pane editors for every built-in object settings action. */
+  private openObjectSettings(object: ChartObjectSnapshot): void {
+    if (object.kind === 'source') {
+      this.requestChartSettings()
+      return
+    }
+    if (object.kind === 'indicator') {
+      this.openIndicatorSettings(object.sourceId)
+      return
+    }
+    if (object.kind === 'drawing') {
+      this.objects?.select(object.id)
+      if (this.isTextDrawing(object.sourceId)) this.requestDrawTextEdit(object.sourceId)
+    }
+  }
+
+  /** Install one inventory for exactly one chart generation. */
+  private installObjects(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    const objects = new ChartObjects(chart, {
+      drawings: this.objectDrawings,
+      onSettings: (object) => this.openObjectSettings(object),
+    })
+    this.objects = objects
+    this.cb.onObjectsChange?.(objects)
+  }
+
+  /** Release inventory observations before any object or chart it reads. */
+  private detachObjects(): void {
+    const objects = this.objects
+    this.objects = null
+    this.cb.onObjectsChange?.(null)
+    this.offProfileObject?.()
+    this.offProfileObject = null
+    objects?.destroy()
   }
 
   private buildChart() {
     this.stopReplay()
+    this.detachObjects()
     this.profileLayer?.dispose()
     this.profileLayer = null
     // Snapshot drawings before the chart they live on goes away.
@@ -1480,6 +1565,11 @@ export class TradingTerminal {
       // to start under both or they land on top of the buttons.
       legendOffset: { top: 80 },
     })
+    this.chart.setDataContext(
+      this.sym
+        ? { symbol: this.sym.symbol, exchange: this.sym.exchange, interval: this.interval }
+        : { interval: this.interval }
+    )
     const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
     const dp = this.dp()
     const light = isLightTheme(mode, appMode)
@@ -1512,6 +1602,7 @@ export class TradingTerminal {
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
     if (!this.volumeOn || isProfileKind(this.ctype)) this.volume.applyOptions({ visible: false })
+    this.installObjects()
     // Same reasoning for the settings patch: a chart-type or theme switch
     // rebuilds the chart, and without this the user's colours, timezone and
     // scale options would silently revert to the engine defaults.
@@ -1699,6 +1790,9 @@ export class TradingTerminal {
     // list still held it — so the next rebuild (timeframe, chart type, theme)
     // brought the deleted indicator back.
     this.chart.on('indicatorRemoved', () => this.syncIndicators())
+    // Visibility changes made from the Objects panel stay with the pane on a
+    // chart rebuild, just like settings and removal from the canvas legend.
+    this.chart.on('objects:change', () => this.syncIndicators())
     this.chart.on('paneRemoved', () => this.placeWatermark())
     // Scrolling back past the loaded range pages in older bars.
     this.chart.setHistoryLoader(() => void this.loadOlderHistory())
@@ -1867,12 +1961,14 @@ export class TradingTerminal {
    */
   private detachDrawing(): void {
     if (!this.draw) return
+    const draw = this.draw
     try {
-      this.drawJson = this.draw.toJSON()
-      this.draw.destroy()
+      this.drawJson = draw.toJSON()
+      draw.destroy()
     } catch {
       /* chart already gone; keep the last snapshot we have */
     }
+    this.objectDrawings.detach(draw)
     this.draw = null
   }
 
@@ -1898,6 +1994,7 @@ export class TradingTerminal {
       stayInDrawingMode: this.drawStay,
     })
     this.draw = draw
+    this.objectDrawings.attach(draw)
     this.drawShortcuts = drawingShortcuts()
     this.matchShortcut = matchDrawingShortcut
     this.keyAction = keyToDrawingAction
@@ -1940,6 +2037,7 @@ export class TradingTerminal {
       if (this.editSelectedText()) (p as { handled?: boolean }).handled = true
     })
     this.chart.on('draw:update', () => this.afterDrawChange())
+    this.objects?.refresh()
   }
 
   private afterDrawChange(): void {
@@ -2403,23 +2501,35 @@ export class TradingTerminal {
     // would add this run's indicators to a chart another run has already
     // populated, duplicating every one of them.
     const chart = this.chart
-    await this.loadIndicators()
-    if (this.destroyed || !this.chart || this.chart !== chart) return
-    // Re-adding walks the tracked list, so a sync mid-loop would read a
-    // half-applied chart and truncate it.
-    this.applyingIndicators = true
+    if (!chart) return
+    this.restoringIndicatorsOn = chart
     try {
-      // syncIndicators writes the result back, so a layout that already
-      // carries duplicates heals on the next load.
-      for (const rec of dedupeIndicators(this.activeIndicators)) {
-        try {
-          this.chart.addIndicator(rec.indicatorId, rec.settings)
-        } catch {
-          /* an id that is no longer registered — skip rather than break the chart */
+      await this.loadIndicators()
+      if (this.destroyed || !this.chart || this.chart !== chart) return
+      // Re-adding walks the tracked list, so a sync mid-loop would read a
+      // half-applied chart and truncate it.
+      this.applyingIndicators = true
+      try {
+        // syncIndicators writes the result back, so a layout that already
+        // carries duplicates heals on the next load.
+        for (const rec of dedupeIndicators(this.activeIndicators)) {
+          try {
+            const inst = this.chart.addIndicator(rec.indicatorId, rec.settings)
+            inst.setVisible(rec.visible !== false)
+          } catch {
+            /* an id that is no longer registered — skip rather than break the chart */
+          }
         }
+      } finally {
+        this.applyingIndicators = false
       }
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart) {
+        this.toast(`Indicators could not be restored: ${this.cleanError(error)}`, 'err')
+      }
+      return
     } finally {
-      this.applyingIndicators = false
+      if (this.restoringIndicatorsOn === chart) this.restoringIndicatorsOn = null
     }
     this.syncIndicators()
   }
@@ -2670,14 +2780,22 @@ export class TradingTerminal {
   }
 
   private syncIndicators(): void {
-    if (!this.chart || this.applyingIndicators) return
-    this.placeWatermark()
-    this.activeIndicators = this.chart.indicators().map((i) => ({
+    if (!this.chart || this.applyingIndicators || this.restoringIndicatorsOn === this.chart) return
+    const next = this.chart.indicators().map((i) => ({
       indicatorId: i.indicatorId,
       settings: { ...i.settings() },
+      visible: i.visible(),
     }))
-    this.lsSet('indicators', JSON.stringify(this.activeIndicators))
-    this.cb.onIndicatorsChange?.(this.listIndicators())
+    if (!sameIndicatorRecords(this.activeIndicators, next)) {
+      this.activeIndicators = next
+      this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+    }
+    const announced = this.listIndicators().map(({ id, name }) => ({ id, name }))
+    if (!sameIndicatorInstances(this.announcedIndicators, announced)) {
+      this.announcedIndicators = announced
+      this.placeWatermark()
+      this.cb.onIndicatorsChange?.(announced)
+    }
   }
 
   async addIndicatorById(indicatorId: string): Promise<void> {
@@ -4052,6 +4170,7 @@ export class TradingTerminal {
     this.offData = null
     this.data?.destroy()
     this.data = null
+    this.detachObjects()
     this.detachDrawing()
     if (this.bookTimer) clearInterval(this.bookTimer)
     this.bookTimer = null

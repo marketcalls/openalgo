@@ -59,6 +59,12 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.1.7: hidden indicators remain hidden through layout restoration and style
+  edits.** Reference levels now follow the instance's visibility along with its
+  plots and other visuals. The new `ChartObjects` inventory also exposes an
+  indicator's visibility and Tier-2 data status to host and widget object
+  panels, but it does not change the descriptor contract or add work to a
+  custom indicator.
 - **2.1.6: Tier-2 studies follow the chart's data context and loaded source
   range.** `createTier2Indicator` receives `dataContext` with the host's symbol,
   exchange and interval, cancels obsolete fetches, extends history when older

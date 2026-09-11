@@ -33,11 +33,21 @@ describe('RightRail', () => {
     expect(screen.getByRole('button', { name: 'Option chain' })).toBeInTheDocument()
   })
 
+  it('opens Objects from a visible text label', async () => {
+    const onSelect = rail()
+    const button = screen.getByRole('button', { name: 'Objects' })
+    expect(button).toHaveTextContent('Objects')
+
+    await userEvent.click(button)
+    expect(onSelect).toHaveBeenCalledWith('objects')
+  })
+
   it('recognises only the panels the rail actually renders', () => {
     // Storage outlives a release. A remembered name that no longer resolves
     // has to read as "no panel", not as one.
     expect(isPanelId('agent')).toBe(true)
     expect(isPanelId('watchlist')).toBe(true)
+    expect(isPanelId('objects')).toBe(true)
     expect(isPanelId('depth')).toBe(false)
     expect(isPanelId(null)).toBe(false)
   })

@@ -3,7 +3,7 @@
 // weight when the whole row opens menus, and it reads as a dated form
 // control. Reserve the glyph for where it distinguishes something.
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
-import type { LinkGroup } from 'openalgo-charts'
+import type { ChartObjects, LinkGroup } from 'openalgo-charts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -241,6 +241,8 @@ interface Props {
    * and whose rows charted nothing, on a page that looks perfectly ready.
    */
   onTerminalChange?(paneId: string, terminal: TradingTerminal | null): void
+  /** Reports the current chart generation's object inventory. */
+  onObjectsChange?(paneId: string, objects: ChartObjects | null): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
@@ -280,6 +282,7 @@ export function ChartPane({
   onFocusPane,
   onSymbolChange,
   onTerminalChange,
+  onObjectsChange,
   onDrawStats,
   linkGroup,
   armed = false,
@@ -306,6 +309,8 @@ export function ChartPane({
   symbolCbRef.current = onSymbolChange
   const terminalCbRef = useRef(onTerminalChange)
   terminalCbRef.current = onTerminalChange
+  const objectsCbRef = useRef(onObjectsChange)
+  objectsCbRef.current = onObjectsChange
   // The flag as it stands when the terminal boots; the effect below tracks it
   // from then on. Read through a ref so the boot effect does not re-run and
   // rebuild the terminal on every toggle.
@@ -432,6 +437,8 @@ export function ChartPane({
       },
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
+      onChartSettings: (req) => aliveRef.current && setChartSettings(req),
+      onObjectsChange: (objects) => objectsCbRef.current?.(paneId, objects),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
       // The legend readout is a second switch for the same thing as the context
       // menu row, so the menu label has to follow it.
@@ -627,12 +634,25 @@ export function ChartPane({
     : ''
 
   const chartTypeDef = CHART_TYPES[chartType] ?? CHART_TYPES.candlestick
+  // The three chart-owned settings editors are deliberately lightweight host
+  // overlays rather than Radix dialogs. Publish their presence on the pane so
+  // the page-level Escape handler can dismiss only the top surface.
+  const paneDialogOpen =
+    searchOpen ||
+    pickerOpen ||
+    chartSettings !== null ||
+    indSettings !== null ||
+    textReq !== null ||
+    ticket !== null ||
+    confirmLeave
 
   return (
     <section
       ref={paneRef}
+      data-trading-dialog-open={paneDialogOpen ? 'true' : undefined}
       style={style}
       className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+      onPointerDownCapture={() => onFocusPane?.(terminalRef.current, paneId)}
     >
       {/* Per-pane control row. One line: the row scrolls rather than wrapping,
           so the view actions stay beside the instrument controls instead of
@@ -959,12 +979,7 @@ export function ChartPane({
             <span className="text-[10px] text-muted-foreground">{lotInfoText(sym, qty)}</span>
           )}
         </div>
-        <div
-          ref={chartRef}
-          className="absolute inset-0"
-          onContextMenuCapture={onContextMenu}
-          onPointerDownCapture={() => onFocusPane?.(terminalRef.current, paneId)}
-        />
+        <div ref={chartRef} className="absolute inset-0" onContextMenuCapture={onContextMenu} />
 
         {!ready && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">

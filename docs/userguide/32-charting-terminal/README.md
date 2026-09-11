@@ -26,8 +26,8 @@ says so and links to `/apikey`.
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera |
 | Left rail | Drawing tools in eight groups, magnet, keep-armed lock, undo, redo, delete |
 | Centre | One to eight chart panes in a grid |
-| Right panel | Watchlist, option chain, or the chart assistant |
-| Right rail | The three buttons that open those panels |
+| Right panel | Watchlist, option chain, Objects, or the chart assistant |
+| Right rail | The four controls that open those panels |
 | Bottom dock | Orders, positions, trades and GTT across every symbol |
 
 The chart grid takes whatever the rails and panels leave. Only the right panel
@@ -155,6 +155,27 @@ Select a drawing to get a floating bar with colour, width, dash, lock, delete
 and, on text tools, an editor. Double-click a text drawing to reopen its editor.
 
 Drawings are saved per pane and survive a reload.
+
+## Objects Panel
+
+The text-labelled **Objects** control on the right rail opens an inventory for
+the active chart pane. Click anywhere in a pane, including its toolbar, to make
+that pane the panel's target. The panel lists the protected price source,
+indicator instances, drawings and an active session profile. Search filters the
+list by object name, kind or source id.
+
+Each row offers only actions that object supports. Indicators can be selected,
+shown or hidden, configured and removed. Drawings can also be locked and focused;
+focusing moves future or off-screen anchors into view. Drawing changes use the
+same undo history and per-pane save as edits on the canvas. Profile rows open the
+existing chart settings form. The primary price source can be configured but
+cannot be hidden, locked or removed.
+
+The panel follows selection and direct changes made on the canvas. Indicator
+visibility is remembered with its settings; older saved panes open their
+indicators as visible. Removing an external-data indicator also releases its
+data requests and empty indicator pane. Object actions do not place, modify or
+cancel orders, and replay keeps every existing order restriction in force.
 
 ## Keyboard Shortcuts
 
