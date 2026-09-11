@@ -10,8 +10,12 @@ fix, live in [docs/releases](releases/).
 
 ### Changed
 
-- Updated `/trading` to OpenAlgo Charts 2.1.4. Mouse and pen plot drags pan
-  time and price by default. Horizontal-only panning remains optional and
+- Updated `/trading` to OpenAlgo Charts 2.1.5. Drawings extend into empty chart
+  space: a trend line, rectangle or freehand stroke that reaches past the latest
+  candle or before the first loaded bar keeps its preview and commits where it
+  was drawn, instead of disappearing mid-gesture. Magnet snapping still requires
+  an actual candle, and saved drawings load unchanged. Mouse and pen plot drags
+  pan time and price by default. Horizontal-only panning remains optional and
   preserves price autoscale; existing saved preferences stay intact. Dragging
   the time axis left expands candle spacing and dragging right compresses it.
   The bottom controls include Reset view, and Axes settings retain the default
