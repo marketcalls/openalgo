@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "2.0.2.3"
+version = "2.0.2.4"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -80,7 +80,7 @@ dependencies = [
   "nbformat==5.11.1",
   "nest-asyncio==1.6.0",
   "numpy==2.4.4",
-  "openalgo==2.0.4",
+  "openalgo==2.0.5",
   "ordered-set==4.1.0",
   "orjson==3.12.0",
   "packaging==24.1",
@@ -231,9 +231,9 @@ analysis = [
     "dash>=4.4.1",
     "dash-bootstrap-components>=2.0.4",
     # Pulled in transitively via streamlit; pinned here to satisfy Dependabot's
-    # advisory on the lockfile (GitPython <=3.1.56 -> >=3.1.57). Nothing in the
+    # advisories on the lockfile (GitPython <=3.1.58 -> >=3.1.59). Nothing in the
     # main dependency list uses it, so this never reaches a production install.
-    "gitpython>=3.1.57",
+    "gitpython>=3.1.59",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.11.1",
     "scipy>=1.18.0",

@@ -55,9 +55,38 @@ when the indicator loads. Do not silently skip validation.
 
 ## Recent changes worth knowing
 
-The descriptor contract has not changed, so an existing indicator keeps working.
-Three things did:
+The descriptor contract has not changed since this skill was written, so an
+existing indicator keeps working on the pinned build. What changed around it,
+newest first:
 
+- **2.1.7: hidden indicators remain hidden through layout restoration and style
+  edits.** Reference levels now follow the instance's visibility along with its
+  plots and other visuals. The new `ChartObjects` inventory also exposes an
+  indicator's visibility and Tier-2 data status to host and widget object
+  panels, but it does not change the descriptor contract or add work to a
+  custom indicator.
+- **2.1.6: Tier-2 studies follow the chart's data context and loaded source
+  range.** `createTier2Indicator` receives `dataContext` with the host's symbol,
+  exchange and interval, cancels obsolete fetches, extends history when older
+  bars arrive and refreshes when the host changes instrument. A descriptor can
+  use `supports(ctx)` to report that its provider cannot serve a context. The
+  managed lifecycle publishes loading, ready, empty, unsupported and error
+  states with an explicit retry action, so provider failure is visible without
+  putting network state into `calc`. Existing Tier-2 descriptors get the range,
+  cancellation and status behavior through the wrapper without changing shape.
+- **2.1.2: a Tier-2 study's data requests are keyed by data setting.** Changing
+  the symbol or any other data input clears the previous values immediately, and
+  a response that arrives for the setting you just left cannot land on the new
+  one. A style-only change reuses the history already in flight instead of
+  refetching, and a live observation wins over a historical point for the same
+  time. An `attach` that used to guard against its own stale responses no longer
+  has to.
+- **1.8.9: precision is keyed on the pane, not the descriptor.** An `onchart`
+  plot prints at the instrument's tick; a plot on its own pane prints at that
+  pane's span with a floor of two decimals. A study pane is no longer formatted
+  in the instrument's tick, which is why an RSI reads `70.00` rather than `70.0`.
+  Custom descriptors get this with nothing to declare, and a precision input is
+  still the wrong answer. See **Do not**, below.
 - **1.8.4: `calc` runs once per animation frame, not once per tick.** A data
   update marks the indicators stale and the flush happens before the paint, so a
   burst of ticks collapses into one call. `calc` must therefore be a pure
@@ -256,9 +285,10 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
 | --- | --- |
 | `strategies/indicators/*.js` | installed indicators, gitignored, never pushed |
 | `.claude/skills/chart-indicator/validate.mjs` | the gate |
-| `.claude/skills/chart-indicator/examples/` | three validated worked examples |
+| `.claude/skills/chart-indicator/examples/` | ten validated worked examples |
 | `.claude/skills/chart-indicator/reference/` | contract, API surface, pitfalls, cookbook |
 | `.claude/skills/chart-indicator/coverage.mjs` | fails if an API or capability is documented but never demonstrated |
+| `.claude/skills/chart-indicator/generate-api-index.mjs` | regenerates the export index in `reference/api.md`; `--check` fails when it is stale |
 | `docs/custom-indicators.md` | the user-facing guide |
 | `blueprints/custom_indicators.py` | serves the folder to the chart |
 | `frontend/src/lib/trading/customIndicators.ts` | the loader |

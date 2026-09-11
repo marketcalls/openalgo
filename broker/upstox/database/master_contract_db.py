@@ -308,6 +308,17 @@ def process_upstox_json(path):
         "CLUSD": "WTIOIL",
     })
 
+    # Upstox ships tick_size in paise on every tradeable segment, so rupees is
+    # that value over 100: NSE_EQ arrives as 1/5/10, NSE_FO and BSE_FO as 5,
+    # MCX_FO as 50, BCD_FO and NCD_FO as 0.25. Left raw, BSE_FO SENSEX options
+    # report a tick of Rs 5.00 instead of Rs 0.05, and anything rounding a price
+    # to that tick lands 100x too coarse.
+    #
+    # Unlike Dhan, no index exception is needed here: Upstox sends null rather
+    # than a rupee value for NSE_INDEX and BSE_INDEX, which coerces to NaN and
+    # divides harmlessly.
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+
     return df
 
 
