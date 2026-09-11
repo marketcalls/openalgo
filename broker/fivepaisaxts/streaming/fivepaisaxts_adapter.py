@@ -275,7 +275,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         attempts = self.reconnect_attempts
                     delay = min(self.reconnect_delay * (2**attempts), self.max_reconnect_delay)
                     self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                    time.sleep(delay)
+                    # Interruptible: disconnect() sets _stop_event, so teardown
+                    # wakes us immediately instead of leaving this thread parked
+                    # for up to max_reconnect_delay in a bare sleep.
+                    if self._stop_event.wait(delay):
+                        break
 
             if self.reconnect_attempts >= self.max_reconnect_attempts:
                 self.logger.error("Max reconnection attempts reached. Giving up.")
@@ -666,9 +670,18 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Subscribe in the queue, which the processor then sends afterwards -
         # resurrecting a stale server-side subscription and its feed traffic.
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
-                self.logger.info(f"Removed {symbol}.{exchange} from subscription registry")
+            # subscribe() appends the depth level to a mode-3 id, so an exact
+            # match never found a depth subscription and left it in the registry
+            # for _resubscribe_all() to restore on the next reconnect - a symbol
+            # the user had unsubscribed coming back on its own. Match on the
+            # prefix instead, so the caller need not know the depth level.
+            for key in [
+                k
+                for k in self.subscriptions
+                if k == correlation_id or k.startswith(f"{correlation_id}_")
+            ]:
+                del self.subscriptions[key]
+                self.logger.info(f"Removed {symbol}.{exchange} [{key}] from subscription registry")
 
             if self.pending_subscriptions:
                 target = (mode, self._instrument_key(instruments[0]))
@@ -687,16 +700,14 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.ws_client.unsubscribe(correlation_id, mode, instruments)
                 self.logger.info(f"Successfully sent unsubscribe request for {symbol}.{exchange}")
 
-                # Always disconnect and perform cleanup after unsubscription
-                self.logger.info("Initiating disconnect and cleanup after unsubscription")
-                self.disconnect()
-
-                return self._create_success_response(
-                    f"Unsubscribed from {symbol}.{exchange} and disconnected from XTS server",
-                    symbol=symbol,
-                    exchange=exchange,
-                    mode=mode,
-                )
+                # Deliberately NOT disconnecting here. This used to call
+                # self.disconnect() on every unsubscribe, which closed the
+                # Socket.IO client, cleared `running`, pinned reconnect_attempts
+                # at the maximum and released ZMQ - so dropping ONE symbol
+                # killed the feed for every other subscribed symbol, with no way
+                # back: _on_close gates reconnection on `running`. The proxy
+                # owns adapter teardown and disconnects us itself once the last
+                # client goes away.
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
