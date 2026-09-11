@@ -418,9 +418,14 @@ class TestTheInstructionsTheSpeechModelIsGiven:
             assert "Ava" in voice.build_instructions("Ava", "goldfinch", trading=trading)
 
     def test_the_instructions_say_the_voice_decides_nothing(self):
-        text = voice.build_instructions("Ava", "goldfinch", trading=True)
-        assert "never place an order" in text.lower()
-        assert "never invent" in text.lower()
+        text = voice.build_instructions("Ava", "goldfinch", trading=True).lower()
+        assert "never place an order" in text
+        # Asserted on substance rather than a quoted sentence: the wording is
+        # tuned when the speech model misbehaves, and a test that pins the
+        # sentence fails on every improvement while proving nothing.
+        assert "no data, no tools" in text
+        assert "hand over every request" in text
+        assert "never describe an order as placed" in text
 
     def test_switching_trading_on_only_adds(self):
         off = voice.build_instructions("Ava", "goldfinch", trading=False)
