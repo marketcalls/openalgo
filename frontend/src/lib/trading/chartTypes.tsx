@@ -78,19 +78,25 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
       transform: () => new LineBreakTransform({ lines: 3 }),
     },
   ],
-  [
-    { value: 'tpo', label: 'Time Price Opportunity', iconKey: 'tpo', series: 'candlestick' },
-    {
-      value: 'session-volume-profile',
-      label: 'Session Volume Profile',
-      iconKey: 'profile',
-      series: 'candlestick',
-    },
-  ],
+]
+
+/**
+ * Types the engine still supports but the dropdown no longer offers. They stay
+ * in `CHART_TYPES` so a saved layout or a settings dialog that already names
+ * one keeps working — only the menu entry is gone.
+ */
+export const HIDDEN_CHART_TYPES: ChartTypeDef[] = [
+  { value: 'tpo', label: 'Time Price Opportunity', iconKey: 'tpo', series: 'candlestick' },
+  {
+    value: 'session-volume-profile',
+    label: 'Session Volume Profile',
+    iconKey: 'profile',
+    series: 'candlestick',
+  },
 ]
 
 export const CHART_TYPES: Record<string, ChartTypeDef> = Object.fromEntries(
-  CHART_TYPE_GROUPS.flat().map((d) => [d.value, d])
+  [...CHART_TYPE_GROUPS.flat(), ...HIDDEN_CHART_TYPES].map((d) => [d.value, d])
 )
 
 const s = {

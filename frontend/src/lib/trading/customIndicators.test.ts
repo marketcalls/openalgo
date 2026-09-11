@@ -9,6 +9,7 @@
  * wrong.
  */
 
+import { hasIndicator } from 'openalgo-charts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { calcOutputError, descriptorErrors, loadCustomIndicators } from './customIndicators'
@@ -25,6 +26,48 @@ afterEach(() => {
 })
 
 describe('loadCustomIndicators', () => {
+  it('waits for registration already in flight before another caller can use the indicator', async () => {
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const registering = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    vi.doMock('/custom-indicators/concurrent.js?v=1', () => ({
+      default: async ({
+        registerIndicator,
+      }: {
+        registerIndicator: (descriptor: unknown) => void
+      }) => {
+        started()
+        await gate
+        registerIndicator({
+          id: 'concurrent-close',
+          name: 'Concurrent Close',
+          placement: 'onchart',
+          inputs: [],
+          plots: [{ key: 'close', type: 'line' }],
+          calc: (bars: { close: number }[]) => ({ close: bars.map((bar) => bar.close) }),
+        })
+      },
+    }))
+    mockIndex([{ file: 'concurrent.js', mtime: 1 }])
+    const first = loadCustomIndicators()
+    await registering
+    let returnedBeforeRegistration = false
+    const second = loadCustomIndicators().then(() => {
+      returnedBeforeRegistration = !hasIndicator('concurrent-close')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    release()
+    await Promise.all([first, second])
+
+    expect(returnedBeforeRegistration).toBe(false)
+    expect(hasIndicator('concurrent-close')).toBe(true)
+  })
+
   it('loads nothing when the index route is not there', async () => {
     mockIndex(null, false)
     expect(await loadCustomIndicators()).toEqual({ loaded: [], errors: [] })

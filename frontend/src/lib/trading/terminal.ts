@@ -606,7 +606,7 @@ export class TradingTerminal {
   /** Guards syncIndicators while applyIndicators is mid-flight. */
   private applyingIndicators = false
   /** History paging: in-flight guard, and whether the broker ran out. */
-  private loadingOlder = false
+  private loadingOlder: { chart: ReturnType<typeof createChart>; ticket: number } | null = null
   private noMoreHistory = false
   private volumeOn = true
   private gridV = true
@@ -851,6 +851,9 @@ export class TradingTerminal {
   }
 
   private setPriceData() {
+    // History can finish during replay. Keep its live snapshot up to date,
+    // but leave both displayed series and their timeline to the playhead.
+    if (this.replay) return
     if (!this.price || !this.volume || !this.rawBars.length) return
     const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
     if (cfg.transform) {
@@ -1667,26 +1670,38 @@ export class TradingTerminal {
    * the rest of the session.
    */
   private async loadOlderHistory(): Promise<void> {
-    if (this.loadingOlder || this.noMoreHistory || !this.rest || !this.sym || !this.chart) {
-      this.chart?.historyLoadComplete()
+    const chart = this.chart
+    const sym = this.sym
+    const interval = this.interval
+    const rest = this.rest
+    const ticket = this.loadTicket
+    if (this.destroyed || !chart || chart.isDestroyed) return
+    if (this.loadingOlder?.chart === chart && this.loadingOlder.ticket === ticket) return
+    if (this.noMoreHistory || !rest || !sym) {
+      chart.historyLoadComplete()
       return
     }
     const oldest = this.rawBars[0]?.time
     if (oldest === undefined) {
-      this.chart.historyLoadComplete()
+      chart.historyLoadComplete()
       return
     }
-    this.loadingOlder = true
+    const request = { chart, ticket }
+    this.loadingOlder = request
     try {
       const to = oldest - 1
-      const older = await this.rest.getBars({
-        symbol: this.sym.symbol,
-        exchange: this.sym.exchange,
-        interval: this.interval,
-        from: to - lookbackDays(this.interval) * 86400,
+      const older = await rest.getBars({
+        symbol: sym.symbol,
+        exchange: sym.exchange,
+        interval,
+        from: to - lookbackDays(interval) * 86400,
         to,
       })
-      if (this.destroyed || !this.chart) return
+      if (
+        this.destroyed || chart.isDestroyed || chart !== this.chart ||
+        ticket !== this.loadTicket || sym !== this.sym ||
+        interval !== this.interval || rest !== this.rest
+      ) return
       // Trust nothing about the window the broker actually returned: keep only
       // what is genuinely older, or a re-sent overlapping page would duplicate
       // bars and grow rawBars without ever moving the left edge.
@@ -1698,7 +1713,7 @@ export class TradingTerminal {
       // Prepending shifts every logical index by the inserted count, so the
       // view has to shift with it or the user is thrown back to the right edge
       // mid-scroll.
-      const before = this.chart.getVisibleLogicalRange()
+      const before = chart.getVisibleLogicalRange()
       const countBefore = this.shownCount
       this.rawBars = [...fresh, ...this.rawBars]
       this.setPriceData()
@@ -1707,7 +1722,7 @@ export class TradingTerminal {
       // number of elements, so the axis grows by its own amount.
       const inserted = this.shownCount - countBefore
       if (before && inserted > 0) {
-        this.chart.setVisibleLogicalRange({
+        chart.setVisibleLogicalRange({
           from: before.from + inserted,
           to: before.to + inserted,
         })
@@ -1716,8 +1731,12 @@ export class TradingTerminal {
       // A failed page must not poison the session; the next scroll retries.
       console.error('[trading] history paging', e)
     } finally {
-      this.loadingOlder = false
-      this.chart?.historyLoadComplete()
+      // An old page can finish after another chart or load started paging.
+      // Release only its own work, never the newer request's loading state.
+      if (this.loadingOlder === request) this.loadingOlder = null
+      if (!this.destroyed && !chart.isDestroyed && this.loadingOlder?.chart !== chart) {
+        chart.historyLoadComplete()
+      }
     }
   }
 
@@ -3183,21 +3202,32 @@ export class TradingTerminal {
 
   /* periodic history reconcile: snap completed bars to broker OHLC/volume */
   private scheduleReconcile() {
+    if (this.destroyed) return
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
     this.reconcileTimer = setTimeout(() => this.runReconcile(), 25000 + Math.random() * 10000)
   }
 
   private async runReconcile(): Promise<void> {
+    const ticket = this.loadTicket
+    const sym = this.sym
+    const interval = this.interval
+    const rest = this.rest
     try {
-      if (this.sym && this.rest) {
+      if (!this.destroyed && sym && rest) {
         const to = nowSec()
-        const fresh = await this.rest.getBars({
-          symbol: this.sym.symbol,
-          exchange: this.sym.exchange,
-          interval: this.interval,
-          from: to - Math.min(3, lookbackDays(this.interval)) * 86400,
+        const fresh = await rest.getBars({
+          symbol: sym.symbol,
+          exchange: sym.exchange,
+          interval,
+          from: to - Math.min(3, lookbackDays(interval)) * 86400,
           to,
         })
+        // A response belongs to the load that requested it, even when a new
+        // load selects the same symbol. It must not mutate the next session.
+        if (
+          this.destroyed || ticket !== this.loadTicket || sym !== this.sym ||
+          interval !== this.interval || rest !== this.rest
+        ) return
         const byTime = new Map(fresh.map((b) => [b.time, b]))
         let changed = false
         for (let i = 0; i < this.rawBars.length; i++) {
@@ -3280,7 +3310,7 @@ export class TradingTerminal {
 
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
-    if (!this.rest) return false
+    if (this.destroyed || !this.rest) return false
     /**
      * Claim this load. Two awaits follow -- the symbol lookup and the bars --
      * and a second call arriving inside either of them used to run to
@@ -3326,7 +3356,7 @@ export class TradingTerminal {
       /* search row already carries the essentials */
     }
     // A newer load claimed the pane while this one was waiting.
-    if (ticket !== this.loadTicket) return false
+    if (this.destroyed || ticket !== this.loadTicket) return false
     const exchange = String(info.exchange)
     const lotsize = Number(info.lotsize) || 1
     // The segment decides this, never the lot size. Every MCX, NCO and CDS
@@ -3364,8 +3394,9 @@ export class TradingTerminal {
     this.lastLtp = null
     this.liveBucket = null
     this.noMoreHistory = false
+    let bars: Bar[]
     try {
-      this.rawBars = await (this.cachedBars ?? this.rest).getBars({
+      bars = await (this.cachedBars ?? this.rest).getBars({
         symbol: this.sym.symbol,
         exchange: this.sym.exchange,
         interval: this.interval,
@@ -3373,13 +3404,15 @@ export class TradingTerminal {
         to,
       })
     } catch (e) {
+      if (this.destroyed || ticket !== this.loadTicket) return false
       this.rawBars = []
       if (!opts.silent) this.toast(`history error: ${this.cleanError(e)}`, 'err')
       return false // caller may fall back (e.g. to the default symbol)
     }
-    // The bars are in. If a newer load claimed the pane while they were in
-    // flight, stop here rather than building a chart it will build again.
-    if (ticket !== this.loadTicket) return false
+    // Validate before assigning: an older response must neither overwrite the
+    // active session nor recreate a chart after its terminal was destroyed.
+    if (this.destroyed || ticket !== this.loadTicket) return false
+    this.rawBars = bars
     if (!this.rawBars.length) {
       if (!opts.silent)
         this.toast(`no history for ${this.sym.symbol} ${this.sym.exchange} ${this.interval}`, 'err')
@@ -3756,6 +3789,8 @@ export class TradingTerminal {
     } catch {
       groups = intervalGroups({ minutes: ['1m', '5m', '15m'], hours: ['1h'], days: ['D'] })
     }
+    // The pane may have closed while intervals loaded. Do not reopen its resources.
+    if (this.destroyed) return
     this.interval = pickInterval(groups, this.lsGet('interval'))
     this.availableIntervals = groups.flatMap((group) => group.items)
     if (isProfileKind(this.ctype)) {
@@ -3768,6 +3803,7 @@ export class TradingTerminal {
     // one WebSocket for ticks + the account-level order stream.
     this.ws = new OpenAlgoWsFeed({ url: this.wsUrl, apiKey: this.apiKey })
     this.ws.onState((s) => {
+      if (this.destroyed) return
       this.cb.onWsState(s)
       if (s === 'closed' || s === 'error' || s === 'reconnecting') this.startLtpFallback()
       // Back on the wire after a break: whatever closed between the drop and

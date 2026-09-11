@@ -35,8 +35,12 @@ and the dock can be resized; the panes follow the layout preset you pick.
 
 ## Session Profiles
 
-Choose **Time Price Opportunity** or **Session Volume Profile** from the chart
-type menu. Right-click the chart and open **Chart settings...**. The existing
+**Time Price Opportunity** and **Session Volume Profile** are no longer offered
+in the chart type menu. The engine still supports both, so a saved layout that
+already selects one keeps drawing it, but there is currently no way to pick one
+from the UI. The rest of this section describes how they behave when selected.
+
+Right-click the chart and open **Chart settings...**. The existing
 **Price** tab changes to the selected profile's settings. Switching back to
 candles restores the candle controls. Each pane remembers both profile types'
 settings independently; **Reset to defaults** resets the active profile and
@@ -222,6 +226,11 @@ choosing a start with the next twenty bars visible is choosing with hindsight.
 The transport gives you previous, play or pause, next, a scrub bar, a speed
 selector and exit. A watermark marks the chart as replayed and the trading
 panel comes off it.
+
+Live ticks and history refreshes continue in the background during replay.
+They do not reveal candles beyond the playhead or move its viewport, including
+when an older history page finishes loading. Exit replay to return to the
+updated live chart.
 
 **No order can leave the chart during replay.** Every order route on the page,
 including the dock's and the GTT tab's, refuses with the same message. Replay is
