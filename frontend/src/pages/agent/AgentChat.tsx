@@ -42,12 +42,13 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Bot, SlidersHorizontal } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import {
   agentErrorMessage,
   agentQueryKeys,
   getSettings,
+  getVoiceConfig,
   type ReasoningEffort,
   recordVoiceTranscript,
   truncateConversation,
@@ -138,6 +139,54 @@ export default function AgentChat() {
    * are worth seeing, and only one of them is a turn.
    */
   const [spokenLines, setSpokenLines] = useState<VoiceTranscriptLine[]>([])
+
+  // The same cache entry the config panel and the mic button read, so renaming
+  // the agent over there reaches the transcript labels without a reload.
+  const voiceConfig = useQuery({
+    queryKey: agentQueryKeys.voice(),
+    queryFn: getVoiceConfig,
+    staleTime: 30_000,
+  })
+  const voiceName = voiceConfig.data?.data.voice_agent_name || 'Agent'
+
+  /**
+   * How many messages existed when each spoken line was first seen.
+   *
+   * Speech and messages are interleaved by **anchoring**, not by sorting on a
+   * clock. Sorting was the first attempt and it was wrong: a message carries no
+   * timestamp, so one had to be invented at first render, and any drift between
+   * that and the moment a line opened reordered the thread. Messages now render
+   * in exactly the order `messages` holds them, which is the order that was
+   * always correct, and each line is placed after the message that had just
+   * been said when it was heard.
+   */
+  const lineAnchors = useRef(new Map<string, number>())
+
+  /** Spoken lines grouped by the message index they follow. */
+  const linesByAnchor = useMemo(() => {
+    const grouped = new Map<number, VoiceTranscriptLine[]>()
+    for (const line of spokenLines) {
+      let anchor = lineAnchors.current.get(line.id)
+      if (anchor === undefined) {
+        anchor = messages.length
+        lineAnchors.current.set(line.id, anchor)
+      }
+      const bucket = grouped.get(anchor)
+      if (bucket) bucket.push(line)
+      else grouped.set(anchor, [line])
+    }
+    // The controller keeps only the most recent lines, so an anchor for a line
+    // that has scrolled out of it will never be read again. Dropping them here
+    // keeps this map the same size as the transcript instead of growing for as
+    // long as the page is open.
+    if (lineAnchors.current.size > spokenLines.length) {
+      const live = new Set(spokenLines.map((line) => line.id))
+      for (const id of lineAnchors.current.keys()) {
+        if (!live.has(id)) lineAnchors.current.delete(id)
+      }
+    }
+    return grouped
+  }, [messages.length, spokenLines])
 
   /** What to speak while a run waits for approval, read at frame time. */
   const awaitingApprovalLine = useRef('That needs your approval before I can place it.')
@@ -350,7 +399,11 @@ export default function AgentChat() {
             backstop: a message that cannot break scrolls inside its own
             container rather than widening the body. */}
         <div ref={threadRef} className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-          {messages.length === 0 ? (
+          {/* Spoken lines count as content. A conversation that is only
+              speech - "hi Ava", an acknowledgement, a question the speech model
+              answered itself - produces no messages at all, and showing the
+              empty state over it loses the whole exchange. */}
+          {messages.length === 0 && spokenLines.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <Bot className="h-10 w-10 text-muted-foreground/50" aria-hidden />
               {conversationId === null ? (
@@ -379,43 +432,31 @@ export default function AgentChat() {
             </div>
           ) : (
             <div className={cn(COLUMN, 'space-y-6 px-4 py-4')}>
-              {messages.map((message) => (
-                <Message
-                  key={message.id}
-                  message={message}
-                  onConfirm={handleConfirm}
-                  onEdit={message.role === 'user' ? handleEdit : undefined}
-                  onRetry={
-                    message.role === 'assistant' && message.id === lastAssistantId
-                      ? handleRetry
-                      : undefined
-                  }
-                  busy={running}
-                />
+              {/* A quiet record of what was actually said out loud, placed
+                  after the message that had just been said when it was heard.
+                  Messages themselves render in the order `messages` holds them
+                  and are never reordered. */}
+              {(linesByAnchor.get(0) ?? []).map((line) => (
+                <SpokenLine key={line.id} line={line} agentName={voiceName} />
               ))}
-              {/* What was actually said out loud, including the parts the
-                  speech model handled itself and never turned into a turn.
-                  Kept visually quieter than a message because it is a record of
-                  the room rather than of a decision. */}
-              {spokenLines.length > 0 && (
-                <div className="space-y-1.5 border-l-2 border-muted pl-3">
-                  {spokenLines.map((line) => (
-                    <p
-                      key={line.id}
-                      className={cn(
-                        'text-xs leading-relaxed',
-                        line.role === 'trader' ? 'text-foreground/80' : 'text-muted-foreground',
-                        !line.final && 'opacity-60'
-                      )}
-                    >
-                      <span className="mr-1.5 font-medium uppercase tracking-wide opacity-60">
-                        {line.role === 'trader' ? 'Said' : 'Heard'}
-                      </span>
-                      {line.text}
-                    </p>
+              {messages.map((message, index) => (
+                <Fragment key={message.id}>
+                  <Message
+                    message={message}
+                    onConfirm={handleConfirm}
+                    onEdit={message.role === 'user' ? handleEdit : undefined}
+                    onRetry={
+                      message.role === 'assistant' && message.id === lastAssistantId
+                        ? handleRetry
+                        : undefined
+                    }
+                    busy={running}
+                  />
+                  {(linesByAnchor.get(index + 1) ?? []).map((line) => (
+                    <SpokenLine key={line.id} line={line} agentName={voiceName} />
                   ))}
-                </div>
-              )}
+                </Fragment>
+              ))}
               {/* Lets the newest question reach the top of the viewport even
                   when the answer under it is only a line long. */}
               <div className="h-[40vh]" aria-hidden />
@@ -470,5 +511,29 @@ export default function AgentChat() {
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * One line of the spoken conversation.
+ *
+ * Deliberately quieter than a message: it is a record of what was said in the
+ * room, not of what the agent decided, and the two are different things even
+ * when they describe the same turn.
+ */
+function SpokenLine({ line, agentName }: { line: VoiceTranscriptLine; agentName: string }) {
+  return (
+    <p
+      className={cn(
+        'border-l-2 border-muted pl-3 text-xs leading-relaxed',
+        line.role === 'trader' ? 'text-foreground/80' : 'text-muted-foreground',
+        !line.final && 'opacity-60'
+      )}
+    >
+      <span className="mr-1.5 font-medium opacity-70">
+        {line.role === 'trader' ? 'You' : agentName}
+      </span>
+      {line.text}
+    </p>
   )
 }
