@@ -281,25 +281,26 @@ function microphoneRefusal(cause: unknown): string {
   // shape that fails here while localhost works.
   if (!window.isSecureContext || name === 'SecurityError') {
     return (
-      'The microphone is blocked because this page is not on a secure origin. ' +
-      'Open OpenAlgo on http://127.0.0.1:5000 or over https. A plain http:// ' +
-      'address that is not localhost cannot use a microphone.'
+      'Your browser will not allow the microphone on this address. Open ' +
+      'OpenAlgo at http://127.0.0.1:5000, or set up https for your domain. ' +
+      'A plain http address that is not on this machine can never use a ' +
+      'microphone, whatever the settings say.'
     )
   }
   if (name === 'NotAllowedError') {
     return (
-      'Microphone access was refused. Allow it for this site in the browser, ' +
-      'and check that the browser itself is allowed the microphone in your ' +
-      'operating system privacy settings.'
+      'The microphone was blocked. Allow it for this site in your browser, ' +
+      'and check your computer lets the browser use the microphone at all: ' +
+      'that switch is in privacy settings on Windows and on a Mac.'
     )
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-    return 'No microphone was found on this device.'
+    return 'No microphone was found. Plug one in, or check it is selected as the input device.'
   }
   if (name === 'NotReadableError') {
-    return 'The microphone is in use by another application.'
+    return 'Another app is using the microphone. Close it and try again.'
   }
-  return describe(cause, 'The microphone could not be opened.')
+  return describe(cause, 'The microphone could not be opened. Try again.')
 }
 
 /**
@@ -535,7 +536,7 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       }
       case 'error': {
         const message = readString(event, ['error.message', 'message'])
-        fail(message || 'The voice session reported an error.')
+        fail(message || 'Something went wrong with voice. Press the microphone to start again.')
         break
       }
     }
@@ -699,12 +700,9 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       // have been.
       const contentType = response.headers.get('content-type') ?? ''
       if (response.redirected || !contentType.includes('sdp') || !body.startsWith('v=0')) {
-        throw new Error(
-          'The voice session could not be started because your sign-in is no ' +
-            'longer valid. Reload the page and sign in again.'
-        )
+        throw new Error('You have been signed out. Reload the page and sign in again.')
       }
-      if (!body.trim()) throw new Error('The voice session came back empty.')
+      if (!body.trim()) throw new Error('Voice could not start. Try again in a minute.')
       // SDP is a CRLF-terminated format and the final terminator is part of
       // it, so the body is normalised rather than trimmed. Trimming it is the
       // same mistake in the browser that produced "unmarshal SDP: EOF" on the
@@ -721,7 +719,7 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
     } catch {
       // Not JSON, so the body is already the message.
     }
-    throw new Error(message || `The voice session could not be started (HTTP ${response.status}).`)
+    throw new Error(message || 'Voice could not start. Try again in a minute.')
   }
 
   async function start(): Promise<void> {
@@ -737,11 +735,11 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       return
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      fail('This browser does not offer microphone access to the page.')
+      fail('This browser cannot use a microphone. Try Chrome, Edge or Firefox.')
       return
     }
     if (typeof RTCPeerConnection === 'undefined') {
-      fail('This browser does not support WebRTC, which the voice agent needs.')
+      fail('This browser is too old for the voice agent. Try Chrome, Edge or Firefox.')
       return
     }
 
@@ -796,7 +794,9 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
         // leaving it open would let the trader talk into a session that can
         // never answer.
         element.play().catch((cause: unknown) => {
-          fail(describe(cause, 'The browser would not play the reply.'))
+          fail(
+            describe(cause, 'Your browser would not play the reply. Check the tab is not muted.')
+          )
         })
       })
       connection.addEventListener('connectionstatechange', () => {
@@ -805,7 +805,8 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
         if (phase === 'failed' || phase === 'disconnected' || phase === 'closed') {
           // Only a live session reports this. A teardown closes the connection
           // itself and has already put the state back.
-          if (state !== 'idle') fail('The voice connection dropped.')
+          if (state !== 'idle')
+            fail('The voice connection dropped. Press the microphone to start again.')
         }
       })
 
@@ -818,7 +819,7 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
 
       const local = connection.localDescription?.sdp ?? offer.sdp ?? ''
       if (!local) {
-        fail('The browser produced no connection offer.')
+        fail('The microphone could not connect. Reload the page and try again.')
         return
       }
 
@@ -832,7 +833,7 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       // InvalidStateError. That is the trader getting what they asked for, not
       // a fault, so it must not paint the button red.
       if (abandoned()) return
-      fail(describe(cause, 'The voice session could not be started.'))
+      fail(describe(cause, 'Voice could not start. Try again in a minute.'))
     }
   }
 

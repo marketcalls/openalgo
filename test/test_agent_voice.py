@@ -466,7 +466,7 @@ class TestMintingRefusesBeforeItLeavesTheMachine:
     )
     def test_an_offer_that_is_not_sdp_is_refused(self, monkeypatch, offer):
         no_network(monkeypatch)
-        with pytest.raises(voice.VoiceUnavailable, match="not a usable connection offer"):
+        with pytest.raises(voice.VoiceUnavailable, match="could not connect"):
             voice.mint_session(offer, {"voice_enabled": True})
 
     def test_voice_switched_off_refuses(self, monkeypatch):
@@ -478,13 +478,13 @@ class TestMintingRefusesBeforeItLeavesTheMachine:
     def test_no_stored_key_refuses(self, monkeypatch):
         no_network(monkeypatch)
         monkeypatch.setattr(agent_settings, "voice_key", lambda: None)
-        with pytest.raises(voice.VoiceUnavailable, match="No OpenAI key is stored"):
+        with pytest.raises(voice.VoiceUnavailable, match="No OpenAI key is saved"):
             voice.mint_session(OFFER, {"voice_enabled": True})
 
     def test_an_empty_stored_key_refuses(self, monkeypatch):
         no_network(monkeypatch)
         monkeypatch.setattr(agent_settings, "voice_key", lambda: "")
-        with pytest.raises(voice.VoiceUnavailable, match="No OpenAI key is stored"):
+        with pytest.raises(voice.VoiceUnavailable, match="No OpenAI key is saved"):
             voice.mint_session(OFFER, {"voice_enabled": True})
 
     def test_the_switch_is_checked_before_the_key(self, monkeypatch):
@@ -574,11 +574,11 @@ class TestWhatIsPostedAndWhatComesBack:
     @pytest.mark.parametrize(
         "status,expected",
         [
-            (401, "key for the voice agent was rejected"),
-            (403, "key for the voice agent was rejected"),
-            (404, "not available on that key"),
-            (429, "rate limiting"),
-            (500, "credit balance"),
+            (401, "would not accept your key"),
+            (403, "would not accept your key"),
+            (404, "cannot use that voice"),
+            (429, "slow down"),
+            (500, "credit"),
         ],
     )
     def test_a_refusal_becomes_something_an_operator_can_act_on(self, voice_env, status, expected):
@@ -588,7 +588,7 @@ class TestWhatIsPostedAndWhatComesBack:
 
     def test_a_model_that_cannot_speak_is_named_as_such(self, voice_env):
         voice_env(FakeResponse(400, None, text='{"error":{"code":"invalid_model"}}'))
-        with pytest.raises(voice.VoiceUnavailable, match="cannot be used for speech"):
+        with pytest.raises(voice.VoiceUnavailable, match="cannot speak"):
             voice.mint_session(OFFER, {"voice_enabled": True})
 
     def test_a_transport_failure_does_not_carry_the_key_into_the_message(self, voice_env):
@@ -596,12 +596,12 @@ class TestWhatIsPostedAndWhatComesBack:
         with pytest.raises(voice.VoiceUnavailable) as caught:
             voice.mint_session(OFFER, {"voice_enabled": True})
         assert KEY not in str(caught.value)
-        assert "Could not reach the voice provider" in str(caught.value)
+        assert "Could not reach OpenAI" in str(caught.value)
 
     @pytest.mark.parametrize("payload", [{}, {"transport": {}}, ValueError("not json")])
     def test_an_unusable_answer_is_refused_rather_than_returned(self, voice_env, payload):
         voice_env(FakeResponse(200, payload))
-        with pytest.raises(voice.VoiceUnavailable, match="something unusable"):
+        with pytest.raises(voice.VoiceUnavailable, match="could not use"):
             voice.mint_session(OFFER, {"voice_enabled": True})
 
 
@@ -640,7 +640,7 @@ class TestTheProbe:
         voice_env(FakeResponse(401, None, text="{}"))
         result = voice.probe()
         assert result.ok is False
-        assert "rejected" in result.message
+        assert "would not accept your key" in result.message
 
 
 class TestSpokenApprovalIsDecidedServerSide:
@@ -722,15 +722,15 @@ class TestAnUpstreamFailureSaysSo:
 
     def test_an_exhausted_balance_is_named_outright_when_the_body_says_so(self):
         message = voice._refusal_message(429, '{"error":{"code":"insufficient_quota"}}').lower()
-        assert "no credits left" in message
-        assert "rate limit" not in message
+        assert "run out of credit" in message
+        assert "slow down" not in message
 
     def test_a_plain_rate_limit_is_still_a_rate_limit(self):
         message = voice._refusal_message(429, "slow down").lower()
-        assert "rate limiting" in message
-        assert "credits" not in message
+        assert "slow down" in message
+        assert "credit" not in message
 
     def test_a_client_error_still_names_what_the_operator_can_fix(self):
         assert "key" in voice._refusal_message(401, "").lower()
-        assert "model" in voice._refusal_message(404, "").lower()
-        assert "rate limiting" in voice._refusal_message(429, "").lower()
+        assert "voice" in voice._refusal_message(404, "").lower()
+        assert "slow down" in voice._refusal_message(429, "").lower()

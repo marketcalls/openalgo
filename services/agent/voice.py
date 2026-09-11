@@ -73,9 +73,9 @@ SPEAKABLE_CHAR_BUDGET = 480
 
 #: Said whenever the cause is an empty account, wherever it surfaces from.
 _NO_CREDIT = (
-    "Your OpenAI account has no credits left, so the voice session could not "
-    "be started. Add credits at platform.openai.com under billing. Everything "
-    "else in the agent keeps working if it runs on a different provider."
+    "Your OpenAI account has run out of credit, so voice cannot start. "
+    "Add credit at platform.openai.com under billing. Everything else keeps "
+    "working if it runs on a different provider."
 )
 
 
@@ -221,7 +221,7 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
 
     offer = str(offer_sdp or "").lstrip()
     if not offer.startswith("v="):
-        raise VoiceUnavailable("That is not a usable connection offer.")
+        raise VoiceUnavailable("The microphone could not connect. Reload the page and try again.")
     # SDP is a CRLF-terminated format and the parser at the other end means it:
     # an offer whose final line has been stripped of its terminator comes back
     # as "failed to unmarshal SDP: EOF". Normalising here rather than trusting
@@ -230,11 +230,11 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
 
     config = config or settings.get_voice_config()
     if not config.get("voice_enabled"):
-        raise VoiceUnavailable("The voice agent is switched off in agent configuration.")
+        raise VoiceUnavailable("Voice is switched off. Turn it on in agent settings.")
 
     key = settings.voice_key()
     if not key:
-        raise VoiceUnavailable("No OpenAI key is stored for the voice agent.")
+        raise VoiceUnavailable("No OpenAI key is saved for voice. Add one in agent settings.")
 
     instructions = build_instructions(
         str(config.get("voice_agent_name") or "Vega"),
@@ -269,7 +269,7 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
     except Exception:
         # No traceback: this frame's locals held the key.
         logger.error("Could not reach the voice provider")
-        raise VoiceUnavailable("Could not reach the voice provider.") from None
+        raise VoiceUnavailable("Could not reach OpenAI. Check this machine is online.") from None
     finally:
         key = ""
 
@@ -281,7 +281,7 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
         answer = response.json()["transport"]["sdp"]
     except Exception:
         logger.exception("Voice provider returned an unusable session")
-        raise VoiceUnavailable("The voice provider returned something unusable.") from None
+        raise VoiceUnavailable("OpenAI sent back something we could not use. Try again.") from None
 
     try:
         from database import agent_db
@@ -307,15 +307,15 @@ def _refusal_message(status: int, body: str) -> str:
         A plain-language message.
     """
     if status in (401, 403):
-        return "The OpenAI key for the voice agent was rejected."
+        return "OpenAI would not accept your key. Check it in agent settings."
     if status == 404:
-        return "The configured voice model is not available on that key."
+        return "Your OpenAI account cannot use that voice. Pick another in agent settings."
     if status == 429:
         # Out of credit and rate limited share a status code and do not share a
         # fix, so the body decides which sentence an operator gets.
         if "insufficient_quota" in body or "credit" in body.lower():
             return _NO_CREDIT
-        return "The voice provider is rate limiting this key. Try again shortly."
+        return "OpenAI is asking us to slow down. Wait a minute and try again."
     if status >= 500:
         # **An exhausted balance arrives here.** Observed: an account with no
         # credits left got a bare "Internal Server Error" with no JSON from this
@@ -330,16 +330,14 @@ def _refusal_message(status: int, body: str) -> str:
         # confirm in a minute and act on. The provider fault follows, because it
         # is real and there is nothing to do about it but wait.
         return (
-            "Could not start the voice session, and the provider did not say "
-            "why. Check your OpenAI credit balance first: an account with no "
-            "credits left fails here exactly like this, with no explanation. "
-            "Add credits at platform.openai.com under billing. If the balance "
-            "is fine, the provider is having trouble and it will clear on its "
-            "own."
+            "Voice could not start, and OpenAI did not say why. Check your "
+            "OpenAI credit first, at platform.openai.com under billing: when "
+            "the credit runs out it fails exactly like this. If there is "
+            "credit, the trouble is at OpenAI's end and it will pass."
         )
     if "not supported in realtime" in body or "invalid_model" in body:
-        return "That model cannot be used for speech. Voice needs a live model such as gpt-live-1."
-    return f"The voice provider refused the session (HTTP {status})."
+        return "That voice cannot speak. Choose gpt-live-1 in agent settings."
+    return "Could not start voice. Try again in a minute."
 
 
 def probe() -> VoiceProbe:
@@ -360,7 +358,7 @@ def probe() -> VoiceProbe:
     if not settings.voice_key():
         return VoiceProbe(
             ok=False,
-            message="No OpenAI key is stored for the voice agent, so there is nothing to test.",
+            message="No OpenAI key is saved for voice, so there is nothing to test.",
             latency_ms=0,
             model=model,
         )
@@ -380,7 +378,7 @@ def probe() -> VoiceProbe:
 
     return VoiceProbe(
         ok=True,
-        message=f"{model} answered and the key works.",
+        message=f"{model} answered. Your key works.",
         latency_ms=int((time.monotonic() - started) * 1000),
         model=model,
     )
