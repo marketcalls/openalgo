@@ -282,6 +282,32 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
 
+### Bumping openalgo-charts also updates the chart-indicator skill
+
+The skill documents a specific build. `reference/api.md` carries the full export
+index and `pitfalls.md` carries the built-in ids a custom module can shadow, so
+a version bump that touches neither leaves the skill describing a library that
+is no longer installed. **Upgrading the pin and updating the skill are one
+change, not two.**
+
+```sh
+cd frontend && npm install openalgo-charts@<version> --save-exact
+node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
+node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
+```
+
+Then read the upstream changelog for the range you skipped and update the prose
+by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
+after* table in `api.md`, and the id-collision list in `pitfalls.md` if the
+registry grew. The generator only owns the export index; nothing generates the
+teaching.
+
+The `chart-indicator-skill` CI job runs both checks, so a stale skill fails the
+build. It exists because both scripts were already in the repo and nothing ran
+them: the index sat on 1.8.1 advertising "337 names" while `/trading` shipped
+2.1.5 with 363, and the eleven studies added in 1.8.3 were absent from the
+reference an indicator author reads.
+
 Two built-in pages exercise the streaming stack end to end: **`/websocket/test`**
 (market data; `/20`, `/30`, `/50` variants request those depth levels) and
 **`/websocket/order`** (account-level order/trade update stream). Use them to

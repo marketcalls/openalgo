@@ -82,6 +82,27 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+  # The chart-indicator skill documents the openalgo-charts build that /trading
+  # actually pins, so a version bump that leaves the skill behind fails here.
+  # Both checks existed and nothing ran them: the export index sat on 1.8.1 while
+  # the app shipped 2.1.5, so 26 exports were missing from the reference and the
+  # count it advertised was wrong by 26.
+  chart-indicator-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: export index matches the pinned openalgo-charts
+        run: node .claude/skills/chart-indicator/generate-api-index.mjs --check
+      - name: every export and capability is documented and demonstrated
+        run: node .claude/skills/chart-indicator/coverage.mjs
+
   # Frontend build (includes TypeScript check)
   # Matrixed across the LTS majors declared in frontend/package.json engines.
   frontend-build:
