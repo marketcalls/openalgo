@@ -56,10 +56,12 @@ import { ConversationSidebar } from '@/components/agent/ConversationSidebar'
 import { Message } from '@/components/agent/Message'
 import { ModelPicker } from '@/components/agent/ModelPicker'
 import { ConversationUsageBadge, sumUsage } from '@/components/agent/UsageBadge'
+import { VoiceButton } from '@/components/agent/VoiceButton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
+import type { VoiceController } from '@/lib/agent/voice'
 import { cn } from '@/lib/utils'
 
 /**
@@ -94,7 +96,54 @@ export default function AgentChat() {
       // never set and the order tools could not be offered at all, so an order
       // request came back as a refusal rather than an approval prompt.
       tradingEnabled: settings.data?.data.trading_enabled ?? false,
+      // Watched only while a spoken turn is running. The frames still drive the
+      // message list the ordinary way; this reads two things off the side of
+      // them - the words to speak, and the fact that a tool is taking a while.
+      onFrame: (frame) => {
+        if (!spokenAnswer.current) return
+        if (frame.type === 'token') spokenAnswer.current.text += frame.delta
+        else if (frame.type === 'tool_start') voiceController.current?.sayWorking(frame.name)
+        else if (frame.type === 'confirm') {
+          spokenAnswer.current.text ||= 'That needs your approval on screen before I can run it.'
+        }
+      },
     })
+
+  /**
+   * Where a spoken turn's answer is collected while it streams.
+   *
+   * Null except while one is running, which is also what keeps `onFrame` free
+   * for typed turns. Read after the send resolves rather than from `messages`,
+   * because React state has not necessarily flushed by then and the words are
+   * wanted the instant the turn ends.
+   */
+  const spokenAnswer = useRef<{ text: string } | null>(null)
+  const voiceController = useRef<VoiceController | null>(null)
+
+  /**
+   * Run one spoken question as an ordinary turn and return what to say.
+   *
+   * This is what puts a spoken exchange on screen. The question goes through
+   * the same `send` a typed one uses, so it appears as a user message, the
+   * answer streams into the same list, and the tool timeline and any chart
+   * render exactly as they do for typing. Only the words come back here.
+   */
+  const askByVoice = useCallback(
+    async (question: string): Promise<string> => {
+      const collector = { text: '' }
+      spokenAnswer.current = collector
+      try {
+        // The voice surface for this turn only: it decides the tools and asks
+        // for an answer short enough to listen to. The conversation, the model
+        // and the message list are shared with the typed surface.
+        await send(question, { surface: 'voice', webSearch: lastWebSearch.current })
+      } finally {
+        spokenAnswer.current = null
+      }
+      return collector.text
+    },
+    [send]
+  )
 
   const threadRef = useRef<HTMLDivElement>(null)
 
@@ -339,13 +388,28 @@ export default function AgentChat() {
               // the turn agree about which model has to read the file.
               modelId={modelId}
               controls={
-                <ModelPicker
-                  value={modelId}
-                  onChange={setModelId}
-                  effort={effort}
-                  onEffortChange={setEffort}
-                  disabled={running}
-                />
+                <>
+                  <ModelPicker
+                    value={modelId}
+                    onChange={setModelId}
+                    effort={effort}
+                    onEffortChange={setEffort}
+                    disabled={running}
+                  />
+                  {/* Renders nothing unless voice is configured and switched
+                      on. A spoken turn runs on the same model the picker beside
+                      it is showing, so the answer does not change character
+                      when the question is spoken instead of typed. */}
+                  <VoiceButton
+                    modelId={modelId}
+                    tradingEnabled={settings.data?.data.trading_enabled ?? false}
+                    ask={askByVoice}
+                    onController={(controller) => {
+                      voiceController.current = controller
+                    }}
+                    disabled={running}
+                  />
+                </>
               }
             />
           </div>

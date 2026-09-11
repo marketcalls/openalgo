@@ -108,7 +108,7 @@ PROVIDER_KINDS_REQUIRING_BASE_URL = ("ollama", "openai_compatible")
 
 REASONING_EFFORTS = ("off", "low", "medium", "high")
 
-SURFACES = ("chat", "chart")
+SURFACES = ("chat", "chart", "voice")
 
 MESSAGE_ROLES = ("user", "assistant", "system", "tool")
 

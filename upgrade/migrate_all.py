@@ -88,6 +88,7 @@ MIGRATIONS = [
     ("migrate_strategy_module.py", "Strategy Module (multi-leg options + RMS)"),
     ("migrate_strategy_universe_tab.py", "Strategy Module Universe Tab Normalization"),
     ("migrate_agent.py", "Agent Module (LLM chat and chart surfaces)"),
+    ("migrate_agent_voice.py", "Agent Voice Surface Settings"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,

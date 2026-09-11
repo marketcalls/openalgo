@@ -45,6 +45,7 @@ import { ChatGptSubscriptionPanel } from '@/components/agent/config/ChatGptSubsc
 import { ProviderCatalogPanel } from '@/components/agent/config/ProviderCatalogPanel'
 import { RegisteredModelsTable } from '@/components/agent/config/RegisteredModelsTable'
 import { TradingPanel } from '@/components/agent/config/TradingPanel'
+import { VoicePanel } from '@/components/agent/config/VoicePanel'
 import { WebSearchPanel } from '@/components/agent/config/WebSearchPanel'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Navbar } from '@/components/layout/Navbar'
@@ -98,7 +99,8 @@ export default function AgentConfig() {
             <div className="space-y-0.5">
               <h1 className="text-base font-semibold leading-none">Agent configuration</h1>
               <p className="text-xs text-muted-foreground">
-                Models, keys and web search, stored encrypted in this instance's own database.
+                Models, keys, web search and voice, stored encrypted in this instance's own
+                database.
               </p>
             </div>
           </div>
@@ -139,6 +141,15 @@ export default function AgentConfig() {
             </Section>
             <Section name="Trading">
               <TradingPanel />
+            </Section>
+            {/* Directly under the trading switch, because its own trading
+                switch is subordinate to that one and reads as nonsense read
+                apart from it. Above the catalog grid for the reason the
+                comment above gives: anything under that grid is a screen and a
+                half down, and this section is one an operator arrives looking
+                for. */}
+            <Section name="Voice">
+              <VoicePanel />
             </Section>
             <Section name="The provider catalog">
               <ProviderCatalogPanel />

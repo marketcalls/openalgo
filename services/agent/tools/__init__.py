@@ -66,11 +66,24 @@ logger = get_logger(__name__)
 SURFACE_CHAT = "chat"
 SURFACE_CHART = "chart"
 
-#: Every surface the agent runs on. A toolkit that names all of them is offered
-#: to both the conversation page and the chart panel.
-ALL_SURFACES: frozenset[str] = frozenset({SURFACE_CHAT, SURFACE_CHART})
+#: The spoken surface. A voice run is an ordinary agent run whose answer is
+#: also read aloud, so it shares the chat surface's toolkits; it is a distinct
+#: value so a toolkit that cannot be driven by voice can say so.
+SURFACE_VOICE = "voice"
 
+#: Every surface the agent runs on. A toolkit that names all of them is offered
+#: to the conversation page, the chart panel and the spoken surface alike.
+ALL_SURFACES: frozenset[str] = frozenset({SURFACE_CHAT, SURFACE_CHART, SURFACE_VOICE})
+
+#: The conversation page only. A toolkit that writes code, builds a flow or
+#: renders an interface belongs here: none of it is usable through a speaker.
 CHAT_ONLY: frozenset[str] = frozenset({SURFACE_CHAT})
+
+#: Chat and voice. The seam for a toolkit that suits a spoken conversation but
+#: has no business being driven from the chart panel.
+CHAT_AND_VOICE: frozenset[str] = frozenset({SURFACE_CHAT, SURFACE_VOICE})
+
+#: The chart panel only.
 CHART_ONLY: frozenset[str] = frozenset({SURFACE_CHART})
 
 #: A run capability a toolkit may require. Each names a boolean attribute of
@@ -84,10 +97,13 @@ CAPABILITIES: frozenset[str] = frozenset({CAPABILITY_TRADING, CAPABILITY_WEB_SEA
 
 __all__ = [
     "ALL_SURFACES",
+    "CHAT_AND_VOICE",
     "CAPABILITIES",
     "CAPABILITY_TRADING",
     "CAPABILITY_WEB_SEARCH",
     "CHART_ONLY",
+    "CHAT_ONLY",
+    "SURFACE_VOICE",
     "CHAT_ONLY",
     "SURFACE_CHART",
     "SURFACE_CHAT",
@@ -474,7 +490,11 @@ TOOLKITS: list[ToolkitSpec] = [
         key="orders",
         module="services.agent.tools.orders",
         attr="OrdersToolkit",
-        surfaces=CHAT_ONLY,
+        # Reaches voice, but only ever through CAPABILITY_TRADING, which the
+        # route computes as the AND of the master switch and
+        # `voice_trading_enabled` for a spoken run. The spec stays declarative;
+        # the narrowing lives with the caller that knows the surface.
+        surfaces=CHAT_AND_VOICE,
         requires=frozenset({CAPABILITY_TRADING}),
         order=50,
         description=(

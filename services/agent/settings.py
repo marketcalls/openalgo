@@ -99,6 +99,21 @@ KEY_MAX_FUNDS_UTILIZATION_PCT = "max_funds_utilization_pct"
 KEY_ALLOW_BULK_DESTRUCTIVE = "allow_bulk_destructive"
 KEY_KILL_SWITCH_FILE = "kill_switch_file"
 
+# The voice surface. Two of these are spoken values and they are deliberately
+# separate: `voice_agent_name` is how a trader addresses the agent all day and
+# carries no authority, while `voice_order_phrase` does one job and is never a
+# greeting. `services.agent.safety.voice_confirm` validates both and refuses an
+# order phrase that appears in the name, so the two cannot be collapsed back
+# into one by configuration.
+KEY_VOICE_ENABLED = "voice_enabled"
+KEY_VOICE_PROVIDER = "voice_provider"
+KEY_VOICE_MODEL = "voice_model"
+KEY_VOICE_SPEAKER = "voice_speaker"
+KEY_VOICE_AGENT_NAME = "voice_agent_name"
+KEY_VOICE_ORDER_PHRASE = "voice_order_phrase"
+KEY_VOICE_TRADING_ENABLED = "voice_trading_enabled"
+KEY_VOICE_CONFIRM_WINDOW_SECONDS = "voice_confirm_window_seconds"
+
 
 @dataclass(frozen=True)
 class _Field:
@@ -165,6 +180,25 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         KEY_ALLOW_BULK_DESTRUCTIVE: _Field("bool", False),
         KEY_KILL_SWITCH: _Field("bool", False),
         KEY_KILL_SWITCH_FILE: _Field("text", DEFAULT_KILL_SWITCH_FILE),
+        # The voice surface ships off. It needs a second credential and it
+        # speaks out loud in a room the operator may not control, so it is the
+        # one part of this module a fresh install must ask for.
+        KEY_VOICE_ENABLED: _Field("bool", False),
+        # One provider today. The vocabulary lives in
+        # `services.agent.voice_providers`, so adding another is a spec entry
+        # rather than a change here.
+        KEY_VOICE_PROVIDER: _Field("text", "openai"),
+        KEY_VOICE_MODEL: _Field("text", "gpt-live-1"),
+        KEY_VOICE_SPEAKER: _Field("text", "marin"),
+        # Not "Milo": the operator reserved that word for approving orders, and
+        # the name a trader says all day must not be the word that trades.
+        KEY_VOICE_AGENT_NAME: _Field("text", "Ava"),
+        KEY_VOICE_ORDER_PHRASE: _Field("text", "milo"),
+        # Subject to KEY_TRADING_ENABLED: turning this on while the master
+        # switch is off changes nothing, so there stays exactly one place to
+        # stop all order flow.
+        KEY_VOICE_TRADING_ENABLED: _Field("bool", False),
+        KEY_VOICE_CONFIRM_WINDOW_SECONDS: _Field("int", 30, minimum=5, maximum=300),
     }
 )
 
@@ -1624,3 +1658,305 @@ def probe_websearch_provider(provider: Any, api_key: Any = None) -> WebSearchPro
         latency_ms=latency_ms,
         result_count=count,
     )
+
+
+# ---------------------------------------------------------------------------
+# The voice surface
+#
+# Shaped like the web search block above: one credential, a handful of
+# tunables, and no key value ever leaving this module. The two spoken values
+# are validated by `services.agent.safety.voice_confirm`, which is also what
+# the approval matcher uses, so a name and a phrase that are accepted here are
+# exactly the pair the matcher will later be asked about.
+# ---------------------------------------------------------------------------
+
+
+def voice_secret_name(provider: Any = None) -> str:
+    """The ``ag_secret`` row holding one speech provider's key.
+
+    Per provider rather than one shared row, so an operator who later configures
+    a second provider does not overwrite the first one's key by switching.
+
+    Args:
+        provider: The provider id. The configured one when omitted.
+
+    Returns:
+        The secret name, for example ``voice:openai``.
+    """
+    from services.agent.voice_providers import voice_provider_spec
+
+    if provider is None:
+        values = _load_all(fresh=False)
+        provider = _parse(
+            KEY_VOICE_PROVIDER,
+            _SPEC[KEY_VOICE_PROVIDER],
+            values.get(KEY_VOICE_PROVIDER),
+            strict=False,
+        )
+    return voice_provider_spec(provider).secret_name
+
+
+def get_voice_defaults() -> dict[str, Any]:
+    """The shipped voice configuration, with no database access.
+
+    Returns:
+        What each configurable field reverts to, so the settings screen can show
+        it without a second endpoint.
+    """
+    return {
+        KEY_VOICE_ENABLED: _SPEC[KEY_VOICE_ENABLED].default,
+        KEY_VOICE_PROVIDER: _SPEC[KEY_VOICE_PROVIDER].default,
+        KEY_VOICE_MODEL: _SPEC[KEY_VOICE_MODEL].default,
+        KEY_VOICE_SPEAKER: _SPEC[KEY_VOICE_SPEAKER].default,
+        KEY_VOICE_AGENT_NAME: _SPEC[KEY_VOICE_AGENT_NAME].default,
+        KEY_VOICE_ORDER_PHRASE: _SPEC[KEY_VOICE_ORDER_PHRASE].default,
+        KEY_VOICE_TRADING_ENABLED: _SPEC[KEY_VOICE_TRADING_ENABLED].default,
+        KEY_VOICE_CONFIRM_WINDOW_SECONDS: _SPEC[KEY_VOICE_CONFIRM_WINDOW_SECONDS].default,
+    }
+
+
+def _voice_secret_row() -> dict[str, Any]:
+    """Presence and fingerprint of the stored OpenAI voice key, never its value.
+
+    Returns:
+        A mapping with ``has_value``, ``fingerprint`` and ``last_used_at``. A
+        database that cannot be read reports absence rather than raising, so the
+        settings screen degrades to "no key stored" instead of erroring.
+    """
+    try:
+        from database import agent_db
+
+        name = voice_secret_name()
+        for row in agent_db.list_secrets():
+            if row.get("name") == name:
+                return {
+                    "has_value": bool(row.get("has_value")),
+                    "fingerprint": row.get("fingerprint"),
+                    "last_used_at": row.get("last_used_at"),
+                }
+    except Exception:
+        logger.exception("Could not read the voice key row")
+    return {"has_value": False, "fingerprint": None, "last_used_at": None}
+
+
+def get_voice_config(*, fresh: bool = True) -> dict[str, Any]:
+    """The whole voice configuration, with the key described and never shown.
+
+    Read fresh by default for the same reason the web search block is: this
+    answers a settings screen that has usually just written.
+
+    Args:
+        fresh: Read past the TTL snapshot.
+
+    Returns:
+        Every tunable, whether a key is stored, the selectable voices, and
+        ``trading_effective`` - whether voice may actually reach a mutating
+        tool once the master switch is taken into account. **No field here is a
+        key value**, masked or otherwise.
+    """
+    values = _load_all(fresh=fresh)
+    payload = {
+        key: _parse(key, _SPEC[key], values.get(key), strict=False) for key in get_voice_defaults()
+    }
+    master = bool(
+        _parse(
+            KEY_TRADING_ENABLED,
+            _SPEC[KEY_TRADING_ENABLED],
+            values.get(KEY_TRADING_ENABLED),
+            strict=False,
+        )
+    )
+    payload["trading_enabled_master"] = master
+    payload["trading_effective"] = master and bool(payload[KEY_VOICE_TRADING_ENABLED])
+    from services.agent import voice_providers
+
+    spec = voice_providers.voice_provider_spec(payload[KEY_VOICE_PROVIDER])
+    payload["speakers"] = list(spec.speakers)
+    # Advisory, like the LLM catalogue: the picker offers what this build knows
+    # about, and the field stays free text so a model released tomorrow can be
+    # typed in and used today.
+    payload["known_models"] = list(spec.known_models)
+    payload["providers"] = [
+        {"id": p.id, "label": p.label, "default_model": p.default_model}
+        for p in voice_providers.VOICE_PROVIDERS.values()
+    ]
+    payload["defaults"] = get_voice_defaults()
+    payload["key"] = _voice_secret_row()
+    return payload
+
+
+def update_voice(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist a partial voice configuration update.
+
+    The two spoken values are validated together, because the rule that matters
+    is a relationship between them rather than a property of either: an order
+    phrase that also appears in the agent's name is rejected however it arrived,
+    whether the operator changed the phrase, the name, or both in one request.
+
+    Args:
+        values: Mapping of voice setting key to new value. Unknown keys are
+            rejected.
+
+    Returns:
+        The voice configuration after the write.
+
+    Raises:
+        ValueError: For an unknown key or an unusable value. Nothing is written.
+    """
+    from services.agent.safety import voice_confirm
+
+    allowed = set(get_voice_defaults())
+    unknown = sorted(set(values) - allowed)
+    if unknown:
+        raise ValueError(f"Unknown voice settings: {', '.join(unknown)}")
+
+    current = _load_all(fresh=True)
+    pending: dict[str, Any] = {}
+
+    name_raw = values.get(KEY_VOICE_AGENT_NAME, current.get(KEY_VOICE_AGENT_NAME))
+    name = voice_confirm.normalise_wake_phrase(
+        name_raw if name_raw not in (None, "") else _SPEC[KEY_VOICE_AGENT_NAME].default
+    )
+    phrase_raw = values.get(KEY_VOICE_ORDER_PHRASE, current.get(KEY_VOICE_ORDER_PHRASE))
+    phrase = voice_confirm.normalise_order_phrase(
+        phrase_raw if phrase_raw not in (None, "") else _SPEC[KEY_VOICE_ORDER_PHRASE].default,
+        name,
+    )
+    if KEY_VOICE_AGENT_NAME in values:
+        pending[KEY_VOICE_AGENT_NAME] = name
+    if KEY_VOICE_ORDER_PHRASE in values or KEY_VOICE_AGENT_NAME in values:
+        # A renamed agent can invalidate a phrase that was fine a moment ago, so
+        # the phrase is re-written whenever either half moves.
+        pending[KEY_VOICE_ORDER_PHRASE] = phrase
+
+    from services.agent import voice_providers
+
+    provider_id = values.get(KEY_VOICE_PROVIDER, current.get(KEY_VOICE_PROVIDER)) or "openai"
+    spec = voice_providers.voice_provider_spec(provider_id)
+    if KEY_VOICE_PROVIDER in values:
+        pending[KEY_VOICE_PROVIDER] = spec.id
+
+    if KEY_VOICE_SPEAKER in values:
+        speaker = str(values[KEY_VOICE_SPEAKER] or "").strip().lower()
+        if speaker not in spec.speakers:
+            raise ValueError(f"Voice must be one of: {', '.join(spec.speakers)}")
+        pending[KEY_VOICE_SPEAKER] = speaker
+
+    if KEY_VOICE_MODEL in values:
+        # Deliberately not checked against spec.known_models: a successor to
+        # gpt-live-1 must be usable the day it ships, without an upgrade. The
+        # provider rejects a name it does not serve, and the Test button on the
+        # settings screen is what surfaces that.
+        model = str(values[KEY_VOICE_MODEL] or "").strip()
+        if not model:
+            raise ValueError("The voice model cannot be empty")
+        pending[KEY_VOICE_MODEL] = model
+
+    for key in (KEY_VOICE_ENABLED, KEY_VOICE_TRADING_ENABLED, KEY_VOICE_CONFIRM_WINDOW_SECONDS):
+        if key in values:
+            pending[key] = values[key]
+
+    if pending:
+        update(pending)
+    return get_voice_config()
+
+
+def voice_key() -> str | None:
+    """The stored OpenAI voice key, for minting a session.
+
+    The only caller is :mod:`services.agent.voice`. It is not exposed over HTTP
+    and is never written to a log or a response.
+
+    Returns:
+        The plaintext key, or None when none is stored.
+    """
+    try:
+        from database import agent_db
+
+        return agent_db.get_secret(voice_secret_name())
+    except Exception:
+        logger.exception("Could not read the voice key")
+        return None
+
+
+def set_voice_key(api_key: Any) -> dict[str, Any]:
+    """Store the OpenAI key the voice session is minted with.
+
+    Args:
+        api_key: The plaintext key.
+
+    Returns:
+        The voice configuration after the write, with no key in it.
+
+    Raises:
+        ValueError: For an unusable value.
+        RuntimeError: When the secret could not be stored.
+    """
+    key = str(api_key or "").strip()
+    if len(key) < 20:
+        raise ValueError("That does not look like an OpenAI API key.")
+    try:
+        from database import agent_db
+
+        stored, message = agent_db.set_secret(voice_secret_name(), key)
+    except Exception:
+        # No traceback and the cause suppressed: this frame's locals hold the
+        # plaintext key, and nothing derived from the original exception may
+        # reach a log or a response.
+        logger.error("Could not store the voice key")
+        raise RuntimeError("Could not store the voice key") from None
+    finally:
+        key = ""
+
+    if not stored:
+        raise RuntimeError(message or "Could not store the voice key")
+    logger.info("Voice key stored")
+    return get_voice_config()
+
+
+def clear_voice_key() -> dict[str, Any]:
+    """Remove the stored OpenAI voice key.
+
+    Returns:
+        The voice configuration after the removal.
+    """
+    try:
+        from database import agent_db
+
+        agent_db.delete_secret(voice_secret_name())
+    except Exception:
+        logger.exception("Could not remove the voice key")
+        raise RuntimeError("Could not remove the voice key") from None
+    logger.info("Voice key removed")
+    return get_voice_config()
+
+
+def voice_enabled(*, fresh: bool = False) -> bool:
+    """Whether the operator has switched the voice surface on.
+
+    Deliberately narrow and deliberately cached. The only caller outside this
+    module is `csp.py`, which runs on **every** response including static
+    assets, so this must not become a database read per request: `_load_all`
+    serves it from the settings TTL snapshot.
+
+    Args:
+        fresh: Read past the cache. A caller on a hot path should not.
+
+    Returns:
+        True when voice is enabled. A settings read that fails returns False,
+        which keeps the header closed rather than opening a capability because
+        a query errored.
+    """
+    try:
+        values = _load_all(fresh=fresh)
+        return bool(
+            _parse(
+                KEY_VOICE_ENABLED,
+                _SPEC[KEY_VOICE_ENABLED],
+                values.get(KEY_VOICE_ENABLED),
+                strict=False,
+            )
+        )
+    except Exception:
+        logger.exception("Could not read the voice switch; treating it as off")
+        return False

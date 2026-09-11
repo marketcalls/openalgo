@@ -55,7 +55,9 @@ from services.agent import attachments as agent_attachments
 from services.agent import builder, catalog, chatgpt_oauth, providers
 from services.agent import settings as agent_settings
 from services.agent import stream as agent_stream
+from services.agent import tools as tools_module
 from services.agent import viz_sink as viz_sink_module
+from services.agent import voice as agent_voice
 from services.agent.frames import SSE_HEADERS
 from services.agent.providers import litellm_model_id, reasoning_capable
 from services.agent.safety import audit
@@ -1324,6 +1326,229 @@ def chatgpt_forget():
 
 
 # ---------------------------------------------------------------------------
+# Voice
+#
+# Shaped like the web search block above, for the same reason: one credential,
+# a handful of tunables, a write-only key and a separate explicit test.
+#
+# The mint route is the one egress surface this module adds, and it is
+# deliberately the narrowest one in the blueprint. It takes an SDP offer and
+# nothing else: the model, the voice, the instructions and the vendor URL all
+# come from stored settings and module constants, so no request can point the
+# server at an endpoint of its choosing or reshape what the speech model is
+# told. That is what keeps voice off the SSRF surface described in
+# `docs/design/55-agent/README.md`.
+# ---------------------------------------------------------------------------
+
+#: The largest SDP offer this blueprint will read. A WebRTC audio offer with a
+#: data channel is a couple of kilobytes; this leaves generous room for ICE
+#: candidates and still refuses a body that is plainly not an offer before it is
+#: buffered, which `MAX_REQUEST_BYTES` alone would not do for a text body.
+MAX_SDP_BYTES = 256_000
+
+
+@agent_bp.route("/api/voice", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_voice():
+    """The voice configuration, with the key described and never shown.
+
+    Carries the tunables, the selectable speakers, whether a key is stored with
+    its fingerprint, and ``trading_effective`` - whether a spoken order could
+    actually reach a mutating tool once the master trading switch is taken into
+    account. The shipped defaults travel inside the same payload.
+    """
+    try:
+        return _ok({"data": agent_settings.get_voice_config()})
+    except Exception:
+        logger.exception("Could not read the voice configuration")
+        return _error("Could not read the voice configuration", 500)
+
+
+@agent_bp.route("/api/voice", methods=["PUT"])
+@check_session_validity
+@_api_limit
+def put_voice():
+    """Update the voice configuration.
+
+    Every value is validated before anything is written, so a request carrying
+    one bad field changes nothing. The agent name and the order phrase are
+    validated together against the same rules the approval matcher uses, which
+    is why a phrase that would be unreachable next to a given name is refused
+    here rather than accepted and then never matched.
+
+    This route never accepts a key. The key has its own route below.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+    if not body:
+        return _error("Nothing to update", 400)
+
+    try:
+        return _ok({"data": agent_settings.update_voice(body)})
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        logger.exception("Could not write the voice configuration")
+        return _error("Could not save the voice configuration", 500)
+
+
+@agent_bp.route("/api/voice/key", methods=["PUT"])
+@check_session_validity
+@_api_limit
+def put_voice_key():
+    """Store the OpenAI key the voice session is minted with.
+
+    Separate from any ``openai`` provider key in the model registry on purpose:
+    an operator may run their intelligence on Claude or a local model and still
+    want OpenAI's ears, and revoking one must not disturb the other.
+
+    Blank is refused rather than read as "clear it", because this route takes
+    only a key. Clearing one is the DELETE below, which says so.
+
+    Returns:
+        The refreshed configuration. The key is not in it.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+
+    api_key = body.get("api_key")
+    try:
+        data = agent_settings.set_voice_key(api_key)
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        # logger.error and no traceback: the submitted key is a local in this
+        # frame, and str(exc) from a storage or encryption failure can quote the
+        # material it choked on, where utils.logging's redaction patterns -- all
+        # of which key off a "token=" or "secret:" style label -- do not match it.
+        logger.error("Could not store the voice key")
+        return _error("Could not store the voice key", 500)
+    finally:
+        # The plaintext lives no longer than the call it was needed for.
+        api_key = None
+
+    logger.info("Voice key stored")
+    return _ok({"data": data, "message": "Voice key stored"})
+
+
+@agent_bp.route("/api/voice/key", methods=["DELETE"])
+@check_session_validity
+@_api_limit
+def delete_voice_key():
+    """Remove the stored OpenAI voice key.
+
+    Idempotent: clearing a key that is not there succeeds, because the operator
+    asked for no key to be stored and none is. The microphone stops working and
+    the rest of the agent is untouched.
+    """
+    try:
+        data = agent_settings.clear_voice_key()
+    except Exception:
+        logger.exception("Could not clear the voice key")
+        return _error("Could not clear the voice key", 500)
+
+    return _ok({"data": data, "message": "Voice key cleared"})
+
+
+@agent_bp.route("/api/voice/test", methods=["POST"])
+@check_session_validity
+@_test_limit
+def test_voice():
+    """Prove the stored key and the configured model can open a session.
+
+    The same rule as every other test route here: a real call, or it is not a
+    test. A throwaway session is minted against a placeholder offer and then
+    abandoned, which is enough to exercise the credential **and** the model,
+    because the vendor validates the key before the offer and the model after
+    it.
+
+    Unlike the mint route this does not require ``voice_enabled``: an operator
+    has to be able to prove a key works before switching the feature on.
+
+    Returns:
+        ``{ok, message, latency_ms, model}`` alongside the refreshed
+        configuration, since a passing test updates the key's last use.
+    """
+    try:
+        result = agent_voice.probe()
+    except Exception:
+        # logger.error and no traceback: the probe path holds the key.
+        logger.error("The voice test could not be run")
+        return _error("Could not run the voice test", 500)
+
+    message = result.message[:MAX_TEST_ERROR_CHARS]
+    if result.ok:
+        logger.info("Voice provider passed its test in %sms", result.latency_ms)
+    else:
+        logger.error("Voice provider failed its test: %s", message)
+
+    return _ok(
+        {
+            "ok": result.ok,
+            "message": message,
+            "latency_ms": result.latency_ms,
+            "model": result.model,
+            "data": agent_settings.get_voice_config(),
+        }
+    )
+
+
+@agent_bp.route("/api/voice/session", methods=["POST"])
+@check_session_validity
+@_stream_limit
+def post_voice_session():
+    """Exchange the browser's SDP offer for the vendor's answer.
+
+    **The request body is the offer and nothing else.** This route accepts no
+    model, no voice, no instructions, no base URL and no other provider
+    parameter, by request or by header. The model, the speaker, the persona, the
+    order phrase and the endpoint are read from stored settings and module
+    constants inside :mod:`services.agent.voice`. A caller can therefore start a
+    session or fail to; it can never steer one, and it cannot name the host the
+    server posts to.
+
+    The body arrives as ``application/sdp`` text and the answer goes back the
+    same way, so the browser can hand it straight to
+    ``setRemoteDescription``. Nothing about the audio itself passes through this
+    process: the WebRTC connection, once answered, is between the browser and
+    the vendor.
+
+    It carries the stream rate limit rather than the settings one. A mint is one
+    real upstream call against a billed credential, in the same cost class as
+    opening a turn, and a settings-page budget would let a reconnect loop spend
+    against the key far faster than a person could.
+
+    Returns:
+        The answer SDP with an ``application/sdp`` mimetype, or a JSON error.
+    """
+    declared = request.content_length
+    if declared is not None and declared > MAX_SDP_BYTES:
+        return _error("That connection offer is too large", 413)
+    request.max_content_length = MAX_SDP_BYTES
+    try:
+        offer = request.get_data(as_text=True)
+    except RequestEntityTooLarge:
+        return _error("That connection offer is too large", 413)
+    if not offer.strip():
+        return _error("A connection offer is required", 400)
+
+    try:
+        answer = agent_voice.mint_session(offer)
+    except agent_voice.VoiceUnavailable as exc:
+        # The message is written for an operator by the voice module and never
+        # carries the key or the vendor's raw body, so it is safe to return.
+        return _error(str(exc), 400)
+    except Exception:
+        logger.exception("Could not mint a voice session")
+        return _error("Could not start the voice session", 500)
+
+    return Response(answer, mimetype="application/sdp")
+
+
+# ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
 
@@ -1862,11 +2087,46 @@ def _build_context(
         conversation_id=conversation_id,
         surface=surface,
         user_id=username,
-        trading_enabled=bool(body.get("trading_enabled", False)),
+        trading_enabled=_trading_capability(body, surface),
         web_search_enabled=bool(web_search),
         analyzer_mode=_analyzer_mode(),
         extras=extras,
     )
+
+
+def _trading_capability(body: dict, surface: str) -> bool:
+    """Whether this run may build a mutating toolkit.
+
+    The request asks, and on the chat surface the request is the whole answer:
+    the switch narrows which toolkits are built, and the risk guard inside the
+    tool body is what actually stands between a sentence and a broker.
+
+    The spoken surface adds a second, server-side narrowing. `voice_trading_enabled`
+    is read here rather than trusted from the body, because the body is written
+    by a browser and this is the only place that can refuse to widen. It can
+    only ever remove the capability: a run that did not ask for trading does not
+    acquire it by being spoken.
+
+    Args:
+        body: The request body.
+        surface: The run's surface.
+
+    Returns:
+        True when mutating toolkits may be built for this run.
+    """
+    asked = bool(body.get("trading_enabled", False))
+    if not asked or surface != tools_module.SURFACE_VOICE:
+        return asked
+    try:
+        from services.agent import settings as agent_settings
+
+        config = agent_settings.get_voice_config()
+        return bool(config.get("trading_effective"))
+    except Exception:
+        # Fail closed: an unreadable setting withholds the capability rather
+        # than handing a spoken run an order toolkit by accident.
+        logger.exception("Could not read voice trading configuration; withholding order tools")
+        return False
 
 
 def _web_search_of(body: dict) -> bool:

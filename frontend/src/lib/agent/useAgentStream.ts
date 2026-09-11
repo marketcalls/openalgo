@@ -211,6 +211,17 @@ export interface AgentTurnOptions {
   /** Files to send with this message. The bytes travel; nothing is stored. */
   attachments?: readonly AgentAttachment[]
   /**
+   * Run this one turn on a different surface from the hook's.
+   *
+   * The voice surface needs it: a spoken question and a typed one share this
+   * hook, the same conversation and the same message list, but they do not want
+   * the same tools or the same prompt - an answer meant for a speaker is two
+   * sentences with no markdown in it. Passing the surface per turn is what lets
+   * a spoken turn render as an ordinary message, with its tool timeline,
+   * without the chat page having to run a second stream of its own.
+   */
+  surface?: AgentSurface
+  /**
    * False withholds the web search tools from this turn.
    *
    * Only false is transmitted. `/chat/confirm` needs none of this: the server
@@ -513,12 +524,13 @@ export function useAgentStream(options: UseAgentStreamOptions = {}): UseAgentStr
       setError(null)
 
       const {
-        surface = 'chat',
+        surface: hookSurface = 'chat',
         modelId,
         reasoningEffort,
         tradingEnabled,
         getChartContext,
       } = optionsRef.current
+      const surface = turn.surface ?? hookSurface
       const chartContext = getChartContext?.() ?? null
 
       const body: Record<string, unknown> = {

@@ -33,8 +33,12 @@ export type ProviderKind = 'openai' | 'anthropic' | 'ollama' | 'openai_compatibl
 /** Reasoning effort, per model and optionally per run. */
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 
-/** Which surface a conversation belongs to: the chat page or the chart panel. */
-export type AgentSurface = 'chat' | 'chart'
+/**
+ * Which surface a conversation belongs to: the chat page, the chart panel, or
+ * the spoken one. `voice` is a third surface on the same agent, not a second
+ * agent, and it narrows the toolkits it reaches rather than widening them.
+ */
+export type AgentSurface = 'chat' | 'chart' | 'voice'
 
 /** Where a submitted key is stored: shared by the provider, or for one model. */
 export type ApiKeyScope = 'provider' | 'model'
@@ -398,6 +402,114 @@ export interface WebSearchTestResult {
   result_count: number
   /** The refreshed config: a passing test updates the key's last use. */
   data: WebSearchConfig
+}
+
+// =============================================================================
+// Voice
+//
+// The spoken surface, shaped like web search above and for the same reasons:
+// one credential of its own, a handful of tunables, and no key value on the
+// wire in either direction. The configuration PUT takes no key at all and the
+// key has its own route.
+//
+// The key is an `ag_secret` under `voice:openai`, deliberately separate from
+// any `openai` provider key: an operator may run the intelligence on Claude or
+// a local model and still want OpenAI's ears and mouth.
+//
+// Two fields here are not independent, and the type cannot say so. The order
+// phrase must not appear anywhere in the agent's name, so the server validates
+// them as a pair however they arrive, and a write that moves either one is
+// re-validated against the other. Send both whenever either changes.
+// =============================================================================
+
+/**
+ * The configurable half of the voice settings, which is also what they revert to.
+ *
+ * `voice_agent_name` is what a trader calls the agent and carries no authority.
+ * `voice_order_phrase` is the single word that approves a staged order, stored
+ * lower-cased because it is matched case-insensitively and never shown as a
+ * name. Sending an empty string for either restores its shipped default rather
+ * than clearing it, since neither may be blank.
+ */
+export interface VoiceDefaults {
+  /** The master switch. Off means the mic never renders. */
+  voice_enabled: boolean
+  /** The speech model. `gpt-live-1` hears and speaks; it decides nothing. */
+  voice_model: string
+  /** Which OpenAI voice speaks, from the `speakers` list on the config. */
+  voice_speaker: string
+  /** What the trader calls the agent. Letters and spaces, up to 40. */
+  voice_agent_name: string
+  /** The word that approves a staged order. One word, 3 to 20 letters. */
+  voice_order_phrase: string
+  /** Whether mutating tools reach the voice surface. Subject to trading_enabled. */
+  voice_trading_enabled: boolean
+  /** How long a spoken approval stays open, 5 to 300. */
+  voice_confirm_window_seconds: number
+}
+
+/**
+ * The stored OpenAI voice key, described and never shown.
+ *
+ * `api_key` is declared as `never` for the same reason it is on AgentModel: an
+ * attempt to put a key value on this object fails to compile rather than
+ * reaching a render.
+ */
+export interface VoiceKeyRow {
+  has_value: boolean
+  /** Display safe, never the value: `...abcd sha256:0123456789ab`. */
+  fingerprint: string | null
+  /** Naive UTC ISO string, or null when the key has never been handed over. */
+  last_used_at: string | null
+  /** Never present. Declared so nothing can assign a key onto this row. */
+  api_key?: never
+}
+
+/**
+ * The whole voice configuration, as `GET /agent/api/voice` renders it.
+ *
+ * `trading_enabled_master` is the platform-wide agent trading switch, repeated
+ * here so the panel can say what `voice_trading_enabled` will actually do:
+ * `trading_effective` is the conjunction, and it is the only one of the three
+ * that describes what a spoken order request can reach.
+ */
+export interface VoiceConfig extends VoiceDefaults {
+  /** The agent-wide trading switch. Not editable from the voice routes. */
+  trading_enabled_master: boolean
+  /** `trading_enabled_master && voice_trading_enabled`. */
+  trading_effective: boolean
+  /** The selectable voices. Advisory, like the model catalogue. */
+  speakers: string[]
+  key: VoiceKeyRow
+  /** Shipped alongside by the settings module rather than under the envelope. */
+  defaults?: VoiceDefaults
+  /** Never present. Declared so nothing can assign a key onto the config. */
+  api_key?: never
+}
+
+/**
+ * A partial voice configuration write.
+ *
+ * Validated as a whole before anything is written, so a request carrying one
+ * bad value changes nothing, and an unknown key is rejected rather than ignored.
+ */
+export type VoiceConfigUpdate = Partial<VoiceDefaults>
+
+export interface VoiceConfigResponse {
+  data: VoiceConfig
+  /** null only if the server ever stops sending them; the panel then omits its hints. */
+  defaults: VoiceDefaults | null
+}
+
+export interface VoiceTestResult {
+  ok: boolean
+  /** On failure this is the vendor's own reason, which the operator needs. */
+  message: string
+  latency_ms: number
+  /** The model the test asked for, which is what a 404 from the vendor is about. */
+  model: string
+  /** The refreshed config: a passing test updates the key's last use. */
+  data: VoiceConfig
 }
 
 // =============================================================================
@@ -884,6 +996,105 @@ export async function testWebSearchProvider(
 }
 
 // -----------------------------------------------------------------------------
+// Voice
+// -----------------------------------------------------------------------------
+
+const VOICE_BASE = `${AGENT_API_BASE}/voice`
+
+/**
+ * Read a voice payload that may travel flat or under `data`.
+ *
+ * The same defence chatGptPayload takes, for the same reason: the agent routes
+ * are not uniform about the envelope, and these ones are being written
+ * alongside this file. Unwrapping whichever arrived beats a hardcoded guess
+ * that turns into a blank panel if it is wrong.
+ *
+ * @param body - The parsed response body.
+ * @param probe - A field the payload itself is known to carry.
+ * @returns The payload.
+ */
+function voicePayload<T>(body: unknown, probe: keyof T & string): T {
+  const envelope = body as { data?: unknown } | null | undefined
+  const nested = envelope?.data
+  if (nested && typeof nested === 'object' && probe in (nested as object)) return nested as T
+  return body as T
+}
+
+/** The config, plus the defaults from wherever the server chose to hang them. */
+function voiceResponse(body: unknown): VoiceConfigResponse {
+  const data = voicePayload<VoiceConfig>(body, 'voice_enabled')
+  const envelope = body as { defaults?: VoiceDefaults } | null | undefined
+  return { data, defaults: data.defaults ?? envelope?.defaults ?? null }
+}
+
+/**
+ * The voice configuration, with the key described and never shown.
+ *
+ * Carries the tunables, the selectable voices, whether a key is stored, and
+ * both halves of the trading question: the agent-wide switch and what voice
+ * can actually reach once that switch is taken into account.
+ */
+export async function getVoiceConfig(): Promise<VoiceConfigResponse> {
+  const response = await webClient.get(VOICE_BASE)
+  return voiceResponse(response.data)
+}
+
+/**
+ * Persist a partial voice configuration update.
+ *
+ * This never carries a key; the key has its own routes below. The agent name
+ * and the order phrase are validated against each other, so send both whenever
+ * either one has moved: a rename can invalidate a phrase that was acceptable a
+ * moment earlier, and the server re-writes the phrase when either half changes.
+ */
+export async function updateVoiceConfig(values: VoiceConfigUpdate): Promise<VoiceConfig> {
+  const response = await webClient.put(VOICE_BASE, values)
+  return voicePayload<VoiceConfig>(response.data, 'voice_enabled')
+}
+
+/**
+ * Store the OpenAI key the voice session is minted with.
+ *
+ * Write only, and never returned by any route. A blank value is refused rather
+ * than read as a clear, because clearing one is clearVoiceKey, which says so.
+ *
+ * @param apiKey - The plaintext key.
+ */
+export async function setVoiceKey(apiKey: string): Promise<VoiceConfig> {
+  const response = await webClient.put(`${VOICE_BASE}/key`, { api_key: apiKey })
+  return voicePayload<VoiceConfig>(response.data, 'voice_enabled')
+}
+
+/**
+ * Remove the stored OpenAI voice key.
+ *
+ * Idempotent. The voice surface stops working until a key is stored again; the
+ * settings themselves are left alone, because they are operator intent and this
+ * call only revokes the credential behind them.
+ */
+export async function clearVoiceKey(): Promise<VoiceConfig> {
+  const response = await webClient.delete(`${VOICE_BASE}/key`)
+  return voicePayload<VoiceConfig>(response.data, 'voice_enabled')
+}
+
+/**
+ * Prove the stored key works by minting a throwaway session and discarding it.
+ *
+ * The same rule as testModel and testWebSearchProvider: a failed test is a 200
+ * carrying `ok: false` and the vendor's own message, not an HTTP error. "No key
+ * stored", "invalid key" and "that model is not available to this account" need
+ * different fixes, and the operator asked a question that deserves the real
+ * answer. No audio is involved and nothing is left behind.
+ *
+ * The result travels flat and carries the refreshed configuration under `data`,
+ * which is why the probe here is `ok` rather than a configuration field.
+ */
+export async function testVoice(): Promise<VoiceTestResult> {
+  const response = await webClient.post(`${VOICE_BASE}/test`, {})
+  return voicePayload<VoiceTestResult>(response.data, 'ok')
+}
+
+// -----------------------------------------------------------------------------
 // The ChatGPT subscription
 // -----------------------------------------------------------------------------
 
@@ -1106,6 +1317,10 @@ export const agentQueryKeys = {
   // answers with the same refreshed object, so one cache entry stays correct
   // and a second key would only be a second thing to invalidate.
   websearch: () => [...agentQueryKeys.all, 'websearch'] as const,
+  // One key for the whole voice configuration, for the same reason: every
+  // mutation (a tunable, the stored key, its removal) answers with the same
+  // refreshed object, so one cache entry stays correct.
+  voice: () => [...agentQueryKeys.all, 'voice'] as const,
   // One key for the subscription. The panel polls it while a sign-in is
   // pending, and the registry and the model picker read the same cache entry to
   // describe the credential a `chatgpt/` row runs on, which has no key of its
