@@ -37,6 +37,21 @@ class FivepaisaXTSWebSocketClient:
     QUOTE_MODE = 2
     DEPTH_MODE = 3
 
+    # Mode to XTS message code, per the XTS documentation:
+    # 1501 = Touchline / full market data, 1502 = market depth,
+    # 1505 = full market data, 1510 = open interest, 1512 = LTP.
+    #
+    # Shared by subscribe() and unsubscribe() so the two cannot disagree:
+    # unsubscribe used to read the code back from its correlation id's stored
+    # entry and silently fall back to 1501, which unsubscribed the wrong feed
+    # for LTP and depth as soon as subscriptions were batched under ids of
+    # their own.
+    MODE_TO_XTS_CODE = {
+        1: 1512,  # LTP
+        2: 1501,  # Quote
+        3: 1502,  # Market depth
+    }
+
     # Exchange Types (matching XTS API)
     NSE_EQ = 1
     NSE_FO = 2
@@ -234,20 +249,7 @@ class FivepaisaXTSWebSocketClient:
         if not self.connected:
             raise RuntimeError("Socket.IO not connected")
 
-        # Map mode to XTS message code
-        # Based on XTS documentation:
-        # 1501 = LTP/Touchline
-        # 1502 = Market Depth
-        # 1505 = Full Market Data
-        # 1510 = Open Interest
-        # 1512 = LTP
-        mode_to_xts_code = {
-            1: 1512,  # LTP mode -> 1512 (LTP)
-            2: 1501,  # Quote mode -> 1501 (Full Market Data)
-            3: 1502,  # Depth mode -> 1502 (Market Depth)
-        }
-
-        xts_message_code = mode_to_xts_code.get(mode, 1501)
+        xts_message_code = self.MODE_TO_XTS_CODE.get(mode, 1501)
 
         # Prepare subscription request
         subscription_request = {"instruments": instruments, "xtsMessageCode": xts_message_code}
@@ -298,6 +300,34 @@ class FivepaisaXTSWebSocketClient:
             f"Subscribed to {len(instruments)} instruments with XTS code {xts_message_code} (mode {mode})"
         )
 
+    @staticmethod
+    def _instrument_key(instrument: dict) -> tuple:
+        """Identity of an instrument, normalised to strings.
+
+        XTS carries the segment as an int and the instrument id as a string in
+        some paths and the reverse in others, so comparing raw values misses
+        matches that are the same instrument.
+        """
+        return (
+            str(instrument.get("exchangeSegment")),
+            str(instrument.get("exchangeInstrumentID")),
+        )
+
+    def _forget_instruments(self, xts_message_code: int, instruments: list[dict]) -> None:
+        """Remove `instruments` from every stored entry using the same code."""
+        targets = {self._instrument_key(i) for i in instruments}
+        for correlation_id in list(self.subscriptions):
+            entry = self.subscriptions[correlation_id]
+            if entry.get("xts_message_code") != xts_message_code:
+                continue
+            kept = [
+                i for i in entry.get("instruments", []) if self._instrument_key(i) not in targets
+            ]
+            if not kept:
+                del self.subscriptions[correlation_id]
+            else:
+                entry["instruments"] = kept
+
     def unsubscribe(self, correlation_id: str, mode: int, instruments: list[dict]):
         """
         Unsubscribe from market data using XTS HTTP API
@@ -310,14 +340,20 @@ class FivepaisaXTSWebSocketClient:
         if not self.connected:
             return
 
-        # Get the XTS message code from stored subscription
-        subscription = self.subscriptions.get(correlation_id, {})
-        xts_message_code = subscription.get("xts_message_code", 1501)
+        # Derive the code from the mode, the same way subscribe() does. Reading
+        # it back from `correlation_id` only worked while every subscribe used
+        # a per-symbol id; batched subscribes are stored under a batch id, so
+        # the lookup missed and every unsubscribe fell back to 1501.
+        xts_message_code = self.MODE_TO_XTS_CODE.get(mode, 1501)
 
         # Prepare unsubscription request
         unsubscription_request = {"instruments": instruments, "xtsMessageCode": xts_message_code}
 
-        # Remove from subscriptions
+        # Drop these instruments from whichever stored entries hold them,
+        # deleting an entry once it is empty. `self.subscriptions` is also the
+        # tick filter (see _process_1105_data), so an instrument left behind
+        # here keeps being accepted after it was unsubscribed.
+        self._forget_instruments(xts_message_code, instruments)
         if correlation_id in self.subscriptions:
             del self.subscriptions[correlation_id]
 
@@ -478,19 +514,16 @@ class FivepaisaXTSWebSocketClient:
             exchange_segment_int = int(exchange_segment)
             instrument_id_int = int(instrument_id)
 
-            # Check if we have any subscription for this instrument
-            is_subscribed = False
-            for sub in self.subscriptions.values():
-                # Get instruments from the subscription
-                for instrument in sub.get("instruments", []):
-                    if (
-                        instrument.get("exchangeSegment") == exchange_segment_int
-                        and instrument.get("exchangeInstrumentID") == instrument_id_int
-                    ):
-                        is_subscribed = True
-                        break
-                if is_subscribed:
-                    break
+            # Check if we have any subscription for this instrument. Compare on
+            # the normalised key: the adapter stores exchangeInstrumentID as a
+            # string, so the previous `== instrument_id_int` could never match
+            # and every 1105 tick was dropped here.
+            wanted = (str(exchange_segment_int), str(instrument_id_int))
+            is_subscribed = any(
+                self._instrument_key(instrument) == wanted
+                for sub in self.subscriptions.values()
+                for instrument in sub.get("instruments", [])
+            )
 
             if not is_subscribed:
                 # Skip processing for unsubscribed instruments

@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+from collections import deque
 from typing import Any, Dict, List, Optional
 
 from broker.fivepaisaxts.streaming.fivepaisaxts_websocket import FivepaisaXTSWebSocketClient
@@ -24,6 +25,30 @@ from .fivepaisaxts_mapping import FivepaisaXTSCapabilityRegistry, FivepaisaXTSEx
 class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Fivepaisa XTS specific implementation of the WebSocket adapter"""
 
+    # Subscription batching: the XTS market-data API takes an `instruments`
+    # ARRAY per request, so coalesce instruments sharing an xtsMessageCode into
+    # one request instead of one request per symbol.
+    #
+    # This matters more here than on a pure socket broker: the client's
+    # subscribe() is a BLOCKING HTTP POST with a 10s timeout, issued inline from
+    # subscribe(). One request per symbol makes a 1000-symbol startup 1000
+    # sequential round-trips.
+    MAX_INSTRUMENTS_PER_SUBSCRIBE = 50
+    # Gap between successive batch requests, applied only when more batches
+    # remain, so a single-symbol subscribe is not penalised with a wait.
+    SUBSCRIPTION_DELAY = 0.5
+    # Collect window opened by the first queued instrument, before the first
+    # request goes out.
+    #
+    # Callers subscribe one symbol at a time (an option chain fires ~50 separate
+    # subscribe() calls), so without this the drain thread would send the very
+    # first instrument immediately, find the queue momentarily empty, exit, and
+    # be restarted by the next enqueue - one 1-instrument request per symbol,
+    # which is the flood this batching exists to prevent. Waiting once here lets
+    # the burst accumulate so it leaves as one request per mode. Matches the
+    # window the sibling 5Paisa adapter opens.
+    SUBSCRIPTION_COLLECT_WINDOW = 0.5
+
     def __init__(self):
         super().__init__()
         self.logger = get_logger("fivepaisa_xts_websocket")
@@ -37,6 +62,13 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
         self._reconnect_thread_active = False  # Guard against duplicate reconnect threads
+
+        # Subscription batch queue: items are (mode, instrument_dict). A single
+        # processor thread drains it into coalesced multi-instrument requests.
+        self.pending_subscriptions = deque()
+        self._sub_thread = None
+        self._stop_event = threading.Event()
+        self._batch_seq = 0  # Names each batch's correlation id
 
         # Log the ZMQ port being used
         self.logger.info(f"Fivepaisa XTS adapter initialized with ZMQ port: {self.zmq_port}")
@@ -192,6 +224,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
+        # A previous disconnect() left the stop event set; clear it or the batch
+        # processor started by the first subscribe after this connect exits on
+        # its collect window and nothing is ever sent.
+        self._stop_event.clear()
+
         threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _connect_with_retry(self) -> None:
@@ -236,9 +273,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     with self.lock:
                         self.reconnect_attempts += 1
                         attempts = self.reconnect_attempts
-                    delay = min(
-                        self.reconnect_delay * (2**attempts), self.max_reconnect_delay
-                    )
+                    delay = min(self.reconnect_delay * (2**attempts), self.max_reconnect_delay)
                     self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
                     time.sleep(delay)
 
@@ -258,6 +293,13 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(
             "Set running=False and max reconnect attempts to prevent auto-reconnection"
         )
+
+        # Wake the batch processor out of any inter-batch wait and drop queued
+        # work, so it cannot fire a subscribe request at a client we are about
+        # to release.
+        self._stop_event.set()
+        with self.lock:
+            self.pending_subscriptions.clear()
 
         # Disconnect and release Socket.IO client
         if hasattr(self, "ws_client") and self.ws_client:
@@ -285,6 +327,144 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # cleanup_zmq() is inherited from BaseBrokerWebSocketAdapter which handles:
     # - idempotency (_zmq_cleaned_up flag), shared-ZMQ skip, _instance_count
     #   decrement, socket nulling, and shared context lifecycle.
+
+    @staticmethod
+    def _instrument_key(instrument: dict) -> tuple:
+        """Identity of an instrument, normalised to strings.
+
+        XTS carries the segment as an int and the instrument id as a string in
+        some paths and the reverse in others, so comparing the raw dicts misses
+        matches that are the same instrument.
+        """
+        return (
+            str(instrument.get("exchangeSegment")),
+            str(instrument.get("exchangeInstrumentID")),
+        )
+
+    def _enqueue_subscriptions(self, items: list) -> None:
+        """Queue (mode, instrument) items for batched sending and ensure the
+        batch processor thread is running."""
+        if not items:
+            return
+        with self.lock:
+            self.pending_subscriptions.extend(items)
+            if self._sub_thread is None or not self._sub_thread.is_alive():
+                self._sub_thread = threading.Thread(
+                    target=self._process_pending_subscriptions, daemon=True
+                )
+                self._sub_thread.start()
+
+    def _process_pending_subscriptions(self) -> None:
+        """Drain the pending queue into coalesced XTS subscribe requests.
+
+        Instruments are grouped by mode - mode maps 1:1 onto xtsMessageCode and
+        a request carries exactly one code - and sent up to
+        MAX_INSTRUMENTS_PER_SUBSCRIBE per request, with a throttle between
+        requests. Failed batches are re-queued. This replaces the previous
+        one-request-per-symbol flood on bulk subscribe and on resubscribe.
+        """
+        consecutive_failures = 0
+
+        # Collect window: let the rest of the burst land before the first
+        # request goes out (see SUBSCRIPTION_COLLECT_WINDOW). Interruptible, so
+        # a disconnect during the window does not stall shutdown.
+        if self._stop_event.wait(self.SUBSCRIPTION_COLLECT_WINDOW):
+            with self.lock:
+                self._sub_thread = None
+            return
+
+        while self.running and not self._stop_event.is_set():
+            # Decide whether to exit on an EMPTY queue under the same lock that
+            # _enqueue_subscriptions holds when it appends work and checks our
+            # liveness. Testing emptiness outside the lock is a lost-wakeup
+            # race: an enqueue could add an item and observe this thread still
+            # alive (so skip starting a new one) in the instant between our
+            # unlocked test and our return, stranding that item until the next
+            # enqueue or reconnect. Clearing _sub_thread here closes that window.
+            with self.lock:
+                if not self.pending_subscriptions:
+                    self._sub_thread = None
+                    return
+
+            if not (self.connected and self.ws_client):
+                # Not connected yet; _on_open re-queues everything on connect,
+                # so back off briefly and re-check (interruptible).
+                consecutive_failures += 1
+                if consecutive_failures > 5:
+                    self.logger.warning(
+                        "Batch processor: not connected after retries; pausing queue."
+                    )
+                    break
+                if self._stop_event.wait(min(2 * consecutive_failures, 10)):
+                    break
+                continue
+            consecutive_failures = 0
+
+            # Pull a batch of same-mode instruments. The mode is taken from the
+            # head of the queue, but matching instruments are then gathered from
+            # ANYWHERE in it: callers interleave modes freely, and a
+            # front-run-only scan would alternate modes item by item and emit
+            # one-instrument requests, which is the flood this exists to
+            # prevent. Order within a mode is preserved.
+            batch_mode = None
+            batch_instruments = []
+            with self.lock:
+                if self.pending_subscriptions:
+                    batch_mode = self.pending_subscriptions[0][0]
+                    remaining = deque()
+                    for mode, instrument in self.pending_subscriptions:
+                        if (
+                            mode == batch_mode
+                            and len(batch_instruments) < self.MAX_INSTRUMENTS_PER_SUBSCRIBE
+                        ):
+                            batch_instruments.append(instrument)
+                        else:
+                            remaining.append((mode, instrument))
+                    self.pending_subscriptions = remaining
+                    self._batch_seq += 1
+                    correlation_id = f"batch_mode_{batch_mode}_{self._batch_seq}"
+
+            if not batch_instruments:
+                continue
+
+            # Snapshot the client ref: disconnect() nulls self.ws_client, and
+            # this send is a blocking HTTP POST, so reading the attribute again
+            # mid-call is a race the check above cannot cover.
+            client = self.ws_client
+            if client is None:
+                break
+
+            try:
+                client.subscribe(correlation_id, batch_mode, batch_instruments)
+                self.logger.info(
+                    f"Sent batched subscription: {len(batch_instruments)} instruments "
+                    f"in mode {batch_mode}"
+                )
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed (mode {batch_mode}): {e}")
+                # Re-queue the failed batch (front, preserving order) for retry,
+                # but not while stopping: disconnect() has just emptied the
+                # queue, and _on_open re-queues the whole book on reconnect, so
+                # putting these back would only plant duplicates.
+                if self._stop_event.is_set() or not self.running:
+                    break
+                with self.lock:
+                    for instrument in reversed(batch_instruments):
+                        self.pending_subscriptions.appendleft((batch_mode, instrument))
+                if self._stop_event.wait(self.SUBSCRIPTION_DELAY * 2):
+                    break
+                continue
+
+            # Throttle only when more work remains, so a single-symbol
+            # subscribe (the common UI case) is not made to wait for nothing.
+            if self.pending_subscriptions:
+                if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
+                    break
+
+        # Loop exited via stop/pause (not the empty-queue return above): clear
+        # the handle so a later _enqueue_subscriptions starts a fresh processor.
+        with self.lock:
+            self._sub_thread = None
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -397,13 +577,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}"
             )
 
-        # Subscribe if connected
+        # Queue for batched sending. When not connected we skip: _on_open
+        # re-queues every stored subscription on (re)connect, so enqueuing here
+        # too would send each instrument twice.
         if self.connected and self.ws_client:
-            try:
-                self.ws_client.subscribe(correlation_id, mode, instruments)
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            self._enqueue_subscriptions([(mode, instruments[0])])
 
         # Return success with capability info
         return self._create_success_response(
@@ -469,22 +647,36 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        # Create instrument list for Fivepaisa XTS API
+        # Create instrument list for Fivepaisa XTS API. str() on the token to
+        # match what subscribe() stores, so the queued-subscribe cancellation
+        # below and the client's instrument bookkeeping both find it.
         instruments = [
             {
                 "exchangeSegment": FivepaisaXTSExchangeMapper.get_exchange_type(brexchange),
-                "exchangeInstrumentID": token,
+                "exchangeInstrumentID": str(token) if token is not None else "",
             }
         ]
 
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Remove from subscriptions
+        # Remove from subscriptions, and cancel any still-queued subscribe for
+        # the same (mode, instrument). Without this, a quick
+        # subscribe -> unsubscribe sends Unsubscribe now but leaves the batched
+        # Subscribe in the queue, which the processor then sends afterwards -
+        # resurrecting a stale server-side subscription and its feed traffic.
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
                 self.logger.info(f"Removed {symbol}.{exchange} from subscription registry")
+
+            if self.pending_subscriptions:
+                target = (mode, self._instrument_key(instruments[0]))
+                self.pending_subscriptions = deque(
+                    item
+                    for item in self.pending_subscriptions
+                    if (item[0], self._instrument_key(item[1])) != target
+                )
 
         # Unsubscribe if connected
         if self.connected and self.ws_client:
@@ -524,16 +716,31 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._resubscribe_all()
 
     def _resubscribe_all(self):
-        """Resubscribe to all stored subscriptions"""
+        """Resubscribe to all stored subscriptions via the batch queue.
+
+        Coalesced into multi-instrument requests rather than one blocking HTTP
+        POST per symbol: a reconnect with a full book was the worst case for the
+        old path, since it replayed every subscription serially.
+
+        Deduped on (mode, instrument): distinct correlation ids can name the
+        same instrument in the same mode - mode 3 stores the depth level in its
+        id, so two depth levels on one token are two entries - and the server
+        only needs telling once.
+        """
+        items = []
+        seen = set()
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            for sub in self.subscriptions.values():
+                for instrument in sub["instruments"]:
+                    key = (sub["mode"], self._instrument_key(instrument))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append((sub["mode"], instrument))
+
+        if items:
+            self.logger.info(f"Resubscribing {len(items)} instrument(s) in batches")
+            self._enqueue_subscriptions(items)
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
