@@ -35,6 +35,7 @@ import pytest
 import blueprints.agent as agent_bp
 from services.agent import settings as agent_settings
 from services.agent import voice
+from services.agent.safety import audit
 from services.agent.safety import voice_confirm as vc
 from services.agent.tools import (
     SURFACE_CHART,
@@ -912,3 +913,49 @@ class TestOnlyTheOpeningInstructionCarriesItsOwnApproval:
             voice.judge_approval("run-1", "milo buy 100 reliance", self.CFG, opening=True).approved
             is True
         )
+
+
+class TestTheApprovalPhraseIsNeverStored:
+    """A secret said out loud must not be written down in plaintext.
+
+    The phrase is spoken every time an order is approved, and `ag_audit` is the
+    table this codebase makes shareable for triage. Storing it there would teach
+    the word that places orders to whoever is handed the report.
+    """
+
+    def test_the_phrase_is_masked_wherever_it_appears(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_settings, "get_voice_config", lambda **_: {"voice_order_phrase": "milo"}
+        )
+        masked = audit._without_approval_phrase("Yeah, it is Milo")
+        assert "milo" not in masked.lower()
+        assert audit.APPROVAL_PHRASE_MASK in masked
+
+    def test_it_is_masked_case_insensitively_and_everywhere(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_settings, "get_voice_config", lambda **_: {"voice_order_phrase": "milo"}
+        )
+        masked = audit._without_approval_phrase("MILO buy 100, then milo again")
+        assert "milo" not in masked.lower()
+        assert masked.count(audit.APPROVAL_PHRASE_MASK) == 2
+
+    def test_a_word_that_merely_contains_it_is_left_alone(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_settings, "get_voice_config", lambda **_: {"voice_order_phrase": "milo"}
+        )
+        assert audit._without_approval_phrase("milometer reading") == "milometer reading"
+
+    def test_a_line_survives_a_settings_failure_unmasked_rather_than_lost(self, monkeypatch):
+        def boom(**_):
+            raise RuntimeError("no database")
+
+        monkeypatch.setattr(agent_settings, "get_voice_config", boom)
+        # Recording the line matters more than masking it: losing the record of
+        # what was said is the worse outcome, and it is logged.
+        assert audit._without_approval_phrase("say milo") == "say milo"
+
+    def test_no_phrase_configured_leaves_the_line_alone(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_settings, "get_voice_config", lambda **_: {"voice_order_phrase": ""}
+        )
+        assert audit._without_approval_phrase("anything at all") == "anything at all"
