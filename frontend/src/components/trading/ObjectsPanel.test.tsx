@@ -1,6 +1,6 @@
 import type { ChartObjectSnapshot, ChartObjects } from 'openalgo-charts'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, userEvent } from '@/test/test-utils'
+import { act, render, screen, userEvent } from '@/test/test-utils'
 import { ObjectsPanel } from './ObjectsPanel'
 
 const capabilities = (
@@ -94,7 +94,7 @@ describe('ObjectsPanel', () => {
     expect(screen.getByText('Pane 2')).toBeInTheDocument()
     expect(screen.getByText(/Loading/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Select Open interest' })).toHaveAccessibleDescription(
-      'Indicator, Chart pane 2, Loading, Visible'
+      'Indicator · Chart pane 2 · Loading · Visible'
     )
 
     await userEvent.type(screen.getByRole('searchbox', { name: 'Search objects' }), 'interest')
@@ -123,7 +123,7 @@ describe('ObjectsPanel', () => {
       'true'
     )
     expect(screen.getByRole('button', { name: 'Select Trend line' })).toHaveAccessibleDescription(
-      'Drawing, Chart pane 1, Visible, Unlocked'
+      'Drawing · Chart pane 1 · Visible · Unlocked'
     )
     await userEvent.click(screen.getByRole('button', { name: 'Hide Trend line' }))
     await userEvent.click(screen.getByRole('button', { name: 'Lock Trend line' }))
@@ -152,7 +152,9 @@ describe('ObjectsPanel', () => {
     const second = model([drawing])
     const view = render(<ObjectsPanel model={first.value} paneLabel="Pane 1" />)
 
-    first.publish([primary, drawing])
+    await act(async () => {
+      first.publish([primary, drawing])
+    })
     expect(screen.getByText('Trend line')).toBeInTheDocument()
 
     view.rerender(<ObjectsPanel model={second.value} paneLabel="Pane 2" />)
