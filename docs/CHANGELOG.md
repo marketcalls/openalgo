@@ -8,6 +8,12 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Changed
+
+- Updated `/trading` to OpenAlgo Charts 2.1.3. Dragging the time axis left
+  expands candle spacing and dragging right compresses it. Mouse panning
+  preserves price autoscale, and the bottom chart controls include Reset view.
+
 ### Fixed
 
 - `/trading` keeps price and volume isolated during replay when a periodic
