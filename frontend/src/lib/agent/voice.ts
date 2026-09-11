@@ -146,6 +146,15 @@ export interface VoiceControllerOptions {
    * @returns The answer text. It is shortened for speech before it is spoken.
    */
   ask?: (question: string) => Promise<string>
+  /**
+   * One finalised line of the spoken conversation, as it was transcribed.
+   *
+   * Called for **every** line, including the ones that never become an agent
+   * turn. A speech model handles much of an exchange itself, and none of that
+   * reaches the message list, so a record built only from turns would be the
+   * subset of a conversation that happened to need a tool.
+   */
+  onSpokenLine?: (role: 'trader' | 'agent', text: string) => void
 }
 
 /** The connection, its state machine, and the delegation loop. */
@@ -171,6 +180,15 @@ export interface VoiceController {
    * no-op unless a spoken turn is waiting on an answer.
    */
   sayWorking: (toolName: string) => void
+  /**
+   * Listen for a spoken approval of one paused run.
+   *
+   * Each finalised thing the trader says while this is set is offered to the
+   * server, which decides. `approve` runs only on a server-side yes.
+   */
+  awaitApproval: (runId: string, approve: () => void) => void
+  /** Stop listening, because the run was answered on screen or abandoned. */
+  cancelApproval: () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +407,8 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
   let delegation: AbortController | null = null
   /** The delegation a page-run turn is answering, for `sayWorking`. */
   let activeDelegation: string | null = null
+  /** The run waiting on a spoken approval, and what to do when it gets one. */
+  let pendingApproval: { runId: string; approve: () => void } | null = null
   let conversation: number | string | null = options.conversationId ?? null
   let lineCounter = 0
 
@@ -423,6 +443,11 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
     const holder = open[role]
     if (!holder) return
     clearTimeout(holder.timer)
+    const finished = lines.find((line) => line.id === holder.id)
+    if (finished?.text.trim()) {
+      options.onSpokenLine?.(role, finished.text.trim())
+      if (role === 'trader' && pendingApproval) void offerApproval(finished.text.trim())
+    }
     open[role] = null
     lines = lines.map((line) => (line.id === holder.id ? { ...line, final: true } : line))
     emitTranscript()
@@ -856,6 +881,42 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
     question = ''
   }
 
+  /**
+   * Offer one utterance to the server as an approval for the waiting run.
+   *
+   * **The page does not decide.** It reports what it heard and which run it
+   * heard it against; whether that is the phrase, whether the window is still
+   * open and whether spoken approval is switched on at all are read server-side
+   * from stored settings, so a defect here cannot turn a sentence into an
+   * order. The card on screen remains the other way, and the only way once the
+   * window has closed.
+   *
+   * @param transcript - The finalised line the trader just said.
+   */
+  async function offerApproval(transcript: string): Promise<void> {
+    const waiting = pendingApproval
+    if (!waiting) return
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const response = await fetch(`${API_BASE_URL}${AGENT_API_BASE}/voice/approve`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        body: JSON.stringify({ run_id: waiting.runId, transcript }),
+      })
+      if (!response.ok) return
+      const payload = await response.json()
+      if (!payload?.data?.approved) return
+    } catch {
+      // A failed check is not an approval. Nothing to report: the trader can
+      // say it again, or tap the card.
+      return
+    }
+    if (pendingApproval !== waiting) return
+    pendingApproval = null
+    waiting.approve()
+  }
+
   function stop(): void {
     teardown()
     setState('idle')
@@ -875,6 +936,13 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       return () => transcriptListeners.delete(listener)
     },
     conversationId: () => conversation,
+    awaitApproval: (runId, approve) => {
+      const id = String(runId || '').trim()
+      pendingApproval = id ? { runId: id, approve } : null
+    },
+    cancelApproval: () => {
+      pendingApproval = null
+    },
     sayWorking: (toolName: string) => {
       // Sent as thinking rather than commentary: the speech model paraphrases
       // it in its own words if it uses it at all, which is what stops a slow

@@ -1496,6 +1496,90 @@ def test_voice():
     )
 
 
+@agent_bp.route("/api/voice/transcript", methods=["POST"])
+@check_session_validity
+@_api_limit
+def post_voice_transcript():
+    """Record one finalised line of a spoken conversation.
+
+    Every line is kept, including the ones that never became an agent turn.
+    A speech model handles plenty of an exchange itself - acknowledgements,
+    asking which expiry was meant - and none of that reaches the message list,
+    so without this the record of a spoken session would be the subset of it
+    that happened to need a tool.
+
+    The row goes to `ag_audit` rather than `ag_message` because it is evidence
+    rather than conversation: the speech model paraphrases what it is given, so
+    what was said out loud and what the agent wrote are two different records of
+    one turn, and flattening them into the same table would lose that.
+
+    Never fails a caller. A line that cannot be recorded is logged; refusing the
+    page would stop a conversation over a failed write.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+
+    role = "agent" if str(body.get("role") or "") == "agent" else "trader"
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return _ok({"data": {"recorded": False}})
+
+    conversation_id = body.get("conversation_id")
+    try:
+        conversation_id = int(conversation_id) if conversation_id is not None else None
+    except (TypeError, ValueError):
+        conversation_id = None
+
+    audit.record_transcript(
+        role,
+        text,
+        conversation_id=conversation_id,
+        run_id=str(body.get("run_id") or "") or None,
+    )
+    return _ok({"data": {"recorded": True}})
+
+
+@agent_bp.route("/api/voice/approve", methods=["POST"])
+@check_session_validity
+@_api_limit
+def post_voice_approve():
+    """Decide whether one spoken utterance approves one paused run.
+
+    **The decision is made here, not in the browser.** The page reports what it
+    heard and which run it heard it against; everything that decides - that
+    order tools are reachable on the voice surface, that a run really is
+    waiting, that the window is still open, and whether the words are the
+    configured phrase - is read from stored settings and from a registry the
+    page cannot write.
+
+    This is not what stands between a sentence and a broker. The risk guard
+    inside the tool body runs after any approval and reads no prompt, and it is
+    still the control. This narrows a different hazard: a word said out loud in
+    a room that contains other people, and a page that could otherwise decide
+    for itself what counted as that word.
+
+    An approval consumes the window, so the same utterance cannot approve the
+    same run twice. Approving the run itself remains `/chat/confirm`, which is
+    the same route the on-screen card uses.
+
+    Returns:
+        ``{"approved": bool, "reason": str}``. A refusal is a 200 carrying
+        `approved: false` and a reason, because "that was not the phrase" is an
+        ordinary outcome of a trader talking near a pending order, not an error.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+
+    run_id = str(body.get("run_id") or "").strip()
+    if not run_id:
+        return _error("A run_id is required", 400)
+
+    verdict = agent_voice.judge_approval(run_id, body.get("transcript"))
+    return _ok({"data": {"approved": verdict.approved, "reason": verdict.reason}})
+
+
 @agent_bp.route("/api/voice/session", methods=["POST"])
 @check_session_validity
 @_stream_limit

@@ -1330,3 +1330,31 @@ export const agentQueryKeys = {
     [...agentQueryKeys.all, 'conversations', params] as const,
   conversation: (id: number) => [...agentQueryKeys.all, 'conversations', id] as const,
 }
+
+/**
+ * Record one finalised line of a spoken conversation.
+ *
+ * Fire and forget. The line goes to `ag_audit`, which is where what was said
+ * out loud belongs: the speech model paraphrases what it is given, so the words
+ * heard and the words the agent wrote are two records of one turn. A failure to
+ * record never interrupts the conversation.
+ *
+ * @param role - `trader` for the microphone, `agent` for what was spoken back.
+ * @param text - The transcribed line.
+ * @param conversationId - The conversation it belongs to, when there is one.
+ */
+export async function recordVoiceTranscript(
+  role: 'trader' | 'agent',
+  text: string,
+  conversationId: number | null
+): Promise<void> {
+  try {
+    await webClient.post(`${VOICE_BASE}/transcript`, {
+      role,
+      text,
+      conversation_id: conversationId,
+    })
+  } catch {
+    // Evidence is worth having, but not at the cost of the conversation.
+  }
+}

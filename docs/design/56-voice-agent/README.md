@@ -201,20 +201,29 @@ and the screen carries the rest.
 
 ## Order approval
 
-> **NOT IMPLEMENTED.** Everything in this section describes a control that does
-> not exist in the running system. `services/agent/safety/voice_confirm.py` is
-> written and tested, and `voice_order_phrase` and
-> `voice_confirm_window_seconds` are stored and editable, but **nothing calls
-> `is_approval`**: the matcher has no caller outside its own tests, so saying
-> the phrase does nothing. An order requested by voice pauses on the on-screen
-> confirmation card and is approved by tapping it, exactly as a typed one is.
->
-> This notice exists because the section below was written in the present tense
-> before the wiring existed, which is the precise failure the meta-rule in
-> `55-agent` is there to prevent: a security claim that resolves to nothing
-> reads as evidence the control is present, and reviewers stop looking. The
-> section is kept as the specification to build against, not as a description
-> of what runs.
+**The decision is made server-side.** `POST /agent/api/voice/approve` takes the
+utterance and the run it is aimed at; everything that decides is read from
+stored settings and from a registry the page cannot write. The page reports
+what it heard and acts on the answer. A defect in the browser, or a browser
+whose code has been altered, cannot turn a sentence into an approval.
+
+This is not what stands between a sentence and a broker - the risk guard inside
+the tool body is, and it runs after any approval and reads no prompt. This
+narrows a different hazard: a word said out loud in a room that contains other
+people, and a page deciding for itself what counted as that word.
+
+Four things must hold, and they fail with different reasons on purpose, because
+an operator who says the phrase into a closed window should be told the window
+closed rather than that they said the wrong word:
+
+1. `trading_effective` - both the platform switch and `voice_trading_enabled`.
+2. The run is registered as waiting. `stream.py:_on_run_paused` stamps it, which
+   is the one place a pause becomes a `confirm` frame.
+3. The window is still open, per `voice_confirm_window_seconds`.
+4. The utterance is the phrase, per `voice_confirm.is_approval`.
+
+Approving consumes the window, so one utterance cannot approve one run twice. A
+run that never paused is refused even for the right phrase.
 
 **Shipped off.** `voice_trading_enabled` defaults to `False`, so the first
 release is read-only and nothing below is reachable.
@@ -264,6 +273,25 @@ leaves `voice_trading_enabled` off and taps the card.
 `ag_audit` records the approval mode, the utterance that matched, and the
 window it matched in.
 
+## Every spoken line is kept
+
+A speech model handles much of an exchange itself - acknowledgements, asking
+which expiry was meant - and none of that becomes an agent turn. A record built
+only from turns would therefore be the subset of a conversation that happened to
+need a tool, which is the wrong subset to have afterwards.
+
+So every finalised line is recorded, through
+`POST /agent/api/voice/transcript`, into **`ag_audit`** under the phase
+`transcript`. It goes there rather than into `ag_message` because it is evidence
+rather than conversation: the speech model paraphrases what it is given, so what
+was said out loud and what the agent wrote are two records of one turn, and
+flattening them into one table loses that distinction.
+
+The same lines render live in the thread, in a quieter style than a message,
+beside the ordinary messages a delegated turn still produces. Recording never
+fails a caller: a line that cannot be written is logged, because losing a line
+is better than interrupting a conversation over it.
+
 ## HTTP surface
 
 | Route | Method | Purpose |
@@ -273,6 +301,8 @@ window it matched in.
 | `/agent/api/voice` | PUT | Update the configuration. |
 | `/agent/api/voice/key` | PUT / DELETE | Store or remove the OpenAI key. |
 | `/agent/api/voice/test` | POST | Mint a throwaway session and discard it, to prove the key works. |
+| `/agent/api/voice/approve` | POST | Decide whether one utterance approves one paused run. |
+| `/agent/api/voice/transcript` | POST | Record one finalised spoken line to `ag_audit`. |
 
 The mint route is an egress surface: it posts to a fixed OpenAI URL that is a
 module constant and is never taken from a request. There is no base-URL

@@ -727,3 +727,66 @@ class TestTheProbe:
         result = voice.probe()
         assert result.ok is False
         assert "rejected" in result.message
+
+
+class TestSpokenApprovalIsDecidedServerSide:
+    """`judge_approval` is the whole of the spoken approval decision.
+
+    Each refusal has its own reason on purpose: an operator who says the phrase
+    into a closed window should be told the window closed, not that they said
+    the wrong word.
+    """
+
+    ARMED = {
+        "trading_effective": True,
+        "voice_order_phrase": "milo",
+        "voice_confirm_window_seconds": 30,
+    }
+
+    def setup_method(self):
+        voice._PAUSED_AT.clear()
+
+    def test_a_run_that_never_paused_cannot_be_approved(self):
+        assert voice.judge_approval("run-1", "milo", self.ARMED).approved is False
+
+    def test_the_phrase_approves_a_run_that_is_waiting(self):
+        voice.note_pause("run-1")
+        assert voice.judge_approval("run-1", "milo", self.ARMED).approved is True
+
+    def test_approving_consumes_the_window(self):
+        voice.note_pause("run-1")
+        assert voice.judge_approval("run-1", "milo", self.ARMED).approved is True
+        second = voice.judge_approval("run-1", "milo", self.ARMED)
+        assert second.approved is False
+        assert "passed" in second.reason
+
+    def test_the_phrase_inside_a_sentence_is_not_an_approval(self):
+        voice.note_pause("run-1")
+        verdict = voice.judge_approval("run-1", "milo what is bank nifty doing", self.ARMED)
+        assert verdict.approved is False
+        assert "phrase" in verdict.reason
+        # The window is still open: a question is not an attempt.
+        assert voice.judge_approval("run-1", "milo", self.ARMED).approved is True
+
+    def test_voice_trading_off_refuses_before_anything_else(self):
+        voice.note_pause("run-1")
+        verdict = voice.judge_approval("run-1", "milo", {**self.ARMED, "trading_effective": False})
+        assert verdict.approved is False
+        assert "switched off" in verdict.reason
+
+    def test_an_expired_window_refuses_the_right_phrase(self):
+        voice.note_pause("run-1")
+        voice._PAUSED_AT["run-1"] -= 120
+        verdict = voice.judge_approval("run-1", "milo", self.ARMED)
+        assert verdict.approved is False
+        assert "passed" in verdict.reason
+
+    def test_the_registry_does_not_grow_without_bound(self):
+        for index in range(voice._PAUSE_REGISTRY_LIMIT + 25):
+            voice.note_pause(f"run-{index}")
+        assert len(voice._PAUSED_AT) <= voice._PAUSE_REGISTRY_LIMIT
+
+    def test_a_run_with_no_id_is_not_registered(self):
+        voice.note_pause("")
+        voice.note_pause(None)
+        assert voice._PAUSED_AT == {}

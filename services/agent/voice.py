@@ -428,3 +428,119 @@ def speakable(text: Any) -> str:
     # own limit is not a guard.
     clipped = raw[: SPEAKABLE_CHAR_BUDGET - 3]
     return clipped.rsplit(" ", 1)[0].strip() + "..."
+
+
+# ---------------------------------------------------------------------------
+# Spoken order approval
+#
+# The matcher in `services.agent.safety.voice_confirm` decides whether an
+# utterance is the phrase. This part decides whether it may be asked at all:
+# that trading is reachable on the voice surface, that a run really is waiting,
+# and that it has not been waiting too long.
+#
+# The decision is made here rather than in the browser so a defect in the page,
+# or a page that has been altered, cannot turn a sentence into an approval. It
+# is not the control that stands between a sentence and a broker - that is the
+# risk guard inside the tool body, which runs after any approval and reads no
+# prompt. This narrows a usability hazard: a word said in a room with other
+# people in it.
+# ---------------------------------------------------------------------------
+
+#: When each paused run began waiting, keyed by run id.
+#:
+#: Written from agno's real OS thread when a run pauses, and read from a request
+#: greenlet. **Deliberately unlocked.** A lock here would be one of the two
+#: crossings `CLAUDE.md` forbids, and none is needed: a single dict key
+#: assignment and a single lookup are each atomic under CPython, and the worst a
+#: race can do is read a pause one instant before it is recorded, which reports
+#: a closed window and falls back to the card.
+_PAUSED_AT: dict[str, float] = {}
+
+#: How many paused runs to remember. A pause that is never answered is dropped
+#: rather than accumulated: the registry is a window, not a record, and
+#: `ag_audit` is where a pause is actually accounted for.
+_PAUSE_REGISTRY_LIMIT = 64
+
+
+def note_pause(run_id: Any) -> None:
+    """Record that a run has begun waiting for approval.
+
+    Args:
+        run_id: The run that paused. Falsy values are ignored, because a pause
+            that cannot be named cannot be approved by voice either.
+    """
+    key = str(run_id or "").strip()
+    if not key:
+        return
+    if len(_PAUSED_AT) >= _PAUSE_REGISTRY_LIMIT:
+        # Drop the oldest rather than grow without bound. Insertion order is
+        # guaranteed, so the first key is the least recent pause.
+        for stale in list(_PAUSED_AT)[: len(_PAUSED_AT) - _PAUSE_REGISTRY_LIMIT + 1]:
+            _PAUSED_AT.pop(stale, None)
+    _PAUSED_AT[key] = time.monotonic()
+
+
+def forget_pause(run_id: Any) -> None:
+    """Close a run's approval window.
+
+    Called once a run has been approved, rejected or abandoned, so the same
+    utterance cannot approve it twice.
+
+    Args:
+        run_id: The run to forget.
+    """
+    _PAUSED_AT.pop(str(run_id or "").strip(), None)
+
+
+@dataclass(frozen=True)
+class ApprovalVerdict:
+    """The answer to one spoken approval attempt.
+
+    Attributes:
+        approved: Whether the run may now be confirmed.
+        reason: Why not, in words an operator can act on. Empty when approved.
+    """
+
+    approved: bool
+    reason: str = ""
+
+
+def judge_approval(
+    run_id: Any, transcript: Any, config: dict[str, Any] | None = None
+) -> ApprovalVerdict:
+    """Decide whether one spoken utterance approves one paused run.
+
+    Four things must hold, and they fail for different reasons on purpose: an
+    operator who says the phrase into a closed window should be told the window
+    closed, not that they said the wrong word.
+
+    Args:
+        run_id: The paused run the utterance is aimed at.
+        transcript: What the speech model heard.
+        config: The voice configuration. Read fresh when not supplied.
+
+    Returns:
+        An :class:`ApprovalVerdict`. Approving consumes the window, so a second
+        attempt on the same run is refused.
+    """
+    from services.agent import settings
+    from services.agent.safety import voice_confirm
+
+    config = config or settings.get_voice_config()
+    if not config.get("trading_effective"):
+        return ApprovalVerdict(False, "Placing orders by voice is switched off.")
+
+    key = str(run_id or "").strip()
+    opened_at = _PAUSED_AT.get(key)
+    window = int(config.get("voice_confirm_window_seconds") or 0)
+    if not voice_confirm.window_is_open(opened_at, time.monotonic(), window):
+        return ApprovalVerdict(False, "The time to approve that by voice has passed.")
+
+    if not voice_confirm.is_approval(transcript, config.get("voice_order_phrase")):
+        # Not an error and not logged as one: a trader talking near a pending
+        # order says plenty of things that are not the phrase.
+        return ApprovalVerdict(False, "That was not the approval phrase.")
+
+    forget_pause(key)
+    logger.info("Voice approval accepted for run %s", key)
+    return ApprovalVerdict(True)

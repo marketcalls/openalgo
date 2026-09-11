@@ -49,6 +49,7 @@ import {
   agentQueryKeys,
   getSettings,
   type ReasoningEffort,
+  recordVoiceTranscript,
   truncateConversation,
 } from '@/api/agent'
 import { Composer, type ComposerTurn } from '@/components/agent/Composer'
@@ -61,7 +62,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
-import type { VoiceController } from '@/lib/agent/voice'
+import type { VoiceController, VoiceTranscriptLine } from '@/lib/agent/voice'
 import { cn } from '@/lib/utils'
 
 /**
@@ -104,7 +105,15 @@ export default function AgentChat() {
         if (frame.type === 'token') spokenAnswer.current.text += frame.delta
         else if (frame.type === 'tool_start') voiceController.current?.sayWorking(frame.name)
         else if (frame.type === 'confirm') {
-          spokenAnswer.current.text ||= 'That needs your approval on screen before I can run it.'
+          // A spoken turn paused for approval. The card renders as it always
+          // does; this additionally lets the trader answer it out loud, with
+          // the server deciding whether what they said was the phrase.
+          const runId = frame.run_id
+          const ids = frame.requirements.map((requirement) => requirement.id)
+          voiceController.current?.awaitApproval(runId, () => {
+            void confirm(Object.fromEntries(ids.map((id) => [id, true])))
+          })
+          spokenAnswer.current.text ||= awaitingApprovalLine.current
         }
       },
     })
@@ -119,6 +128,26 @@ export default function AgentChat() {
    */
   const spokenAnswer = useRef<{ text: string } | null>(null)
   const voiceController = useRef<VoiceController | null>(null)
+
+  /**
+   * Every line of the spoken conversation, in order.
+   *
+   * Kept beside `messages` rather than folded into them because they are
+   * different records: a message is what the agent decided, a line is what was
+   * said out loud, and a speech model paraphrases the one into the other. Both
+   * are worth seeing, and only one of them is a turn.
+   */
+  const [spokenLines, setSpokenLines] = useState<VoiceTranscriptLine[]>([])
+
+  /** What to speak while a run waits for approval, read at frame time. */
+  const awaitingApprovalLine = useRef('That needs your approval before I can place it.')
+
+  const handleSpokenLine = useCallback((role: 'trader' | 'agent', text: string) => {
+    void recordVoiceTranscript(role, text, conversationIdRef.current)
+  }, [])
+
+  const conversationIdRef = useRef<number | null>(null)
+  conversationIdRef.current = conversationId ?? null
 
   /**
    * Run one spoken question as an ordinary turn and return what to say.
@@ -364,6 +393,29 @@ export default function AgentChat() {
                   busy={running}
                 />
               ))}
+              {/* What was actually said out loud, including the parts the
+                  speech model handled itself and never turned into a turn.
+                  Kept visually quieter than a message because it is a record of
+                  the room rather than of a decision. */}
+              {spokenLines.length > 0 && (
+                <div className="space-y-1.5 border-l-2 border-muted pl-3">
+                  {spokenLines.map((line) => (
+                    <p
+                      key={line.id}
+                      className={cn(
+                        'text-xs leading-relaxed',
+                        line.role === 'trader' ? 'text-foreground/80' : 'text-muted-foreground',
+                        !line.final && 'opacity-60'
+                      )}
+                    >
+                      <span className="mr-1.5 font-medium uppercase tracking-wide opacity-60">
+                        {line.role === 'trader' ? 'Said' : 'Heard'}
+                      </span>
+                      {line.text}
+                    </p>
+                  ))}
+                </div>
+              )}
               {/* Lets the newest question reach the top of the viewport even
                   when the answer under it is only a line long. */}
               <div className="h-[40vh]" aria-hidden />
@@ -404,6 +456,8 @@ export default function AgentChat() {
                     modelId={modelId}
                     tradingEnabled={settings.data?.data.trading_enabled ?? false}
                     ask={askByVoice}
+                    onSpokenLine={handleSpokenLine}
+                    onTranscript={setSpokenLines}
                     onController={(controller) => {
                       voiceController.current = controller
                     }}

@@ -62,6 +62,10 @@ export interface VoiceButtonProps {
   ask?: (question: string) => Promise<string>
   /** Receives the controller so the page can report tool activity into it. */
   onController?: (controller: VoiceController | null) => void
+  /** Every finalised spoken line, for the page to record. */
+  onSpokenLine?: (role: 'trader' | 'agent', text: string) => void
+  /** The live transcript, for the page to render in the thread. */
+  onTranscript?: (lines: VoiceTranscriptLine[]) => void
   className?: string
 }
 
@@ -71,6 +75,8 @@ export function VoiceButton({
   disabled = false,
   ask,
   onController,
+  onSpokenLine,
+  onTranscript,
   className,
 }: VoiceButtonProps) {
   // The same cache entry the config panel reads and writes, so turning voice on
@@ -89,6 +95,10 @@ export function VoiceButton({
   // renders, and rebuilding the controller mid-session would drop the call.
   const askRef = useRef(ask)
   askRef.current = ask
+  const spokenLineRef = useRef(onSpokenLine)
+  spokenLineRef.current = onSpokenLine
+  const onTranscriptRef = useRef(onTranscript)
+  onTranscriptRef.current = onTranscript
 
   // One controller for the life of the mount. It is rebuilt when the turn's
   // model or the trading ask changes, because those travel with every spoken
@@ -103,6 +113,7 @@ export function VoiceButton({
           if (!run) return Promise.resolve('')
           return run(question)
         },
+        onSpokenLine: (role, text) => spokenLineRef.current?.(role, text),
       }),
     [modelId, tradingEnabled]
   )
@@ -119,7 +130,10 @@ export function VoiceButton({
     setStatus(controller.status())
     setLines(controller.transcript())
     const offStatus = controller.onStatus(setStatus)
-    const offTranscript = controller.onTranscript(setLines)
+    const offTranscript = controller.onTranscript((next) => {
+      setLines(next)
+      onTranscriptRef.current?.(next)
+    })
     return () => {
       offStatus()
       offTranscript()
