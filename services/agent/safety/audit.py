@@ -574,48 +574,8 @@ def record_transcript(
     return append(
         PHASE_TRANSCRIPT,
         f"voice:{role}",
-        {"text": _without_approval_phrase(text)},
+        {"text": text},
         conversation_id=conversation_id,
         run_id=run_id,
         ok=True,
     )
-
-
-#: What replaces the approval phrase in a stored line.
-APPROVAL_PHRASE_MASK = "[approval word]"
-
-
-def _without_approval_phrase(text: str) -> str:
-    """Remove the spoken approval phrase from a line before it is stored.
-
-    The phrase is a secret whose whole value is that only the operator knows it,
-    and it is said out loud every time an order is approved. Storing it would
-    put it in plaintext in the one table this module exists to make shareable:
-    the audit report is meant to be handed to someone helping triage, and it
-    must not teach them the word that places orders.
-
-    Masked rather than dropped, so the record still shows that the word was
-    said and where. That an approval was accepted is recorded separately, as a
-    `decision` row, so nothing about the account of a trade depends on the
-    plaintext surviving here.
-
-    Args:
-        text: The transcribed line.
-
-    Returns:
-        The line with every occurrence of the phrase replaced. Unchanged when
-        no phrase is configured or the settings cannot be read, because a
-        failure to look it up must not become a failure to record the line.
-    """
-    try:
-        from services.agent import settings
-
-        phrase = str(settings.get_voice_config(fresh=False).get("voice_order_phrase") or "").strip()
-    except Exception:
-        logger.exception("Could not read the approval phrase; storing the line unmasked")
-        return text
-    if not phrase:
-        return text
-    # Whole words only: a phrase that happens to sit inside a longer word is not
-    # the word that was said.
-    return re.sub(rf"\b{re.escape(phrase)}\b", APPROVAL_PHRASE_MASK, text, flags=re.IGNORECASE)

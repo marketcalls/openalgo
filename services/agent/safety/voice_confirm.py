@@ -1,7 +1,7 @@
 """Spoken approval for a staged order, decided without a model.
 
-The `/agent` voice surface lets an operator approve a paused order by saying a
-word. This module decides whether they did. It is the same shape as
+The `/agent` voice surface lets an operator approve a paused order by answering
+out loud. This module decides whether they did. It is the same shape as
 :mod:`services.agent.safety.risk` and for the same reason: a control that can be
 talked out of is not a control.
 
@@ -10,43 +10,26 @@ string goes in and a boolean comes out, so no phrasing in a conversation, a
 symbol name, a broker rejection or a web page can change a verdict. The risk
 guard still runs after this, inside the tool body, before the service call.
 
-The order phrase is not the agent's name
----------------------------------------
+What protects an order here
+---------------------------
 
-Two separate values are configured, and keeping them separate is the control:
+The read-back. Before anything can be approved, the order is spoken back in
+full - action, quantity, the contract as a person says it, the exchange, the
+product and the order type - and the trader answers a question they have just
+heard the whole of.
 
-* **The wake phrase** is how a trader addresses the agent all day. It may be
-  several words and it carries no authority whatsoever.
-* **The order phrase** does one thing only. It is never a greeting, never a
-  name, and is spoken solely to approve an order that has already been staged
-  and read back.
+There is no secret word. A password was tried and removed: it made every
+approval a memory test, it was read aloud by the speech model until that was
+fixed, and it was written into the audit trail every time it was spoken. What
+it bought was narrow - a stranger within earshot cannot say a word they do not
+know - and what it cost was the thing traders actually do, which is answer.
 
-:func:`normalise_order_phrase` refuses an order phrase that appears anywhere in
-the wake phrase, so an operator cannot collapse the two back into one by
-configuration.
-
-Even reserved, the phrase is matched as **the word and nothing else**, allowing
-only bare affirmation around it, because a reserved word still gets said::
-
-    is_approval("milo", "milo")                      -> True
-    is_approval("yes milo", "milo")                  -> True
-    is_approval("milo, confirm.", "milo")            -> True
-    is_approval("milo what is bank nifty", "milo")   -> False
-    is_approval("place it milo", "milo")             -> False
-    is_approval("yes", "milo")                       -> False
-
-The last one matters as much as the rest: a bare affirmation is not approval,
-because "yes" is what a trader says to a colleague. Only the configured phrase
-approves.
-
-What this does not defend against
----------------------------------
-
-A bare utterance of the order phrase by anyone within earshot while a window is
-open will approve the staged order. Reserving the phrase, the alone-word rule,
-the short single-use window in the caller, and the on-screen card reduce that
-surface; they do not remove it. An operator who wants it removed leaves
-`voice_trading_enabled` off.
+So this is honest about its limit: **anyone within earshot who says yes while
+the window is open approves the staged order, and the agent cannot tell one
+voice from another.** The window is short and single use, the order has just
+been read back, and every limit in the risk guard still applies afterwards. An
+operator who does not control the room they trade in leaves
+`voice_trading_enabled` off and taps the card.
 """
 
 from __future__ import annotations
@@ -54,34 +37,46 @@ from __future__ import annotations
 import re
 
 __all__ = [
-    "AFFIRMATIONS",
-    "is_prefixed_instruction",
-    "MAX_PHRASE_LENGTH",
+    "CONFIRMATIONS",
+    "is_spoken_confirmation",
     "MAX_WAKE_LENGTH",
-    "MIN_PHRASE_LENGTH",
-    "is_approval",
-    "normalise_order_phrase",
     "normalise_wake_phrase",
     "window_is_open",
 ]
 
 #: Bare affirmations permitted alongside the word. Nothing here approves on its
 #: own; each may only accompany the configured name.
-AFFIRMATIONS: frozenset[str] = frozenset(
-    {"yes", "yeah", "yep", "yup", "ok", "okay", "confirm", "confirmed", "please", "sure"}
+#: Words that, on their own, mean yes to an order that has just been read back.
+#:
+#: Short and closed on purpose. Anything longer is a sentence, and a sentence
+#: near a pending order is conversation rather than an answer to it.
+CONFIRMATIONS: frozenset[str] = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "ok",
+        "okay",
+        "confirm",
+        "confirmed",
+        "place",
+        "send",
+        "go",
+        "ahead",
+        "do",
+        "it",
+        "please",
+        "sure",
+        "right",
+        "correct",
+    }
 )
 
-#: An approval is at most this many words. Three covers "yes milo confirm" and
-#: refuses anything that has started to become a sentence.
-_MAX_TOKENS = 3
+#: A confirmation is at most this many words. "yes go ahead please" is four.
+_MAX_CONFIRMATION_TOKENS = 4
 
-MIN_PHRASE_LENGTH = 3
-MAX_PHRASE_LENGTH = 20
 MAX_WAKE_LENGTH = 40
-
-#: The order phrase is letters only and one word. A digit or a hyphen does not
-#: survive transcription intact, and a space cannot satisfy the alone-word rule.
-_PHRASE_PATTERN = re.compile(rf"^[A-Za-z]{{{MIN_PHRASE_LENGTH},{MAX_PHRASE_LENGTH}}}$")
 
 #: The wake phrase carries no authority, so it may be several words.
 _WAKE_PATTERN = re.compile(rf"^[A-Za-z][A-Za-z ]{{0,{MAX_WAKE_LENGTH - 1}}}$")
@@ -117,73 +112,6 @@ def normalise_wake_phrase(raw: object) -> str:
     return phrase
 
 
-def normalise_order_phrase(raw: object, wake_phrase: object = "") -> str:
-    """Validate the phrase that approves a staged order.
-
-    Args:
-        raw: The operator's input.
-        wake_phrase: The configured wake phrase, so the two can be kept apart.
-            Passing nothing skips that check, which is only correct when the
-            caller has no wake phrase to compare against.
-
-    Returns:
-        The phrase, lower-cased, since it is matched case-insensitively and
-        never displayed as a name.
-
-    Raises:
-        ValueError: If the value is not a single run of between
-            :data:`MIN_PHRASE_LENGTH` and :data:`MAX_PHRASE_LENGTH` letters, or
-            if it also appears in the wake phrase. The second check is what
-            stops an operator collapsing the two values back into one: a word
-            said to get the agent's attention must not also place a trade.
-    """
-    phrase = str(raw or "").strip()
-    if not _PHRASE_PATTERN.match(phrase):
-        raise ValueError(
-            "The order approval phrase must be a single word of "
-            f"{MIN_PHRASE_LENGTH} to {MAX_PHRASE_LENGTH} letters, with no "
-            "spaces, digits or punctuation."
-        )
-    phrase = phrase.lower()
-    wake_tokens = {token.lower() for token in _TOKEN_PATTERN.findall(str(wake_phrase or ""))}
-    if phrase in wake_tokens:
-        raise ValueError(
-            "The order approval phrase must not appear in the wake phrase. "
-            "A word said to get the agent's attention must not also be the "
-            "word that places an order."
-        )
-    return phrase
-
-
-def is_approval(transcript: object, order_phrase: object) -> bool:
-    """Whether one spoken utterance approves a staged order.
-
-    Args:
-        transcript: What the speech model heard. Punctuation and casing are
-            irrelevant; anything that is not a letter is treated as a separator.
-        order_phrase: The configured approval phrase, as stored.
-
-    Returns:
-        ``True`` only when the utterance consists of the configured phrase,
-        optionally accompanied by bare affirmations from :data:`AFFIRMATIONS`,
-        and nothing else. Any other content, including a sentence that happens
-        to contain the phrase, returns ``False``.
-    """
-    try:
-        word = normalise_order_phrase(order_phrase).lower()
-    except ValueError:
-        # An unusable configured phrase approves nothing. Failing closed here
-        # means a malformed settings row cannot become a permissive matcher.
-        return False
-
-    tokens = [token.lower() for token in _TOKEN_PATTERN.findall(str(transcript or ""))]
-    if not tokens or len(tokens) > _MAX_TOKENS:
-        return False
-    if word not in tokens:
-        return False
-    return all(token == word or token in AFFIRMATIONS for token in tokens)
-
-
 def window_is_open(opened_at: float | None, now: float, seconds: int) -> bool:
     """Whether a spoken approval window is still open.
 
@@ -210,54 +138,39 @@ def window_is_open(opened_at: float | None, now: float, seconds: int) -> bool:
     return elapsed <= seconds
 
 
-def is_prefixed_instruction(transcript: object, *phrases: object) -> bool:
-    """Whether an utterance is an instruction that opens with an approval word.
+def is_spoken_confirmation(transcript: object) -> bool:
+    """Whether one utterance is a plain yes to an order already read back.
 
-    The operator's second way of approving: rather than staging an order,
-    hearing it read back and answering, they say the word and the instruction
-    together - "milo buy one hundred shares of reliance". The order is placed
-    without a read-back.
+    The operator's chosen way of approving: the order is spoken back in full -
+    action, quantity, contract, exchange, product, order type - and the trader
+    answers the way a person answers, without a password.
 
-    **This is weaker than the alone-word rule and deliberately so.** That rule
-    exists because a reserved word still gets said; a word at the head of a
-    sentence is far easier to say by accident, and the sentence after it is
-    never heard back before it runs. What still stands is everything that was
-    never a matter of phrasing: both trading switches, and the risk guard inside
-    the tool body, which reads no prompt and applies every limit after any
-    approval.
+    **The read-back is what protects this.** There is no secret here: anyone
+    within earshot who says yes while the window is open approves the staged
+    order, and the agent cannot tell one voice from another. What it buys is
+    that a trader who has just heard the order in full says one natural word
+    rather than remembering a token. An operator who does not control the room
+    they trade in should set the approval mode to `phrase` instead.
 
-    **Only the order phrase opens an instruction, never the agent's name.** The
-    name is what a trader says all day, and a word said that often must not be
-    able to place a trade however it is followed. The signature takes several
-    words so an operator can be given more than one order phrase later; it is
-    not a place to pass the name.
+    Every other guard is unchanged: both switches, the window, and the risk
+    guard inside the tool body, which reads no prompt and applies every limit
+    after any approval::
+
+        is_spoken_confirmation("yes")            -> True
+        is_spoken_confirmation("go ahead")       -> True
+        is_spoken_confirmation("yes place it")   -> True
+        is_spoken_confirmation("no")             -> False
+        is_spoken_confirmation("yes but wait")   -> False
+        is_spoken_confirmation("what is nifty")  -> False
 
     Args:
         transcript: What the speech model heard.
-        *phrases: The words that may open an instruction. Unusable values are
-            skipped.
 
     Returns:
-        True when the utterance begins with one of the words **and** carries
-        further content. A bare word is not an instruction; that is the
-        alone-word case, which :func:`is_approval` answers.
+        True when every word is an affirmation and there are not too many of
+        them. Anything carrying other content is conversation, not an answer.
     """
     tokens = [token.lower() for token in _TOKEN_PATTERN.findall(str(transcript or ""))]
-    if len(tokens) < 2:
+    if not tokens or len(tokens) > _MAX_CONFIRMATION_TOKENS:
         return False
-
-    opening = tokens[0]
-    for phrase in phrases:
-        word = " ".join(str(phrase or "").split()).lower()
-        if not word:
-            continue
-        parts = _TOKEN_PATTERN.findall(word)
-        if not parts:
-            continue
-        # A multi-word name opens the instruction only in full, so "hey trader"
-        # is not matched by "hey".
-        if tokens[: len(parts)] == parts and len(tokens) > len(parts):
-            return True
-        if len(parts) == 1 and opening == parts[0]:
-            return True
-    return False
+    return all(token in CONFIRMATIONS for token in tokens)

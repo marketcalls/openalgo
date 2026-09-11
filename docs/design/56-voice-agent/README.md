@@ -93,225 +93,50 @@ Everything lives in the database, nothing in `.env`.
 | `voice_enabled` | bool | `False` | Master switch. Off means the mic never renders. |
 | `voice_model` | text | `gpt-live-1` | The speech model. |
 | `voice_speaker` | text | `marin` | Which OpenAI voice speaks. |
-| `voice_agent_name` | text | `Milo` | What the agent is called **and** the spoken approval word. |
+| `voice_agent_name` | text | `Vega` | What the agent is called. It carries no authority. |
 | `voice_trading_enabled` | bool | `False` | Whether mutating tools reach the voice surface at all. |
 | `voice_confirm_window_seconds` | int | `30` | How long a spoken approval stays open. |
 
-### `voice_agent_name` carries two jobs
+### There is no secret word
 
-It is the persona the trader addresses and the word that approves a staged
-order, so it is validated harder than a label needs to be: **one word, letters
-only, two to twenty characters**, stored with its capitalisation and matched
-case-insensitively.
+One was tried and removed. The operator configured a private phrase and only
+that phrase approved an order. It cost more than it bought:
 
-A multi-word name would break the alone-word rule below, and punctuation would
-not survive transcription. Rejecting those at the settings boundary is what
-keeps the matcher a simple, total function rather than a parser.
+- Every approval became a memory test, in the moment a trader least wants one.
+- The speech model read it aloud - "say milo to place it" - until that was
+  fixed, which made a secret of nothing.
+- It was written to `ag_audit` in plaintext every time it was spoken, in the one
+  table this codebase makes shareable for triage.
+- It accreted machinery: a second validated setting, a rule that the word could
+  not appear in the agent's name, a separate rule for the word opening an
+  instruction, and a rule that only the opening instruction could carry it.
 
-Changing the name changes both jobs at once, which is the point: an operator who
-wants a word nobody says by accident sets one, and the persona follows.
+What it bought was narrow: a stranger within earshot cannot say a word they do
+not know. What replaced it is the thing a trader does anyway - answering.
 
-The OpenAI key is an `ag_secret` under `voice:openai`, written through
-`agent_db.set_secret` like every other credential, never returned to the
-browser, and never logged.
+### What protects an order now
 
-`voice_trading_enabled` is subject to `trading_enabled`. Turning it on while
-the master switch is off does nothing, which is deliberate: there is one place
-to stop all order flow and it keeps working.
+**The read-back.** Nothing can be approved until the order has been spoken back
+in full, so the trader is answering a question they have just heard the whole
+of. `voice_confirm.is_spoken_confirmation` accepts a plain yes and nothing else:
+every word must be an affirmation and there may be at most four of them, so
+"yes", "go ahead" and "yes place it" approve, while "yes but wait" and any
+question do not.
 
-## Tools on the voice surface
-
-`SURFACE_VOICE` is added to `services/agent/tools/__init__.py` and to
-`agent_db.SURFACES`. Toolkits reaching voice:
-
-`market`, `symbols`, `indicators`, `account`, `options`, `instrument`, `live`,
-`viz`, `option_viz`.
-
-`chart` stays `CHART_ONLY`; it drives the `/trading` panel, which a voice turn
-is not attached to.
-
-`viz` and `option_viz` are the reason this feature is worth building. "Show me
-the Bank Nifty option chain" draws it on screen while the answer is spoken,
-which is a thing the text surface cannot do hands-free.
-
-Mutating tools are excluded from the voice surface unless **both**
-`trading_enabled` and `voice_trading_enabled` are set.
-
-## Speaking
-
-A `SURFACE_VOICE` fragment in `prompts.py` gives Milo its persona and its
-brevity:
-
-- One or two sentences. Detail goes to the screen, not the ear.
-- Numbers rounded for speech. "Twenty-three thousand four hundred", not
-  "23,412.55". The exact figure is on screen.
-- No markdown, no tables, no bullet lists. They are unspeakable.
-- Say what is being done before a slow tool, not after.
-
-`session.commentary.append` caps content at 500 tokens. `voice.speakable()`
-enforces a shorter budget than that and is the only path to the data channel.
-
-## Symbols are the hard part
-
-Reference: [`docs/prompt/symbol-format.md`](../../prompt/symbol-format.md),
-[`docs/prompt/order-constants.md`](../../prompt/order-constants.md),
-[`docs/prompt/websockets-format.md`](../../prompt/websockets-format.md).
-
-An OpenAlgo symbol is an exact contract identity, not a display label, and it is
-built for machines: `NIFTY28MAR2420800CE`, `BANKNIFTY24APR24FUT`,
-`VEDL25APR24292.5CE`. Text chat can show that string and a trader reads it at a
-glance. A speaker cannot. This is the difference between the two surfaces and
-most of the work in making voice usable.
-
-Both directions need rules, and they are not the same rule.
-
-**Speaking a symbol.** Never character by character. `NIFTY28MAR2420800CE` is
-"the twenty thousand eight hundred Nifty call expiring on the twenty-eighth of
-March". A decimal strike is a number, not digits: `292.5` is "two ninety-two
-point five". Exchange codes are spoken the way a trader says them, and the
-underscore in `NSE_INDEX` is never pronounced. Products and order types go to
-words: `CNC` is delivery, `NRML` is normal, `MIS` is intraday, `SL-M` is "stop
-loss market". These live in `voice.build_instructions`, because they govern
-delivery, and in the `SURFACE_VOICE` prompt section, because they govern what
-the agent writes in the first place.
-
-**Hearing a symbol.** A spoken instrument is ambiguous in a way a typed one is
-not: "buy fifty Nifty twenty-four thousand calls" names no expiry, and "the
-Bank Nifty future" names no month. The agent resolves that through the `symbols`
-toolkit - search, contract lookup, expiry dates - and never by assembling a
-symbol string from what it heard. A symbol built by concatenation is a symbol
-that can be subtly wrong and still exist.
-
-This is the same rule `/strategy` already enforces for signal legs, quoted from
-`symbol-format.md`:
-
-> A signal leg on a derivatives exchange must name an exact listed contract. A
-> base symbol plus expiry rank is refused rather than guessed.
-
-Voice inherits it. **An order is never placed against a guessed contract.** If
-the trader has not said enough to identify one listed contract, the agent asks
-rather than choosing the nearest expiry, and the read-back names the exact
-resolved contract, so the word that approves is spoken against something the
-trader has just heard in full.
-
-**Live data.** `websockets-format.md` defines modes 1/2/3 as LTP, Quote and
-Depth. Voice never says a mode number: it says last price, quote, or market
-depth. Depth in particular is a table, so the spoken answer is the top of book
-and the screen carries the rest.
-
-## Order approval
-
-**The decision is made server-side.** `POST /agent/api/voice/approve` takes the
-utterance and the run it is aimed at; everything that decides is read from
-stored settings and from a registry the page cannot write. The page reports
-what it heard and acts on the answer. A defect in the browser, or a browser
-whose code has been altered, cannot turn a sentence into an approval.
-
-This is not what stands between a sentence and a broker - the risk guard inside
-the tool body is, and it runs after any approval and reads no prompt. This
-narrows a different hazard: a word said out loud in a room that contains other
-people, and a page deciding for itself what counted as that word.
-
-Four things must hold, and they fail with different reasons on purpose, because
-an operator who says the phrase into a closed window should be told the window
-closed rather than that they said the wrong word:
-
-1. `trading_effective` - both the platform switch and `voice_trading_enabled`.
-2. The run is registered as waiting. `stream.py:_on_run_paused` stamps it, which
-   is the one place a pause becomes a `confirm` frame.
-3. The window is still open, per `voice_confirm_window_seconds`.
-4. The utterance is the phrase, per `voice_confirm.is_approval`.
-
-Approving consumes the window, so one utterance cannot approve one run twice. A
-run that never paused is refused even for the right phrase.
-
-**Shipped off.** `voice_trading_enabled` defaults to `False`, so the first
-release is read-only and nothing below is reachable.
-
-When an operator turns it on, an order requested by voice follows the same
-pause the text surface uses. agno pauses the run, the confirmation card renders
-on screen exactly as it does today, and Milo additionally reads the order back
-and opens a spoken window:
-
-```
-Milo: "Buy 50 NIFTY24000CE at market, about 62,000 rupees. Say milo to place."
-```
-
-The approval word is `voice_agent_name`, lower-cased. It ships as `milo`, at the
-operator's direction, and is configurable.
-
-### Two ways to approve, and they are not equally strong
-
-**The word alone, after the read-back.** The order is staged, spoken back in
-full - action, quantity, the contract as a person says it, exchange, product,
-order type - and the trader answers with the word. They have heard exactly what
-will be sent before approving it.
-
-**The word opening the instruction.** "milo buy one hundred shares of reliance"
-is the question and the approval in one breath, at the operator's explicit
-direction. There is no read-back, so a mis-transcription reaches the broker: a
-hundred heard as a thousand, or the wrong strike, runs without anyone hearing it
-first. It buys speed with a real reduction in safety, and it is the operator's
-call to make.
-
-Only the **opening** instruction may carry its own word. Anything said after an
-order is already staged is held to the alone-word rule, so "milo, what is bank
-nifty doing" asks a question rather than placing the order that happens to be
-waiting.
-
-Both ways apply to every tool that pauses, which is all seven mutating ones:
-`place_order`, `place_smart_order`, `modify_order`, `cancel_order`,
-`cancel_all_orders`, `close_position` and `close_all_positions`.
-
-### The agent's name never places an order
-
-Only `voice_order_phrase` reaches a broker. `voice_agent_name` is what the
-trader says all day, and a word said that often must not be able to trade
-however it is followed - "Ava, should I buy a hundred reliance" is a question.
-The order phrase does one job and is said for no other reason, which is the
-whole reason the two are separate values.
-
-### The speech model is never told the word
-
-It used to be placed in the instructions so the model could say "say milo to
-place it". That reads the secret out loud to whoever is in the room, and a word
-spoken aloud is a secret from nobody. The instructions now say "your approval
-word" and the model is told it will never be given it, must never guess or
-repeat it, and that anyone within earshot can hear it. Nothing sent to the
-speech vendor carries the word, which a test asserts.
-
-### What makes the word safe enough to use
-
-`milo` is also what the trader calls the agent, so the matcher cannot simply
-look for the word inside an utterance. It does not:
-
-- **The utterance must be the word alone.** `milo`, optionally wrapped in a
-  bare affirmation (`yes milo`, `milo confirm`, `ok milo`). Anything carrying
-  other content does not match, so "Milo, what is Bank Nifty doing?" is a
-  question even with a window open. Filler and punctuation are stripped first;
-  a single remaining token that is not the word is a rejection, not a retry.
-- **The window is short and single-use.** `voice_confirm_window_seconds`,
-  default 30, one attempt. It opens only after an order has been staged and
-  read back, and it closes on the first utterance either way.
-- **The matcher is a pure function.** String in, boolean out. It reads no
-  prompt, holds no state, and imports nothing from agno, LiteLLM or the
-  database, so no phrasing anywhere in a conversation can alter its verdict.
-- **The risk guard is unchanged.** It still runs inside the tool body, after
-  approval, before the service call. Spoken approval reaches the same gate a
-  tapped approval reaches.
-- **The card never goes away.** Tapping still works, and is the only path when
-  the window has expired.
+The decision is made server-side by `POST /agent/api/voice/approve`. The page
+reports what it heard and which run it heard it against; whether trading is
+reachable, whether a run is really waiting, whether the window is still open and
+whether the words are an answer are all read from stored settings and from a
+registry the page cannot write.
 
 ### What this does not defend against
 
-Stated plainly, because the meta-rule in `55-agent` applies here: a bare "milo"
-spoken by anyone within earshot during an open window will approve the staged
-order. The window, the single attempt and the alone-word rule reduce the
-surface; they do not eliminate it. An operator who wants that surface closed
-leaves `voice_trading_enabled` off and taps the card.
-
-`ag_audit` records the approval mode, the utterance that matched, and the
-window it matched in.
+Stated plainly, because the meta-rule in `55-agent` applies here: **anyone
+within earshot who says yes while the window is open approves the staged order,
+and the agent cannot tell one voice from another.** The window is short and
+single use, the order has just been read back, and the risk guard inside the
+tool body applies every limit afterwards. An operator who does not control the
+room they trade in leaves `voice_trading_enabled` off and taps the card.
 
 ## Every spoken line is kept
 

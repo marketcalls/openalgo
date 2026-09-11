@@ -101,16 +101,13 @@ KEY_KILL_SWITCH_FILE = "kill_switch_file"
 
 # The voice surface. Two of these are spoken values and they are deliberately
 # separate: `voice_agent_name` is how a trader addresses the agent all day and
-# carries no authority, while `voice_order_phrase` does one job and is never a
-# greeting. `services.agent.safety.voice_confirm` validates both and refuses an
-# order phrase that appears in the name, so the two cannot be collapsed back
-# into one by configuration.
+# carries no authority: an order is approved by confirming it out loud after the
+# agent has read it back, or by tapping the card on screen.
 KEY_VOICE_ENABLED = "voice_enabled"
 KEY_VOICE_PROVIDER = "voice_provider"
 KEY_VOICE_MODEL = "voice_model"
 KEY_VOICE_SPEAKER = "voice_speaker"
 KEY_VOICE_AGENT_NAME = "voice_agent_name"
-KEY_VOICE_ORDER_PHRASE = "voice_order_phrase"
 KEY_VOICE_TRADING_ENABLED = "voice_trading_enabled"
 KEY_VOICE_CONFIRM_WINDOW_SECONDS = "voice_confirm_window_seconds"
 
@@ -137,21 +134,20 @@ class _Field:
 
 _SPEC: Mapping[str, _Field] = MappingProxyType(
     {
-        # The master switch, ON by default at the operator's explicit direction.
+        # The master switch, OFF by default at the operator's explicit direction.
         #
-        # This is a deliberate reversal of where the defaults previously sat,
-        # and it is worth stating plainly because it changes what a fresh
-        # install can do: opening /agent and typing a sentence can now reach an
-        # order tool without anyone having opted in. What still stands between
-        # that sentence and a broker is the approval pause on every mutating
-        # tool, the risk guard that runs inside the tool body after approval,
-        # and the per-session and per-order limits below.
+        # It was ON for a while and is now back off, because a fresh install
+        # where typing a sentence can reach an order tool asks the operator to
+        # notice a capability they never chose. Placing, modifying and
+        # cancelling are opt-in: the tools are not offered at all until this is
+        # switched on, so the agent declines rather than asking for approval.
         #
-        # An existing installation that never touched this setting also picks
-        # the new value up on upgrade, because the default is what a missing row
-        # resolves to. An operator who explicitly set it either way keeps what
-        # they set.
-        KEY_TRADING_ENABLED: _Field("bool", True),
+        # An existing installation that never touched this setting picks the new
+        # value up on upgrade, because the default is what a missing row
+        # resolves to - which for this switch means an agent that could trade
+        # stops being able to. An operator who explicitly set it either way
+        # keeps what they set.
+        KEY_TRADING_ENABLED: _Field("bool", False),
         # Off by default for the same reason: the operator asked for trading to
         # work in live mode as well, and leaving this on would have allowed
         # orders only while the platform sat in analyzer mode, which is the same
@@ -195,7 +191,6 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         # not be confusable by a speech model on a noisy desk - and "Vega" is
         # an options Greek, which reads as deliberate on a trading platform.
         KEY_VOICE_AGENT_NAME: _Field("text", "Vega"),
-        KEY_VOICE_ORDER_PHRASE: _Field("text", "milo"),
         # Subject to KEY_TRADING_ENABLED: turning this on while the master
         # switch is off changes nothing, so there stays exactly one place to
         # stop all order flow.
@@ -1711,7 +1706,6 @@ def get_voice_defaults() -> dict[str, Any]:
         KEY_VOICE_MODEL: _SPEC[KEY_VOICE_MODEL].default,
         KEY_VOICE_SPEAKER: _SPEC[KEY_VOICE_SPEAKER].default,
         KEY_VOICE_AGENT_NAME: _SPEC[KEY_VOICE_AGENT_NAME].default,
-        KEY_VOICE_ORDER_PHRASE: _SPEC[KEY_VOICE_ORDER_PHRASE].default,
         KEY_VOICE_TRADING_ENABLED: _SPEC[KEY_VOICE_TRADING_ENABLED].default,
         KEY_VOICE_CONFIRM_WINDOW_SECONDS: _SPEC[KEY_VOICE_CONFIRM_WINDOW_SECONDS].default,
     }
@@ -1816,20 +1810,10 @@ def update_voice(values: Mapping[str, Any]) -> dict[str, Any]:
     pending: dict[str, Any] = {}
 
     name_raw = values.get(KEY_VOICE_AGENT_NAME, current.get(KEY_VOICE_AGENT_NAME))
-    name = voice_confirm.normalise_wake_phrase(
-        name_raw if name_raw not in (None, "") else _SPEC[KEY_VOICE_AGENT_NAME].default
-    )
-    phrase_raw = values.get(KEY_VOICE_ORDER_PHRASE, current.get(KEY_VOICE_ORDER_PHRASE))
-    phrase = voice_confirm.normalise_order_phrase(
-        phrase_raw if phrase_raw not in (None, "") else _SPEC[KEY_VOICE_ORDER_PHRASE].default,
-        name,
-    )
     if KEY_VOICE_AGENT_NAME in values:
-        pending[KEY_VOICE_AGENT_NAME] = name
-    if KEY_VOICE_ORDER_PHRASE in values or KEY_VOICE_AGENT_NAME in values:
-        # A renamed agent can invalidate a phrase that was fine a moment ago, so
-        # the phrase is re-written whenever either half moves.
-        pending[KEY_VOICE_ORDER_PHRASE] = phrase
+        pending[KEY_VOICE_AGENT_NAME] = voice_confirm.normalise_wake_phrase(
+            name_raw if name_raw not in (None, "") else _SPEC[KEY_VOICE_AGENT_NAME].default
+        )
 
     from services.agent import voice_providers
 

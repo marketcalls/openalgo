@@ -425,11 +425,10 @@ export interface WebSearchTestResult {
 /**
  * The configurable half of the voice settings, which is also what they revert to.
  *
- * `voice_agent_name` is what a trader calls the agent and carries no authority.
- * `voice_order_phrase` is the single word that approves a staged order, stored
- * lower-cased because it is matched case-insensitively and never shown as a
- * name. Sending an empty string for either restores its shipped default rather
- * than clearing it, since neither may be blank.
+ * `voice_agent_name` is what a trader calls the agent and carries no authority:
+ * an order is approved by confirming it out loud after the agent has read it
+ * back, or by tapping the card. Sending an empty string restores the shipped
+ * default rather than clearing it, since the name may not be blank.
  */
 export interface VoiceDefaults {
   /** The master switch. Off means the mic never renders. */
@@ -441,7 +440,6 @@ export interface VoiceDefaults {
   /** What the trader calls the agent. Letters and spaces, up to 40. */
   voice_agent_name: string
   /** The word that approves a staged order. One word, 3 to 20 letters. */
-  voice_order_phrase: string
   /** Whether mutating tools reach the voice surface. Subject to trading_enabled. */
   voice_trading_enabled: boolean
   /** How long a spoken approval stays open, 5 to 300. */

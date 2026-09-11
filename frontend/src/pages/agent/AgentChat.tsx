@@ -111,16 +111,9 @@ export default function AgentChat() {
           // the server deciding whether what they said was the phrase.
           const runId = frame.run_id
           const ids = frame.requirements.map((requirement) => requirement.id)
-          voiceController.current?.awaitApproval(
-            runId,
-            () => {
-              void confirm(Object.fromEntries(ids.map((id) => [id, true])))
-            },
-            // The question that opened this turn. When the operator put the
-            // approval word at the head of it, that is the approval, and the
-            // order runs without a read-back.
-            spokenQuestion.current
-          )
+          voiceController.current?.awaitApproval(runId, () => {
+            void confirm(Object.fromEntries(ids.map((id) => [id, true])))
+          })
           spokenAnswer.current.text ||= awaitingApprovalLine.current
         }
       },
@@ -198,9 +191,6 @@ export default function AgentChat() {
   /** What to speak while a run waits for approval, read at frame time. */
   const awaitingApprovalLine = useRef('That needs your approval before I can place it.')
 
-  /** The spoken question that opened the running turn, for the fast path. */
-  const spokenQuestion = useRef('')
-
   const handleSpokenLine = useCallback((role: 'trader' | 'agent', text: string) => {
     void recordVoiceTranscript(role, text, conversationIdRef.current)
   }, [])
@@ -220,7 +210,6 @@ export default function AgentChat() {
     async (question: string): Promise<string> => {
       const collector = { text: '' }
       spokenAnswer.current = collector
-      spokenQuestion.current = question
       try {
         // The voice surface for this turn only: it decides the tools and asks
         // for an answer short enough to listen to. The conversation, the model

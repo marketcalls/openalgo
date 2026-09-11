@@ -10,7 +10,7 @@
  * Three things this panel has to make obvious, because none is guessable and
  * each one is a way an operator ends up surprised:
  *
- * - **The name and the approval word are different values on purpose.** The
+ * - **The name carries no authority.** The
  *   name is what a trader says all day and carries no authority. The approval
  *   word does one thing, and the server refuses a word that also appears in the
  *   name so the two cannot be collapsed back into one by configuration. That
@@ -36,8 +36,8 @@
  * The two switches apply on toggle and the typed fields wait for Save. That
  * split is deliberate: a switch has no intermediate state worth staging, and
  * the trading switch in particular is the one control an operator may want to
- * flip in a hurry, while a half-typed approval word saved on every keystroke
- * would be a different approval word on every keystroke.
+ * flip in a hurry, while a half-typed name saved on every keystroke would be a
+ * different name on every keystroke.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -89,17 +89,14 @@ import { showToast } from '@/utils/toast'
 const MIN_CONFIRM_WINDOW = 5
 const MAX_CONFIRM_WINDOW = 300
 
-/** What the approval word and the name are allowed to be, as input hints. */
+/** What the name is allowed to be, as an input hint. */
 const MAX_NAME_CHARS = 40
-const MIN_PHRASE_CHARS = 3
-const MAX_PHRASE_CHARS = 20
 
 /** The typed half of the configuration, held as text while it is edited. */
 interface Draft {
   model: string
   speaker: string
   agentName: string
-  orderPhrase: string
   confirmWindow: string
 }
 
@@ -108,7 +105,6 @@ function toDraft(config: VoiceConfig): Draft {
     model: config.voice_model,
     speaker: config.voice_speaker,
     agentName: config.voice_agent_name,
-    orderPhrase: config.voice_order_phrase,
     confirmWindow: String(config.voice_confirm_window_seconds),
   }
 }
@@ -118,7 +114,6 @@ function sameDraft(a: Draft, b: Draft): boolean {
     a.model === b.model &&
     a.speaker === b.speaker &&
     a.agentName === b.agentName &&
-    a.orderPhrase === b.orderPhrase &&
     a.confirmWindow === b.confirmWindow
   )
 }
@@ -136,26 +131,6 @@ function parseWhole(raw: string): number | null {
   if (!/^\d+$/.test(text)) return null
   const value = Number(text)
   return Number.isSafeInteger(value) ? value : null
-}
-
-/**
- * Whether the approval word is also one of the words in the name.
- *
- * This is the one relationship the server enforces across two fields, so it is
- * the one worth checking locally: the operator typing a name is the moment the
- * conflict is created, and a rejected save several fields later reads as the
- * form being broken rather than as these two values disagreeing. Everything
- * that is not a letter is a separator here exactly as the matcher treats it, so
- * "Milo" in "Hey Milo" is caught and "Milos" is not.
- */
-function wordAppearsInName(phrase: string, name: string): boolean {
-  const word = phrase.trim().toLowerCase()
-  if (!word) return false
-  return name
-    .toLowerCase()
-    .split(/[^a-z]+/)
-    .filter(Boolean)
-    .includes(word)
 }
 
 /**
@@ -204,7 +179,6 @@ export function VoicePanel() {
 
   const form = draft ?? (config ? toDraft(config) : null)
   const dirty = form !== null && config !== null && !sameDraft(form, toDraft(config))
-  const conflict = form !== null && wordAppearsInName(form.orderPhrase, form.agentName)
 
   /**
    * Every mutation answers with the whole refreshed configuration, so the cache
@@ -311,10 +285,8 @@ export function VoicePanel() {
     if (form.model.trim() !== config.voice_model) values.voice_model = form.model.trim()
     if (form.speaker !== config.voice_speaker) values.voice_speaker = form.speaker
     const nameMoved = form.agentName.trim() !== config.voice_agent_name
-    const phraseMoved = form.orderPhrase.trim() !== config.voice_order_phrase
-    if (nameMoved || phraseMoved) {
+    if (nameMoved) {
       values.voice_agent_name = form.agentName.trim()
-      values.voice_order_phrase = form.orderPhrase.trim()
     }
     if (window !== config.voice_confirm_window_seconds) {
       values.voice_confirm_window_seconds = window
@@ -433,20 +405,17 @@ export function VoicePanel() {
 
             <div className="space-y-4">
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold">What the agent is called, and what trades</h3>
+                <h3 className="text-sm font-semibold">What you call the agent</h3>
                 <p className="text-xs text-muted-foreground">
-                  These are two different words on purpose. The name is what you say to get the
-                  agent's attention and it carries no authority at all. The approval word does one
-                  thing: it approves an order that has already been staged and read back to you. A
-                  word said all day must not also be the word that places a trade, so the approval
-                  word may not appear anywhere in the name and the server refuses a pair that breaks
-                  that.
+                  What you say to get the agent's attention. It carries no authority: an order is
+                  approved by confirming it out loud after the agent has read it back, or by tapping
+                  the card on screen.
                 </p>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor={`${fieldId}-name`}>What you call the agent</Label>
+                  <Label htmlFor={`${fieldId}-name`}>Name</Label>
                   <Input
                     id={`${fieldId}-name`}
                     value={form.agentName}
@@ -460,32 +429,7 @@ export function VoicePanel() {
                     {defaults ? ` Leave it empty to restore ${defaults.voice_agent_name}.` : ''}
                   </p>
                 </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor={`${fieldId}-phrase`}>Word that approves an order</Label>
-                  <Input
-                    id={`${fieldId}-phrase`}
-                    value={form.orderPhrase}
-                    maxLength={MAX_PHRASE_CHARS}
-                    spellCheck={false}
-                    autoComplete="off"
-                    onChange={(event) => setDraft({ ...form, orderPhrase: event.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {`One word, ${MIN_PHRASE_CHARS} to ${MAX_PHRASE_CHARS} letters, no spaces, digits or punctuation.`}
-                    {defaults ? ` Leave it empty to restore ${defaults.voice_order_phrase}.` : ''}
-                  </p>
-                </div>
               </div>
-
-              {conflict ? (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" aria-hidden />
-                  <AlertDescription>
-                    {`"${form.orderPhrase.trim()}" appears in the name, so it cannot also be the approval word. Change one of them before saving.`}
-                  </AlertDescription>
-                </Alert>
-              ) : null}
             </div>
 
             <Separator />
@@ -567,12 +511,11 @@ export function VoicePanel() {
                   whether to turn it on is exactly the reader this paragraph is
                   for, and they read it before the switch, not after. */}
               <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
-                <p>
-                  What spoken approval means: while that window is open, anyone within earshot who
-                  says <span className="font-mono">{config.voice_order_phrase}</span> can place the
-                  staged order. The agent cannot tell one voice from another. The word has to be
-                  said on its own, with nothing but a bare "yes" or "confirm" around it, and the
-                  window is short and single use, which narrows that surface without removing it.
+                <p className="text-xs text-muted-foreground">
+                  What confirming out loud means: while that window is open, anyone within earshot
+                  who says yes can place the staged order. The agent cannot tell one voice from
+                  another. What stands in front of it is the read-back - the order is spoken back in
+                  full before anything is placed - and every limit above still applies afterwards.
                 </p>
                 <p className="mt-2">
                   The on-screen confirmation card never goes away, so tapping still works and is the
@@ -590,7 +533,7 @@ export function VoicePanel() {
             ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={submit} disabled={!dirty || conflict || saveSettings.isPending}>
+              <Button onClick={submit} disabled={!dirty || saveSettings.isPending}>
                 {saveSettings.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                 ) : null}
