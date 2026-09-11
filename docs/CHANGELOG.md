@@ -6,23 +6,58 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
-## [Unreleased]
+## [2.0.2.4] - 2026-09-11
+
+### Charting Profiles and Broker Correctness Release
+
+37 commits since 2.0.2.3, excluding automated frontend build commits. Full
+notes: [version-2.0.2.4-released.md](releases/version-2.0.2.4-released.md).
+
+### Highlights
+
+- The charting terminal moves from openalgo-charts 2.0.2 to 2.1.7 across four
+  engine upgrades, adding TPO and session volume profiles, a per-pane Objects
+  panel and the engine's data loading controller.
+- The Upstox V3 migration is complete, with CAS data, shared rate limiting and
+  WebSocket leak fixes (#2028).
+- Kotak market data now streams over SFeed with per-data-centre routing (#2016).
+- GTT history appears in the order book, and sandbox GTT no longer reports 501.
 
 ### Changed
 
-- Updated `/trading` to OpenAlgo Charts 2.1.5. Drawings extend into empty chart
-  space: a trend line, rectangle or freehand stroke that reaches past the latest
-  candle or before the first loaded bar keeps its preview and commits where it
-  was drawn, instead of disappearing mid-gesture. Magnet snapping still requires
-  an actual candle, and saved drawings load unchanged. Mouse and pen plot drags
-  pan time and price by default. Horizontal-only panning remains optional and
-  preserves price autoscale; existing saved preferences stay intact. Dragging
-  the time axis left expands candle spacing and dragging right compresses it.
-  The bottom controls include Reset view, and Axes settings retain the default
-  visible-bar preference.
+- `/trading` drawings extend into empty chart space: a trend line, rectangle or
+  freehand stroke that reaches past the latest candle or before the first loaded
+  bar keeps its preview and commits where it was drawn, instead of disappearing
+  mid-gesture. Magnet snapping still requires an actual candle, and saved
+  drawings load unchanged.
+- Mouse and pen plot drags pan time and price by default. Horizontal-only
+  panning remains optional and preserves price autoscale; existing saved
+  preferences stay intact. Dragging the time axis left expands candle spacing
+  and dragging right compresses it. The bottom controls include Reset view, and
+  Axes settings retain the default visible-bar preference.
+- The profile entries were removed from the chart type menu, where they did not
+  belong, now that profiles are their own studies.
 
 ### Fixed
 
+- Upstox reported tick size in paise rather than rupees, so every tick-derived
+  value was off by a factor of a hundred (#2026).
+- The Upstox synthetic daily candle was stamped in host local time rather than
+  IST, placing it on the wrong day for anyone not running in IST (#2030).
+- Upstox multiquotes never populated `prev_close`, breaking percentage-change
+  reporting wherever it was displayed (#1725).
+- Kotak holdings did not report `average_price` (#2001), and tradebook fills
+  were keyed on `order_timestamp` instead of `fill_timestamp`, losing per-fill
+  `trade_id` (#2007).
+- Samco kept reconnecting after a rejected session token (#2035), and a
+  Flattrade WebSocket close stalled the reconnect (#1965).
+- Groww tradebook prices are reported in the rupees Groww actually sends (#1995).
+- Holiday checks now apply the requested date range (#1938).
+- The central CORS policy is applied to blueprint decorators, which were
+  bypassing it (#1927).
+- Ctrl+C on the development server stops the health collector and releases its
+  sessions before exit, so a stopped instance no longer keeps writing to
+  `health.db` (#2031).
 - `/trading` keeps price and volume isolated during replay when a periodic
   history refresh or an older history page completes. Leaving replay restores
   the updated live session. A refresh from an earlier symbol, interval or load
@@ -33,8 +68,12 @@ fix, live in [docs/releases](releases/).
   without exhausting the new session or releasing another page's loading state.
 - Closing a pane during interval lookup no longer starts its WebSocket and
   polling timer after teardown.
-- Custom indicators wait for concurrent registration to finish before they
-  are added or restored, preventing missing indicators during pane startup.
+- Custom indicators wait for concurrent registration to finish before they are
+  added or restored, preventing missing indicators during pane startup.
+- Negative Net GEX values are abbreviated with K/L/Cr suffixes (#1911); SIP
+  inputs are validated before prices load (#1884); backtester controls are
+  labelled for assistive technology (#1877); the Docker installer no longer
+  starts a container from a failed build (#2005).
 
 ### Security
 
@@ -52,6 +91,44 @@ fix, live in [docs/releases](releases/).
   `@vitest/mocker` to 4.1.11 (path traversal via the mocker redirect), and
   colord to 2.10.0 (slow rejection of malformed colour strings). All four are
   build and test tooling, not runtime code.
+
+### Dependencies
+
+- `openalgo-charts`: 2.0.2 to 2.1.7
+- The pinned `openalgo` SDK: 2.0.3 to 2.0.5, with `requirements-nginx.txt`
+  realigned after it was left a version behind
+- `docker/login-action`: 3 to 4.5.2 (#1719)
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; the charting terminal
+  through four engine upgrades, TPO and session volume profiles, the pane
+  Objects panel, the data loading controller and replay isolation; GTT history
+  in the order book; ordered shutdown on Ctrl+C (#2031); clearing every open
+  Dependabot advisory; the `chart-indicator` skill regeneration and its CI gate.
+- **@Kalaiviswa** - the Upstox V3 migration and the Flattrade reconnect stall
+  (#2028, #1965); Kotak SFeed market data (#2016); the Upstox daily candle
+  stamped in IST (#2030); the Samco reconnect loop (#2035).
+- **@arsalanansari17** - tradebook fills keyed on `fill_timestamp` with per-fill
+  `trade_id` preserved (#2007); Kotak average price on holdings (#2001).
+- **@anishkun (Anish kunda)** - Upstox tick size normalized from paise to rupees
+  (#2026), and the root-cause analysis on #2029.
+- **@linuxsmiths** - Upstox multiquotes never populating `prev_close` (#1725).
+- **@nightcityblade** - holiday checks applying the requested date range (#1938).
+- **@WilliamK112 (Ching Wei Kang)** - central CORS policy applied to blueprint
+  decorators (#1927).
+- **@vibecoding-skills (Harsh Dattani)** - Groww tradebook prices in rupees
+  (#1995).
+- **@srajbr (Samiran Raj Boro)** - negative Net GEX abbreviations (#1911).
+- **@siddharthg2309 (Siddharth Gouthaman)** - SIP input validation (#1884).
+- **@hafzism (Hafeez)** - backtester control labelling (#1877).
+- **@aravindgandavadi (Aravind Gandavadi)** - the Docker installer no longer
+  starting a container from a failed build (#2005).
+- **@Mr-Neutr0n (hari)** - frontend test coverage for the Footer (#1964).
+- **@Pragitics (Pragit R V)** - the strategy-builder Greeks tab awaited rather
+  than queried synchronously (#1903).
+- **@santhiprakash (Santhi Prakash)** - README quick-contribution example
+  aligned with Conventional Commits (#1935).
 
 ## [2.0.2.3] - 2026-09-06
 
