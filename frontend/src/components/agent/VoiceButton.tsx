@@ -88,6 +88,8 @@ export function VoiceButton({
     staleTime: 30_000,
   })
 
+  const idleTimeout = config.data?.data.voice_idle_timeout_seconds ?? 0
+
   const [status, setStatus] = useState<VoiceStatus>({ state: 'idle', error: null })
   const [lines, setLines] = useState<VoiceTranscriptLine[]>([])
 
@@ -108,6 +110,10 @@ export function VoiceButton({
       createVoiceController({
         modelId,
         tradingEnabled,
+        // Read from the operator's configuration rather than hardcoded: an
+        // open microphone is billed for as long as it is open, and how long a
+        // desk tolerates a quiet one is not ours to decide.
+        idleTimeoutSeconds: idleTimeout,
         ask: (question) => {
           const run = askRef.current
           if (!run) return Promise.resolve('')
@@ -115,7 +121,7 @@ export function VoiceButton({
         },
         onSpokenLine: (role, text) => spokenLineRef.current?.(role, text),
       }),
-    [modelId, tradingEnabled]
+    [modelId, tradingEnabled, idleTimeout]
   )
 
   // The page needs the controller to report tool activity into it while it runs

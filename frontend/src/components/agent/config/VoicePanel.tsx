@@ -86,6 +86,8 @@ import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
 /** The bounds `voice_confirm_window_seconds` is stored under, as input hints. */
+const MIN_IDLE_TIMEOUT = 30
+const MAX_IDLE_TIMEOUT = 3600
 const MIN_CONFIRM_WINDOW = 5
 const MAX_CONFIRM_WINDOW = 300
 
@@ -98,6 +100,7 @@ interface Draft {
   speaker: string
   agentName: string
   confirmWindow: string
+  idleTimeout: string
 }
 
 function toDraft(config: VoiceConfig): Draft {
@@ -106,6 +109,7 @@ function toDraft(config: VoiceConfig): Draft {
     speaker: config.voice_speaker,
     agentName: config.voice_agent_name,
     confirmWindow: String(config.voice_confirm_window_seconds),
+    idleTimeout: String(config.voice_idle_timeout_seconds),
   }
 }
 
@@ -114,7 +118,8 @@ function sameDraft(a: Draft, b: Draft): boolean {
     a.model === b.model &&
     a.speaker === b.speaker &&
     a.agentName === b.agentName &&
-    a.confirmWindow === b.confirmWindow
+    a.confirmWindow === b.confirmWindow &&
+    a.idleTimeout === b.idleTimeout
   )
 }
 
@@ -273,7 +278,12 @@ export function VoicePanel() {
 
     const window = parseWhole(form.confirmWindow)
     if (window === null) {
-      setFormError('The confirmation window must be a whole number of seconds.')
+      setFormError('The approval window must be a whole number of seconds.')
+      return
+    }
+    const idle = parseWhole(form.idleTimeout)
+    if (idle === null) {
+      setFormError('The quiet timeout must be a whole number of seconds.')
       return
     }
 
@@ -290,6 +300,9 @@ export function VoicePanel() {
     }
     if (window !== config.voice_confirm_window_seconds) {
       values.voice_confirm_window_seconds = window
+    }
+    if (idle !== config.voice_idle_timeout_seconds) {
+      values.voice_idle_timeout_seconds = idle
     }
 
     if (Object.keys(values).length === 0) {
@@ -503,6 +516,26 @@ export function VoicePanel() {
                     {defaults ? ` Default ${defaults.voice_confirm_window_seconds}.` : ''} It opens
                     only after an order has been staged and read back, allows one attempt, and
                     closes on the first thing said either way.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor={`${fieldId}-idle`}>Stop after this much quiet, seconds</Label>
+                  <Input
+                    id={`${fieldId}-idle`}
+                    type="number"
+                    min={MIN_IDLE_TIMEOUT}
+                    max={MAX_IDLE_TIMEOUT}
+                    step={10}
+                    value={form.idleTimeout}
+                    onChange={(event) => setDraft({ ...form, idleTimeout: event.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {`${MIN_IDLE_TIMEOUT} to ${MAX_IDLE_TIMEOUT}.`}
+                    {defaults ? ` Default ${defaults.voice_idle_timeout_seconds}.` : ''} An open
+                    microphone is charged for as long as it is open, because silence is still audio
+                    being sent. This hangs up a session nobody is using. The thread and the
+                    transcript are kept, so starting again costs a button press.
                   </p>
                 </div>
               </div>

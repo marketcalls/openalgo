@@ -110,6 +110,7 @@ KEY_VOICE_SPEAKER = "voice_speaker"
 KEY_VOICE_AGENT_NAME = "voice_agent_name"
 KEY_VOICE_TRADING_ENABLED = "voice_trading_enabled"
 KEY_VOICE_CONFIRM_WINDOW_SECONDS = "voice_confirm_window_seconds"
+KEY_VOICE_IDLE_TIMEOUT_SECONDS = "voice_idle_timeout_seconds"
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,13 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         # stop all order flow.
         KEY_VOICE_TRADING_ENABLED: _Field("bool", False),
         KEY_VOICE_CONFIRM_WINDOW_SECONDS: _Field("int", 30, minimum=5, maximum=300),
+        # An open microphone is billed for as long as it is open, because
+        # silence is still audio being streamed. A trading screen is left open
+        # all day, so a mic left on by accident is a real cost rather than a
+        # tidiness problem. Three minutes of nobody speaking ends the session;
+        # the thread and the transcript are already saved, so starting again
+        # costs a button press.
+        KEY_VOICE_IDLE_TIMEOUT_SECONDS: _Field("int", 180, minimum=30, maximum=3600),
     }
 )
 
@@ -1708,6 +1716,7 @@ def get_voice_defaults() -> dict[str, Any]:
         KEY_VOICE_AGENT_NAME: _SPEC[KEY_VOICE_AGENT_NAME].default,
         KEY_VOICE_TRADING_ENABLED: _SPEC[KEY_VOICE_TRADING_ENABLED].default,
         KEY_VOICE_CONFIRM_WINDOW_SECONDS: _SPEC[KEY_VOICE_CONFIRM_WINDOW_SECONDS].default,
+        KEY_VOICE_IDLE_TIMEOUT_SECONDS: _SPEC[KEY_VOICE_IDLE_TIMEOUT_SECONDS].default,
     }
 
 
@@ -1838,7 +1847,12 @@ def update_voice(values: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("The voice model cannot be empty")
         pending[KEY_VOICE_MODEL] = model
 
-    for key in (KEY_VOICE_ENABLED, KEY_VOICE_TRADING_ENABLED, KEY_VOICE_CONFIRM_WINDOW_SECONDS):
+    for key in (
+        KEY_VOICE_ENABLED,
+        KEY_VOICE_TRADING_ENABLED,
+        KEY_VOICE_CONFIRM_WINDOW_SECONDS,
+        KEY_VOICE_IDLE_TIMEOUT_SECONDS,
+    ):
         if key in values:
             pending[key] = values[key]
 

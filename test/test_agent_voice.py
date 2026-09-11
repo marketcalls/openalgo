@@ -734,3 +734,36 @@ class TestAnUpstreamFailureSaysSo:
         assert "key" in voice._refusal_message(401, "").lower()
         assert "voice" in voice._refusal_message(404, "").lower()
         assert "slow down" in voice._refusal_message(429, "").lower()
+
+
+class TestTheIdleTimeoutIsConfigured:
+    """An open microphone is billed for as long as it is open.
+
+    Silence is still audio being streamed, and a trading screen stays open all
+    day, so a microphone left on by accident costs money rather than being
+    untidy. The hang-up is a setting because how long a desk tolerates a quiet
+    one is the operator's call.
+    """
+
+    def test_it_ships_at_three_minutes(self):
+        assert agent_settings.get_voice_defaults()["voice_idle_timeout_seconds"] == 180
+
+    def test_an_install_with_no_row_still_gets_a_timeout(self):
+        # The row is absent on any instance that ran the voice migration before
+        # this setting existed, and a missing row must not read as "never hang
+        # up": that is the expensive direction.
+        spec = agent_settings._SPEC[agent_settings.KEY_VOICE_IDLE_TIMEOUT_SECONDS]
+        assert (
+            agent_settings._parse(
+                agent_settings.KEY_VOICE_IDLE_TIMEOUT_SECONDS, spec, None, strict=False
+            )
+            == 180
+        )
+
+    @pytest.mark.parametrize("value", [29, 3601, 0, -1, "soon"])
+    def test_a_value_outside_the_range_is_refused(self, value):
+        with pytest.raises(ValueError):
+            agent_settings.update_voice({agent_settings.KEY_VOICE_IDLE_TIMEOUT_SECONDS: value})
+
+    def test_the_configuration_reports_it(self):
+        assert "voice_idle_timeout_seconds" in agent_settings.get_voice_config()

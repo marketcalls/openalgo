@@ -444,6 +444,8 @@ export interface VoiceDefaults {
   voice_trading_enabled: boolean
   /** How long a spoken approval stays open, 5 to 300. */
   voice_confirm_window_seconds: number
+  /** Hang up after this long with nobody speaking. An open mic is billed. */
+  voice_idle_timeout_seconds: number
 }
 
 /**

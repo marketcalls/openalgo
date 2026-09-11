@@ -155,6 +155,14 @@ export interface VoiceControllerOptions {
    * subset of a conversation that happened to need a tool.
    */
   onSpokenLine?: (role: 'trader' | 'agent', text: string) => void
+  /**
+   * Hang up after this many seconds with nobody speaking. 0 never hangs up.
+   *
+   * An open microphone is billed for as long as it is open: silence is still
+   * audio being streamed to the provider. A trading screen stays open all day,
+   * so a microphone left on by accident is a real cost rather than untidiness.
+   */
+  idleTimeoutSeconds?: number
 }
 
 /** The connection, its state machine, and the delegation loop. */
@@ -410,6 +418,32 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
   let activeDelegation: string | null = null
   /** The run waiting on a spoken approval, and what to do when it gets one. */
   let pendingApproval: { runId: string; approve: () => void } | null = null
+  /** Hangs up a session nobody is using. Cleared by every sign of life. */
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Restart the idle countdown.
+   *
+   * Called by anything that means the session is still wanted: a word from
+   * either side, a turn being run. A session that hangs up keeps its thread and
+   * its transcript, so starting again costs a button press and loses nothing.
+   */
+  function touchIdle(): void {
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    const seconds = options.idleTimeoutSeconds ?? 0
+    if (seconds <= 0) return
+    idleTimer = setTimeout(() => {
+      if (state === 'idle') return
+      const minutes = Math.round(seconds / 60)
+      const quiet =
+        minutes >= 1 ? `${minutes} minute${minutes === 1 ? '' : 's'}` : `${seconds} seconds`
+      teardown()
+      setState(
+        'idle',
+        `Voice stopped after ${quiet} of quiet. Press the microphone to start again.`
+      )
+    }, seconds * 1000)
+  }
   let conversation: number | string | null = options.conversationId ?? null
   let lineCounter = 0
 
@@ -461,6 +495,7 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
    * @param delta - The text fragment the vendor sent.
    */
   function appendDelta(role: 'trader' | 'agent', delta: string): void {
+    touchIdle()
     if (!delta) return
     let holder = open[role]
     if (!holder) {
@@ -775,7 +810,10 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       // created after the answer is applied never opens.
       const events = connection.createDataChannel(EVENT_CHANNEL)
       channel = events
-      events.addEventListener('open', () => setState('listening'))
+      events.addEventListener('open', () => {
+        setState('listening')
+        touchIdle()
+      })
       events.addEventListener('message', (message: MessageEvent) => {
         if (typeof message.data === 'string') handleEvent(message.data)
       })
@@ -839,6 +877,10 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
 
   /** Release everything. Called by both `stop` and `fail`. */
   function teardown(): void {
+    if (idleTimer !== undefined) {
+      clearTimeout(idleTimer)
+      idleTimer = undefined
+    }
     // First, before anything is released: an await that resumes after this
     // point must be able to tell that its session is gone.
     generation += 1
