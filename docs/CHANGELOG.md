@@ -36,6 +36,23 @@ fix, live in [docs/releases](releases/).
 - Custom indicators wait for concurrent registration to finish before they
   are added or restored, preventing missing indicators during pane startup.
 
+### Security
+
+- Cleared every open Dependabot advisory on the lockfiles. `npm audit` and the
+  Python resolve both report no known vulnerabilities.
+- GitPython raised to 3.1.62 (advisories through 3.1.58 cover config-injection
+  RCE, arbitrary file read and git-directory creation). It arrives transitively
+  through streamlit in the opt-in `analysis` group, so it never reaches a
+  production install; the floor in `pyproject.toml` keeps the lockfile clear.
+- maplibre-gl forced to 6.9.0 for the `DOM.sanitize()` XSS bypass. It is pulled
+  in only to satisfy the `plotly.js` peer dependency of `react-plotly.js`; the
+  app renders through `plotly.js-dist-min`, so the vulnerable code was never in
+  the shipped bundle and is still absent from it.
+- svgo raised to 4.1.0 (`removeScripts` sanitizer bypasses), vitest and
+  `@vitest/mocker` to 4.1.11 (path traversal via the mocker redirect), and
+  colord to 2.10.0 (slow rejection of malformed colour strings). All four are
+  build and test tooling, not runtime code.
+
 ## [2.0.2.3] - 2026-09-06
 
 ### Strategy Module, Agent and Charting Release
