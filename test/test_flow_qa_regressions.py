@@ -1124,6 +1124,19 @@ def test_option_expiry_templates_call_the_client_after_resolving_validly(
     assert option_expiry_env.client.calls[0][0] == node_type
 
 
+def test_option_symbol_passes_include_quotes_to_the_client(option_expiry_env, monkeypatch):
+    """The Flow node must preserve the opt-in quote request at execution time."""
+    result, _ = _run_graph(
+        monkeypatch,
+        "optionSymbol",
+        {**_OPTION_EXPIRY_TEMPLATE, "includeQuotes": True},
+        {"underlying": "NIFTY", "expiry": "27AUG26"},
+    )
+
+    assert result["status"] == "success"
+    assert option_expiry_env.client.calls[0][1]["include_quotes"] is True
+
+
 @pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain"])
 def test_explicit_dynamic_expiry_overrides_an_embedded_expiry_and_must_be_valid(
     option_expiry_env, monkeypatch, node_type

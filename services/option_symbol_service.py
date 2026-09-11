@@ -42,7 +42,7 @@ from typing import Any, Optional
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from services.flow_node_contracts import parse_underlying_symbol
-from services.quotes_service import get_quotes
+from services.quotes_service import get_multiquotes, get_quotes
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
@@ -82,6 +82,33 @@ def clear_strikes_cache():
 #: CRUDEOIL19AUG26FUT but no plain CRUDEOIL, so asking for a spot quote there
 #: returns nothing and the whole chain comes back empty.
 NO_SPOT_EXCHANGES = frozenset({"MCX", "CDS", "BCD", "NCDEX", "NCO"})
+# Only adapters whose multiquote method makes one upstream request for a batch
+# may use the combined underlying-and-option request. Keep this allowlist
+# explicit because some adapters fan out internally despite exposing the same
+# method, which would erase the latency win.
+OPTION_SYMBOL_QUOTE_BATCH_LIMITS = {"dhan": 1000}
+DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT = 1
+
+
+def _extract_multiquote_data(
+    response: dict[str, Any], symbol: str, exchange: str
+) -> dict[str, Any] | None:
+    """Return one symbol's normalized quote from a multiquote response."""
+    results = response.get("results", [])
+    if not isinstance(results, list):
+        return None
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if result.get("symbol") != symbol:
+            continue
+        if result.get("exchange") and result["exchange"] != exchange:
+            continue
+        data = result.get("data")
+        if isinstance(data, dict):
+            return data
+    return None
 
 
 def find_near_month_futures(base_symbol: str, exchange: str) -> dict[str, Any] | None:
@@ -202,6 +229,26 @@ def _is_finite_number(value: Any) -> bool:
         return math.isfinite(value)
     except (TypeError, OverflowError, ValueError):
         return False
+
+
+def _has_usable_ltp(quote: Any) -> bool:
+    """Return whether a quote payload contains a finite numeric LTP."""
+    return isinstance(quote, dict) and _is_finite_number(quote.get("ltp"))
+
+
+def _get_option_symbol_quote_batch_limit(credential: str | None) -> int:
+    """Return the authenticated broker's safe single-request quote limit."""
+    if not isinstance(credential, str) or not credential:
+        return DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT
+
+    try:
+        _, broker_name = get_auth_token_broker(credential)
+    except Exception:
+        logger.exception("Unable to determine broker for option-symbol quote batching")
+        return DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT
+
+    broker_key = broker_name.strip().lower() if isinstance(broker_name, str) else ""
+    return OPTION_SYMBOL_QUOTE_BATCH_LIMITS.get(broker_key, DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT)
 
 
 def validate_option_type(option_type: Any) -> str:
@@ -704,6 +751,7 @@ def get_option_symbol(
     option_type: str,
     api_key: str,
     underlying_ltp: float | None = None,
+    include_quotes: bool = False,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Main function to get option symbol based on underlying and parameters.
@@ -717,6 +765,9 @@ def get_option_symbol(
         option_type: Option type ("CE" or "PE")
         api_key: OpenAlgo API key
         underlying_ltp: Optional pre-fetched LTP to avoid redundant quote requests
+        include_quotes: Include the selected option's quote in the response. When no
+            LTP is supplied, the underlying and candidate option symbols are fetched
+            in one multiquote request when the broker's batch limit allows it.
 
     Returns:
         Tuple of (success, response_data, status_code)
@@ -818,10 +869,82 @@ def get_option_symbol(
         else:
             quote_symbol = underlying
 
-        # Step 3: Get LTP of underlying (use provided LTP if available to avoid rate limits)
+        # Step 3: Get the underlying LTP. An include_quotes request can resolve the
+        # target strike from the same snapshot as the option quote by asking for the
+        # underlying and every candidate strike together.
+        options_exchange = get_option_exchange(quote_exchange)
+        quote_batch: dict[tuple[str, str], dict[str, Any]] = {}
+        quote_batch_used = False
+        batched_underlying_ltp = None
+        quote_candidate_strikes = None
+
+        if include_quotes and underlying_ltp is None:
+            quote_candidate_strikes = get_available_strikes(
+                base_symbol, final_expiry, option_type, options_exchange
+            )
+            quote_batch_limit = _get_option_symbol_quote_batch_limit(api_key)
+            batch_size = len(quote_candidate_strikes) + 1 if quote_candidate_strikes else 0
+            if quote_candidate_strikes and batch_size <= quote_batch_limit:
+                quote_symbols = [{"symbol": quote_symbol, "exchange": quote_exchange}]
+                quote_symbols.extend(
+                    {
+                        "symbol": construct_option_symbol(
+                            base_symbol, final_expiry, strike, option_type
+                        ),
+                        "exchange": options_exchange,
+                    }
+                    for strike in quote_candidate_strikes
+                )
+                batch_success, batch_response, _ = get_multiquotes(quote_symbols, api_key)
+                if batch_success and isinstance(batch_response, dict):
+                    batch_results = batch_response.get("results", [])
+                    if not isinstance(batch_results, list):
+                        batch_results = []
+                    for result in batch_results:
+                        if not isinstance(result, dict):
+                            continue
+                        result_symbol = result.get("symbol")
+                        result_exchange = result.get("exchange") or (
+                            quote_exchange if result_symbol == quote_symbol else options_exchange
+                        )
+                        result_data = result.get("data")
+                        if result_symbol and isinstance(result_data, dict):
+                            quote_batch[(result_symbol, result_exchange)] = result_data
+
+                    underlying_quote = _extract_multiquote_data(
+                        batch_response, quote_symbol, quote_exchange
+                    )
+                    if underlying_quote is not None:
+                        batched_underlying_ltp = underlying_quote.get("ltp")
+                        quote_batch_used = _has_usable_ltp(underlying_quote)
+                else:
+                    batch_message = (
+                        batch_response.get("message", "Unknown error")
+                        if isinstance(batch_response, dict)
+                        else "Invalid multiquote response"
+                    )
+                    logger.warning(
+                        f"Unable to batch quotes for {underlying}; falling back to the standard quote path: "
+                        f"{batch_message}"
+                    )
+            elif quote_candidate_strikes:
+                # Expected on every adapter outside the allowlist, so keep it off
+                # the warning channel for what is a normal opt-in request.
+                logger.debug(
+                    f"Skipping batched option-symbol quotes for {underlying}: "
+                    f"{batch_size} instruments exceed the broker limit of {quote_batch_limit}"
+                )
+            else:
+                logger.debug(
+                    f"Skipping batched option-symbol quotes for {underlying}: no candidate strikes"
+                )
+
         if underlying_ltp is not None:
             ltp = underlying_ltp
             logger.info(f"Using provided LTP: {ltp} for {quote_symbol}")
+        elif quote_batch_used:
+            ltp = batched_underlying_ltp
+            logger.info(f"Using batched LTP: {ltp} for {quote_symbol}")
         else:
             logger.info(f"Fetching LTP for: {quote_symbol} on {quote_exchange}")
 
@@ -867,18 +990,17 @@ def get_option_symbol(
                 500,
             )
 
-        # Step 4: Map to options exchange
-        options_exchange = get_option_exchange(quote_exchange)
-
-        # Step 5: Determine calculation method based on strike_int parameter
+        # Step 4: Determine calculation method based on strike_int parameter
         if strike_int is None:
             # NEW METHOD: Use actual strikes from database
             logger.info("Using actual strikes method (strike_int not provided)")
 
             # Fetch all available strikes for this underlying and expiry
-            available_strikes = get_available_strikes(
-                base_symbol, final_expiry, option_type, options_exchange
-            )
+            available_strikes = quote_candidate_strikes
+            if available_strikes is None:
+                available_strikes = get_available_strikes(
+                    base_symbol, final_expiry, option_type, options_exchange
+                )
 
             if not available_strikes:
                 logger.error(
@@ -933,12 +1055,12 @@ def get_option_symbol(
             # Calculate target strike based on offset
             target_strike = calculate_offset_strike(atm_strike, offset, strike_int, option_type)
 
-        # Step 6: Construct option symbol
+        # Step 5: Construct option symbol
         option_symbol = construct_option_symbol(
             base_symbol, final_expiry, target_strike, option_type
         )
 
-        # Step 7: Find option in database
+        # Step 6: Find option in database
         option_details = find_option_in_database(option_symbol, options_exchange)
 
         if not option_details:
@@ -954,23 +1076,59 @@ def get_option_symbol(
                 404,
             )
 
-        # Step 8: Get freeze quantity
+        # Step 7: Get freeze quantity
         from database.qty_freeze_db import get_freeze_qty_for_option
 
         freeze_qty = get_freeze_qty_for_option(option_details["symbol"], option_details["exchange"])
 
-        # Step 9: Return success response with simplified format
+        # An initial batch already contains the selected leg. If the caller supplied
+        # the underlying LTP, fetch only that leg now. The fallback path also fetches
+        # only the leg after its normal underlying request.
+        option_quote = None
+        if include_quotes:
+            option_quote = quote_batch.get((option_details["symbol"], option_details["exchange"]))
+            if not _has_usable_ltp(option_quote):
+                quote_success, quote_response, quote_status = get_multiquotes(
+                    [
+                        {
+                            "symbol": option_details["symbol"],
+                            "exchange": option_details["exchange"],
+                        }
+                    ],
+                    api_key,
+                )
+                if not quote_success:
+                    return False, quote_response, quote_status
+                option_quote = _extract_multiquote_data(
+                    quote_response, option_details["symbol"], option_details["exchange"]
+                )
+
+            if not _has_usable_ltp(option_quote):
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Could not determine a usable LTP for {option_details['symbol']}.",
+                    },
+                    500,
+                )
+
+        # Step 8: Return success response with simplified format
+        response_data = {
+            "status": "success",
+            "symbol": option_details["symbol"],
+            "exchange": option_details["exchange"],
+            "lotsize": option_details["lotsize"],
+            "tick_size": option_details["tick_size"],
+            "freeze_qty": freeze_qty,
+            "underlying_ltp": ltp,
+        }
+        if include_quotes:
+            response_data["quote"] = option_quote
+
         return (
             True,
-            {
-                "status": "success",
-                "symbol": option_details["symbol"],
-                "exchange": option_details["exchange"],
-                "lotsize": option_details["lotsize"],
-                "tick_size": option_details["tick_size"],
-                "freeze_qty": freeze_qty,
-                "underlying_ltp": ltp,
-            },
+            response_data,
             200,
         )
 
