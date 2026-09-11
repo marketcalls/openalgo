@@ -578,7 +578,7 @@ class TestWhatIsPostedAndWhatComesBack:
             (403, "key for the voice agent was rejected"),
             (404, "not available on that key"),
             (429, "rate limiting"),
-            (500, "internal error"),
+            (500, "credit balance"),
         ],
     )
     def test_a_refusal_becomes_something_an_operator_can_act_on(self, voice_env, status, expected):
@@ -702,15 +702,33 @@ class TestAnUpstreamFailureSaysSo:
     configuration that were all correct.
     """
 
-    def test_a_server_error_blames_the_provider_not_the_operator(self):
-        message = voice._refusal_message(500, "Internal Server Error")
-        assert "internal error" in message.lower()
-        assert "nothing is wrong with your key" in message.lower()
-        assert "refused" not in message.lower()
+    def test_a_server_error_sends_the_operator_to_billing_first(self):
+        """An empty account arrives here as a bare 500 with no explanation.
+
+        Observed on a real account: with no credits left this endpoint returned
+        "Internal Server Error" and nothing else, while /v1/chat/completions on
+        the same key reported the same condition properly as 429
+        `credit_balance_exhausted`. A message that says the settings are fine
+        and to wait sends an operator away from the one cause they can fix.
+        """
+        message = voice._refusal_message(500, "Internal Server Error").lower()
+        assert "credit" in message
+        assert "billing" in message
+        assert "refused" not in message
 
     def test_every_server_error_reads_the_same_way(self):
         for status in (500, 502, 503, 504):
-            assert "internal error" in voice._refusal_message(status, "").lower()
+            assert "credit" in voice._refusal_message(status, "").lower()
+
+    def test_an_exhausted_balance_is_named_outright_when_the_body_says_so(self):
+        message = voice._refusal_message(429, '{"error":{"code":"insufficient_quota"}}').lower()
+        assert "no credits left" in message
+        assert "rate limit" not in message
+
+    def test_a_plain_rate_limit_is_still_a_rate_limit(self):
+        message = voice._refusal_message(429, "slow down").lower()
+        assert "rate limiting" in message
+        assert "credits" not in message
 
     def test_a_client_error_still_names_what_the_operator_can_fix(self):
         assert "key" in voice._refusal_message(401, "").lower()

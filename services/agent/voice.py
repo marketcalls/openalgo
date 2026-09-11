@@ -71,6 +71,14 @@ MINT_TIMEOUT_SECONDS = 20.0
 SPEAKABLE_CHAR_BUDGET = 480
 
 
+#: Said whenever the cause is an empty account, wherever it surfaces from.
+_NO_CREDIT = (
+    "Your OpenAI account has no credits left, so the voice session could not "
+    "be started. Add credits at platform.openai.com under billing. Everything "
+    "else in the agent keeps working if it runs on a different provider."
+)
+
+
 class VoiceUnavailable(RuntimeError):
     """The voice surface cannot start, with a reason an operator can act on."""
 
@@ -303,19 +311,31 @@ def _refusal_message(status: int, body: str) -> str:
     if status == 404:
         return "The configured voice model is not available on that key."
     if status == 429:
+        # Out of credit and rate limited share a status code and do not share a
+        # fix, so the body decides which sentence an operator gets.
+        if "insufficient_quota" in body or "credit" in body.lower():
+            return _NO_CREDIT
         return "The voice provider is rate limiting this key. Try again shortly."
     if status >= 500:
-        # Worth its own message. "Refused" sends an operator to check their key,
-        # their model and their configuration, and none of that is the problem:
-        # a 5xx here means the request was accepted and the session could not be
-        # created at the other end. Observed as a bare "Internal Server Error"
-        # with no JSON, while the same endpoint still returned a clean 400 for a
-        # malformed offer, so input validation was up and session creation was
-        # not.
+        # **An exhausted balance arrives here.** Observed: an account with no
+        # credits left got a bare "Internal Server Error" with no JSON from this
+        # endpoint, while `/v1/chat/completions` on the same key answered the
+        # same condition properly, with 429 and `credit_balance_exhausted`. So
+        # a 5xx here is not reliably a provider fault, and a message that says
+        # "nothing is wrong with your settings, try again later" sends an
+        # operator away to wait for someone else to fix the one thing only they
+        # can fix.
+        #
+        # The billing check leads, because it is the cause an operator can
+        # confirm in a minute and act on. The provider fault follows, because it
+        # is real and there is nothing to do about it but wait.
         return (
-            "The voice provider had an internal error and could not start the "
-            "session. Nothing is wrong with your key or your settings; this is "
-            "on their side. Try again in a few minutes."
+            "Could not start the voice session, and the provider did not say "
+            "why. Check your OpenAI credit balance first: an account with no "
+            "credits left fails here exactly like this, with no explanation. "
+            "Add credits at platform.openai.com under billing. If the balance "
+            "is fine, the provider is having trouble and it will clear on its "
+            "own."
         )
     if "not supported in realtime" in body or "invalid_model" in body:
         return "That model cannot be used for speech. Voice needs a live model such as gpt-live-1."
