@@ -2101,7 +2101,11 @@ class WebSocketProxy:
                         "data": market_data,
                     }
                     market_data_service = get_market_data_service()
-                    market_data_service.process_market_data(mds_data)
+                    # Runs off the event loop: process_market_data fans out to
+                    # synchronous DB work (sandbox order execution, margin
+                    # reconciliation) that would otherwise stall this loop and
+                    # the websockets.serve() accept path it shares (#2019).
+                    await aio.to_thread(market_data_service.process_market_data, mds_data)
                 except Exception as mds_error:
                     # Don't block WebSocket delivery if MarketDataService has issues
                     logger.debug(f"MarketDataService processing error: {mds_error}")
