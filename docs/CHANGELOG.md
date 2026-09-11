@@ -10,9 +10,12 @@ fix, live in [docs/releases](releases/).
 
 ### Changed
 
-- Updated `/trading` to OpenAlgo Charts 2.1.3. Dragging the time axis left
-  expands candle spacing and dragging right compresses it. Mouse panning
-  preserves price autoscale, and the bottom chart controls include Reset view.
+- Updated `/trading` to OpenAlgo Charts 2.1.4. Mouse and pen plot drags pan
+  time and price by default. Horizontal-only panning remains optional and
+  preserves price autoscale; existing saved preferences stay intact. Dragging
+  the time axis left expands candle spacing and dragging right compresses it.
+  The bottom controls include Reset view, and Axes settings retain the default
+  visible-bar preference.
 
 ### Fixed
 
