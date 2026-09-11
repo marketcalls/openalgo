@@ -101,8 +101,10 @@ def build_instructions(agent_name: str, order_phrase: str, *, trading: bool) -> 
 
     Args:
         agent_name: What the trader calls the agent.
-        order_phrase: The word that approves a staged order, mentioned so the
-            model can read it out when one is pending.
+        order_phrase: Accepted for the caller's convenience and **deliberately
+            not placed in the instructions**. A speech model told the word will
+            say it, and a word said out loud in a room is no longer a secret.
+            The instructions refer to "your approval word" instead.
         trading: Whether mutating tools are reachable on this surface at all.
             When False the phrase is never mentioned, because offering an
             approval word for a capability that is switched off invites the
@@ -143,16 +145,18 @@ def build_instructions(agent_name: str, order_phrase: str, *, trading: bool) -> 
             "",
             "Orders:",
             "- You never place an order and you never decide that one is safe.",
-            "- When an order is staged you will be given its details and the word",
-            f"  '{order_phrase}'. Read the order back in full - action, quantity,",
+            "- When an order is staged, read it back in full - action, quantity,",
             "  the contract said as a person would say it, the exchange, the",
-            "  product and the order type - and then say that the trader should",
-            f"  say '{order_phrase}' to place it.",
+            "  product and the order type - and then say that the trader can",
+            "  approve it by saying their approval word.",
             "- Read back exactly what you were given. Never round a quantity,",
             "  never simplify a contract into a nearer-sounding one, and never",
             "  fill in an expiry or a strike that was not in what you were given.",
-            f"- Do not say '{order_phrase}' in any other situation, and never",
-            "  encourage or hurry a trader toward saying it.",
+            "- You are never told the approval word and you must never guess it,",
+            "  ask for it, repeat it, or say it out loud. It is the trader's to",
+            "  know. Say 'your approval word' and nothing more. Anyone within",
+            "  earshot can hear you, and a word spoken aloud is no longer a",
+            "  word only the trader knows.",
         ]
     return "\n".join(lines)
 
@@ -190,6 +194,11 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
     Args:
         offer_sdp: The browser's offer, as `application/sdp` text.
         config: The voice configuration. Read fresh when not supplied.
+        opening: Whether this utterance is the instruction that opened the turn
+            rather than something said afterwards. Only an opening instruction
+            may carry its own approval, which is what stops an unrelated
+            sentence beginning with the word from approving an order that is
+            already staged.
 
     Returns:
         The answer SDP, for the browser to apply as its remote description.
@@ -506,7 +515,11 @@ class ApprovalVerdict:
 
 
 def judge_approval(
-    run_id: Any, transcript: Any, config: dict[str, Any] | None = None
+    run_id: Any,
+    transcript: Any,
+    config: dict[str, Any] | None = None,
+    *,
+    opening: bool = False,
 ) -> ApprovalVerdict:
     """Decide whether one spoken utterance approves one paused run.
 
@@ -536,11 +549,36 @@ def judge_approval(
     if not voice_confirm.window_is_open(opened_at, time.monotonic(), window):
         return ApprovalVerdict(False, "The time to approve that by voice has passed.")
 
-    if not voice_confirm.is_approval(transcript, config.get("voice_order_phrase")):
+    phrase = config.get("voice_order_phrase")
+    # Two ways to approve, and they are not equally strong.
+    #
+    # The word alone, after the order has been read back, is the careful one:
+    # the trader has heard exactly what will be sent before answering.
+    #
+    # The word opening the instruction - "milo buy one hundred reliance" - skips
+    # the read-back at the operator's explicit direction. It is easier to say by
+    # accident and the sentence is never heard back, so it buys speed with a
+    # real reduction in safety. Both switches still gate it, and the risk guard
+    # inside the tool body still applies every limit afterwards.
+    spoken_alone = voice_confirm.is_approval(transcript, phrase)
+    # Only the instruction that opened the turn may carry its own approval.
+    # Anything said after an order is staged goes through the alone-word rule,
+    # so "milo, what is bank nifty doing" asks a question rather than placing
+    # the order that happens to be waiting.
+    # Only the order phrase, never the agent's name. The name is what a trader
+    # says all day - "Ava, what do you make of this" - and a word said that
+    # often must not be able to place a trade, however it is followed. The order
+    # phrase does one job and is said for no other reason.
+    instruction = opening and voice_confirm.is_prefixed_instruction(transcript, phrase)
+    if not spoken_alone and not instruction:
         # Not an error and not logged as one: a trader talking near a pending
         # order says plenty of things that are not the phrase.
         return ApprovalVerdict(False, "That was not the approval phrase.")
 
     forget_pause(key)
-    logger.info("Voice approval accepted for run %s", key)
+    logger.info(
+        "Voice approval accepted for run %s (%s)",
+        key,
+        "phrase after read-back" if spoken_alone else "phrase opening the instruction",
+    )
     return ApprovalVerdict(True)

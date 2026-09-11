@@ -186,7 +186,7 @@ export interface VoiceController {
    * Each finalised thing the trader says while this is set is offered to the
    * server, which decides. `approve` runs only on a server-side yes.
    */
-  awaitApproval: (runId: string, approve: () => void) => void
+  awaitApproval: (runId: string, approve: () => void, instruction?: string) => void
   /** Stop listening, because the run was answered on screen or abandoned. */
   cancelApproval: () => void
 }
@@ -892,8 +892,11 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
    * window has closed.
    *
    * @param transcript - The finalised line the trader just said.
+   * @param opening - True when this is the instruction that opened the turn,
+   *   which is the only kind allowed to carry its own approval word. Anything
+   *   said afterwards is held to the stricter alone-word rule.
    */
-  async function offerApproval(transcript: string): Promise<void> {
+  async function offerApproval(transcript: string, opening = false): Promise<void> {
     const waiting = pendingApproval
     if (!waiting) return
     try {
@@ -902,7 +905,7 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
-        body: JSON.stringify({ run_id: waiting.runId, transcript }),
+        body: JSON.stringify({ run_id: waiting.runId, transcript, opening }),
       })
       if (!response.ok) return
       const payload = await response.json()
@@ -936,9 +939,16 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
       return () => transcriptListeners.delete(listener)
     },
     conversationId: () => conversation,
-    awaitApproval: (runId, approve) => {
+    awaitApproval: (runId, approve, instruction) => {
       const id = String(runId || '').trim()
       pendingApproval = id ? { runId: id, approve } : null
+      // The instruction that opened the turn is offered straight away, because
+      // the operator's fast path puts the approval word at the head of it:
+      // "milo buy one hundred reliance" is the question and the approval in one
+      // breath, and waiting for a second utterance would strand it. The server
+      // still decides, and refuses when the word is not there.
+      const opening = String(instruction || '').trim()
+      if (id && opening) void offerApproval(opening, true)
     },
     cancelApproval: () => {
       pendingApproval = null

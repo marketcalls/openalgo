@@ -398,9 +398,18 @@ class TestTheInstructionsTheSpeechModelIsGiven:
         assert "Orders:" not in text
         assert "place an order" not in text.lower()
 
-    def test_it_is_mentioned_when_trading_is_on(self):
+    def test_the_approval_word_is_never_given_to_the_speech_model(self):
+        """The word must not reach the model that speaks out loud.
+
+        It used to be placed in the instructions so the model could say "say
+        goldfinch to place it", which reads the secret to the whole room and
+        leaves it a secret from nobody. The model is told to refer to "your
+        approval word" and is never told what it is.
+        """
         text = voice.build_instructions("Ava", "goldfinch", trading=True)
-        assert "goldfinch" in text
+        assert "goldfinch" not in text.lower()
+        assert "approval word" in text
+        assert "never" in text
         assert "Orders:" in text
 
     def test_the_agent_name_is_always_there(self):
@@ -634,7 +643,11 @@ class TestWhatIsPostedAndWhatComesBack:
         assert "goldfinch" not in client.calls[0][1]["json"]["session"]["instructions"]
 
         voice.mint_session(OFFER, {**base, "trading_effective": True})
-        assert "goldfinch" in client.calls[1][1]["json"]["session"]["instructions"]
+        # The order section appears, and the word itself never does: nothing
+        # sent to the speech vendor carries it.
+        armed = client.calls[1][1]["json"]["session"]["instructions"]
+        assert "approval word" in armed
+        assert "goldfinch" not in armed.lower()
 
     def test_the_key_is_in_the_header_and_nowhere_in_the_body(self, voice_env):
         client = voice_env(FakeResponse(200, {"transport": {"sdp": "v=0\r\n"}}))
@@ -790,3 +803,112 @@ class TestSpokenApprovalIsDecidedServerSide:
         voice.note_pause("")
         voice.note_pause(None)
         assert voice._PAUSED_AT == {}
+
+
+class TestTheInstructionCanCarryItsOwnApproval:
+    """The operator's fast path: the word at the head of the instruction.
+
+    Weaker than the alone-word rule on purpose, and documented as such: the
+    order is never read back, so a mis-transcription reaches the broker. Both
+    switches still gate it and the risk guard still runs afterwards.
+    """
+
+    CFG = {
+        "trading_effective": True,
+        "voice_order_phrase": "milo",
+        "voice_agent_name": "Ava",
+        "voice_confirm_window_seconds": 30,
+    }
+
+    def setup_method(self):
+        voice._PAUSED_AT.clear()
+        voice.note_pause("run-1")
+
+    def test_the_order_phrase_opening_an_instruction_approves_it(self):
+        assert voice.judge_approval(
+            "run-1", "milo buy 100 shares of reliance in CNC on NSE", self.CFG, opening=True
+        ).approved
+
+    def test_the_agent_name_never_places_an_order(self):
+        """The name is said all day; it must not be able to trade.
+
+        The operator's rule: the order phrase is only for placing, modifying and
+        cancelling orders, and the name is only for talking. A word said
+        constantly cannot be the one that reaches a broker, however it is
+        followed.
+        """
+        assert (
+            voice.judge_approval("run-1", "ava buy 100 reliance", self.CFG, opening=True).approved
+            is False
+        )
+
+    def test_an_instruction_with_no_word_in_front_is_not_approved(self):
+        assert (
+            voice.judge_approval("run-1", "buy 100 reliance", self.CFG, opening=True).approved
+            is False
+        )
+
+    def test_the_word_must_open_the_instruction_not_merely_appear_in_it(self):
+        assert (
+            voice.judge_approval(
+                "run-1", "tell ava to buy reliance", self.CFG, opening=True
+            ).approved
+            is False
+        )
+
+    def test_a_question_that_merely_mentions_the_agent_is_not_an_order(self):
+        assert voice.judge_approval("run-1", "ava", self.CFG).approved is False
+        voice.note_pause("run-1")
+        assert voice.judge_approval("run-1", "what is nifty doing", self.CFG).approved is False
+
+    def test_the_fast_path_is_still_gated_by_the_switches(self):
+        verdict = voice.judge_approval(
+            "run-1", "milo buy 100 reliance", {**self.CFG, "trading_effective": False}, opening=True
+        )
+        assert verdict.approved is False
+        assert "switched off" in verdict.reason
+
+    def test_the_fast_path_is_still_gated_by_the_window(self):
+        voice._PAUSED_AT["run-1"] -= 120
+        assert (
+            voice.judge_approval("run-1", "milo buy 100 reliance", self.CFG, opening=True).approved
+            is False
+        )
+
+    def test_a_bare_agent_name_never_approves_even_though_it_may_open_one(self):
+        # The name opens an instruction but is not itself an approval: only the
+        # order phrase works alone, which is what keeps a name said all day from
+        # approving a staged order.
+        assert voice.judge_approval("run-1", "ava", self.CFG).approved is False
+
+
+class TestOnlyTheOpeningInstructionCarriesItsOwnApproval:
+    """A sentence said after an order is staged is held to the alone-word rule.
+
+    This is the hazard the narrowing exists for: without it, "milo, what is bank
+    nifty doing" - a question - would approve whatever order happened to be
+    waiting, because it begins with the word.
+    """
+
+    CFG = {
+        "trading_effective": True,
+        "voice_order_phrase": "milo",
+        "voice_agent_name": "Ava",
+        "voice_confirm_window_seconds": 30,
+    }
+
+    def setup_method(self):
+        voice._PAUSED_AT.clear()
+        voice.note_pause("run-1")
+
+    def test_a_later_question_beginning_with_the_word_does_not_approve(self):
+        verdict = voice.judge_approval("run-1", "milo what is bank nifty doing", self.CFG)
+        assert verdict.approved is False
+        # Still open: a question is not a spent attempt.
+        assert voice.judge_approval("run-1", "milo", self.CFG).approved is True
+
+    def test_the_same_words_as_an_opening_instruction_are_treated_as_one(self):
+        assert (
+            voice.judge_approval("run-1", "milo buy 100 reliance", self.CFG, opening=True).approved
+            is True
+        )

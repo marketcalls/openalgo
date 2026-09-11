@@ -55,6 +55,7 @@ import re
 
 __all__ = [
     "AFFIRMATIONS",
+    "is_prefixed_instruction",
     "MAX_PHRASE_LENGTH",
     "MAX_WAKE_LENGTH",
     "MIN_PHRASE_LENGTH",
@@ -207,3 +208,56 @@ def window_is_open(opened_at: float | None, now: float, seconds: int) -> bool:
     if elapsed < 0:
         return False
     return elapsed <= seconds
+
+
+def is_prefixed_instruction(transcript: object, *phrases: object) -> bool:
+    """Whether an utterance is an instruction that opens with an approval word.
+
+    The operator's second way of approving: rather than staging an order,
+    hearing it read back and answering, they say the word and the instruction
+    together - "milo buy one hundred shares of reliance". The order is placed
+    without a read-back.
+
+    **This is weaker than the alone-word rule and deliberately so.** That rule
+    exists because a reserved word still gets said; a word at the head of a
+    sentence is far easier to say by accident, and the sentence after it is
+    never heard back before it runs. What still stands is everything that was
+    never a matter of phrasing: both trading switches, and the risk guard inside
+    the tool body, which reads no prompt and applies every limit after any
+    approval.
+
+    **Only the order phrase opens an instruction, never the agent's name.** The
+    name is what a trader says all day, and a word said that often must not be
+    able to place a trade however it is followed. The signature takes several
+    words so an operator can be given more than one order phrase later; it is
+    not a place to pass the name.
+
+    Args:
+        transcript: What the speech model heard.
+        *phrases: The words that may open an instruction. Unusable values are
+            skipped.
+
+    Returns:
+        True when the utterance begins with one of the words **and** carries
+        further content. A bare word is not an instruction; that is the
+        alone-word case, which :func:`is_approval` answers.
+    """
+    tokens = [token.lower() for token in _TOKEN_PATTERN.findall(str(transcript or ""))]
+    if len(tokens) < 2:
+        return False
+
+    opening = tokens[0]
+    for phrase in phrases:
+        word = " ".join(str(phrase or "").split()).lower()
+        if not word:
+            continue
+        parts = _TOKEN_PATTERN.findall(word)
+        if not parts:
+            continue
+        # A multi-word name opens the instruction only in full, so "hey trader"
+        # is not matched by "hey".
+        if tokens[: len(parts)] == parts and len(tokens) > len(parts):
+            return True
+        if len(parts) == 1 and opening == parts[0]:
+            return True
+    return False

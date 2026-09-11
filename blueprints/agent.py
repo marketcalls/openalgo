@@ -1559,6 +1559,11 @@ def post_voice_approve():
     a room that contains other people, and a page that could otherwise decide
     for itself what counted as that word.
 
+    ``opening`` marks the utterance as the instruction that opened the turn,
+    which is the only kind that may carry its own approval word. Anything said
+    afterwards is held to the alone-word rule, so a question that happens to
+    begin with the word does not place an order that is already staged.
+
     An approval consumes the window, so the same utterance cannot approve the
     same run twice. Approving the run itself remains `/chat/confirm`, which is
     the same route the on-screen card uses.
@@ -1576,7 +1581,11 @@ def post_voice_approve():
     if not run_id:
         return _error("A run_id is required", 400)
 
-    verdict = agent_voice.judge_approval(run_id, body.get("transcript"))
+    verdict = agent_voice.judge_approval(
+        run_id,
+        body.get("transcript"),
+        opening=bool(body.get("opening")),
+    )
     return _ok({"data": {"approved": verdict.approved, "reason": verdict.reason}})
 
 

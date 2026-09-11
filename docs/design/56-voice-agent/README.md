@@ -240,6 +240,46 @@ Milo: "Buy 50 NIFTY24000CE at market, about 62,000 rupees. Say milo to place."
 The approval word is `voice_agent_name`, lower-cased. It ships as `milo`, at the
 operator's direction, and is configurable.
 
+### Two ways to approve, and they are not equally strong
+
+**The word alone, after the read-back.** The order is staged, spoken back in
+full - action, quantity, the contract as a person says it, exchange, product,
+order type - and the trader answers with the word. They have heard exactly what
+will be sent before approving it.
+
+**The word opening the instruction.** "milo buy one hundred shares of reliance"
+is the question and the approval in one breath, at the operator's explicit
+direction. There is no read-back, so a mis-transcription reaches the broker: a
+hundred heard as a thousand, or the wrong strike, runs without anyone hearing it
+first. It buys speed with a real reduction in safety, and it is the operator's
+call to make.
+
+Only the **opening** instruction may carry its own word. Anything said after an
+order is already staged is held to the alone-word rule, so "milo, what is bank
+nifty doing" asks a question rather than placing the order that happens to be
+waiting.
+
+Both ways apply to every tool that pauses, which is all seven mutating ones:
+`place_order`, `place_smart_order`, `modify_order`, `cancel_order`,
+`cancel_all_orders`, `close_position` and `close_all_positions`.
+
+### The agent's name never places an order
+
+Only `voice_order_phrase` reaches a broker. `voice_agent_name` is what the
+trader says all day, and a word said that often must not be able to trade
+however it is followed - "Ava, should I buy a hundred reliance" is a question.
+The order phrase does one job and is said for no other reason, which is the
+whole reason the two are separate values.
+
+### The speech model is never told the word
+
+It used to be placed in the instructions so the model could say "say milo to
+place it". That reads the secret out loud to whoever is in the room, and a word
+spoken aloud is a secret from nobody. The instructions now say "your approval
+word" and the model is told it will never be given it, must never guess or
+repeat it, and that anyone within earshot can hear it. Nothing sent to the
+speech vendor carries the word, which a test asserts.
+
 ### What makes the word safe enough to use
 
 `milo` is also what the trader calls the agent, so the matcher cannot simply
