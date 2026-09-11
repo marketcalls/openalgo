@@ -149,14 +149,31 @@ is worth. Take it as an input, default 1.
 These remove the two things every ported study used to hand-roll: a session
 parser and a colour ramp.
 
+## What arrived after 1.8.2
+
+Nothing here changes the descriptor contract. It is what the surface gained
+while the sections above stayed true.
+
+| | |
+| --- | --- |
+| **1.8.3** | Eleven studies, taking the registry from 91 to 102: `t3`, `hull-suite`, `consolidation-breakout`, `smma`, `net-volume`, `linreg-slope`, `ma-channel`, `chaikin-volatility`, `standard-deviation`, `standard-error`, `standard-error-bands`. Each is exported as a descriptor constant and reusable through `getIndicator`. The same release corrected nine built-ins and moved ten defaults, so a study measured against a built-in before 1.8.3 needs its expectations re-derived rather than assumed. |
+| **1.8.4** | `calc` is flushed once per animation frame rather than per tick, so it must be a pure function of `(bars, settings)`. `calcTail` now only pays for deep history, not for a fast feed. |
+| **1.8.9** | Precision follows the pane an indicator is handed. An overlay plot prints at the instrument's tick, a study pane at two decimals or finer. Nothing to declare in the descriptor. |
+| **2.0.0** | The render backend port (`createRenderBackend`, `registerRenderBackend`, `Canvas2dBackend`, `resolveRenderBackend`, `backendDegradation`) plus SVG export and watermark helpers. All chart infrastructure: an indicator never touches a backend, and the WebGL2 path renders the same plots. |
+| **2.1.2** | A Tier-2 study's history requests and live callbacks are isolated by data key, so a response for a setting you have left cannot land on the current one. |
+| **2.1.5** | Drawing previews survive past the newest candle. No indicator surface changed. |
+
 ## Complete export index
 
-All 337 names on the API object, so nothing is a surprise. Generated from the
-installed openalgo-charts@1.8.1 build.
+<!-- BEGIN GENERATED EXPORT INDEX -->
 
-**Registration and introspection** (14)
+All 363 names on the API object, so nothing is a surprise. Generated from
+the installed openalgo-charts@2.1.5 build by `generate-api-index.mjs`; do not
+edit this section by hand.
 
-`registerIndicator`, `createTier2Indicator`, `registeredIndicators`, `getIndicator`, `hasIndicator`, `indicatorDefaults`, `indicatorStyleInputs`, `plotStyleKeys`, `registeredChartTypes`, `getChartType`, `registerChartType`, `registerBuiltinIndicators`, `BUILTIN_INDICATORS`, `INDICATORS_TIER`
+**Registration and introspection** (13)
+
+`registerIndicator`, `createTier2Indicator`, `registeredIndicators`, `getIndicator`, `hasIndicator`, `indicatorDefaults`, `indicatorStyleInputs`, `plotStyleKeys`, `registeredChartTypes`, `getChartType`, `registerChartType`, `registerBuiltinIndicators`, `INDICATORS_TIER`
 
 **Reading bars** (10)
 
@@ -186,10 +203,27 @@ installed openalgo-charts@1.8.1 build.
 
 `INDICATOR_LINE_STYLES`, `INDICATOR_PLOT_STYLES`, `PRICE_SCALE_MODES`, `PRICE_LEVEL_KINDS`, `DEFAULT_THEME`, `darkTheme`, `lightTheme`, `ALT_PRESET`, `VERSION`, `version`, `CHART_STATE_VERSION`, `DEFAULT_CANDLE_STYLE`, `DEFAULT_HISTOGRAM_STYLE`, `DEFAULT_TRADING_COLORS`, `resolveCrosshairStyle`, `resolveGridStyle`, `resolveScaleStyle`, `seriesStyleForLastPriceLevel`, `lastPriceLevelFromSeriesStyle`, `IndicatorBackground`, `IndicatorFill`
 
-**Chart infrastructure, not for indicators** (179)
+**Built-in indicator descriptors** (102)
 
-Panes, scales, feeds, drawing primitives, trading controllers, link groups, replay.
-An indicator describes what to compute and what to plot; the chart owns these.
+Each is the descriptor object itself, identical to `getIndicator(id)` once
+`registerBuiltinIndicators()` has run. Call one's `calc` instead of porting its
+formula: `getIndicator('macd').calc(bars, settings, {})`. These are also the ids
+a custom module can accidentally shadow.
 
-`ADAPTIVE_INDICATORS`, `ADL`, `ADX`, `ALLIGATOR`, `ALMA`, `ALPHATREND`, `AROON`, `AROON_OSCILLATOR`, `ATR`, `AVERAGE_DAILY_RANGE`, `AVERAGE_INDICATORS`, `AWESOME_OSCILLATOR`, `BALANCE_OF_POWER`, `BB_TREND`, `BOLLINGER`, `BOLLINGER_BANDWIDTH`, `BOLLINGER_PERCENT_B`, `BUILTIN_COMMANDS`, `BarCache`, `BuySellButtons`, `CCI`, `CHAIKIN_MONEY_FLOW`, `CHAIKIN_OSCILLATOR`, `CHANDELIER_EXIT`, `CHANDE_KROLL_STOP`, `CHANDE_MOMENTUM`, `CHOPPINESS_INDEX`, `CHOP_ZONE`, `CONNORS_RSI`, `COPPOCK_CURVE`, `CPR`, `CandleBuilder`, `Chart`, `ChartTable`, `ComparisonController`, `DEFAULT_CANDLE_BUILDER_OPTIONS`, `DEFAULT_CHART_TABLE_OPTIONS`, `DEFAULT_KEYMAP`, `DEFAULT_PRICE_SCALE_OPTIONS`, `DEFAULT_TIME_NAVIGATOR_OPTIONS`, `DEFAULT_TIME_SCALE_OPTIONS`, `DEMA`, `DONCHIAN`, `DPO`, `EASE_OF_MOVEMENT`, `ELDER_FORCE_INDEX`, `EMA`, `ENVELOPE`, `EventMarkers`, `FISHER_TRANSFORM`, `FLOW_INDICATORS`, `HALFTREND`, `HISTORICAL_VOLATILITY`, `HMA`, `ICHIMOKU`, `INDEX_INDICATORS`, `IndicatorDrawings`, `InvalidationLevel`, `KAMA`, `KELTNER_CHANNEL`, `KLINGER_OSCILLATOR`, `KNOW_SURE_THING`, `LINK_CROSSHAIR_ALPHA`, `LSMA`, `LinkCrosshair`, `LinkGroup`, `LogoWatermark`, `MACD`, `MASS_INDEX`, `MA_CROSS`, `MA_RIBBON`, `MCGINLEY_DYNAMIC`, `MEDIAN`, `MFI`, `MOMENTUM`, `NVI`, `OBV`, `OSCILLATOR_INDICATORS`, `OVERLAY_INDICATORS`, `OpenAlgoDataFeed`, `OpenAlgoLiveDataFeed`, `OpenAlgoTradeFeed`, `OpenAlgoWsFeed`, `PARABOLIC_SAR`, `PPO`, `PVI`, `PVO`, `PVT`, `Pane`, `PaneLegend`, `PriceLevels`, `PriceLine`, `PriceScale`, `RANGE_ANALYSIS`, `RANGE_INDICATORS`, `RELATIVE_VIGOR_INDEX`, `RELATIVE_VOLATILITY_INDEX`, `ROC`, `RSI`, `RSI_DIVERGENCE`, `ReplayController`, `SCALE_FONT_MAX`, `SCALE_FONT_MIN`, `SEASONALITY`, `SEASONALITY_INDICATORS`, `SIGNAL_INDICATORS`, `SMA`, `SMI`, `SMI_ERGODIC_INDICATOR`, `SMI_ERGODIC_OSCILLATOR`, `SPECIAL_K`, `STOCHASTIC`, `STOCHASTIC_RSI`, `STRENGTH_INDICATORS`, `STUDY_INDICATORS`, `SUPERTREND`, `SeriesMarkers`, `ShortcutManager`, `TEMA`, `TREND_STRENGTH_INDEX`, `TRIX`, `TSI`, `TWAP`, `TickBarAggregator`, `TimeNavigator`, `TimeScale`, `TradeMarkersPrimitive`, `TradingController`, `ULCER_INDEX`, `ULTIMATE_OSCILLATOR`, `VOLATILITY_INDICATORS`, `VOLATILITY_STOP`, `VOLUME`, `VORTEX`, `VWAP`, `VWMA`, `WAVETREND`, `WAVETREND_INDICATORS`, `WILLIAMS_FRACTALS`, `WILLIAMS_PERCENT_R`, `WILLIAMS_VIX_FIX`, `WMA`, `WOODIES_CCI`, `addComparison`, `alignToPrimary`, `applyChartSettings`, `backoffDelayMs`, `barCacheKey`, `barsSince`, `beginPick`, `chartSettingsSchema`, `classifyAuthAck`, `comparisonController`, `computePriceLevels`, `conflationGroupSize`, `createChart`, `createLinkGroup`, `decodeOrder`, `eventToCombo`, `followerIndex`, `followerRange`, `formatCombo`, `formatSubscribe`, `formatUnsubscribe`, `isRebasing`, `isReservedCombo`, `isValidCombo`, `mapHistoryResponse`, `mapOrder`, `mapOrderStatus`, `mapPosition`, `normalizeCombo`, `parseCombo`, `parseMessage`, `parseTopic`, `readChartSettings`, `readSequence`, `valueWhen`, `withBarCache`
+`ADL`, `ADX`, `ALLIGATOR`, `ALMA`, `ALPHATREND`, `AROON`, `AROON_OSCILLATOR`, `ATR`, `AVERAGE_DAILY_RANGE`, `AWESOME_OSCILLATOR`, `BALANCE_OF_POWER`, `BB_TREND`, `BOLLINGER`, `BOLLINGER_BANDWIDTH`, `BOLLINGER_PERCENT_B`, `CCI`, `CHAIKIN_MONEY_FLOW`, `CHAIKIN_OSCILLATOR`, `CHAIKIN_VOLATILITY`, `CHANDE_KROLL_STOP`, `CHANDE_MOMENTUM`, `CHANDELIER_EXIT`, `CHOP_ZONE`, `CHOPPINESS_INDEX`, `CONNORS_RSI`, `CONSOLIDATION_BREAKOUT`, `COPPOCK_CURVE`, `CPR`, `DEMA`, `DONCHIAN`, `DPO`, `EASE_OF_MOVEMENT`, `ELDER_FORCE_INDEX`, `EMA`, `ENVELOPE`, `FISHER_TRANSFORM`, `HALFTREND`, `HISTORICAL_VOLATILITY`, `HMA`, `HULL_SUITE`, `ICHIMOKU`, `KAMA`, `KELTNER_CHANNEL`, `KLINGER_OSCILLATOR`, `KNOW_SURE_THING`, `LINREG_SLOPE`, `LSMA`, `MA_CHANNEL`, `MA_CROSS`, `MA_RIBBON`, `MACD`, `MASS_INDEX`, `MCGINLEY_DYNAMIC`, `MEDIAN`, `MFI`, `MOMENTUM`, `NET_VOLUME`, `NVI`, `OBV`, `PARABOLIC_SAR`, `PPO`, `PVI`, `PVO`, `PVT`, `RANGE_ANALYSIS`, `RELATIVE_VIGOR_INDEX`, `RELATIVE_VOLATILITY_INDEX`, `ROC`, `RSI`, `RSI_DIVERGENCE`, `SEASONALITY`, `SMA`, `SMI`, `SMI_ERGODIC_INDICATOR`, `SMI_ERGODIC_OSCILLATOR`, `SMMA`, `SPECIAL_K`, `STANDARD_DEVIATION`, `STANDARD_ERROR`, `STANDARD_ERROR_BANDS`, `STOCHASTIC`, `STOCHASTIC_RSI`, `SUPERTREND`, `T3`, `TEMA`, `TREND_STRENGTH_INDEX`, `TRIX`, `TSI`, `TWAP`, `ULCER_INDEX`, `ULTIMATE_OSCILLATOR`, `VOLATILITY_STOP`, `VOLUME`, `VORTEX`, `VWAP`, `VWMA`, `WAVETREND`, `WILLIAMS_FRACTALS`, `WILLIAMS_PERCENT_R`, `WILLIAMS_VIX_FIX`, `WMA`, `WOODIES_CCI`
 
+**Built-in indicator groups** (14)
+
+Arrays of the descriptors above, as the picker rail groups them.
+
+`ADAPTIVE_INDICATORS`, `AVERAGE_INDICATORS`, `BUILTIN_INDICATORS`, `FLOW_INDICATORS`, `INDEX_INDICATORS`, `OSCILLATOR_INDICATORS`, `OVERLAY_INDICATORS`, `RANGE_INDICATORS`, `SEASONALITY_INDICATORS`, `SIGNAL_INDICATORS`, `STRENGTH_INDICATORS`, `STUDY_INDICATORS`, `VOLATILITY_INDICATORS`, `WAVETREND_INDICATORS`
+
+**Chart infrastructure, not for indicators** (90)
+
+Panes, scales, feeds, drawing primitives, trading controllers, link groups, replay
+and the render backends. An indicator describes what to compute and what to plot;
+the chart owns these.
+
+`addComparison`, `alignToPrimary`, `applyChartSettings`, `backendDegradation`, `backoffDelayMs`, `BarCache`, `barCacheKey`, `barsSince`, `beginPick`, `BUILTIN_COMMANDS`, `BuySellButtons`, `CandleBuilder`, `candleGeometry`, `candleTier`, `Canvas2dBackend`, `Chart`, `chartSettingsSchema`, `ChartTable`, `classifyAuthAck`, `comparisonController`, `ComparisonController`, `computePriceLevels`, `conflationGroupSize`, `createChart`, `createLinkGroup`, `createRenderBackend`, `decodeOrder`, `DEFAULT_CANDLE_BUILDER_OPTIONS`, `DEFAULT_CHART_TABLE_OPTIONS`, `DEFAULT_KEYMAP`, `DEFAULT_PRICE_SCALE_OPTIONS`, `DEFAULT_TIME_NAVIGATOR_OPTIONS`, `DEFAULT_TIME_SCALE_OPTIONS`, `DEFAULT_ZOOM_GLIDE_OPTIONS`, `EventMarkers`, `eventToCombo`, `followerIndex`, `followerRange`, `formatCombo`, `formatSubscribe`, `formatUnsubscribe`, `IndicatorDrawings`, `InvalidationLevel`, `isRebasing`, `isReservedCombo`, `isValidCombo`, `LINK_CROSSHAIR_ALPHA`, `LinkCrosshair`, `LinkGroup`, `LogoWatermark`, `mapHistoryResponse`, `mapOrder`, `mapOrderStatus`, `mapPosition`, `normalizeCombo`, `OpenAlgoDataFeed`, `OpenAlgoLiveDataFeed`, `OpenAlgoTradeFeed`, `OpenAlgoWsFeed`, `Pane`, `PaneLegend`, `parseCombo`, `parseMessage`, `parseTopic`, `PriceLevels`, `PriceLine`, `PriceScale`, `readChartSettings`, `readSequence`, `registeredRenderBackends`, `registerRenderBackend`, `ReplayController`, `ReplayShade`, `resolveRenderBackend`, `SCALE_FONT_MAX`, `SCALE_FONT_MIN`, `SeriesMarkers`, `ShortcutManager`, `SvgContext`, `SvgLinearGradient`, `TextWatermark`, `TickBarAggregator`, `TimeNavigator`, `TimeScale`, `TradeMarkersPrimitive`, `TradingController`, `unregisterRenderBackend`, `valueWhen`, `withBarCache`, `ZoomGlide`
+
+<!-- END GENERATED EXPORT INDEX -->
