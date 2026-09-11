@@ -19,8 +19,9 @@ This script is NOT registered in upgrade/migrate_all.py because of (1).
 It must be run explicitly by the operator at a controlled moment:
 
     cd upgrade
-    uv run rotate_pepper.py            # interactive prompt
-    uv run rotate_pepper.py --yes      # non-interactive
+    uv run rotate_pepper.py                      # interactive prompt
+    uv run rotate_pepper.py --app-stopped --yes  # non-interactive
+    # (--yes alone refuses to run: it must attest the app is stopped.)
 
 Pre-flight:
   1. Stop OpenAlgo (kill the running process / systemctl stop openalgo).
@@ -36,7 +37,9 @@ Post-flight:
   3. Confirm you can log in with the new password.
 
 Columns rotated:
-  auth_db Fernet (PBKDF2-SHA256, salt=b"openalgo_static_salt"):
+  auth_db Fernet (PBKDF2-SHA256, salt=FERNET_SALT — the per-install hex from
+  .env; falls back to the legacy static salt with a loud warning, matching
+  database/auth_db.py:_resolve_fernet_salt()):
     - auth.auth
     - auth.feed_token
     - auth.secret_api_key  (was plaintext for some installs)
@@ -85,14 +88,72 @@ ENV_PATH = os.path.join(PROJECT_ROOT, ".env")
 load_dotenv(ENV_PATH)
 
 
-# ---------- Fernet key derivations (must match the three modules) ----------
+# ---------- Fernet key derivations (must match the runtime modules) ----------
+
+def _resolve_fernet_salt() -> bytes:
+    """Match database/auth_db.py:_resolve_fernet_salt().
+
+    The per-install FERNET_SALT env var (random hex, >=32 chars) is the
+    production path — utils/env_check.py auto-provisions it on first boot and
+    every Fernet domain (auth, flow, WhatsApp) derives from it. The legacy
+    static literal is only a fallback for installs that predate it; warn
+    loudly when we hit that path so an operator on a FERNET_SALT install
+    aborts instead of rotating against the wrong key.
+    """
+    raw = (os.getenv("FERNET_SALT") or "").strip()
+    if raw and len(raw) >= 32:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+    if not getattr(_resolve_fernet_salt, "_warned", False):
+        _resolve_fernet_salt._warned = True  # type: ignore[attr-defined]
+        sys.stderr.write(
+            "[rotate_pepper] WARNING: FERNET_SALT is not set or invalid — "
+            "deriving the auth key from the legacy static salt. If this "
+            "install stores ciphertext under a per-install FERNET_SALT, "
+            "ABORT now and re-run with FERNET_SALT set (check the .env this "
+            "script loads).\n"
+        )
+    return b"openalgo_static_salt"
+
 
 def _auth_db_fernet(pepper: str) -> Fernet:
     """Match database/auth_db.py:get_encryption_key()."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"openalgo_static_salt",
+        salt=_resolve_fernet_salt(),
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
+    return Fernet(key)
+
+
+def _whatsapp_db_fernet(pepper: str) -> Fernet:
+    """Match database/whatsapp_db.py:_build_fernet(): the auth salt plus the
+    ':whatsapp-session' domain separator (the runtime fallback path appends
+    the same suffix to the legacy static salt, so this composition matches
+    both runtime paths)."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=_resolve_fernet_salt() + b":whatsapp-session",
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
+    return Fernet(key)
+
+
+def _legacy_whatsapp_db_fernet(pepper: str) -> Fernet:
+    """Pre-FERNET_SALT whatsapp_db key: the legacy static salt plus the same
+    ':whatsapp-session' domain separator. Decrypt-fallback only — a session
+    stored before FERNET_SALT was provisioned is re-encrypted under the
+    current salt, matching runtime's single-salt read path."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"openalgo_static_salt:whatsapp-session",
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
@@ -136,8 +197,14 @@ def _legacy_settings_db_fernet(pepper: str) -> Fernet:
 
 # ---------- Helpers ----------
 
-def _resolve_db_path() -> str:
-    """Resolve DATABASE_URL to an absolute SQLite path."""
+def _resolve_db_path(env_path: str) -> str:
+    """Resolve DATABASE_URL to an absolute SQLite path.
+
+    Relative SQLite paths resolve against the directory of the selected
+    .env (matching utils/env_check.py:_resolve_sqlite_path), so pointing
+    --env at another installation's .env targets that installation's
+    database — not this checkout's.
+    """
     db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
     m = re.match(r"sqlite:///(.+)", db_url)
     if not m:
@@ -148,7 +215,8 @@ def _resolve_db_path() -> str:
         sys.exit(2)
     db_path = m.group(1)
     if not os.path.isabs(db_path):
-        db_path = os.path.join(PROJECT_ROOT, db_path)
+        env_dir = os.path.dirname(os.path.abspath(env_path))
+        db_path = os.path.join(env_dir, db_path)
     return db_path
 
 
@@ -228,6 +296,11 @@ class Rotator:
         self.new_telegram = _telegram_db_fernet(new_pepper)
         self.old_settings = _settings_db_fernet(old_pepper)
         self.new_settings = _settings_db_fernet(new_pepper)
+        self.old_whatsapp = _whatsapp_db_fernet(old_pepper)
+        self.new_whatsapp = _whatsapp_db_fernet(new_pepper)
+        # Decrypt-only fallback for sessions stored before FERNET_SALT was
+        # provisioned (same pattern as old_settings_legacy below).
+        self.old_whatsapp_legacy = _legacy_whatsapp_db_fernet(old_pepper)
         # Decrypt-only fallback for SMTP passwords stored before the KDF upgrade.
         self.old_settings_legacy = _legacy_settings_db_fernet(old_pepper)
         # ph for re-hashing api_key_hash. Argon2 verifier needs the new pepper
@@ -249,6 +322,8 @@ class Rotator:
             "bot_config.token_plaintext_promoted": 0,
             "flow_workflows.api_key": 0,
             "flow_workflows.api_key_plaintext_promoted": 0,
+            "whatsapp_config.session_blob": 0,
+            "whatsapp_users.encrypted_api_key": 0,
         }
 
     def _table_exists(self, name: str) -> bool:
@@ -440,19 +515,93 @@ class Rotator:
                 if not was_enc:
                     self.stats["flow_workflows.api_key_plaintext_promoted"] += 1
 
+        # ---- whatsapp_config.session_blob (whatsapp_db Fernet, raw BLOB) ----
+        if self._table_exists("whatsapp_config"):
+            cur = self.conn.execute("SELECT id, session_blob FROM whatsapp_config")
+            for row_id, blob_v in cur.fetchall():
+                if not blob_v:
+                    continue
+                try:
+                    pt = self.old_whatsapp.decrypt(bytes(blob_v))
+                except (InvalidToken, ValueError):
+                    # Blob may predate FERNET_SALT provisioning (legacy salt).
+                    try:
+                        pt = self.old_whatsapp_legacy.decrypt(bytes(blob_v))
+                    except (InvalidToken, ValueError):
+                        print(
+                            f"  WARN: whatsapp_config.session_blob row {row_id}: "
+                            "cannot decrypt, leaving alone (re-pair WhatsApp after "
+                            "the rotation)"
+                        )
+                        continue
+                self.conn.execute(
+                    "UPDATE whatsapp_config SET session_blob = ? WHERE id = ?",
+                    (self.new_whatsapp.encrypt(pt), row_id),
+                )
+                self.stats["whatsapp_config.session_blob"] += 1
+
+        # ---- whatsapp_users.encrypted_api_key (whatsapp_db Fernet) ----
+        if self._table_exists("whatsapp_users"):
+            cur = self.conn.execute(
+                "SELECT id, encrypted_api_key FROM whatsapp_users"
+            )
+            for row_id, wa_v in cur.fetchall():
+                if not wa_v:
+                    continue
+                try:
+                    pt = self.old_whatsapp.decrypt(wa_v.encode()).decode()
+                except (InvalidToken, ValueError):
+                    # Value may predate FERNET_SALT provisioning (legacy salt).
+                    try:
+                        pt = self.old_whatsapp_legacy.decrypt(wa_v.encode()).decode()
+                    except (InvalidToken, ValueError):
+                        print(
+                            f"  WARN: whatsapp_users.encrypted_api_key row {row_id}: "
+                            "cannot decrypt, leaving alone"
+                        )
+                        continue
+                self.conn.execute(
+                    "UPDATE whatsapp_users SET encrypted_api_key = ? WHERE id = ?",
+                    (self.new_whatsapp.encrypt(pt.encode()).decode(), row_id),
+                )
+                self.stats["whatsapp_users.encrypted_api_key"] += 1
+
 
 # ---------- Main ----------
 
 def main():
     parser = argparse.ArgumentParser(description="Rotate API_KEY_PEPPER and re-encrypt all dependent fields")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation prompt")
+    parser.add_argument(
+        "--app-stopped",
+        action="store_true",
+        help="Attest the OpenAlgo app is fully stopped (required with --yes)",
+    )
     parser.add_argument("--db", help="Path to SQLite DB (defaults to DATABASE_URL from .env)")
     parser.add_argument("--env", help="Path to .env file to update (defaults to project root .env)")
     parser.add_argument("--dry-run", action="store_true", help="Run rotation in a DB transaction but rollback at the end (no .env update)")
     args = parser.parse_args()
 
     env_path = args.env or ENV_PATH
-    db_path = args.db or _resolve_db_path()
+    # Load the chosen env file BEFORE resolving the DB path or deriving any
+    # key. Module import already loaded the project-root .env without override,
+    # so a plain reload could neither redirect DATABASE_URL nor replace
+    # already-loaded values — the script would rotate one installation's
+    # database with another installation's pepper and then write the new
+    # pepper into the wrong .env. override=True makes the selected file the
+    # authority for everything this run reads (DATABASE_URL, API_KEY_PEPPER,
+    # FERNET_SALT, SMTP_KEY_SALT, TELEGRAM_KEY_SALT).
+    load_dotenv(env_path, override=True)
+    db_path = args.db or _resolve_db_path(env_path)
+
+    if args.yes and not args.dry_run and not args.app_stopped:
+        sys.stderr.write(
+            "\n  REFUSING to run: --yes requires --app-stopped. Rotating the"
+            "\n  pepper while the app is running can interleave live writes"
+            "\n  with the migration and leave the DB half-rotated."
+            "\n  Stop OpenAlgo, then re-run with --app-stopped.\n"
+        )
+        return 2
     old_pepper = os.getenv("API_KEY_PEPPER", "")
     if not old_pepper:
         sys.stderr.write("API_KEY_PEPPER is not set in .env. Aborting.\n")
@@ -477,14 +626,20 @@ def main():
     print("    3. Re-hash apikeys.api_key_hash (Argon2 needs new pepper).")
     print("    4. Replace API_KEY_PEPPER in .env atomically.")
     print()
+    print("  Preconditions:")
+    print("    - The OpenAlgo app must be fully stopped while this runs.")
+    print()
     print("  After this runs, you must:")
     print("    - Use /auth/reset-password (with TOTP) to set a new password.")
     print("    - Existing browser sessions remain valid (APP_KEY unchanged).")
+    print("    - Re-register OAuth/MCP clients: their client secrets and refresh")
+    print("      tokens are stored as Argon2(secret + PEPPER) hashes, which cannot")
+    print("      be re-derived for a new pepper.")
     print()
 
     if not args.yes and not args.dry_run:
         try:
-            ans = input("  Type 'yes' to proceed: ").strip().lower()
+            ans = input("  Type 'yes' to confirm the app is stopped and proceed: ").strip().lower()
         except (KeyboardInterrupt, EOFError):
             print()
             return 1
