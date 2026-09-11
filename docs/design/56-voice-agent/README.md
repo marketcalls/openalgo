@@ -201,6 +201,21 @@ and the screen carries the rest.
 
 ## Order approval
 
+> **NOT IMPLEMENTED.** Everything in this section describes a control that does
+> not exist in the running system. `services/agent/safety/voice_confirm.py` is
+> written and tested, and `voice_order_phrase` and
+> `voice_confirm_window_seconds` are stored and editable, but **nothing calls
+> `is_approval`**: the matcher has no caller outside its own tests, so saying
+> the phrase does nothing. An order requested by voice pauses on the on-screen
+> confirmation card and is approved by tapping it, exactly as a typed one is.
+>
+> This notice exists because the section below was written in the present tense
+> before the wiring existed, which is the precise failure the meta-rule in
+> `55-agent` is there to prevent: a security claim that resolves to nothing
+> reads as evidence the control is present, and reviewers stop looking. The
+> section is kept as the specification to build against, not as a description
+> of what runs.
+
 **Shipped off.** `voice_trading_enabled` defaults to `False`, so the first
 release is read-only and nothing below is reachable.
 
