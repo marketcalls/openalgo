@@ -1,4 +1,10 @@
-import { type Bar, CandleBuilder, createChart, type SeriesApi } from 'openalgo-charts'
+import {
+  type Bar,
+  CandleBuilder,
+  createChart,
+  DataLoadingController,
+  type SeriesApi,
+} from 'openalgo-charts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type SymbolView, TradingTerminal } from './terminal'
 
@@ -22,10 +28,37 @@ type TerminalState = {
   loadingOlder: unknown
   noMoreHistory: boolean
   rest: { getBars: () => Promise<Bar[]> }
+  data: {
+    refresh(): Promise<readonly Bar[]>
+    loadMore(): Promise<readonly Bar[]>
+    bars(): readonly Bar[]
+    getState(): {
+      request: {
+        symbol: string
+        exchange: string
+        interval: string
+      } | null
+      bars: readonly Bar[]
+      status: string
+      historyStatus: string
+      hasMore: boolean | null
+      reason: string
+      paused: boolean
+    }
+    pushBar(bar: Bar): void
+    setPaused(paused: boolean): void
+    setVisible(visible: boolean): void
+    destroy(): void
+  } | null
   setPriceData(): void
+  buildChart(): void
   beginReplayAt(index: number): Promise<void>
   runReconcile(): Promise<void>
   loadOlderHistory(): Promise<void>
+  connectLive(): void
+  replayPicking: boolean
+  commitReplayPick(): void
+  setVolumeVisible(visible: boolean): void
 }
 
 const bar = (time: number, close: number, volume = 100): Bar => ({
@@ -76,11 +109,12 @@ afterEach(() => {
 
 function mount() {
   const container = document.createElement('div')
+  const legendEl = document.createElement('div')
   const terminal = new TradingTerminal({
     apiKey: 'test',
     wsUrl: 'ws://test.invalid',
     container,
-    legendEl: document.createElement('div'),
+    legendEl,
     getTheme: () => ({ mode: 'dark', appMode: 'live' }),
     callbacks: {
       onReady() {},
@@ -124,7 +158,7 @@ function mount() {
   state.builder = new CandleBuilder({ intervalSec: 60, volumeMode: 'ltq-sum' })
   state.builder.seed(state.rawBars[3])
   state.setPriceData()
-  return { terminal, state }
+  return { terminal, state, container, legendEl }
 }
 
 function deferred<T>() {
@@ -144,6 +178,86 @@ function pendingHistory(state: TerminalState) {
 }
 
 describe('history refresh while replay controls the chart', () => {
+  it('routes repair and pagination through one data owner', async () => {
+    const { state } = mount()
+    const refresh = vi.fn(async () => [bar(120, 111), bar(240, 103, 4200)])
+    const loadMore = vi.fn(async () => [bar(0, 99), ...state.rawBars])
+    const snapshot = (reason: string, values: readonly Bar[]) => ({
+      request: {
+        symbol: state.sym.symbol,
+        exchange: state.sym.exchange,
+        interval: state.interval,
+      },
+      bars: values,
+      status: 'ready',
+      historyStatus: 'idle',
+      hasMore: true,
+      reason,
+      paused: false,
+    })
+    let current = snapshot('load', state.rawBars)
+    state.data = {
+      refresh: async () => {
+        const values = await refresh()
+        current = snapshot('refresh', values)
+        return values
+      },
+      loadMore: async () => {
+        const values = await loadMore()
+        current = snapshot('prepend', values)
+        return values
+      },
+      bars: () => current.bars,
+      getState: () => current,
+      pushBar() {},
+      setPaused() {},
+      setVisible() {},
+      destroy() {},
+    }
+    state.rest = { getBars: async () => Promise.reject(new Error('direct history bypass')) }
+
+    await state.runReconcile()
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(state.rawBars.find((item) => item.time === 120)?.close).toBe(111)
+    expect(state.builder.current()?.volume).toBe(4200)
+
+    await state.loadOlderHistory()
+    expect(loadMore).toHaveBeenCalledOnce()
+    expect(state.rawBars.map((item) => item.time)).toEqual([0, 120, 240])
+  })
+
+  it('pauses controller snapshots for replay and resumes the maintained live store', async () => {
+    const { terminal, state } = mount()
+    const setPaused = vi.fn()
+    state.data = {
+      refresh: async () => state.rawBars,
+      loadMore: async () => state.rawBars,
+      bars: () => state.rawBars,
+      getState: () => ({
+        request: {
+          symbol: state.sym.symbol,
+          exchange: state.sym.exchange,
+          interval: state.interval,
+        },
+        bars: state.rawBars,
+        status: 'ready',
+        historyStatus: 'idle',
+        hasMore: true,
+        reason: 'state',
+        paused: false,
+      }),
+      pushBar() {},
+      setPaused,
+      setVisible() {},
+      destroy() {},
+    }
+
+    await state.beginReplayAt(1)
+    expect(setPaused).toHaveBeenCalledWith(true)
+    terminal.stopReplay()
+    expect(setPaused).toHaveBeenLastCalledWith(false)
+  })
+
   it.each([
     'before',
     'during',
@@ -226,6 +340,94 @@ describe('history refresh while replay controls the chart', () => {
   })
 })
 
+describe('live candle alignment', () => {
+  it('anchors intraday buckets to the broker history session', () => {
+    const { state } = mount()
+    const sessionOpen = Date.UTC(2026, 8, 11, 3, 45) / 1000
+    state.interval = '1h'
+    state.rawBars = [bar(sessionOpen, 100)]
+    state.ws = {
+      onLtp: () => () => {},
+      onDepth: () => () => {},
+      subscribe() {},
+    }
+
+    state.connectLive()
+
+    expect(state.builder.bucketStart(sessionOpen + 60 * 59)).toBe(sessionOpen)
+    expect(state.builder.bucketStart(sessionOpen + 60 * 60)).toBe(sessionOpen + 60 * 60)
+  })
+
+  it('uses the exchange timestamp from depth without inventing trade volume', () => {
+    const { state } = mount()
+    const sessionOpen = Date.UTC(2026, 8, 11, 3, 45) / 1000
+    let onDepth: ((symbol: string, exchange: string, depth: unknown) => void) | undefined
+    const pushBar = vi.fn()
+    state.interval = '1h'
+    state.rawBars = [bar(sessionOpen, 100, 5000)]
+    state.ws = {
+      onLtp: () => () => {},
+      onDepth: (cb: typeof onDepth) => {
+        onDepth = cb
+        return () => {}
+      },
+      subscribe() {},
+    }
+    state.data = { pushBar, destroy() {} } as unknown as NonNullable<TerminalState['data']>
+    vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+    state.connectLive()
+
+    onDepth?.(state.sym.symbol, state.sym.exchange, {
+      bids: [],
+      asks: [],
+      ltp: 104,
+      timeSec: sessionOpen + 60 * 61,
+    })
+
+    expect(state.rawBars.at(-1)).toMatchObject({
+      time: sessionOpen + 60 * 60,
+      close: 104,
+      volume: 0,
+    })
+    expect(pushBar).toHaveBeenCalledWith(
+      expect.objectContaining({ time: sessionOpen + 60 * 60, close: 104, volume: 0 })
+    )
+  })
+})
+
+describe('terminal listener ownership', () => {
+  it('keeps one replay pointer handler across rebuilds and removes it on destroy', () => {
+    const { terminal, state, container } = mount()
+    state.buildChart()
+    state.buildChart()
+    const commit = vi.spyOn(state, 'commitReplayPick').mockImplementation(() => {})
+    state.replayPicking = true
+
+    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 20 }))
+    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 10, clientY: 20 }))
+    expect(commit).toHaveBeenCalledOnce()
+
+    terminal.destroy()
+    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 20 }))
+    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 10, clientY: 20 }))
+    expect(commit).toHaveBeenCalledOnce()
+  })
+
+  it('removes delegated legend actions on destroy', () => {
+    const { terminal, state, legendEl } = mount()
+    const setVolumeVisible = vi.spyOn(state, 'setVolumeVisible').mockImplementation(() => {})
+    legendEl.innerHTML = '<button data-legend-action="volume">Volume</button>'
+    const button = legendEl.querySelector('button')!
+
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(setVolumeVisible).toHaveBeenCalledOnce()
+    terminal.destroy()
+    legendEl.innerHTML = '<button data-legend-action="volume">Volume</button>'
+    legendEl.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(setVolumeVisible).toHaveBeenCalledOnce()
+  })
+})
+
 describe('older history session ownership', () => {
   it.each([
     'bars',
@@ -289,6 +491,27 @@ describe('older history session ownership', () => {
 })
 
 describe('symbol load lifecycle', () => {
+  it('stops controller polling while hidden and releases it on teardown', async () => {
+    const { terminal } = mount()
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const setVisible = vi.spyOn(DataLoadingController.prototype, 'setVisible')
+    const destroy = vi.spyOn(DataLoadingController.prototype, 'destroy')
+    vi.spyOn(terminal, 'api').mockResolvedValue({ data: { minutes: ['1m'] } })
+    vi.spyOn(terminal, 'search').mockResolvedValue([])
+    await terminal.init()
+
+    visibility.mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(setVisible).toHaveBeenLastCalledWith(false)
+
+    terminal.destroy()
+    expect(destroy).toHaveBeenCalledOnce()
+    const calls = setVisible.mock.calls.length
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(setVisible).toHaveBeenCalledTimes(calls)
+  })
+
   it('does not create a socket or book poller after destruction during interval lookup', async () => {
     const { terminal, state } = mount()
     const intervals = deferred<{ data: { minutes: string[] } }>()

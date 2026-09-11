@@ -59,6 +59,15 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.1.6: Tier-2 studies follow the chart's data context and loaded source
+  range.** `createTier2Indicator` receives `dataContext` with the host's symbol,
+  exchange and interval, cancels obsolete fetches, extends history when older
+  bars arrive and refreshes when the host changes instrument. A descriptor can
+  use `supports(ctx)` to report that its provider cannot serve a context. The
+  managed lifecycle publishes loading, ready, empty, unsupported and error
+  states with an explicit retry action, so provider failure is visible without
+  putting network state into `calc`. Existing Tier-2 descriptors get the range,
+  cancellation and status behavior through the wrapper without changing shape.
 - **2.1.2: a Tier-2 study's data requests are keyed by data setting.** Changing
   the symbol or any other data input clears the previous values immediately, and
   a response that arrives for the setting you just left cannot land on the new
