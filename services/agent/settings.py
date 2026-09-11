@@ -190,9 +190,11 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         KEY_VOICE_PROVIDER: _Field("text", "openai"),
         KEY_VOICE_MODEL: _Field("text", "gpt-live-1"),
         KEY_VOICE_SPEAKER: _Field("text", "marin"),
-        # Not "Milo": the operator reserved that word for approving orders, and
-        # the name a trader says all day must not be the word that trades.
-        KEY_VOICE_AGENT_NAME: _Field("text", "Ava"),
+        # Chosen to sit far from the order phrase phonetically. The name is
+        # said constantly and the order phrase reaches a broker, so the two must
+        # not be confusable by a speech model on a noisy desk - and "Vega" is
+        # an options Greek, which reads as deliberate on a trading platform.
+        KEY_VOICE_AGENT_NAME: _Field("text", "Vega"),
         KEY_VOICE_ORDER_PHRASE: _Field("text", "milo"),
         # Subject to KEY_TRADING_ENABLED: turning this on while the master
         # switch is off changes nothing, so there stays exactly one place to

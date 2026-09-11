@@ -228,7 +228,7 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
         raise VoiceUnavailable("No OpenAI key is stored for the voice agent.")
 
     instructions = build_instructions(
-        str(config.get("voice_agent_name") or "Ava"),
+        str(config.get("voice_agent_name") or "Vega"),
         str(config.get("voice_order_phrase") or ""),
         trading=bool(config.get("trading_effective")),
     )
