@@ -77,6 +77,10 @@ VOICE_READ_ONLY = {
     "live",
     "viz",
     "option_viz",
+    # Drawing reaches voice: a spoken turn renders on screen exactly as a typed
+    # one does, and the surface is built on the ear taking the conclusion while
+    # the screen keeps the detail.
+    "openui",
 }
 
 
@@ -93,11 +97,21 @@ class TestVoiceWidensNothing:
         with_trading = keys_for(surface=SURFACE_VOICE, trading_enabled=True)
         assert with_trading - VOICE_READ_ONLY == {"orders"}
 
-    def test_voice_never_reaches_the_toolkits_that_write_code_or_draw_an_interface(self):
-        # None of these can be driven through a speaker, and two of them write
-        # files. They are chat only and must stay there.
+    def test_voice_never_reaches_the_toolkits_that_produce_something_to_review(self):
+        """A strategy and a flow stay on the page that can edit them.
+
+        Drawing is deliberately not in this set. It was, on the reasoning that
+        an interface cannot be spoken, and that mistook the surface for the
+        channel: a spoken turn renders on screen exactly as a typed one does.
+        The result was that "show me my order book" was answerable by typing and
+        refused by voice inside the same conversation.
+        """
         spoken = keys_for(surface=SURFACE_VOICE, trading_enabled=True, web_search_enabled=True)
-        assert not ({"openui", "strategy_gen", "flow_gen"} & spoken)
+        assert not ({"strategy_gen", "flow_gen"} & spoken)
+
+    def test_voice_can_draw(self):
+        spoken = keys_for(surface=SURFACE_VOICE)
+        assert {"openui", "viz", "option_viz"} <= spoken
 
     def test_chat_still_gets_them(self):
         # The other half of the claim above: the narrowing removed them from

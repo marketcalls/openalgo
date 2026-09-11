@@ -75,8 +75,11 @@ SURFACE_VOICE = "voice"
 #: to the conversation page, the chart panel and the spoken surface alike.
 ALL_SURFACES: frozenset[str] = frozenset({SURFACE_CHAT, SURFACE_CHART, SURFACE_VOICE})
 
-#: The conversation page only. A toolkit that writes code, builds a flow or
-#: renders an interface belongs here: none of it is usable through a speaker.
+#: The conversation page only. A toolkit whose output is a thing to read, edit
+#: and keep - a strategy, a flow - belongs here: reviewing one is a typing job,
+#: and the surface that asked for it by voice cannot do the reviewing. Drawing
+#: is not in that category and reaches voice, because a spoken turn has a
+#: screen.
 CHAT_ONLY: frozenset[str] = frozenset({SURFACE_CHAT})
 
 #: Chat and voice. The seam for a toolkit that suits a spoken conversation but
@@ -479,7 +482,14 @@ TOOLKITS: list[ToolkitSpec] = [
         key="openui",
         module="services.agent.tools.openui",
         attr="OpenUiToolkit",
-        surfaces=CHAT_ONLY,
+        # Reaches voice. It was chat-only at first, on the reasoning that an
+        # interface cannot be spoken - which mistook the surface for the
+        # channel. A spoken turn renders on screen exactly as a typed one does,
+        # and the whole design of the surface is that the ear gets the
+        # conclusion while the screen keeps the detail. Withholding the toolkit
+        # that draws the detail left "show me my order book" answerable by
+        # typing and refused by voice, in the same conversation.
+        surfaces=CHAT_AND_VOICE,
         order=46,
         description=(
             "Render a card of general data: bar, line, area and pie charts, tables, "
