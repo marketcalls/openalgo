@@ -71,6 +71,7 @@ const PLACEMENTS = new Set(['onchart', 'pane'])
  * not re-imported, and its warnings are not repeated.
  */
 const processed = new Set<string>()
+let loading: Promise<CustomIndicatorLoad> | null = null
 
 /**
  * Ids present before any user module ran, captured once.
@@ -241,7 +242,20 @@ function guardCalc(
  * user file all have to leave the other 102 indicators working, so the index is
  * treated as optional and each module is isolated from the next.
  */
-export async function loadCustomIndicators(
+export function loadCustomIndicators(
+  opts: { onProblem?: ProblemReporter } = {}
+): Promise<CustomIndicatorLoad> {
+  // A restore and a picker can overlap. Every caller must wait until the
+  // shared registry is ready, including modules another call already claimed.
+  if (!loading) {
+    loading = importCustomIndicators(opts).finally(() => {
+      loading = null
+    })
+  }
+  return loading
+}
+
+async function importCustomIndicators(
   opts: { onProblem?: ProblemReporter } = {}
 ): Promise<CustomIndicatorLoad> {
   const result: CustomIndicatorLoad = { loaded: [], errors: [] }

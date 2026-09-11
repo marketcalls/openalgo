@@ -227,6 +227,11 @@ The transport gives you previous, play or pause, next, a scrub bar, a speed
 selector and exit. A watermark marks the chart as replayed and the trading
 panel comes off it.
 
+Live ticks and history refreshes continue in the background during replay.
+They do not reveal candles beyond the playhead or move its viewport, including
+when an older history page finishes loading. Exit replay to return to the
+updated live chart.
+
 **No order can leave the chart during replay.** Every order route on the page,
 including the dock's and the GTT tab's, refuses with the same message. Replay is
 a simulation, and the prices on screen are not the market's.

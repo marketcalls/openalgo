@@ -8,6 +8,21 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `/trading` keeps price and volume isolated during replay when a periodic
+  history refresh or an older history page completes. Leaving replay restores
+  the updated live session. A refresh from an earlier symbol, interval or load
+  is discarded, and a destroyed terminal cannot restart its refresh timer.
+- Symbol loads that finish after switching instruments or closing a pane no
+  longer overwrite the active history or rebuild a destroyed chart.
+- Older history pages discard obsolete symbol, interval and chart responses
+  without exhausting the new session or releasing another page's loading state.
+- Closing a pane during interval lookup no longer starts its WebSocket and
+  polling timer after teardown.
+- Custom indicators wait for concurrent registration to finish before they
+  are added or restored, preventing missing indicators during pane startup.
+
 ## [2.0.2.3] - 2026-09-06
 
 ### Strategy Module, Agent and Charting Release
