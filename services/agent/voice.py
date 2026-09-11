@@ -245,6 +245,19 @@ def mint_session(offer_sdp: Any, config: dict[str, Any] | None = None) -> str:
             json=payload,
             timeout=MINT_TIMEOUT_SECONDS,
         )
+        if response.status_code >= 500:
+            # Once, and only for a 5xx. A session that was not created was not
+            # billed, and the alternative is asking a trader to press the
+            # microphone again for a blip that has usually already passed. A
+            # 4xx is never retried: it will fail the same way and the message
+            # is the useful part.
+            logger.warning("Voice provider returned %s; retrying once", response.status_code)
+            response = client.post(
+                spec.sessions_url,
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+                timeout=MINT_TIMEOUT_SECONDS,
+            )
     except Exception:
         # No traceback: this frame's locals held the key.
         logger.error("Could not reach the voice provider")
@@ -291,6 +304,19 @@ def _refusal_message(status: int, body: str) -> str:
         return "The configured voice model is not available on that key."
     if status == 429:
         return "The voice provider is rate limiting this key. Try again shortly."
+    if status >= 500:
+        # Worth its own message. "Refused" sends an operator to check their key,
+        # their model and their configuration, and none of that is the problem:
+        # a 5xx here means the request was accepted and the session could not be
+        # created at the other end. Observed as a bare "Internal Server Error"
+        # with no JSON, while the same endpoint still returned a clean 400 for a
+        # malformed offer, so input validation was up and session creation was
+        # not.
+        return (
+            "The voice provider had an internal error and could not start the "
+            "session. Nothing is wrong with your key or your settings; this is "
+            "on their side. Try again in a few minutes."
+        )
     if "not supported in realtime" in body or "invalid_model" in body:
         return "That model cannot be used for speech. Voice needs a live model such as gpt-live-1."
     return f"The voice provider refused the session (HTTP {status})."

@@ -578,7 +578,7 @@ class TestWhatIsPostedAndWhatComesBack:
             (403, "key for the voice agent was rejected"),
             (404, "not available on that key"),
             (429, "rate limiting"),
-            (500, "HTTP 500"),
+            (500, "internal error"),
         ],
     )
     def test_a_refusal_becomes_something_an_operator_can_act_on(self, voice_env, status, expected):
@@ -690,3 +690,29 @@ class TestSpokenApprovalIsDecidedServerSide:
         verdict = voice.judge_approval("run-1", "yes", self.ARMED)
         assert verdict.approved is False
         assert "passed" in verdict.reason
+
+
+class TestAnUpstreamFailureSaysSo:
+    """A 5xx is not a refusal, and must not read like one.
+
+    Observed live: the provider returned a bare "Internal Server Error" with no
+    JSON, while the same endpoint still answered a malformed offer with a clean
+    400. Input validation was up and session creation was not. "The voice
+    provider refused the session" sent an operator to check a key, a model and a
+    configuration that were all correct.
+    """
+
+    def test_a_server_error_blames_the_provider_not_the_operator(self):
+        message = voice._refusal_message(500, "Internal Server Error")
+        assert "internal error" in message.lower()
+        assert "nothing is wrong with your key" in message.lower()
+        assert "refused" not in message.lower()
+
+    def test_every_server_error_reads_the_same_way(self):
+        for status in (500, 502, 503, 504):
+            assert "internal error" in voice._refusal_message(status, "").lower()
+
+    def test_a_client_error_still_names_what_the_operator_can_fix(self):
+        assert "key" in voice._refusal_message(401, "").lower()
+        assert "model" in voice._refusal_message(404, "").lower()
+        assert "rate limiting" in voice._refusal_message(429, "").lower()
