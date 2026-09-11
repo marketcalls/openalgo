@@ -74,6 +74,15 @@ import { cn } from '@/lib/utils'
  */
 const COLUMN = 'mx-auto w-full max-w-3xl'
 
+/**
+ * The surfaces this page serves, and therefore lists.
+ *
+ * A spoken question and a typed one land in the same thread list, so listing
+ * only `chat` here hid every voice session an operator had ever had - including
+ * the ones that never reached the agent at all.
+ */
+const AGENT_SURFACES = ['chat', 'voice'] as const
+
 export default function AgentChat() {
   const [modelId, setModelId] = useState<number | null>(null)
   // Per turn, not persisted: effort belongs to the question being asked.
@@ -191,9 +200,20 @@ export default function AgentChat() {
   /** What to speak while a run waits for approval, read at frame time. */
   const awaitingApprovalLine = useRef('That needs your approval before I can place it.')
 
-  const handleSpokenLine = useCallback((role: 'trader' | 'agent', text: string) => {
-    void recordVoiceTranscript(role, text, conversationIdRef.current)
-  }, [])
+  const handleSpokenLine = useCallback(
+    (role: 'trader' | 'agent', text: string) => {
+      void recordVoiceTranscript(role, text, conversationIdRef.current).then((opened) => {
+        // The first line of a spoken session opens a thread. Adopting it here
+        // is what keeps the whole session - the lines the agent never saw, and
+        // the turns it did - in one place an operator can open again later.
+        if (opened != null && conversationIdRef.current == null) {
+          conversationIdRef.current = opened
+          setConversation(opened)
+        }
+      })
+    },
+    [setConversation]
+  )
 
   const conversationIdRef = useRef<number | null>(null)
   conversationIdRef.current = conversationId ?? null
@@ -353,7 +373,7 @@ export default function AgentChat() {
           than pushing the page sideways. */}
       <ConversationSidebar
         activeId={conversationId}
-        surface="chat"
+        surface={AGENT_SURFACES}
         busy={running}
         onNewChat={reset}
         onSelect={handleSelectConversation}

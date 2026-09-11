@@ -146,8 +146,8 @@ function fullStamp(iso: string | null | undefined): string {
 export interface ConversationSidebarProps {
   /** The conversation on screen, or null for a thread not yet written to. */
   activeId: number | null
-  /** Which surface's conversations to list. Chat by default. */
-  surface?: AgentSurface
+  /** Which surfaces to list. Chat by default; a page may pass several. */
+  surface?: AgentSurface | readonly AgentSurface[]
   /** True while a turn is streaming. Every disturbing action is disabled. */
   busy?: boolean
   /** Clear the thread and start fresh. Must not create a conversation row. */

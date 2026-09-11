@@ -47,6 +47,7 @@ OS thread, which is where the audit rows are written) releases it by calling
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -1432,12 +1433,17 @@ def get_conversation(conversation_id: int, user_id: str) -> AgConversation | Non
         return None
 
 
-def list_conversations(user_id: str, surface: str | None = None, limit: int = 100) -> list[dict]:
+def list_conversations(
+    user_id: str, surface: str | Sequence[str] | None = None, limit: int = 100
+) -> list[dict]:
     """A user's conversations, most recently updated first.
 
     Args:
         user_id: The session username.
-        surface: Restrict to ``chat`` or ``chart``.
+        surface: Restrict to one surface, or to several. A page that serves more
+            than one passes them all: `/agent` answers both typed and spoken
+            questions into the same thread list, and listing only `chat` there
+            hid every spoken session an operator had ever had.
         limit: Maximum rows to return.
 
     Returns:
@@ -1445,8 +1451,10 @@ def list_conversations(user_id: str, surface: str | None = None, limit: int = 10
     """
     try:
         query = db_session.query(AgConversation).filter(AgConversation.user_id == user_id)
-        if surface:
+        if isinstance(surface, str):
             query = query.filter(AgConversation.surface == surface)
+        elif surface:
+            query = query.filter(AgConversation.surface.in_(list(surface)))
         rows = (
             query.order_by(AgConversation.updated_at.desc(), AgConversation.id.desc())
             .limit(limit)

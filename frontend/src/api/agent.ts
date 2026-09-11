@@ -1173,7 +1173,8 @@ export async function removeChatGptSession(): Promise<boolean> {
 }
 
 export interface ListConversationsParams {
-  surface?: AgentSurface
+  /** One surface, or several for a page that serves more than one. */
+  surface?: AgentSurface | readonly AgentSurface[]
   /** Clamped server side to between 1 and 200. Defaults to 100. */
   limit?: number
 }
@@ -1184,9 +1185,15 @@ export interface ListConversationsParams {
 export async function listConversations(
   params: ListConversationsParams = {}
 ): Promise<Conversation[]> {
+  // Several surfaces travel as one comma-separated value, which is what the
+  // route reads. Sending the array raw would arrive as repeated keys.
+  const query = {
+    ...params,
+    ...(Array.isArray(params.surface) ? { surface: params.surface.join(',') } : {}),
+  }
   const response = await webClient.get<{ data: Conversation[] }>(
     `${AGENT_API_BASE}/conversations`,
-    { params }
+    { params: query }
   )
   return response.data.data ?? []
 }
@@ -1345,14 +1352,17 @@ export async function recordVoiceTranscript(
   role: 'trader' | 'agent',
   text: string,
   conversationId: number | null
-): Promise<void> {
+): Promise<number | null> {
   try {
-    await webClient.post(`${VOICE_BASE}/transcript`, {
-      role,
-      text,
-      conversation_id: conversationId,
-    })
+    const response = await webClient.post<{ data?: { conversation_id?: number | null } }>(
+      `${VOICE_BASE}/transcript`,
+      { role, text, conversation_id: conversationId }
+    )
+    // The first line of a spoken session opens a thread, and the id comes back
+    // so the rest of the session lands in it rather than opening one per line.
+    return response.data?.data?.conversation_id ?? null
   } catch {
     // Evidence is worth having, but not at the cost of the conversation.
+    return null
   }
 }

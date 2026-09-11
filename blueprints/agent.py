@@ -1516,6 +1516,10 @@ def post_voice_transcript():
     Never fails a caller. A line that cannot be recorded is logged; refusing the
     page would stop a conversation over a failed write.
     """
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
     body, error = _json_body()
     if error:
         return error
@@ -1531,13 +1535,27 @@ def post_voice_transcript():
     except (TypeError, ValueError):
         conversation_id = None
 
+    # A spoken session that never needs the agent still happened, and until now
+    # it left no thread: a conversation was only created when a question
+    # delegated, so an exchange the speech model handled itself lived in
+    # `ag_audit` and nowhere an operator could find it. The first line of a
+    # session opens the thread, so every spoken session has somewhere to be.
+    if conversation_id is None:
+        created, error = agent_db.create_conversation(
+            username, title=text[:60], surface=tools_module.SURFACE_VOICE
+        )
+        if created:
+            conversation_id = created.get("id")
+        else:
+            logger.warning("Could not open a conversation for a spoken line: %s", error)
+
     audit.record_transcript(
         role,
         text,
         conversation_id=conversation_id,
         run_id=str(body.get("run_id") or "") or None,
     )
-    return _ok({"data": {"recorded": True}})
+    return _ok({"data": {"recorded": True, "conversation_id": conversation_id}})
 
 
 @agent_bp.route("/api/voice/approve", methods=["POST"])
@@ -1646,9 +1664,15 @@ def list_conversations():
     if not username:
         return _error("Not authenticated", 401)
 
-    surface = (request.args.get("surface") or "").strip() or None
-    if surface and surface not in agent_db.SURFACES:
+    # A page that serves more than one surface asks for them together. `/agent`
+    # answers both typed and spoken questions into the same thread list, and
+    # listing only one of them hid every spoken session an operator had had.
+    requested = [part.strip() for part in (request.args.get("surface") or "").split(",")]
+    surfaces = [part for part in requested if part]
+    unknown = [part for part in surfaces if part not in agent_db.SURFACES]
+    if unknown:
         return _error(f"surface must be one of: {', '.join(agent_db.SURFACES)}", 400)
+    surface = surfaces or None
 
     try:
         limit = min(max(int(request.args.get("limit", 100)), 1), 200)
