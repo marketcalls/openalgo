@@ -466,7 +466,12 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "ltp": float(ltp),
                             "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
                         }
-                    elif mode == 2 and effective_ltp > 0:
+                    elif mode == 2:
+                        # Same contract point as mode 3 below: a quote payload
+                        # always carries ltp, defaulted to 0. Gating the whole
+                        # publish on a non-zero price meant a mode-2 subscriber
+                        # received nothing at all - not even the book's OHLC and
+                        # volume - until the instrument's first trade of the day.
                         publish_data = {
                             "ltp": effective_ltp,
                             "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
@@ -492,8 +497,23 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         else:
                             continue  # No depth data available at all
 
+                        # ltp is a first-class field of the mode-3 payload
+                        # (docs/prompt/websockets-format.md), emitted
+                        # unconditionally by every other broker adapter -
+                        # angel, shoonya, dhan, zerodha, upstox all default it
+                        # to 0 rather than dropping the key.
+                        #
+                        # Kotak used to omit it whenever effective_ltp was 0,
+                        # on the reasoning that this "lets the frontend fall
+                        # back to polled REST data". It does - permanently. The
+                        # chart subscribes Depth alone for tradeable symbols and
+                        # stops its REST quote poll only on a depth frame
+                        # carrying ltp, so a payload without the key is read as
+                        # "keep polling" and nothing can ever clear it
+                        # (issue #2038).
                         publish_data = {
                             "timestamp": int(time.time() * 1000),
+                            "ltp": effective_ltp,
                             "depth": {
                                 "buy": depth_buy,
                                 "sell": depth_sell,
@@ -501,10 +521,6 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "totalbuyqty": depth_total_buy,
                             "totalsellqty": depth_total_sell,
                         }
-                        # Only include LTP if valid; omitting it lets
-                        # the frontend fall back to polled REST data
-                        if effective_ltp > 0:
-                            publish_data["ltp"] = effective_ltp
                     else:
                         continue
                     publish_data.update(
