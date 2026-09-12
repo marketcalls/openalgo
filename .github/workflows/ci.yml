@@ -65,6 +65,7 @@ jobs:
             test/test_broker_credential_logging.py \
             test/test_option_symbol_service_validation.py \
             test/test_graceful_shutdown.py \
+            test/test_analyze_intake.py \
             -v --timeout=60
 
   # Frontend linting
