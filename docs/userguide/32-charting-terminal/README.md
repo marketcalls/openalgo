@@ -3,9 +3,9 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. It is powered by `openalgo-charts` 2.1.9: a from-scratch canvas
+it. It is powered by `openalgo-charts` 2.2.0: a from-scratch canvas
 charting engine with 17 chart types, 102 built-in indicators plus any you write
-yourself, and 51 drawing tools, wired to the same broker session and market-data
+yourself, and 85 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
 Everything on the page is live over the WebSocket feed. Nothing on it polls for
@@ -24,7 +24,7 @@ says so and links to `/apikey`.
 | Region | What it holds |
 |---|---|
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera |
-| Left rail | Drawing tools in eight groups, magnet, keep-armed lock, undo, redo, delete |
+| Left rail | Drawing tools in ten groups, magnet, keep-armed lock, undo, redo, delete |
 | Centre | One to eight chart panes in a grid |
 | Right panel | Watchlist, option chain, Objects, or the chart assistant |
 | Right rail | The four controls that open those panels |
@@ -58,10 +58,8 @@ watermark.
 
 ## Session Profiles
 
-**Time Price Opportunity** and **Session Volume Profile** are no longer offered
-in the chart type menu. The engine still supports both, so a saved layout that
-already selects one keeps drawing it, but there is currently no way to pick one
-from the UI. The rest of this section describes how they behave when selected.
+Choose **Time Price Opportunity** or **Session Volume Profile** from the chart
+type menu in the pane toolbar. Both appear in the last group, below Line Break.
 
 Right-click the chart and open **Chart settings...**. The existing
 **Price** tab changes to the selected profile's settings. Switching back to

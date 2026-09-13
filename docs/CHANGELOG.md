@@ -8,6 +8,12 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore **Time Price Opportunity** and **Session Volume Profile** in the
+  `/trading` chart-type menu. Both can be selected again, with their existing
+  settings, saved layouts, live updates and intraday interval handling.
+
 ### Changed
 
 - Upgrade `/trading` to openalgo-charts 2.2.0 and expose all 85 drawing tools,
