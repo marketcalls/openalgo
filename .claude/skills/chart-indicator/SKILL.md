@@ -59,6 +59,15 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.1.9: chart hosts gain built-in branding and
+  an optional text watermark.** `ChartOptions.branding` defaults to the
+  OpenAlgo mark, while `ChartOptions.watermark` defaults off. Hosts can update
+  them with `setBranding` and `setWatermarkOptions`, inspect them with
+  `brandingOptions` and `watermarkOptions`, and follow branding changes through
+  `branding:changed`. Blank watermark text follows the symbol and interval from
+  `setDataContext`. The public types are `LogoWatermarkOptions`,
+  `ChartWatermarkOptions`, and `BrandingChangedEvent`. These are host APIs and
+  do not change or belong inside an indicator descriptor.
 - **2.1.8: navigation can ease automatic price ranges as it reveals new
   extrema.** `animAutoscale` follows `animZoom` by default, while a manual scale
   and a descriptor's fixed `range()` remain authoritative. Normalized wheel and

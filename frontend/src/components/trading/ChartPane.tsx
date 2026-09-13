@@ -20,6 +20,7 @@ import { lotInfoText } from '@/lib/trading/legend'
 import type { ProfileMenuAction } from '@/lib/trading/profileLayer'
 import { isProfileKind } from '@/lib/trading/profileSettings'
 import {
+  type BrandingLink,
   type ChartSettingsRequest,
   type CtxItem,
   type DrawSelection,
@@ -323,6 +324,7 @@ export function ChartPane({
   const [interval, setIntervalState] = useState('5m')
   const [chartType, setChartTypeState] = useState('candlestick')
   const [sym, setSym] = useState<SymbolView | null>(null)
+  const [branding, setBranding] = useState<BrandingLink | null>(null)
   const [qty, setQty] = useState(1)
   const [wsState, setWsState] = useState('connecting')
   /**
@@ -429,6 +431,7 @@ export function ChartPane({
         setQty(1)
         symbolCbRef.current?.(paneId, `${view.exchange}:${view.symbol}`)
       },
+      onBrandingChange: (link) => aliveRef.current && setBranding(link),
       onLtp: () => {}, // legend overlay + canvas render the live price
       onDrawChange: (s) => {
         if (!aliveRef.current) return
@@ -855,6 +858,17 @@ export function ChartPane({
 
         {/* Right side: connection LED + actions */}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {branding && (
+            <a
+              href={branding.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={branding.label}
+              className="inline-flex min-h-11 items-center whitespace-nowrap px-2 text-[11px] text-muted-foreground hover:text-foreground hover:underline sm:min-h-0 sm:px-0"
+            >
+              {branding.label}
+            </a>
+          )}
           <span
             className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
             title={`WebSocket ${wsState}`}

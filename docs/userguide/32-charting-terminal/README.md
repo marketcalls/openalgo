@@ -3,7 +3,7 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. It is powered by `openalgo-charts` 2.1.8: a from-scratch canvas
+it. It is powered by `openalgo-charts` 2.1.9: a from-scratch canvas
 charting engine with 17 chart types, 102 built-in indicators plus any you write
 yourself, and 51 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
@@ -32,6 +32,29 @@ says so and links to `/apikey`.
 
 The chart grid takes whatever the rails and panels leave. Only the right panel
 and the dock can be resized; the panes follow the layout preset you pick.
+
+## Chart Branding and Watermark
+
+Each chart shows the OpenAlgo mark in its bottom-left corner. Activate the mark
+with a completed click or tap to open the OpenAlgo site. The matching **Chart by
+OpenAlgo** link in the pane toolbar provides the same destination for keyboard
+and assistive-technology users. Dragging the mark does not activate the link.
+
+The larger text watermark is a separate, optional background label. Open
+**Chart settings**, choose **Appearance**, and use the Watermark controls:
+
+- **Show watermark** turns the watermark on. It is off by default, including
+  for panes saved before watermark support was added.
+- **Text** sets a custom label. Leave it blank to use the current symbol and
+  interval automatically.
+- **Color**, **Opacity**, and **Text size** control its appearance.
+
+Automatic text follows symbol and interval changes. Replay keeps the selected
+watermark and adds its own Replay marker, so the two meanings remain separate.
+**Reset to defaults** turns the optional watermark off again. **Cancel** leaves
+the saved settings unchanged, and **OK** applies and remembers the changes for
+that pane. PNG and SVG snapshots include the corner branding and any visible
+watermark.
 
 ## Session Profiles
 
@@ -294,7 +317,7 @@ It needs a model configured first, at `/agent/config`.
 Reloading the page brings back the grid layout, the pane sync settings, the open
 right panel and its width, the dock's open tab and height, the One-Click state,
 and per pane: the symbol, interval, chart type, product, indicators, drawings,
-magnet, keep-armed, grid and volume settings.
+magnet, keep-armed, grid, volume and watermark settings.
 
 Watchlists are stored on the server, so they follow you between devices.
 Everything else above is stored in the browser.
