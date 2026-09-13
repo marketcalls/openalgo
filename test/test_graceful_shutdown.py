@@ -20,11 +20,49 @@ These tests drive ``shutdown_runtime`` directly rather than raising signals: the
 handler is one line, the ordering it guards is the part that can regress, and a
 test that raises SIGINT into the pytest process is a test that can take the
 runner down with it.
+
+The same gap left six APScheduler instances running. Each is on a daemon thread,
+so the interpreter does not wait for it, and it keeps firing while the process
+tears down, into thread pools ``concurrent.futures`` has already closed. Every
+tick from then on raises ``cannot schedule new futures after shutdown``. The
+strategy module reconciles pending stops every five seconds, so it is the one
+that fills the console. They are writers as much as the collector is, and the
+tests below pin that they stop, that they stop in an order where a slow step
+cannot strand a quick one, and that not one of them waits on a job in flight.
 """
+
+import inspect
+import sys
+import threading
+import time
 
 import pytest
 
 from utils import shutdown as shutdown_mod
+
+#: Every teardown step, in the order shutdown_runtime runs them.
+#
+# The collector first, for the reason issue #2031 turns on. Then the five
+# schedulers that stop without waiting for anything. Then the strategy module,
+# whose teardown joins two threads and unsubscribes a websocket, because a step
+# that can be slow must not be the reason a quick one behind it never ran, and
+# the websocket proxy after them because its cleanup joins a thread. Then the
+# session sweep, last, because everything above can bind one.
+_STEP_NAMES = (
+    "_stop_health_collector",
+    "_stop_flow_scheduler",
+    "_stop_historify_scheduler",
+    "_stop_chartink_scheduler",
+    "_stop_python_strategy_scheduler",
+    "_stop_squareoff_scheduler",
+    "_stop_strategy_module",
+    "_stop_websocket_proxy",
+    "_remove_all_scoped_sessions",
+)
+
+#: Captured before any fixture can replace them, so a test can run the real
+#: step while the autouse stub keeps the rest of the suite off the schedulers.
+_REAL = {name: getattr(shutdown_mod, name) for name in _STEP_NAMES}
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +71,21 @@ def _reset_state():
     shutdown_mod._shutdown_done = False
     yield
     shutdown_mod._shutdown_done = False
+
+
+@pytest.fixture(autouse=True)
+def _no_real_schedulers(monkeypatch):
+    """Keep the suite away from schedulers it did not start.
+
+    The scheduler steps look the process up in ``sys.modules``, and a full
+    pytest run imports most of this repository, so without this a test about
+    ordering would really shut down the Chartink scheduler that importing
+    ``blueprints.chartink`` starts. A test that wants a real step restores it
+    from ``_REAL``; a later ``monkeypatch.setattr`` wins over this one.
+    """
+    for name in _STEP_NAMES:
+        if name != "_remove_all_scoped_sessions":
+            monkeypatch.setattr(shutdown_mod, name, lambda: None)
 
 
 def test_the_collector_is_stopped_before_sessions_are_released(monkeypatch):
@@ -165,6 +218,163 @@ def test_the_handler_exits_with_the_conventional_code(monkeypatch):
         shutdown_mod._handle_signal(signal.SIGINT, None)
 
     assert exc.value.code == 128 + int(signal.SIGINT)
+
+
+def test_every_background_writer_is_stopped_before_sessions_are_released(monkeypatch):
+    """All nine steps run, in the order the module documents.
+
+    Pinned as an exact sequence rather than a set. Which steps run is the easy
+    half; the half that regresses is where a new one gets inserted, and every
+    position in this list is load bearing.
+    """
+    calls = []
+    for name in _STEP_NAMES:
+        monkeypatch.setattr(shutdown_mod, name, lambda n=name: calls.append(n))
+
+    shutdown_mod.shutdown_runtime()
+
+    assert calls == list(_STEP_NAMES)
+
+
+def test_the_strategy_scheduler_is_told_to_stop(monkeypatch):
+    """The reported symptom, and the step that ends it.
+
+    Pending-stop reconciliation fires every five seconds. Left running it
+    submits into a closed pool and logs a traceback a tick for as long as the
+    process takes to go. ``stop_strategy_module`` existed the whole time and
+    nothing called it.
+    """
+    stopped = []
+
+    class _Runtime:
+        @staticmethod
+        def stop_strategy_module():
+            stopped.append("strategy")
+
+    monkeypatch.setitem(sys.modules, "services.strategy_module.runtime", _Runtime)
+    monkeypatch.setattr(shutdown_mod, "_stop_strategy_module", _REAL["_stop_strategy_module"])
+    monkeypatch.setattr(shutdown_mod, "_remove_all_scoped_sessions", lambda: None)
+
+    shutdown_mod.shutdown_runtime()
+
+    assert stopped == ["strategy"]
+
+
+def test_no_teardown_step_waits_on_a_job_already_running(monkeypatch):
+    """A signal handler that blocks is how a stopped process stays alive.
+
+    And a live process is the only thing that can still be holding a database,
+    which is the whole of issue #2031. The square-off scheduler is the one whose
+    own entry point waits by default, so it is the one that has to opt out.
+    """
+    seen = {}
+
+    class _Squareoff:
+        @staticmethod
+        def stop_squareoff_scheduler(wait=True):
+            seen["wait"] = wait
+
+    monkeypatch.setitem(sys.modules, "sandbox.squareoff_thread", _Squareoff)
+
+    _REAL["_stop_squareoff_scheduler"]()
+
+    assert seen == {"wait": False}
+
+
+def test_an_operator_stopping_the_engine_still_waits():
+    """Only the signal path declines the wait.
+
+    An operator leaving analyze mode is not racing an exit, and the job in
+    flight is closing sandbox positions, so that caller should still wait. The
+    parameter exists solely to keep the two callers apart.
+    """
+    from sandbox.squareoff_thread import stop_squareoff_scheduler
+
+    signature = inspect.signature(stop_squareoff_scheduler)
+    assert signature.parameters["wait"].default is True
+
+
+def test_a_scheduler_module_nothing_imported_is_not_imported_to_stop_it(monkeypatch):
+    """Importing ``blueprints.chartink`` starts a scheduler at module scope.
+
+    So a teardown that imports it to ask whether it is running would start, on
+    the way out, the very thing it is there to stop.
+    """
+    monkeypatch.delitem(sys.modules, "blueprints.chartink", raising=False)
+
+    _REAL["_stop_chartink_scheduler"]()
+
+    assert "blueprints.chartink" not in sys.modules
+
+
+def test_the_websocket_proxy_is_stopped_before_the_interpreter_joins_threads(monkeypatch):
+    """The step that ends the hang.
+
+    The dev server runs the proxy on a real OS thread, and until something
+    clears its running flag the thread has no reason to return. Its cleanup was
+    reachable only through ``atexit``, which runs after the interpreter has
+    joined non-daemon threads, and through the proxy's own SIGINT handler,
+    which this module's handler is registered later than and replaced.
+    """
+    cleaned = []
+
+    class _Integration:
+        @staticmethod
+        def cleanup_websocket_server():
+            cleaned.append("proxy")
+
+    monkeypatch.setitem(sys.modules, "websocket_proxy.app_integration", _Integration)
+
+    _REAL["_stop_websocket_proxy"]()
+
+    assert cleaned == ["proxy"]
+
+
+def test_the_proxy_thread_is_not_what_the_interpreter_waits_on():
+    """A non-daemon proxy thread plus atexit cleanup is a deadlock by build.
+
+    ``atexit`` runs only once every non-daemon thread has been joined, so the
+    cleanup that releases the proxy thread sat behind the wait for that thread.
+    Pinned on the source because the property lives in a thread constructor no
+    unit test can reach without binding a real websocket port.
+    """
+    from websocket_proxy import app_integration
+
+    source = inspect.getsource(app_integration.start_websocket_server)
+    assert "daemon=True" in source
+    assert "daemon=False" not in source
+
+
+def test_the_health_collector_notices_a_stop_without_waiting_out_its_interval():
+    """The collector slept a whole sampling interval in one call.
+
+    ``stop_health_collector`` clears the flag and joins for five seconds, and a
+    ``time.sleep`` already running cannot see the flag. With the default ten
+    second interval the join therefore timed out every time, and Ctrl+C paid
+    five seconds before the rest of the teardown had even begun. Sliced, the
+    flag lands within a tenth of a second.
+    """
+    from utils import health_monitor
+
+    elapsed = []
+
+    def _sleeper():
+        started = time.perf_counter()
+        health_monitor._sleep(10.0)
+        elapsed.append(time.perf_counter() - started)
+
+    health_monitor._collector_running = True
+    try:
+        thread = threading.Thread(target=_sleeper, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        health_monitor._collector_running = False
+        thread.join(timeout=5.0)
+    finally:
+        health_monitor._collector_running = False
+
+    assert elapsed, "the sleep never returned"
+    assert elapsed[0] < 2.0, f"took {elapsed[0]:.2f}s to notice the stop"
 
 
 def test_installing_handlers_is_idempotent(monkeypatch):

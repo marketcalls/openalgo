@@ -1250,11 +1250,14 @@ if __name__ == "__main__":
             flush=True,
         )
 
-    # Ctrl+C must stop the health collector and release this thread's sessions
-    # before the interpreter goes, or the instance keeps writing to health.db
-    # and the next start contends with a live writer rather than a stale lock
-    # (issue #2031). Only in the process that actually serves: the reloader
-    # parent has no collector to stop, and under gunicorn this block never runs.
+    # Ctrl+C must stop every background writer and release this thread's
+    # sessions before the interpreter goes, or the instance keeps writing to
+    # health.db and the next start contends with a live writer rather than a
+    # stale lock (issue #2031). The schedulers count as writers: left running
+    # they keep firing while the interpreter tears down, into thread pools it
+    # has already closed, which is a traceback a tick until the process goes.
+    # Only in the process that actually serves: the reloader parent has none of
+    # this to stop, and under gunicorn this block never runs.
     if not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         from utils.shutdown import install_signal_handlers
 
