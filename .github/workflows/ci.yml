@@ -103,6 +103,8 @@ jobs:
         run: node .claude/skills/chart-indicator/generate-api-index.mjs --check
       - name: every export and capability is documented and demonstrated
         run: node .claude/skills/chart-indicator/coverage.mjs
+      - name: drawing menu metadata matches the pinned package
+        run: node frontend/scripts/generate-drawing-tools.mjs --check
 
   # Frontend build (includes TypeScript check)
   # Matrixed across the LTS majors declared in frontend/package.json engines.

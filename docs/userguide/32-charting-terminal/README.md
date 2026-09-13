@@ -166,6 +166,12 @@ Pick a tool from the left rail. A group button re-arms whatever you last used
 from that group; the small corner wedge opens the full list without changing the
 armed tool.
 
+The terminal exposes all 85 drawing tools from openalgo-charts 2.2.0. Channels
+include regression and pitchfork variants; Fibonacci and Gann include fans,
+arcs, circles and squares. Patterns include XABCD, Elliott waves and harmonic
+patterns with measured ratios. Geometric studies include tessellation and
+wavefronts. Use the scrollable group menus to reach the complete catalogue.
+
 Two controls change how the tools behave:
 
 - **Magnet** snaps an anchor to the nearest open, high, low or close.
@@ -177,7 +183,12 @@ Two controls change how the tools behave:
 Select a drawing to get a floating bar with colour, width, dash, lock, delete
 and, on text tools, an editor. Double-click a text drawing to reopen its editor.
 
-Drawings are saved per pane and survive a reload.
+Notes, balloons, comments, signposts and price notes use the same text editor.
+For a Table drawing, separate columns with `|` and insert rows with
+`Shift+Enter`; the first row supplies the headers. Press Enter to apply.
+
+Drawings are saved per pane and survive a reload. Existing saved tool IDs and
+anchor meanings are preserved by the upgrade.
 
 ## Pointer and Touch Navigation
 

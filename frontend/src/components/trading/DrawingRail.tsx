@@ -4,7 +4,7 @@
  * Purely additive: the pane's existing trading controls (symbol, timeframe,
  * chart type, product, qty, right-click order entry) are untouched. A group
  * button opens a flyout of its tools; a plain click re-arms the last tool used
- * in that group, which is what makes a 40-tool set usable from eight buttons.
+ * in that group, keeping the expanded catalogue reachable from compact groups.
  */
 import { useEffect, useRef, useState } from 'react'
 import {

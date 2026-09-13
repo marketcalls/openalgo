@@ -6,6 +6,23 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Changed
+
+- Upgrade `/trading` to openalgo-charts 2.2.0 and expose all 85 drawing tools,
+  including advanced channels, pitchforks, Fibonacci and Gann geometry,
+  wavefronts and manual patterns. Saved drawing IDs and version 2 documents
+  remain compatible.
+- Drawing menu labels and glyphs follow the installed package through generated
+  metadata, keeping the drawing renderer lazy. Registry checks catch omitted
+  tools and stale metadata during future upgrades.
+- Notes, balloons, comments, signposts, price notes and tables use the existing
+  content editor. Tables explain column separators and multiline row entry.
+  Font colours reach the rendered letters; content edits preserve table grids
+  and theme defaults. Editors show only controls supported by each tool.
+- Refresh the custom chart indicator skill and generated API index for 2.2.0.
+
 ## [2.0.2.4] - 2026-09-11
 
 ### Charting Profiles and Broker Correctness Release

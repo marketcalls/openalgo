@@ -1,14 +1,5 @@
-/**
- * Settings for a text-bearing drawing (text, callout, price label).
- *
- * The chart engine renders every one of these style keys but ships no DOM, so
- * the form is the host's. It opens as soon as one of those tools is placed — an
- * empty text box on a chart is not useful — and again from the style bar's T
- * button to edit an existing one.
- *
- * Background and border are **off** unless the drawing already has them: text
- * dropped on a chart should be the words, not a filled plate.
- */
+/** Edit drawing content with only the controls supported by its published schema. */
+import { DRAW_TOOL_METADATA } from '@/lib/trading/drawingToolMetadata'
 import { useEffect, useRef, useState } from 'react'
 import type { DrawTextStyle } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
@@ -24,12 +15,6 @@ interface Props {
   req: TextRequest | null
   onSubmit(id: string, value: DrawTextStyle): void
   onClose(): void
-}
-
-const TITLES: Record<string, string> = {
-  text: 'Text',
-  callout: 'Callout',
-  'price-label': 'Price label',
 }
 
 const SIZES = [10, 11, 12, 14, 16, 20, 24, 28, 32, 40]
@@ -51,6 +36,9 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
   }, [req])
 
   if (!req || !v) return null
+
+  const fields = DRAW_TOOL_METADATA[req.tool]?.fields ?? []
+  const supports = (field: string) => fields.includes(`text.${field}`)
 
   const set = <K extends keyof DrawTextStyle>(k: K, val: DrawTextStyle[K]) =>
     setV((p) => (p ? { ...p, [k]: val } : p))
@@ -79,7 +67,7 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
       <div className="w-80 rounded-lg border bg-popover shadow-2xl">
         <div className="flex items-center justify-between border-b px-4 py-2.5">
           <h3 className="text-[15px] font-semibold tracking-tight">
-            {TITLES[req.tool] ?? 'Text'}
+            {DRAW_TOOL_METADATA[req.tool]?.name ?? 'Text'}
           </h3>
           <button
             type="button"
@@ -87,7 +75,15 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
             aria-label="Close"
             className="-mr-1 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <path d="M6 6l12 12M18 6L6 18" />
             </svg>
           </button>
@@ -111,7 +107,9 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
                 className="h-7 w-[68px] appearance-none rounded border border-border bg-background pl-2 pr-6 text-[13px] outline-none transition-colors hover:bg-accent focus:border-primary"
               >
                 {SIZES.map((n) => (
-                  <option key={n} value={n}>{n}</option>
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
                 ))}
               </select>
               <svg
@@ -132,7 +130,11 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
               aria-label="Bold"
               aria-pressed={v.bold}
               onClick={() => set('bold', !v.bold)}
-              className={cn(tog, 'font-bold', v.bold && 'border-primary/50 bg-primary/15 text-primary')}
+              className={cn(
+                tog,
+                'font-bold',
+                v.bold && 'border-primary/50 bg-primary/15 text-primary'
+              )}
             >
               B
             </button>
@@ -141,12 +143,22 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
               aria-label="Italic"
               aria-pressed={v.italic}
               onClick={() => set('italic', !v.italic)}
-              className={cn(tog, 'italic', v.italic && 'border-primary/50 bg-primary/15 text-primary')}
+              className={cn(
+                tog,
+                'italic',
+                v.italic && 'border-primary/50 bg-primary/15 text-primary'
+              )}
             >
               I
             </button>
           </div>
 
+          {req.tool === 'table' && (
+            <p className="text-xs text-muted-foreground">
+              Separate columns with | and use Shift+Enter for a new row. The first row is the
+              header.
+            </p>
+          )}
           <textarea
             ref={ref}
             value={v.text}
@@ -167,36 +179,44 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
 
           {/* Each toggle owns its colour, which stays visible but inert while
               the toggle is off — so its value survives being switched off. */}
-          <label className="flex items-center gap-2 text-[13px]">
-            <TickBox checked={v.background} onChange={(next) => set('background', next)} />
-            <span className="flex-1">Background</span>
-            <input
-              type="color"
-              value={v.backgroundColor}
-              onChange={(e) => set('backgroundColor', e.target.value)}
-              aria-label="Background colour"
-              disabled={!v.background}
-              className={cn(swatch, !v.background && 'opacity-40')}
-            />
-          </label>
+          {supports('backgroundColor') && (
+            <label className="flex items-center gap-2 text-[13px]">
+              {supports('background') && (
+                <TickBox checked={v.background} onChange={(next) => set('background', next)} />
+              )}
+              <span className="flex-1">Background</span>
+              <input
+                type="color"
+                value={v.backgroundColor}
+                onChange={(e) => set('backgroundColor', e.target.value)}
+                aria-label="Background colour"
+                disabled={!v.background}
+                className={cn(swatch, !v.background && 'opacity-40')}
+              />
+            </label>
+          )}
 
-          <label className="flex items-center gap-2 text-[13px]">
-            <TickBox checked={v.border} onChange={(next) => set('border', next)} />
-            <span className="flex-1">Border</span>
-            <input
-              type="color"
-              value={v.borderColor}
-              onChange={(e) => set('borderColor', e.target.value)}
-              aria-label="Border colour"
-              disabled={!v.border}
-              className={cn(swatch, !v.border && 'opacity-40')}
-            />
-          </label>
+          {supports('border') && (
+            <label className="flex items-center gap-2 text-[13px]">
+              <TickBox checked={v.border} onChange={(next) => set('border', next)} />
+              <span className="flex-1">Border</span>
+              <input
+                type="color"
+                value={v.borderColor}
+                onChange={(e) => set('borderColor', e.target.value)}
+                aria-label="Border colour"
+                disabled={!v.border}
+                className={cn(swatch, !v.border && 'opacity-40')}
+              />
+            </label>
+          )}
 
-          <label className="flex items-center gap-2 text-[13px]">
-            <TickBox checked={v.wrap} onChange={(next) => set('wrap', next)} />
-            <span className="flex-1">Text wrap</span>
-          </label>
+          {supports('wrap') && (
+            <label className="flex items-center gap-2 text-[13px]">
+              <TickBox checked={v.wrap} onChange={(next) => set('wrap', next)} />
+              <span className="flex-1">Text wrap</span>
+            </label>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 border-t px-4 py-3">

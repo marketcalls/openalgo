@@ -59,6 +59,12 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.2.0: hosts can offer 85 drawing tools.** The draw tier adds channels,
+  pitchforks, Fibonacci and Gann geometry, wavefronts and manual patterns.
+  `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS` and `PATTERN_DRAWING_TOOLS`
+  belong to `openalgo-charts/draw`; they are not part of the custom indicator's
+  API object. The indicator descriptor contract and its 102 built-ins are
+  unchanged. Drawing documents retain version 2 and existing tool IDs.
 - **2.1.9: chart hosts gain built-in branding and
   an optional text watermark.** `ChartOptions.branding` defaults to the
   OpenAlgo mark, while `ChartOptions.watermark` defaults off. Hosts can update

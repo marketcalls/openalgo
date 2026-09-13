@@ -111,6 +111,7 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
+import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
@@ -291,7 +292,40 @@ export interface BrandingLink {
 }
 
 /** Tools whose content is typed rather than dragged. */
-const TEXT_TOOLS = new Set(['text', 'callout', 'price-label'])
+const TEXT_TOOLS = new Set(Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text))
+
+/** The colour forms emitted by the chart palette and the host token rasterizer. */
+function drawingRgb(color: string): number[] | null {
+  const value = color.trim()
+  let rgb: number[] | null = null
+  if (/^#[0-9a-f]{3,4}$/i.test(value)) {
+    rgb = [...value.slice(1, 4)].map((channel) => parseInt(channel + channel, 16))
+  } else if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
+    rgb = [1, 3, 5].map((offset) => parseInt(value.slice(offset, offset + 2), 16))
+  } else {
+    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(value)
+    if (match) rgb = match.slice(1, 4).map(Number)
+  }
+  return rgb
+}
+
+/** Native colour inputs require hex even when the canvas theme uses rgb(). */
+function drawingColorInput(color: string): string {
+  const rgb = drawingRgb(color)
+  return rgb ? `#${rgb.map(channel => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}` : '#000000'
+}
+
+/** Match the renderer's automatic plate text while preserving an unset override. */
+function drawingTextContrast(background: string): string {
+  const rgb = drawingRgb(background)
+  if (!rgb) return '#10131a'
+  const [r, g, b] = rgb.map((channel) => {
+    const value = channel / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45 ? '#10131a' : '#ffffff'
+}
+
 /** The engine's font size for drawing text that carries none, in media px. */
 const DRAWING_TEXT_PX = 12
 
@@ -2098,27 +2132,27 @@ export class TradingTerminal {
     const d = this.draw?.get(id)
     if (!d) return null
     const t: Partial<DrawingText> = d.text ?? {}
-    // The colour is the drawing's own: the engine paints text in `style.color`
-    // unless the text carries one, and this dialog writes the drawing's, so the
-    // style bar's swatch and this field always agree.
-    const color = t.color ?? d.style.color ?? '#e4e8f4'
+    const theme = this.chart?.theme()
+    const lineColor = d.style.color ?? theme?.lineColor ?? '#4f8cff'
+    const plate = d.tool !== 'text' && d.tool !== 'table'
+    const backgroundColor = t.backgroundColor ?? (plate ? lineColor
+      : d.tool === 'table' || t.background === true ? theme?.background ?? '#ffffff' : '#434651')
+    const plateFill = d.tool === 'callout' || d.tool === 'price-label' ? lineColor : backgroundColor
+    const color = t.color ?? (plate ? drawingTextContrast(plateFill) : lineColor)
     return {
       text: t.value ?? '',
-      color,
+      color: drawingColorInput(color),
       // Unset means the tool's own size, which is what the engine paints it at
       // (a price label is 12px, the text tool 14px). Seeding the dialog with a
       // host constant instead would enlarge a label whose caption alone was
       // edited.
-      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? DRAWING_TEXT_PX,
+      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
       bold: t.bold === true,
       italic: t.italic === true,
-      background: t.background === true,
-      // Never the chart's own background: a plate in that colour is invisible,
-      // which reads as "Background does nothing". A neutral grey shows on both
-      // the dark and light themes.
-      backgroundColor: t.backgroundColor ?? '#434651',
-      border: t.border === true,
-      borderColor: t.borderColor ?? color,
+      background: d.tool !== 'text' || t.background === true,
+      backgroundColor: drawingColorInput(backgroundColor),
+      border: d.tool === 'table' ? t.border !== false : t.border === true,
+      borderColor: drawingColorInput(t.borderColor ?? lineColor),
       wrap: t.wrap === true,
     }
   }
@@ -2135,20 +2169,24 @@ export class TradingTerminal {
       this.afterDrawChange()
       return
     }
-    this.draw.update(id, {
-      style: { color: v.color },
-      text: {
-        value: trimmed,
-        fontSize: v.fontSize,
-        bold: v.bold,
-        italic: v.italic,
-        background: v.background,
-        backgroundColor: v.backgroundColor,
-        border: v.border,
-        borderColor: v.borderColor,
-        wrap: v.wrap,
-      },
-    })
+    const initial = this.drawTextStyle(id)
+    if (!initial) return
+    // Preserve absent overrides so content edits retain renderer defaults and
+    // continue following future theme changes. Font colour belongs to text.
+    const text: DrawingText = { value: trimmed }
+    if (v.color !== initial.color) text.color = v.color
+    if (v.fontSize !== initial.fontSize) text.fontSize = v.fontSize
+    if (v.bold !== initial.bold) text.bold = v.bold
+    if (v.italic !== initial.italic) text.italic = v.italic
+    if (v.background !== initial.background) {
+      text.background = v.background
+      if (v.background) text.backgroundColor = v.backgroundColor
+    }
+    if (v.backgroundColor !== initial.backgroundColor) text.backgroundColor = v.backgroundColor
+    if (v.border !== initial.border) text.border = v.border
+    if (v.borderColor !== initial.borderColor) text.borderColor = v.borderColor
+    if (v.wrap !== initial.wrap) text.wrap = v.wrap
+    this.draw.update(id, { text })
     this.afterDrawChange()
   }
 
