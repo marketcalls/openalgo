@@ -8,6 +8,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from database.settings_db import get_security_settings, set_security_settings
 from database.traffic_db import Error404Tracker, InvalidAPIKeyTracker, IPBan, logs_session
 from limiter import limiter
+from utils.ip_helper import get_real_ip
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,21 @@ def ban_ip():
         if ip_address in ["127.0.0.1", "::1", "localhost"]:
             return jsonify({"error": "Cannot ban localhost"}), 400
 
+        # Prevent banning the address this request itself arrived from. Behind
+        # Docker or a reverse proxy every visitor shares the gateway address,
+        # so banning it shuts out the operator along with the bot.
+        if ip_address == get_real_ip():
+            return jsonify(
+                {
+                    "error": (
+                        f"Cannot ban {ip_address} - your own connection comes from it, "
+                        "so banning it would lock you out. In Docker or behind a proxy "
+                        "every visitor looks like this one address: set "
+                        "TRUST_PROXY_HEADERS to TRUE in .env to see the real ones."
+                    )
+                }
+            ), 400
+
         success = IPBan.ban_ip(
             ip_address=ip_address,
             reason=reason,
@@ -237,8 +253,9 @@ def ban_host():
             ), 404
 
         banned_count = 0
+        own_ip = get_real_ip()
         for log in matching_logs:
-            if log.client_ip and log.client_ip not in ["127.0.0.1", "::1"]:
+            if log.client_ip and log.client_ip not in ["127.0.0.1", "::1", own_ip]:
                 success = IPBan.ban_ip(
                     ip_address=log.client_ip,
                     reason=f"Host ban: {host} - {reason}",
