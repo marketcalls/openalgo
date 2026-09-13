@@ -33,10 +33,14 @@ describe('RightRail', () => {
     expect(screen.getByRole('button', { name: 'Option chain' })).toBeInTheDocument()
   })
 
-  it('opens Objects from a visible text label', async () => {
+  it('opens Objects from a glyph, not a word down the rail', async () => {
     const onSelect = rail()
     const button = screen.getByRole('button', { name: 'Objects' })
-    expect(button).toHaveTextContent('Objects')
+    // The rail is glyphs in identical 32px boxes. Spelling this one out made
+    // its button twice the height of the three beside it, so the name reaches
+    // a reader through the button and the hover tip instead of the rail.
+    expect(button.textContent).toBe('')
+    expect(button.querySelector('svg')).not.toBeNull()
 
     await userEvent.click(button)
     expect(onSelect).toHaveBeenCalledWith('objects')

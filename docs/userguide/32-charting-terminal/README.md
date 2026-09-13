@@ -210,11 +210,11 @@ chart and trading controls.
 
 ## Objects Panel
 
-The text-labelled **Objects** control on the right rail opens an inventory for
-the active chart pane. Click anywhere in a pane, including its toolbar, to make
-that pane the panel's target. The panel lists the protected price source,
-indicator instances, drawings and an active session profile. Search filters the
-list by object name, kind or source id.
+The **Objects** control on the right rail opens an inventory for the active
+chart pane. Click anywhere in a pane, including its toolbar, to make that pane
+the panel's target. The panel lists the protected price source, indicator
+instances, drawings and an active session profile. Search filters the list by
+object name, kind or source id.
 
 Each row offers only actions that object supports. Indicators can be selected,
 shown or hidden, configured and removed. Drawings can also be locked and focused;

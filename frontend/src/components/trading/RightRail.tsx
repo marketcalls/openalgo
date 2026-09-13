@@ -8,19 +8,24 @@
  * closes it.
  */
 
-import { Bot, List, Table2 } from 'lucide-react'
+import { Bot, List, Shapes, Table2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
 
 const PANELS = [
-  // A plain list and a table. Nothing here is a metaphor: the watchlist is a
-  // list of instruments and the option chain is a table of strikes. The
-  // assistant is the one thing on the rail that is not a view of the market,
-  // so it is last rather than wedged between two that are.
+  // Nothing here is a metaphor: the watchlist is a list of instruments, the
+  // option chain is a table of strikes, and the objects panel is the shapes
+  // drawn on the chart. The assistant is the one thing on the rail that is
+  // not a view of the market, so it is last rather than wedged between two
+  // that are.
+  //
+  // Every panel carries a glyph. Objects spelled its label down the rail
+  // instead, which made one button twice the height of the three beside it
+  // and turned a row of icons into a row with a word in it.
   { id: 'watchlist', label: 'Watchlist', icon: List },
   { id: 'options', label: 'Option chain', icon: Table2 },
-  { id: 'objects', label: 'Objects', text: true },
+  { id: 'objects', label: 'Objects', icon: Shapes },
   { id: 'agent', label: 'Assistant', icon: Bot },
 ] as const
 
@@ -70,9 +75,7 @@ export function RightRail({ active, onSelect }: Props) {
 
   return (
     <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 no-scrollbar overflow-y-auto border-l bg-background/40 py-1">
-      {PANELS.map((panel) => {
-        const { id, label } = panel
-        const Icon = 'icon' in panel ? panel.icon : null
+      {PANELS.map(({ id, label, icon: Icon }) => {
         const isOpen = active === id
         return (
           <div key={id} className="group relative">
@@ -85,28 +88,14 @@ export function RightRail({ active, onSelect }: Props) {
               // only way back to a full-width chart, so the button that opened
               // a panel has to be the button that puts it away.
               onClick={() => onSelect(isOpen ? null : id)}
-              className={cn(
-                RAIL_BTN,
-                'text-[11px]',
-                Icon === null && 'h-[68px]',
-                isOpen && RAIL_BTN_ON
-              )}
+              className={cn(RAIL_BTN, isOpen && RAIL_BTN_ON)}
               aria-label={label}
               aria-expanded={isOpen}
               // Only while the panel exists. Pointing aria-controls at an id
               // that is not in the document is worse than omitting it.
               aria-controls={isOpen ? `oa-panel-${id}` : undefined}
             >
-              {Icon ? (
-                <Icon className="h-[18px] w-[18px]" strokeWidth={RAIL_ICON_STROKE} />
-              ) : (
-                <span
-                  className="leading-none tracking-wide"
-                  style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-                >
-                  {label}
-                </span>
-              )}
+              <Icon className="h-[18px] w-[18px]" strokeWidth={RAIL_ICON_STROKE} />
             </button>
             {/* Opens left: this rail is against the viewport edge, so a tip
                 opening right would be clipped. */}
