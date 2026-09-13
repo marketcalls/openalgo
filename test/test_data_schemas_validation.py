@@ -83,3 +83,21 @@ class TestValidateOptionOffset:
     def test_invalid_option_offset(self, invalid_offset: str):
         with pytest.raises(ValidationError):
             validate_option_offset(invalid_offset)
+
+    @pytest.mark.parametrize(
+        "non_string_offset",
+        [
+            None,
+            50,
+            1.5,
+            ["ITM1"],
+            {"offset": "ATM"},
+        ],
+    )
+    def test_non_string_option_offset(self, non_string_offset):
+        with pytest.raises(ValidationError):
+            validate_option_offset(non_string_offset)
+
+    def test_whitespace_only_option_offset(self):
+        with pytest.raises(ValidationError):
+            validate_option_offset("   ")
