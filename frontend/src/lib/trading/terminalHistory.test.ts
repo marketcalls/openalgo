@@ -402,14 +402,25 @@ describe('terminal listener ownership', () => {
     state.buildChart()
     const commit = vi.spyOn(state, 'commitReplayPick').mockImplementation(() => {})
     state.replayPicking = true
+    // Pointer identity is part of the gesture contract; MouseEvent omits it.
+    const pointer = (type: 'pointerdown' | 'pointerup') =>
+      new PointerEvent(type, {
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons: type === 'pointerdown' ? 1 : 0,
+        clientX: 10,
+        clientY: 20,
+      })
 
-    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 20 }))
-    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 10, clientY: 20 }))
+    container.dispatchEvent(pointer('pointerdown'))
+    container.dispatchEvent(pointer('pointerup'))
     expect(commit).toHaveBeenCalledOnce()
 
     terminal.destroy()
-    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 20 }))
-    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 10, clientY: 20 }))
+    container.dispatchEvent(pointer('pointerdown'))
+    container.dispatchEvent(pointer('pointerup'))
     expect(commit).toHaveBeenCalledOnce()
   })
 
