@@ -3,7 +3,7 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. It is powered by the `openalgo-charts` package: a from-scratch canvas
+it. It is powered by `openalgo-charts` 2.1.8: a from-scratch canvas
 charting engine with 17 chart types, 102 built-in indicators plus any you write
 yourself, and 51 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
@@ -155,6 +155,26 @@ Select a drawing to get a floating bar with colour, width, dash, lock, delete
 and, on text tools, an editor. Double-click a text drawing to reopen its editor.
 
 Drawings are saved per pane and survive a reload.
+
+## Pointer and Touch Navigation
+
+- Scroll vertically over the plot to zoom the time axis. Horizontal trackpad
+  input, or holding Shift while scrolling, pans through time instead.
+- A browser pinch gesture reported as Ctrl-wheel or Cmd-wheel zooms around the
+  pointer. It uses the same chart gesture on supported trackpads and browsers.
+- Scroll over a visible price axis to expand or compress that price scale around
+  the pointed price. This makes the scale manual, so it stays where you put it.
+- Drag inside the plot with a mouse or pen to pan both time and price. Touch
+  panning also moves both axes.
+
+While a price scale is automatic, its range eases as navigation brings a new
+high or low into view. A manually adjusted or fixed scale stays authoritative.
+Use **Reset chart view**, `Home` or `0` to restore the saved default bar count
+and automatic price scaling.
+
+On a narrow screen, the pane toolbar scrolls horizontally to keep its actions
+reachable. Use the drawing rail, side panels and bottom dock for the remaining
+chart and trading controls.
 
 ## Objects Panel
 

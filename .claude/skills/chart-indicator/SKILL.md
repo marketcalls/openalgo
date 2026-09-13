@@ -59,6 +59,13 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.1.8: navigation can ease automatic price ranges as it reveals new
+  extrema.** `animAutoscale` follows `animZoom` by default, while a manual scale
+  and a descriptor's fixed `range()` remain authoritative. Normalized wheel and
+  trackpad gestures and the packaged widget's responsive controls are host
+  features; they do not change a descriptor. OpenAlgo `/trading` constructs a
+  bare `Chart`, so it receives the engine gestures but keeps its own toolbar,
+  rails and panels rather than receiving `WidgetOptions.mobile` controls.
 - **2.1.7: hidden indicators remain hidden through layout restoration and style
   edits.** Reference levels now follow the instance's visibility along with its
   plots and other visuals. The new `ChartObjects` inventory also exposes an
