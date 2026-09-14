@@ -674,8 +674,13 @@ class BrokerData:
             if df.empty:
                 logger.info(f"Sandbox returned empty history for {symbol}, generating fake candles.")
 
-                # Calculate interval in seconds based on requested timeframe
-                interval_seconds = self.timeframe_map.get(interval, 300)
+                # timeframe_map holds Dhan's request codes as strings ("5" for
+                # 5m, "D" for daily). They are minutes, not seconds, and must be
+                # converted before they touch a Unix timestamp.
+                if interval == "D":
+                    interval_seconds = 24 * 60 * 60
+                else:
+                    interval_seconds = int(self.timeframe_map[interval]) * 60
 
                 # Determine number of candles to generate based on date range
                 start_dt = datetime.strptime(str(start_date), "%Y-%m-%d")
@@ -688,8 +693,8 @@ class BrokerData:
                     base_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                 else:
                     # For intraday, generate candles from market open
-                    # Calculate trading hours in seconds (9:15 AM to 3:30 PM = 6h 15m = 22500 seconds)
-                    trading_session_seconds = 6 * 60 + 15  # 375 minutes
+                    # 9:15 AM to 3:30 PM = 6h 15m = 22500 seconds
+                    trading_session_seconds = (6 * 60 + 15) * 60
                     num_candles = min(trading_session_seconds // interval_seconds, 75)
                     base_dt = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
 
@@ -697,6 +702,7 @@ class BrokerData:
                 quote_tmpl = {"ltp": 0, "open": 0, "high": 0, "low": 0, "volume": 0, "oi": 0}
 
                 # Generate candles respecting the requested interval
+                fake_candles = []
                 for i in range(num_candles):
                     candle_ts = base_ts + (i * interval_seconds)
                     realistic = self._apply_sandbox_mock_realism(
