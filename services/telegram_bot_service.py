@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from database.auth_db import get_broker_name, get_username_by_apikey
+from database.symbol import enhanced_search_symbols
 
 # Database imports
 from database.telegram_db import (
@@ -38,10 +39,164 @@ from database.telegram_db import (
     update_bot_config,
 )
 from utils import real_threading
-from utils.constants import CRYPTO_BROKERS
+from utils.constants import CRYPTO_BROKERS, VALID_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Chart types ``/chart`` accepts, including the single-letter aliases its own
+#: handler already honours. Used to tell a chart type apart from an exchange so
+#: that an argument can be omitted without shifting the ones after it.
+_CHART_TYPES = frozenset({"intraday", "i", "daily", "d", "both"})
+
+#: Order applied when a bare symbol exists on more than one exchange. Cash comes
+#: first so ``/quote RELIANCE`` keeps resolving to NSE exactly as it did before,
+#: and the index segments follow so ``/chart NIFTY`` and ``/chart SENSEX`` resolve
+#: without the user having to name a segment.
+_EXCHANGE_PREFERENCE = (
+    "NSE",
+    "BSE",
+    "NSE_INDEX",
+    "BSE_INDEX",
+    "MCX_INDEX",
+    "GLOBAL_INDEX",
+    "NFO",
+    "BFO",
+    "MCX",
+    "CDS",
+    "BCD",
+    "NCDEX",
+    "NCO",
+    "CRYPTO",
+)
+
+
+def resolve_exchange(symbol: str, default: str = "NSE") -> str:
+    """Find the exchange a bare symbol belongs to.
+
+    ``/chart NIFTY`` used to assume NSE, but NIFTY is listed on NSE_INDEX, so the
+    history call failed with a generic error. Look the symbol up instead and fall
+    back to ``default`` only when nothing matches, which keeps an unknown symbol
+    behaving as it did before.
+
+    Args:
+        symbol: Symbol as typed by the user.
+        default: Exchange to use when the symbol matches nothing.
+
+    Returns:
+        str: The resolved exchange, or ``default``.
+    """
+    symbol = (symbol or "").upper()
+    if not symbol:
+        return default
+    try:
+        matches = enhanced_search_symbols(symbol, limit=50)
+    except Exception:
+        # A lookup failure must not cost the user their chart: the old assumption
+        # is still the best guess available.
+        logger.exception("Symbol lookup failed for %s, falling back to %s", symbol, default)
+        return default
+
+    # Partial matches would pull in derivatives whose names merely start with the
+    # symbol, so only an exact listing decides the exchange.
+    exact = {(m.exchange or "").upper() for m in matches if (m.symbol or "").upper() == symbol}
+    if not exact:
+        return default
+    for candidate in _EXCHANGE_PREFERENCE:
+        if candidate in exact:
+            return candidate
+    return sorted(exact)[0]
+
+
+def parse_symbol_arguments(args: list[str]) -> tuple[dict[str, Any] | None, str | None]:
+    """Parse ``/chart`` and ``/quote`` arguments by token shape rather than position.
+
+    Positional parsing meant an optional argument could only be supplied if every
+    argument before it was, so ``/chart RELIANCE intraday 15m 10`` read "intraday"
+    as the exchange. Each token is instead matched against what it can legally be,
+    which leaves every previously working invocation parsing identically.
+
+    Args:
+        args: Raw command arguments, symbol first.
+
+    Returns:
+        tuple: ``(parsed, error)`` where ``parsed`` holds ``symbol``, ``exchange``,
+        ``chart_type``, ``interval`` and ``days`` (``None`` where not supplied),
+        and ``error`` is a user-facing message when a token cannot be placed.
+    """
+    if not args:
+        return None, "No symbol given."
+
+    parsed: dict[str, Any] = {
+        "symbol": args[0].upper(),
+        "exchange": None,
+        "chart_type": None,
+        "interval": None,
+        "days": None,
+    }
+
+    for token in args[1:]:
+        upper, lower = token.upper(), token.lower()
+        if parsed["exchange"] is None and upper in VALID_EXCHANGES:
+            parsed["exchange"] = upper
+        elif parsed["chart_type"] is None and lower in _CHART_TYPES:
+            parsed["chart_type"] = lower
+        elif parsed["days"] is None and token.isdigit():
+            # Only a run of digits reaches int(), so a stray word reports itself
+            # below instead of raising ValueError out of the handler.
+            parsed["days"] = int(token)
+        elif parsed["interval"] is None:
+            parsed["interval"] = token
+        else:
+            return None, f"Could not understand '{token}'."
+
+    if parsed["days"] is not None and parsed["days"] <= 0:
+        return None, "Days must be a positive number."
+    return parsed, None
+
+
+def history_to_dataframe(history_data: Any, symbol: str, exchange: str) -> Any | None:
+    """Convert a history response to a DataFrame, or ``None`` if it is not one.
+
+    The API returns a status dict rather than a DataFrame when the request is
+    rejected, for instance on an exchange the symbol is not listed on. That dict
+    used to reach ``pd.DataFrame()`` and raise "If using all scalar values, you
+    must pass an index", surfacing as a stack trace instead of an explanation.
+
+    Args:
+        history_data: Whatever the history call returned.
+        symbol: Symbol requested, for the log message.
+        exchange: Exchange requested, for the log message.
+
+    Returns:
+        The DataFrame, or ``None`` when there is no usable data.
+    """
+    import pandas as pd
+
+    if isinstance(history_data, pd.DataFrame):
+        if history_data.empty:
+            logger.error("No data for %s on %s", symbol, exchange)
+            return None
+        return history_data
+
+    if history_data is None:
+        logger.error("No data for %s on %s", symbol, exchange)
+        return None
+
+    if isinstance(history_data, dict):
+        message = history_data.get("message") or history_data.get("status") or "no data"
+        logger.error("History request for %s on %s was rejected: %s", symbol, exchange, message)
+        return None
+
+    try:
+        frame = pd.DataFrame(history_data)
+    except Exception:
+        logger.exception("Unusable history response for %s on %s", symbol, exchange)
+        return None
+    if frame.empty:
+        logger.error("No data for %s on %s", symbol, exchange)
+        return None
+    return frame
 
 
 class TelegramBotService:
@@ -213,19 +368,11 @@ class TelegramBotService:
                     logger.exception(f"Synchronous history fetch failed: {e}")
                     return None
 
-            # Check if we got data
-            if history_data is None or (
-                isinstance(history_data, pd.DataFrame) and history_data.empty
-            ):
-                logger.error("No data available for chart generation")
+            # The API returns a DataFrame directly with timestamp as index, but
+            # returns a status dict when it rejects the request.
+            df = history_to_dataframe(history_data, symbol, exchange)
+            if df is None:
                 return None
-
-            # The API returns a DataFrame directly with timestamp as index
-            df = (
-                history_data
-                if isinstance(history_data, pd.DataFrame)
-                else pd.DataFrame(history_data)
-            )
 
             # Reset index to get timestamp as a column
             df = df.reset_index()
@@ -386,19 +533,11 @@ class TelegramBotService:
                     logger.exception(f"Synchronous daily history fetch failed: {e}")
                     return None
 
-            # Check if we got data
-            if history_data is None or (
-                isinstance(history_data, pd.DataFrame) and history_data.empty
-            ):
-                logger.error("No data available for chart generation")
+            # The API returns a DataFrame directly with timestamp as index, but
+            # returns a status dict when it rejects the request.
+            df = history_to_dataframe(history_data, symbol, exchange)
+            if df is None:
                 return None
-
-            # The API returns a DataFrame directly with timestamp as index
-            df = (
-                history_data
-                if isinstance(history_data, pd.DataFrame)
-                else pd.DataFrame(history_data)
-            )
 
             # Reset index to get timestamp as a column
             df = df.reset_index()
@@ -1645,7 +1784,11 @@ class TelegramBotService:
         cs = self._cs(telegram_user)
 
         symbol = context.args[0].upper()
-        exchange = context.args[1].upper() if len(context.args) > 1 else "NSE"
+        exchange = context.args[1].upper() if len(context.args) > 1 else None
+        if exchange is None:
+            # `/quote NIFTY` assumed NSE, but NIFTY is listed on NSE_INDEX.
+            loop = asyncio.get_event_loop()
+            exchange = await loop.run_in_executor(None, lambda: resolve_exchange(symbol))
 
         # Get quote using SDK
         client = self._get_sdk_client(user.id)
@@ -1741,14 +1884,27 @@ class TelegramBotService:
             )
             return
 
-        # Parse arguments with defaults
-        symbol = context.args[0].upper()
-        exchange = context.args[1].upper() if len(context.args) > 1 else "NSE"
-        chart_type = (
-            context.args[2].lower() if len(context.args) > 2 else "intraday"
-        )  # Default to intraday only
-        interval = context.args[3] if len(context.args) > 3 else None
-        days = int(context.args[4]) if len(context.args) > 4 else None
+        # Parse by token shape so an argument can be omitted without shifting
+        # the ones after it.
+        parsed, error = parse_symbol_arguments(context.args)
+        if error:
+            await update.message.reply_text(
+                f"{error}\n"
+                "Usage: /chart <symbol> [exchange] [type] [interval] [days]\n"
+                "Type: intraday (default), daily, or both"
+            )
+            return
+
+        symbol = parsed["symbol"]
+        exchange = parsed["exchange"]
+        chart_type = parsed["chart_type"] or "intraday"  # Default to intraday only
+        interval = parsed["interval"]
+        days = parsed["days"]
+
+        if exchange is None:
+            # `/chart NIFTY` assumed NSE, but NIFTY is listed on NSE_INDEX.
+            loop = asyncio.get_event_loop()
+            exchange = await loop.run_in_executor(None, lambda: resolve_exchange(symbol))
 
         # Set default intervals and days based on chart type
         if chart_type in ["intraday", "i"]:
