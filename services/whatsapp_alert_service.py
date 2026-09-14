@@ -35,6 +35,31 @@ logger = get_logger(__name__)
 alert_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="whatsapp_alert")
 
 
+def _placed_nothing(order_type: str, response: dict[str, Any]) -> bool:
+    """Whether a successful smart order resulted in no order at all.
+
+    Mirrors the helper of the same name in telegram_alert_service, so the two
+    channels describe the same event the same way. See issue #2054.
+
+    Args:
+        order_type: The api_type the alert is being sent for.
+        response: The order response dict.
+
+    Returns:
+        bool: True when this is a smart order that placed nothing.
+    """
+    return (
+        order_type == "placesmartorder"
+        and response.get("status") == "success"
+        and not response.get("orderid")
+    )
+
+
+def _no_action_reason(response: dict[str, Any]) -> str:
+    """The adapter's explanation for placing no order, for a trader to read."""
+    return response.get("message") or "No order was placed."
+
+
 class WhatsAppAlertService:
     """Format order events and dispatch them to linked WhatsApp users."""
 
@@ -45,6 +70,10 @@ class WhatsAppAlertService:
         self.alert_templates = {
             "placeorder": "*Order Placed*\n{details}",
             "placesmartorder": "*Smart Order Placed*\n{details}",
+            # A smart order aims at a target position size, so placing nothing
+            # is a correct outcome and needs its own heading. Under the
+            # "Placed" heading it read as an executed order (issue #2054).
+            "placesmartorder_no_action": "*Smart Order - No Action Taken*\n{details}",
             "basketorder": "*Basket Order Executed*\n{details}",
             "splitorder": "*Split Order Executed*\n{details}",
             "optionsorder": "*Options Order Executed*\n{details}",
@@ -104,7 +133,13 @@ class WhatsAppAlertService:
                     ]
                 )
                 if response.get("status") == "success":
-                    lines.append(f"Order ID: {response.get('orderid', 'N/A')}")
+                    if response.get("orderid"):
+                        lines.append(f"Order ID: {response.get('orderid')}")
+                    else:
+                        # No order id on a success means the adapter placed
+                        # nothing on purpose. Reporting "Order ID: N/A" under
+                        # the Placed heading told the user an order had gone in.
+                        lines.append(f"Result: {_no_action_reason(response)}")
 
             elif order_type == "basketorder":
                 if response.get("status") == "success":
@@ -333,7 +368,12 @@ class WhatsAppAlertService:
                 logger.debug("WhatsApp alert: api_key did not resolve to any user")
                 return
 
-            template = self.alert_templates.get(order_type, "*Order Update*\n{details}")
+            template_key = (
+                f"{order_type}_no_action"
+                if _placed_nothing(order_type, response)
+                else order_type
+            )
+            template = self.alert_templates.get(template_key, "*Order Update*\n{details}")
             details = self.format_order_details(order_type, order_data, response)
             message = template.format(details=details)
 
