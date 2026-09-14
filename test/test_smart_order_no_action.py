@@ -53,16 +53,31 @@ def is_no_action():
     return is_no_action_response
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        NO_POSITION,
-        ALREADY_MATCHED,
-        "Positions Already Matched. No Action needed.",
-    ],
-)
+#: Every wording a shipped adapter or the sandbox actually returns with
+#: status success and no order placed. Collected by grepping broker/ and
+#: services/ rather than written from the one adapter the report came from:
+#: the wording is not uniform, and a marker set fitted to a single broker puts
+#: the others back on the defect.
+DO_NOTHING_MESSAGES = [
+    "No action needed. Position size matches current position",
+    "No action needed. Position size matches current position.",
+    "No action needed. Position already matched.",  # zerodha, hdfcsky, arrow
+    "No action needed. Position already aligned",  # iiflcapital
+    "No action needed",  # deltaexchange, ibulls, indmoney
+    "No action required",  # definedge
+    "No OpenPosition Found. Not placing Exit order.",
+    "Positions Already Matched. No Action needed.",  # sandbox, live rewrite
+]
+
+
+@pytest.mark.parametrize("message", DO_NOTHING_MESSAGES)
 def test_every_do_nothing_message_is_recognised(is_no_action, message):
-    """THE DEFECT: only the 'No action needed' wording used to count."""
+    """THE DEFECT: only "No action" counted, and only in analyze mode.
+
+    "No action required" is definedge's wording and matches none of the
+    "needed" variants, so a marker set built from the others alone would leave
+    that broker announcing a placed order for an order it never sent.
+    """
     assert is_no_action({"status": "success", "message": message}) is True
 
 
@@ -227,8 +242,36 @@ def test_markers_cover_every_message_the_adapters_emit():
     sandbox = SANDBOX_PATH.read_text(encoding="utf-8")
     assert NO_POSITION in sandbox
 
-    for message in (NO_POSITION, "Positions Already Matched. No Action needed."):
-        assert any(marker in message for marker in NO_ACTION_MARKERS), message
+    for message in DO_NOTHING_MESSAGES:
+        assert any(marker in message.lower() for marker in NO_ACTION_MARKERS), message
+
+
+def test_no_success_no_action_message_in_the_tree_is_missed():
+    """Sweeps the adapters so a new wording cannot quietly slip past.
+
+    Reads the literal returned beside a success status in every
+    place_smartorder_api, rather than trusting the list above to have stayed
+    current. A new adapter wording that no marker covers fails here, at the
+    point it is added, instead of on a trader's phone.
+    """
+    from services.place_smart_order_service import NO_ACTION_MARKERS
+
+    # Only success responses are swept. "No action required or invalid
+    # parameters" carries status error in several adapters and stays a
+    # rejection, not a no-op; test_a_failure_is_not_no_action pins that.
+    missed = []
+    for path in (REPO / "broker").rglob("order_api.py"):
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        for match in re.finditer(
+            r'"status":\s*"success",\s*"message":\s*"([^"]+)"', source
+        ):
+            message = match.group(1)
+            if "no action" not in message.lower() and "openposition" not in message.lower():
+                continue
+            if not any(marker in message.lower() for marker in NO_ACTION_MARKERS):
+                missed.append(f"{path.name}: {message}")
+
+    assert not missed, "adapter wordings no marker covers: " + "; ".join(sorted(set(missed)))
 
 
 def test_frontend_and_backend_agree_on_what_no_action_looks_like():
@@ -252,10 +295,12 @@ def test_frontend_and_backend_agree_on_what_no_action_looks_like():
     frontend_markers = set(re.findall(r"message\.includes\('([^']+)'\)", branch))
     assert frontend_markers, "the placesmartorder branch matches no message"
 
+    # The backend markers are lower-cased, since adapter wording varies in case.
     for marker in frontend_markers:
-        assert any(marker in backend or backend in marker for backend in NO_ACTION_MARKERS), (
-            f"the toast treats {marker!r} as no-action but the backend does not"
-        )
+        lowered = marker.lower()
+        assert any(
+            lowered in backend or backend in lowered for backend in NO_ACTION_MARKERS
+        ), f"the toast treats {marker!r} as no-action but the backend does not"
     assert "No OpenPosition Found" in frontend_markers
 
 
