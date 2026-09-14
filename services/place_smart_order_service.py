@@ -27,26 +27,32 @@ logger = get_logger(__name__)
 #: A smart order aims at a target position size, so the correct outcome is
 #: often no order at all. Every broker adapter reports that the same way -
 #: ``res`` is None because no API call was made, and the response carries a
-#: success status and one of two messages, chosen by whether the caller asked
-#: for a quantity:
+#: success status and a message saying why nothing was sent. The wording is not
+#: uniform across the 30-odd adapters:
 #:
 #:   "No action needed. Position size matches current position"
+#:   "No action needed. Position already matched."       (zerodha, hdfcsky, ...)
+#:   "No action needed. Position already aligned"        (iiflcapital)
+#:   "No action required"                                (definedge)
 #:   "No OpenPosition Found. Not placing Exit order."
+#:   "Positions Already Matched. No Action needed."      (sandbox, live rewrite)
 #:
-#: The sandbox produces the same pair (``services/sandbox_service.py``), as does
-#: the frontend, which already treats both as informational in
-#: ``frontend/src/hooks/useSocket.ts``.
+#: so the markers are the shortest distinguishing fragments and are matched
+#: case-insensitively. "No action" rather than "No action needed" is deliberate:
+#: definedge's wording is "required", and a marker that missed it would put that
+#: broker straight back on the defect this fixes. The sandbox produces the same
+#: shapes (``services/sandbox_service.py``), as does the frontend, which already
+#: treats them as informational in ``frontend/src/hooks/useSocket.ts``.
 #:
-#: Only the first was ever matched here. The second fell through to the failure
-#: path, so closing a position the user does not hold - clicking the red X on an
-#: empty positions page - was reported as a placed order in analyze mode and as
-#: an error in live mode. Issue #2054.
+#: Only "No action" was ever matched here, and only in analyze mode. The
+#: no-position wording fell through to the failure path, so closing a position
+#: the user does not hold - clicking the red X on an empty positions page - was
+#: reported as a placed order in analyze mode and as an error in live mode.
+#: Issue #2054.
 NO_ACTION_MARKERS = (
-    "No action needed",
-    "No OpenPosition Found",
-    # The live path rewrites the first message into this form before it reaches
-    # the frontend, and the sandbox emits it directly.
-    "Already Matched",
+    "no action",
+    "no openposition found",
+    "already matched",
 )
 
 
@@ -62,7 +68,7 @@ def is_no_action_response(response: dict[str, Any]) -> bool:
     if not isinstance(response, dict) or response.get("status") != "success":
         return False
 
-    message = response.get("message") or ""
+    message = (response.get("message") or "").lower()
     return any(marker in message for marker in NO_ACTION_MARKERS)
 
 
@@ -256,7 +262,7 @@ def place_smart_order_with_auth(
         if res is None and is_no_action_response(response_data):
             broker_message = response_data.get("message") or ""
 
-            if "No OpenPosition Found" in broker_message:
+            if "no openposition found" in broker_message.lower():
                 # Nothing to exit. Passed through as the adapter worded it, so
                 # the message names the actual cause rather than claiming the
                 # position matched a target the user never set.
