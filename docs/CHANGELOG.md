@@ -8,11 +8,48 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
-### Fixed
+## [2.0.2.5] - 2026-09-14
 
-- Restore **Time Price Opportunity** and **Session Volume Profile** in the
-  `/trading` chart-type menu. Both can be selected again, with their existing
-  settings, saved layouts, live updates and intraday interval handling.
+### Voice Agent Release
+
+29 commits since 2.0.2.4, excluding automated frontend build commits. Full
+notes: [version-2.0.2.5-released.md](releases/version-2.0.2.5-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling.
+
+### Highlights
+
+- The agent at `/agent` gains a third surface beside chat and chart: a spoken
+  one. The speech model hears and speaks and decides nothing; every answer it
+  reads out comes from the model configured at `/agent/config`, through the same
+  toolkits, the same risk guard and the same audit rows a typed question goes
+  through. No audio passes through the server.
+- Order placement by the agent is now opt-in. It shipped on, so a fresh install
+  could reach an order tool by typing a sentence with nobody having chosen that
+  (#2036).
+- The charting terminal moves from openalgo-charts 2.1.7 to 2.2.0, exposing all
+  85 drawing tools.
+- The 5paisa XTS, Tradejini and 5paisa feeds survive a full symbol book, and
+  Kotak depth payloads stop the trading chart polling REST (#2038, #2042, #2044).
+
+### Added
+
+- Voice surface on `/agent` and `/agent/config`, configured per installation
+  with the provider credential stored in the database. `Permissions-Policy`
+  relaxes `microphone` to `self` only while voice is enabled; an operator who
+  sets `PERMISSIONS_POLICY` explicitly still owns the whole string.
+- Every finalised spoken line is recorded under a `transcript` phase and
+  rendered in the thread beside the messages a delegated turn produces. The
+  first line of a session opens the thread, so a spoken-only exchange is no
+  longer unreachable once it ends.
+- A voice session with nobody speaking for three minutes hangs up, since an open
+  microphone is billed for as long as it is open. The interval is a setting.
+- The agent's spoken name defaults to Vega, chosen to sit far from an order
+  instruction phonetically. An operator's own name is left alone.
+- `upgrade/migrate_agent_voice.py` and
+  `upgrade/migrate_agent_voice_phrase_removal.py`, both idempotent and both
+  supporting `--status`.
 
 ### Changed
 
@@ -27,7 +64,80 @@ fix, live in [docs/releases](releases/).
   content editor. Tables explain column separators and multiline row entry.
   Font colours reach the rendered letters; content edits preserve table grids
   and theme defaults. Editors show only controls supported by each tool.
+- The TPO chart display defaults to letters rather than letters and blocks. A
+  stored choice is kept.
+- The Objects button on the `/trading` right rail is a glyph in the same 32px
+  box as every other panel, instead of its label spelled down the rail.
+- The spoken approval phrase is removed. An order is approved by answering a
+  full read-back, decided server-side, rather than by a configured secret word
+  that had to be remembered, was read aloud by the speech model, and was written
+  to the audit trail in plaintext.
+- Every message the voice surface can put in front of someone names the cause
+  and the next action in plain words, on the browser half too. No status codes,
+  no protocol terms. The rule is recorded in `CLAUDE.md` under Conventions.
 - Refresh the custom chart indicator skill and generated API index for 2.2.0.
+
+### Fixed
+
+- Restore **Time Price Opportunity** and **Session Volume Profile** in the
+  `/trading` chart-type menu. Both can be selected again, with their existing
+  settings, saved layouts, live updates and intraday interval handling.
+- A spoken order request resolved the contract and then announced the order
+  without calling the tool, so no pause, no approval prompt and no order, while
+  the trader had just been told one was on its way.
+- The voice surface could not draw. A spoken turn renders on screen exactly as a
+  typed one does, so withholding `render_ui` removed the half of the answer the
+  surface was designed around. `render_ui` also draws figures the operator
+  supplied in their own message, titled so they cannot be mistaken for an
+  account.
+- The thread sidebar only ever listed chat threads, making every past voice
+  conversation unreachable, and a spoken thread rendered typed turns above
+  earlier speech.
+- 5paisa XTS sent one blocking HTTP POST per symbol, so a 1000-symbol startup
+  was 1000 sequential round-trips and every reconnect replayed the book the same
+  way. Subscriptions are batched into one request per mode; every LTP and depth
+  unsubscribe had been targeting the quote feed, and the tick filter compared an
+  int against a string so it dropped every depth tick (#2042).
+- 5paisa XTS `unsubscribe()` called `disconnect()` on every invocation, so
+  dropping one symbol killed the feed for every other subscribed symbol, with
+  nothing able to bring it back (#2042).
+- Kotak dropped `ltp` from quote and depth payloads when the price was zero, and
+  suppressed the mode 2 publish entirely. The trading chart subscribes depth
+  alone for tradeable symbols, so a payload without the key read as "keep
+  polling" and nothing could ever clear the REST fallback (#2038).
+- Tradejini re-sent the complete symbol list once per symbol change, since a
+  subscribe replaces the server-side list rather than appending to it. Feed
+  syncs are coalesced into one request per feed (part of #1350, #2044).
+- The 5paisa `last_snapshot` cache was never pruned, so it grew for the life of
+  the Gunicorn worker and resurfaced stale prices on re-subscribe and across the
+  3 AM token rollover (#2044).
+- Ctrl+C on the development server printed a scheduler traceback every five
+  seconds and needed several presses. Six APScheduler instances were never
+  stopped, the websocket proxy thread was non-daemon with its cleanup registered
+  through `atexit`, and the health collector slept its whole sampling interval
+  in one call.
+- The LiteLLM pydantic serializer warning no longer prints on every `chatgpt/`
+  plan turn.
+- Replace the retired YouTube subscriber badge in the README, and sync SDK pin
+  references to 2.0.5 across the API and MCP architecture documentation (#2050).
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - the voice surface and everything that
+  followed it, including order placement made opt-in (#2036), the removal of the
+  spoken approval phrase and its audit-trail leak, spoken orders that place
+  rather than being announced, drawing from the voice surface, transcripts
+  captured and threaded, the idle hangup, the plain-language voice errors and
+  the two migrations; openalgo-charts 2.1.8, 2.1.9 and 2.2.0 with the generated
+  drawing metadata; TPO and session volume profile restored, the TPO letters
+  default and the Objects rail icon; the Ctrl+C shutdown fix; the LiteLLM
+  warning filter.
+- **@Kalaiviswa** - 5paisa XTS subscription batching and the unsubscribe
+  teardown, Kotak `ltp` in quote and depth payloads (#2038), Tradejini feed sync
+  coalescing (part of #1350) and the bounded 5paisa `last_snapshot` cache
+  (#2042, #2044).
+- **@Ayush7614** - SDK pin references synced to 2.0.5 in the documentation
+  (#2050).
 
 ## [2.0.2.4] - 2026-09-11
 
