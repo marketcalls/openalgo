@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import type { AgentChartCommand } from '@/lib/agent/stream'
+import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
 import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 
@@ -49,72 +50,6 @@ const NO_DRAW: DrawStats = {
   tool: null,
   shortcuts: {},
 }
-
-/**
- * Grid layout presets. Each preset is a
- * CSS grid: `areas` names the cells, `cells` maps each pane (in order) to a named
- * area — so a pane can span (e.g. the big left chart in "1 + 2").
- */
-interface LayoutPreset {
-  id: string
-  label: string
-  cols: string
-  rows: string
-  areas: string
-  cells: string[]
-}
-
-const LAYOUTS: LayoutPreset[] = [
-  { id: 'single', label: 'Single', cols: '1fr', rows: '1fr', areas: '"a"', cells: ['a'] },
-  {
-    id: 'cols2',
-    label: '2 columns',
-    cols: '1fr 1fr',
-    rows: '1fr',
-    areas: '"a b"',
-    cells: ['a', 'b'],
-  },
-  {
-    id: 'rows2',
-    label: '2 rows',
-    cols: '1fr',
-    rows: '1fr 1fr',
-    areas: '"a" "b"',
-    cells: ['a', 'b'],
-  },
-  {
-    id: 'oneTwo',
-    label: '1 + 2',
-    cols: '1.4fr 1fr',
-    rows: '1fr 1fr',
-    areas: '"a b" "a c"',
-    cells: ['a', 'b', 'c'],
-  },
-  {
-    id: 'grid4',
-    label: '2 × 2',
-    cols: '1fr 1fr',
-    rows: '1fr 1fr',
-    areas: '"a b" "c d"',
-    cells: ['a', 'b', 'c', 'd'],
-  },
-  {
-    id: 'grid6',
-    label: '3 × 2',
-    cols: '1fr 1fr 1fr',
-    rows: '1fr 1fr',
-    areas: '"a b c" "d e f"',
-    cells: ['a', 'b', 'c', 'd', 'e', 'f'],
-  },
-  {
-    id: 'grid8',
-    label: '4 × 2',
-    cols: '1fr 1fr 1fr 1fr',
-    rows: '1fr 1fr',
-    areas: '"a b c d" "e f g h"',
-    cells: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'],
-  },
-]
 
 const LAYOUT_KEY = 'oa-trading-layout'
 const SYNC_KEY = 'oa-trading-sync'
@@ -166,25 +101,6 @@ function readSync(): SyncState {
   } catch {
     return SYNC_DEFAULT
   }
-}
-
-/** Mini glyph that previews a layout preset (renders the actual grid arrangement). */
-function LayoutIcon({ preset, className }: { preset: LayoutPreset; className?: string }) {
-  return (
-    <span
-      className={cn('grid h-4 w-4 gap-px', className)}
-      style={{
-        gridTemplateColumns: preset.cols,
-        gridTemplateRows: preset.rows,
-        gridTemplateAreas: preset.areas,
-      }}
-      aria-hidden="true"
-    >
-      {preset.cells.map((c) => (
-        <span key={c} style={{ gridArea: c }} className="rounded-[1px] bg-current" />
-      ))}
-    </span>
-  )
 }
 
 export default function Trading() {

@@ -5,6 +5,7 @@
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
 import type { ChartObjects, LinkGroup } from 'openalgo-charts'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { GridIcon, PencilIcon, VolumeIcon } from '@/components/chart/menuIcons'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -125,15 +126,6 @@ function IndicatorIcon({ className }: { className?: string }) {
   )
 }
 
-function PencilIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M4 20.5h4L20 8.5a2.4 2.4 0 0 0-3.4-3.4L4.5 17z" />
-      <path d="M15.5 6.5 18.5 9.5" />
-    </svg>
-  )
-}
-
 /**
  * Rewind: two triangles pointing back to a bar.
  *
@@ -168,30 +160,6 @@ function UndoIcon({ className, flip }: { className?: string; flip?: boolean }) {
     >
       <path d="M9 14 4 9l5-5" />
       <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
-    </svg>
-  )
-}
-
-function VolumeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M5 20v-6M12 20V8M19 20v-9" />
-    </svg>
-  )
-}
-
-function GridIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
     </svg>
   )
 }
