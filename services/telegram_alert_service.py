@@ -39,9 +39,15 @@ def _placed_nothing(order_type: str, response: dict[str, Any]) -> bool:
     """Whether a successful smart order resulted in no order at all.
 
     A smart order targets a position size, so the adapter placing nothing is a
-    correct outcome rather than a failure, and it is the one case where a
-    success carries no order id. Read off the response shape rather than the
-    message text so this stays true whatever wording an adapter uses.
+    correct outcome rather than a failure, and the two response shapes are
+    distinct: a placed order carries an order id and no message, and a
+    no-action result carries a message and no order id. Both halves are
+    required. An order that went in but whose id the adapter failed to parse
+    has neither, and must not be announced as "no order was placed" - it falls
+    through to the unchanged heading and the old "Order ID: N/A".
+
+    Read off the shape rather than the message text, so this holds whatever
+    wording an adapter uses.
 
     Args:
         order_type: The api_type the alert is being sent for.
@@ -54,6 +60,7 @@ def _placed_nothing(order_type: str, response: dict[str, Any]) -> bool:
         order_type == "placesmartorder"
         and response.get("status") == "success"
         and not response.get("orderid")
+        and bool(response.get("message"))
     )
 
 
@@ -130,11 +137,16 @@ class TelegramAlertService:
                 if response.get("status") == "success":
                     if response.get("orderid"):
                         details.append(f"Order ID: `{response.get('orderid')}`")
-                    else:
-                        # No order id on a success means the adapter placed
-                        # nothing on purpose. Reporting "Order ID: N/A" under
-                        # the Placed heading told the user an order had gone in.
+                    elif _placed_nothing(order_type, response):
+                        # A success with a message and no order id is the
+                        # adapter reporting that it placed nothing on purpose.
+                        # "Order ID: N/A" under the Placed heading told the user
+                        # an order had gone in.
                         details.append(f"Result: {_no_action_reason(response)}")
+                    else:
+                        # Neither an id nor a reason. Something went in and the
+                        # id was lost, so say no more than the old line did.
+                        details.append("Order ID: `N/A`")
 
             elif order_type == "basketorder":
                 if response.get("status") == "success":
