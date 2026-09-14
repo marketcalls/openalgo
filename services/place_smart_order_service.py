@@ -24,6 +24,47 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+#: A smart order aims at a target position size, so the correct outcome is
+#: often no order at all. Every broker adapter reports that the same way -
+#: ``res`` is None because no API call was made, and the response carries a
+#: success status and one of two messages, chosen by whether the caller asked
+#: for a quantity:
+#:
+#:   "No action needed. Position size matches current position"
+#:   "No OpenPosition Found. Not placing Exit order."
+#:
+#: The sandbox produces the same pair (``services/sandbox_service.py``), as does
+#: the frontend, which already treats both as informational in
+#: ``frontend/src/hooks/useSocket.ts``.
+#:
+#: Only the first was ever matched here. The second fell through to the failure
+#: path, so closing a position the user does not hold - clicking the red X on an
+#: empty positions page - was reported as a placed order in analyze mode and as
+#: an error in live mode. Issue #2054.
+NO_ACTION_MARKERS = (
+    "No action needed",
+    "No OpenPosition Found",
+    # The live path rewrites the first message into this form before it reaches
+    # the frontend, and the sandbox emits it directly.
+    "Already Matched",
+)
+
+
+def is_no_action_response(response: dict[str, Any]) -> bool:
+    """Whether a smart order correctly resulted in no order being placed.
+
+    Args:
+        response: The response dict from a broker adapter or the sandbox.
+
+    Returns:
+        bool: True when the adapter reported success and placed nothing.
+    """
+    if not isinstance(response, dict) or response.get("status") != "success":
+        return False
+
+    message = response.get("message") or ""
+    return any(marker in message for marker in NO_ACTION_MARKERS)
+
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
     """Publish an analyzer error event and return the error response dict."""
@@ -163,12 +204,11 @@ def place_smart_order_with_auth(
         analyzer_request = order_request_data.copy()
         analyzer_request["api_type"] = "placesmartorder"
 
-        # Check if this is a no-action case
-        no_action = (
-            response_data.get("status") == "success"
-            and "No action" in response_data.get("message", "")
-            or "Already Matched" in response_data.get("message", "")
-        )
+        # Check if this is a no-action case. Written as one call so the two
+        # messages cannot drift apart again, and so the status check applies to
+        # every marker: as an inline expression the "and" bound tighter than the
+        # "or", which let a failed response carrying "Already Matched" through.
+        no_action = is_no_action_response(response_data)
 
         if no_action:
             bus.publish(SmartOrderNoActionEvent(
@@ -210,21 +250,28 @@ def place_smart_order_with_auth(
     try:
         res, response_data, order_id = broker_module.place_smartorder_api(order_data, auth_token)
 
-        # Handle case where position size matches current position
-        if (
-            res is None
-            and response_data.get("status") == "success"
-            and "No action needed" in response_data.get("message", "")
-        ):
-            order_response_data = {
-                "status": "success",
-                "message": "Positions Already Matched. No Action needed.",
-            }
+        # Handle the cases where the adapter placed no order on purpose. It
+        # makes no API call for either, so res is None and there is no order id
+        # to report; both are a success, not a failure.
+        if res is None and is_no_action_response(response_data):
+            broker_message = response_data.get("message") or ""
+
+            if "No OpenPosition Found" in broker_message:
+                # Nothing to exit. Passed through as the adapter worded it, so
+                # the message names the actual cause rather than claiming the
+                # position matched a target the user never set.
+                message = broker_message
+            else:
+                # Position already at the requested size. Reworded as before,
+                # which is the wording the positions page matches on.
+                message = "Positions Already Matched. No Action needed."
+
+            order_response_data = {"status": "success", "message": message}
             bus.publish(SmartOrderNoActionEvent(
                 mode="live", api_type="placesmartorder",
                 symbol=order_data.get("symbol", ""),
                 exchange=order_data.get("exchange", ""),
-                message=" Positions Already Matched. No Action needed.",
+                message=message,
                 request_data=order_request_data, response_data=order_response_data,
                 api_key=api_key,
             ))
