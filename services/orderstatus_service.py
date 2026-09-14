@@ -44,6 +44,29 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     return error_response
 
 
+def _weighted_fill_price(fills: list[dict[str, Any]]) -> float:
+    """
+    Quantity-weighted average price across an order's fills.
+
+    Falls back to the first fill's price when no fill reports a usable
+    quantity, which is what a single-row tradebook would have given anyway.
+    """
+    total_qty = 0.0
+    total_value = 0.0
+    for fill in fills:
+        try:
+            qty = float(fill.get("quantity") or 0)
+            price = float(fill.get("average_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        total_qty += qty
+        total_value += qty * price
+    if total_qty > 0:
+        return total_value / total_qty
+    first = fills[0].get("average_price")
+    return float(first) if first else 0.0
+
+
 def get_order_status_with_auth(
     status_data: dict[str, Any], auth_token: str, broker: str, original_data: dict[str, Any]
 ) -> tuple[bool, dict[str, Any], int]:
@@ -206,25 +229,19 @@ def get_order_status_with_auth(
                 trades_list = tradebook_response.get("data", [])
                 logger.debug(f"[OrderStatus] Tradebook returned {len(trades_list)} trades")
 
-                # Find matching trade by orderid and get average_price
+                # An order that filled in parts has one tradebook row per fill,
+                # all sharing its orderid. Average across every one of them,
+                # weighted by quantity: stopping at the first match reported
+                # that fill's price instead of the order's average.
                 logger.info(
                     f"[OrderStatus] Searching for OrderID {orderid} in {len(trades_list)} trades"
                 )
-                for trade_idx, trade in enumerate(trades_list):
-                    trade_orderid = str(trade.get("orderid"))
-                    # Log all trades for better debugging
-                    logger.debug(
-                        f"[OrderStatus] Trade {trade_idx + 1}: OrderID={trade_orderid}, Symbol={trade.get('symbol')}, AvgPrice={trade.get('average_price')}"
+                fills = [t for t in trades_list if str(t.get("orderid")) == str(orderid)]
+                if fills:
+                    average_price = _weighted_fill_price(fills)
+                    logger.info(
+                        f"[OrderStatus] Found {len(fills)} fill(s) for OrderID {orderid}, average_price: {average_price}"
                     )
-
-                    if trade_orderid == str(orderid):
-                        # Extract average_price from trade data
-                        avg_price_raw = trade.get("average_price", 0.0)
-                        average_price = float(avg_price_raw) if avg_price_raw else 0.0
-                        logger.info(
-                            f"[OrderStatus] Found trade for OrderID {orderid}, average_price: {average_price} (raw: {avg_price_raw})"
-                        )
-                        break
                 else:
                     logger.warning(
                         f"[OrderStatus] No trade found for OrderID {orderid} in tradebook. Available order IDs: {[str(t.get('orderid')) for t in trades_list[:5]]}"
