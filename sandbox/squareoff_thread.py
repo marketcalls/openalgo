@@ -364,9 +364,17 @@ def start_squareoff_scheduler():
             return False, f"Failed to start square-off scheduler: {str(e)}"
 
 
-def stop_squareoff_scheduler():
+def stop_squareoff_scheduler(wait: bool = True):
     """
     Stop the square-off scheduler gracefully
+
+    Args:
+        wait: Block until a square-off already running has finished. True is
+            right for an operator stopping the engine, because the job in
+            flight is closing sandbox positions. The Ctrl+C path passes
+            False: a signal handler that waits on a broker call is how a
+            stopped process stays alive, and every writer it was holding
+            keeps its database open (issue #2031).
     """
     global _scheduler
 
@@ -377,7 +385,7 @@ def stop_squareoff_scheduler():
 
         try:
             logger.info("Stopping square-off scheduler...")
-            _scheduler.shutdown(wait=True)
+            _scheduler.shutdown(wait=wait)
             _scheduler = None
             logger.info("Square-off scheduler stopped successfully")
             return True, "Square-off scheduler stopped"

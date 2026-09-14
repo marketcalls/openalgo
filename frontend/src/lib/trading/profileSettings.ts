@@ -120,7 +120,7 @@ const tpo = {
   valueAreaPercent: numeric('Value area (%)', 70, 1, 100, 'TPO calculation'),
   display: choice<'letters' | 'blocks' | 'both'>(
     'Display',
-    'both',
+    'letters',
     [
       ['letters', 'Letters'],
       ['blocks', 'Blocks'],

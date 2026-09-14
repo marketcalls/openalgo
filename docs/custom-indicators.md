@@ -211,6 +211,9 @@ arrives as `''`.
 | `calcTail(...)` | Incremental recompute for live ticks, see below |
 | `attach(ctx)` | Per-instance lifecycle for indicators with their own data |
 
+An indicator `range()` is fixed. The chart's automatic price range may ease as
+navigation reveals new values, but it does not override that fixed range.
+
 **On `calcTail`.** Without it every live tick costs a full `calc`. That is a few
 hundred microseconds over 50k bars, so it only matters for something running in a
 busy live pane. Note that if you also implement `markers`, those re-run in full

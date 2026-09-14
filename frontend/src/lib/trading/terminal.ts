@@ -25,7 +25,6 @@ import {
   DataLoadingController,
   type DataLoadingSnapshot,
   type IPrimitive,
-  LogoWatermark,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
@@ -112,14 +111,9 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
+import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
-import {
-  buildChartTheme,
-  isLightTheme,
-  mutedTradeColors,
-  resolveCssColor,
-  volumeColor,
-} from './chartTheme'
+import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
@@ -253,6 +247,8 @@ export interface TerminalCallbacks {
   onToast(msg: string, kind: ToastKind): void
   onWsState(state: string): void
   onSymbolLoaded(view: SymbolView): void
+  /** Linked branding exposed in host chrome for keyboard and assistive technology. */
+  onBrandingChange?(link: BrandingLink | null): void
   onLtp(ltp: number): void
   /** Drawing toolbar state changed (tool armed, shape added/removed, undo...). */
   onDrawChange?(stats: DrawStats): void
@@ -290,8 +286,46 @@ export interface TerminalCallbacks {
   onOrderTicket?(req: OrderTicketRequest): void
 }
 
+export interface BrandingLink {
+  href: string
+  label: string
+}
+
 /** Tools whose content is typed rather than dragged. */
-const TEXT_TOOLS = new Set(['text', 'callout', 'price-label'])
+const TEXT_TOOLS = new Set(Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text))
+
+/** The colour forms emitted by the chart palette and the host token rasterizer. */
+function drawingRgb(color: string): number[] | null {
+  const value = color.trim()
+  let rgb: number[] | null = null
+  if (/^#[0-9a-f]{3,4}$/i.test(value)) {
+    rgb = [...value.slice(1, 4)].map((channel) => parseInt(channel + channel, 16))
+  } else if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
+    rgb = [1, 3, 5].map((offset) => parseInt(value.slice(offset, offset + 2), 16))
+  } else {
+    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(value)
+    if (match) rgb = match.slice(1, 4).map(Number)
+  }
+  return rgb
+}
+
+/** Native colour inputs require hex even when the canvas theme uses rgb(). */
+function drawingColorInput(color: string): string {
+  const rgb = drawingRgb(color)
+  return rgb ? `#${rgb.map(channel => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}` : '#000000'
+}
+
+/** Match the renderer's automatic plate text while preserving an unset override. */
+function drawingTextContrast(background: string): string {
+  const rgb = drawingRgb(background)
+  if (!rgb) return '#10131a'
+  const [r, g, b] = rgb.map((channel) => {
+    const value = channel / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45 ? '#10131a' : '#ffffff'
+}
+
 /** The engine's font size for drawing text that carries none, in media px. */
 const DRAWING_TEXT_PX = 12
 
@@ -610,6 +644,7 @@ export class TradingTerminal {
   private readonly sk: string
 
   private chart: ChartInstance | null = null
+  private offBranding: (() => void) | null = null
   private price: SeriesApi | null = null
   private volume: SeriesApi | null = null
 
@@ -762,8 +797,6 @@ export class TradingTerminal {
   private replayLoadTicket = 0
   /** The price axis's autoscale state before replay forced it on. */
   private replayAutoScale = true
-  /** Held so it can be moved to whichever pane is currently at the bottom. */
-  private watermark: LogoWatermark | null = null
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
@@ -1509,6 +1542,8 @@ export class TradingTerminal {
     this.profileLayer = null
     // Snapshot drawings before the chart they live on goes away.
     this.detachDrawing()
+    this.offBranding?.()
+    this.offBranding = null
     if (this.chart) this.chart.destroy()
     // The primitives registered here belonged to the chart just destroyed.
     this.screenshotExcluded.length = 0
@@ -1570,9 +1605,12 @@ export class TradingTerminal {
         ? { symbol: this.sym.symbol, exchange: this.sym.exchange, interval: this.interval }
         : { interval: this.interval }
     )
+    this.offBranding = this.chart.on('branding:changed', () => {
+      this.cb.onBrandingChange?.(this.brandingLink())
+    })
+    this.cb.onBrandingChange?.(this.brandingLink())
     const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
     const dp = this.dp()
-    const light = isLightTheme(mode, appMode)
     const style: SeriesStyle = cfg.baseline
       ? { baseValue: this.rawBars.reduce((s, b) => s + b.close, 0) / (this.rawBars.length || 1) }
       : {}
@@ -1641,31 +1679,6 @@ export class TradingTerminal {
         : this.rawBars.length
           ? this.rawBars[this.rawBars.length - 1].close
           : null
-
-    // Mini brand mark, bottom-left. On pane 0 now that volume is an overlay
-    // there rather than a pane of its own — pane 1 only exists once an
-    // indicator asks for one, so anchoring to it would have been conditional.
-    const watermark = new LogoWatermark({
-      // The symbol on its own, not the app icon: that asset is a full-bleed
-      // plate with the mark filling under half of it and the wordmark
-      // beneath, so scaling it up scaled the padding too. This one's square
-      // viewBox is tight to the symbol, so height alone gives 32x32, and
-      // 3 of plate padding puts it in a 38x38 square.
-      src: '/images/openalgo-glyph.svg',
-      position: 'bottom-left',
-      height: 32,
-      padding: 3,
-      margin: 10,
-      opacity: 0.85,
-      // Mark alone at rest; the wording unrolls to its right on hover, so it
-      // names itself when looked at without occupying the corner always. The
-      // mark and text share one colour, so this sets both.
-      label: 'OpenAlgo Charts',
-      labelColor: light ? '#3c4354' : '#e4e8f4',
-      href: 'https://openalgo.in',
-    })
-    this.watermark = watermark
-    this.chart.addPrimitive(watermark, 0)
 
     // inline SELL · qty · BUY panel, docked top-left below the OHLC legend.
     if (!this.sym!.quoteOnly) {
@@ -1747,14 +1760,6 @@ export class TradingTerminal {
       }
     )
     this.chart.subscribeClick((id) => {
-      // The canvas cannot hold an anchor, so the mark reports the hit and the
-      // host navigates. noopener/noreferrer: the opened tab must not reach back
-      // into a page holding a broker session.
-      if (id === 'watermark') {
-        const href = watermark.href()
-        if (href) window.open(href, '_blank', 'noopener,noreferrer')
-        return
-      }
       if (id === 'trade:buy') return void this.placeFromMenu('BUY', 'MARKET')
       if (id === 'trade:sell') return void this.placeFromMenu('SELL', 'MARKET')
       if (id === 'position::close') return void this.exitPosition()
@@ -1793,9 +1798,24 @@ export class TradingTerminal {
     // Visibility changes made from the Objects panel stay with the pane on a
     // chart rebuild, just like settings and removal from the canvas legend.
     this.chart.on('objects:change', () => this.syncIndicators())
-    this.chart.on('paneRemoved', () => this.placeWatermark())
     // Scrolling back past the loaded range pages in older bars.
     this.chart.setHistoryLoader(() => void this.loadOlderHistory())
+  }
+
+  /** Safe link metadata for the active chart branding, if it supplies a destination. */
+  brandingLink(): BrandingLink | null {
+    const options = (
+      this.chart as unknown as {
+        brandingOptions?(): false | { href?: string; label?: string }
+      } | null
+    )?.brandingOptions?.()
+    if (!options || typeof options.href !== 'string' || !/^https?:\/\//i.test(options.href))
+      return null
+    const label =
+      typeof options.label === 'string' && options.label.trim()
+        ? options.label.trim()
+        : 'Chart branding'
+    return { href: options.href, label }
   }
 
   /**
@@ -2112,27 +2132,27 @@ export class TradingTerminal {
     const d = this.draw?.get(id)
     if (!d) return null
     const t: Partial<DrawingText> = d.text ?? {}
-    // The colour is the drawing's own: the engine paints text in `style.color`
-    // unless the text carries one, and this dialog writes the drawing's, so the
-    // style bar's swatch and this field always agree.
-    const color = t.color ?? d.style.color ?? '#e4e8f4'
+    const theme = this.chart?.theme()
+    const lineColor = d.style.color ?? theme?.lineColor ?? '#4f8cff'
+    const plate = d.tool !== 'text' && d.tool !== 'table'
+    const backgroundColor = t.backgroundColor ?? (plate ? lineColor
+      : d.tool === 'table' || t.background === true ? theme?.background ?? '#ffffff' : '#434651')
+    const plateFill = d.tool === 'callout' || d.tool === 'price-label' ? lineColor : backgroundColor
+    const color = t.color ?? (plate ? drawingTextContrast(plateFill) : lineColor)
     return {
       text: t.value ?? '',
-      color,
+      color: drawingColorInput(color),
       // Unset means the tool's own size, which is what the engine paints it at
       // (a price label is 12px, the text tool 14px). Seeding the dialog with a
       // host constant instead would enlarge a label whose caption alone was
       // edited.
-      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? DRAWING_TEXT_PX,
+      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
       bold: t.bold === true,
       italic: t.italic === true,
-      background: t.background === true,
-      // Never the chart's own background: a plate in that colour is invisible,
-      // which reads as "Background does nothing". A neutral grey shows on both
-      // the dark and light themes.
-      backgroundColor: t.backgroundColor ?? '#434651',
-      border: t.border === true,
-      borderColor: t.borderColor ?? color,
+      background: d.tool !== 'text' || t.background === true,
+      backgroundColor: drawingColorInput(backgroundColor),
+      border: d.tool === 'table' ? t.border !== false : t.border === true,
+      borderColor: drawingColorInput(t.borderColor ?? lineColor),
       wrap: t.wrap === true,
     }
   }
@@ -2149,20 +2169,24 @@ export class TradingTerminal {
       this.afterDrawChange()
       return
     }
-    this.draw.update(id, {
-      style: { color: v.color },
-      text: {
-        value: trimmed,
-        fontSize: v.fontSize,
-        bold: v.bold,
-        italic: v.italic,
-        background: v.background,
-        backgroundColor: v.backgroundColor,
-        border: v.border,
-        borderColor: v.borderColor,
-        wrap: v.wrap,
-      },
-    })
+    const initial = this.drawTextStyle(id)
+    if (!initial) return
+    // Preserve absent overrides so content edits retain renderer defaults and
+    // continue following future theme changes. Font colour belongs to text.
+    const text: DrawingText = { value: trimmed }
+    if (v.color !== initial.color) text.color = v.color
+    if (v.fontSize !== initial.fontSize) text.fontSize = v.fontSize
+    if (v.bold !== initial.bold) text.bold = v.bold
+    if (v.italic !== initial.italic) text.italic = v.italic
+    if (v.background !== initial.background) {
+      text.background = v.background
+      if (v.background) text.backgroundColor = v.backgroundColor
+    }
+    if (v.backgroundColor !== initial.backgroundColor) text.backgroundColor = v.backgroundColor
+    if (v.border !== initial.border) text.border = v.border
+    if (v.borderColor !== initial.borderColor) text.borderColor = v.borderColor
+    if (v.wrap !== initial.wrap) text.wrap = v.wrap
+    this.draw.update(id, { text })
     this.afterDrawChange()
   }
 
@@ -2761,24 +2785,6 @@ export class TradingTerminal {
    * two SMAs differ only by instance id, so "remove the one with this
    * indicatorId" would drop an arbitrary one of them.
    */
-  /**
-   * Keep the brand mark in the chart's bottom corner rather than pane 0's.
-   *
-   * A primitive belongs to a pane, and an oscillator that asks for its own
-   * pane pushes a new one underneath. "Bottom of pane 0" is then the middle
-   * of the chart, which is where the mark was ending up. The engine emits no
-   * event when a pane is created (only paneRemoved), so this is driven from
-   * the indicator funnel, which is the only thing that creates one here.
-   */
-  private placeWatermark(): void {
-    const mark = this.watermark
-    if (!this.chart || !mark) return
-    const bottom = this.chart.panes().length - 1
-    if (bottom < 0) return
-    this.chart.removePrimitive(mark)
-    this.chart.addPrimitive(mark, bottom)
-  }
-
   private syncIndicators(): void {
     if (!this.chart || this.applyingIndicators || this.restoringIndicatorsOn === this.chart) return
     const next = this.chart.indicators().map((i) => ({
@@ -2793,7 +2799,6 @@ export class TradingTerminal {
     const announced = this.listIndicators().map(({ id, name }) => ({ id, name }))
     if (!sameIndicatorInstances(this.announcedIndicators, announced)) {
       this.announcedIndicators = announced
-      this.placeWatermark()
       this.cb.onIndicatorsChange?.(announced)
     }
   }
@@ -4165,6 +4170,9 @@ export class TradingTerminal {
 
   destroy() {
     this.destroyed = true
+    this.offBranding?.()
+    this.offBranding = null
+    this.cb.onBrandingChange?.(null)
     document.removeEventListener('visibilitychange', this.onVisibilityChange)
     this.offData?.()
     this.offData = null

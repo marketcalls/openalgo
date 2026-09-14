@@ -49,6 +49,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from services.agent.tools import SURFACE_VOICE
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +68,7 @@ __all__ = [
     "PromptSection",
     "SURFACE_SECTIONS",
     "VISUALIZATION_SECTION",
+    "VOICE_SURFACE_SECTION",
     "TAG_ATTACHMENT",
     "TAG_CODE",
     "TAG_TOOL_RESULT",
@@ -77,6 +79,7 @@ __all__ = [
     "render_sections",
     "runtime_section",
     "sections_for",
+    "voice_surface_section",
     "with_body",
     "wrap_attachment",
     "wrap_tool_result",
@@ -894,6 +897,97 @@ a few lines.
 """,
 )
 
+
+def _shipped_voice_agent_name() -> str:
+    """The shipped value of ``voice_agent_name``, with no database access.
+
+    ``services.agent.settings`` owns that vocabulary, and its
+    ``get_voice_defaults`` is a pure read of the shipped schema, so this costs
+    no I/O and keeps the name in exactly one place rather than hardcoding a
+    second copy here. The import is deferred into the function because this
+    module is deliberately importable on its own, and because the *configured*
+    name is not this module's to fetch: it reaches :func:`voice_surface_section`
+    as an argument from the caller that already holds the settings.
+
+    Returns:
+        The shipped agent name, or :data:`ASSISTANT_NAME` if the settings module
+        cannot be read at all, which costs a persona and nothing else.
+    """
+    try:
+        from services.agent.settings import KEY_VOICE_AGENT_NAME, get_voice_defaults
+
+        return str(get_voice_defaults().get(KEY_VOICE_AGENT_NAME) or "").strip() or ASSISTANT_NAME
+    except Exception:
+        logger.exception(
+            "Voice agent name could not be read from settings; using the assistant name"
+        )
+        return ASSISTANT_NAME
+
+
+def voice_surface_section(agent_name: str | None = None) -> PromptSection:
+    """Build the spoken surface's section, named for the agent the trader addresses.
+
+    The section replaces the default surface section by key, so a caller that
+    has the operator's configuration in hand passes
+    ``settings.get_voice_config()[KEY_VOICE_AGENT_NAME]`` through
+    ``extra_sections`` and the configured name wins over the shipped one without
+    any other section moving.
+
+    Args:
+        agent_name: What the trader calls the agent on this surface. Blank or
+            None falls back to the shipped ``voice_agent_name``.
+
+    Returns:
+        A :class:`PromptSection` keyed ``surface``.
+    """
+    name = str(agent_name or "").strip() or _shipped_voice_agent_name()
+    return PromptSection(
+        key="surface",
+        title="THIS SURFACE: SPOKEN",
+        order=70,
+        body=f"""
+You are {name} here, and your answer goes two places at once: a speech model
+reads it aloud, and it also renders on the trader's screen as an ordinary
+message with its tool timeline and anything you drew. The ear and the screen
+carry different halves of it. The ear gets the conclusion; the screen keeps the
+detail, so you do not have to say the detail.
+
+- One or two sentences. A spoken paragraph is a paragraph nobody can hold in
+  their head, and the operator can already read the rest.
+- Round every number for the ear: twenty-three thousand four hundred, not
+  23,412.55. The exact figure is on screen beside you, so rounding it in speech
+  loses nothing and makes the answer hearable.
+- No markdown, no tables, no bullet lists, no headings and no code fences. None
+  of it can be spoken, and a list of eight positions read out loud is noise. Say
+  "eight positions open, the biggest is Reliance" and let the screen carry the
+  eight.
+- Say names the way a person says them out loud. "Reliance on the NSE", never
+  "NSE:RELIANCE"; "the twenty-four thousand call", never "NIFTY24000CE". No
+  colons, no slashes, no spelled-out ticker and no symbols.
+- Before a slow tool, say in a few words what you are fetching rather than
+  going quiet: "Checking the chain now." Silence sounds like a dropped call.
+- Drawing still pays here. A chart or a card lands on the screen while you
+  speak, so draw it and describe it in one line instead of reading its numbers.
+- **Act, do not announce.** Brevity is about how you say a thing, never about
+  whether you do it. If the trader asks for an order, call the order tool in
+  the same turn; saying "I'll place a buy for a hundred Reliance" and stopping
+  there places nothing, raises no approval prompt, and leaves them believing a
+  trade exists when none does. That is the worst outcome available on this
+  surface, and speaking briefly is what makes it tempting: the sentence sounds
+  like the whole job. It is not. Resolve the contract, then call the tool.
+  Describe what you did, not what you are about to do.
+
+Where this contradicts HOW TO ANSWER above, this section wins. That one is
+written for an answer that is only read.
+""",
+    )
+
+
+#: The spoken surface section carrying the shipped agent name. A run whose
+#: surface is :data:`SURFACE_VOICE` gets this much with no wiring at all; a
+#: caller holding the operator's configured name replaces it by key.
+VOICE_SURFACE_SECTION = voice_surface_section()
+
 #: Surface name to the sections it adds, in no particular order: each carries
 #: its own ``order`` weight. A surface not listed here gets the base prompt
 #: alone, which is correct behaviour rather than an error.
@@ -909,6 +1003,11 @@ SURFACE_SECTIONS: Mapping[str, tuple[PromptSection, ...]] = {
         section for section in (CHAT_SURFACE_SECTION, OPENUI_LANG_SECTION) if section.body.strip()
     ),
     "chart": (CHART_SURFACE_SECTION,),
+    # Voice shares the chat surface's toolkits but none of its output rules, so
+    # it gets its own section and not the chat one. The OpenUI reference is
+    # absent for the same reason it is absent from the chart panel: render_ui is
+    # CHAT_ONLY, and a surface is never taught a tool it does not have.
+    SURFACE_VOICE: (VOICE_SURFACE_SECTION,),
 }
 
 
@@ -993,7 +1092,7 @@ def sections_for(
     overrides a base section rather than appending a contradiction.
 
     Args:
-        surface: ``chat`` or ``chart``. An unknown surface contributes no
+        surface: ``chat``, ``chart`` or ``voice``. An unknown surface contributes no
             surface section, which is correct rather than an error.
         extra_sections: Sections a caller adds, applied last.
         override: The operator's replacement prompt. When present it replaces
@@ -1103,7 +1202,7 @@ def build_system_prompt(
     """Compose the system prompt for one run.
 
     Args:
-        surface: ``chat`` or ``chart``.
+        surface: ``chat``, ``chart`` or ``voice``.
         trading_enabled: Whether this session may place orders.
         analyzer_mode: Whether the platform analyzer toggle is on.
         now: Current time in the operator's timezone, or None to omit it.

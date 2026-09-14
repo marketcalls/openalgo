@@ -59,6 +59,28 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.2.0: hosts can offer 85 drawing tools.** The draw tier adds channels,
+  pitchforks, Fibonacci and Gann geometry, wavefronts and manual patterns.
+  `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS` and `PATTERN_DRAWING_TOOLS`
+  belong to `openalgo-charts/draw`; they are not part of the custom indicator's
+  API object. The indicator descriptor contract and its 102 built-ins are
+  unchanged. Drawing documents retain version 2 and existing tool IDs.
+- **2.1.9: chart hosts gain built-in branding and
+  an optional text watermark.** `ChartOptions.branding` defaults to the
+  OpenAlgo mark, while `ChartOptions.watermark` defaults off. Hosts can update
+  them with `setBranding` and `setWatermarkOptions`, inspect them with
+  `brandingOptions` and `watermarkOptions`, and follow branding changes through
+  `branding:changed`. Blank watermark text follows the symbol and interval from
+  `setDataContext`. The public types are `LogoWatermarkOptions`,
+  `ChartWatermarkOptions`, and `BrandingChangedEvent`. These are host APIs and
+  do not change or belong inside an indicator descriptor.
+- **2.1.8: navigation can ease automatic price ranges as it reveals new
+  extrema.** `animAutoscale` follows `animZoom` by default, while a manual scale
+  and a descriptor's fixed `range()` remain authoritative. Normalized wheel and
+  trackpad gestures and the packaged widget's responsive controls are host
+  features; they do not change a descriptor. OpenAlgo `/trading` constructs a
+  bare `Chart`, so it receives the engine gestures but keeps its own toolbar,
+  rails and panels rather than receiving `WidgetOptions.mobile` controls.
 - **2.1.7: hidden indicators remain hidden through layout restoration and style
   edits.** Reference levels now follow the instance's visibility along with its
   plots and other visuals. The new `ChartObjects` inventory also exposes an

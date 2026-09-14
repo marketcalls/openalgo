@@ -303,8 +303,10 @@ table:  (ctx) => ({ rows: [['VWAP', '123.45'], ['Side', 'Above']] })   // or nul
 ```
 
 `range` applies only when the indicator created its own pane; two indicators
-sharing a pane would otherwise fight over it. `table` is for things that are not
-a value per bar, such as a scoreboard or a seasonality matrix.
+sharing a pane would otherwise fight over it. It is a fixed range, so navigation
+and the automatic-range animation added in 2.1.8 leave it authoritative.
+`table` is for things that are not a value per bar, such as a scoreboard or a
+seasonality matrix.
 
 ## calcTail
 

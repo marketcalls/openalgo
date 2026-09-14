@@ -3,9 +3,9 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. It is powered by the `openalgo-charts` package: a from-scratch canvas
+it. It is powered by `openalgo-charts` 2.2.0: a from-scratch canvas
 charting engine with 17 chart types, 102 built-in indicators plus any you write
-yourself, and 51 drawing tools, wired to the same broker session and market-data
+yourself, and 85 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
 Everything on the page is live over the WebSocket feed. Nothing on it polls for
@@ -24,7 +24,7 @@ says so and links to `/apikey`.
 | Region | What it holds |
 |---|---|
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera |
-| Left rail | Drawing tools in eight groups, magnet, keep-armed lock, undo, redo, delete |
+| Left rail | Drawing tools in ten groups, magnet, keep-armed lock, undo, redo, delete |
 | Centre | One to eight chart panes in a grid |
 | Right panel | Watchlist, option chain, Objects, or the chart assistant |
 | Right rail | The four controls that open those panels |
@@ -33,12 +33,33 @@ says so and links to `/apikey`.
 The chart grid takes whatever the rails and panels leave. Only the right panel
 and the dock can be resized; the panes follow the layout preset you pick.
 
+## Chart Branding and Watermark
+
+Each chart shows the OpenAlgo mark in its bottom-left corner. Activate the mark
+with a completed click or tap to open the OpenAlgo site. The matching **Chart by
+OpenAlgo** link in the pane toolbar provides the same destination for keyboard
+and assistive-technology users. Dragging the mark does not activate the link.
+
+The larger text watermark is a separate, optional background label. Open
+**Chart settings**, choose **Appearance**, and use the Watermark controls:
+
+- **Show watermark** turns the watermark on. It is off by default, including
+  for panes saved before watermark support was added.
+- **Text** sets a custom label. Leave it blank to use the current symbol and
+  interval automatically.
+- **Color**, **Opacity**, and **Text size** control its appearance.
+
+Automatic text follows symbol and interval changes. Replay keeps the selected
+watermark and adds its own Replay marker, so the two meanings remain separate.
+**Reset to defaults** turns the optional watermark off again. **Cancel** leaves
+the saved settings unchanged, and **OK** applies and remembers the changes for
+that pane. PNG and SVG snapshots include the corner branding and any visible
+watermark.
+
 ## Session Profiles
 
-**Time Price Opportunity** and **Session Volume Profile** are no longer offered
-in the chart type menu. The engine still supports both, so a saved layout that
-already selects one keeps drawing it, but there is currently no way to pick one
-from the UI. The rest of this section describes how they behave when selected.
+Choose **Time Price Opportunity** or **Session Volume Profile** from the chart
+type menu in the pane toolbar. Both appear in the last group, below Line Break.
 
 Right-click the chart and open **Chart settings...**. The existing
 **Price** tab changes to the selected profile's settings. Switching back to
@@ -143,6 +164,12 @@ Pick a tool from the left rail. A group button re-arms whatever you last used
 from that group; the small corner wedge opens the full list without changing the
 armed tool.
 
+The terminal exposes all 85 drawing tools from openalgo-charts 2.2.0. Channels
+include regression and pitchfork variants; Fibonacci and Gann include fans,
+arcs, circles and squares. Patterns include XABCD, Elliott waves and harmonic
+patterns with measured ratios. Geometric studies include tessellation and
+wavefronts. Use the scrollable group menus to reach the complete catalogue.
+
 Two controls change how the tools behave:
 
 - **Magnet** snaps an anchor to the nearest open, high, low or close.
@@ -154,15 +181,40 @@ Two controls change how the tools behave:
 Select a drawing to get a floating bar with colour, width, dash, lock, delete
 and, on text tools, an editor. Double-click a text drawing to reopen its editor.
 
-Drawings are saved per pane and survive a reload.
+Notes, balloons, comments, signposts and price notes use the same text editor.
+For a Table drawing, separate columns with `|` and insert rows with
+`Shift+Enter`; the first row supplies the headers. Press Enter to apply.
+
+Drawings are saved per pane and survive a reload. Existing saved tool IDs and
+anchor meanings are preserved by the upgrade.
+
+## Pointer and Touch Navigation
+
+- Scroll vertically over the plot to zoom the time axis. Horizontal trackpad
+  input, or holding Shift while scrolling, pans through time instead.
+- A browser pinch gesture reported as Ctrl-wheel or Cmd-wheel zooms around the
+  pointer. It uses the same chart gesture on supported trackpads and browsers.
+- Scroll over a visible price axis to expand or compress that price scale around
+  the pointed price. This makes the scale manual, so it stays where you put it.
+- Drag inside the plot with a mouse or pen to pan both time and price. Touch
+  panning also moves both axes.
+
+While a price scale is automatic, its range eases as navigation brings a new
+high or low into view. A manually adjusted or fixed scale stays authoritative.
+Use **Reset chart view**, `Home` or `0` to restore the saved default bar count
+and automatic price scaling.
+
+On a narrow screen, the pane toolbar scrolls horizontally to keep its actions
+reachable. Use the drawing rail, side panels and bottom dock for the remaining
+chart and trading controls.
 
 ## Objects Panel
 
-The text-labelled **Objects** control on the right rail opens an inventory for
-the active chart pane. Click anywhere in a pane, including its toolbar, to make
-that pane the panel's target. The panel lists the protected price source,
-indicator instances, drawings and an active session profile. Search filters the
-list by object name, kind or source id.
+The **Objects** control on the right rail opens an inventory for the active
+chart pane. Click anywhere in a pane, including its toolbar, to make that pane
+the panel's target. The panel lists the protected price source, indicator
+instances, drawings and an active session profile. Search filters the list by
+object name, kind or source id.
 
 Each row offers only actions that object supports. Indicators can be selected,
 shown or hidden, configured and removed. Drawings can also be locked and focused;
@@ -274,7 +326,7 @@ It needs a model configured first, at `/agent/config`.
 Reloading the page brings back the grid layout, the pane sync settings, the open
 right panel and its width, the dock's open tab and height, the One-Click state,
 and per pane: the symbol, interval, chart type, product, indicators, drawings,
-magnet, keep-armed, grid and volume settings.
+magnet, keep-armed, grid, volume and watermark settings.
 
 Watchlists are stored on the server, so they follow you between devices.
 Everything else above is stored in the browser.

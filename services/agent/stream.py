@@ -835,9 +835,19 @@ class EventTranslator:
         """
         self._paused = True
         requirements = _requirement_payloads(event)
+        run_id = self.run_id or str(getattr(event, "run_id", "") or "")
+        # Stamps the spoken approval window. Best effort and never fatal: a run
+        # that cannot be registered simply cannot be approved by voice, and the
+        # confirmation card on screen is unaffected.
+        try:
+            from services.agent import voice as agent_voice
+
+            agent_voice.note_pause(run_id)
+        except Exception:
+            logger.exception("Could not record the pause for voice approval")
         return [
             Confirm(
-                run_id=self.run_id or str(getattr(event, "run_id", "") or ""),
+                run_id=run_id,
                 session_id=self.session_id or str(getattr(event, "session_id", "") or ""),
                 requirements=requirements,
             )

@@ -7,6 +7,12 @@ import {
 } from './profileSettings'
 
 describe('profile settings', () => {
+  it('defaults the TPO display to letters for the form, the reset and the renderer', () => {
+    expect(readProfileSettings('tpo', {}).display).toBe('letters')
+    expect(profileDefaults('tpo')['profiles.tpo.display']).toBe('letters')
+    expect(profileValues('tpo', {})['profiles.tpo.display']).toBe('letters')
+  })
+
   it('reads independent profile preferences from the same pane settings', () => {
     const stored = {
       'profiles.tpo.ticksPerRow': 40,

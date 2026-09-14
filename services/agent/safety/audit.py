@@ -42,6 +42,14 @@ logger = get_logger(__name__)
 PHASE_ATTEMPT = "attempt"
 PHASE_RESULT = "result"
 PHASE_DECISION = "decision"
+#: One line of a spoken conversation, as the speech model transcribed it.
+#:
+#: Not a tool call, which is why it has its own phase. It is recorded because
+#: what was actually said out loud in the room is the thing an operator needs
+#: afterwards, and it is not recoverable from the message list: the speech model
+#: paraphrases what it is given, so the words heard and the words the agent
+#: wrote are different records of the same turn.
+PHASE_TRANSCRIPT = "transcript"
 
 REDACTED = "[redacted]"
 
@@ -543,3 +551,31 @@ def audited(
             risk_verdict=risk_verdict,
             order_ids=call.order_ids or None,
         )
+
+
+def record_transcript(
+    role: str,
+    text: str,
+    *,
+    conversation_id: Any = None,
+    run_id: str | None = None,
+) -> int | None:
+    """Record one finalised line of a spoken conversation.
+
+    Args:
+        role: ``trader`` for the microphone, ``agent`` for what was spoken back.
+        text: The transcribed line.
+        conversation_id: The conversation it belongs to.
+        run_id: The run it belongs to, when it was part of one.
+
+    Returns:
+        The row id, or None when nothing could be written.
+    """
+    return append(
+        PHASE_TRANSCRIPT,
+        f"voice:{role}",
+        {"text": text},
+        conversation_id=conversation_id,
+        run_id=run_id,
+        ok=True,
+    )

@@ -164,13 +164,21 @@ while the sections above stayed true.
 | **2.1.5** | Drawing previews survive past the newest candle. No indicator surface changed. |
 | **2.1.6** | Tier-2 studies receive the host's symbol, exchange and interval through `dataContext`, follow source-range changes, cancel obsolete fetches and expose loading, ready, empty, unsupported and error states with retry. `supports(ctx)` lets a provider decline a context explicitly. `DataLoadingController`, `HistoryRequestPool`, `sharedHistoryRequests` and `BAR_CACHE_VERSION` also joined the core export, but they belong to chart hosts rather than indicator descriptors. |
 | **2.1.7** | Hidden indicator state survives layout restoration and plot-style edits, and reference levels follow instance visibility. The new `ChartObjects` export lets hosts inventory indicators and display their Tier-2 status, but it is host infrastructure and does not change the descriptor contract. The built-in registry remains at 102 ids. |
+| **2.1.8** | Normalized wheel and trackpad navigation, price-axis wheel scaling and eased automatic price ranges are engine behavior; manual scales and an indicator's fixed `range()` remain authoritative. Responsive mobile controls and their reduced-motion fallback belong to the packaged widget. OpenAlgo `/trading` uses a bare `Chart`, so it inherits the gestures while retaining its own controls. No descriptor or built-in-registry change. |
+| **2.1.9** | Chart hosts gain default built-in branding and an optional text watermark through `ChartOptions.branding` and `ChartOptions.watermark`. Runtime updates use `setBranding` and `setWatermarkOptions`; `brandingOptions` and `watermarkOptions` return snapshots; `branding:changed` carries `BrandingChangedEvent`; and blank watermark text follows `setDataContext`. The public option types are `LogoWatermarkOptions` and `ChartWatermarkOptions`. This is host infrastructure and does not change the descriptor contract or built-in registry. |
+| **2.2.0** | The draw tier grows to 85 tools and adds `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS` and `PATTERN_DRAWING_TOOLS`. These are host drawing descriptors, not exports on the custom indicator API object. Indicator descriptors and the 102 built-ins are unchanged; saved drawing documents remain version 2. |
 
 ## Complete export index
+
+Version 2.1.9 adds the type-only declarations and `Chart` methods
+listed above. They are absent from the generated index because a custom
+indicator receives runtime named exports, while TypeScript types and prototype
+methods are not properties of that API object.
 
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 368 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.1.7 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.2.0 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (13)

@@ -71,6 +71,11 @@ _collector_thread = None
 _collector_running = False
 _collector_lock = threading.Lock()
 
+#: Longest the loop sleeps before re-checking the stop flag, so stopping is
+#: prompt rather than waiting out a whole sampling interval. Matched to the
+#: strategy checkpoint writer, which had the same problem first.
+_STOP_CHECK_SEC = 0.1
+
 # Cached metrics for fast access (updated by background thread)
 _cached_metrics = {
     "status": "pass",
@@ -613,6 +618,22 @@ def collect_metrics():
         health_session.remove()
 
 
+def _sleep(seconds):
+    """Sleep in slices, so stopping does not wait out a sampling interval.
+
+    ``stop_health_collector`` clears the flag and joins for five seconds. A
+    single ``time.sleep(HEALTH_SAMPLE_INTERVAL)`` cannot see the flag while it
+    is running, so with the default interval of ten seconds the join timed out
+    every time and Ctrl+C paid five seconds before the rest of the teardown
+    even started.
+    """
+    remaining = seconds
+    while _collector_running and remaining > 0:
+        slice_ = min(_STOP_CHECK_SEC, remaining)
+        time.sleep(slice_)
+        remaining -= slice_
+
+
 def _collector_loop():
     """Background collector loop (daemon thread, low priority)"""
     global _collector_running
@@ -625,8 +646,9 @@ def _collector_loop():
         except Exception as e:
             logger.exception(f"Error in collector loop: {e}")
 
-        # Sleep for interval (releases GIL, zero impact on API/WebSocket)
-        time.sleep(HEALTH_SAMPLE_INTERVAL)
+        # Sliced, so a stop lands within _STOP_CHECK_SEC rather than within
+        # HEALTH_SAMPLE_INTERVAL. Still releases the GIL the same way.
+        _sleep(HEALTH_SAMPLE_INTERVAL)
 
     logger.info("Health monitoring collector stopped")
 
