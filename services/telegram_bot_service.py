@@ -1802,7 +1802,7 @@ class TelegramBotService:
         )
 
         if not response or response.get("status") != "success":
-            await update.message.reply_text(f"Failed to fetch quote for {symbol}")
+            await update.message.reply_text(f"Failed to fetch quote for {symbol} on {exchange}")
             return
 
         quote = response.get("data", {})
@@ -1962,7 +1962,9 @@ class TelegramBotService:
                         photo=charts_generated[0].media, caption=charts_generated[0].caption
                     )
             else:
-                await update.message.reply_text(f"Failed to generate charts for {symbol}")
+                await update.message.reply_text(
+                    f"Failed to generate charts for {symbol} on {exchange}"
+                )
 
         except Exception as e:
             logger.exception(f"Error generating charts: {e}")
