@@ -27,6 +27,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from restx_api.data_schemas import OptionSymbolSchema  # noqa: E402
 from services import option_symbol_service as oss  # noqa: E402
 from services.option_symbol_service import (  # noqa: E402
     VALID_OPTION_TYPES,
@@ -233,6 +234,7 @@ def stub_resolver(monkeypatch):
         return True, {"status": "success", "data": {"ltp": 23587.50}}, 200
 
     monkeypatch.setattr(oss, "get_quotes", fake_get_quotes)
+    monkeypatch.setattr(oss, "get_auth_token_broker", lambda credential: ("auth-token", "dhan"))
     monkeypatch.setattr(oss, "get_available_strikes", lambda *args, **kwargs: list(STRIKES))
     monkeypatch.setattr(
         oss,
@@ -264,12 +266,21 @@ class TestGetOptionSymbolBoundary:
         request.update(overrides)
         return request
 
+    def test_include_quotes_is_optional_and_boolean(self):
+        request = self._request()
+        request["apikey"] = request.pop("api_key")
+
+        assert OptionSymbolSchema().load(request)["include_quotes"] is False
+        request["include_quotes"] = True
+        assert OptionSymbolSchema().load(request)["include_quotes"] is True
+
     def test_actual_strikes_path_resolves_as_before(self, stub_resolver):
         success, response, status_code = get_option_symbol(**self._request())
 
         assert (success, status_code) == (True, 200)
         assert response["symbol"] == "NIFTY28OCT2523500CE"
         assert response["underlying_ltp"] == 23587.50
+        assert "quote" not in response
 
     def test_strike_int_path_resolves_as_before(self, stub_resolver):
         success, response, status_code = get_option_symbol(**self._request(strike_int=50))
@@ -318,6 +329,229 @@ class TestGetOptionSymbolBoundary:
         assert success is True
         assert response["symbol"] == "NIFTY28OCT2523450CE"
         assert stub_resolver == []
+
+    def test_include_quotes_uses_one_batch_for_underlying_and_selected_option(
+        self, stub_resolver, monkeypatch
+    ):
+        multiquote_calls = []
+
+        def fake_get_multiquotes(symbols, api_key):
+            multiquote_calls.append(symbols)
+            return (
+                True,
+                {
+                    "status": "success",
+                    "results": [
+                        {
+                            "symbol": item["symbol"],
+                            "exchange": item["exchange"],
+                            "data": {"ltp": 23587.50 if item["symbol"] == "NIFTY" else 123.45},
+                        }
+                        for item in symbols
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr(oss, "get_multiquotes", fake_get_multiquotes)
+
+        success, response, status_code = get_option_symbol(**self._request(include_quotes=True))
+
+        assert (success, status_code) == (True, 200)
+        assert response["symbol"] == "NIFTY28OCT2523500CE"
+        assert response["quote"] == {"ltp": 123.45}
+        assert stub_resolver == []
+        assert len(multiquote_calls) == 1
+        assert {item["symbol"] for item in multiquote_calls[0]} == {
+            "NIFTY",
+            "NIFTY28OCT2523400CE",
+            "NIFTY28OCT2523450CE",
+            "NIFTY28OCT2523500CE",
+            "NIFTY28OCT2523550CE",
+            "NIFTY28OCT2523600CE",
+            "NIFTY28OCT2523650CE",
+            "NIFTY28OCT2523700CE",
+            "NIFTY28OCT2523750CE",
+        }
+
+    @pytest.mark.parametrize("broker", ["fyers", "zebu"])
+    def test_include_quotes_skips_batching_for_multi_request_adapters(
+        self, stub_resolver, monkeypatch, broker
+    ):
+        candidate_strikes = list(STRIKES)
+        multiquote_calls = []
+
+        monkeypatch.setattr(oss, "get_available_strikes", lambda *args: candidate_strikes)
+        monkeypatch.setattr(oss, "get_auth_token_broker", lambda credential: ("token", broker))
+
+        def fake_get_multiquotes(symbols, api_key):
+            multiquote_calls.append(symbols)
+            assert len(symbols) == 1
+            return (
+                True,
+                {
+                    "status": "success",
+                    "results": [
+                        {
+                            "symbol": symbols[0]["symbol"],
+                            "exchange": symbols[0]["exchange"],
+                            "data": {"ltp": 123.45},
+                        }
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr(oss, "get_multiquotes", fake_get_multiquotes)
+
+        success, response, status_code = get_option_symbol(**self._request(include_quotes=True))
+
+        assert (success, status_code) == (True, 200)
+        assert response["quote"] == {"ltp": 123.45}
+        assert stub_resolver == [("NIFTY", "NSE_INDEX")]
+        assert len(multiquote_calls) == 1
+        assert multiquote_calls[0][0]["symbol"] == response["symbol"]
+
+    @pytest.mark.parametrize("invalid_option_quote", [{}, {"ltp": None}])
+    def test_include_quotes_retries_when_the_batch_quote_has_no_ltp(
+        self, stub_resolver, monkeypatch, invalid_option_quote
+    ):
+        multiquote_calls = []
+
+        def fake_get_multiquotes(symbols, api_key):
+            multiquote_calls.append(symbols)
+            is_retry = len(multiquote_calls) == 2
+            return (
+                True,
+                {
+                    "status": "success",
+                    "results": [
+                        {
+                            "symbol": item["symbol"],
+                            "exchange": item["exchange"],
+                            "data": (
+                                {"ltp": 23587.50}
+                                if item["symbol"] == "NIFTY"
+                                else {"ltp": 123.45}
+                                if is_retry
+                                else invalid_option_quote
+                            ),
+                        }
+                        for item in symbols
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr(oss, "get_multiquotes", fake_get_multiquotes)
+
+        success, response, status_code = get_option_symbol(**self._request(include_quotes=True))
+
+        assert (success, status_code) == (True, 200)
+        assert response["quote"] == {"ltp": 123.45}
+        assert len(multiquote_calls) == 2
+        assert len(multiquote_calls[1]) == 1
+
+    @pytest.mark.parametrize("invalid_option_quote", [{}, {"ltp": None}])
+    def test_include_quotes_rejects_missing_ltp_after_fallback(
+        self, stub_resolver, monkeypatch, invalid_option_quote
+    ):
+        multiquote_calls = []
+
+        def fake_get_multiquotes(symbols, api_key):
+            multiquote_calls.append(symbols)
+            return (
+                True,
+                {
+                    "status": "success",
+                    "results": [
+                        {
+                            "symbol": item["symbol"],
+                            "exchange": item["exchange"],
+                            "data": (
+                                {"ltp": 23587.50}
+                                if item["symbol"] == "NIFTY"
+                                else invalid_option_quote
+                            ),
+                        }
+                        for item in symbols
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr(oss, "get_multiquotes", fake_get_multiquotes)
+
+        success, response, status_code = get_option_symbol(**self._request(include_quotes=True))
+
+        assert (success, status_code) == (False, 500)
+        assert "usable LTP" in response["message"]
+        assert len(multiquote_calls) == 2
+
+    def test_include_quotes_with_prefetched_ltp_fetches_only_the_option(
+        self, stub_resolver, monkeypatch
+    ):
+        multiquote_calls = []
+
+        def fake_get_multiquotes(symbols, api_key):
+            multiquote_calls.append(symbols)
+            return (
+                True,
+                {
+                    "status": "success",
+                    "results": [
+                        {
+                            "symbol": symbols[0]["symbol"],
+                            "exchange": symbols[0]["exchange"],
+                            "data": {"ltp": 88.25},
+                        }
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr(oss, "get_multiquotes", fake_get_multiquotes)
+
+        success, response, status_code = get_option_symbol(
+            **self._request(underlying_ltp=23574.00, include_quotes=True)
+        )
+
+        assert (success, status_code) == (True, 200)
+        assert response["symbol"] == "NIFTY28OCT2523450CE"
+        assert response["quote"] == {"ltp": 88.25}
+        assert stub_resolver == []
+        assert multiquote_calls == [[{"symbol": "NIFTY28OCT2523450CE", "exchange": "NFO"}]]
+
+    def test_include_quotes_reuses_option_data_when_batch_lacks_underlying(
+        self, stub_resolver, monkeypatch
+    ):
+        multiquote_calls = []
+
+        def fake_get_multiquotes(symbols, api_key):
+            multiquote_calls.append(symbols)
+            return (
+                True,
+                {
+                    "status": "success",
+                    "results": [
+                        {
+                            "symbol": "NIFTY28OCT2523500CE",
+                            "exchange": "NFO",
+                            "data": {"ltp": 123.45},
+                        }
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr(oss, "get_multiquotes", fake_get_multiquotes)
+
+        success, response, status_code = get_option_symbol(**self._request(include_quotes=True))
+
+        assert (success, status_code) == (True, 200)
+        assert response["quote"] == {"ltp": 123.45}
+        assert stub_resolver == [("NIFTY", "NSE_INDEX")]
+        assert len(multiquote_calls) == 1
 
 
 class TestNoSilentPutFallback:
