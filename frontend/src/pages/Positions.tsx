@@ -952,7 +952,16 @@ export default function Positions() {
                             // squared off, with quantity 0 and its realised
                             // P&L. Those rows stay - the figure is the point -
                             // but there is nothing left to close on them.
-                            const isOpen = (position.quantity || 0) !== 0
+                            //
+                            // Coerced, not compared directly: the quantity is
+                            // typed as a number but does not always arrive as
+                            // one. Zerodha's position mapping defaults it to
+                            // the string "0", and a strict `!== 0` reads that
+                            // as an open position, which is the exact row this
+                            // guard exists to catch. calculatePnlPercent above
+                            // coerces for the same reason.
+                            const quantity = Number(position.quantity) || 0
+                            const isOpen = quantity !== 0
 
                             return (
                               <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
@@ -984,7 +993,7 @@ export default function Positions() {
                                     // short. Colouring its 0 red read as a short.
                                     !isOpen
                                       ? 'text-muted-foreground'
-                                      : position.quantity > 0
+                                      : quantity > 0
                                         ? 'text-green-600'
                                         : 'text-red-600'
                                   )}

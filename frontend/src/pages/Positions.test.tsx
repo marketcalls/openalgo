@@ -146,6 +146,26 @@ describe('Positions close button', () => {
     expect(quantityCell.className).not.toContain('text-red-600')
   })
 
+  it('treats a string zero quantity as closed, not as open', async () => {
+    // The API does not always send a number. Zerodha's position mapping
+    // defaults quantity to the string "0", and a strict `!== 0` reads that as
+    // an open position - putting the button back on the exact row this guard
+    // exists to clear.
+    await renderPositions([{ ...CLOSED_POSITION, quantity: '0' } as unknown as Position])
+
+    expect(
+      screen.queryByRole('button', { name: `Close ${CLOSED_POSITION.symbol} position` })
+    ).not.toBeInTheDocument()
+  })
+
+  it('still offers Close when a live quantity arrives as a string', async () => {
+    await renderPositions([{ ...OPEN_POSITION, quantity: '-75' } as unknown as Position])
+
+    expect(
+      screen.getByRole('button', { name: `Close ${OPEN_POSITION.symbol} position` })
+    ).toBeInTheDocument()
+  })
+
   it('disables Close All when every position is squared off', async () => {
     await renderPositions([CLOSED_POSITION])
 
