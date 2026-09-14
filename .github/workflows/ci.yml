@@ -67,6 +67,7 @@ jobs:
             test/test_graceful_shutdown.py \
             test/test_flattrade_data_silence_watchdog.py \
             test/test_requirements_parity.py \
+            test/test_telegram_chart_arguments.py \
             -v --timeout=60
 
   # Frontend linting
