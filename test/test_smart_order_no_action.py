@@ -172,6 +172,26 @@ def test_placed_nothing_only_applies_to_smart_orders(alert_service):
     assert module._placed_nothing("placesmartorder", {"status": "error"}) is False
 
 
+def test_a_lost_order_id_is_not_called_a_no_action(alert_service):
+    """A success with neither an id nor a reason must not claim nothing happened.
+
+    An adapter that returns 200 but whose order id failed to parse produces
+    exactly that shape. Announcing "No order was placed" for it would be a
+    false statement about a live order, which is worse than the vague line it
+    replaced, so the message half of the shape test is required.
+    """
+    module, _ = alert_service
+    lost_id = {"status": "success", "mode": "live"}
+
+    assert module._placed_nothing("placesmartorder", lost_id) is False
+
+    message = _rendered_alert(alert_service, lost_id)
+    assert "Smart Order Placed" in message
+    assert "No Action Taken" not in message
+    assert "No order was placed" not in message
+    assert "N/A" in message
+
+
 # ---------------------------------------------------------------------------
 # The contract with the rest of the platform
 # ---------------------------------------------------------------------------
@@ -216,17 +236,27 @@ def test_frontend_and_backend_agree_on_what_no_action_looks_like():
 
     That mismatch is what made the live case surface as "Error: No OpenPosition
     Found" rather than the informational toast the hook was written to show.
+
+    Only the placesmartorder branch is read, and only for the two markers this
+    module knows about. Scanning every `message.includes` in the hook would
+    make an unrelated toast elsewhere in the file fail this test and point the
+    blame at the backend.
     """
     from services.place_smart_order_service import NO_ACTION_MARKERS
 
     hook = USESOCKET_PATH.read_text(encoding="utf-8")
-    frontend_markers = set(re.findall(r"message\.includes\('([^']+)'\)", hook))
+    branch = hook.split("apiType === 'placesmartorder'", 1)
+    assert len(branch) == 2, "the hook no longer has a placesmartorder branch"
+    branch = branch[1].split("} else {", 1)[0]
 
-    assert "No OpenPosition Found" in frontend_markers
+    frontend_markers = set(re.findall(r"message\.includes\('([^']+)'\)", branch))
+    assert frontend_markers, "the placesmartorder branch matches no message"
+
     for marker in frontend_markers:
-        assert any(marker in backend for backend in NO_ACTION_MARKERS) or any(
-            backend in marker for backend in NO_ACTION_MARKERS
-        ), f"frontend treats {marker!r} as no-action but the backend does not"
+        assert any(marker in backend or backend in marker for backend in NO_ACTION_MARKERS), (
+            f"the toast treats {marker!r} as no-action but the backend does not"
+        )
+    assert "No OpenPosition Found" in frontend_markers
 
 
 def test_live_path_returns_success_not_a_failure():
