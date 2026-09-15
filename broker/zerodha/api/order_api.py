@@ -5,6 +5,7 @@ import threading
 import time
 import urllib.parse
 
+from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity
 from broker.zerodha.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -152,7 +153,14 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position.get("exchange") == exchange
                 and position.get("product") == product
             ):
-                net_qty = position.get("quantity", "0")
+                # Raw Kite response, so MCX quantity is a contract count.
+                # place_smartorder_api compares this against a position size
+                # given in OpenAlgo units and hands the difference to
+                # place_order_api, which converts back -- so it has to be in
+                # units here or the order is divided by the lot size twice.
+                net_qty = from_kite_quantity(
+                    position.get("quantity", "0"), tradingsymbol, exchange
+                )
                 logger.debug(f"Net Quantity {net_qty}")
                 break  # Assuming you need the first match
 
@@ -327,7 +335,15 @@ def close_all_positions(current_api_key, auth):
 
             # Determine action based on net quantity
             action = "SELL" if int(position["quantity"]) > 0 else "BUY"
-            quantity = abs(int(position["quantity"]))
+            # Same raw-response caveat as get_open_position: convert to OpenAlgo
+            # units here, because place_order_api converts back to contracts.
+            quantity = abs(
+                int(
+                    from_kite_quantity(
+                        position["quantity"], position["tradingsymbol"], position["exchange"]
+                    )
+                )
+            )
 
             # Get OA Symbol before sending to Place Order
             symbol = get_oa_symbol(position["tradingsymbol"], position["exchange"])
