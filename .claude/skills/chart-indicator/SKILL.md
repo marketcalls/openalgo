@@ -59,6 +59,16 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.3.0: charts can be arithmetic over several instruments.**
+  `openalgo-charts/transform` gains `parseExpression` and `evaluateExpression`,
+  so `/trading` can chart `NIFTY/RELIANCE`, `2*CE25000 - CE25200` or any
+  expression over any number of legs. These belong to the **transform tier**,
+  not to the API object a custom indicator module receives, so nothing about
+  writing an indicator changes. Worth knowing for one reason: a study added to
+  a computed chart runs on the folded series, whose bars have no `volume` and
+  whose high and low are a bound rather than a measurement unless the host
+  asked for close-only. Volume studies read zero there, which is honest rather
+  than broken.
 - **2.2.1: inputs can carry help text, and a plot can label its own axis.**
   Every `IndicatorInput` variant now takes an optional `tooltip`, which the
   settings dialog renders as a small focusable `?` beside the label. Put the

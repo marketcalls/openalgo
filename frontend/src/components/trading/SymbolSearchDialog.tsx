@@ -4,6 +4,38 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { isPlainSymbol, parseExpression } from 'openalgo-charts/transform'
+
+/**
+ * The operator keypad, in the order it is drawn. `1/` wraps the whole box
+ * rather than splicing at the caret, because a reciprocal of part of an
+ * expression is almost never what was meant.
+ */
+const OPERATORS = [
+  { label: '÷', insert: '/', title: 'Divide' },
+  { label: '−', insert: '-', title: 'Subtract' },
+  { label: '+', insert: '+', title: 'Add' },
+  { label: '×', insert: '*', title: 'Multiply' },
+  { label: '^', insert: '^', title: 'Exponentiation' },
+  { label: '1/', insert: '1/', title: 'Reciprocal' },
+] as const
+
+/**
+ * Is the box holding arithmetic over instruments rather than one symbol?
+ *
+ * A parse failure answers no. A half-typed `NIFTY/` arrives on every keystroke,
+ * and the ordinary search below already says when a symbol is unknown.
+ */
+function isExpression(text: string): boolean {
+  const q = text.trim()
+  if (q === '' || isPlainSymbol(q)) return false
+  try {
+    parseExpression(q)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /**
  * Symbol search modal for the /trading page.
@@ -164,6 +196,8 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
     return ['ALL', ...CHIP_ORDER.filter((c) => present.has(c))]
   }, [allExchanges])
 
+  const expression = useMemo(() => isExpression(query), [query])
+
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase()
     const base = chip === 'ALL' ? rows : rows.filter((r) => categoryOf(String(r.exchange)) === chip)
@@ -231,6 +265,13 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
       setSel((s) => Math.max(s - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
+      // Arithmetic wins over the result list: the rows below are matches for
+      // the last leg the user typed, and loading one of those would silently
+      // discard the expression they built.
+      if (expression) {
+        pick({ symbol: query.trim(), exchange: '', name: 'Computed chart', expression: true })
+        return
+      }
       const row = filtered[sel]
       if (row) pick(row)
     }
@@ -252,10 +293,44 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search symbol…"
+            placeholder="Search symbol, or build an expression…"
             className="w-full bg-transparent text-base outline-none placeholder:text-muted-foreground"
             aria-label="Search symbol"
           />
+          {/* Each key carries its own label, so the row needs no group role of its
+              own: a wrapper role here would only add a landmark with nothing to say. */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            {OPERATORS.map((op) => (
+              <button
+                type="button"
+                key={op.insert}
+                title={op.title}
+                aria-label={op.title}
+                // `mousedown`, not `click`: the field must not lose focus first,
+                // or the caret position being written to is already gone.
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  const node = inputRef.current
+                  if (!node) return
+                  const start = node.selectionStart ?? query.length
+                  const end = node.selectionEnd ?? start
+                  const next =
+                    op.insert === '1/'
+                      ? `1/(${query.trim()})`
+                      : query.slice(0, start) + op.insert + query.slice(end)
+                  setQuery(next)
+                  const caret = op.insert === '1/' ? next.length : start + op.insert.length
+                  requestAnimationFrame(() => {
+                    node.focus()
+                    node.setSelectionRange(caret, caret)
+                  })
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {op.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Segment chips (broker-supported only) */}
@@ -323,7 +398,15 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
         </div>
 
         <div className="border-t px-5 py-2.5 text-center text-xs text-muted-foreground">
-          Start typing to search, then press Enter to load the highlighted symbol.
+          {expression ? (
+            <>
+              Press Enter to chart{' '}
+              <span className="font-medium text-foreground">{query.trim()}</span>. A computed
+              chart cannot be traded.
+            </>
+          ) : (
+            'Start typing to search, then press Enter to load the highlighted symbol. Operators build an expression.'
+          )}
         </div>
       </DialogContent>
     </Dialog>
