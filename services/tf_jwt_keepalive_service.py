@@ -13,6 +13,15 @@ openalgo-chart session (the user has the chart open regularly, per their own
 usage — see useTradeFinderBoost.ts): a cheap expiry check gates the slow
 refresh, which runs in a background thread so the HTTP response returns
 immediately regardless of whether a refresh was kicked off.
+
+Headless refresh only reloads an already-logged-in TradeFinder session — it
+cannot complete a fresh Google login. When TradeFinder's own session has
+actually logged out (independent of Google, which can still be fine), every
+headless attempt fails identically. Once the headless retries are exhausted,
+this service opens one real, visible browser window (same flow as
+strategies/tf_login_setup.py) so the user can click through the Google login
+whenever they next look at their screen, without having to remember to run
+anything from a terminal.
 """
 
 from __future__ import annotations
@@ -20,6 +29,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import threading
+import time
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -38,6 +48,24 @@ _refreshing = False
 _scheduler: BackgroundScheduler | None = None
 _scheduler_lock = threading.Lock()
 _KEEPALIVE_JOB_ID = "tf_jwt_keepalive_tick"
+
+# Headless can only reload an already-logged-in TF session (see refresh_tf_jwt's
+# docstring) -- when TF's own session has actually logged out, every headless
+# attempt fails identically, so retrying it more than once just burns the
+# outage window before the headed fallback (which actually works, see below)
+# kicks in. One attempt still absorbs a genuine cold-Chromium flake; the
+# headed tier is what recovers a real logout now, not this retry loop.
+_MAX_REFRESH_ATTEMPTS = 1
+_RETRY_BACKOFF_SECONDS = 5
+
+# Headless refresh can only reload an already-logged-in session; it cannot
+# complete a fresh Google login (the OAuth popup click-through is unreliable
+# under headless Chromium). When TradeFinder's own session has actually
+# logged out, every headless attempt fails the same way, so as a last resort
+# pop a REAL, visible browser window and give the user time to click through
+# the Google login themselves — same flow as running tf_login_setup.py, just
+# triggered automatically instead of requiring the user to remember it.
+_HEADED_LOGIN_TIMEOUT_SECONDS = 240
 
 
 def _load_tf_auth():
@@ -64,15 +92,21 @@ def get_tf_jwt_status() -> dict:
     }
 
 
-def trigger_refresh_if_needed(min_seconds: int = 1800) -> dict:
+def trigger_refresh_if_needed(min_seconds: int = 1800, force: bool = False) -> dict:
     """Non-blocking. Cheap file read + expiry check; if the token is missing or
     expiring within `min_seconds`, kicks off the browser refresh in a
     background thread (deduped — a refresh already in flight is not
-    re-launched) and returns immediately. Safe to call every few minutes."""
+    re-launched) and returns immediately. Safe to call every few minutes.
+
+    `force=True` skips the expiry check entirely -- for when a live request
+    just got a 401 on a token the file still claims has time left (TF revoked
+    the session server-side, independent of the JWT's own exp claim). Without
+    this, that mismatch is invisible until the next scheduled tick, up to 20
+    minutes of every TradeFinder call failing for no visible reason."""
     global _refreshing
     ta = _load_tf_auth()
     token = ta._read_file_jwt()
-    needs_refresh = not token or ta.jwt_expiry_seconds(token) <= min_seconds
+    needs_refresh = force or not token or ta.jwt_expiry_seconds(token) <= min_seconds
 
     if needs_refresh:
         with _lock:
@@ -87,13 +121,45 @@ def trigger_refresh_if_needed(min_seconds: int = 1800) -> dict:
                         # service logged nothing and a dead refresh looked
                         # identical to a healthy one — the token simply expired
                         # with no trace in log/errors.jsonl.
-                        if not ta.refresh_tf_jwt():
-                            logger.error(
-                                "tf_jwt_keepalive: refresh produced no token. Check the "
-                                "browser profile is still logged in (uv run python "
-                                "strategies/tf_login_setup.py) and that the Playwright "
-                                "chromium build is installed (uv run playwright install chromium)."
-                            )
+                        #
+                        # Retry rather than give up: a single miss (TF slow to
+                        # mint, cold Chromium losing the race against the rest
+                        # of app startup) used to leave the token dead until
+                        # the next 20-min tick. Both the boot call and the
+                        # scheduled tick land here, so one retry loop covers
+                        # every caller.
+                        for attempt in range(1, _MAX_REFRESH_ATTEMPTS + 1):
+                            if ta.refresh_tf_jwt():
+                                if attempt > 1:
+                                    logger.info(
+                                        f"tf_jwt_keepalive: refresh succeeded on attempt {attempt}"
+                                    )
+                                return
+                            if attempt < _MAX_REFRESH_ATTEMPTS:
+                                logger.warning(
+                                    f"tf_jwt_keepalive: refresh attempt {attempt} produced no "
+                                    f"token, retrying in {_RETRY_BACKOFF_SECONDS}s"
+                                )
+                                time.sleep(_RETRY_BACKOFF_SECONDS)
+
+                        # Headless is exhausted. Open a visible window so the user can
+                        # complete the Google login by hand whenever they notice it —
+                        # refresh_tf_jwt keeps polling for the token for the whole
+                        # timeout, so the window stays up long enough to click through.
+                        logger.warning(
+                            "tf_jwt_keepalive: headless refresh exhausted, opening a visible "
+                            "browser window for manual Google login"
+                        )
+                        if ta.refresh_tf_jwt(headless=False, timeout_s=_HEADED_LOGIN_TIMEOUT_SECONDS):
+                            logger.info("tf_jwt_keepalive: refresh succeeded via headed login window")
+                            return
+                        logger.error(
+                            "tf_jwt_keepalive: refresh failed even after a headed login window "
+                            "(no display, or login not completed in time). Run "
+                            "uv run python strategies/tf_login_setup.py manually, or check "
+                            "that the Playwright chromium build is installed "
+                            "(uv run playwright install chromium)."
+                        )
                     except Exception as e:
                         logger.warning(f"tf_jwt_keepalive: background refresh failed: {e}")
                     finally:

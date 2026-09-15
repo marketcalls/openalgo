@@ -7,6 +7,10 @@ from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from limiter import limiter
 from services.tf_cpr_service import attach_cpr, ensure_cpr_cache
+from services.tf_directional_score_service import (
+    attach_directional_score,
+    ensure_directional_score_cache,
+)
 from services.tf_first_candle_service import attach_first_candle, ensure_first_candle_cache
 from services.tradefinder_service import fetch_market_pulse
 from utils.logging import get_logger
@@ -68,6 +72,12 @@ class TfMarketPulse(Resource):
                 # pattern as CPR above (see services/tf_first_candle_service.py).
                 ensure_first_candle_cache(boost_symbols, auth_token, broker)
                 attach_first_candle(result["intraday_boost"])
+
+                # Directional steadiness enrichment: same non-blocking
+                # cache-fill pattern, but refreshed every 5 minutes rather
+                # than once per day (see services/tf_directional_score_service.py).
+                ensure_directional_score_cache(boost_symbols, auth_token, broker)
+                attach_directional_score(result["intraday_boost"])
 
             return make_response(jsonify({"status": "success", "data": result}), 200)
 

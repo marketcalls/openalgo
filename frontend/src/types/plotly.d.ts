@@ -20,6 +20,8 @@ declare module 'react-plotly.js' {
     onRelayout?: (event: Plotly.PlotRelayoutEvent) => void
     onClick?: (event: Plotly.PlotMouseEvent) => void
     onHover?: (event: Plotly.PlotMouseEvent) => void
+    onSelected?: (event: Plotly.PlotSelectionEvent | undefined) => void
+    onDeselect?: () => void
     revision?: number
   }
 

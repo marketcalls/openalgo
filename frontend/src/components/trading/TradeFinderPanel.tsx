@@ -65,6 +65,28 @@ const POLL_INTERVALS = [5_000, 15_000, 30_000, 60_000] as const
 const SCORE_HISTORY_LEN = 20
 /** How far down the list counts as "the top" for the new-entrant alert. */
 const NEW_ENTRANT_TOP_N = 10
+
+/* ── clean-climb / base-breakout badge thresholds ──
+   Both read the whole day's rank+price timeline (5-min snapshot cadence, from
+   /boostsnapshots), refetched every CLIMB_POLL_MS -- polling faster than the
+   snapshotter's own cadence buys nothing. */
+const CLIMB_POLL_MS = 5 * 60_000
+/** Must reach this rank or better today to count as "made it to the top." */
+const CLIMB_TOP_K = 10
+/** Must have been worse than this near the open, or it was already near the
+ * top and this isn't a climb. */
+const CLIMB_EARLY_RANK_FLOOR = 20
+/** First snapshot's ltp this far above prev_close or more is a gap-up, not a
+ * climb -- excluded. */
+const GAP_UP_MAX_PCT = 2
+/** Trailing window (minutes, excluding the latest couple of points) used as
+ * the consolidation "base" for the breakout check. */
+const CONSOLIDATION_WINDOW_MIN = 60
+/** The base's (max-min)/min must stay under this to count as consolidating. */
+const CONSOLIDATION_RANGE_MAX_PCT = 1.5
+/** The latest price must clear the base's high by at least this much to
+ * count as a breakout rather than noise. */
+const BREAKOUT_MARGIN_PCT = 0.5
 const CPR_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'bullish', label: 'Bullish only' },
@@ -82,7 +104,7 @@ interface Features {
   search: boolean
   compactDensity: boolean
   addToWatchlist: boolean
-  columns: { ltp: boolean; chg: boolean; score: boolean; cpr: boolean }
+  columns: { ltp: boolean; chg: boolean; score: boolean; cpr: boolean; directional: boolean }
   /** Off = the hardcoded 30s default; any other value is the user's choice. */
   pollIntervalMs: number
   jwtHealth: boolean
@@ -107,6 +129,20 @@ interface Features {
   /** Aggressive by design -- automatically charts whoever takes rank #1 on
    * the active list. Must never be on by default. */
   autoChartTop1: boolean
+  /** Sectors-only: rank-over-the-day chart for a sector, same idea as
+   * `rankTimeline` but reading the "sector_index" list_type the scheduler
+   * writes alongside the three boost lists. */
+  sectorRankTimeline: boolean
+  /** A stock that climbed from outside CLIMB_EARLY_RANK_FLOOR into the top
+   * CLIMB_TOP_K today without a gap-up open at the first snapshot -- a
+   * genuine intraday mover, not a stock that opened high and sat there. */
+  cleanClimbAlert: boolean
+  /** A stock that consolidated in a tight range then broke above it. */
+  baseBreakoutAlert: boolean
+  /** null = off (show the full list). Otherwise narrows the active ranked
+   * list to its N highest directional_score rows -- "identify the
+   * directional stock" without scanning past the choppy ones by eye. */
+  topN: number | null
 }
 
 const DEFAULT_FEATURES: Features = {
@@ -116,7 +152,7 @@ const DEFAULT_FEATURES: Features = {
   search: false,
   compactDensity: false,
   addToWatchlist: false,
-  columns: { ltp: true, chg: true, score: true, cpr: true },
+  columns: { ltp: true, chg: true, score: true, cpr: true, directional: false },
   pollIntervalMs: 30_000,
   jwtHealth: false,
   retryBackoff: false,
@@ -130,6 +166,10 @@ const DEFAULT_FEATURES: Features = {
   newEntrantAlert: false,
   scoreCrossAlert: null,
   autoChartTop1: false,
+  sectorRankTimeline: false,
+  cleanClimbAlert: false,
+  baseBreakoutAlert: false,
+  topN: null,
 }
 
 function readFeatures(): Features {
@@ -170,7 +210,11 @@ function readView(): ViewId {
   return (VIEWS.find((v) => v.id === saved)?.id ?? 'intraday_boost') as ViewId
 }
 
-const ROW_GRID = 'grid grid-cols-[22px_1fr_52px_48px_44px] items-center gap-1'
+const ROW_GRID = 'grid grid-cols-[22px_1fr_52px_48px_44px_44px] items-center gap-1'
+
+/** Preset choices for the "Top N by directional score" filter -- 'null'
+ * means off (show the full list). */
+const TOP_N_OPTIONS = [10, 20, 30, 50] as const
 
 function ChgCell({ value }: { value: number }) {
   return (
@@ -197,6 +241,33 @@ function ScoreCell({ score, direction }: { score: number; direction: 'up' | 'dow
         <TrendingUp className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
       )}
       {direction === 'down' && (
+        <TrendingDown className="h-3 w-3 shrink-0 text-rose-600 dark:text-rose-400" />
+      )}
+    </span>
+  )
+}
+
+/** "Steadiness since open" score (0-100, Kaufman efficiency ratio) -- how
+ * cleanly the stock has moved in one direction rather than churning. Title
+ * carries the reversal count, the concrete number behind "without hiccups."
+ * null (not yet computed -- market just opened, or fetch failed) renders as
+ * a blank cell, never as 0, since 0 would misleadingly read as "pure chop." */
+function DirectionalScoreCell({ item }: { item: TfListItem }) {
+  if (item.directional_score == null) return <span />
+  const reversals = item.directional_reversals
+  const title =
+    reversals != null ? `${reversals} reversal${reversals === 1 ? '' : 's'} since open` : undefined
+  return (
+    <span
+      className="flex items-center justify-end gap-0.5 tabular-nums"
+      title={title}
+      aria-label={title}
+    >
+      {item.directional_score.toFixed(0)}
+      {item.directional_direction === 'up' && (
+        <TrendingUp className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+      )}
+      {item.directional_direction === 'down' && (
         <TrendingDown className="h-3 w-3 shrink-0 text-rose-600 dark:text-rose-400" />
       )}
     </span>
@@ -408,6 +479,28 @@ function CprDot({ item }: { item: TfListItem }) {
   )
 }
 
+/** Persistent per-row flag for the clean-climb / base-breakout detectors --
+ * unlike the toasts, this stays visible for as long as the condition holds
+ * this session, so scanning the list finds it without having caught the
+ * popup. `detail` carries the specific numbers into the tooltip. */
+function MomentumBadge({
+  kind,
+  detail,
+}: {
+  kind: 'climb' | 'breakout'
+  detail: string
+}) {
+  const Icon = kind === 'climb' ? TrendingUp : ArrowUp
+  return (
+    <span title={detail} className="inline-flex shrink-0">
+      <Icon
+        className={cn('h-3 w-3', kind === 'climb' ? 'text-orange-500' : 'text-emerald-500')}
+        aria-hidden="true"
+      />
+    </span>
+  )
+}
+
 /** One row: a label and a Switch, the same shape WatchlistPanel already uses
  * for its column toggles. Kept generic so both top-level features and the
  * nested column checkboxes render identically. */
@@ -425,6 +518,19 @@ function FeatureRow({
       <span className="text-foreground">{label}</span>
       <Switch checked={checked} onCheckedChange={onChange} className="scale-90" />
     </label>
+  )
+}
+
+/** A section header that names its scope explicitly -- every setting under
+ * it applies to exactly the view(s) named here, nothing wider or narrower. */
+function ScopeHeader({ title, scope }: { title: string; scope: string }) {
+  return (
+    <div className="mt-1 border-t pt-1.5 first:mt-0 first:border-t-0 first:pt-0">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+        {title}
+      </p>
+      <p className="text-[10px] text-muted-foreground/70">{scope}</p>
+    </div>
   )
 }
 
@@ -450,9 +556,13 @@ function FeatureSettings({
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-        Data
-      </p>
+      {/* Every setting below is scoped to exactly one of these three groups
+          -- a switch that only does something on two of the four views
+          (Intraday Boost/Breakout Beacon/High Powered are one group here,
+          Sectors is its own) needs to say so, or "why isn't this doing
+          anything" is the first thing a user hits after turning it on
+          while looking at the wrong tab. */}
+      <ScopeHeader title="All views" scope="Applies everywhere -- ranked lists and Sectors" />
       <FeatureRow
         label="Freshness caption"
         checked={features.freshness}
@@ -491,10 +601,46 @@ function FeatureSettings({
         checked={features.retryBackoff}
         onChange={(v) => set('retryBackoff', v)}
       />
+      <FeatureRow
+        label="Compact rows"
+        checked={features.compactDensity}
+        onChange={(v) => set('compactDensity', v)}
+      />
+      <FeatureRow
+        label="Add-to-watchlist button"
+        checked={features.addToWatchlist}
+        onChange={(v) => set('addToWatchlist', v)}
+      />
 
-      <p className="mt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-        Filters
-      </p>
+      <ScopeHeader
+        title="Ranked lists only"
+        scope="Intraday Boost · Breakout Beacon · High Powered -- has no effect on Sectors"
+      />
+      <FeatureRow
+        label="Symbol search"
+        checked={features.search}
+        onChange={(v) => set('search', v)}
+      />
+      <FeatureRow
+        label="Rank change arrows"
+        checked={features.rankArrows}
+        onChange={(v) => set('rankArrows', v)}
+      />
+      <FeatureRow
+        label="Pin/favorite symbols"
+        checked={features.pinning}
+        onChange={(v) => set('pinning', v)}
+      />
+      <FeatureRow
+        label="Score sparkline"
+        checked={features.scoreSparkline}
+        onChange={(v) => set('scoreSparkline', v)}
+      />
+      <FeatureRow
+        label="Rank timeline chart"
+        checked={features.rankTimeline}
+        onChange={(v) => set('rankTimeline', v)}
+      />
       <label className="flex items-center justify-between gap-3 py-1 text-[12px]">
         <span className="text-foreground">Min score</span>
         <input
@@ -509,69 +655,30 @@ function FeatureSettings({
           className="h-6 w-16 rounded border bg-background px-1.5 text-right text-[11px]"
         />
       </label>
-      <label className="flex items-center justify-between gap-3 py-1 text-[12px]">
-        <span className="text-foreground">CPR bias</span>
-        <Select value={features.cprFilter} onValueChange={(v) => set('cprFilter', v as CprFilter)}>
-          <SelectTrigger className="h-6 w-28 text-[11px]" aria-label="CPR bias filter">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CPR_FILTERS.map((f) => (
-              <SelectItem key={f.id} value={f.id} className="text-[11px]">
-                {f.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <label className="flex flex-col gap-0.5 py-1 text-[12px]">
+        <span className="flex items-center justify-between gap-3">
+          <span className="text-foreground">CPR bias</span>
+          <Select
+            value={features.cprFilter}
+            onValueChange={(v) => set('cprFilter', v as CprFilter)}
+          >
+            <SelectTrigger className="h-6 w-28 text-[11px]" aria-label="CPR bias filter">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CPR_FILTERS.map((f) => (
+                <SelectItem key={f.id} value={f.id} className="text-[11px]">
+                  {f.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </span>
+        <span className="text-[10px] text-muted-foreground">
+          Only Intraday Boost carries real CPR data -- filtering the other two lists returns
+          nothing.
+        </span>
       </label>
-
-      <p className="mt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-        Display
-      </p>
-      <FeatureRow
-        label="Rank change arrows"
-        checked={features.rankArrows}
-        onChange={(v) => set('rankArrows', v)}
-      />
-      <FeatureRow
-        label="Symbol search"
-        checked={features.search}
-        onChange={(v) => set('search', v)}
-      />
-      <FeatureRow
-        label="Compact rows"
-        checked={features.compactDensity}
-        onChange={(v) => set('compactDensity', v)}
-      />
-      <FeatureRow
-        label="Add-to-watchlist button"
-        checked={features.addToWatchlist}
-        onChange={(v) => set('addToWatchlist', v)}
-      />
-      <FeatureRow
-        label="Pin/favorite symbols"
-        checked={features.pinning}
-        onChange={(v) => set('pinning', v)}
-      />
-      <FeatureRow
-        label="Sector quick-filter chips"
-        checked={features.sectorChips}
-        onChange={(v) => set('sectorChips', v)}
-      />
-      <FeatureRow
-        label="Score sparkline"
-        checked={features.scoreSparkline}
-        onChange={(v) => set('scoreSparkline', v)}
-      />
-      <FeatureRow
-        label="Rank timeline chart"
-        checked={features.rankTimeline}
-        onChange={(v) => set('rankTimeline', v)}
-      />
-
-      <p className="mt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-        Alerts
-      </p>
       <FeatureRow
         label={`New entrant (top ${NEW_ENTRANT_TOP_N})`}
         checked={features.newEntrantAlert}
@@ -596,10 +703,31 @@ function FeatureSettings({
         checked={features.autoChartTop1}
         onChange={(v) => set('autoChartTop1', v)}
       />
-
-      <p className="mt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-        Columns
-      </p>
+      <FeatureRow
+        label="Clean climber badge"
+        checked={features.cleanClimbAlert}
+        onChange={(v) => set('cleanClimbAlert', v)}
+      />
+      <span className="block pb-1 text-[10px] text-muted-foreground">
+        Flags a stock that climbed from outside the top {CLIMB_EARLY_RANK_FLOOR} into the top{' '}
+        {CLIMB_TOP_K} today without a gap-up open.
+      </span>
+      <FeatureRow
+        label="Base breakout badge"
+        checked={features.baseBreakoutAlert}
+        onChange={(v) => set('baseBreakoutAlert', v)}
+      />
+      <span className="block pb-1 text-[10px] text-muted-foreground">
+        Flags a stock that consolidated in a tight range, then broke above it. Both badges refresh
+        every 5 min, matching the snapshot cadence.
+      </span>
+      <label className="flex flex-col gap-0.5 py-1 text-[12px]">
+        <span className="text-foreground">Columns</span>
+        <span className="text-[10px] text-muted-foreground">
+          LTP/Change % are hidden on Breakout Beacon regardless of this setting -- that list's own
+          fields aren't real quote data.
+        </span>
+      </label>
       <FeatureRow
         label="LTP"
         checked={features.columns.ltp}
@@ -620,6 +748,58 @@ function FeatureSettings({
         checked={features.columns.cpr}
         onChange={(v) => setColumn('cpr', v)}
       />
+      <FeatureRow
+        label="Directional score"
+        checked={features.columns.directional}
+        onChange={(v) => setColumn('directional', v)}
+      />
+      <label className="flex flex-col gap-0.5 py-1 text-[12px]">
+        <span className="flex items-center justify-between gap-3">
+          <span className="text-foreground">Top N (by directional score)</span>
+          <Select
+            value={String(features.topN ?? 'off')}
+            onValueChange={(v) => set('topN', v === 'off' ? null : Number(v))}
+          >
+            <SelectTrigger className="h-6 w-16 text-[11px]" aria-label="Top N filter">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off" className="text-[11px]">
+                Off
+              </SelectItem>
+              {TOP_N_OPTIONS.map((n) => (
+                <SelectItem key={n} value={String(n)} className="text-[11px]">
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </span>
+        <span className="text-[10px] text-muted-foreground">
+          Only Intraday Boost carries a directional score -- has no effect on the other lists.
+        </span>
+      </label>
+
+      <ScopeHeader
+        title="Sectors only"
+        scope="Has no effect on Intraday Boost/Breakout Beacon/High Powered"
+      />
+      <FeatureRow
+        label="Sector quick-filter chips"
+        checked={features.sectorChips}
+        onChange={(v) => set('sectorChips', v)}
+      />
+      <FeatureRow
+        label="Sector rank timeline chart"
+        checked={features.sectorRankTimeline}
+        onChange={(v) => set('sectorRankTimeline', v)}
+      />
+      {features.sectorRankTimeline && (
+        <p className="text-[10px] text-muted-foreground/70">
+          Needs the backend snapshot scheduler enabled (TF_BOOST_SNAPSHOT_ENABLED) -- shows today's
+          history only, from the moment it was turned on.
+        </p>
+      )}
     </div>
   )
 }
@@ -670,6 +850,12 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
   useEffect(() => {
     viewRef.current = view
   }, [view])
+  /** Read by the climb/breakout detector below, which runs on its own timer
+   * independent of the market_pulse poll that actually sets this. */
+  const pulseRef = useRef(pulse)
+  useEffect(() => {
+    pulseRef.current = pulse
+  }, [pulse])
   /** Not guaranteed stable across renders (no memoization contract on the
    * prop), and this effect only runs once per apiKey/interval change --
    * without a ref, autoChartTop1 could call a version of onPick captured
@@ -678,6 +864,12 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
   useEffect(() => {
     onPickRef.current = onPick
   }, [onPick])
+
+  // Rebuilt every render from listRows/selectedStocks below, so ArrowUp/Down
+  // can move DOM focus to the newly-charted row without a second index to
+  // keep in sync with activeSymbol.
+  const listRowRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const sectorRowRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   /** This poll's rank per symbol, so the next poll can tell whether each
    * symbol moved up or down the list -- compared, then overwritten, once
@@ -701,6 +893,20 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
   /** This poll's #1 symbol per list, so autoChartTop1 only fires on an
    * actual change of leader, not every poll the same leader holds. */
   const prevTop1Ref = useRef<Map<string, string>>(new Map())
+
+  /** Symbols currently flagged by each detector, keyed by `${listKey}:${symbol}`
+   * -- badges persist on the row for as long as the condition holds, unlike
+   * the toasts below. Recomputed wholesale each detector poll (line ~955),
+   * so a symbol that drops out of listRows or stops qualifying is dropped
+   * too, rather than accumulating forever. */
+  const [climbFlags, setClimbFlags] = useState<Map<string, string>>(new Map())
+  const [breakoutFlags, setBreakoutFlags] = useState<Map<string, string>>(new Map())
+  /** Symbols already toasted today for each detector -- same dedup shape as
+   * alertedSymbolsRef, but never cleared mid-session (unlike scoreCrossAlert,
+   * a climb/breakout is a one-time event for the day, not a level that can
+   * be re-crossed). */
+  const climbToastedRef = useRef<Set<string>>(new Set())
+  const breakoutToastedRef = useRef<Set<string>>(new Set())
 
   const [pulseUpdatedAt, setPulseUpdatedAt] = useState<Date | null>(null)
   const [sectorUpdatedAt, setSectorUpdatedAt] = useState<Date | null>(null)
@@ -963,10 +1169,115 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
     }
   }
 
+  /* ── clean-climb / base-breakout badges: scans the whole day's rank+price
+     timeline for the active list, every CLIMB_POLL_MS. Separate from the 30s
+     market_pulse poll -- this data only refreshes every 5 min server-side
+     (the snapshotter's own cadence), so polling it faster buys nothing. */
+  useEffect(() => {
+    if (!features.cleanClimbAlert && !features.baseBreakoutAlert) return
+    if (view === 'sectors') return
+
+    let alive = true
+
+    const scan = async () => {
+      const listKey = viewRef.current
+      if (listKey === 'sectors' || !alive) return
+      const symbols = pulseRef.current?.[listKey]?.map((r) => r.symbol) ?? []
+      if (symbols.length === 0) return
+
+      const today = new Date().toISOString().slice(0, 10)
+      let res: BoostSnapshotsResponse
+      try {
+        res = await tradefinderApi.getBoostSnapshots(apiKey, today, listKey, {
+          includePrices: true,
+        })
+      } catch {
+        return
+      }
+      if (!alive || res.status !== 'success') return
+
+      const ranks = res.ranks ?? {}
+      const prices = res.prices ?? {}
+      const nextClimb = new Map<string, string>()
+      const nextBreakout = new Map<string, string>()
+
+      for (const symbol of symbols) {
+        const key = `${listKey}:${symbol}`
+        const item = pulseRef.current?.[listKey]?.find((r) => r.symbol === symbol)
+
+        if (featuresRef.current.cleanClimbAlert) {
+          const rankPoints = ranks[symbol]?.[today] ?? []
+          const priceForGap = prices[symbol]?.[today]?.[0]?.[1]
+          if (rankPoints.length >= 2 && item) {
+            const earlyRank = rankPoints[0][1]
+            const bestRank = Math.min(...rankPoints.map((p) => p[1]))
+            const gapPct =
+              priceForGap != null && item.prev_close
+                ? ((priceForGap - item.prev_close) / item.prev_close) * 100
+                : 0
+            if (
+              earlyRank > CLIMB_EARLY_RANK_FLOOR &&
+              bestRank <= CLIMB_TOP_K &&
+              Math.abs(gapPct) < GAP_UP_MAX_PCT
+            ) {
+              const detail = `Climbed #${earlyRank} -> #${bestRank} today, no gap-up open`
+              nextClimb.set(key, detail)
+              if (!climbToastedRef.current.has(key)) {
+                climbToastedRef.current.add(key)
+                showToast.info(`${symbol}: ${detail}`)
+              }
+            }
+          }
+        }
+
+        if (featuresRef.current.baseBreakoutAlert) {
+          const pricePoints = prices[symbol]?.[today] ?? []
+          if (pricePoints.length >= 4) {
+            const latest = pricePoints[pricePoints.length - 1]
+            // The base excludes the last couple of points -- otherwise the
+            // breakout print itself would widen its own base range and could
+            // never clear it.
+            const baseCutoff = latest[0] - CONSOLIDATION_WINDOW_MIN
+            const base = pricePoints
+              .slice(0, -2)
+              .filter((p) => p[0] >= baseCutoff)
+              .map((p) => p[1])
+            if (base.length >= 3) {
+              const baseMin = Math.min(...base)
+              const baseMax = Math.max(...base)
+              const rangePct = ((baseMax - baseMin) / baseMin) * 100
+              const breakoutPct = ((latest[1] - baseMax) / baseMax) * 100
+              if (rangePct < CONSOLIDATION_RANGE_MAX_PCT && breakoutPct >= BREAKOUT_MARGIN_PCT) {
+                const detail = `Broke a ${rangePct.toFixed(1)}% base, +${breakoutPct.toFixed(1)}% breakout`
+                nextBreakout.set(key, detail)
+                if (!breakoutToastedRef.current.has(key)) {
+                  breakoutToastedRef.current.add(key)
+                  showToast.info(`${symbol}: ${detail}`)
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!alive) return
+      if (featuresRef.current.cleanClimbAlert) setClimbFlags(nextClimb)
+      if (featuresRef.current.baseBreakoutAlert) setBreakoutFlags(nextBreakout)
+    }
+
+    scan()
+    const timer = setInterval(scan, CLIMB_POLL_MS)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: apiKey is stable for the panel's life; pulse/featuresRef/viewRef are read fresh via ref on each tick rather than restarting the timer
+  }, [features.cleanClimbAlert, features.baseBreakoutAlert, view, apiKey])
+
   /** Fetches once per click, not polled -- this is a look-up, not a live
    * value, and the endpoint it calls is the backtesting one, not something
    * meant for repeated hammering. */
-  const openTimeline = async (symbol: string, listKey: ListView) => {
+  const openTimeline = async (symbol: string, listKey: ListView | 'sector_index') => {
     setTimelineFor(symbol)
     setTimelineData(null)
     setTimelineError(null)
@@ -1018,6 +1329,15 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
       ...listRows.filter((r) => pinnedSet.has(r.symbol)),
       ...listRows.filter((r) => !pinnedSet.has(r.symbol)),
     ]
+  }
+  // Only intraday_boost ever carries a directional_score (same server-side
+  // enrichment scope as CPR/first-candle) -- applying this on the other
+  // lists would just re-sort everything to null and return nothing useful.
+  if (features.topN != null && view === 'intraday_boost') {
+    listRows = listRows
+      .slice()
+      .sort((a, b) => (b.directional_score ?? -1) - (a.directional_score ?? -1))
+      .slice(0, features.topN)
   }
   const showQuoteColumns = view !== 'breakout_beacon'
 
@@ -1143,6 +1463,7 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
               {showQuoteColumns && features.columns.chg ? 'Chg' : ''}
             </span>
             <span className="text-right">{features.columns.score ? 'Score' : ''}</span>
+            <span className="text-right">{features.columns.directional ? 'Dir' : ''}</span>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -1164,8 +1485,27 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
               listRows.map((item, i) => (
                 <button
                   key={item.symbol}
+                  ref={(el) => {
+                    listRowRefs.current[i] = el
+                  }}
                   type="button"
-                  onClick={() => chartSymbol(item.symbol)}
+                  onClick={(e) => {
+                    chartSymbol(item.symbol)
+                    // Click-to-focus on a <button> isn't guaranteed (macOS
+                    // Safari skips it without Full Keyboard Access), so without
+                    // this an arrow key right after a mouse click would do
+                    // nothing until the row was tabbed to instead.
+                    e.currentTarget.focus()
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+                    e.preventDefault()
+                    const next = i + (e.key === 'ArrowDown' ? 1 : -1)
+                    if (next < 0 || next >= listRows.length) return
+                    chartSymbol(listRows[next].symbol)
+                    listRowRefs.current[next]?.focus()
+                    listRowRefs.current[next]?.scrollIntoView({ block: 'nearest' })
+                  }}
                   className={cn(
                     ROW_GRID,
                     'w-full border-b border-border/40 px-2 text-left text-[12px] transition-colors hover:bg-accent',
@@ -1180,6 +1520,18 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
                     <span className="flex min-w-0 items-center gap-1 truncate">
                       {features.columns.cpr && <CprDot item={item} />}
                       <span className="truncate">{item.symbol}</span>
+                      {climbFlags.has(`${view}:${item.symbol}`) && (
+                        <MomentumBadge
+                          kind="climb"
+                          detail={climbFlags.get(`${view}:${item.symbol}`)!}
+                        />
+                      )}
+                      {breakoutFlags.has(`${view}:${item.symbol}`) && (
+                        <MomentumBadge
+                          kind="breakout"
+                          detail={breakoutFlags.get(`${view}:${item.symbol}`)!}
+                        />
+                      )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
                       {features.rankArrows && (
@@ -1308,6 +1660,11 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
                   ) : (
                     <span />
                   )}
+                  {features.columns.directional ? (
+                    <DirectionalScoreCell item={item} />
+                  ) : (
+                    <span />
+                  )}
                 </button>
               ))
             )}
@@ -1423,12 +1780,55 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
               every time the selection cleared. */}
           <div className="flex min-h-0 flex-1 flex-col border-t">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/30 px-2 py-1">
-              <span className="truncate text-[11px] font-medium">
-                {selectedSector === ALL_SECTORS
-                  ? 'ALL'
-                  : selectedSector
-                    ? selectedSector.replace(/_r_factor$/, '')
-                    : 'Select a sector'}
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="truncate text-[11px] font-medium">
+                  {selectedSector === ALL_SECTORS
+                    ? 'ALL'
+                    : selectedSector
+                      ? selectedSector.replace(/_r_factor$/, '')
+                      : 'Select a sector'}
+                </span>
+                {features.sectorRankTimeline &&
+                  selectedSector &&
+                  selectedSector !== ALL_SECTORS &&
+                  (() => {
+                    const sectorSymbol = selectedSector.replace(/_r_factor$/, '')
+                    return (
+                      <Popover
+                        open={timelineFor === sectorSymbol}
+                        onOpenChange={(open) => {
+                          if (!open) setTimelineFor(null)
+                        }}
+                      >
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (timelineFor === sectorSymbol) {
+                                setTimelineFor(null)
+                              } else {
+                                openTimeline(sectorSymbol, 'sector_index')
+                              }
+                            }}
+                            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                            title={`${sectorSymbol} rank history`}
+                            aria-label={`${sectorSymbol} rank history`}
+                          >
+                            <History className="h-3 w-3" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-auto p-0">
+                          {timelineError ? (
+                            <p className="p-3 text-[12px] text-muted-foreground">{timelineError}</p>
+                          ) : timelineData === null ? (
+                            <p className="p-3 text-[12px] text-muted-foreground">Loading…</p>
+                          ) : (
+                            <RankTimelineChart points={timelineData} />
+                          )}
+                        </PopoverContent>
+                      </Popover>
+                    )
+                  })()}
               </span>
               {/* Off by default -- the list keeps its |rfactor| ranking until
                   the user explicitly asks to see gainers or losers first.
@@ -1463,11 +1863,26 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
               ) : selectedStocks.length === 0 ? (
                 <p className="p-3 text-[12px] text-muted-foreground">No stocks in this sector.</p>
               ) : (
-                selectedStocks.map((stock) => (
+                selectedStocks.map((stock, i) => (
                   <button
                     key={stock.symbol}
+                    ref={(el) => {
+                      sectorRowRefs.current[i] = el
+                    }}
                     type="button"
-                    onClick={() => chartSymbol(stock.symbol)}
+                    onClick={(e) => {
+                      chartSymbol(stock.symbol)
+                      e.currentTarget.focus()
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+                      e.preventDefault()
+                      const next = i + (e.key === 'ArrowDown' ? 1 : -1)
+                      if (next < 0 || next >= selectedStocks.length) return
+                      chartSymbol(selectedStocks[next].symbol)
+                      sectorRowRefs.current[next]?.focus()
+                      sectorRowRefs.current[next]?.scrollIntoView({ block: 'nearest' })
+                    }}
                     className={cn(
                       'grid w-full grid-cols-[1fr_52px_48px_44px] items-center gap-1 border-b border-border/40 px-2 text-left text-[12px] transition-colors hover:bg-accent',
                       features.compactDensity ? 'py-0.5' : 'py-1',

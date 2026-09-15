@@ -93,6 +93,12 @@ def _proxy_with_subscription(
     client_ids: tuple[int, ...] = (7,),
 ) -> tuple[WebSocketProxy, _Adapter, list[dict[str, Any]]]:
     proxy = WebSocketProxy.__new__(WebSocketProxy)
+    proxy._subscription_started_at = {}
+    # cleanup_client defers to a linger window in production; these tests call
+    # cleanup_client directly and assert teardown happened synchronously, so
+    # disable the linger to get the old inline behaviour (see cleanup_client's
+    # docstring in websocket_proxy/server.py).
+    proxy._client_linger_seconds = 0
     adapter = adapter or _Adapter()
     subscription = {
         "symbol": "RELIANCE",
@@ -517,6 +523,12 @@ def test_three_thousand_subscription_cleanup_is_linear_and_yields_to_event_loop(
 
     adapter = ScaleAdapter()
     proxy = WebSocketProxy.__new__(WebSocketProxy)
+    proxy._subscription_started_at = {}
+    # cleanup_client defers to a linger window in production; these tests call
+    # cleanup_client directly and assert teardown happened synchronously, so
+    # disable the linger to get the old inline behaviour (see cleanup_client's
+    # docstring in websocket_proxy/server.py).
+    proxy._client_linger_seconds = 0
     proxy.user_mapping = {7: "scale-user"}
     proxy.broker_adapters = {"scale-user": adapter}
     proxy.user_broker_mapping = {"scale-user": "sandbox"}
@@ -1414,6 +1426,12 @@ def test_final_unsubscribe_and_market_frame_are_serializable_under_one_lock(
 
 def test_subscribe_rejection_is_a_partial_ack_with_a_per_symbol_error() -> None:
     proxy = WebSocketProxy.__new__(WebSocketProxy)
+    proxy._subscription_started_at = {}
+    # cleanup_client defers to a linger window in production; these tests call
+    # cleanup_client directly and assert teardown happened synchronously, so
+    # disable the linger to get the old inline behaviour (see cleanup_client's
+    # docstring in websocket_proxy/server.py).
+    proxy._client_linger_seconds = 0
     proxy.user_mapping = {7: "alice"}
     proxy.broker_adapters = {"alice": _RejectingAdapter()}
     proxy.user_broker_mapping = {"alice": "angel"}

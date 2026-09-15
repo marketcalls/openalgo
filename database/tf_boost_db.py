@@ -207,3 +207,42 @@ def get_boost_rank_timeline(
     for symbol, day, min_of_day, rank in rows:
         timeline.setdefault(symbol, {}).setdefault(day, []).append([int(min_of_day), int(rank)])
     return timeline
+
+
+def get_boost_price_timeline(
+    start_date: str,
+    end_date: str | None = None,
+    list_type: str = "intraday_boost",
+) -> dict[str, dict[str, list[list[float]]]]:
+    """Return every symbol's ltp over time: {symbol: {day: [[minute_of_day, ltp], ...]}},
+    each day's pairs sorted by time. A sibling to get_boost_rank_timeline rather
+    than an extension of it -- that function backs the ISI backtest's top-N gate
+    on an exact 2-tuple [minute, rank] shape, so it is left untouched. This one
+    exists purely to feed intraday consolidation/breakout detection (TradeFinder
+    panel), which needs price, not rank. Returns {} on any failure, matching the
+    other query functions here.
+    """
+    end_date = end_date or start_date
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol,
+                       strftime(snapshot_date, '%Y-%m-%d') AS day,
+                       hour(snapshot_time) * 60 + minute(snapshot_time) AS min_of_day,
+                       ltp
+                FROM tf_boost_snapshots
+                WHERE snapshot_date BETWEEN ? AND ?
+                  AND list_type = ?
+                ORDER BY symbol, snapshot_time
+                """,
+                [start_date, end_date, list_type],
+            ).fetchall()
+    except Exception as e:
+        logger.warning(f"get_boost_price_timeline({start_date}..{end_date}, {list_type}): {e}")
+        return {}
+
+    timeline: dict[str, dict[str, list[list[float]]]] = {}
+    for symbol, day, min_of_day, ltp in rows:
+        timeline.setdefault(symbol, {}).setdefault(day, []).append([int(min_of_day), float(ltp)])
+    return timeline

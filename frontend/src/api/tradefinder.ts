@@ -11,6 +11,14 @@ export interface TfListItem {
   cpr_width_pct?: number | null
   cpr_bias?: 'bullish' | 'bearish' | null
   first_candle_range_pct?: number | null
+  /** Kaufman efficiency-ratio-based "steadiness since open" score, 0-100 --
+   * 100 is a perfectly straight move, near 0 is pure chop. Only ever
+   * populated on `intraday_boost`, refreshed every ~5 minutes server-side. */
+  directional_score?: number | null
+  directional_direction?: 'up' | 'down' | null
+  /** Sign flips in the candle-to-candle move since the open -- the concrete
+   * number behind "without hiccups." */
+  directional_reversals?: number | null
 }
 
 export interface MarketPulseData {
@@ -66,6 +74,9 @@ export interface JwtHealthResponse {
 /** `[minute_of_day, rank]` pairs, already sorted by time. */
 export type RankTimelinePoint = [number, number]
 
+/** `[minute_of_day, ltp]` pairs, already sorted by time. */
+export type PriceTimelinePoint = [number, number]
+
 export interface BoostSnapshotsResponse {
   status: 'success' | 'error'
   date?: string
@@ -75,6 +86,8 @@ export interface BoostSnapshotsResponse {
   /** Only present when `includeRanks` was set. Keyed by symbol, then by
    * `YYYY-MM-DD` -- a single-day request still nests one day deep. */
   ranks?: Record<string, Record<string, RankTimelinePoint[]>>
+  /** Only present when `includePrices` was set. Same shape as `ranks`. */
+  prices?: Record<string, Record<string, PriceTimelinePoint[]>>
   message?: string
 }
 
@@ -104,13 +117,14 @@ export const tradefinderApi = {
     return response.data
   },
 
-  /** Today's rank timeline for one list -- the backtesting endpoint doubles
-   * as the only source of "how has this symbol's rank moved today", since
-   * nothing else records rank history. */
+  /** Today's rank (and optionally price) timeline for one list -- the
+   * backtesting endpoint doubles as the only source of "how has this symbol's
+   * rank/price moved today", since nothing else records that history. */
   getBoostSnapshots: async (
     apiKey: string,
     date: string,
-    listType: string
+    listType: string,
+    opts: { includePrices?: boolean } = {}
   ): Promise<BoostSnapshotsResponse> => {
     const response = await apiClient.post<BoostSnapshotsResponse>('/boostsnapshots', {
       apikey: apiKey,
@@ -118,6 +132,7 @@ export const tradefinderApi = {
       lookbackDays: 1,
       list_type: listType,
       includeRanks: true,
+      includePrices: opts.includePrices ?? false,
     })
     return response.data
   },

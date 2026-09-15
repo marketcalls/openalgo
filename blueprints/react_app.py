@@ -363,6 +363,12 @@ def react_arbitrage():
     return serve_react_app()
 
 
+# Screener - scan a watchlist with any chart indicator
+@react_bp.route("/screener")
+def react_screener():
+    return serve_react_app()
+
+
 # Option Chain - live chain with Greeks and click-to-trade
 @react_bp.route("/optionchain", strict_slashes=False)
 def react_optionchain():

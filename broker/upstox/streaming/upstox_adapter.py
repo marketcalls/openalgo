@@ -938,6 +938,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "ltq": int(ltpc.get("ltq", 0)),
                 "ltt": int(ltpc.get("ltt", 0)),
                 "cp": float(ltpc.get("cp", 0)),
+                # Same value under the name every other broker adapter uses.
+                "prev_close": float(ltpc.get("cp", 0)),
             }
         )
         # LTPC carries the wrapper-typed iep; the other CAS fields exist only
@@ -977,7 +979,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "open": float(ohlc.get("open", 0)),
                 "high": float(ohlc.get("high", 0)),
                 "low": float(ohlc.get("low", 0)),
+                # NOTE: this "close" is TODAY's running close from the 1d candle,
+                # i.e. it tracks LTP - it is NOT the previous session's close.
+                # ltpc.cp is, and clients need it for change% against prev close.
                 "close": float(ohlc.get("close", 0)),
+                "prev_close": float(ltpc.get("cp", 0)),
                 "ltp": float(ltp),
                 "last_trade_quantity": int(ltq),
                 "volume": int(volume),

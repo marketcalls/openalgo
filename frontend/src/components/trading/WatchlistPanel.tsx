@@ -12,7 +12,10 @@
  * no second socket and no polling loop of its own.
  */
 
+import { useQuery } from '@tanstack/react-query'
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   GripVertical,
   MoreHorizontal,
@@ -22,6 +25,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { tradefinderApi } from '@/api/tradefinder'
 import { type Watchlist, type WatchlistItem, watchlistApi, watchlistError } from '@/api/watchlist'
 import { Button } from '@/components/ui/button'
 import {
@@ -93,6 +97,10 @@ interface Quote {
   high?: number
   low?: number
   open?: number
+  /** TradeFinder's R-factor (raw `param_3`), null when TF isn't currently
+   * ranking this symbol -- most rows, most of the time. NSE cash equities
+   * only, TF's only coverage. */
+  rFactor?: number | null
 }
 
 /**
@@ -137,8 +145,59 @@ const COLUMNS: readonly Column[] = [
   { id: 'high', label: 'High', width: 60, get: (q: Quote) => (q.high ? fmt(q.high) : '-') },
   { id: 'low', label: 'Low', width: 60, get: (q: Quote) => (q.low ? fmt(q.low) : '-') },
   { id: 'open', label: 'Open', width: 60, get: (q: Quote) => (q.open ? fmt(q.open) : '-') },
+  {
+    id: 'rFactor',
+    label: 'M Score',
+    width: 64,
+    get: (q: Quote) => (q.rFactor == null ? '-' : q.rFactor.toFixed(1)),
+  },
 ] as const
 type ColumnId = string
+
+/**
+ * Raw numeric value behind each column, for sorting rather than display.
+ *
+ * Volume, high, low and open all render "-" for a zero (compact() and the
+ * column's own `get` both treat 0 as "no value", since a real Vol/High/Low/
+ * Open is never legitimately zero -- it means the snapshot hasn't carried
+ * one yet). Sorting must agree: leaving the raw 0 here would rank an
+ * unavailable row first on an ascending sort instead of last with the rest
+ * of the unknowns. Change/changePercent are exempt -- an unchanged price is
+ * a real, displayed 0.00, not a missing value.
+ */
+const SORT_VALUE: Record<ColumnId, (q: Quote) => number | null | undefined> = {
+  last: (q) => q.ltp,
+  change: (q) => q.change,
+  changePercent: (q) => q.changePercent,
+  volume: (q) => q.volume || null,
+  high: (q) => q.high || null,
+  low: (q) => q.low || null,
+  open: (q) => q.open || null,
+  rFactor: (q) => q.rFactor ?? null,
+}
+
+/** Which column the list is sorted by. Null means the user's own drag order. */
+interface Sort {
+  id: ColumnId | 'symbol'
+  dir: 'asc' | 'desc'
+}
+
+const SORT_KEY = 'oa-trading-watchlist-sort'
+
+function readSort(): Sort | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null')
+    const validIds = new Set<string>(['symbol', ...COLUMNS.map((c) => c.id)])
+    return saved &&
+      typeof saved.id === 'string' &&
+      validIds.has(saved.id) &&
+      (saved.dir === 'asc' || saved.dir === 'desc')
+      ? saved
+      : null
+  } catch {
+    return null
+  }
+}
 
 /** Lakhs and crores: raw volume does not fit a 58px column. */
 function compact(value: number | undefined): string {
@@ -158,7 +217,7 @@ interface Display {
 
 const DISPLAY_KEY = 'oa-trading-watchlist-display'
 const DISPLAY_DEFAULT: Display = {
-  columns: ['last', 'changePercent'],
+  columns: ['last', 'changePercent', 'rFactor'],
   logo: true,
   exchange: true,
 }
@@ -238,12 +297,40 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
   const [confirm, setConfirm] = useState<{ kind: 'delete' | 'clear'; name: string } | null>(null)
 
   const fileRef = useRef<HTMLInputElement>(null)
+  // Rebuilt every render from sortedItems below, so ArrowUp/Down can move
+  // DOM focus to the newly-charted row without a second index to keep in
+  // sync with activeSymbol.
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([])
   const { isMarketOpen } = useMarketStatus()
 
   const [display, setDisplay] = useState<Display>(readDisplay)
   useEffect(() => {
     localStorage.setItem(DISPLAY_KEY, JSON.stringify(display))
   }, [display])
+
+  /**
+   * Column-header sort, TradingView-style: click cycles ascending, descending,
+   * then back to the list's own drag order (null). Persisted per browser like
+   * the other display prefs, since it is a "how I like this list" choice.
+   */
+  const [sort, setSort] = useState<Sort | null>(readSort)
+  useEffect(() => {
+    localStorage.setItem(SORT_KEY, JSON.stringify(sort))
+  }, [sort])
+  // Hiding the sorted column would otherwise leave the list sorted by
+  // something with no header left to show the arrow or clear it from --
+  // stuck sorted by an invisible column until the user re-shows it.
+  useEffect(() => {
+    if (sort && sort.id !== 'symbol' && !display.columns.includes(sort.id)) {
+      setSort(null)
+    }
+  }, [display.columns, sort])
+  const toggleSort = (id: Sort['id']) =>
+    setSort((prev) => {
+      if (!prev || prev.id !== id) return { id, dir: 'asc' }
+      if (prev.dir === 'asc') return { id, dir: 'desc' }
+      return null
+    })
 
   /** The chosen columns, in the canonical order rather than click order. */
   const shownColumns = useMemo(
@@ -397,6 +484,42 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
   const [resolvedCloses, setResolvedCloses] = useState<Record<string, number>>({})
 
   /**
+   * TradeFinder R-factor per NSE symbol, merged from `intraday_boost`
+   * (`score`) and sector_scope's per-sector stock breakdown (`param_3`).
+   * Verified live that these two agree exactly on shared symbols (e.g. INFY
+   * 1.03 both places) -- they're the same metric. `breakout_beacon` and
+   * `high_powered_stocks` are deliberately excluded: their `score` field is
+   * on a wholly different, much larger scale (e.g. HDFCBANK 115.06 there vs
+   * 0.21 everywhere else that day) despite the backend labelling it the same
+   * way -- merging them in silently corrupted the column. Most watchlist
+   * symbols will still show nothing: TF only ranks the NSE names it
+   * currently finds interesting.
+   */
+  const { data: rFactorScores } = useQuery({
+    queryKey: ['watchlist-rfactor', apiKey],
+    queryFn: async () => {
+      const [pulse, sector] = await Promise.all([
+        tradefinderApi.getMarketPulse(apiKey),
+        tradefinderApi.getSectorScope(apiKey),
+      ])
+      const scores = new Map<string, number>()
+      for (const item of pulse.data?.intraday_boost ?? []) {
+        scores.set(item.symbol.toUpperCase(), item.score)
+      }
+      for (const sectorStocks of Object.values(sector.data?.sectors ?? {})) {
+        for (const stock of Object.values(sectorStocks)) {
+          const key = stock.symbol.toUpperCase()
+          if (!scores.has(key)) scores.set(key, stock.param_3)
+        }
+      }
+      return scores
+    },
+    enabled: Boolean(apiKey),
+    staleTime: 30_000,
+    refetchInterval: SNAPSHOT_REFRESH_MS,
+  })
+
+  /**
    * Last price and change per row.
    *
    * The live price comes from the hook, which has already chosen between the
@@ -424,10 +547,36 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         high: snapshot?.high,
         low: snapshot?.low,
         open: snapshot?.open,
+        rFactor:
+          row.exchange === 'NSE' ? (rFactorScores?.get(row.symbol.toUpperCase()) ?? null) : null,
       }
     }
     return next
-  }, [priced, multiQuotes, resolvedCloses])
+  }, [priced, multiQuotes, resolvedCloses, rFactorScores])
+
+  /**
+   * Rows in display order: the list's own drag order when unsorted, or by the
+   * clicked column otherwise. A row with no quote yet (or a column with no
+   * value for it, e.g. no previous close) sorts to the bottom regardless of
+   * direction -- matching TradingView rather than treating "unknown" as zero,
+   * which would park it among the biggest losers.
+   */
+  const sortedItems = useMemo(() => {
+    if (!sort) return items
+    const dir = sort.dir === 'asc' ? 1 : -1
+    return [...items].sort((a, b) => {
+      if (sort.id === 'symbol') return dir * a.symbol.localeCompare(b.symbol)
+      const accessor = SORT_VALUE[sort.id]
+      const av = accessor?.(quotes[`${a.exchange}:${a.symbol}`] ?? ({} as Quote))
+      const bv = accessor?.(quotes[`${b.exchange}:${b.symbol}`] ?? ({} as Quote))
+      const aNum = typeof av === 'number' && Number.isFinite(av) ? av : null
+      const bNum = typeof bv === 'number' && Number.isFinite(bv) ? bv : null
+      if (aNum == null && bNum == null) return 0
+      if (aNum == null) return 1
+      if (bNum == null) return -1
+      return dir * (aNum - bNum)
+    })
+  }, [items, sort, quotes])
 
   // One request per instrument per trading day, and only for the ones that
   // need it, so a broker whose quote already carries a real previous close
@@ -812,16 +961,41 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         </DropdownMenu>
       </div>
 
-      {/* Column header, built from the same selection as the rows below */}
+      {/* Column header, built from the same selection as the rows below.
+          Each cell is a sort toggle, TradingView-style: click cycles
+          ascending, descending, then back to the list's own drag order. */}
       <div
         className="grid shrink-0 gap-x-1.5 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70"
         style={{ gridTemplateColumns: gridTemplate }}
       >
-        <span>Symbol</span>
+        <button
+          type="button"
+          onClick={() => toggleSort('symbol')}
+          className="flex items-center gap-0.5 text-left hover:text-foreground"
+        >
+          Symbol
+          {sort?.id === 'symbol' &&
+            (sort.dir === 'asc' ? (
+              <ArrowUp className="h-2.5 w-2.5" />
+            ) : (
+              <ArrowDown className="h-2.5 w-2.5" />
+            ))}
+        </button>
         {shownColumns.map((column) => (
-          <span key={column.id} className="text-right">
+          <button
+            key={column.id}
+            type="button"
+            onClick={() => toggleSort(column.id)}
+            className="flex items-center justify-end gap-0.5 text-right hover:text-foreground"
+          >
             {column.label}
-          </span>
+            {sort?.id === column.id &&
+              (sort.dir === 'asc' ? (
+                <ArrowUp className="h-2.5 w-2.5" />
+              ) : (
+                <ArrowDown className="h-2.5 w-2.5" />
+              ))}
+          </button>
         ))}
         <span />
       </div>
@@ -851,7 +1025,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
             </Button>
           </div>
         ) : (
-          items.map((item, index) => {
+          sortedItems.map((item, index) => {
             const key = `${item.exchange}:${item.symbol}`
             const quote = quotes[key]
             // Three states, not two: no previous close means no direction.
@@ -862,11 +1036,17 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
             // downward drag lands BELOW the row it was dropped on; drawing
             // the line above it both times told the user the wrong thing.
             const dropBelow = dragId != null && items.findIndex((i) => i.id === dragId) < index
+            // Dragging to reorder only makes sense against the list's own
+            // order. While a column sort is active, the row's position on
+            // screen no longer matches its position in `items`, so a drop
+            // here would silently reorder the wrong pair of instruments.
+            const draggableRow = sort === null
             return (
               <div
                 key={item.id}
-                draggable
+                draggable={draggableRow}
                 onDragStart={(e) => {
+                  if (!draggableRow) return
                   // Firefox refuses to begin a drag unless dataTransfer carries
                   // something, so this is what makes reordering work there.
                   e.dataTransfer.effectAllowed = 'move'
@@ -874,12 +1054,13 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                   setDragId(item.id)
                 }}
                 onDragOver={(e) => {
+                  if (!draggableRow) return
                   e.preventDefault()
                   e.dataTransfer.dropEffect = 'move'
                   setOverId(item.id)
                 }}
                 onDragLeave={() => setOverId((id) => (id === item.id ? null : id))}
-                onDrop={() => void dropOn(item.id)}
+                onDrop={() => draggableRow && void dropOn(item.id)}
                 onDragEnd={() => {
                   setDragId(null)
                   setOverId(null)
@@ -923,8 +1104,18 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                     stay on the wrapper, which still receives them because a
                     plain button is not itself draggable. */}
                 <button
+                  ref={(el) => {
+                    rowRefs.current[index] = el
+                  }}
                   type="button"
-                  onClick={() => onPick({ symbol: item.symbol, exchange: item.exchange })}
+                  onClick={(e) => {
+                    onPick({ symbol: item.symbol, exchange: item.exchange })
+                    // Click-to-focus on a <button> isn't guaranteed (macOS
+                    // Safari skips it without Full Keyboard Access), so without
+                    // this an arrow key right after a mouse click would do
+                    // nothing until the row was tabbed to instead.
+                    e.currentTarget.focus()
+                  }}
                   onKeyDown={(e) => {
                     // Removing from the row itself is what lets the trash stay
                     // out of the tab order: two stops per row would be sixty
@@ -932,6 +1123,14 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                     if (e.key === 'Delete') {
                       e.preventDefault()
                       void removeSymbol(item)
+                    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      const next = index + (e.key === 'ArrowDown' ? 1 : -1)
+                      if (next < 0 || next >= sortedItems.length) return
+                      const target = sortedItems[next]
+                      onPick({ symbol: target.symbol, exchange: target.exchange })
+                      rowRefs.current[next]?.focus()
+                      rowRefs.current[next]?.scrollIntoView({ block: 'nearest' })
                     }
                   }}
                   className="absolute inset-0 cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"

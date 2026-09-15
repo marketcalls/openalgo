@@ -7,6 +7,7 @@ Optimized for backtesting and analytical queries.
 """
 
 from __future__ import annotations
+
 import os
 import threading
 from contextlib import contextmanager
@@ -93,7 +94,9 @@ def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
                     logger.debug(f"DuckDB connection attempt {attempt + 1} failed, retrying: {e}")
                     time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
                 else:
-                    logger.exception(f"Failed to connect to DuckDB after {max_retries} attempts: {e}")
+                    logger.exception(
+                        f"Failed to connect to DuckDB after {max_retries} attempts: {e}"
+                    )
 
         if conn is None:
             raise last_error or Exception("Failed to connect to DuckDB")
@@ -382,9 +385,7 @@ def init_database():
             ("last_error", "VARCHAR"),
         ]:
             try:
-                conn.execute(
-                    f"ALTER TABLE expired_fno_contracts ADD COLUMN {col} {typedef}"
-                )
+                conn.execute(f"ALTER TABLE expired_fno_contracts ADD COLUMN {col} {typedef}")
             except Exception:
                 pass  # Column already exists
 
@@ -584,11 +585,13 @@ def bulk_remove_from_watchlist(
                 exchange = item.get("exchange", "").upper()
 
                 if not symbol or not exchange:
-                    failed.append({
-                        "symbol": symbol or "MISSING",
-                        "exchange": exchange or "MISSING",
-                        "error": "Missing symbol or exchange",
-                    })
+                    failed.append(
+                        {
+                            "symbol": symbol or "MISSING",
+                            "exchange": exchange or "MISSING",
+                            "error": "Missing symbol or exchange",
+                        }
+                    )
                     continue
 
                 # Check if exists
@@ -607,13 +610,17 @@ def bulk_remove_from_watchlist(
                     removed += 1
                     existing_set.discard((symbol, exchange))
                 except Exception as e:
-                    failed.append({
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "error": str(e),
-                    })
+                    failed.append(
+                        {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "error": str(e),
+                        }
+                    )
 
-        logger.info(f"Bulk watchlist remove: {removed} removed, {skipped} skipped, {len(failed)} failed")
+        logger.info(
+            f"Bulk watchlist remove: {removed} removed, {skipped} skipped, {len(failed)} failed"
+        )
         return removed, skipped, failed
 
     except Exception as e:
@@ -676,7 +683,9 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
         numeric_columns = price_columns + ["volume", "oi"]
         df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors="coerce")
 
-        invalid_price_mask = df[price_columns].isna().any(axis=1) | (df[price_columns] <= 0).any(axis=1)
+        invalid_price_mask = df[price_columns].isna().any(axis=1) | (df[price_columns] <= 0).any(
+            axis=1
+        )
         invalid_price_rows = int(invalid_price_mask.sum())
         if invalid_price_rows:
             logger.warning(
@@ -1202,6 +1211,178 @@ def _get_market_open_seconds(exchange: str) -> int:
     return EXCHANGE_MARKET_OPEN_SECONDS.get(exchange.upper(), 33300)
 
 
+# IST is UTC+5:30. Stored timestamps are UTC epoch seconds, so every candle
+# boundary calculation has to shift into IST, bucket there, and shift back.
+IST_OFFSET_SECONDS = 19800
+
+
+def bucket_start(ts: int, interval_seconds: int, market_open_seconds: int) -> int:
+    """
+    Candle start for a timestamp, aligned to the exchange's market open.
+
+    The Python twin of the bucket expression embedded in the SQL of
+    ``_get_aggregated_ohlcv``. Anything that has to place a bar outside a query
+    -- stitching a live quote onto a stored series, for one -- must land on the
+    same boundary the aggregation would have produced, or the two disagree by
+    minutes and the newest candle is silently wrong.
+
+    ``test/test_screener_bars.py`` evaluates the SQL expression and this
+    function over the same epochs and asserts they match, so a change to either
+    side cannot drift unnoticed.
+
+    Args:
+        ts: UTC epoch seconds.
+        interval_seconds: Candle width, e.g. 300 for 5m.
+        market_open_seconds: Seconds from IST midnight to the open, e.g. 33300
+            for NSE's 09:15. See ``_get_market_open_seconds``.
+
+    Returns:
+        UTC epoch seconds of the containing candle's start.
+    """
+    shifted = ts + IST_OFFSET_SECONDS
+    day_start_utc = (shifted // 86400) * 86400 - IST_OFFSET_SECONDS
+    trading_seconds = (shifted % 86400) - market_open_seconds
+    # Floor division, matching SQL FLOOR(): a pre-open timestamp gives a
+    # negative bucket rather than rounding toward zero into the session.
+    offset = (trading_seconds // interval_seconds) * interval_seconds
+    return int(day_start_utc + market_open_seconds + offset)
+
+
+def _bulk_frame(exchange: str, symbols: list[str], interval: str, bars: int) -> pd.DataFrame:
+    """
+    Last ``bars`` candles for every symbol on one exchange, in one query.
+
+    Split by exchange because the bucket expression embeds that exchange's
+    market open as a literal, so it cannot vary within a query.
+    """
+    market_open = _get_market_open_seconds(exchange)
+    placeholders = ", ".join("?" for _ in symbols)
+    params: list[Any] = [interval if interval in STORAGE_INTERVALS else "1m"]
+    params += [exchange, *symbols]
+
+    if interval in STORAGE_INTERVALS:
+        source = f"""
+            SELECT symbol, timestamp, open, high, low, close, volume
+            FROM market_data
+            WHERE interval = ?
+              AND exchange = ?
+              AND symbol IN ({placeholders})
+        """
+    else:
+        minutes = INTERVAL_MINUTES.get(interval)
+        if minutes is None:
+            return pd.DataFrame()
+        secs = minutes * 60
+        bucket = (
+            f"(FLOOR((timestamp + {IST_OFFSET_SECONDS}) / 86400) * 86400 "
+            f"- {IST_OFFSET_SECONDS}) + {market_open} + "
+            f"FLOOR((((timestamp + {IST_OFFSET_SECONDS}) % 86400) - {market_open})"
+            f" / {secs}) * {secs}"
+        )
+        source = f"""
+            SELECT symbol,
+                   {bucket} AS timestamp,
+                   FIRST(open ORDER BY timestamp) AS open,
+                   MAX(high) AS high,
+                   MIN(low) AS low,
+                   LAST(close ORDER BY timestamp) AS close,
+                   SUM(volume) AS volume
+            FROM market_data
+            WHERE interval = ?
+              AND exchange = ?
+              AND symbol IN ({placeholders})
+            GROUP BY symbol, {bucket}
+        """
+
+    # QUALIFY bounds the payload to the last N bars *per symbol*. A date window
+    # cannot: it returns 5 bars for a thinly ingested symbol and 2000 for a
+    # dense one, and an indicator needs a predictable warm-up either way.
+    query = f"""
+        WITH src AS ({source})
+        SELECT *
+        FROM src
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp DESC) <= {int(bars)}
+        ORDER BY symbol, timestamp
+    """
+
+    with get_connection() as conn:
+        return conn.execute(query, params).fetchdf()
+
+
+def get_bulk_ohlcv(
+    pairs: list[tuple[str, str]], interval: str, bars: int
+) -> tuple[dict[str, dict[str, list]], list[str]]:
+    """
+    Read many symbols' OHLCV in one query per exchange.
+
+    The screener asks the same question of hundreds of symbols at once, which
+    ``get_ohlcv`` answers one symbol per call behind a process-wide connection
+    lock -- so a loop over it pays several hundred connection open/close cycles
+    and cannot be parallelised out of. ``portfolio/data.py`` established the
+    shape this follows (one query, columnar result, 17ms against 265ms); this
+    is that with the full bar rather than closes only.
+
+    Symbols with no ingested history are **returned, not raised on**. A missing
+    symbol matters -- it is one nobody screened -- but refusing to scan the
+    other 480 because 20 were never downloaded would make the feature useless.
+    The caller surfaces them.
+
+    Args:
+        pairs: ``(symbol, exchange)`` tuples. Case-insensitive, deduped here.
+        interval: One of ``STORAGE_INTERVALS`` or ``COMPUTED_INTERVALS``.
+        bars: Most recent candles per symbol.
+
+    Returns:
+        ``(data, missing)`` where data maps ``"EXCHANGE:SYMBOL"`` to columnar
+        arrays ``{"t","o","h","l","c","v"}`` (``v`` omitted when every bar has
+        zero volume), and missing lists the requested keys that had no rows.
+    """
+    wanted: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for symbol, exchange in pairs:
+        key = ((symbol or "").strip().upper(), (exchange or "").strip().upper())
+        if key[0] and key[1] and key not in seen:
+            seen.add(key)
+            wanted.append(key)
+
+    by_exchange: dict[str, list[str]] = {}
+    for symbol, exchange in wanted:
+        by_exchange.setdefault(exchange, []).append(symbol)
+
+    data: dict[str, dict[str, list]] = {}
+    for exchange, symbols in by_exchange.items():
+        try:
+            frame = _bulk_frame(exchange, symbols, interval, bars)
+        except Exception:
+            # One exchange failing must not lose the others' results.
+            logger.exception(f"Bulk OHLCV query failed for {exchange} {interval}")
+            continue
+        if frame.empty:
+            continue
+        for symbol, group in frame.groupby("symbol", sort=False):
+            data[f"{exchange}:{symbol}"] = _columnarise(group)
+
+    missing = [f"{ex}:{sym}" for sym, ex in wanted if f"{ex}:{sym}" not in data]
+    return data, missing
+
+
+def _columnarise(group: pd.DataFrame) -> dict[str, list]:
+    """One symbol's frame as JSON-ready columns."""
+    volume = pd.to_numeric(group["volume"], errors="coerce").fillna(0)
+    columns: dict[str, list] = {
+        "t": group["timestamp"].astype("int64").tolist(),
+        "o": group["open"].round(4).tolist(),
+        "h": group["high"].round(4).tolist(),
+        "l": group["low"].round(4).tolist(),
+        "c": group["close"].round(4).tolist(),
+    }
+    # Indices carry no volume; sending a column of zeros for every symbol on
+    # every scan is pure payload.
+    if bool((volume != 0).any()):
+        columns["v"] = volume.astype("int64").tolist()
+    return columns
+
+
 def _get_aggregated_ohlcv(
     symbol: str,
     exchange: str,
@@ -1217,6 +1398,10 @@ def _get_aggregated_ohlcv(
     For MCX (opens 9:00), hourly candles are 9:00-10:00, 10:00-11:00, etc.
 
     Supports custom intervals like 25m, 45m, 2h, 3h, etc.
+
+    The bucket expression below has a Python twin in ``bucket_start``, for
+    callers that must place a bar outside a query. ``test/test_screener_bars.py``
+    pins the two together; change one and change the other.
 
     Args:
         symbol: Trading symbol
@@ -1517,8 +1702,11 @@ def get_data_range(symbol: str, exchange: str, interval: str) -> dict[str, Any] 
 
 
 def get_existing_dates(
-    symbol: str, exchange: str, interval: str,
-    start_ts: int, end_ts: int,
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_ts: int,
+    end_ts: int,
 ) -> set:
     """
     Get the set of dates (as date objects) that have data in market_data
@@ -1621,11 +1809,13 @@ def bulk_delete_market_data(
                 exchange = item.get("exchange", "").upper()
 
                 if not symbol or not exchange:
-                    failed.append({
-                        "symbol": symbol or "MISSING",
-                        "exchange": exchange or "MISSING",
-                        "error": "Missing symbol or exchange",
-                    })
+                    failed.append(
+                        {
+                            "symbol": symbol or "MISSING",
+                            "exchange": exchange or "MISSING",
+                            "error": "Missing symbol or exchange",
+                        }
+                    )
                     continue
 
                 try:
@@ -1637,7 +1827,7 @@ def bulk_delete_market_data(
                         """,
                         [symbol, exchange],
                     )
-                    rows_deleted = result.rowcount if hasattr(result, 'rowcount') else 0
+                    rows_deleted = result.rowcount if hasattr(result, "rowcount") else 0
 
                     # Delete from data_catalog
                     conn.execute(
@@ -1656,14 +1846,18 @@ def bulk_delete_market_data(
                         logger.debug(f"Bulk delete: No data found for {symbol}:{exchange}")
 
                 except Exception as e:
-                    failed.append({
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "error": str(e),
-                    })
+                    failed.append(
+                        {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "error": str(e),
+                        }
+                    )
                     logger.error(f"Bulk delete: Failed to delete {symbol}:{exchange}: {e}")
 
-        logger.info(f"Bulk delete completed: {deleted} deleted, {skipped} skipped, {len(failed)} failed")
+        logger.info(
+            f"Bulk delete completed: {deleted} deleted, {skipped} skipped, {len(failed)} failed"
+        )
         return deleted, skipped, failed
 
     except Exception as e:
@@ -1838,8 +2032,18 @@ def vacuum_database():
 # exchange the platform validates as legal, otherwise /history download/upload
 # rejects symbols that the live /quote and /history-API paths happily serve.
 SUPPORTED_EXCHANGES = [
-    "NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NCO",
-    "NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX",
+    "NSE",
+    "BSE",
+    "NFO",
+    "BFO",
+    "MCX",
+    "CDS",
+    "BCD",
+    "NCO",
+    "NSE_INDEX",
+    "BSE_INDEX",
+    "MCX_INDEX",
+    "GLOBAL_INDEX",
     "CRYPTO",
 ]
 
@@ -2671,7 +2875,9 @@ def export_to_parquet(
                     SELECT DISTINCT symbol, exchange FROM data_catalog
                     ORDER BY symbol, exchange
                 """).fetchdf()
-                symbols_list = [(row["symbol"], row["exchange"]) for _, row in symbols_df.iterrows()]
+                symbols_list = [
+                    (row["symbol"], row["exchange"]) for _, row in symbols_df.iterrows()
+                ]
 
             if not symbols_list:
                 return False, "No symbols found to export", 0
@@ -2680,8 +2886,8 @@ def export_to_parquet(
             target_interval = interval if interval else "D"
 
             is_daily_agg = is_daily_aggregated_interval(target_interval)
-            is_intraday_computed = (
-                target_interval in COMPUTED_INTERVALS or is_custom_interval(target_interval)
+            is_intraday_computed = target_interval in COMPUTED_INTERVALS or is_custom_interval(
+                target_interval
             )
 
             for sym, exch in symbols_list:
@@ -2741,9 +2947,7 @@ def export_to_parquet(
                         if parsed and parsed["type"] == "intraday":
                             minutes = parsed["minutes"]
                         else:
-                            logger.warning(
-                                f"Cannot parse interval {target_interval}, skipping"
-                            )
+                            logger.warning(f"Cannot parse interval {target_interval}, skipping")
                             skipped_intervals.append(f"{sym}:{exch}:{target_interval}")
                             continue
                     interval_seconds = minutes * 60
@@ -2810,8 +3014,16 @@ def export_to_parquet(
                 df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
                 df = df[
                     [
-                        "symbol", "exchange", "interval", "timestamp",
-                        "open", "high", "low", "close", "volume", "oi",
+                        "symbol",
+                        "exchange",
+                        "interval",
+                        "timestamp",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "volume",
+                        "oi",
                         "datetime",
                     ]
                 ]
@@ -2837,7 +3049,9 @@ def export_to_parquet(
         file_size = os.path.getsize(abs_output) / (1024 * 1024)  # MB
         message = f"Exported {record_count} records ({file_size:.2f} MB)"
         if skipped_intervals:
-            message += f". Note: {len(skipped_intervals)} symbol(s) skipped due to missing source data."
+            message += (
+                f". Note: {len(skipped_intervals)} symbol(s) skipped due to missing source data."
+            )
         logger.info(message)
         return True, message, record_count
 
@@ -4055,9 +4269,7 @@ def upsert_expired_fno_contracts(contracts: list[dict[str, Any]]) -> int:
         return 0
 
 
-def get_expired_fno_contracts(
-    upstox_key: str, expiry_date: str
-) -> list[dict[str, Any]]:
+def get_expired_fno_contracts(upstox_key: str, expiry_date: str) -> list[dict[str, Any]]:
     """
     Get cached contracts for an instrument + expiry combination.
 
@@ -4100,9 +4312,7 @@ def get_expired_fno_contracts(
         return []
 
 
-def mark_expired_fno_contract_done(
-    expired_instrument_key: str, candle_count: int
-) -> None:
+def mark_expired_fno_contract_done(expired_instrument_key: str, candle_count: int) -> None:
     """Mark an expired F&O contract as data downloaded."""
     try:
         with get_connection() as conn:
@@ -4145,9 +4355,7 @@ def resolve_expired_fno_contract(
         logger.exception(f"Error resolving expired F&O contract: {e}")
 
 
-def increment_expired_fno_retry(
-    expired_instrument_key: str, error_msg: str | None = None
-) -> None:
+def increment_expired_fno_retry(expired_instrument_key: str, error_msg: str | None = None) -> None:
     """Increment retry count and record error for a failed contract download."""
     try:
         with get_connection() as conn:
@@ -4174,9 +4382,24 @@ def upsert_rolling_options(rows: list[dict[str, Any]]) -> int:
     if not rows:
         return 0
     cols = [
-        "underlying", "exchange_segment", "instrument", "expiry_flag", "expiry_code",
-        "interval", "strike_label", "strike_price", "option_type", "timestamp",
-        "open", "high", "low", "close", "volume", "oi", "iv", "spot",
+        "underlying",
+        "exchange_segment",
+        "instrument",
+        "expiry_flag",
+        "expiry_code",
+        "interval",
+        "strike_label",
+        "strike_price",
+        "option_type",
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "oi",
+        "iv",
+        "spot",
     ]
     placeholders = ", ".join("?" for _ in cols)
     try:
@@ -4205,12 +4428,8 @@ def delete_market_data_symbols(pairs: list[tuple[str, str]], interval: str = "1m
             # Bulk semi-join delete: register the pairs once, scan each table once.
             # (market_data has no index on `symbol`, so per-row deletes would each
             # full-scan a multi-GB table — a single pass is orders of magnitude faster.)
-            conn.execute(
-                "CREATE TEMP TABLE _del_syms (symbol VARCHAR, exchange VARCHAR)"
-            )
-            conn.executemany(
-                "INSERT INTO _del_syms VALUES (?, ?)", [[s, e] for s, e in pairs]
-            )
+            conn.execute("CREATE TEMP TABLE _del_syms (symbol VARCHAR, exchange VARCHAR)")
+            conn.executemany("INSERT INTO _del_syms VALUES (?, ?)", [[s, e] for s, e in pairs])
             conn.execute(
                 "DELETE FROM market_data WHERE interval = ? AND (symbol, exchange) IN "
                 "(SELECT symbol, exchange FROM _del_syms)",
@@ -4269,8 +4488,13 @@ def update_expired_fno_job(job_id: str, updates: dict[str, Any]) -> None:
     """Update fields on an expired F&O job record."""
     try:
         allowed = {
-            "status", "total_contracts", "completed_contracts",
-            "failed_contracts", "started_at", "completed_at", "error_message",
+            "status",
+            "total_contracts",
+            "completed_contracts",
+            "failed_contracts",
+            "started_at",
+            "completed_at",
+            "error_message",
         }
         fields = {k: v for k, v in updates.items() if k in allowed}
         if not fields:
@@ -4292,9 +4516,7 @@ def get_expired_fno_job(job_id: str) -> dict[str, Any] | None:
     """Get a single expired F&O job by ID."""
     try:
         with get_connection() as conn:
-            result = conn.execute(
-                "SELECT * FROM expired_fno_jobs WHERE id = ?", [job_id]
-            ).fetchdf()
+            result = conn.execute("SELECT * FROM expired_fno_jobs WHERE id = ?", [job_id]).fetchdf()
 
             if result.empty:
                 return None
@@ -4371,7 +4593,7 @@ def get_pending_expired_fno_contracts(
     # Guard: empty contract_types would generate invalid SQL `IN ()`.
     # Default to all contract types when none are specified.
     if not contract_types:
-        contract_types = ['CE', 'PE', 'FUT']
+        contract_types = ["CE", "PE", "FUT"]
 
     try:
         with get_connection() as conn:
@@ -4450,13 +4672,11 @@ def get_expired_fno_stats() -> dict[str, Any]:
     """Get summary statistics for expired F&O data."""
     try:
         with get_connection() as conn:
-            expiries_count = conn.execute(
-                "SELECT COUNT(*) FROM expired_fno_expiries"
-            ).fetchone()[0]
+            expiries_count = conn.execute("SELECT COUNT(*) FROM expired_fno_expiries").fetchone()[0]
 
-            contracts_count = conn.execute(
-                "SELECT COUNT(*) FROM expired_fno_contracts"
-            ).fetchone()[0]
+            contracts_count = conn.execute("SELECT COUNT(*) FROM expired_fno_contracts").fetchone()[
+                0
+            ]
 
             downloaded_count = conn.execute(
                 "SELECT COUNT(*) FROM expired_fno_contracts WHERE data_fetched = TRUE"

@@ -55,13 +55,17 @@ class BoostSnapshotsSchema(Schema):
     list_type = fields.Str(
         required=False,
         load_default="intraday_boost",
-        validate=validate.OneOf(["intraday_boost", "breakout_beacon", "high_powered_stocks"]),
+        validate=validate.OneOf(
+            ["intraday_boost", "breakout_beacon", "high_powered_stocks", "sector_index"]
+        ),
     )
     # HH:MM IST. When set, the universe is what the list looked like as of that
     # time (no whole-day hindsight). Omit/empty = best rank over the whole day.
     rankAsOf = fields.Str(required=False, load_default="", validate=validate.Length(max=5))
     # Also return every symbol's rank over time, for a per-signal top-N gate.
     includeRanks = fields.Bool(required=False, load_default=False)
+    # Also return every symbol's ltp over time, for consolidation/breakout detection.
+    includePrices = fields.Bool(required=False, load_default=False)
 
 
 class TfMarketPulseSchema(Schema):

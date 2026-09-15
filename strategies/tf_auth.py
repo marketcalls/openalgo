@@ -30,7 +30,7 @@ TF_PROFILE_DIR = os.getenv("TF_PROFILE_DIR", os.path.join(_HERE, ".tf_browser_pr
 TF_HOME_URL    = "https://tradefinder.in/home"
 TF_LOGIN_URL   = "https://tradefinder.in/login"
 TF_EMAIL       = os.getenv("TF_EMAIL", "sheladiyaaakash123@gmail.com")
-TF_LS_KEY      = "lt"   # localStorage key holding the JWT (DevTools → Application → Local Storage)
+TF_LS_KEY      = "tradefinder_token"   # localStorage key holding the JWT (DevTools → Application → Local Storage). Was "lt" until TradeFinder renamed it 2026-09.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -90,33 +90,58 @@ def _attempt_google_login(page) -> None:
     With the persistent profile already signed into Google, clicking the account tile
     completes in ~5s without a password.
 
-    Current TF landing-page flow (verified 2026-07-21): the "Login with Google"
-    text/aria selectors this used to rely on don't exist — the site opens a
-    "Welcome!" modal with a "User Login" button (Google-icon, no "google" in
-    its text) that then shows the standard Google account chooser.
+    Current TF landing-page flow (verified 2026-09-14): the site opens a
+    "Welcome!" modal (`.tf-land-modal`) with a "User Login" pill (Google-icon,
+    no "google" in its text) that then opens the standard Google account
+    chooser **in a separate popup window**, not inline — clicking the email
+    tile on `page` itself is a silent no-op since the tile lives on that
+    popup. TF has rewritten the nav button's markup/classes at least three
+    times now (see git history) while its accessible role and exact text
+    ("Login", not "Login Now") have stayed put, so the primary selector
+    targets those instead of CSS classes — the old class-based selectors stay
+    as a fallback in case a future TF rewrite drops the role/text too.
     """
-    # 1) Open the "Welcome!" login modal from the homepage nav/hero button.
-    # Click directly (no count()>0 pre-check) — count() is a synchronous
-    # snapshot taken before Playwright's own actionability wait runs, so it
-    # can read 0 a moment before the element renders, silently skipping a
-    # click that would have succeeded. click(timeout=...) already waits/
-    # retries for the element to appear, so let it do that job.
-    for sel in ["div.homepagebutton.login", "a.item-menu-mobile:has-text('Login')"]:
-        try:
-            page.locator(sel).first.click(timeout=5000)
-            break
-        except Exception:
-            continue
-
-    # 2) In the modal, click "User Login" (the Google-OAuth option).
+    # 1) Open the "Welcome!" login modal from the homepage nav button.
+    # get_by_role first (survives class/DOM rewrites); wait_for_selector on
+    # the fallbacks so a cold load that's still hydrating gets one more beat
+    # before click(timeout=...) gives up.
     try:
-        page.locator("text=User Login").first.click(timeout=5000)
+        page.get_by_role("button", name="Login", exact=True).click(timeout=8000)
+    except Exception:
+        for sel in ["nav.tf-hp-nav-links button:has-text('Login')", "div.homepagebutton.login", "a.item-menu-mobile:has-text('Login')"]:
+            try:
+                page.wait_for_selector(sel, timeout=8000, state="visible")
+                page.locator(sel).first.click(timeout=8000)
+                break
+            except Exception:
+                continue
+
+    # 2) In the modal, click "User Login" (the Google-OAuth option). This has
+    # opened a popup window on every run verified so far, but Google's own
+    # OAuth flow is free to redirect the current tab instead (observed live
+    # 2026-09-14) -- expect_page times out with no popup ever created in that
+    # case, so `target` falls through to `page` itself rather than silently
+    # giving up (the bug this replaces: no popup meant no click, ever, and
+    # the account chooser just sat there for the rest of the timeout budget).
+    popup = None
+    try:
+        with page.context.expect_page(timeout=5000) as popup_info:
+            page.locator("text=User Login").first.click(timeout=5000)
+        popup = popup_info.value
+        popup.wait_for_load_state("domcontentloaded", timeout=10000)
     except Exception:
         pass
 
-    # 3) On the Google account chooser, click our email tile if presented.
+    # 3) On the Google account chooser -- in the popup if one opened,
+    # otherwise `page` itself navigated there inline -- click our email tile.
+    target = popup if popup is not None else page
+    if target is page:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
     try:
-        page.locator(f"text={TF_EMAIL}").first.click(timeout=8000)
+        target.locator(f"text={TF_EMAIL}").first.click(timeout=8000)
     except Exception:
         pass
 
@@ -147,7 +172,6 @@ def refresh_tf_jwt(headless: bool = True, timeout_s: int = 60) -> str | None:
               f"          run: uv run python strategies/tf_login_setup.py  (one-time Google login)")
         return None
 
-    deadline = time.time() + timeout_s
     try:
         with sync_playwright() as p:
             ctx = p.chromium.launch_persistent_context(
@@ -175,6 +199,11 @@ def refresh_tf_jwt(headless: bool = True, timeout_s: int = 60) -> str | None:
                 except Exception:
                     pass
 
+            # Budget starts HERE, not before launch. Cold Chromium start +
+            # goto (30s) + the login-modal flow (up to ~33s of waits) used to
+            # eat the whole timeout, so on a busy boot this loop ran zero
+            # times and a perfectly healthy profile returned None.
+            deadline = time.time() + timeout_s
             while time.time() < deadline:
                 jwt = _read_lt_from_page(page)
                 if jwt and jwt_expiry_seconds(jwt) > _FRESH_ENOUGH_SECONDS:

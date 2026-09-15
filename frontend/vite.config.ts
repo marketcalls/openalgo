@@ -48,6 +48,20 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
+      // Historify serves its own routes under /historify rather than /api/v1
+      // (session auth, not API key), and webClient addresses them relatively.
+      // Without this the dev server answers them itself and returns the SPA
+      // shell, so the screener's bar fetch and the expired-F&O calls fail on a
+      // JSON parse rather than a status code.
+      '/historify': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
+      // Watchlists are the screener's symbol source, same arrangement.
+      '/watchlist': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
     },
   },
   build: {

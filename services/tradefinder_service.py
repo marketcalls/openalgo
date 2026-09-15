@@ -55,6 +55,15 @@ def _get_tf_jwt() -> str:
     return TF_JWT_TOKEN
 
 
+def has_tf_jwt() -> bool:
+    """Whether a server-side JWT is present at all -- lets a caller whose
+    fetch just failed tell "no token to authenticate with" apart from "token
+    was fine, the request itself failed" (bad route, network error, TF
+    outage), instead of collapsing every failure into one misleading
+    "token unavailable or expired" message."""
+    return bool(_get_tf_jwt())
+
+
 def _tf_totp(ts_ms: int, step: int = 30) -> str:
     """RFC 6238 TOTP — HMAC-SHA1, 30s window, 6 digits."""
     counter = int(ts_ms / 1000 / step)
@@ -107,6 +116,24 @@ def _map_items(raw: list[dict]) -> list[dict]:
     return items
 
 
+def _on_auth_failure() -> None:
+    """A live request just proved the cached token is dead -- possibly before
+    its own exp claim says so (TF can revoke the session server-side
+    independent of the JWT's stated expiry). Kick an immediate background
+    refresh instead of waiting for the next scheduled keepalive tick, which
+    is up to 20 minutes away: without this, every TradeFinder call fails for
+    that whole window even though the self-heal (headless reload, falling
+    back to an automated headed Google re-login) takes well under two
+    minutes once it actually starts. Deduped by the keepalive service's own
+    lock, so calling this on every failed request during the outage is
+    harmless -- it's a no-op once a refresh is already in flight."""
+    try:
+        from services.tf_jwt_keepalive_service import trigger_refresh_if_needed
+        trigger_refresh_if_needed(force=True)
+    except Exception:
+        logger.exception("Failed to trigger immediate TF JWT refresh after auth failure")
+
+
 def fetch_market_pulse() -> Optional[dict[str, list[dict]]]:
     """Fetch all three TradeFinder ranked lists in one call. Returns None on
     ANY failure (empty/expired JWT, network error, TF error payload) so the
@@ -126,6 +153,7 @@ def fetch_market_pulse() -> Optional[dict[str, list[dict]]]:
     if data.get("status") == "ERROR":
         logger.warning(f"TradeFinder error: {data.get('code')} — {data.get('message')} "
                         f"(JWT expired? paste a fresh token into {TF_JWT_FILE})")
+        _on_auth_failure()
         return None
     payload_data = (data.get("payload") or {}).get("data") or {}
     result = {}
@@ -140,29 +168,60 @@ def fetch_market_pulse() -> Optional[dict[str, list[dict]]]:
 
 
 def fetch_sector_scope() -> Optional[dict]:
-    """Fetch TradeFinder's sector rfactor index + per-sector stock breakdown
-    (the two calls openalgo-chart's SectorScope.tsx makes client-side) using
-    the server's own auto-refreshing JWT. Returns None on ANY failure (empty/
-    expired JWT, network error, TF error payload) — mirrors fetch_market_pulse's
-    all-or-nothing contract so the caller can fall back cleanly."""
+    """Fetch TradeFinder's sector rfactor index + per-sector stock breakdown.
+
+    TF used to serve this as two separate calls (/data/order/daily-index +
+    /data/order/all_sector) authenticated the same way as market_pulse
+    (a custom 'jwttoken' header). As of 2026-09, both of those routes 404 —
+    verified live against tradefinder.in's own Sector Scope page via a
+    Playwright probe of the persisted, already-logged-in browser profile
+    (strategies/.tf_browser_profile): TF now serves both halves from a single
+    /data/sector_scope endpoint (payload.data.{'daily-index','all_sector'},
+    identical shape to the old two responses), and that route only accepts
+    the JWT as a standard 'Authorization: Bearer <token>' header — the
+    'accesstoken' TOTP header is unchanged, and it's the exact same JWT
+    (verified identical claims/allowed_pages to what 'jwttoken' still uses on
+    market_pulse, just a fresher mint). market_pulse's legacy header still
+    works as of this writing, so it's untouched here — but if it starts
+    failing the same way, this is the header style to switch it to as well.
+    Returns None on ANY failure (empty/expired JWT, network error, TF error
+    payload) — mirrors fetch_market_pulse's all-or-nothing contract so the
+    caller can fall back cleanly."""
     jwt = _get_tf_jwt()
     if not jwt:
         logger.warning(f"TF_JWT_TOKEN is empty. Quick fix: echo '<token>' > {TF_JWT_FILE}")
         return None
     totp = _tf_totp(_tf_server_time_ms())
-    headers = {"jwttoken": jwt, "accesstoken": totp}
+    headers = {"Authorization": f"Bearer {jwt}", "accesstoken": totp}
     try:
-        r_index = requests.get(f"{TF_BASE}/data/order/daily-index", headers=headers, timeout=10)
-        r_sectors = requests.get(f"{TF_BASE}/data/order/all_sector", headers=headers, timeout=10)
-        index_data = r_index.json()
-        sectors_data = r_sectors.json()
+        r = requests.get(f"{TF_BASE}/data/sector_scope", headers=headers, timeout=10)
+        # A non-2xx response (e.g. TF renaming/removing the route again)
+        # returns a plain-text body, not JSON — calling .json() on it raises
+        # a cryptic "Extra data" JSONDecodeError that reads identically to an
+        # expired token, hiding the real cause. Surface the status/body instead.
+        if not r.ok:
+            if r.status_code == 401:
+                logger.warning(
+                    f"TradeFinder sector_scope returned HTTP 401: {r.text[:200]!r} "
+                    "— token rejected, triggering an immediate refresh"
+                )
+                _on_auth_failure()
+            else:
+                logger.warning(
+                    f"TradeFinder sector_scope returned HTTP {r.status_code}: "
+                    f"{r.text[:200]!r} — this is a TF-side route change, not a token problem"
+                )
+            return None
+        data = r.json()
     except Exception as e:
         logger.warning(f"TradeFinder sector scope request failed: {e}")
         return None
-    if index_data.get("status") == "ERROR" or sectors_data.get("status") == "ERROR":
+    if data.get("status") == "ERROR":
         logger.warning(f"TradeFinder sector scope error (JWT expired? paste a fresh token into {TF_JWT_FILE})")
+        _on_auth_failure()
         return None
+    payload_data = (data.get("payload") or {}).get("data") or {}
     return {
-        "index": (index_data.get("payload") or {}).get("data") or [],
-        "sectors": (sectors_data.get("payload") or {}).get("data") or {},
+        "index": payload_data.get("daily-index") or [],
+        "sectors": payload_data.get("all_sector") or {},
     }

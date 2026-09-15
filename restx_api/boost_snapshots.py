@@ -36,6 +36,7 @@ class BoostSnapshots(Resource):
                 list_type=data.get("list_type", "intraday_boost"),
                 rank_as_of=data.get("rankAsOf", ""),
                 include_ranks=data.get("includeRanks", False),
+                include_prices=data.get("includePrices", False),
             )
 
             return make_response(jsonify(response_data), status_code)

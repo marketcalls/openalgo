@@ -15,7 +15,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from database.auth_db import get_auth_token_broker
-from database.tf_boost_db import get_boost_rank_timeline, get_boost_symbols
+from database.tf_boost_db import (
+    get_boost_price_timeline,
+    get_boost_rank_timeline,
+    get_boost_symbols,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -28,6 +32,7 @@ def boost_universe_service(
     list_type: str = "intraday_boost",
     rank_as_of: str = "",
     include_ranks: bool = False,
+    include_prices: bool = False,
 ) -> tuple[bool, dict, int]:
     """Validate the API key and return the union of boost-list symbols for the
     [date - (lookback_days - 1), date] window. Returns (success, response, http)."""
@@ -46,6 +51,7 @@ def boost_universe_service(
     # Only sent when asked for: the full rank timeline is roughly (symbols x
     # snapshots) pairs — ~15k for one day, and it scales with lookbackDays.
     ranks = get_boost_rank_timeline(start_str, end_str, list_type) if include_ranks else None
+    prices = get_boost_price_timeline(start_str, end_str, list_type) if include_prices else None
     return (
         True,
         {
@@ -57,6 +63,7 @@ def boost_universe_service(
             "count": len(symbols),
             "symbols": symbols,
             **({"ranks": ranks} if ranks is not None else {}),
+            **({"prices": prices} if prices is not None else {}),
         },
         200,
     )

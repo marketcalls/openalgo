@@ -223,6 +223,54 @@ def get_chart_data():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@historify_bp.route("/api/bulk-ohlcv", methods=["POST"])
+@check_session_validity
+def bulk_ohlcv():
+    """
+    OHLCV for many symbols at once, for the indicator screener.
+
+    POST rather than GET because a 500-symbol universe does not belong in a
+    query string, and session-authenticated like every other route here: this is
+    the signed-in user reading their own local store from their own browser, so
+    an API-key surface would add a public endpoint for nothing.
+
+    Body::
+
+        {"symbols": [{"symbol": "RELIANCE", "exchange": "NSE"}],
+         "interval": "5m", "bars": 300, "live": true}
+    """
+    try:
+        from database.auth_db import get_api_key_for_tradingview
+        from services.screener_service import DEFAULT_BARS, scan_bars
+
+        body = request.get_json(silent=True) or {}
+        pairs = [
+            (item.get("symbol", ""), item.get("exchange", ""))
+            for item in body.get("symbols") or []
+            if isinstance(item, dict)
+        ]
+        live = bool(body.get("live"))
+
+        # Quotes need the broker session, but stored history does not. A user
+        # without an API key gets the scan they can have rather than a 401 for
+        # the part they asked to add on top.
+        api_key = get_api_key_for_tradingview(session.get("user")) if live else None
+
+        success, response, status_code = scan_bars(
+            pairs=pairs,
+            interval=body.get("interval", "D"),
+            bars=int(body.get("bars") or DEFAULT_BARS),
+            live=live,
+            api_key=api_key,
+        )
+        return jsonify(response), status_code
+    except (TypeError, ValueError) as e:
+        return jsonify({"status": "error", "message": f"Invalid request: {e}"}), 400
+    except Exception as e:
+        logger.exception(f"Error getting bulk OHLCV: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @historify_bp.route("/api/catalog", methods=["GET"])
 @check_session_validity
 def get_catalog():
@@ -1566,6 +1614,7 @@ def broker_historify_capabilities():
     """Return historify capabilities for all brokers (from plugin.json cache)."""
     try:
         from utils.plugin_loader import get_all_broker_historify_capabilities
+
         brokers = get_all_broker_historify_capabilities()
         return jsonify({"status": "success", "brokers": brokers}), 200
     except Exception as e:
@@ -1585,14 +1634,16 @@ def expired_fno_capability():
         broker = session.get("broker", "").lower()
         supported = broker in EXPIRED_FNO_CAPABLE_BROKERS
 
-        return jsonify({
-            "status": "success",
-            "supported": supported,
-            "broker": broker or None,
-            "note": "Requires Upstox Plus Plan" if supported else None,
-            "supported_underlyings": SUPPORTED_UNDERLYINGS if supported else [],
-            "supports_custom_underlying": supported,
-        }), 200
+        return jsonify(
+            {
+                "status": "success",
+                "supported": supported,
+                "broker": broker or None,
+                "note": "Requires Upstox Plus Plan" if supported else None,
+                "supported_underlyings": SUPPORTED_UNDERLYINGS if supported else [],
+                "supports_custom_underlying": supported,
+            }
+        ), 200
     except Exception as e:
         logger.error(f"Error checking expired F&O capability: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1693,7 +1744,11 @@ def get_expired_contracts():
         underlying = request.args.get("underlying", "").upper()
         # Support ?expiry_dates=2024-03-28,2024-04-25 or legacy ?expiry_date=2024-03-28
         expiry_dates_raw = request.args.get("expiry_dates") or request.args.get("expiry_date", "")
-        expiry_dates = [e.strip() for e in expiry_dates_raw.split(",") if e.strip()] if expiry_dates_raw else []
+        expiry_dates = (
+            [e.strip() for e in expiry_dates_raw.split(",") if e.strip()]
+            if expiry_dates_raw
+            else []
+        )
 
         if not underlying or not expiry_dates:
             return jsonify(
@@ -1751,8 +1806,12 @@ def start_expired_fno_job():
             ), 400
 
         success, response, status_code = start_expired_fno_download(
-            underlying, expiry_dates, contract_types, api_key,
-            look_back=look_back, incremental=incremental,
+            underlying,
+            expiry_dates,
+            contract_types,
+            api_key,
+            look_back=look_back,
+            incremental=incremental,
         )
         return jsonify(response), status_code
     except Exception as e:
