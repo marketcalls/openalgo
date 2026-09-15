@@ -2,6 +2,7 @@
 
 import os
 
+from broker.zerodha.api.rate_limiter import request as paced_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -19,11 +20,13 @@ def get_margin_data(auth_token):
 
     try:
         # Make the GET request using the shared client
-        response = client.get("https://api.kite.trade/user/margins", headers=headers)
+        response, margin_data = paced_request(
+            client, "GET", "https://api.kite.trade/user/margins", headers=headers
+        )
         response.raise_for_status()  # Raises an exception for 4XX/5XX responses
 
-        # Parse the response
-        margin_data = response.json()
+        if margin_data is None:
+            margin_data = response.json()
     except Exception as e:
         error_message = str(e)
         try:
@@ -74,11 +77,12 @@ def get_margin_data(auth_token):
         total_realised = 0
         total_unrealised = 0
         try:
-            pos_response = client.get(
-                "https://api.kite.trade/portfolio/positions", headers=headers
+            pos_response, position_book = paced_request(
+                client, "GET", "https://api.kite.trade/portfolio/positions", headers=headers
             )
             pos_response.raise_for_status()
-            position_book = pos_response.json()
+            if position_book is None:
+                position_book = pos_response.json()
 
             if position_book.get("status") == "success" and position_book.get("data"):
                 net_positions = position_book["data"].get("net", [])
@@ -99,11 +103,16 @@ def get_margin_data(auth_token):
                         f"{p['exchange']}:{p['tradingsymbol']}" for p in open_positions
                     ]
                     query = "&".join(f"i={inst}" for inst in instruments)
-                    quote_response = client.get(
-                        f"https://api.kite.trade/quote/ltp?{query}", headers=headers
+                    # This shares the 1/sec quote budget with every other quote
+                    # caller, so it has to go through the limiter as well: the
+                    # funds panel refreshing was competing with the option
+                    # chain for the same one request per second.
+                    quote_response, quote_data = paced_request(
+                        client, "GET", f"https://api.kite.trade/quote/ltp?{query}", headers=headers
                     )
                     quote_response.raise_for_status()
-                    quote_data = quote_response.json()
+                    if quote_data is None:
+                        quote_data = quote_response.json()
                     ltp_map = {}
                     if quote_data.get("status") == "success" and quote_data.get("data"):
                         for key, val in quote_data["data"].items():
