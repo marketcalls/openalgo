@@ -312,30 +312,40 @@ def _carry_forward_amounts(position, factor):
     "upldPrc" is the one per-unit price in the payload not derived from that
     valuation. It is Kotak's spelling of Noren's "upldprc", documented there
     as "Average price uploaded with holdings" - the cost basis the back office
-    pushes in alongside the carried quantity - and it reads "0.00" on every
-    published sample row, all of which happen to have no carried-forward leg.
+    pushes in alongside the carried quantity. On the account in #2061 it reads
+    "0.00" on every carried leg, so the fallback below is what runs there;
+    it is kept because it costs nothing and is the only field that could ever
+    carry the number, on any account or any future version of the API.
 
-    Falling back to cfBuyAmt/cfSellAmt when Kotak sends nothing usable is what
-    makes this safe to ship without an account to try it on, and it is the
-    reason to prefer upldPrc over any reconstruction: if upldPrc turns out to
-    carry the settlement price too, then cf_qty * upldPrc * factor is the
-    carried amount already in use and every number here is unchanged.
+    Falling back to cfBuyAmt/cfSellAmt is not a workaround for a missing
+    lookup, it is the end of the road: a carried row holds seventeen fields
+    and upldPrc is the only price among them, and Kotak's other endpoints are
+    all current-day (orders, trades, order history by order number), so the
+    cost basis of an overnight leg is not reachable through this API at all.
+    The caller says so on the row rather than leaving the number to be read
+    as an entry price.
 
     Args:
         position: One raw Kotak position row.
         factor: The row's price scaling factor, from _price_factor.
 
     Returns:
-        tuple[float, float]: The carried buy amount and carried sell amount.
+        tuple[float, float, bool]: The carried buy amount, the carried sell
+        amount, and whether those amounts are Kotak's carry-forward valuation
+        rather than what the leg cost.
     """
     cf_buy_qty = _number(position, "cfBuyQty")
     cf_sell_qty = _number(position, "cfSellQty")
     if not (cf_buy_qty or cf_sell_qty):
-        return 0.0, 0.0
+        return 0.0, 0.0, False
 
     carried_price = _number(position, "upldPrc")
     if carried_price > 0:
-        return cf_buy_qty * carried_price * factor, cf_sell_qty * carried_price * factor
+        return (
+            cf_buy_qty * carried_price * factor,
+            cf_sell_qty * carried_price * factor,
+            False,
+        )
 
     # No cost basis for the overnight leg, so Kotak's documented amounts are
     # all there is. They still give the correct *day's* P&L, which is what the
@@ -348,7 +358,7 @@ def _carry_forward_amounts(position, factor):
         f"{position.get('trdSym', '')}: its average price and P&L are Kotak's "
         "carry-forward valuation, i.e. the previous day's settlement price."
     )
-    return _number(position, "cfBuyAmt"), _number(position, "cfSellAmt")
+    return _number(position, "cfBuyAmt"), _number(position, "cfSellAmt"), True
 
 
 def transform_positions_data(positions_data):
@@ -386,7 +396,7 @@ def transform_positions_data(positions_data):
         # market, since it only computes an unrealized P&L when average_price is
         # above zero - so a carried-forward holding showed no cost and no P&L.
         factor = _price_factor(position)
-        cf_buy_amt, cf_sell_amt = _carry_forward_amounts(position, factor)
+        cf_buy_amt, cf_sell_amt, carried_valuation = _carry_forward_amounts(position, factor)
         total_buy_amt = cf_buy_amt + _number(position, "buyAmt")
         total_sell_amt = cf_sell_amt + _number(position, "sellAmt")
         buy_qty = _number(position, "flBuyQty") + _number(position, "cfBuyQty")
@@ -432,10 +442,16 @@ def transform_positions_data(positions_data):
         realized = total_sell_amt - total_buy_amt
         net_qty = transformed_position["quantity"]
 
+        # "or 0.0" normalizes negative zero. A leg marked at exactly the price
+        # it was carried at lands on -0.0 through floating point (26160.0 +
+        # -26160.000000000004), which serializes into the API response as
+        # "-0.0" and reads as "-0.00" anywhere the value is formatted straight
+        # out, such as the positions CSV. Four of the five rows in #2061 are
+        # exactly that case.
         if not net_qty:
-            transformed_position["pnl"] = round(realized, 2)
+            transformed_position["pnl"] = round(realized, 2) or 0.0
         elif ltp:
-            transformed_position["pnl"] = round(realized + net_qty * ltp * factor, 2)
+            transformed_position["pnl"] = round(realized + net_qty * ltp * factor, 2) or 0.0
         else:
             # Open, but with no price to mark against - the LTP backfill in
             # order_api.py is best-effort and leaves the row alone when the
@@ -444,6 +460,27 @@ def transform_positions_data(positions_data):
             # would read as a total loss. Report 0.0, which is what every
             # consumer already fell back to while the key was missing.
             transformed_position["pnl"] = 0.0
+
+        # Say on the row when its money numbers are measured from Kotak's
+        # overnight re-valuation rather than from what the position cost, so a
+        # caller has something to test instead of having to know that Kotak
+        # carried legs behave differently. Present only in that case: absent is
+        # the normal reading, on every other broker and on every Kotak row
+        # whose average really is an entry price.
+        #
+        # It qualifies "pnl" as much as "average_price" - both come off the
+        # same amounts - and it is set even on a fully-closed row, where
+        # average_price is 0.00 by Kotak's own definition but the realized P&L
+        # is still only today's slice of a position opened before today.
+        #
+        # Deliberately not a substitute for the average: reporting 0.00 there
+        # would strip the Positions page of its live marking
+        # (useLivePrice.ts gates on average_price > 0 and recomputes P&L from
+        # it), leave P&L frozen between REST polls and P&L% reading 0.00%, and
+        # would still be indistinguishable from a leg that is genuinely closed,
+        # which Kotak also reports as 0.
+        if carried_valuation:
+            transformed_position["average_price_basis"] = "carry_forward_valuation"
 
         transformed_data.append(transformed_position)
 
