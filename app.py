@@ -557,6 +557,8 @@ def create_app():
         """Custom handler for CSRF errors (400 Bad Request)"""
         from flask import flash, jsonify, redirect, request, url_for
 
+        from utils.safe_redirect import safe_local_redirect_target
+
         error_description = str(error)
 
         from utils.url_redaction import redact_url_credentials
@@ -576,7 +578,9 @@ def create_app():
                 ), 400
             else:
                 flash("Security token expired. Please try again.", "error")
-                return redirect(request.referrer or url_for("auth.login"))
+                fallback = url_for("auth.login")
+                target = safe_local_redirect_target(request.referrer, fallback, request.host)
+                return redirect(target)
 
         # For other 400 errors
         return str(error), 400
