@@ -111,10 +111,10 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
-import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
+import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
   type IntervalData,
@@ -292,7 +292,9 @@ export interface BrandingLink {
 }
 
 /** Tools whose content is typed rather than dragged. */
-const TEXT_TOOLS = new Set(Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text))
+const TEXT_TOOLS = new Set(
+  Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text)
+)
 
 /** The colour forms emitted by the chart palette and the host token rasterizer. */
 function drawingRgb(color: string): number[] | null {
@@ -303,7 +305,9 @@ function drawingRgb(color: string): number[] | null {
   } else if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
     rgb = [1, 3, 5].map((offset) => parseInt(value.slice(offset, offset + 2), 16))
   } else {
-    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(value)
+    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(
+      value
+    )
     if (match) rgb = match.slice(1, 4).map(Number)
   }
   return rgb
@@ -312,7 +316,15 @@ function drawingRgb(color: string): number[] | null {
 /** Native colour inputs require hex even when the canvas theme uses rgb(). */
 function drawingColorInput(color: string): string {
   const rgb = drawingRgb(color)
-  return rgb ? `#${rgb.map(channel => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}` : '#000000'
+  return rgb
+    ? `#${rgb
+        .map((channel) =>
+          Math.max(0, Math.min(255, Math.round(channel)))
+            .toString(16)
+            .padStart(2, '0')
+        )
+        .join('')}`
+    : '#000000'
 }
 
 /** Match the renderer's automatic plate text while preserving an unset override. */
@@ -592,6 +604,10 @@ export function buildOrderTicket(input: {
 const VISIBLE_BARS = 120
 /** Empty bars kept between the newest candle and the price axis. */
 const RIGHT_PAD_BARS = 4
+/** What a chart opens with the very first time this browser has no saved layout, matching TradingView's own default. */
+const DEFAULT_INDICATORS: { indicatorId: string; settings: Record<string, unknown> }[] = [
+  { indicatorId: 'volume', settings: {} },
+]
 
 /**
  * Where the exported PNG paints the OHLC readout, in CSS px. These mirror the
@@ -1848,7 +1864,12 @@ export class TradingTerminal {
     }
     try {
       const raw = this.lsGet('indicators')
-      const parsed = raw ? (JSON.parse(raw) as typeof this.activeIndicators) : []
+      // `raw === null` means this browser has never saved a layout at all --
+      // distinct from an explicit clear, which persists '[]'. Only the former
+      // gets TradingView's default: Volume on, so a user who deliberately
+      // removed every indicator does not have it reappear on the next load.
+      const parsed =
+        raw != null ? (JSON.parse(raw) as typeof this.activeIndicators) : DEFAULT_INDICATORS
       if (Array.isArray(parsed)) this.activeIndicators = parsed
     } catch {
       /* ignore */
@@ -2135,8 +2156,13 @@ export class TradingTerminal {
     const theme = this.chart?.theme()
     const lineColor = d.style.color ?? theme?.lineColor ?? '#4f8cff'
     const plate = d.tool !== 'text' && d.tool !== 'table'
-    const backgroundColor = t.backgroundColor ?? (plate ? lineColor
-      : d.tool === 'table' || t.background === true ? theme?.background ?? '#ffffff' : '#434651')
+    const backgroundColor =
+      t.backgroundColor ??
+      (plate
+        ? lineColor
+        : d.tool === 'table' || t.background === true
+          ? (theme?.background ?? '#ffffff')
+          : '#434651')
     const plateFill = d.tool === 'callout' || d.tool === 'price-label' ? lineColor : backgroundColor
     const color = t.color ?? (plate ? drawingTextContrast(plateFill) : lineColor)
     return {
@@ -2146,7 +2172,10 @@ export class TradingTerminal {
       // (a price label is 12px, the text tool 14px). Seeding the dialog with a
       // host constant instead would enlarge a label whose caption alone was
       // edited.
-      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
+      fontSize:
+        t.fontSize ??
+        this.toolDefaultText(d.tool)?.fontSize ??
+        (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
       bold: t.bold === true,
       italic: t.italic === true,
       background: d.tool !== 'text' || t.background === true,
@@ -2809,7 +2838,8 @@ export class TradingTerminal {
     try {
       const inst = this.chart.addIndicator(indicatorId, {})
       this.syncIndicators()
-      this.warnIfStarved(inst)
+      const { getIndicator } = await import('openalgo-charts')
+      this.warnIfStarved(inst, getIndicator(indicatorId))
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
@@ -2827,10 +2857,22 @@ export class TradingTerminal {
    *
    * Reading `values()` is safe here: the engine flushes any pending recompute on
    * that call, so this sees the result of the add rather than the frame before.
+   *
+   * An indicator whose plots are all hidden is the exception, and not a rare
+   * one: anything drawing through `draws()` or its own primitive still has to
+   * declare a plot, so it declares an invisible one and returns a column of
+   * nulls. Empty columns are that indicator's normal, permanent state, and
+   * warning about them sends the user widening a range that was never the
+   * problem.
    */
-  private warnIfStarved(inst: { name: string; values(): Record<string, unknown> }): void {
+  private warnIfStarved(
+    inst: { name: string; values(): Record<string, unknown> },
+    descriptor?: { plots?: readonly { style?: { visible?: boolean } }[] }
+  ): void {
     const loaded = this.rawBars.length
     if (!loaded) return
+    const plots = descriptor?.plots
+    if (plots?.length && plots.every((p) => p.style?.visible === false)) return
     const cols = Object.values(inst.values()).filter(Array.isArray) as unknown[][]
     if (cols.length === 0) return
     const anyFinite = cols.some((col) =>

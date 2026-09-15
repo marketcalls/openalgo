@@ -1,7 +1,8 @@
 """
 OI Profile Blueprint
 
-Serves OI Profile data: futures candles + OI butterfly + daily OI change.
+Serves OI Profile data: futures candles + OI butterfly + OI change (daily,
+or an arbitrary window when window_start/window_end are given).
 Endpoints:
     POST /oiprofile/api/profile-data  - Get OI profile data
     GET  /oiprofile/api/intervals     - Get broker-supported intervals (filtered)
@@ -19,6 +20,14 @@ from utils.logging import get_logger
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
+
+# Cap how many expiries can be summed in one request
+MAX_EXPIRIES = 4
+
+# Strikes either side of ATM. Each one is two legs to quote, so the ceiling is
+# what keeps a careless request from asking the broker for the whole chain.
+DEFAULT_STRIKE_COUNT = 20
+MAX_STRIKE_COUNT = 50
 
 # Only allow these intraday intervals for the candlestick panel
 ALLOWED_INTERVALS = {"1m", "5m", "15m"}
@@ -49,23 +58,59 @@ def profile_data():
         underlying = data.get("underlying", "").strip()[:20]
         exchange = data.get("exchange", "").strip()[:20]
         expiry_date = data.get("expiry_date", "").strip()[:10]
+        # Optional list of expiries to sum OI across (nearest first).
+        expiry_dates = data.get("expiry_dates") or ([expiry_date] if expiry_date else [])
+        if not isinstance(expiry_dates, list):
+            return jsonify({"status": "error", "message": "expiry_dates must be a list"}), 400
+        expiry_dates = [str(e).strip().upper()[:10] for e in expiry_dates[:MAX_EXPIRIES] if e]
         interval = data.get("interval", "5m").strip()[:5]
         days = min(int(data.get("days", 5)), 30)
+        # The chart overlay only needs current OI; the change pass costs one
+        # history call per option leg, so let a caller opt out of it.
+        include_change = data.get("include_change", True) is not False
+        # The overlay draws on the chart's own bars, so it asks for no candles.
+        include_candles = data.get("include_candles", True) is not False
 
-        if not underlying or not exchange or not expiry_date:
+        try:
+            strike_count = int(data.get("strike_count", DEFAULT_STRIKE_COUNT))
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "strike_count must be a number"}), 400
+        strike_count = max(1, min(strike_count, MAX_STRIKE_COUNT))
+
+        try:
+            window_start = data.get("window_start")
+            window_end = data.get("window_end")
+            window_start = int(window_start) if window_start is not None else None
+            window_end = int(window_end) if window_end is not None else None
+        except (TypeError, ValueError):
+            return jsonify(
+                {"status": "error", "message": "window_start/window_end must be unix seconds"}
+            ), 400
+
+        if (window_start is None) != (window_end is None):
+            return jsonify(
+                {"status": "error", "message": "window_start and window_end must be given together"}
+            ), 400
+
+        if window_start is not None and window_start >= window_end:
+            return jsonify(
+                {"status": "error", "message": "window_start must be before window_end"}
+            ), 400
+
+        if not underlying or not exchange or not expiry_dates:
             return jsonify(
                 {
                     "status": "error",
-                    "message": "underlying, exchange, and expiry_date are required",
+                    "message": "underlying, exchange, and at least one expiry are required",
                 }
             ), 400
 
         if not re.match(r"^[A-Z0-9]+$", underlying) or not re.match(r"^[A-Z0-9_]+$", exchange):
             return jsonify({"status": "error", "message": "Invalid input format"}), 400
 
-        if not re.match(r"^\d{2}[A-Z]{3}\d{2}$", expiry_date):
+        if any(not re.match(r"^\d{2}[A-Z]{3}\d{2}$", e) for e in expiry_dates):
             return jsonify(
-                {"status": "error", "message": "Invalid expiry_date format. Expected DDMMMYY"}
+                {"status": "error", "message": "Invalid expiry format. Expected DDMMMYY"}
             ), 400
 
         if interval not in ALLOWED_INTERVALS:
@@ -79,10 +124,16 @@ def profile_data():
         success, response, status_code = get_oi_profile_data(
             underlying=underlying,
             exchange=exchange,
-            expiry_date=expiry_date,
+            expiry_date=expiry_dates[0],
+            expiry_dates=expiry_dates,
             interval=interval,
             days=days,
             api_key=api_key,
+            window_start=window_start,
+            window_end=window_end,
+            include_change=include_change,
+            include_candles=include_candles,
+            strike_count=strike_count,
         )
 
         return jsonify(response), status_code
