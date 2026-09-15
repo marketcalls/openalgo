@@ -28,6 +28,9 @@ import { showToast } from '@/utils/toast'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
+// The backend sums at most this many expiries in one request
+const MAX_EXPIRIES = 4
+
 const INTERVAL_DAYS: Record<string, number> = {
   '1m': 1,
   '5m': 5,
@@ -41,6 +44,16 @@ function convertExpiryForAPI(expiry: string): string {
     return `${parts[0]}${parts[1].toUpperCase()}${parts[2].slice(-2)}`
   }
   return expiry.replace(/-/g, '').toUpperCase()
+}
+
+function candleEpochSeconds(candle: CandleData): number | null {
+  const raw = candle.timestamp ?? candle.time
+  if (raw === undefined || raw === null) return null
+  if (typeof raw === 'number') {
+    return raw > 1e12 ? Math.floor(raw / 1000) : raw
+  }
+  const d = new Date(String(raw))
+  return Number.isNaN(d.getTime()) ? null : Math.floor(d.getTime() / 1000)
 }
 
 function formatCandleTime(candle: CandleData): string {
@@ -86,12 +99,18 @@ export default function OIProfile() {
     defaultUnderlyings[defaultToolsFnoExchange]?.[0] || ''
   )
   const [expiries, setExpiries] = useState<string[]>([])
-  const [selectedExpiry, setSelectedExpiry] = useState('')
+  // Multiple expiries can be ticked; their OI is summed per strike.
+  const [selectedExpiries, setSelectedExpiries] = useState<string[]>([])
+  const [expiryOpen, setExpiryOpen] = useState(false)
   const [intervals, setIntervals] = useState<string[]>(['5m'])
   const [selectedInterval, setSelectedInterval] = useState('5m')
   const [profileData, setProfileData] = useState<OIProfileDataResponse | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const requestIdRef = useRef(0)
+  // Arbitrary time window (unix seconds) the user drag-selected on the
+  // candlestick panel. When set, OI change is scoped to this window instead
+  // of the default "vs previous day's close".
+  const [windowRange, setWindowRange] = useState<{ start: number; end: number } | null>(null)
 
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
@@ -125,8 +144,9 @@ export default function OIProfile() {
     setUnderlyings(defaults)
     setSelectedUnderlying(defaults[0] || '')
     setExpiries([])
-    setSelectedExpiry('')
+    setSelectedExpiries([])
     setProfileData(null)
+    setWindowRange(null)
 
     let cancelled = false
     const fetchUnderlyings = async () => {
@@ -153,8 +173,9 @@ export default function OIProfile() {
   useEffect(() => {
     if (!selectedUnderlying) return
     setExpiries([])
-    setSelectedExpiry('')
+    setSelectedExpiries([])
     setProfileData(null)
+    setWindowRange(null)
 
     let cancelled = false
     const fetchExpiries = async () => {
@@ -163,15 +184,15 @@ export default function OIProfile() {
         if (cancelled) return
         if (response.status === 'success' && response.expiries.length > 0) {
           setExpiries(response.expiries)
-          setSelectedExpiry(response.expiries[0])
+          setSelectedExpiries([response.expiries[0]])
         } else {
           setExpiries([])
-          setSelectedExpiry('')
+          setSelectedExpiries([])
         }
       } catch {
         if (cancelled) return
         setExpiries([])
-        setSelectedExpiry('')
+        setSelectedExpiries([])
       }
     }
     fetchExpiries()
@@ -182,18 +203,20 @@ export default function OIProfile() {
 
   // Fetch profile data
   const fetchProfileData = useCallback(async () => {
-    if (!selectedExpiry) return
+    if (selectedExpiries.length === 0) return
     const requestId = ++requestIdRef.current
     setIsLoading(true)
     try {
-      const expiryForAPI = convertExpiryForAPI(selectedExpiry)
+      const expiriesForAPI = selectedExpiries.map(convertExpiryForAPI)
       const days = INTERVAL_DAYS[selectedInterval] || 5
       const response = await oiProfileApi.getProfileData({
         underlying: selectedUnderlying,
         exchange: selectedExchange,
-        expiry_date: expiryForAPI,
+        expiry_date: expiriesForAPI[0],
+        expiry_dates: expiriesForAPI,
         interval: selectedInterval,
         days,
+        ...(windowRange ? { window_start: windowRange.start, window_end: windowRange.end } : {}),
       })
       if (requestIdRef.current !== requestId) return
       if (response.status === 'success') {
@@ -207,13 +230,58 @@ export default function OIProfile() {
     } finally {
       if (requestIdRef.current === requestId) setIsLoading(false)
     }
-  }, [selectedUnderlying, selectedExpiry, selectedExchange, selectedInterval])
+  }, [selectedUnderlying, selectedExpiries, selectedExchange, selectedInterval, windowRange])
 
   useEffect(() => {
-    if (selectedExpiry) {
+    if (selectedExpiries.length > 0) {
       fetchProfileData()
     }
-  }, [selectedExpiry, fetchProfileData])
+  }, [selectedExpiries, fetchProfileData])
+
+  // Drag-select a range on the candlestick panel to scope OI change to that
+  // window instead of the default daily delta. Clears when the interval
+  // changes, since a window from a different candle set is meaningless.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedInterval is the trigger, not a value read inside
+  useEffect(() => {
+    setWindowRange(null)
+  }, [selectedInterval])
+
+  const handlePlotSelected = useCallback(
+    (event: PlotlyTypes.PlotSelectionEvent | undefined) => {
+      if (!event?.points?.length || !profileData?.candles) return
+      // Only the candlestick trace (curveNumber 0) carries a meaningful time axis.
+      const candleIndices = event.points.filter((p) => p.curveNumber === 0).map((p) => p.pointIndex)
+      if (candleIndices.length === 0) return
+      const minIdx = Math.min(...candleIndices)
+      const maxIdx = Math.max(...candleIndices)
+      const start = candleEpochSeconds(profileData.candles[minIdx])
+      const end = candleEpochSeconds(profileData.candles[maxIdx])
+      if (start === null || end === null || start >= end) return
+      setWindowRange({ start, end })
+    },
+    [profileData]
+  )
+
+  const clearWindow = useCallback(() => setWindowRange(null), [])
+
+  // Tick an expiry on or off. The last one cannot be unticked - an empty
+  // selection has nothing to plot.
+  const toggleExpiry = useCallback(
+    (expiry: string) => {
+      setSelectedExpiries((prev) => {
+        if (prev.includes(expiry)) {
+          return prev.length === 1 ? prev : prev.filter((e) => e !== expiry)
+        }
+        if (prev.length >= MAX_EXPIRIES) {
+          showToast.error(`You can combine up to ${MAX_EXPIRIES} expiries`)
+          return prev
+        }
+        // Keep the chart's expiry order the same as the dropdown's
+        return [...prev, expiry].sort((a, b) => expiries.indexOf(a) - expiries.indexOf(b))
+      })
+    },
+    [expiries]
+  )
 
   // Theme colors
   const themeColors = useMemo(
@@ -247,7 +315,6 @@ export default function OIProfile() {
       displaylogo: false,
       modeBarButtonsToRemove: [
         'pan2d',
-        'select2d',
         'lasso2d',
         'autoScale2d',
         'toggleSpikelines',
@@ -360,7 +427,7 @@ export default function OIProfile() {
       },
     ]
 
-    const expiryLabel = convertExpiryForAPI(selectedExpiry)
+    const expiryLabel = selectedExpiries.map(convertExpiryForAPI).join(' + ')
 
     // ATM horizontal line
     const shapes: Partial<PlotlyTypes.Shape>[] = atmStrike
@@ -403,6 +470,7 @@ export default function OIProfile() {
       barmode: 'overlay' as const,
       bargap: 0.1,
       showlegend: false,
+      dragmode: 'select' as const,
       margin: { l: 60, r: 30, t: 50, b: 60 },
       hoverlabel: {
         bgcolor: themeColors.hoverBg,
@@ -440,7 +508,7 @@ export default function OIProfile() {
         tickfont: { color: themeColors.text, size: 9 },
         gridcolor: themeColors.grid,
         title: {
-          text: 'CE <-> PE Change (D)',
+          text: windowRange ? 'CE <-> PE Change (Window)' : 'CE <-> PE Change (D)',
           font: { color: themeColors.text, size: 11 },
         },
         zeroline: true,
@@ -461,7 +529,7 @@ export default function OIProfile() {
     }
 
     return { data, layout }
-  }, [profileData, themeColors, selectedExpiry, selectedUnderlying])
+  }, [profileData, themeColors, selectedExpiries, selectedUnderlying, windowRange])
 
   return (
     <div className="py-6 space-y-4">
@@ -523,23 +591,45 @@ export default function OIProfile() {
             </PopoverContent>
           </Popover>
 
-          {/* Expiry */}
-          <Select
-            value={selectedExpiry}
-            onValueChange={setSelectedExpiry}
-            disabled={expiries.length === 0}
-          >
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Expiry" />
-            </SelectTrigger>
-            <SelectContent>
-              {expiries.map((e) => (
-                <SelectItem key={e} value={e}>
-                  {e}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* Expiry - tick up to MAX_EXPIRIES to sum their OI per strike */}
+          <Popover open={expiryOpen} onOpenChange={setExpiryOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={expiryOpen}
+                disabled={expiries.length === 0}
+                className="w-[200px] justify-between"
+              >
+                <span className="truncate">
+                  {selectedExpiries.length === 0
+                    ? 'Expiry'
+                    : selectedExpiries.length === 1
+                      ? selectedExpiries[0]
+                      : `${selectedExpiries.length} expiries`}
+                </span>
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-56 p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search expiry..." />
+                <CommandList>
+                  <CommandEmpty>No expiry found</CommandEmpty>
+                  <CommandGroup>
+                    {expiries.map((e) => (
+                      <CommandItem key={e} value={e} onSelect={() => toggleExpiry(e)}>
+                        <Check
+                          className={`mr-2 h-4 w-4 ${selectedExpiries.includes(e) ? 'opacity-100' : 'opacity-0'}`}
+                        />
+                        {e}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
 
           {/* Interval */}
           <Select value={selectedInterval} onValueChange={setSelectedInterval}>
@@ -559,6 +649,13 @@ export default function OIProfile() {
           <Button variant="outline" size="sm" onClick={fetchProfileData} disabled={isLoading}>
             {isLoading ? 'Loading...' : 'Refresh'}
           </Button>
+
+          {/* Clear the drag-selected OI change window, if any */}
+          {windowRange && (
+            <Button variant="outline" size="sm" onClick={clearWindow}>
+              Clear window
+            </Button>
+          )}
         </div>
       </div>
 
@@ -580,11 +677,26 @@ export default function OIProfile() {
             </Badge>
           )}
           <Badge variant="secondary" className="text-sm px-3 py-1">
+            {selectedExpiries.length > 1
+              ? `Expiries: ${selectedExpiries.join(' + ')}`
+              : `Expiry: ${selectedExpiries[0] || '-'}`}
+          </Badge>{' '}
+          <Badge variant="secondary" className="text-sm px-3 py-1">
             Interval: {profileData.interval}
           </Badge>
           <Badge variant="secondary" className="text-sm px-3 py-1">
             Candles: {profileData.candles?.length || 0}
           </Badge>
+          {windowRange ? (
+            <Badge variant="secondary" className="text-sm px-3 py-1">
+              Window: {new Date(windowRange.start * 1000).toLocaleTimeString()} –{' '}
+              {new Date(windowRange.end * 1000).toLocaleTimeString()}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-sm px-3 py-1 text-muted-foreground">
+              Drag on the candles to scope OI change to a window
+            </Badge>
+          )}
         </div>
       )}
 
@@ -602,10 +714,12 @@ export default function OIProfile() {
               config={plotConfig}
               useResizeHandler
               style={{ width: '100%', height: '700px' }}
+              onSelected={handlePlotSelected}
+              onDeselect={clearWindow}
             />
           ) : (
             <div className="flex items-center justify-center h-[700px] text-muted-foreground">
-              {selectedExpiry
+              {selectedExpiries.length > 0
                 ? 'No data available'
                 : 'Select an underlying and expiry to view OI Profile'}
             </div>
