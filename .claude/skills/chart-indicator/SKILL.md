@@ -59,6 +59,17 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.2.1: inputs can carry help text, and a plot can label its own axis.**
+  Every `IndicatorInput` variant now takes an optional `tooltip`, which the
+  settings dialog renders as a small focusable `?` beside the label. Put the
+  explanation there rather than in a parenthetical that stretches the row.
+  `IndicatorPlot` now takes an optional `priceFormat`, the same `PriceFormat`
+  union `addSeries` uses, with a new `percent` variant: it suffixes the value
+  and does **not** scale it, so a study returning 0..1 reads `0.62%` and one
+  returning 0..100 reads `62.24%`. Multiplying inside `calc` to make the axis
+  read better would change the legend, the crosshair and everything computed off
+  the value. Like `style.precision` it belongs to a plot that owns its pane.
+  Both fields are optional, so an existing descriptor is unaffected.
 - **2.2.0: hosts can offer 85 drawing tools.** The draw tier adds channels,
   pitchforks, Fibonacci and Gann geometry, wavefronts and manual patterns.
   `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS` and `PATTERN_DRAWING_TOOLS`

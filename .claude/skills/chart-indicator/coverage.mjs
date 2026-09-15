@@ -115,11 +115,12 @@ const CAPABILITIES = [
   ["input 'text'", "type: 'text'"],
   ["input 'select'", "type: 'select'"],
   ["input 'source'", "type: 'source'"],
-  ["input 'session'", "type: 'session'"],
-  ["input 'timeframe'", "type: 'timeframe'"],
-  ["input 'symbol'", "type: 'symbol'"],
-  ["input 'price'", "type: 'price'"],
-  ["input 'time'", "type: 'time'"],
+  // The five types this list used to demand -- 'session', 'timeframe', 'symbol',
+  // 'price', 'time' -- were never in the library. Requiring them here is what
+  // kept them in the docs, and the widget drops an unknown type in silence, so
+  // a study written from that example installed and lost its control.
+  ["input tooltip", "tooltip:"],
+  ["plot priceFormat", "priceFormat:"],
 ]
 
 const DOCS = ['SKILL.md', 'reference/contract.md', 'reference/api.md',

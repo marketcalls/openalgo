@@ -81,8 +81,7 @@ them through its own `IndicatorHost`. Always guard.
 | --- | --- |
 | `line` | `from`, `to`, plus `extendLeft` / `extendRight` |
 | `box` | `from`, `to`, `fillColor`, `opacity`, `text` |
-| `label` | `at`, `text` (splits on `
-`), `align` |
+| `label` | `at`, `text` (splits on `\n`), `align` |
 | `polyline` | `points[]`, `closed`, `fillColor` |
 
 Anchors are **times, not indices**: paging history in shifts every index, so an
@@ -201,6 +200,26 @@ which is exactly what a warmup gap should do.
 Every input needs `key`, `type`, `label`, `default`. Valid sources: `open`,
 `high`, `low`, `close`, `hl2`, `hlc3`, `ohlc4`, `volume`.
 
+**Those six are the whole union.** There is no `session`, `timeframe`, `symbol`,
+`price`, `time` or `enum` input type. The widget's renderer switches on
+`input.type` with no default case, so an unrecognised type is dropped in
+silence: the default still applies and the study computes correctly, while the
+control never appears and the user cannot change it. A free-form timeframe or
+session is a `text` input you parse yourself; one with a fixed set of choices is
+a `select`.
+
+Any input may also carry `tooltip` (2.2.1), help text the dialog renders as a
+focusable `?` beside the label. A label has to stay short enough for a dense
+panel, so put the explanation here rather than in a parenthetical:
+
+```js
+{ key: 'per', type: 'number', label: 'Days per bar unit', default: 1, min: 1,
+  tooltip: 'Calendar days each bar covers: 1 for intraday and daily, 7 for weekly and above.' }
+```
+
+An empty string draws nothing, which is the difference between no help and a
+mark with nothing behind it.
+
 A cleared text or number field arrives as `''`, not as the default. Always
 coerce: `Math.max(2, Math.floor(Number(settings.length) || 20))`.
 
@@ -214,6 +233,7 @@ coerce: `Math.max(2, Math.floor(Number(settings.length) || 20))`.
   title: 'MA',               // legend label
   style: { color: '#4f8cff', lineWidth: 2, lineStyle: 'dashed' },
   priceScaleId: 'right',     // own axis if you name a different one
+  priceFormat: { type: 'percent' },  // 2.2.1: axis/crosshair format for this plot's scale
   colorKey: 'lineColor',     // optional: an input key holding the colour
   colorBy({ value, index, values, settings }) { return '#ef5350' } }
 ```

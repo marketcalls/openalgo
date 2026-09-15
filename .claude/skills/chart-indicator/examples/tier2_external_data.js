@@ -32,7 +32,7 @@ export default function ({ registerIndicator, createTier2Indicator }) {
       placement: 'pane',
 
       inputs: [
-        { key: 'symbol', type: 'symbol', label: 'Symbol', default: '' },
+        { key: 'symbol', type: 'text', label: 'Symbol', default: '' },
         { key: 'endpoint', type: 'text', label: 'Endpoint', default: '/api/v1/oi' },
       ],
 
@@ -70,7 +70,7 @@ export default function ({ registerIndicator, createTier2Indicator }) {
     name: 'External (manual attach)',
     category: 'Custom',
     placement: 'pane',
-    inputs: [{ key: 'symbol', type: 'symbol', label: 'Symbol', default: '' }],
+    inputs: [{ key: 'symbol', type: 'text', label: 'Symbol', default: '' }],
     plots: [{ key: 'v', type: 'line', title: 'Value' }],
 
     /**

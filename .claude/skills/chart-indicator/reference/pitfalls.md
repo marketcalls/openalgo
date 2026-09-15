@@ -85,8 +85,7 @@ A fixed number of points looks right on one symbol and wrong on every other.
 
 *Validator: WARNING on `aboveBar`/`belowBar` for an `onchart` indicator.*
 
-Marker text is multi-line since 1.7.1: `
-` splits it into stacked rows. Earlier
+Marker text is multi-line since 1.7.1: `\n` splits it into stacked rows. Earlier
 guidance that it was single-line no longer applies.
 
 ---
