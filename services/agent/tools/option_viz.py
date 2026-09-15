@@ -1816,10 +1816,9 @@ class OptionVizToolkit(OpenAlgoToolkit):
     ) -> bool:
         """Put one combined premium line chart on the run's sink.
 
-        The combined series is the frame's bars and every leg is a thin line
-        under it, so the reader can see which leg moved. The figure is a line
-        and only a line: see the module docstring for why a combined candle
-        would be a lie.
+        The combined series is the frame's bars and nothing else is drawn. The
+        figure is a line and only a line: see the module docstring for why a
+        combined candle would be a lie.
 
         The combined series travels as bars rather than as one more line
         because a study reads the chart's primary series. Sending it any other
@@ -1830,7 +1829,8 @@ class OptionVizToolkit(OpenAlgoToolkit):
             series: The aligned rows, each carrying ``time`` in epoch seconds.
             combined: The combined value per row.
             legs: One entry per leg, carrying ``label``, ``colour`` and
-                ``values`` parallel to ``series``.
+                ``values`` parallel to ``series``. Read for the summary line
+                rather than drawn.
             title: Heading shown above the chart.
             subtitle: The line under the heading that says which of the two
                 series this is.
@@ -1867,22 +1867,15 @@ class OptionVizToolkit(OpenAlgoToolkit):
         if not bars:
             return False
 
-        # Each leg under the combined line, so the reader can see which one
-        # moved. These are drawn, not studied: a study reads the frame's bars,
-        # which are the combined series, and that is the number the operator
-        # asked about.
-        leg_series = [
-            {
-                "label": str(leg.get("label") or ""),
-                "colour": str(leg.get("colour") or _OTHER_LEG_COLOUR),
-                "points": [
-                    {"time": int(row.get("time") or 0), "value": float(value)}
-                    for row, value in zip(rows, list(leg.get("values") or [])[-keep:], strict=False)
-                    if isinstance(value, (int, float)) and math.isfinite(float(value))
-                ],
-            }
-            for leg in legs
-        ]
+        # The legs are not drawn. A combined premium is one number, and the
+        # question "what is the straddle doing" is answered by that number: the
+        # individual premiums move against each other, so putting them on the
+        # same axis fills the card with two lines that cross and re-cross while
+        # the combination, the thing that was asked about, reads as the flattest
+        # of the three. `get_history` on a leg answers the other question.
+        #
+        # `legs` still arrives because the callers compute it on the way here
+        # and the summary line quotes from it.
 
         spec: dict[str, Any] = {
             "symbol": title,
@@ -1895,7 +1888,6 @@ class OptionVizToolkit(OpenAlgoToolkit):
             "bar_count": len(bars),
             "bars": bars,
             "indicators": list(indicators),
-            "series": leg_series,
             "value_label": axis,
             "subtitle": subtitle,
         }

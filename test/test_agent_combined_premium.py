@@ -220,22 +220,38 @@ class TestWhatDrawsIt:
     def test_it_is_drawn_as_a_line(self):
         assert self.deliver().spec["chart_type"] == "line"
 
-    def test_each_leg_rides_alongside_as_its_own_line(self):
-        series = self.deliver().spec["series"]
-        assert [line["label"] for line in series] == ["23100 CE", "23100 PE"]
-        assert series[0]["points"][0] == {"time": 1_700_000_000, "value": 60.0}
-        # Drawn, not studied: the study reads the bars, which are the
-        # combination the operator asked about.
-        assert series[0]["colour"] == "#16a34a"
+    def test_the_legs_are_not_drawn_beside_the_combination(self):
+        spec = self.deliver().spec
+        # A combined premium is one number. The individual premiums move
+        # against each other, so drawing them on the same axis fills the card
+        # with two lines that cross and re-cross while the combination, the
+        # thing that was asked about, reads as the flattest of the three.
+        assert "series" not in spec or spec["series"] == []
 
     def test_the_studies_asked_for_travel_with_it(self):
         frame = self.deliver(indicators=[{"id": "supertrend", "inputs": {"length": 10}}])
         assert frame.spec["indicators"] == [{"id": "supertrend", "inputs": {"length": 10}}]
 
-    def test_a_series_with_no_finite_values_draws_nothing_rather_than_a_gap_at_zero(self):
-        frame = self.deliver(
-            legs=[{"label": "thin", "colour": "#888", "values": [float("nan")] * 4}]
+    def test_a_combined_value_that_did_not_print_is_absent_rather_than_zero(self):
+        from services.agent.tools.option_viz import OptionVizToolkit
+
+        rows = [{"time": 1_700_000_000 + i * 300} for i in range(3)]
+        sink: list = []
+        toolkit = OptionVizToolkit.__new__(OptionVizToolkit)
+        toolkit._sink = sink
+        OptionVizToolkit._deliver_premium(
+            toolkit,
+            series=rows,
+            combined=[120.0, float("nan"), 130.0],
+            legs=[],
+            title="t",
+            subtitle="s",
+            axis="a",
+            interval="5m",
+            indicators=[],
+            source="straddle_chart_service",
+            notices=[],
         )
-        # A premium that did not print is absent, not zero. Zero is a number
-        # someone might read as the combination having collapsed.
-        assert frame.spec["series"][0]["points"] == []
+        # Zero is a number someone might read as the combination having
+        # collapsed, so a bar that did not price is left out.
+        assert [bar["close"] for bar in sink[0].frame.spec["bars"]] == [120.0, 130.0]

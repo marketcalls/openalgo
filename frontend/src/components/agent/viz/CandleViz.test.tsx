@@ -228,86 +228,6 @@ describe('CandleViz', () => {
     expect(screen.getByText('3 bars')).toBeInTheDocument()
   })
 
-  it('draws a line per extra series beside the bars', async () => {
-    // What a combined premium frame carries: the combination as the bars, its
-    // legs as lines alongside. The legs are drawn, not studied, because a
-    // study reads the primary series and that is the combination.
-    const withLegs = {
-      ...SPEC,
-      indicators: [],
-      // A premium chart: a line, and no volume, because a combination has none.
-      chart_type: 'line',
-      bars: [bar(1780444800, 120, 0), bar(1780531200, 124, 0)],
-      series: [
-        {
-          label: '23100 CE',
-          colour: '#16a34a',
-          points: [
-            { time: 1780444800, value: 60 },
-            { time: 1780531200, value: 62 },
-          ],
-        },
-        {
-          label: '23100 PE',
-          colour: '#dc2626',
-          points: [{ time: 1780444800, value: 60 }],
-        },
-      ],
-    }
-    render(<CandleViz spec={withLegs} />)
-
-    await waitFor(() => expect(harness.charts).toHaveLength(1))
-    const chart = harness.charts[0]
-
-    // Bars first, then one line per leg. No volume series: a premium has none.
-    expect(chart.series.map((item) => item.type)).toEqual(['line', 'line', 'line'])
-    const style = (index: number) =>
-      (chart.series[index].options.style ?? {}) as Record<string, unknown>
-    expect(style(1)).toMatchObject({ color: '#16a34a', title: '23100 CE', lineWidth: 1 })
-    expect(style(2)).toMatchObject({ color: '#dc2626', title: '23100 PE' })
-    expect(chart.series[1].setData).toHaveBeenCalledWith([
-      { time: 1780444800, value: 60 },
-      { time: 1780531200, value: 62 },
-    ])
-  })
-
-  it('orders an extra series and drops a point sharing a timestamp', async () => {
-    const jumbled = {
-      ...SPEC,
-      indicators: [],
-      chart_type: 'line',
-      bars: [bar(1780444800, 120, 0), bar(1780531200, 124, 0)],
-      series: [
-        {
-          label: 'leg',
-          colour: '#888',
-          points: [
-            { time: 1780531200, value: 5 },
-            { time: 1780444800, value: 4 },
-            // Two points at one timestamp collide in the data layer, and the
-            // one that wins is whichever arrived last rather than the right one.
-            { time: 1780531200, value: 9 },
-            { time: 1780617600, value: null },
-          ],
-        },
-      ],
-    }
-    render(<CandleViz spec={jumbled} />)
-
-    await waitFor(() => expect(harness.charts).toHaveLength(1))
-    expect(harness.charts[0].series[1].setData).toHaveBeenCalledWith([
-      { time: 1780444800, value: 4 },
-      { time: 1780531200, value: 5 },
-    ])
-  })
-
-  it('draws the bars alone when the frame carries no extra series', async () => {
-    render(<CandleViz spec={{ ...SPEC, indicators: [] }} />)
-    await waitFor(() => expect(harness.charts).toHaveLength(1))
-    // Bars and volume, and nothing invented beside them.
-    expect(harness.charts[0].series.map((item) => item.type)).toEqual(['candlestick', 'histogram'])
-  })
-
   it('says so when the tool drew no candles', async () => {
     render(<CandleViz spec={{ ...SPEC, bar_count: 0, bars: [] }} />)
 
@@ -328,21 +248,21 @@ describe('CandleViz', () => {
     expect(harness.createChart).not.toHaveBeenCalled()
   })
 
-  it('carries the OpenAlgo mark by default', async () => {
-    // The library has no watermark option: the mark is a primitive the host
-    // adds, so a chart that never adds one simply has none, and nothing fails.
-    // That is how it went missing here while /trading kept its own. Pinned by
-    // the asset and the corner, not merely by something having been added.
+  it('carries exactly one OpenAlgo mark, the one the engine draws', async () => {
+    // The engine draws a corner mark by default. A host that adds its own as a
+    // primitive on top of it gets two, stacked in the same corner, which is
+    // what this card did. Configuring the one that is already there is the fix
+    // and this is what pins it: the branding option carries the asset and the
+    // corner, and nothing is added beside it.
     render(<CandleViz spec={SPEC} title="RELIANCE NSE D" />)
     await waitFor(() => expect(harness.charts).toHaveLength(1))
 
-    const marks = harness.charts[0].primitives
-    expect(marks).toHaveLength(1)
-    expect(marks[0].pane).toBe(0)
-
-    const options = (marks[0].primitive as { options: Record<string, unknown> }).options
-    expect(options.src).toBe('/images/openalgo-glyph.svg')
-    expect(options.position).toBe('bottom-left')
-    expect(options.label).toBe('OpenAlgo Charts')
+    const chart = harness.charts[0]
+    const branding = chart.options.branding as Record<string, unknown>
+    expect(branding.src).toBe('/images/openalgo-glyph.svg')
+    expect(branding.position).toBe('bottom-left')
+    expect(branding.label).toBe('OpenAlgo Charts')
+    // No second mark, which is the whole point.
+    expect(chart.primitives).toHaveLength(0)
   })
 })

@@ -44,9 +44,6 @@ import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { asNumber, asRecord, asText, parseBars } from './spec'
 
-/** Most extra lines one chart draws beside its bars. The backend caps the legs. */
-const MAX_SERIES = 8
-
 /** Most overlays one chart draws. The backend caps at six; this is the guard. */
 const MAX_OVERLAYS = 8
 
@@ -78,26 +75,11 @@ interface CandleOverlay {
   inputs: Record<string, unknown>
 }
 
-/**
- * One extra line drawn beside the frame's own bars.
- *
- * Studies read the chart's primary series, which is the bars, so a series here
- * is drawn and not studied. That is the right way round: a combined premium
- * arrives as the bars precisely so a supertrend attaches to the combination,
- * and its legs ride alongside as context.
- */
-interface CandleSeries {
-  label: string
-  colour: string
-  points: { time: number; value: number }[]
-}
-
 /** The drawable part of a `kind: "candles"` spec, after parsing. */
 interface CandleChartSpec {
   bars: Bar[]
   chartType: string
   overlays: CandleOverlay[]
-  series: CandleSeries[]
   symbol: string | null
   exchange: string | null
   interval: string | null
@@ -123,40 +105,6 @@ function parseOverlays(value: unknown): CandleOverlay[] {
     overlays.push({ id: id.toLowerCase(), inputs: asRecord(row.inputs) ?? {} })
   }
   return overlays
-}
-
-/**
- * Read the spec's `series` list: the extra lines drawn beside the bars.
- *
- * Points are sorted and de-duplicated by time for the same reason bars are:
- * two points sharing a timestamp collide in the data layer, and the one that
- * wins is whichever arrived last rather than whichever is right.
- */
-function parseSeries(value: unknown): CandleSeries[] {
-  if (!Array.isArray(value)) return []
-  const series: CandleSeries[] = []
-  for (const entry of value) {
-    if (series.length >= MAX_SERIES) break
-    const row = asRecord(entry)
-    if (!row || !Array.isArray(row.points)) continue
-    const points: { time: number; value: number }[] = []
-    for (const item of row.points) {
-      const point = asRecord(item)
-      if (!point) continue
-      const time = asNumber(point.time)
-      const value = asNumber(point.value)
-      if (time === null || value === null) continue
-      points.push({ time, value })
-    }
-    if (points.length === 0) continue
-    points.sort((a, b) => a.time - b.time)
-    series.push({
-      label: asText(row.label) ?? '',
-      colour: asText(row.colour) ?? '#94a3b8',
-      points: points.filter((p, i) => i === 0 || p.time > points[i - 1].time),
-    })
-  }
-  return series
 }
 
 function parseNotices(value: unknown): string[] {
@@ -199,7 +147,6 @@ function parseCandleSpec(value: unknown): CandleParse {
       bars,
       chartType: (asText(root.chart_type) ?? 'candlestick').toLowerCase(),
       overlays: parseOverlays(root.indicators),
-      series: parseSeries(root.series),
       symbol: asText(root.symbol),
       exchange: asText(root.exchange),
       interval: asText(root.interval),
@@ -337,6 +284,28 @@ export function CandleViz({ spec, title, source, variant = 'figure', className }
         shortcuts: false,
         timeNavigator: false,
         ...(timezone ? { timezone } : {}),
+        // The brand mark, through the engine's own branding rather than as a
+        // primitive added on top of it. The engine draws one by default, so a
+        // host that adds its own gets two marks stacked in the corner. This
+        // configures the one that is already there.
+        //
+        // The glyph, not the app icon: that asset is a full-bleed plate whose
+        // mark fills under half of it, so scaling it up scales the padding too.
+        // Sized proportionally to the card, because a mark sized for a full
+        // screen would sit on the candles rather than under them.
+        branding: {
+          src: '/images/openalgo-glyph.svg',
+          position: 'bottom-left',
+          height: inline ? 15 : 22,
+          padding: 3,
+          margin: 8,
+          opacity: 0.8,
+          // Mark alone at rest; the wording unrolls to its right on hover, so
+          // it names itself when looked at without occupying the corner always.
+          label: 'OpenAlgo Charts',
+          labelColor: mode === 'dark' || appMode === 'analyzer' ? '#e4e8f4' : '#3c4354',
+          href: 'https://openalgo.in',
+        },
       })
       instance = created
       // The component can unmount inside the awaits above, in which case the
@@ -348,34 +317,6 @@ export function CandleViz({ spec, title, source, variant = 'figure', className }
         return
       }
 
-      // The brand mark, the same primitive and the same asset /trading mounts,
-      // so a chart in the conversation is recognisably the platform's chart
-      // rather than an anonymous one. It is smaller here than on the terminal:
-      // a chat card is a fraction of the height, and a mark sized for a full
-      // screen would sit on the candles instead of under them.
-      //
-      // The library has no watermark option; the mark is a primitive the host
-      // owns and adds, which is why a chart that never adds one simply has
-      // none. Pane 0, because volume is an overlay there and pane 1 only
-      // exists once an indicator asks for one.
-      const watermark = new core.LogoWatermark({
-        // The glyph, not the app icon: that asset is a full-bleed plate whose
-        // mark fills under half of it, so scaling it up scales the padding too.
-        src: '/images/openalgo-glyph.svg',
-        position: 'bottom-left',
-        // Proportional to the chart it sits in: a mark sized for the standalone
-        // block would occupy a sixth of an inline one.
-        height: inline ? 15 : 22,
-        padding: 3,
-        margin: 8,
-        opacity: 0.8,
-        // Mark alone at rest; the wording unrolls to its right on hover, so it
-        // names itself when looked at without occupying the corner always.
-        label: 'OpenAlgo Charts',
-        labelColor: mode === 'dark' || appMode === 'analyzer' ? '#e4e8f4' : '#3c4354',
-        href: 'https://openalgo.in',
-      })
-      created.addPrimitive(watermark, 0)
 
       const definition = types.CHART_TYPES[chartSpec.chartType] ?? types.CHART_TYPES.candlestick
       // Only Heikin Ashi is reachable from the backend's list and it ignores
@@ -412,18 +353,6 @@ export function CandleViz({ spec, title, source, variant = 'figure', className }
           }))
         )
         volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
-      }
-
-      // The extra lines, on the price scale the bars use because they are in
-      // the same unit: a straddle's legs are premiums like the combination
-      // they add up to. Thinner than the primary, so the combination stays the
-      // thing being read.
-      for (const line of chartSpec.series) {
-        created
-          .addSeries('line', {
-            style: { color: line.colour, lineWidth: 1, title: line.label },
-          })
-          .setData(line.points)
       }
 
       // The frame is a finished range rather than a live feed, so the whole of
