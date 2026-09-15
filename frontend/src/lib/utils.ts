@@ -25,11 +25,11 @@ export function sanitizeCSV(value: string | number | null | undefined): string {
 
 /**
  * Returns a currency formatter bound to the active broker.
- * - deltaexchange → USD ($)
+ * - deltaexchange / deltaexchange_demo → USD ($)
  * - all other brokers  → INR (₹)
  */
 export function makeFormatCurrency(broker?: string | null): (value: number) => string {
-  const isUSD = broker === 'deltaexchange'
+  const isUSD = broker === 'deltaexchange' || broker === 'deltaexchange_demo'
   return (value: number) =>
     isUSD
       ? new Intl.NumberFormat('en-US', {
