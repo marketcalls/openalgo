@@ -619,7 +619,7 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
 
     try:
         # Calculate midnight timestamp for the date in IST
-        midnight_ist = datetime.combine(query_date, datetime.min.time())
+        midnight_ist = IST.localize(datetime.combine(query_date, datetime.min.time()))
         midnight_epoch = int(midnight_ist.timestamp() * 1000)
 
         # Get timing offsets from database (or defaults if not in DB)
