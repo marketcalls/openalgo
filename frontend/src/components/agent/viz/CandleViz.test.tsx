@@ -17,6 +17,7 @@ import { CandleViz } from './CandleViz'
 
 interface SeriesStub {
   type: string
+  options: Record<string, unknown>
   setData: ReturnType<typeof vi.fn>
   priceScale: () => { setOptions: ReturnType<typeof vi.fn> }
 }
@@ -29,7 +30,7 @@ interface ChartStub {
   destroyed: number
   fitted: number
   spacing: number[]
-  addSeries: (type: string) => SeriesStub
+  addSeries: (type: string, options?: Record<string, unknown>) => SeriesStub
   addPrimitive: (primitive: unknown, pane: number) => void
   addIndicator: (id: string) => void
   fitContent: () => void
@@ -57,9 +58,10 @@ const harness = vi.hoisted(() => {
           chart.timeScale.barSpacing = value
         },
       },
-      addSeries: (type: string) => {
+      addSeries: (type: string, options?: Record<string, unknown>) => {
         const series: SeriesStub = {
           type,
+          options: options ?? {},
           setData: vi.fn(),
           priceScale: () => ({ setOptions: vi.fn() }),
         }
@@ -224,6 +226,86 @@ describe('CandleViz', () => {
     await waitFor(() => expect(harness.charts).toHaveLength(1))
     await waitFor(() => expect(harness.charts[0].indicators).toEqual(['rsi']))
     expect(screen.getByText('3 bars')).toBeInTheDocument()
+  })
+
+  it('draws a line per extra series beside the bars', async () => {
+    // What a combined premium frame carries: the combination as the bars, its
+    // legs as lines alongside. The legs are drawn, not studied, because a
+    // study reads the primary series and that is the combination.
+    const withLegs = {
+      ...SPEC,
+      indicators: [],
+      // A premium chart: a line, and no volume, because a combination has none.
+      chart_type: 'line',
+      bars: [bar(1780444800, 120, 0), bar(1780531200, 124, 0)],
+      series: [
+        {
+          label: '23100 CE',
+          colour: '#16a34a',
+          points: [
+            { time: 1780444800, value: 60 },
+            { time: 1780531200, value: 62 },
+          ],
+        },
+        {
+          label: '23100 PE',
+          colour: '#dc2626',
+          points: [{ time: 1780444800, value: 60 }],
+        },
+      ],
+    }
+    render(<CandleViz spec={withLegs} />)
+
+    await waitFor(() => expect(harness.charts).toHaveLength(1))
+    const chart = harness.charts[0]
+
+    // Bars first, then one line per leg. No volume series: a premium has none.
+    expect(chart.series.map((item) => item.type)).toEqual(['line', 'line', 'line'])
+    const style = (index: number) =>
+      (chart.series[index].options.style ?? {}) as Record<string, unknown>
+    expect(style(1)).toMatchObject({ color: '#16a34a', title: '23100 CE', lineWidth: 1 })
+    expect(style(2)).toMatchObject({ color: '#dc2626', title: '23100 PE' })
+    expect(chart.series[1].setData).toHaveBeenCalledWith([
+      { time: 1780444800, value: 60 },
+      { time: 1780531200, value: 62 },
+    ])
+  })
+
+  it('orders an extra series and drops a point sharing a timestamp', async () => {
+    const jumbled = {
+      ...SPEC,
+      indicators: [],
+      chart_type: 'line',
+      bars: [bar(1780444800, 120, 0), bar(1780531200, 124, 0)],
+      series: [
+        {
+          label: 'leg',
+          colour: '#888',
+          points: [
+            { time: 1780531200, value: 5 },
+            { time: 1780444800, value: 4 },
+            // Two points at one timestamp collide in the data layer, and the
+            // one that wins is whichever arrived last rather than the right one.
+            { time: 1780531200, value: 9 },
+            { time: 1780617600, value: null },
+          ],
+        },
+      ],
+    }
+    render(<CandleViz spec={jumbled} />)
+
+    await waitFor(() => expect(harness.charts).toHaveLength(1))
+    expect(harness.charts[0].series[1].setData).toHaveBeenCalledWith([
+      { time: 1780444800, value: 4 },
+      { time: 1780531200, value: 5 },
+    ])
+  })
+
+  it('draws the bars alone when the frame carries no extra series', async () => {
+    render(<CandleViz spec={{ ...SPEC, indicators: [] }} />)
+    await waitFor(() => expect(harness.charts).toHaveLength(1))
+    // Bars and volume, and nothing invented beside them.
+    expect(harness.charts[0].series.map((item) => item.type)).toEqual(['candlestick', 'histogram'])
   })
 
   it('says so when the tool drew no candles', async () => {
