@@ -141,6 +141,26 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         raise ZerodhaAPIError(f"API request failed: {error_msg}")
 
 
+def _best_bid_ask(quote: dict) -> dict:
+    """
+    Price and size at the top of the book, from a Kite /quote entry.
+
+    Kite reports both under depth.buy[0] and depth.sell[0]. Only the prices
+    used to be read, so every quote, multiquote and option-chain leg reported
+    bid_qty and ask_qty as 0 - which reads as "nothing on offer", not "not
+    reported". get_market_depth already reads quantity from the same response.
+    """
+    depth = quote.get("depth") or {}
+    buy = (depth.get("buy") or [{}])[0]
+    sell = (depth.get("sell") or [{}])[0]
+    return {
+        "ask": sell.get("price", 0),
+        "bid": buy.get("price", 0),
+        "ask_qty": sell.get("quantity", 0),
+        "bid_qty": buy.get("quantity", 0),
+    }
+
+
 class BrokerData:
     def __init__(self, auth_token):
         """Initialize Zerodha data handler with authentication token"""
@@ -222,8 +242,7 @@ class BrokerData:
 
             # Return quote data
             return {
-                "ask": quote.get("depth", {}).get("sell", [{}])[0].get("price", 0),
-                "bid": quote.get("depth", {}).get("buy", [{}])[0].get("price", 0),
+                **_best_bid_ask(quote),
                 "high": quote.get("ohlc", {}).get("high", 0),
                 "low": quote.get("ohlc", {}).get("low", 0),
                 "ltp": quote.get("last_price", 0),
@@ -397,8 +416,7 @@ class BrokerData:
                 "symbol": original["symbol"],
                 "exchange": original["exchange"],
                 "data": {
-                    "ask": quote.get("depth", {}).get("sell", [{}])[0].get("price", 0),
-                    "bid": quote.get("depth", {}).get("buy", [{}])[0].get("price", 0),
+                    **_best_bid_ask(quote),
                     "high": quote.get("ohlc", {}).get("high", 0),
                     "low": quote.get("ohlc", {}).get("low", 0),
                     "ltp": quote.get("last_price", 0),
