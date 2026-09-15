@@ -21,6 +21,14 @@ function renderDialog(onPick: (row: SearchRow) => void = () => {}) {
   )
 }
 
+/** The dialog focuses and selects its box 30ms after opening; typing before
+ *  that races the select() and loses the first character. */
+async function focusedBox() {
+  const box = screen.getByLabelText('Search symbol') as HTMLInputElement
+  await waitFor(() => expect(box).toHaveFocus())
+  return box
+}
+
 describe('SymbolSearchDialog', () => {
   beforeEach(() => {
     useBrokerStore.setState({
@@ -80,7 +88,7 @@ describe('SymbolSearchDialog', () => {
     const picked: SearchRow[] = []
     renderDialog((row) => picked.push(row))
 
-    const box = screen.getByLabelText('Search symbol')
+    const box = await focusedBox()
     await userEvent.type(box, 'NIFTY100EW/NIFTY100QUALTY30')
     await waitFor(() => expect(screen.getByText(/Press Enter to chart/)).toBeInTheDocument())
     await userEvent.type(box, '{Enter}')
@@ -94,7 +102,7 @@ describe('SymbolSearchDialog', () => {
     const picked: SearchRow[] = []
     renderDialog((row) => picked.push(row))
 
-    const box = screen.getByLabelText('Search symbol')
+    const box = await focusedBox()
     await userEvent.type(box, 'NIFTY')
     // Wait for a real result row, not merely for buttons to exist: the chips
     // and the operator keys are buttons too, so counting them passed before the
@@ -109,7 +117,7 @@ describe('SymbolSearchDialog', () => {
 
   it('the operator keys write into the box and the reciprocal wraps it', async () => {
     renderDialog()
-    const box = screen.getByLabelText('Search symbol') as HTMLInputElement
+    const box = await focusedBox() as HTMLInputElement
 
     await userEvent.type(box, 'NIFTY100EW')
     await userEvent.click(screen.getByLabelText('Divide'))
@@ -133,5 +141,49 @@ describe('SymbolSearchDialog', () => {
     await waitFor(() =>
       expect(screen.getByText(/cannot be traded/)).toBeInTheDocument()
     )
+  });
+
+  /**
+   * The bug this pins: searching the WHOLE box meant that the moment an
+   * operator was typed the query stopped matching any instrument, the list
+   * emptied, and there was no way to look up the second leg. You had to already
+   * know its exact name, which defeats a search box.
+   */
+  it('searches the leg being typed, not the whole expression', async () => {
+    const queries: string[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async (q) => {
+          queries.push(q)
+          return ROWS
+        }}
+        onPick={() => {}}
+      />
+    )
+
+    const box = await focusedBox()
+    await userEvent.type(box, 'NIFTY100EW+NIFTY1')
+    await waitFor(() => expect(screen.getByText('NIFTY100EW')).toBeInTheDocument())
+
+    // The last search asked for the leg after the operator, never the whole box.
+    expect(queries.at(-1)).toBe('NIFTY1')
+    expect(queries).not.toContain('NIFTY100EW+NIFTY1')
+  });
+
+  it('completing a leg keeps the dialog open and writes the exchange in', async () => {
+    const picked: SearchRow[] = []
+    renderDialog((row) => picked.push(row))
+
+    const box = await focusedBox() as HTMLInputElement
+    await userEvent.type(box, 'NIFTY100EW+NIFTY100Q')
+    await waitFor(() => expect(screen.getByText('NIFTY100QUALTY30')).toBeInTheDocument())
+    await userEvent.click(screen.getByText('NIFTY100QUALTY30'))
+
+    // The leg is completed in place, qualified by its exchange, and nothing is
+    // loaded: the user is still building.
+    expect(box.value).toBe('NIFTY100EW+NSE_INDEX:NIFTY100QUALTY30')
+    expect(picked).toHaveLength(0)
   });
 })

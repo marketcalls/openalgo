@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import type { SearchRow } from '@/lib/trading/terminal'
@@ -26,6 +26,26 @@ const OPERATORS = [
  * A parse failure answers no. A half-typed `NIFTY/` arrives on every keystroke,
  * and the ordinary search below already says when a symbol is unknown.
  */
+/** Characters that end one leg and begin the next. */
+const OPERATOR = /[+\-*/^(),÷×−]/
+
+/**
+ * The leg the caret is in, and everything before it.
+ *
+ * The result list has to search THIS, not the whole box. Searching the whole
+ * string meant that the moment an operator was typed the query stopped matching
+ * any instrument, the list went empty, and there was no way to look up the
+ * second leg: you had to know its exact name already.
+ */
+function splitLeg(query: string): { prefix: string; leg: string } {
+  for (let i = query.length - 1; i >= 0; i--) {
+    if (OPERATOR.test(query[i])) {
+      return { prefix: query.slice(0, i + 1), leg: query.slice(i + 1) }
+    }
+  }
+  return { prefix: '', leg: query }
+}
+
 function isExpression(text: string): boolean {
   const q = text.trim()
   if (q === '' || isPlainSymbol(q)) return false
@@ -187,6 +207,15 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const reqIdRef = useRef(0)
+  /**
+   * Where the caret belongs after the next render.
+   *
+   * Writing the box also changes the leg being searched, which re-renders, and
+   * a `requestAnimationFrame` restore raced that: typing could resume before
+   * the caret moved and lose its first character. A layout effect runs after
+   * every render and before paint, so there is no window to race.
+   */
+  const caretRef = useRef<number | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Chips = ALL + only the segments the broker actually supports.
@@ -197,12 +226,13 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
   }, [allExchanges])
 
   const expression = useMemo(() => isExpression(query), [query])
+  const { prefix, leg } = useMemo(() => splitLeg(query), [query])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toUpperCase()
+    const q = leg.trim().toUpperCase()
     const base = chip === 'ALL' ? rows : rows.filter((r) => categoryOf(String(r.exchange)) === chip)
     return [...base].sort((a, b) => compareRows(a, b, q)).slice(0, MAX_ROWS)
-  }, [rows, chip, query])
+  }, [rows, chip, leg])
 
   // On open: seed query with the current symbol, select it, focus, reset chip.
   useEffect(() => {
@@ -220,7 +250,9 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
   // Debounced search; a request id guards against out-of-order responses.
   useEffect(() => {
     if (!open) return
-    const q = query.trim()
+    // The leg being typed, not the whole box: mid-expression the box is not a
+    // symbol and would match nothing.
+    const q = leg.trim()
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (q.length < 1) {
       setRows([])
@@ -241,7 +273,17 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query, open, search])
+  }, [leg, open, search])
+
+  useLayoutEffect(() => {
+    if (caretRef.current === null) return
+    const node = inputRef.current
+    if (node) {
+      node.focus()
+      node.setSelectionRange(caretRef.current, caretRef.current)
+    }
+    caretRef.current = null
+  })
 
   // Keep the keyboard selection within bounds and scrolled into view.
   useEffect(() => {
@@ -251,9 +293,28 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
     listRef.current?.querySelector(`[data-idx="${sel}"]`)?.scrollIntoView({ block: 'nearest' })
   }, [sel])
 
+  /** Load this and close. The only path that leaves the dialog. */
   const pick = (row: SearchRow) => {
     onPick(row)
     onOpenChange(false)
+  }
+
+  /**
+   * What clicking a result row does.
+   *
+   * Mid-expression it completes the leg and stays open, because the user is
+   * still building; otherwise it loads that instrument. The exchange is written
+   * in so a leg is never ambiguous: `NFO:NIFTY...CE` and `NSE:RELIANCE` resolve
+   * without inheriting whatever the pane happens to be showing.
+   */
+  const chooseRow = (row: SearchRow) => {
+    if (prefix === '') {
+      pick(row)
+      return
+    }
+    const next = `${prefix}${row.exchange}:${row.symbol}`
+    setQuery(next)
+    caretRef.current = next.length
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -273,7 +334,7 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
         return
       }
       const row = filtered[sel]
-      if (row) pick(row)
+      if (row) chooseRow(row)
     }
   }
 
@@ -319,11 +380,7 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
                       ? `1/(${query.trim()})`
                       : query.slice(0, start) + op.insert + query.slice(end)
                   setQuery(next)
-                  const caret = op.insert === '1/' ? next.length : start + op.insert.length
-                  requestAnimationFrame(() => {
-                    node.focus()
-                    node.setSelectionRange(caret, caret)
-                  })
+                  caretRef.current = op.insert === '1/' ? next.length : start + op.insert.length
                 }}
                 className="flex h-6 w-6 items-center justify-center rounded text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
@@ -375,7 +432,7 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
                 type="button"
                 key={`${r.symbol}:${r.exchange}`}
                 data-idx={i}
-                onClick={() => pick(r)}
+                onClick={() => chooseRow(r)}
                 onMouseEnter={() => setSel(i)}
                 className={cn(
                   'grid w-full grid-cols-[1fr_1fr_auto] items-center gap-3 px-5 py-2.5 text-left',
@@ -384,7 +441,7 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
               >
                 <span className="truncate text-sm font-medium">{r.symbol}</span>
                 <span className="truncate text-sm text-muted-foreground">
-                  <Highlight text={r.name || ''} q={query.trim()} />
+                  <Highlight text={r.name || ''} q={leg.trim()} />
                 </span>
                 <span className="flex items-center justify-end gap-2 text-xs">
                   <span className="text-[10px] font-medium uppercase text-muted-foreground">
