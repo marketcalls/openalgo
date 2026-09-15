@@ -21,6 +21,7 @@ from services.strategy_chart_service import (
     _cap_last_n_trading_dates,
     _convert_timestamp_to_ist,
     _normalize_leg,
+    _resolve_explicit_window,
     _resolve_trading_window,
 )
 from utils.logging import get_logger
@@ -37,6 +38,8 @@ def get_multi_strike_oi_data(
     days: int = 5,
     underlying_symbol: str | None = None,
     underlying_exchange: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ):
     """
     Compute Multi Strike OI time series for the Strategy Builder.
@@ -47,14 +50,26 @@ def get_multi_strike_oi_data(
         legs: List of leg dicts — only active OPTION legs are used.
         interval: Candle interval (e.g., "1m", "5m").
         api_key: OpenAlgo API key.
-        days: Calendar-day lookback window.
+        days: Calendar-day lookback window. Ignored when start_date is given.
+        start_date: Explicit IST window start, "YYYY-MM-DD". Supplied by a chart
+                    paging older history.
+        end_date: Explicit IST window end, "YYYY-MM-DD". Defaults to today.
 
     Returns:
         Tuple of (success: bool, response: dict, status_code: int).
     """
     try:
         ist = pytz.timezone("Asia/Kolkata")
-        start_date_str, end_date_str = _resolve_trading_window(days, ist)
+        try:
+            explicit = _resolve_explicit_window(start_date, end_date, ist)
+        except ValueError as exc:
+            # A window the caller can correct, not a server fault: say what is
+            # wrong with it rather than returning an opaque 500.
+            return False, {"status": "error", "message": str(exc)}, 400
+        if explicit is None:
+            start_date_str, end_date_str = _resolve_trading_window(days, ist)
+        else:
+            start_date_str, end_date_str = explicit
 
         base_symbol = (underlying or "").strip().upper()
         if not base_symbol:
@@ -188,9 +203,12 @@ def get_multi_strike_oi_data(
         # Cap every series (underlying + each leg) to the last N distinct
         # trading dates actually present. Market-agnostic: counts returned
         # dates rather than hardcoding session close times.
-        underlying_series = _cap_last_n_trading_dates(underlying_series, days, ist)
-        for leg_entry in leg_series:
-            leg_entry["series"] = _cap_last_n_trading_dates(leg_entry["series"], days, ist)
+        # Skipped for an explicit window, where trimming to the newest few dates
+        # would drop the older half of exactly the range that was asked for.
+        if explicit is None:
+            underlying_series = _cap_last_n_trading_dates(underlying_series, days, ist)
+            for leg_entry in leg_series:
+                leg_entry["series"] = _cap_last_n_trading_dates(leg_entry["series"], days, ist)
 
         # ── Latest underlying LTP ─────────────────────────────────────
         success_q, quote_resp, _ = get_quotes(

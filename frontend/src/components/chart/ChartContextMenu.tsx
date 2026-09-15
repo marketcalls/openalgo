@@ -34,8 +34,15 @@ export interface ChartContextMenuProps {
   onClose(): void
   railVisible: boolean
   onToggleRail(): void
-  volumeVisible: boolean
-  onToggleVolume(): void
+  /**
+   * Volume, when the chart has any.
+   *
+   * Optional together: a chart of a spread's premium or of open interest has no
+   * volume to draw, and the row is left out there rather than offered as a
+   * switch that turns an empty histogram on and off.
+   */
+  volumeVisible?: boolean
+  onToggleVolume?(): void
 }
 
 type GridChoice = 'both' | 'horizontal' | 'vertical' | 'none'
@@ -131,10 +138,12 @@ export function ChartContextMenu({
         {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
       </button>
 
-      <button type="button" className={ROW} onClick={() => run(onToggleVolume)}>
-        <VolumeIcon className={ICON} />
-        {volumeVisible ? 'Hide volume' : 'Show volume'}
-      </button>
+      {onToggleVolume ? (
+        <button type="button" className={ROW} onClick={() => run(onToggleVolume)}>
+          <VolumeIcon className={ICON} />
+          {volumeVisible ? 'Hide volume' : 'Show volume'}
+        </button>
+      ) : null}
 
       <div className="relative">
         <button
