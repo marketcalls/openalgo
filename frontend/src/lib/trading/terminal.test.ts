@@ -115,8 +115,9 @@ describe('usesLots', () => {
  * subscribe that would supply ltq is not an option: brokers whose adapters
  * track one mode per symbol froze the chart on it (issue #1664).
  *
- * So the periodic history reconcile supplies that one field. These cases pin
- * why it re-seeds the builder instead of patching `rawBars` alone.
+ * So the history repair supplies that one field, through the builder's own
+ * `reconcile`. These cases pin why the builder's copy must be updated rather
+ * than `rawBars` alone, and what reconcile keeps from each side.
  */
 describe('forming-bar volume', () => {
   const BUCKET = 60
@@ -155,6 +156,20 @@ describe('forming-bar volume', () => {
     expect(u?.isNew).toBe(false)
     // The ticks still own the price. History is a poll and lags them.
     expect(u?.bar.close).toBe(103)
+  })
+
+  it('reconcile takes the sampled volume and a provisional open, and keeps the live close', () => {
+    const b = new CandleBuilder({ intervalSec: BUCKET, volumeMode: 'ltq-sum' })
+    b.seed(bar(0, 5000))
+    // History stopped at the previous bar, so this tick opens the bucket at
+    // whatever price it carries: provisional, and history knows the open.
+    const opened = b.onTick({ time: BUCKET + 10, price: 101 })
+    expect(opened?.provisional).toBe(true)
+    const merged = b.reconcile({ time: BUCKET, open: 100.5, high: 101.5, low: 100.2, close: 100.9, volume: 4200 })
+    expect(merged).toMatchObject({ open: 100.5, high: 101.5, low: 100.2, close: 101, volume: 4200 })
+    const u = b.onTick({ time: BUCKET + 40, price: 103 })
+    expect(u?.bar).toMatchObject({ open: 100.5, close: 103, volume: 4200 })
+    expect(u?.provisional).toBe(false)
   })
 
   it('starts the next bar clean rather than carrying the correction forward', () => {

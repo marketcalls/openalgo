@@ -52,28 +52,10 @@ import type {
 import {
   runTransform,
   parseExpression,
-  isPlainSymbol,
   evaluateExpression,
   type SymbolExpression,
 } from 'openalgo-charts/transform'
-
-/**
- * Is this search text arithmetic rather than one instrument?
- *
- * A parse failure answers no: a half-typed `NIFTY/` arrives on every
- * keystroke, and the ordinary symbol path already knows how to say that a
- * symbol is unknown.
- */
-function isChartExpression(text: string): boolean {
-  const s = (text || '').trim()
-  if (s === '' || isPlainSymbol(s)) return false
-  try {
-    parseExpression(s)
-    return true
-  } catch {
-    return false
-  }
-}
+import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 
 // Re-exported so the React layer imports its chart types from this facade
 // rather than reaching into the library directly, as it already does for
@@ -782,6 +764,16 @@ export class TradingTerminal {
   private chartDataKey: string | null = null
   private trade: TradeFeedInstance | null = null
   private builder: CandleBuilder | null = null
+  /** The expression on the chart, when the pane shows a combination rather than an instrument. */
+  private expr: SymbolExpression | null = null
+  /** History for plain symbols and combinations alike; the controller talks only to this. */
+  private exprFeed: ExpressionFeed | null = null
+  /** Exchange a bare leg of the current expression resolves to. */
+  private exprLegExchange = 'NSE'
+  /** Latest price per leg, keyed as the expression names them. */
+  private readonly legLtp = new Map<string, number>()
+  /** The LTP subscriptions a combination holds, one per leg. */
+  private legSubs: Array<{ symbol: string; exchange: string }> = []
   private offLtp: (() => void) | null = null
   private offDepth: (() => void) | null = null
   private offWsState: (() => void) | null = null
@@ -1019,26 +1011,18 @@ export class TradingTerminal {
     const before = snapshot.reason === 'prepend' ? chart?.getVisibleLogicalRange() : null
     const countBefore = this.shownCount
 
-    // REST contributes the sampled forming-bar volume. Live ticks retain the
-    // bar's price path, and the higher sampled volume remains monotonic.
+    // History's view of the bar still forming: the sampled volume (a depth
+    // subscription carries none), the true open when the builder opened the
+    // bucket mid-way, and the union of the extremes. The close stays with the
+    // ticks, which are fresher than any poll. The builder's own copy is
+    // reconciled as well, or its next tick would write the stale values
+    // straight back over the repair.
     if (snapshot.reason === 'refresh' && this.builder && this.liveBucket != null) {
       const current = this.builder.current()
       const index = current ? next.findIndex((bar) => bar.time === current.time) : -1
       if (current && index >= 0 && current.time === this.liveBucket) {
-        const historical = next[index]
-        const reconciled: Bar = {
-          ...historical,
-          open: current.open,
-          high: Math.max(historical.high, current.high),
-          low: Math.min(historical.low, current.low),
-          close: current.close,
-          volume:
-            historical.volume === undefined && current.volume === undefined
-              ? undefined
-              : Math.max(historical.volume ?? 0, current.volume ?? 0),
-        }
-        next[index] = reconciled
-        this.builder.seed(reconciled)
+        const reconciled = this.builder.reconcile(next[index])
+        if (reconciled) next[index] = reconciled
       }
     }
 
@@ -3338,6 +3322,24 @@ export class TradingTerminal {
     if (this.ltpPollTimer) return
     this.ltpPollTimer = setInterval(async () => {
       if (!this.sym) return
+      if (this.sym.synthetic && this.expr) {
+        // A combination polls each leg and folds, the same as the socket path.
+        try {
+          for (const leg of this.expr.symbols) {
+            const r = resolveLeg(leg, this.exprLegExchange)
+            const j = await this.api<{ data?: { ltp?: number } }>('quotes', {
+              symbol: r.symbol,
+              exchange: r.exchange,
+            })
+            if (typeof j.data?.ltp === 'number' && j.data.ltp > 0) this.legLtp.set(leg, j.data.ltp)
+          }
+          this.onCombinedTick(this.expr, nowSec())
+          this.cb.onWsState('fallback')
+        } catch {
+          /* next cycle */
+        }
+        return
+      }
       try {
         const j = await this.api<{ data?: { ltp?: number; bid?: number; ask?: number } }>(
           'quotes',
@@ -3393,7 +3395,10 @@ export class TradingTerminal {
         else this.rawBars.push(u.bar)
         // History and live bars share one bounded store. The terminal retains
         // its existing single WS subscription and supplies its built bar here.
-        this.data?.pushBar(u.bar)
+        // A bucket the builder opened mid-way, because history stopped one bar
+        // short or the socket came back, is provisional: history keeps the open.
+        if (u.provisional) this.data?.pushBar(u.bar, { provisional: true })
+        else this.data?.pushBar(u.bar)
         // Replay owns the series while it is running. Writing the live bar into
         // it puts a candle at the current wall-clock bucket, at the current
         // price, hundreds of bars past the playhead: a lone spike far from the
@@ -3479,6 +3484,75 @@ export class TradingTerminal {
     } else {
       this.ws.subscribe('Depth', this.sym.symbol, this.sym.exchange, 5)
     }
+  }
+
+  /* ── live data for a combination: one LTP stream per leg, folded per tick ── */
+  private connectExpressionLive(expr: SymbolExpression) {
+    if (!this.ws) return
+    const sec = intervalSeconds(this.interval)
+    const sessionAnchorSec = this.rawBars[this.rawBars.length - 1]?.time ?? 0
+    // The builder aggregates the folded value, so the forming bar's open, high
+    // and low belong to the combination rather than to any one leg. Seeded from
+    // the folded history like an instrument's builder: when history stopped one
+    // bucket short, the first tick opens a provisional bar and the repair after
+    // the bar closes brings the open it missed.
+    this.builder = sec
+      ? new CandleBuilder({ intervalSec: sec, volumeMode: 'ltq-sum', sessionAnchorSec })
+      : null
+    if (this.builder && this.rawBars.length) {
+      this.builder.seed(this.rawBars[this.rawBars.length - 1])
+    }
+    // Every leg starts at the close its history ended on, so the first tick of
+    // any one leg already has a price for the others to fold with.
+    this.legLtp.clear()
+    for (const leg of expr.symbols) {
+      const rows = this.exprFeed?.legBars[leg]
+      const last = rows?.[rows.length - 1]
+      if (last) this.legLtp.set(leg, last.close)
+    }
+    this.depthActive = false
+    if (this.offLtp) {
+      this.offLtp()
+      this.offLtp = null
+    }
+    if (this.offDepth) {
+      this.offDepth()
+      this.offDepth = null
+    }
+    this.offLtp = this.ws.onLtp((e: LtpEvent) => {
+      const leg = this.legFor(expr, e.symbol, e.exchange)
+      if (!leg) return
+      this.cb.onWsState('live')
+      this.stopLtpFallback()
+      this.legLtp.set(leg, e.ltp)
+      this.onCombinedTick(expr, e.timeSec)
+    })
+    this.legSubs = expr.symbols.map((leg) => resolveLeg(leg, this.exprLegExchange))
+    for (const leg of this.legSubs) this.ws.subscribe('LTP', leg.symbol, leg.exchange)
+  }
+
+  /** Which leg of the expression a tick belongs to, or null when it is not ours. */
+  private legFor(expr: SymbolExpression, symbol: string | undefined, exchange: string | undefined) {
+    if (!symbol) return null
+    for (const leg of expr.symbols) {
+      const r = resolveLeg(leg, this.exprLegExchange)
+      if (r.symbol === symbol && (!exchange || r.exchange === exchange)) return leg
+    }
+    return null
+  }
+
+  /** Fold the latest price of every leg into one tick for the combined series. */
+  private onCombinedTick(expr: SymbolExpression, timeSec?: number) {
+    const legs: Record<string, Bar[]> = {}
+    for (const leg of expr.symbols) {
+      const p = this.legLtp.get(leg)
+      if (p === undefined) return // a leg without a price cannot be folded yet
+      legs[leg] = [{ time: 0, open: p, high: p, low: p, close: p }]
+    }
+    const value = evaluateExpression(expr, legs)[0]?.close
+    // A divisor at zero folds to a gap, and a gap is not a price.
+    if (value === undefined || !Number.isFinite(value)) return
+    this.onTick({ ltp: value, timeSec })
   }
 
   /** Repair a known stream gap immediately through the shared data owner. */
@@ -3609,10 +3683,11 @@ export class TradingTerminal {
    * Chart an expression over several instruments: `NIFTY/RELIANCE`,
    * `2*CE25000 - CE25200`, `(A+B)/2`.
    *
-   * The legs are fetched in parallel and the first failure wins, because a
-   * combination missing a leg is not a chart with a gap, it is no chart at all.
-   * The engine folds them; this method only supplies bars and refuses to let
-   * the result look tradeable.
+   * History goes through the same controller as an instrument, behind a feed
+   * that fetches every leg and folds them, so the warm load, the repair after
+   * each bar closes and the gap repair all apply. Live ticks arrive per leg
+   * and are folded into one series by `connectExpressionLive`. The result is
+   * never allowed to look tradeable.
    */
   private async loadExpression(
     source: string,
@@ -3627,30 +3702,24 @@ export class TradingTerminal {
       return false
     }
 
+    // A bare leg inherits the exchange of whatever the pane showed before,
+    // which is what a trader typing `NIFTY/RELIANCE` means. Remembered here so
+    // every later repair resolves the legs the same way the load did.
+    if (!this.sym?.synthetic) this.exprLegExchange = this.sym?.exchange || 'NSE'
     const to = this.gridNow()
-    const from = to - lookbackDays(this.interval) * 86400
-    let bars: Bar[]
+    const request = {
+      symbol: source,
+      exchange: '',
+      interval: this.interval,
+      from: to - lookbackDays(this.interval) * 86400,
+      to,
+    }
+    const inner = this.cachedBars ?? this.rest
+    if (!inner) return false
+    const feed = this.exprFeed ?? new ExpressionFeed(inner, () => this.exprLegExchange)
+    let bars: readonly Bar[]
     try {
-      const loaded = await Promise.all(
-        expr.symbols.map(async (leg) => {
-          // `NSE:RELIANCE` names its exchange; a bare symbol inherits the
-          // pane's, which is what a trader typing `NIFTY/RELIANCE` means.
-          const cut = leg.indexOf(':')
-          const exchange = cut > 0 ? leg.slice(0, cut) : (this.sym?.exchange ?? 'NSE')
-          const symbol = cut > 0 ? leg.slice(cut + 1) : leg
-          const rows = await (this.cachedBars ?? this.rest!).getBars({
-            symbol, exchange, interval: this.interval, from, to,
-          })
-          return [leg, rows] as const
-        }),
-      )
-      if (this.destroyed || ticket !== this.loadTicket) return false
-      const legs: Record<string, readonly Bar[]> = {}
-      for (const [leg, rows] of loaded) {
-        if (!rows.length) throw new Error(`no bars for ${leg}`)
-        legs[leg] = rows
-      }
-      bars = evaluateExpression(expr, legs)
+      bars = this.data ? await this.data.load(request) : await feed.getBars(request)
     } catch (e) {
       if (this.destroyed || ticket !== this.loadTicket) return false
       this.rawBars = []
@@ -3659,15 +3728,22 @@ export class TradingTerminal {
     }
     if (this.destroyed || ticket !== this.loadTicket) return false
     if (!bars.length) {
+      // The controller resolves with what it has and reports the failure in
+      // its state: a missing leg is an error, legs that never share a bar are
+      // an empty result.
+      this.rawBars = []
+      const error = this.data?.getState().error
       if (!opts.silent) {
-        this.toast(`${source}: the legs share no bars on ${this.interval}`, 'err')
+        this.toast(
+          `${source}: ${error ? this.cleanError(error) : `the legs share no bars on ${this.interval}`}`,
+          'err'
+        )
       }
       return false
     }
 
     // `quoteOnly` keeps the product picker and the depth ladder away; `synthetic`
-    // is what the order path refuses by name. A synthetic pane has no live
-    // subscription at all, so `connectLive` is not called.
+    // is what the order path refuses by name.
     this.sym = {
       symbol: source,
       exchange: '',
@@ -3684,8 +3760,10 @@ export class TradingTerminal {
     this.rawBars = [...bars]
     this.lastLtp = null
     this.liveBucket = null
-    this.noMoreHistory = true // paging an expression would have to page every leg
+    this.noMoreHistory = false // the feed pages every leg
+    this.expr = expr
     this.buildChart()
+    this.connectExpressionLive(expr)
     return true
   }
 
@@ -3713,9 +3791,15 @@ export class TradingTerminal {
       (this.sym.symbol !== pick.symbol || this.sym.exchange !== pick.exchange)
     ) {
       // Mirror connectLive's single-subscription model: the outgoing symbol
-      // holds exactly one mode -- LTP when quote-only, Depth otherwise.
+      // holds exactly one mode -- LTP when quote-only, Depth otherwise. A
+      // combination holds one LTP subscription per leg instead.
       try {
-        if (this.sym.quoteOnly) {
+        if (this.sym.synthetic) {
+          for (const leg of this.legSubs) this.ws.unsubscribe('LTP', leg.symbol, leg.exchange)
+          this.legSubs = []
+          this.legLtp.clear()
+          this.expr = null
+        } else if (this.sym.quoteOnly) {
           this.ws.unsubscribe('LTP', this.sym.symbol, this.sym.exchange)
         } else {
           this.ws.unsubscribe('Depth', this.sym.symbol, this.sym.exchange)
@@ -4184,9 +4268,20 @@ export class TradingTerminal {
   async init() {
     this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
     this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
-    this.data = new DataLoadingController(this.cachedBars, {
+    this.exprFeed = new ExpressionFeed(this.cachedBars, () => this.exprLegExchange)
+    // Repair follows the stream: one small refresh a moment after each bar
+    // closes, an immediate one when the stream skips a bucket, and each asks
+    // history for the last few bars only. The 30-second poll stays, now as a
+    // tail request rather than the whole window, because a tradeable's only
+    // subscription is Depth, which carries no traded quantity: history is the
+    // sole source of the forming bar's volume, and a volume pane frozen for a
+    // whole bar reads as a dead feed.
+    this.data = new DataLoadingController(this.exprFeed, {
       now: nowSec,
       pollIntervalMs: 30_000,
+      refreshOnBarClose: true,
+      refreshOnGap: true,
+      refreshWindowBars: 5,
       pageSize: 500,
       maxEmptyPages: 4,
       maxBars: 100_000,
@@ -4223,8 +4318,14 @@ export class TradingTerminal {
       if (s === 'closed' || s === 'error' || s === 'reconnecting') this.startLtpFallback()
       // Back on the wire after a break: whatever closed between the drop and
       // now was never built from ticks, so reconcile at once instead of waiting
-      // out the rest of the 30-second polling cycle staring at the hole.
-      if (s === 'open') this.reconcileNow()
+      // for the next poll staring at the hole. The builder is reseeded from its
+      // own bar first, which marks the bucket it opens next as provisional: the
+      // first tick after a gap is not that bucket's open.
+      if (s === 'open') {
+        const current = this.builder?.current()
+        if (current) this.builder?.seed(current)
+        this.reconcileNow()
+      }
     })
     this.offWsControl = this.ws.onControl((m) => {
       if (m.type === 'auth' && m.status !== 'success') this.cb.onWsState('auth failed')
