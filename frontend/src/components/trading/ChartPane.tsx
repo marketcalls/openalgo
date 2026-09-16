@@ -1028,6 +1028,7 @@ export function ChartPane({
         />
         <IndicatorSettingsDialog
           req={indSettings}
+          symbol={sym?.symbol}
           onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
           onDefaults={(id) =>
             terminalRef.current

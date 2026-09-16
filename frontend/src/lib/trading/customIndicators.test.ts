@@ -186,6 +186,15 @@ describe('descriptorErrors', () => {
     const errors = descriptorErrors({ ...good, ...patch })
     expect(errors.join('; ')).toMatch(pattern)
   })
+
+  // The OI Profile's expiry tick list. This allowlist rejecting it is what
+  // stopped the whole module registering, and the chart then answered
+  // 'unknown indicator "oi-profile-live"' with nothing said about why.
+  it('accepts the expiries pick list', () => {
+    expect(
+      descriptorErrors({ ...good, inputs: [{ key: 'expiryDate', type: 'expiries', default: '' }] })
+    ).toEqual([])
+  })
 })
 
 describe('calcOutputError', () => {

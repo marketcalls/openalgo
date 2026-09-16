@@ -21,8 +21,8 @@
  * contract requires at least one), so it's a hidden no-op line.
  *
  * Expiries: like Sensibull, the profile can sum several expiries. Leave the
- * override blank and it fetches the nearest N option expiries for the
- * underlying itself; type one in to pin the profile to that expiry alone.
+ * pick list blank and it fetches the nearest N option expiries for the
+ * underlying itself; tick the ones you want to pin it to exactly those.
  *
  * Load: the strike window is a setting (5/10/25/50 around ATM) because every
  * strike is two legs to quote and, for the change columns, one broker history
@@ -118,7 +118,7 @@ function rowHalfHeight(rows) {
 function dataKey(settings, symbol) {
   return [
     resolveUnderlying(settings, symbol),
-    String(settings.exchange ?? 'NFO').toUpperCase(),
+    resolveExchange(settings, resolveUnderlying(settings, symbol)),
     String(settings.expiryDate ?? '').toUpperCase(),
     String(settings.expiries ?? 1),
     String(settings.strikes ?? 25),
@@ -135,6 +135,17 @@ function resolveUnderlying(settings, symbol) {
     .toUpperCase()
     .replace(/\d{2}[A-Z]{3}\d{2}FUT$/, '')
     .replace(/[^A-Z0-9]/g, '')
+}
+
+/**
+ * The F&O exchange the underlying's options live on. Left on Auto - which is
+ * the default - the BSE indices go to BFO and everything else to NFO, so a
+ * SENSEX chart needs no setting at all. A saved 'NFO' or 'BFO' still wins.
+ */
+function resolveExchange(settings, underlying) {
+  const typed = String(settings.exchange ?? '').trim().toUpperCase()
+  if (typed && typed !== 'AUTO') return typed
+  return /^(SENSEX|BANKEX)/.test(underlying) ? 'BFO' : 'NFO'
 }
 
 /** Nearest `count` option expiries for an underlying, as DDMMMYY. */
@@ -160,14 +171,15 @@ export default function ({ registerIndicator, nulls }) {
     inputs: [
       { key: 'underlying', type: 'symbol', label: 'Underlying', default: '', group: 'Instrument' },
       {
-        key: 'exchange', type: 'select', label: 'Exchange', default: 'NFO', group: 'Instrument',
+        key: 'exchange', type: 'select', label: 'Exchange', default: 'auto', group: 'Instrument',
         options: [
+          { label: 'Auto', value: 'auto' },
           { label: 'NFO', value: 'NFO' },
           { label: 'BFO', value: 'BFO' },
         ],
       },
       { key: 'expiries', type: 'number', label: 'Expiries To Combine', default: 1, min: 1, max: 6, step: 1, group: 'Instrument' },
-      { key: 'expiryDate', type: 'text', label: 'Expiry Override (DDMMMYY)', default: '', group: 'Instrument' },
+      { key: 'expiryDate', type: 'expiries', label: 'Expiry Used', default: '', group: 'Instrument' },
       {
         key: 'mode', type: 'select', label: 'Mode', default: 'oi', group: 'Display',
         options: [
@@ -541,9 +553,15 @@ export default function ({ registerIndicator, nulls }) {
       let expiryCache = []
       let expiryCachedAt = 0
 
+      // `expiryDate` is a comma-separated pick list, the way Sensibull ticks
+      // its expiries. A single value is the old override and still works.
       const resolveExpiries = async (settings, exchange, underlying) => {
-        const override = String(settings.expiryDate ?? '').trim().toUpperCase()
-        if (override) return [override]
+        const picked = String(settings.expiryDate ?? '')
+          .toUpperCase()
+          .split(',')
+          .map((e) => e.replace(/[^A-Z0-9]/g, ''))
+          .filter(Boolean)
+        if (picked.length) return picked
 
         const count = Math.min(6, Math.max(1, Math.floor(Number(settings.expiries) || 1)))
         const key = `${exchange}|${underlying}|${count}`
@@ -594,8 +612,8 @@ export default function ({ registerIndicator, nulls }) {
       const runFetch = async (mine) => {
         const stale = () => cancelled || mine !== generation
         const settings = ctx.settings()
-        const exchange = String(settings.exchange ?? 'NFO').trim().toUpperCase()
         const underlying = resolveUnderlying(settings, ctx.symbol?.())
+        const exchange = resolveExchange(settings, underlying)
         state.mode = settings.mode === 'oi' ? 'oi' : 'change'
         watchedKey = dataKey(settings, ctx.symbol?.())
         if (!underlying) {

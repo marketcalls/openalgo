@@ -16,7 +16,9 @@ const CHAIN = [
   { strike: 23300, ce_oi: 8_721_000, pe_oi: 6_893_000, ce_oi_change: 2_637_000, pe_oi_change: 1_542_000 },
   { strike: 23400, ce_oi: 5_000_000, pe_oi: 3_000_000, ce_oi_change: -400_000, pe_oi_change: 120_000 },
 ]
-globalThis.fetch = async (url) => {
+let lastBody = null
+globalThis.fetch = async (url, opts) => {
+  if (opts?.body) lastBody = JSON.parse(opts.body)
   if (String(url).includes('/search/api/expiries'))
     return { ok: true, json: async () => ({ expiries: ['22-SEP-26'] }) }
   if (String(url).includes('csrf')) return { ok: true, json: async () => ({ csrf_token: 't' }) }
@@ -86,5 +88,27 @@ c = canvas()
 primitive.draw(c, rc('oi-profile-strike:23400'))
 assert.ok(c.texts.includes('Call OI Chg: -4.00L'), c.texts.join(' | '))
 
+// Ticked expiries are a comma list, and every one of them is asked for; a
+// single value is the old single-expiry override and still works.
+settings.expiryDate = '22SEP26, 29SEP26'
+await new Promise((r) => setTimeout(r, 1400))
+assert.deepEqual(lastBody.expiry_dates, ['22SEP26', '29SEP26'], JSON.stringify(lastBody))
+
+settings.expiryDate = '06OCT26'
+await new Promise((r) => setTimeout(r, 1400))
+assert.deepEqual(lastBody.expiry_dates, ['06OCT26'], JSON.stringify(lastBody))
+
+// Exchange left on Auto: the chart's own symbol picks the underlying, and the
+// BSE indices go to BFO without anyone setting anything.
+settings.exchange = 'auto'
+settings.expiryDate = ''
+await new Promise((r) => setTimeout(r, 1400))
+assert.equal(lastBody.underlying, 'NIFTY', JSON.stringify(lastBody))
+assert.equal(lastBody.exchange, 'NFO', JSON.stringify(lastBody))
+
+settings.underlying = 'SENSEX'
+await new Promise((r) => setTimeout(r, 1400))
+assert.equal(lastBody.exchange, 'BFO', JSON.stringify(lastBody))
+
 teardown()
-console.log('OK: hover tooltip names the strike, matches mode, formats in lakhs')
+console.log('OK: hover tooltip names the strike, matches mode, formats in lakhs; expiry picks are summed')

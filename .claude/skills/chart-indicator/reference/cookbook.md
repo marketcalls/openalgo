@@ -257,6 +257,11 @@ inputs: [
   // These two are numbers a host may also resolve from a chart click.
   { key: 'anchor',  type: 'price',     label: 'Anchor Price', default: 0, group: 'Instrument' },
   { key: 'from',    type: 'time',      label: 'Anchor Time',  default: 0, group: 'Instrument' },
+
+  // OpenAlgo's own type, not the library's: the settings dialog renders it as a
+  // tick list of the underlying's nearest option expiries and hands back the
+  // picks as a comma-separated string ('22SEP26,29SEP26').
+  { key: 'expiryDate', type: 'expiries', label: 'Expiry Used', default: '', group: 'Instrument' },
 ]
 ```
 

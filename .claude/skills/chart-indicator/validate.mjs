@@ -131,11 +131,17 @@ const note = once(notes)
 // The library's IndicatorInput union. The last five are 1.8.1: 'session',
 // 'timeframe' and 'symbol' are strings the indicator parses itself, 'price' and
 // 'time' are numbers a host may also resolve from a chart click.
+//
+// 'expiries' is OpenAlgo's own, not the library's: the settings dialog renders
+// it as a tick list of the underlying's nearest option expiries and stores the
+// picks as a comma-separated string, so an indicator still reads one string.
 const INPUT_TYPES = new Set([
   'number', 'boolean', 'color', 'text', 'select', 'source',
-  'session', 'timeframe', 'symbol', 'price', 'time',
+  'session', 'timeframe', 'symbol', 'price', 'time', 'expiries',
 ])
-const STRING_INPUTS = new Set(['text', 'select', 'source', 'session', 'timeframe', 'symbol'])
+const STRING_INPUTS = new Set([
+  'text', 'select', 'source', 'session', 'timeframe', 'symbol', 'expiries',
+])
 const NUMBER_INPUTS = new Set(['number', 'price', 'time'])
 const SOURCES = new Set(['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume'])
 const PLACEMENTS = new Set(['onchart', 'pane'])

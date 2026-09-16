@@ -47,6 +47,12 @@ const INDEX_URL = '/custom-indicators/index.json'
 // Kept in step with the library's IndicatorInput union. 'session', 'timeframe'
 // and 'symbol' are strings the indicator parses itself; 'price' and 'time' are
 // numbers a host may also let the user pick off the chart.
+//
+// 'expiries' is ours, not the library's: the settings dialog renders it as a
+// tick list of the underlying's nearest option expiries and stores the picks as
+// a comma-separated string. Adding a type here is half the job - a type this
+// list accepts but the dialog cannot draw registers fine and then shows the
+// user an empty row.
 const INPUT_TYPES = new Set([
   'number',
   'boolean',
@@ -59,6 +65,7 @@ const INPUT_TYPES = new Set([
   'symbol',
   'price',
   'time',
+  'expiries',
 ])
 const PLACEMENTS = new Set(['onchart', 'pane'])
 
