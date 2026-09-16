@@ -25,7 +25,7 @@
  * the user just set up.
  */
 
-import type { DataFeed, SeriesApi } from 'openalgo-charts'
+import type { DataFeed, DataLoadingOptions, SeriesApi } from 'openalgo-charts'
 import { createWidget, type SymbolSearch, type Widget } from 'openalgo-charts/widget'
 import { useEffect, useRef, useState } from 'react'
 import { ensureCalendarIntervals, ensureInterval } from '@/lib/chart/intervalRegistry'
@@ -200,6 +200,14 @@ export interface OpenAlgoChartProps {
   onIntervalRejected?: (interval: string) => void
   /** The live handle, for a host toolbar driving settings, indicators or objects. */
   onReady?: (widget: Widget | null) => void
+  /**
+   * Repair driven by the stream, for a host that pushes live bars into
+   * `widget.dataController` itself: a refresh after each bar closes, one when
+   * a bucket is skipped, each fetching only the tail. The history poll stays
+   * closed whatever is passed here, so a host that pushes nothing still gets a
+   * chart that never touches the network after a load.
+   */
+  loading?: Pick<DataLoadingOptions, 'refreshOnBarClose' | 'refreshOnGap' | 'refreshWindowBars'>
 }
 
 export function OpenAlgoChart({
@@ -224,6 +232,7 @@ export function OpenAlgoChart({
   onData,
   onIntervalRejected,
   onReady,
+  loading,
 }: OpenAlgoChartProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const widgetRef = useRef<Widget | null>(null)
@@ -257,6 +266,7 @@ export function OpenAlgoChart({
     onData,
     onIntervalRejected,
     onReady,
+    loading,
   })
   latest.current = {
     dataEndsAt,
@@ -272,6 +282,7 @@ export function OpenAlgoChart({
     onData,
     onIntervalRejected,
     onReady,
+    loading,
   }
 
   useEffect(() => {
@@ -321,8 +332,10 @@ export function OpenAlgoChart({
       const widget = createWidget(host, {
         feed,
         loading: {
+          ...p.loading,
           // The controller's history-repair poll. Zero closes it, which is what
           // makes this chart genuinely static rather than quietly refreshing.
+          // After the spread on purpose: no host reopens it.
           pollIntervalMs: 0,
           // Read through the ref so a symbol change moves the horizon without
           // rebuilding the chart. See `dataEndsAt` for why both clocks matter.

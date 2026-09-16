@@ -18,7 +18,11 @@ import { registeredIndicators } from 'openalgo-charts'
 import type { Widget } from 'openalgo-charts/widget'
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChartContextMenu, type ChartMenuAnchor } from '@/components/chart/ChartContextMenu'
-import { type ChartDataEvent, OpenAlgoChart } from '@/components/chart/OpenAlgoChart'
+import {
+  type ChartDataEvent,
+  OpenAlgoChart,
+  type OpenAlgoChartProps,
+} from '@/components/chart/OpenAlgoChart'
 import {
   type CatalogEntry,
   IndicatorPickerDialog,
@@ -94,6 +98,8 @@ export interface StrategyChartShellProps {
    * what its own numbers mean.
    */
   tooltip?: (time: number) => ChartTooltipRow[] | null
+  /** Stream-driven repair for a tab that pushes live bars; see the chart's prop. */
+  loading?: OpenAlgoChartProps['loading']
 }
 
 /** One labelled number in the crosshair readout. */
@@ -203,6 +209,7 @@ export function StrategyChartShell({
   onReady,
   onData,
   tooltip,
+  loading,
 }: StrategyChartShellProps) {
   const paneRef = useRef<HTMLDivElement>(null)
   const plotRef = useRef<HTMLDivElement>(null)
@@ -490,6 +497,7 @@ export function StrategyChartShell({
           chartType="line"
           persistKey={persistKey}
           topbar={false}
+          loading={loading}
           onReady={(instance) => {
             setWidget(instance)
             onReady(instance)
