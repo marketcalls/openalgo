@@ -8,6 +8,7 @@ breakout_beacon, high_powered_stocks) for future backtest replay.
 """
 
 from __future__ import annotations
+
 import os
 import time
 from contextlib import contextmanager
@@ -87,7 +88,105 @@ def init_tf_boost_database():
                 UNIQUE (snapshot_time, list_type, symbol)
             )
         """)
+
+        # Enrichment columns, added to an existing table rather than shipped in
+        # the CREATE above, because every installation that has been snapshotting
+        # since July already has the table and would never see them otherwise.
+        # DuckDB's ADD COLUMN IF NOT EXISTS makes this safe to run on every boot.
+        #
+        # These four numbers are computed on every live poll today (tf_cpr_service,
+        # tf_first_candle_service, tf_directional_score_service) and then thrown
+        # away when the response is rendered, which is why not one of them can be
+        # tested against what a symbol went on to do. They are the difference
+        # between "this stock is ranked highly" and "this stock is ranked highly
+        # and got there in a straight line from an open above its CPR."
+        for column, ddl_type in (
+            ("directional_score", "DOUBLE"),
+            ("directional_direction", "VARCHAR"),
+            ("directional_reversals", "INTEGER"),
+            ("cpr_width_pct", "DOUBLE"),
+            ("cpr_bias", "VARCHAR"),
+            ("first_candle_range_pct", "DOUBLE"),
+        ):
+            conn.execute(
+                f"ALTER TABLE tf_boost_snapshots ADD COLUMN IF NOT EXISTS {column} {ddl_type}"
+            )
+
+        # One row per poll, written whether or not any list came back. Without it
+        # an empty stretch in the snapshots is unreadable: a morning where the
+        # JWT had expired looks exactly like a morning where nothing qualified,
+        # and the 16-Sep-2026 study had to throw away 13 of 38 days because that
+        # difference could not be established after the fact.
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS tf_boost_heartbeat_id_seq START 1")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tf_boost_heartbeat (
+                id BIGINT PRIMARY KEY DEFAULT nextval('tf_boost_heartbeat_id_seq'),
+                snapshot_date  DATE NOT NULL,
+                snapshot_time  TIMESTAMP NOT NULL,
+                pulse_ok       BOOLEAN NOT NULL,
+                sector_ok      BOOLEAN NOT NULL,
+                rows_written   INTEGER NOT NULL,
+                note           VARCHAR,
+                created_at     TIMESTAMP DEFAULT current_timestamp,
+                UNIQUE (snapshot_time)
+            )
+        """)
     logger.info("TF Boost snapshot database initialized (isolated, no historify schema touched)")
+
+
+def record_heartbeat(
+    snapshot_time,
+    pulse_ok: bool,
+    sector_ok: bool,
+    rows_written: int,
+    note: str | None = None,
+) -> None:
+    """Record that a poll happened. Never raises: a heartbeat that fails to write
+    must not cost the tick its snapshot rows, which are the actual product."""
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO tf_boost_heartbeat
+                    (snapshot_date, snapshot_time, pulse_ok, sector_ok, rows_written, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (snapshot_time) DO NOTHING
+                """,
+                [snapshot_time.date(), snapshot_time, pulse_ok, sector_ok, rows_written, note],
+            )
+    except Exception as e:
+        logger.warning(f"tf_boost heartbeat write failed @ {snapshot_time}: {e}")
+
+
+def get_capture_gaps(date: str, max_gap_minutes: int = 2) -> list[dict]:
+    """Stretches of the session with no poll, for the day given (YYYY-MM-DD).
+
+    A study reading the snapshots needs to know where it was not looking. Each
+    gap is reported as the minute after the last poll through the minute of the
+    next one, so `PATANJALI 09:15 -> 10:15` reads as the 60-minute hole it was
+    rather than as an hour in which nothing happened.
+    """
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                WITH beats AS (
+                    SELECT snapshot_time t,
+                           LEAD(snapshot_time) OVER (ORDER BY snapshot_time) AS next_t
+                    FROM tf_boost_heartbeat
+                    WHERE snapshot_date = ?
+                )
+                SELECT t, next_t, date_diff('minute', t, next_t) AS gap
+                FROM beats
+                WHERE next_t IS NOT NULL AND date_diff('minute', t, next_t) > ?
+                ORDER BY gap DESC
+                """,
+                [date, max_gap_minutes],
+            ).fetchall()
+        return [{"from": str(r[0]), "to": str(r[1]), "minutes": int(r[2])} for r in rows]
+    except Exception as e:
+        logger.warning(f"get_capture_gaps({date}): {e}")
+        return []
 
 
 def get_boost_symbols(
