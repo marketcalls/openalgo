@@ -1019,26 +1019,18 @@ export class TradingTerminal {
     const before = snapshot.reason === 'prepend' ? chart?.getVisibleLogicalRange() : null
     const countBefore = this.shownCount
 
-    // REST contributes the sampled forming-bar volume. Live ticks retain the
-    // bar's price path, and the higher sampled volume remains monotonic.
+    // History's view of the bar still forming: the sampled volume (a depth
+    // subscription carries none), the true open when the builder opened the
+    // bucket mid-way, and the union of the extremes. The close stays with the
+    // ticks, which are fresher than any poll. The builder's own copy is
+    // reconciled as well, or its next tick would write the stale values
+    // straight back over the repair.
     if (snapshot.reason === 'refresh' && this.builder && this.liveBucket != null) {
       const current = this.builder.current()
       const index = current ? next.findIndex((bar) => bar.time === current.time) : -1
       if (current && index >= 0 && current.time === this.liveBucket) {
-        const historical = next[index]
-        const reconciled: Bar = {
-          ...historical,
-          open: current.open,
-          high: Math.max(historical.high, current.high),
-          low: Math.min(historical.low, current.low),
-          close: current.close,
-          volume:
-            historical.volume === undefined && current.volume === undefined
-              ? undefined
-              : Math.max(historical.volume ?? 0, current.volume ?? 0),
-        }
-        next[index] = reconciled
-        this.builder.seed(reconciled)
+        const reconciled = this.builder.reconcile(next[index])
+        if (reconciled) next[index] = reconciled
       }
     }
 
@@ -3393,7 +3385,10 @@ export class TradingTerminal {
         else this.rawBars.push(u.bar)
         // History and live bars share one bounded store. The terminal retains
         // its existing single WS subscription and supplies its built bar here.
-        this.data?.pushBar(u.bar)
+        // A bucket the builder opened mid-way, because history stopped one bar
+        // short or the socket came back, is provisional: history keeps the open.
+        if (u.provisional) this.data?.pushBar(u.bar, { provisional: true })
+        else this.data?.pushBar(u.bar)
         // Replay owns the series while it is running. Writing the live bar into
         // it puts a candle at the current wall-clock bucket, at the current
         // price, hundreds of bars past the playhead: a lone spike far from the
@@ -4184,9 +4179,19 @@ export class TradingTerminal {
   async init() {
     this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
     this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
+    // Repair follows the stream: one small refresh a moment after each bar
+    // closes, an immediate one when the stream skips a bucket, and each asks
+    // history for the last few bars only. The 30-second poll stays, now as a
+    // tail request rather than the whole window, because a tradeable's only
+    // subscription is Depth, which carries no traded quantity: history is the
+    // sole source of the forming bar's volume, and a volume pane frozen for a
+    // whole bar reads as a dead feed.
     this.data = new DataLoadingController(this.cachedBars, {
       now: nowSec,
       pollIntervalMs: 30_000,
+      refreshOnBarClose: true,
+      refreshOnGap: true,
+      refreshWindowBars: 5,
       pageSize: 500,
       maxEmptyPages: 4,
       maxBars: 100_000,
@@ -4223,8 +4228,14 @@ export class TradingTerminal {
       if (s === 'closed' || s === 'error' || s === 'reconnecting') this.startLtpFallback()
       // Back on the wire after a break: whatever closed between the drop and
       // now was never built from ticks, so reconcile at once instead of waiting
-      // out the rest of the 30-second polling cycle staring at the hole.
-      if (s === 'open') this.reconcileNow()
+      // for the next poll staring at the hole. The builder is reseeded from its
+      // own bar first, which marks the bucket it opens next as provisional: the
+      // first tick after a gap is not that bucket's open.
+      if (s === 'open') {
+        const current = this.builder?.current()
+        if (current) this.builder?.seed(current)
+        this.reconcileNow()
+      }
     })
     this.offWsControl = this.ws.onControl((m) => {
       if (m.type === 'auth' && m.status !== 'success') this.cb.onWsState('auth failed')

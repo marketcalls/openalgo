@@ -389,8 +389,11 @@ describe('live candle alignment', () => {
       close: 104,
       volume: 0,
     })
+    // The seed was the previous bar and this tick opened the next bucket, so
+    // the open is only the first price seen: history keeps the true one.
     expect(pushBar).toHaveBeenCalledWith(
-      expect.objectContaining({ time: sessionOpen + 60 * 60, close: 104, volume: 0 })
+      expect.objectContaining({ time: sessionOpen + 60 * 60, close: 104, volume: 0 }),
+      { provisional: true }
     )
   })
 })
