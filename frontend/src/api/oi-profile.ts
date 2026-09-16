@@ -34,6 +34,9 @@ export interface OIProfileDataResponse {
   oi_chain?: OIProfileChainItem[]
   window_start?: number | null
   window_end?: number | null
+  strike_count?: number
+  /** Whether the options exchange is in session. A closed market cannot move. */
+  market_open?: boolean
 }
 
 export interface IntervalsResponse {
@@ -61,6 +64,9 @@ export const oiProfileApi = {
     days: number
     window_start?: number
     window_end?: number
+    strike_count?: number
+    include_change?: boolean
+    include_candles?: boolean
   }): Promise<OIProfileDataResponse> => {
     const response = await webClient.post<OIProfileDataResponse>(
       '/oiprofile/api/profile-data',

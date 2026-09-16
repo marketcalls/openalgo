@@ -503,15 +503,31 @@ retina screen - drawn, but nowhere near the price it belongs to.
 minutes, so the beat is three minutes, reschedules itself after each attempt
 rather than on a fixed interval, carries up to ten seconds of random jitter so
 many open charts do not arrive together, and skips entirely while the tab is
-hidden or the market is closed. Only one request is ever in flight, and a
+hidden. A closed market stretches the beat to fifteen minutes rather than
+stopping it, because only a fetch can tell the chart that the next session has
+opened - stopping outright leaves a chart left open overnight dead until it is
+reloaded. Only one request is ever in flight, and a
 generation counter means a slow answer for an instrument you have left cannot
 paint over the one you are looking at.
 
 **Two passes, fastest first.** Current open interest answers in under a second;
-the previous session's close costs one broker history call per leg the first
-time it is asked for in a session. So the bars are painted from the fast answer
+the open interest each leg carried into the session costs one broker history
+call per leg the first time it is asked for in a session. So the bars are painted from the fast answer
 immediately and upgraded when the slow one lands, rather than leaving the chart
 empty while it runs.
+
+**A toolbar control of its own.** Because it is a view of the whole option
+chain rather than one more line on the price, `/trading` gives OI Profile a
+toggle and a settings gear directly in the chart toolbar, next to Indicators.
+The button appears only when the indicator file is actually installed, so
+deleting it removes the control with it.
+
+**Hovering a strike names it.** The chart owns hover state - `hitTest` reports
+which strike is under the pointer and hands the winner back on `rc.hoverId` -
+so the tooltip appears and vanishes with the cursor without the indicator
+tracking a single listener. It prints what the bars currently are: totals under
+**Open Interest**, the session's build under **Change in OI**, in lakhs and
+crores the way the numbers are actually read.
 
 Settings worth knowing: **Strikes Around ATM** (5/10/25/50) is the one that
 decides how much work a refresh is; **Previous Session Outline** draws the

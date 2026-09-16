@@ -29,13 +29,23 @@ import { showToast } from '@/utils/toast'
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 // The backend sums at most this many expiries in one request
-const MAX_EXPIRIES = 4
+const MAX_EXPIRIES = 6
 
 const INTERVAL_DAYS: Record<string, number> = {
   '1m': 1,
   '5m': 5,
   '15m': 7,
 }
+
+// How often a live page re-asks for the profile, in milliseconds. A closed
+// market cannot move, but the beat still has to come back slowly rather than
+// stop: a page left open overnight has to notice the next session opening.
+const LIVE_REFRESH_MS = 3 * 60 * 1000
+const CLOSED_REFRESH_MS = 15 * 60 * 1000
+
+// Strikes either side of ATM kept in view regardless of how narrow the day's
+// price range is, so the OI columns always carry some context.
+const MIN_STRIKES_IN_VIEW = 5
 
 function convertExpiryForAPI(expiry: string): string {
   if (!expiry) return ''
@@ -201,6 +211,12 @@ export default function OIProfile() {
     }
   }, [selectedUnderlying, selectedExchange])
 
+  // Which selection the plot on screen belongs to. The two-pass load below
+  // needs to know whether there is anything painted yet for what is being
+  // asked for - a repaint of the same selection must not blank its change
+  // columns on the way through.
+  const paintedKeyRef = useRef<string | null>(null)
+
   // Fetch profile data
   const fetchProfileData = useCallback(async () => {
     if (selectedExpiries.length === 0) return
@@ -209,7 +225,7 @@ export default function OIProfile() {
     try {
       const expiriesForAPI = selectedExpiries.map(convertExpiryForAPI)
       const days = INTERVAL_DAYS[selectedInterval] || 5
-      const response = await oiProfileApi.getProfileData({
+      const params = {
         underlying: selectedUnderlying,
         exchange: selectedExchange,
         expiry_date: expiriesForAPI[0],
@@ -217,10 +233,27 @@ export default function OIProfile() {
         interval: selectedInterval,
         days,
         ...(windowRange ? { window_start: windowRange.start, window_end: windowRange.end } : {}),
-      })
+      }
+      const selectionKey = JSON.stringify(params)
+
+      // Open interest answers in well under a second. The change columns need
+      // the open interest every leg carried into the session, which is one
+      // broker history call each the first time it is asked for - most of a
+      // minute over a full chain. So paint the fast answer straight away and
+      // upgrade it when the slow one lands, rather than holding a blank page.
+      // Only on a selection that has nothing on screen yet: repainting a
+      // selection already showing its change columns would blank them.
+      if (paintedKeyRef.current !== selectionKey && !windowRange) {
+        const fast = await oiProfileApi.getProfileData({ ...params, include_change: false })
+        if (requestIdRef.current !== requestId) return
+        if (fast.status === 'success') setProfileData(fast)
+      }
+
+      const response = await oiProfileApi.getProfileData(params)
       if (requestIdRef.current !== requestId) return
       if (response.status === 'success') {
         setProfileData(response)
+        paintedKeyRef.current = selectionKey
       } else {
         showToast.error(response.message || 'Failed to fetch OI Profile data')
       }
@@ -237,6 +270,35 @@ export default function OIProfile() {
       fetchProfileData()
     }
   }, [selectedExpiries, fetchProfileData])
+
+  // Keep the page live. The exchange republishes open interest every few
+  // minutes, so a three-minute beat is as fresh as the number can be; the
+  // backend shares one answer across every client asking for the same
+  // picture, so the beat costs the broker nothing extra. It skips while the
+  // tab is hidden, and stretches rather than stops once the market closes -
+  // only a fetch can tell the page the next session has opened.
+  //
+  // A drag-selected window is a fixed [start, end]; re-asking cannot change it.
+  const liveRefreshPaused = Boolean(windowRange) || selectedExpiries.length === 0
+  const refreshMs = profileData?.market_open === false ? CLOSED_REFRESH_MS : LIVE_REFRESH_MS
+
+  useEffect(() => {
+    if (liveRefreshPaused) return
+
+    const beat = () => {
+      if (!document.hidden) fetchProfileData()
+    }
+    const timer = setInterval(beat, refreshMs)
+    // A tab coming back to the front is stale by however long it was away.
+    const onVisible = () => {
+      if (!document.hidden) fetchProfileData()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [liveRefreshPaused, refreshMs, fetchProfileData])
 
   // Drag-select a range on the candlestick panel to scope OI change to that
   // window instead of the default daily delta. Clears when the interval
@@ -326,9 +388,12 @@ export default function OIProfile() {
 
   // Build the 3-column plot
   const profilePlot = useMemo(() => {
-    if (!profileData?.oi_chain || !profileData.candles?.length) return { data: [], layout: {} }
+    // The OI columns are the point of the page; the futures candles are
+    // context. A broker that answers the chain but not the futures history
+    // used to blank the whole plot, so only the chain is required here.
+    if (!profileData?.oi_chain?.length) return { data: [], layout: {} }
 
-    const candles = profileData.candles
+    const candles = profileData.candles ?? []
     const oiChain = profileData.oi_chain
     const atmStrike = profileData.atm_strike
 
@@ -459,6 +524,28 @@ export default function OIProfile() {
         ]
       : []
 
+    // Price action first, padded; then widened so at least a few strikes
+    // either side of ATM are always on screen even on a very quiet day.
+    const yRange = ((): [number, number] | undefined => {
+      if (!candles.length) return undefined
+      const hi = Math.max(...highs)
+      const lo = Math.min(...lows)
+      // A malformed candle would make these NaN, and a NaN range renders an
+      // empty plot. Falling back to autoscale shows a squeezed chart, which
+      // is still a chart.
+      if (!Number.isFinite(hi) || !Number.isFinite(lo)) return undefined
+      const pad = Math.max((hi - lo) * 0.15, 1)
+      let top = hi + pad
+      let bottom = lo - pad
+      if (atmStrike) {
+        const step = strikes.length > 1 ? Math.abs(strikes[1] - strikes[0]) : 0
+        const band = step * MIN_STRIKES_IN_VIEW
+        top = Math.max(top, atmStrike + band)
+        bottom = Math.min(bottom, atmStrike - band)
+      }
+      return [bottom, top]
+    })()
+
     const layout: Partial<PlotlyTypes.Layout> = {
       title: {
         text: `${selectedUnderlying} ${expiryLabel} - Futures with OI Profile`,
@@ -508,7 +595,9 @@ export default function OIProfile() {
         tickfont: { color: themeColors.text, size: 9 },
         gridcolor: themeColors.grid,
         title: {
-          text: windowRange ? 'CE <-> PE Change (Window)' : 'CE <-> PE Change (D)',
+          // Named for what it measures: the build since this session opened,
+          // or the build across the window the user dragged out.
+          text: windowRange ? 'CE <-> PE Change (Window)' : 'CE <-> PE Change (Today)',
           font: { color: themeColors.text, size: 11 },
         },
         zeroline: true,
@@ -516,6 +605,14 @@ export default function OIProfile() {
       },
       // Shared Y-axis (price/strike)
       yaxis: {
+        // Framed on the price action, not on the whole strike ladder. The two
+        // panels share this axis, and the ladder is far taller than the day's
+        // range - 2000 points of strikes against 494 points of candles, which
+        // squeezed the candlestick panel into a quarter of its height and got
+        // worse the more strikes were asked for. Widened to keep a band of
+        // strikes either side of ATM in view; zooming out still reveals the
+        // rest, which is all still in the data.
+        range: yRange,
         title: {
           text: 'Price / Strike',
           font: { color: themeColors.text, size: 11 },

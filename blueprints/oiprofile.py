@@ -21,8 +21,9 @@ from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
-# Cap how many expiries can be summed in one request
-MAX_EXPIRIES = 4
+# Cap how many expiries can be summed in one request. Six is what Sensibull's
+# own OI Profile offers, and matching it is the point.
+MAX_EXPIRIES = 6
 
 # Strikes either side of ATM. Each one is two legs to quote, so the ceiling is
 # what keeps a careless request from asking the broker for the whole chain.

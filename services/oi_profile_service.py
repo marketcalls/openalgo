@@ -53,12 +53,17 @@ _CACHE_MAXSIZE = int(os.getenv("OI_PROFILE_CACHE_MAXSIZE", "64"))
 _profile_cache: TTLCache = TTLCache(maxsize=max(_CACHE_MAXSIZE, 1), ttl=max(_CACHE_TTL, 0.001))
 _profile_cache_lock = threading.Lock()
 
-# Previous session's closing OI, per option symbol. It is settled history: it
-# cannot change again until tomorrow, yet reading it costs one broker history
-# call per leg behind a process-wide ~350ms gate, so an 80-leg chain spends
-# most of a minute rediscovering yesterday. Cached for the session, which is
-# what makes "Change in OI" usable at all.
-_PREV_OI_TTL = float(os.getenv("OI_PROFILE_PREV_OI_TTL", "21600"))  # 6 hours
+# Open interest each option carried into the current session, per symbol. The
+# opening bar cannot change once the session has started, yet reading it costs
+# one broker history call per leg behind a process-wide ~350ms gate, so an
+# 80-leg chain spends most of a minute rediscovering the open. Cached for the
+# session, which is what makes "Change in OI" usable at all.
+#
+# The TTL has to outlast a session: 09:15 to 15:30 is over six hours, so a
+# six-hour TTL expired mid-afternoon and made the next request refetch all ~80
+# legs for the same immutable number, stalling it for half a minute. Twelve is
+# still well short of the next session, and `maxsize` is the real bound anyway.
+_PREV_OI_TTL = float(os.getenv("OI_PROFILE_PREV_OI_TTL", "43200"))  # 12 hours
 _PREV_OI_MAXSIZE = int(os.getenv("OI_PROFILE_PREV_OI_MAXSIZE", "4096"))
 _prev_oi_cache: TTLCache = TTLCache(maxsize=max(_PREV_OI_MAXSIZE, 1), ttl=max(_PREV_OI_TTL, 0.001))
 _prev_oi_cache_lock = threading.Lock()
@@ -138,68 +143,168 @@ def _find_futures_symbol(
         return None
 
 
-def _previous_session_oi(candles: list[dict]) -> float:
+def _session_open_oi(candles: list[dict]) -> float:
     """
-    OI at the close of the session before the latest one that traded.
+    Open interest carried into the latest session present in ``candles``.
 
-    Not simply ``candles[-2]``. Outside market hours the broker appends a
-    candle for the new calendar date carrying the last quote, so the newest two
-    rows are an exact copy of each other; taking the second-to-last then
-    compares a session against itself and reports every strike as unchanged.
-    A trader opening the chart in the evening wants the day's build, not a
-    screen of zeros, so an identical trailing row is dropped first.
+    This is the anchor "Change in OI" is measured from, and it has to come
+    from the intraday series rather than the daily one. A daily candle's OI
+    is the last value the broker saw *during* that session; the exchange
+    then settles and republishes, and the settled figure is what the next
+    session opens on. Measured on NIFTY22SEP2623200PE: the daily candle for
+    15-Sep closed at 4,552,925 while 16-Sep opened at 6,614,400, so a chart
+    anchored on the daily row showed a phantom 2 million build on every
+    strike from the first second of the session, before a single contract
+    had traded.
+
+    Anchoring on the opening bar keeps the anchor and the live chain OI in
+    the same family, so the change is the session's own build and nothing
+    else. It reads zero at the open, which is the correct answer.
+
+    Returns 0.0 when the series carries no usable session.
     """
-    if not candles:
+    session = _latest_session_rows(candles)
+    if not session:
         return 0.0
-
-    rows = list(candles)
-    last = rows[-1]
-    while len(rows) >= 2 and _same_session_row(rows[-2], last):
-        rows.pop()
-
-    if len(rows) < 2:
-        return 0.0
-    return float(rows[-2].get("oi", 0) or 0)
+    return float(session[0].get("oi", 0) or 0)
 
 
-def _same_session_row(a: dict, b: dict) -> bool:
-    """Whether two daily candles carry the same session's numbers."""
-    return all(a.get(k) == b.get(k) for k in ("open", "high", "low", "close", "volume", "oi"))
+def _candle_time(candle: dict) -> int | None:
+    """Unix seconds for a candle, from either the `time` or `timestamp` key."""
+    t = candle.get("time")
+    if t is None:
+        t = candle.get("timestamp")
+    if t is None:
+        return None
+    try:
+        t = float(t)
+    except (TypeError, ValueError):
+        return None
+    return int(t // 1000) if t > 1e12 else int(t)
 
 
-def _fetch_daily_oi_changes(
-    option_symbols: list[dict], options_exchange: str, api_key: str
+def _latest_session_rows(candles: list[dict]) -> list[dict]:
+    """Rows belonging to the most recent IST calendar date in the series."""
+    ist = pytz.timezone("Asia/Kolkata")
+    dated = []
+    for c in candles:
+        t = _candle_time(c)
+        if t is None:
+            continue
+        dated.append((datetime.fromtimestamp(t, ist).date(), t, c))
+    if not dated:
+        return []
+    last_date = max(d for d, _, _ in dated)
+    rows = sorted((t, c) for d, t, c in dated if d == last_date)
+    return [c for _, c in rows]
+
+
+# Broker rate-limit shape for the per-leg history calls below: small batches
+# with a pause between them, and exponential backoff on a 429.
+BATCH_SIZE = 5
+BATCH_DELAY = 0.5  # seconds between batches
+MAX_RETRIES = 2
+RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
+
+
+def _history_rows(
+    symbol: str, exchange: str, interval: str, start: str, end: str, api_key: str
+) -> list[dict] | None:
+    """One history call with 429 backoff. Returns the rows, or None."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            success, resp, status_code = get_history(
+                symbol=symbol,
+                exchange=exchange,
+                interval=interval,
+                start_date=start,
+                end_date=end,
+                api_key=api_key,
+            )
+            if success and resp.get("data"):
+                return resp["data"]
+            if status_code != 429 or attempt >= MAX_RETRIES:
+                return None
+        except Exception as e:
+            if attempt >= MAX_RETRIES or "429" not in str(e):
+                logger.warning(f"Could not read history for {symbol}: {e}")
+                return None
+        delay = RETRY_BASE_DELAY * (2**attempt)
+        logger.warning(f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s")
+        time.sleep(delay)
+    return None
+
+
+def _in_batches(symbols: list[str], fetch_one) -> dict[str, float]:
+    """
+    Run fetch_one over symbols in rate-limit-friendly batches.
+
+    A symbol fetch_one answers None for is left out of the result rather than
+    recorded as zero. The difference matters: a caller subtracting a zero
+    anchor from a live number reports the leg's whole open interest as though
+    every contract of it had been written today, so one broker hiccup paints a
+    strike as a huge fresh build. Absent means unknown, and unknown draws
+    nothing.
+    """
+    results = {}
+    for i in range(0, len(symbols), BATCH_SIZE):
+        for symbol in symbols[i : i + BATCH_SIZE]:
+            value = fetch_one(symbol)
+            if value is not None:
+                results[symbol] = value
+        if i + BATCH_SIZE < len(symbols):
+            time.sleep(BATCH_DELAY)
+    return results
+
+
+def _anchor_intervals(interval: str) -> list[str]:
+    """
+    Bar sizes to try for an OI anchor, tightest first.
+
+    The anchor's granularity is its error: a bar's ``oi`` is its closing
+    value, so a five-minute anchor silently swallows the first five minutes
+    of whatever it is measuring. One minute is the tightest the brokers
+    serve; the chart's own interval is the fallback for one that does not.
+    """
+    return ["1m"] if interval == "1m" else ["1m", interval]
+
+
+def _fetch_session_open_oi(
+    option_symbols: list[dict], options_exchange: str, api_key: str, interval: str = "5m"
 ) -> dict[str, float]:
     """
-    Fetch daily history for options and return previous day's OI.
+    Fetch the open interest each option carried into the current session.
 
-    Yesterday's close is settled, so each symbol is fetched once per session
-    and then served from a cache. Whatever is left uses sequential batch
-    processing with rate-limit handling to avoid broker 429 errors: batches
-    with delays between them, and retries with exponential backoff.
+    The opening bar cannot change once the session has started, so each
+    symbol is fetched once per session and then served from a cache.
 
     Args:
         option_symbols: List of dicts with 'symbol' key
         options_exchange: Exchange for options (NFO, BFO)
         api_key: OpenAlgo API key
+        interval: Fallback bar size, for a broker that does not serve 1m.
 
     Returns:
-        Dict mapping symbol -> previous_day_oi
+        Dict mapping symbol -> open interest at the session's open
     """
-    end = datetime.now().strftime("%Y-%m-%d")
-    start = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+    ist = pytz.timezone("Asia/Kolkata")
+    today = datetime.now(ist).strftime("%Y-%m-%d")
+    # A week back is the fallback range: it always contains a trading day, so
+    # a chart opened on a holiday or over a long weekend still anchors on the
+    # last session that actually traded.
+    fallback_start = (datetime.now(ist) - timedelta(days=7)).strftime("%Y-%m-%d")
 
     results = {}
 
     # Only fetch for symbols with non-zero current OI, and only those whose
-    # previous close is not already known for this session.
+    # opening OI is not already known for this session.
     symbols_to_fetch = []
     with _prev_oi_cache_lock:
         for s in option_symbols:
             symbol = s["symbol"]
             if s.get("oi", 0) <= 0:
                 continue
-            cached = _prev_oi_cache.get((symbol, options_exchange))
+            cached = _prev_oi_cache.get((symbol, options_exchange, today))
             if cached is None:
                 symbols_to_fetch.append(symbol)
             else:
@@ -208,75 +313,67 @@ def _fetch_daily_oi_changes(
     if not symbols_to_fetch:
         return results
 
-    BATCH_SIZE = 5
-    BATCH_DELAY = 0.5  # seconds between batches
-    MAX_RETRIES = 2
-    RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
+    def fetch_one(symbol: str) -> float | None:
+        # Today is asked for first, because that is the small answer and the
+        # common case. Only an empty reply widens the range, so a holiday
+        # costs the wide call and a trading day does not.
+        for bar in _anchor_intervals(interval):
+            for start, end in ((today, today), (fallback_start, today)):
+                rows = _history_rows(symbol, options_exchange, bar, start, end, api_key)
+                if rows:
+                    open_oi = _session_open_oi(rows)
+                    if open_oi > 0:
+                        return open_oi
+        logger.warning(f"No opening OI for {symbol}; its change is reported as unknown")
+        return None
 
-    def fetch_one_with_retry(symbol: str) -> tuple[str, float]:
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                success, resp, status_code = get_history(
-                    symbol=symbol,
-                    exchange=options_exchange,
-                    interval="D",
-                    start_date=start,
-                    end_date=end,
-                    api_key=api_key,
-                )
-                if success and resp.get("data"):
-                    return symbol, _previous_session_oi(resp["data"])
-
-                # Rate limited - retry with backoff
-                if status_code == 429 and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s"
-                    )
-                    time.sleep(delay)
-                    continue
-
-                return symbol, 0.0
-            except Exception as e:
-                if attempt < MAX_RETRIES and "429" in str(e):
-                    delay = RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s"
-                    )
-                    time.sleep(delay)
-                    continue
-                return symbol, 0.0
-        return symbol, 0.0
-
-    # Process in batches to respect rate limits
-    for i in range(0, len(symbols_to_fetch), BATCH_SIZE):
-        batch = symbols_to_fetch[i : i + BATCH_SIZE]
-        for symbol in batch:
-            sym, prev_oi = fetch_one_with_retry(symbol)
-            results[sym] = prev_oi
-            # A zero is "the broker had nothing to say", not a settled close,
-            # so it is not worth remembering for the rest of the day.
-            if prev_oi > 0:
-                with _prev_oi_cache_lock:
-                    _prev_oi_cache[(sym, options_exchange)] = prev_oi
-
-        # Delay between batches (skip after last batch)
-        if i + BATCH_SIZE < len(symbols_to_fetch):
-            time.sleep(BATCH_DELAY)
-
+    fetched = _in_batches(symbols_to_fetch, fetch_one)
+    with _prev_oi_cache_lock:
+        for sym, open_oi in fetched.items():
+            _prev_oi_cache[(sym, options_exchange, today)] = open_oi
+    results.update(fetched)
     return results
+
+
+def _oi_entering(candles: list[dict], target_time: int) -> float:
+    """
+    Open interest carried *into* the bar that starts at ``target_time``.
+
+    A bar's ``oi`` is its closing value, so the bar starting at target_time
+    already contains the build the window is meant to measure; anchoring on it
+    silently drops the window's first bar. Measured live on 16-Sep-2026: a
+    09:15-09:25 window on NIFTY22SEP2623200PE reported 450,125 where the true
+    build was 1,892,020, because the anchor was already five minutes in.
+
+    The last bar strictly before target_time carries the right value, but only
+    within the same session - reaching back across a session boundary picks up
+    the settlement gap that :func:`_session_open_oi` exists to avoid. A window
+    starting on the session's own first bar therefore falls back to that bar's
+    close, which is the closest the intraday series can get.
+    """
+    ist = pytz.timezone("Asia/Kolkata")
+    target_date = datetime.fromtimestamp(target_time, ist).date()
+    best = None
+    for c in candles:
+        t = _candle_time(c)
+        if t is None or t >= target_time:
+            continue
+        if datetime.fromtimestamp(t, ist).date() != target_date:
+            continue
+        if best is None or t > best[0]:
+            best = (t, c.get("oi", 0) or 0)
+    if best is not None:
+        return float(best[1])
+    return _oi_at_or_before(candles, target_time)
 
 
 def _oi_at_or_before(candles: list[dict], target_time: int) -> float:
     """Last candle's OI at or before target_time (unix seconds), else 0.0."""
     best = None
     for c in candles:
-        t = c.get("time")
+        t = _candle_time(c)
         if t is None:
-            ts = c.get("timestamp")
-            if ts is None:
-                continue
-            t = int(ts // 1000) if ts > 1e12 else int(ts)
+            continue
         if t <= target_time and (best is None or t > best[0]):
             best = (t, c.get("oi", 0) or 0)
     return float(best[1]) if best else 0.0
@@ -292,78 +389,31 @@ def _fetch_windowed_oi_changes(
 ) -> dict[str, float]:
     """
     Fetch intraday history for options and return OI change over an
-    arbitrary [window_start, window_end] range (unix seconds), at the same
-    interval used for the futures candles.
+    arbitrary [window_start, window_end] range (unix seconds).
 
-    Mirrors _fetch_daily_oi_changes's batching/retry shape exactly, only the
-    interval/date-range and the OI(end) - OI(start) computation differ.
+    Read at the tightest bar size the broker serves rather than the chart's,
+    because the anchor's granularity is the measurement's error - see
+    :func:`_anchor_intervals`.
 
     Returns:
-        Dict mapping symbol -> (oi_at_window_end - oi_at_window_start)
+        Dict mapping symbol -> (oi_at_window_end - oi_entering_window_start)
     """
     ist = pytz.timezone("Asia/Kolkata")
     start = datetime.fromtimestamp(window_start, ist).strftime("%Y-%m-%d")
     end = datetime.fromtimestamp(window_end, ist).strftime("%Y-%m-%d")
 
-    results = {}
-
     symbols_to_fetch = [s["symbol"] for s in option_symbols if s.get("oi", 0) > 0]
-
     if not symbols_to_fetch:
-        return results
+        return {}
 
-    BATCH_SIZE = 5
-    BATCH_DELAY = 0.5  # seconds between batches
-    MAX_RETRIES = 2
-    RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
+    def fetch_one(symbol: str) -> float:
+        for bar in _anchor_intervals(interval):
+            rows = _history_rows(symbol, options_exchange, bar, start, end, api_key)
+            if rows:
+                return _oi_at_or_before(rows, window_end) - _oi_entering(rows, window_start)
+        return 0.0
 
-    def fetch_one_with_retry(symbol: str) -> tuple[str, float]:
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                success, resp, status_code = get_history(
-                    symbol=symbol,
-                    exchange=options_exchange,
-                    interval=interval,
-                    start_date=start,
-                    end_date=end,
-                    api_key=api_key,
-                )
-                if success and resp.get("data"):
-                    data = resp["data"]
-                    oi_start = _oi_at_or_before(data, window_start)
-                    oi_end = _oi_at_or_before(data, window_end)
-                    return symbol, oi_end - oi_start
-
-                if status_code == 429 and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s"
-                    )
-                    time.sleep(delay)
-                    continue
-
-                return symbol, 0.0
-            except Exception as e:
-                if attempt < MAX_RETRIES and "429" in str(e):
-                    delay = RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s"
-                    )
-                    time.sleep(delay)
-                    continue
-                return symbol, 0.0
-        return symbol, 0.0
-
-    for i in range(0, len(symbols_to_fetch), BATCH_SIZE):
-        batch = symbols_to_fetch[i : i + BATCH_SIZE]
-        for symbol in batch:
-            sym, oi_change = fetch_one_with_retry(symbol)
-            results[sym] = oi_change
-
-        if i + BATCH_SIZE < len(symbols_to_fetch):
-            time.sleep(BATCH_DELAY)
-
-    return results
+    return _in_batches(symbols_to_fetch, fetch_one)
 
 
 def _market_open(exchange: str) -> bool:
@@ -576,8 +626,8 @@ def get_oi_profile_data(
                     api_key,
                 )
             else:
-                prev_oi_map = _fetch_daily_oi_changes(
-                    option_symbols_for_history, options_exchange, api_key
+                prev_oi_map = _fetch_session_open_oi(
+                    option_symbols_for_history, options_exchange, api_key, interval
                 )
 
         # Step 4: Compute OI changes, summed over every selected expiry
