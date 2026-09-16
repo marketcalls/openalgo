@@ -180,7 +180,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 368 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.3.0 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.3.1 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (13)
