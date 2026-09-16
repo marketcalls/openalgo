@@ -46,7 +46,7 @@ def test_two_expiries_sum_oi_and_change(monkeypatch):
     # Previous day's OI: half of current, for every leg.
     monkeypatch.setattr(
         svc,
-        "_fetch_session_open_oi",
+        "_fetch_prev_session_oi",
         lambda symbols, ex, key, interval=None: {s["symbol"]: s["oi"] / 2 for s in symbols},
     )
 
@@ -71,7 +71,7 @@ def test_two_expiries_sum_oi_and_change(monkeypatch):
 def test_single_expiry_still_works(monkeypatch):
     monkeypatch.setattr(svc, "get_option_chain", lambda **k: _chain("09OCT25", 100, 40))
     monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
-    monkeypatch.setattr(svc, "_fetch_session_open_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
 
     ok, resp, _ = svc.get_oi_profile_data(
         underlying="NIFTY",
@@ -93,7 +93,7 @@ def test_include_change_false_skips_the_history_pass(monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("OI change history must not be fetched")
 
-    monkeypatch.setattr(svc, "_fetch_session_open_oi", _boom)
+    monkeypatch.setattr(svc, "_fetch_prev_session_oi", _boom)
 
     ok, resp, _ = svc.get_oi_profile_data(
         underlying="NIFTY",
@@ -117,7 +117,7 @@ def test_a_repeat_request_is_served_from_the_cache(monkeypatch):
 
     monkeypatch.setattr(svc, "get_option_chain", _chain_once)
     monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
-    monkeypatch.setattr(svc, "_fetch_session_open_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
 
     args = {
         "underlying": "NIFTY",
@@ -138,7 +138,7 @@ def test_a_repeat_request_is_served_from_the_cache(monkeypatch):
 
 def test_include_candles_false_skips_the_futures_lookup(monkeypatch):
     monkeypatch.setattr(svc, "get_option_chain", lambda **k: _chain("09OCT25", 100, 40))
-    monkeypatch.setattr(svc, "_fetch_session_open_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
 
     def _boom(*a, **k):
         raise AssertionError("futures must not be looked up")
@@ -168,35 +168,34 @@ def _bar(ts, oi):
     return {"open": 1, "high": 1, "low": 1, "close": 1, "volume": 1, "oi": oi, "timestamp": t}
 
 
-def test_session_open_oi_is_the_first_bar_of_the_latest_day():
-    bars = [
-        _bar("2026-09-15 09:15", 2_895_490),
-        _bar("2026-09-15 15:29", 4_784_065),
-        _bar("2026-09-16 09:15", 6_614_400),
-        _bar("2026-09-16 09:16", 7_569_120),
-    ]
-    assert svc._session_open_oi(bars) == 6_614_400
-
-
-def test_session_open_oi_does_not_anchor_on_the_prior_session():
-    # PORTED DEFECT: the anchor used to be the previous *daily* candle's OI,
-    # which is the last value seen during that session and not the settled
-    # figure the next session opens on. Measured live on 16-Sep-2026,
-    # NIFTY22SEP2623200PE: daily 15-Sep closed 4,552,925 while 16-Sep opened
-    # 6,614,400, so every strike showed a two-million phantom build before a
-    # single contract had traded.
+def test_anchor_is_the_previous_session_close(monkeypatch):
+    # PORTED DEFECT: the anchor was briefly the *current* session's opening
+    # bar, on the theory that the overnight step from the previous daily
+    # candle was a settlement artefact. Measured against NSE on 16-Sep-2026 it
+    # is not: NIFTY22SEP2623200PE closed 15-Sep at 4,552,925, which is exactly
+    # NSE's 70,045 contracts at a lot size of 65, and NSE reported the day's
+    # change from there. Anchoring on the 6,614,400 opening bar showed 85%
+    # where NSE and Sensibull both showed 170%.
     bars = [_bar("2026-09-15 15:29", 4_552_925), _bar("2026-09-16 09:15", 6_614_400)]
-    assert svc._session_open_oi(bars) == 6_614_400
+    assert svc._previous_session_oi(bars) == 4_552_925
 
 
-def test_session_open_oi_ignores_bar_order():
-    bars = [_bar("2026-09-16 09:20", 7_000_000), _bar("2026-09-16 09:15", 6_614_400)]
-    assert svc._session_open_oi(bars) == 6_614_400
+def test_anchor_skips_a_repeated_trailing_session():
+    # Outside market hours the broker appends a row for the new calendar date
+    # carrying the last quote, so the newest two rows are the same session
+    # twice. Taking rows[-2] blindly compares a session against itself and
+    # reports every strike as unchanged.
+    bars = [
+        _bar("2026-09-14 15:29", 3_000_000),
+        _bar("2026-09-15 15:29", 4_552_925),
+        _bar("2026-09-16 09:15", 4_552_925),
+    ]
+    assert svc._previous_session_oi(bars) == 3_000_000
 
 
-def test_session_open_oi_is_zero_without_usable_bars():
-    assert svc._session_open_oi([]) == 0.0
-    assert svc._session_open_oi([{"oi": 5}]) == 0.0
+def test_anchor_is_zero_without_a_previous_session():
+    assert svc._previous_session_oi([]) == 0.0
+    assert svc._previous_session_oi([_bar("2026-09-16 09:15", 6_614_400)]) == 0.0
 
 
 def test_strike_count_reaches_the_chain_and_keys_the_cache(monkeypatch):
@@ -208,7 +207,7 @@ def test_strike_count_reaches_the_chain_and_keys_the_cache(monkeypatch):
 
     monkeypatch.setattr(svc, "get_option_chain", _chain_spy)
     monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
-    monkeypatch.setattr(svc, "_fetch_session_open_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
 
     base = {
         "underlying": "NIFTY",
@@ -247,9 +246,11 @@ def test_window_anchor_does_not_reach_back_across_a_session():
     assert svc._oi_entering(bars, bars[1]["timestamp"]) == 6_614_400
 
 
-def test_anchor_prefers_one_minute_bars():
-    # The anchor's granularity is its error, so 1m leads and the chart's own
-    # interval is only the fallback for a broker that does not serve it.
+def test_the_window_anchor_prefers_one_minute_bars():
+    # A drag-selected window's anchor granularity is its error, so 1m leads
+    # and the chart's own interval is only the fallback for a broker that does
+    # not serve it. The daily anchor above is a different path: its bar size
+    # is always 'D', because that row is the exchange's settled figure.
     assert svc._anchor_intervals("5m") == ["1m", "5m"]
     assert svc._anchor_intervals("1m") == ["1m"]
 
@@ -260,13 +261,17 @@ def test_an_unreadable_leg_is_unknown_not_a_zero_anchor(monkeypatch):
     # fresh write. Absent means unknown, and unknown draws nothing.
     monkeypatch.setattr(svc, "_history_rows", lambda *a, **k: None)
     legs = [{"symbol": "NIFTY22SEP2623200PE", "oi": 8_506_420}]
-    assert svc._fetch_session_open_oi(legs, "NFO", "k") == {}
+    assert svc._fetch_prev_session_oi(legs, "NFO", "k") == {}
 
 
 def test_a_leg_whose_history_has_no_oi_is_also_unknown(monkeypatch):
-    monkeypatch.setattr(svc, "_history_rows", lambda *a, **k: [_bar("2026-09-16 09:15", 0)])
+    monkeypatch.setattr(
+        svc,
+        "_history_rows",
+        lambda *a, **k: [_bar("2026-09-15 15:29", 0), _bar("2026-09-16 09:15", 0)],
+    )
     legs = [{"symbol": "NIFTY22SEP2623200PE", "oi": 8_506_420}]
-    assert svc._fetch_session_open_oi(legs, "NFO", "k") == {}
+    assert svc._fetch_prev_session_oi(legs, "NFO", "k") == {}
 
 
 def test_an_unknown_anchor_leaves_the_change_at_zero(monkeypatch):

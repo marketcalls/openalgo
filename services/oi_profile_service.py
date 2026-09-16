@@ -143,30 +143,46 @@ def _find_futures_symbol(
         return None
 
 
-def _session_open_oi(candles: list[dict]) -> float:
+def _previous_session_oi(candles: list[dict]) -> float:
     """
-    Open interest carried into the latest session present in ``candles``.
+    Open interest at the close of the session before the latest one.
 
-    This is the anchor "Change in OI" is measured from, and it has to come
-    from the intraday series rather than the daily one. A daily candle's OI
-    is the last value the broker saw *during* that session; the exchange
-    then settles and republishes, and the settled figure is what the next
-    session opens on. Measured on NIFTY22SEP2623200PE: the daily candle for
-    15-Sep closed at 4,552,925 while 16-Sep opened at 6,614,400, so a chart
-    anchored on the daily row showed a phantom 2 million build on every
-    strike from the first second of the session, before a single contract
-    had traded.
+    This is the anchor "Change in OI" is measured from, and it is the
+    exchange's own: verified against NSE on 16-Sep-2026 for
+    NIFTY22SEP2623200PE, whose daily candle for 15-Sep read 4,552,925 -
+    exactly NSE's 70,045 contracts at a lot size of 65, to the contract.
+    NSE and Sensibull both report the day's build from that figure.
 
-    Anchoring on the opening bar keeps the anchor and the live chain OI in
-    the same family, so the change is the session's own build and nothing
-    else. It reads zero at the open, which is the correct answer.
+    It is deliberately NOT the current session's opening bar. That was tried
+    (the opening bar read 6,614,400 against the same 4,552,925 close) on the
+    theory that the overnight step was a settlement artefact; measured against
+    NSE it is not, and anchoring there understated every strike's build - the
+    leg above showed 85% where NSE and Sensibull both showed 170%. The
+    overnight step is real open interest, and the day's change owns it.
 
-    Returns 0.0 when the series carries no usable session.
+    Not simply ``candles[-2]``. Outside market hours the broker appends a
+    candle for the new calendar date carrying the last quote, so the newest
+    two rows are an exact copy of each other; taking the second-to-last then
+    compares a session against itself and reports every strike as unchanged.
+
+    Returns 0.0 when the series carries no usable previous session.
     """
-    session = _latest_session_rows(candles)
-    if not session:
+    if not candles:
         return 0.0
-    return float(session[0].get("oi", 0) or 0)
+
+    rows = list(candles)
+    last = rows[-1]
+    while len(rows) >= 2 and _same_session_row(rows[-2], last):
+        rows.pop()
+
+    if len(rows) < 2:
+        return 0.0
+    return float(rows[-2].get("oi", 0) or 0)
+
+
+def _same_session_row(a: dict, b: dict) -> bool:
+    """Whether two daily candles carry the same session's numbers."""
+    return all(a.get(k) == b.get(k) for k in ("open", "high", "low", "close", "volume", "oi"))
 
 
 def _candle_time(candle: dict) -> int | None:
@@ -269,30 +285,30 @@ def _anchor_intervals(interval: str) -> list[str]:
     return ["1m"] if interval == "1m" else ["1m", interval]
 
 
-def _fetch_session_open_oi(
+def _fetch_prev_session_oi(
     option_symbols: list[dict], options_exchange: str, api_key: str, interval: str = "5m"
 ) -> dict[str, float]:
     """
-    Fetch the open interest each option carried into the current session.
+    Fetch the open interest each option closed the previous session on.
 
-    The opening bar cannot change once the session has started, so each
-    symbol is fetched once per session and then served from a cache.
+    That figure is settled and cannot change again, so each symbol is fetched
+    once per session and then served from a cache.
 
     Args:
         option_symbols: List of dicts with 'symbol' key
         options_exchange: Exchange for options (NFO, BFO)
         api_key: OpenAlgo API key
-        interval: Fallback bar size, for a broker that does not serve 1m.
+        interval: Unused by this path; kept because the chart passes it.
 
     Returns:
-        Dict mapping symbol -> open interest at the session's open
+        Dict mapping symbol -> open interest at the previous session's close
     """
     ist = pytz.timezone("Asia/Kolkata")
     today = datetime.now(ist).strftime("%Y-%m-%d")
-    # A week back is the fallback range: it always contains a trading day, so
-    # a chart opened on a holiday or over a long weekend still anchors on the
-    # last session that actually traded.
-    fallback_start = (datetime.now(ist) - timedelta(days=7)).strftime("%Y-%m-%d")
+    # Two weeks back: the range has to hold two sessions that traded even
+    # across a long weekend and a holiday, because the anchor is the row
+    # before the latest one.
+    history_start = (datetime.now(ist) - timedelta(days=14)).strftime("%Y-%m-%d")
 
     results = {}
 
@@ -314,17 +330,12 @@ def _fetch_session_open_oi(
         return results
 
     def fetch_one(symbol: str) -> float | None:
-        # Today is asked for first, because that is the small answer and the
-        # common case. Only an empty reply widens the range, so a holiday
-        # costs the wide call and a trading day does not.
-        for bar in _anchor_intervals(interval):
-            for start, end in ((today, today), (fallback_start, today)):
-                rows = _history_rows(symbol, options_exchange, bar, start, end, api_key)
-                if rows:
-                    open_oi = _session_open_oi(rows)
-                    if open_oi > 0:
-                        return open_oi
-        logger.warning(f"No opening OI for {symbol}; its change is reported as unknown")
+        rows = _history_rows(symbol, options_exchange, "D", history_start, today, api_key)
+        if rows:
+            prev_oi = _previous_session_oi(rows)
+            if prev_oi > 0:
+                return prev_oi
+        logger.warning(f"No previous-session OI for {symbol}; its change is reported as unknown")
         return None
 
     fetched = _in_batches(symbols_to_fetch, fetch_one)
@@ -347,7 +358,7 @@ def _oi_entering(candles: list[dict], target_time: int) -> float:
 
     The last bar strictly before target_time carries the right value, but only
     within the same session - reaching back across a session boundary picks up
-    the settlement gap that :func:`_session_open_oi` exists to avoid. A window
+    the settlement gap that :func:`_previous_session_oi` exists to avoid. A window
     starting on the session's own first bar therefore falls back to that bar's
     close, which is the closest the intraday series can get.
     """
@@ -626,7 +637,7 @@ def get_oi_profile_data(
                     api_key,
                 )
             else:
-                prev_oi_map = _fetch_session_open_oi(
+                prev_oi_map = _fetch_prev_session_oi(
                     option_symbols_for_history, options_exchange, api_key, interval
                 )
 

@@ -32,7 +32,7 @@ def _run(window_start=None, window_end=None):
     with (
         patch.object(svc, "get_option_chain", return_value=(True, CHAIN_RESPONSE, 200)),
         patch.object(svc, "_find_futures_symbol", return_value=None),
-        patch.object(svc, "_fetch_session_open_oi", return_value={}) as daily_mock,
+        patch.object(svc, "_fetch_prev_session_oi", return_value={}) as daily_mock,
         patch.object(svc, "_fetch_windowed_oi_changes", return_value={}) as windowed_mock,
     ):
         svc.get_oi_profile_data(
