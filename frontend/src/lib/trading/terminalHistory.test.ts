@@ -6,6 +6,7 @@ import {
   type SeriesApi,
 } from 'openalgo-charts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { parseExpression, type SymbolExpression } from 'openalgo-charts/transform'
 import { type SymbolView, TradingTerminal } from './terminal'
 
 // Exercise the terminal and chart together. Only canvas painting and the
@@ -56,6 +57,11 @@ type TerminalState = {
   runReconcile(): Promise<void>
   loadOlderHistory(): Promise<void>
   connectLive(): void
+  connectExpressionLive(expr: SymbolExpression): void
+  expr: SymbolExpression | null
+  exprFeed: { legBars: Record<string, readonly Bar[]> } | null
+  exprLegExchange: string
+  legLtp: Map<string, number>
   replayPicking: boolean
   commitReplayPick(): void
   setVolumeVisible(visible: boolean): void
@@ -393,6 +399,74 @@ describe('live candle alignment', () => {
     // the open is only the first price seen: history keeps the true one.
     expect(pushBar).toHaveBeenCalledWith(
       expect.objectContaining({ time: sessionOpen + 60 * 60, close: 104, volume: 0 }),
+      { provisional: true }
+    )
+  })
+})
+
+describe('a combination stays live', () => {
+  // The chart of `CE+PE` used to be static: legs fetched once, folded once, no
+  // subscription. It now holds one LTP stream per leg and folds every tick
+  // into the combined series through the same builder and pushBar path an
+  // instrument uses, so the repair after each bar closes applies to it too.
+  const T = Date.UTC(2026, 8, 16, 4, 15) / 1000 // 09:45 IST, a minute boundary
+  const leg = (time: number, close: number) => ({ time, open: close, high: close, low: close, close })
+
+  function wire() {
+    const { state } = mount()
+    const subscribe = vi.fn()
+    const unsubscribe = vi.fn()
+    let onLtp: ((e: { symbol: string; exchange: string; ltp: number; timeSec: number }) => void) | undefined
+    state.ws = {
+      onLtp: (cb: typeof onLtp) => {
+        onLtp = cb
+        return () => {}
+      },
+      onDepth: () => () => {},
+      subscribe,
+      unsubscribe,
+    }
+    const pushBar = vi.fn()
+    state.data = { pushBar, destroy() {} } as unknown as NonNullable<TerminalState['data']>
+    state.interval = '1m'
+    state.exprLegExchange = 'NFO'
+    state.expr = parseExpression('NIFTY22SEP2623200CE+NIFTY22SEP2623200PE')
+    state.exprFeed = {
+      legBars: {
+        NIFTY22SEP2623200CE: [leg(T - 60, 99), leg(T, 100)],
+        NIFTY22SEP2623200PE: [leg(T - 60, 199), leg(T, 200)],
+      },
+    }
+    state.sym = { ...state.sym, symbol: 'NIFTY22SEP2623200CE+NIFTY22SEP2623200PE', exchange: '', quoteOnly: true, synthetic: true }
+    return { state, subscribe, unsubscribe, pushBar, tick: (e: NonNullable<typeof onLtp> extends (e: infer E) => void ? E : never) => onLtp?.(e) }
+  }
+
+  it('subscribes LTP for every leg and folds each tick with the other legs latest price', () => {
+    const { state, subscribe, pushBar, tick } = wire()
+    state.rawBars = [leg(T - 60, 298), leg(T, 300)]
+    state.connectExpressionLive(state.expr!)
+    expect(subscribe.mock.calls).toEqual([
+      ['LTP', 'NIFTY22SEP2623200CE', 'NFO'],
+      ['LTP', 'NIFTY22SEP2623200PE', 'NFO'],
+    ])
+    // Only the call leg ticks: the put is still at the close its history ended on.
+    tick({ symbol: 'NIFTY22SEP2623200CE', exchange: 'NFO', ltp: 101, timeSec: T + 10 })
+    expect(pushBar).toHaveBeenLastCalledWith(expect.objectContaining({ time: T, close: 301, open: 300 }))
+    tick({ symbol: 'NIFTY22SEP2623200PE', exchange: 'NFO', ltp: 205, timeSec: T + 20 })
+    expect(pushBar).toHaveBeenLastCalledWith(expect.objectContaining({ time: T, close: 306, high: 306, low: 300 }))
+    // A tick for an instrument that is not a leg is ignored.
+    tick({ symbol: 'NIFTY29SEP26FUT', exchange: 'NFO', ltp: 23000, timeSec: T + 30 })
+    expect(pushBar).toHaveBeenCalledTimes(2)
+    expect(state.rawBars.at(-1)).toMatchObject({ time: T, close: 306 })
+  })
+
+  it('opens the current bucket provisionally when the folded history stopped one bar short', () => {
+    const { state, pushBar, tick } = wire()
+    state.rawBars = [leg(T - 120, 296), leg(T - 60, 298)]
+    state.connectExpressionLive(state.expr!)
+    tick({ symbol: 'NIFTY22SEP2623200PE', exchange: 'NFO', ltp: 210, timeSec: T + 5 })
+    expect(pushBar).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: T, open: 310, close: 310 }),
       { provisional: true }
     )
   })
