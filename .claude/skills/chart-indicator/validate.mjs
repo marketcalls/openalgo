@@ -140,8 +140,20 @@ const note = once(notes)
 //
 // A free-form timeframe or session is therefore a `text` input the indicator
 // parses itself; one with a fixed set of choices is a `select`.
-const INPUT_TYPES = new Set(['number', 'boolean', 'color', 'text', 'select', 'source'])
-const STRING_INPUTS = new Set(['text', 'select', 'source'])
+//
+// The runtime list in `frontend/src/lib/trading/customIndicators.ts` is the
+// authority on what registers, and this has to agree with it: the semantic
+// string types the dialog does draw belong here, or a file the app runs
+// happily is refused by the gate. 'expiries' is ours rather than the
+// library's - the dialog renders it as a tick list of the underlying's
+// nearest option expiries and hands back a comma-separated string.
+const INPUT_TYPES = new Set([
+  'number', 'boolean', 'color', 'text', 'select', 'source',
+  'session', 'timeframe', 'symbol', 'expiries',
+])
+const STRING_INPUTS = new Set([
+  'text', 'select', 'source', 'session', 'timeframe', 'symbol', 'expiries',
+])
 const NUMBER_INPUTS = new Set(['number'])
 const SOURCES = new Set(['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume'])
 const PLACEMENTS = new Set(['onchart', 'pane'])
