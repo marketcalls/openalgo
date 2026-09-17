@@ -578,6 +578,30 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
     })
   }, [items, sort, quotes])
 
+  /**
+   * Rows in display order: the list's own drag order when unsorted, or by the
+   * clicked column otherwise. A row with no quote yet (or a column with no
+   * value for it, e.g. no previous close) sorts to the bottom regardless of
+   * direction -- matching TradingView rather than treating "unknown" as zero,
+   * which would park it among the biggest losers.
+   */
+  const sortedItems = useMemo(() => {
+    if (!sort) return items
+    const dir = sort.dir === 'asc' ? 1 : -1
+    return [...items].sort((a, b) => {
+      if (sort.id === 'symbol') return dir * a.symbol.localeCompare(b.symbol)
+      const accessor = SORT_VALUE[sort.id]
+      const av = accessor?.(quotes[`${a.exchange}:${a.symbol}`] ?? ({} as Quote))
+      const bv = accessor?.(quotes[`${b.exchange}:${b.symbol}`] ?? ({} as Quote))
+      const aNum = typeof av === 'number' && Number.isFinite(av) ? av : null
+      const bNum = typeof bv === 'number' && Number.isFinite(bv) ? bv : null
+      if (aNum == null && bNum == null) return 0
+      if (aNum == null) return 1
+      if (bNum == null) return -1
+      return dir * (aNum - bNum)
+    })
+  }, [items, sort, quotes])
+
   // One request per instrument per trading day, and only for the ones that
   // need it, so a broker whose quote already carries a real previous close
   // costs nothing extra.
