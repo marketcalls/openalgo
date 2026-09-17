@@ -551,7 +551,21 @@ def classify_event(
             state.current_rank <= RUN_LEADER_RANK
             or (state.first_seen_rank - state.current_rank) >= RUN_MIN_CLIMB
         )
-        if rated:
+        # The price direction must agree with what the ranked list is saying.
+        # MFSL on 17-Sep-2026 had eleven minutes of data, five of them a
+        # pullback from +1.70% to +0.89%, and was called a clean DOWN run while
+        # sitting sixth on a strength list and up on the day. It then rose 4%,
+        # so the put that badge pointed at lost 66% while the call made 135%.
+        # Across the day's badges, requiring agreement lifted direction accuracy
+        # from 49% to 58% and the share reaching +1% from 34% to 44%, on 59
+        # badges rather than 73.
+        # "Not deteriorating" rather than "improving": a stock that took rank 2
+        # in the morning and held it has nowhere better to go, and excluding it
+        # would drop exactly the leaders worth watching. No badge on 17-Sep-2026
+        # had an unchanged rank, so the two readings scored identically there.
+        improving = state.rank_change_since_first_seen >= 0
+        agrees = improving if run.direction == "up" else not improving
+        if rated and agrees:
             candidates.append("CLEAN_RUN_UP" if run.direction == "up" else "CLEAN_RUN_DOWN")
 
     if state.observations == 1:
