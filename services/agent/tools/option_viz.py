@@ -118,9 +118,10 @@ another.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytz
@@ -141,11 +142,15 @@ from services.agent.tools.market import (
     candle_columns,
     chart_bars,
     is_listed,
-    normalise_interval,
 )
 from services.agent.tools.options import normalise_expiry, normalise_int, normalise_symbol
 from services.agent.tools.symbols import DERIVATIVE_EXCHANGES, symbol_expiry
-from services.agent.tools.viz import CALL_COLOUR, PUT_COLOUR, plotly_spec, tool_answer
+from services.agent.tools.viz import (
+    CALL_COLOUR,
+    PUT_COLOUR,
+    normalise_indicators,
+    tool_answer,
+)
 from services.agent.viz_sink import emit, no_sink_message, sink_of
 from services.expiry_service import get_expiry_dates
 from services.intervals_service import get_intervals
@@ -177,21 +182,92 @@ __all__ = [
     "leg_symbol",
     "listed_expiries",
     "resolve_contract",
+    "premium_interval",
     "resolve_expiry",
     "resolve_underlying_exchange",
     "signed_multiplier",
+    "DEFAULT_EXPIRY_CHOICE",
+    "EXPIRY_CHOICES",
+    "choose_expiry",
+    "monthly_expiry",
+    "within_this_week",
 ]
 
 #: The renderer selector the payoff tool emits. One kind, one branch in the
-#: client's ``VizBlock``: that is the whole cost of adding a renderer. The
-#: premium series needs no new kind at all, because a line chart is what the
-#: existing ``plotly`` renderer already draws.
+#: client's ``VizBlock``: that is the whole cost of adding a renderer.
 PAYOFF_VIZ = "payoff"
+
+#: The renderer the premium series emits, which is the platform's own chart
+#: engine, the same one ``plot_price_chart`` and ``/trading`` draw with.
+#:
+#: It drew through the generic plotting renderer once, on the reasoning that a
+#: line chart needs no new kind. That was true of the line and false of
+#: everything around it. A study reads the chart's **primary** series, so a
+#: premium drawn as a plot of points can carry no study at all: asked for a
+#: supertrend on a straddle there was nothing to attach it to. Sending the
+#: combined series as the frame's bars puts it where the engine looks, and the
+#: indicator argument below then works exactly as it does on a price chart.
+PREMIUM_VIZ = "candles"
 
 #: Candle size for a premium series when the model does not name one. Five
 #: minutes is what a straddle chart opens on: fine enough to show the shape of
 #: the session, coarse enough that a full day is under eighty points.
 DEFAULT_PREMIUM_INTERVAL = "5m"
+
+#: What to draw when the asked-for candle size is not one this broker serves.
+#: One minute, because every broker that serves intraday candles at all serves
+#: these, and a premium series aggregates upward cleanly by eye.
+FALLBACK_PREMIUM_INTERVAL = "1m"
+
+
+def premium_interval(value: Any, accepted: list[str] | None) -> tuple[str, str | None]:
+    """Settle the candle size for a premium series, falling back rather than refusing.
+
+    The price chart refuses an interval the broker does not serve, which is
+    right there: the model named an instrument and can name another size for
+    it. Here it is wrong. The operator asked to see a combination, the size is
+    incidental to that question, and answering "this broker has no 3m" draws
+    nothing at all when a minute chart would have answered them.
+
+    So an unavailable size steps down to one minute and says so. What it never
+    does is silently draw something else: the notice names both sizes, because
+    a 1m chart presented as the 15m chart that was asked for is a different
+    picture of the same session.
+
+    Args:
+        value: The size the model named, or an empty value for the default.
+        accepted: The sizes this broker serves, or None when the lookup failed
+            and there is nothing to check against.
+
+    Returns:
+        The size to draw, and a notice when it is not the one asked for.
+    """
+    cleaned = str(value or "").strip() or DEFAULT_PREMIUM_INTERVAL
+    if not accepted or cleaned in accepted:
+        # No list means the intervals lookup failed. The history service
+        # validates the interval again, so this stays a read rather than
+        # failing closed on a lookup that is not the operator's problem.
+        return cleaned, None
+
+    matches = [item for item in accepted if item.lower() == cleaned.lower()]
+    if len(matches) == 1:
+        return matches[0], (
+            f"The interval was read as {matches[0]!r} rather than {cleaned!r}. Interval "
+            "names are case sensitive: 'm' is minutes and 'M' is months."
+        )
+
+    for candidate in (FALLBACK_PREMIUM_INTERVAL, DEFAULT_PREMIUM_INTERVAL):
+        if candidate in accepted:
+            return candidate, (
+                f"This broker does not serve {cleaned!r} candles, so the series was drawn at "
+                f"{candidate!r} instead. It is a different picture of the same session."
+            )
+
+    fallback = accepted[0]
+    return fallback, (
+        f"This broker does not serve {cleaned!r} candles, so the series was drawn at "
+        f"{fallback!r}, the first size it does serve."
+    )
 
 #: Trading sessions a premium series spans when the model does not ask for more.
 DEFAULT_PREMIUM_DAYS = 1
@@ -226,9 +302,6 @@ _LEG_SEARCH_ORDER: tuple[str, ...] = ("NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"
 _UNDERLYING_SEARCH_ORDER: tuple[str, ...] = ("NSE_INDEX", "BSE_INDEX", "NSE", "BSE", "MCX", "CDS")
 
 #: The combined series line. Deliberately neither the call nor the put colour:
-#: it is the thing being charted and the legs are context beneath it.
-_COMBINED_COLOUR = "#0ea5e9"
-
 #: A leg colour when the leg is neither a call nor a put, for example a future.
 _OTHER_LEG_COLOUR = "#a855f7"
 
@@ -269,23 +342,6 @@ _MAX_HEADING_LEGS = 3
 # ---------------------------------------------------------------------------
 # Small pure helpers
 # ---------------------------------------------------------------------------
-
-
-def _ist_label(epoch: Any) -> str | None:
-    """Render a UTC epoch second as the ISO instant a Plotly date axis reads.
-
-    Args:
-        epoch: UTC epoch seconds, as every series in this file carries them.
-
-    Returns:
-        The instant in IST, to the second, or None when the value is not a
-        timestamp, in which case the point is dropped rather than placed at the
-        epoch.
-    """
-    moment = as_number(epoch)
-    if moment is None:
-        return None
-    return datetime.fromtimestamp(moment, IST).isoformat(timespec="seconds")
 
 
 def leg_entries(value: Any, field: str) -> list[Any]:
@@ -645,43 +701,201 @@ def listed_expiries(call: Callable[..., Any], base: str, venue: str) -> list[str
     return [item for item in (symbol_expiry(entry) for entry in dates) if item]
 
 
+#: How the model may name an expiry without knowing the dates. Every one of
+#: these resolves against the **listed** expiries, so a tool always names a real
+#: date back rather than repeating the word it was given.
+#:
+#: This lives here because this module is the one vocabulary the option tools
+#: share. It was written twice: the live card understood "current month" while
+#: the premium chart refused it, so the same question drew a card one way and a
+#: chart another, or not at all.
+EXPIRY_CHOICES: tuple[str, ...] = (
+    "current_week",
+    "next_week",
+    "current_month",
+    "next_month",
+)
+
+#: What an unnamed expiry means. The nearest listed one, which for an index is
+#: this week and for a stock is this month.
+DEFAULT_EXPIRY_CHOICE = "current_week"
+
+#: Spellings of each choice that a model reasonably produces, including the
+#: spaced and hyphenated forms of a phrase like "current month".
+_EXPIRY_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "current_week": ("", "current_week", "nearest", "weekly", "this_week", "front", "front_week"),
+    "next_week": ("next_week", "next", "following_week"),
+    "current_month": ("current_month", "monthly", "this_month", "month", "front_month"),
+    "next_month": ("next_month", "following_month"),
+}
+
+
+def _expiry_keyword(value: Any) -> str | None:
+    """Which choice a model's wording means, or None when it named a date.
+
+    Args:
+        value: Whatever the model passed for an expiry.
+
+    Returns:
+        One of :data:`EXPIRY_CHOICES`, or None when the text is not a keyword
+        and should be read as an exact date.
+    """
+    text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    for choice, spellings in _EXPIRY_SYNONYMS.items():
+        if text in spellings:
+            return choice
+    return None
+
+
+def within_this_week(expiry: str) -> bool:
+    """Whether a ``DDMMMYY`` expiry falls inside the current calendar week.
+
+    Args:
+        expiry: The expiry, as every OpenAlgo symbol spells it.
+
+    Returns:
+        True when the date is on or before the coming Sunday. An unparseable
+        date answers False, so a caller says "the nearest listed one" rather
+        than claiming a week it could not check.
+    """
+    try:
+        moment = datetime.strptime(expiry, "%d%b%y").date()
+    except ValueError:
+        return False
+    today = datetime.now(IST).date()
+    return today <= moment <= today + timedelta(days=6 - today.weekday())
+
+
+def monthly_expiry(listed: Sequence[str], *, later: bool) -> str:
+    """The last expiry listed in a contract month.
+
+    The monthly contract is the last weekly of its month, which is why this
+    groups by the month segment rather than counting entries: an index lists
+    four or five expiries a month and a stock lists one.
+
+    Args:
+        listed: The listed expiries, nearest first.
+        later: True for the month after the nearest expiry's month.
+
+    Returns:
+        The last expiry of that month, falling back to the last listed expiry
+        when the month has none.
+    """
+    months: list[str] = []
+    for entry in listed:
+        month = entry[2:]
+        if month not in months:
+            months.append(month)
+    wanted = months[1] if later and len(months) > 1 else months[0]
+    matching = [entry for entry in listed if entry[2:] == wanted]
+    return matching[-1] if matching else listed[-1]
+
+
+def choose_expiry(listed: Sequence[str], value: Any, notices: list[str]) -> str:
+    """Turn an expiry choice into one of the expiries actually listed.
+
+    "Current month" has to come out as a real date or the caller is naming a
+    contract that does not exist, so every branch picks from ``listed`` and
+    says which date it picked.
+
+    Args:
+        listed: The listed expiries in ``DDMMMYY`` form, nearest first.
+        value: The model's choice or an exact date.
+        notices: Collected notices, appended to.
+
+    Returns:
+        One of ``listed``.
+
+    Raises:
+        RetryAgentRun: If an exact date was named and is not listed.
+    """
+    keyword = _expiry_keyword(value)
+
+    if keyword == "current_week":
+        picked = listed[0]
+        if within_this_week(picked):
+            notices.append(f"{picked} is this week's expiry and was used.")
+        else:
+            # "Current week" has to come out as a contract that exists. A stock
+            # lists monthly expiries only, and this week's index expiry is
+            # behind us by Wednesday evening, so saying "the current week" back
+            # would name a date nothing trades on.
+            notices.append(
+                f"No expiry is listed inside the current week, so {picked}, the nearest "
+                "listed one, was used."
+            )
+        return picked
+
+    if keyword == "next_week":
+        picked = listed[1] if len(listed) > 1 else listed[0]
+        if picked == listed[0]:
+            notices.append(
+                f"{picked} is the only listed expiry, so the next one could not be used."
+            )
+        else:
+            notices.append(f"{picked} is the next listed expiry after {listed[0]}.")
+        return picked
+
+    if keyword in ("current_month", "next_month"):
+        picked = monthly_expiry(listed, later=keyword == "next_month")
+        notices.append(
+            f"{picked} is the last expiry listed in "
+            f"{'the following' if keyword == 'next_month' else 'the current'} contract month."
+        )
+        return picked
+
+    exact = normalise_expiry(str(value).strip().upper(), "", allow_embedded=False)
+    if exact not in listed:
+        invalid_argument(
+            "expiry",
+            f"{exact} is not a listed expiry",
+            "The listed ones are " + ", ".join(listed[:8]) + ". Pass one of those, or one "
+            f"of {', '.join(EXPIRY_CHOICES)}.",
+        )
+    return exact
+
+
 def resolve_expiry(
     call: Callable[..., Any], base: str, venue: str, value: Any, notices: list[str]
 ) -> str:
-    """Settle which expiry to price, defaulting to the nearest listed one.
+    """Settle which expiry to price, from a date or from the shared vocabulary.
 
     Resolving it here rather than making the model call ``get_expiry_dates``
     first is a whole round trip saved on the most common question this tool
-    answers.
+    answers, and an exact date still costs none: only a word like "current
+    month" needs the listed set to resolve against.
 
     Args:
         call: The toolkit's ``service_call``, so this stays a plain function
             that any toolkit can hand its own service access to.
         base: The already-normalised underlying.
         venue: The underlying's exchange.
-        value: The expiry the model named, or an empty value.
+        value: An exact ``DDMMMYY`` date, one of :data:`EXPIRY_CHOICES`, or an
+            empty value for the nearest listed expiry.
         notices: Collected notices, appended to when one is resolved here.
 
     Returns:
         The expiry in ``DDMMMYY`` form.
 
     Raises:
-        RetryAgentRun: If the underlying lists no options at all.
+        RetryAgentRun: If the underlying lists no options at all, or a named
+            date is not among them.
     """
-    text = "" if value is None else str(value).strip().upper()
-    if text:
-        return normalise_expiry(text, base, allow_embedded=False)
+    text = "" if value is None else str(value).strip()
+    if text and _expiry_keyword(text) is None:
+        # An exact date, so the listed set is not needed and the round trip to
+        # fetch it is saved. This is the common call.
+        return normalise_expiry(text.upper(), base, allow_embedded=False)
 
-    nearest = next(iter(listed_expiries(call, base, venue)), None)
-    if not nearest:
+    listed = listed_expiries(call, base, venue)
+    if not listed:
         invalid_argument(
             "expiry_date",
             f"{base} lists no option expiries on {get_option_exchange(venue)}",
             "Confirm the underlying has listed options, or name the expiry explicitly in "
             "DDMMMYY form.",
         )
-    notices.append(f"{nearest} is the nearest listed expiry and was used.")
-    return nearest
+    return choose_expiry(listed, text, notices)
 
 
 def resolve_contract(
@@ -804,6 +1018,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         legs: list[str | dict[str, str | int]] | None = None,
         interval: str = DEFAULT_PREMIUM_INTERVAL,
         days: int = DEFAULT_PREMIUM_DAYS,
+        indicators: list[str | dict[str, Any]] | None = None,
     ) -> str:
         """Chart the combined premium of several option legs over time.
 
@@ -829,9 +1044,11 @@ class OptionVizToolkit(OpenAlgoToolkit):
 
         Sensible defaults, so this usually answers in one call: the latest
         session, five minute candles, and for the rolling series the nearest
-        listed expiry and whichever exchange the underlying is listed on. The
-        result says what was used, so correct it on a second call only if the
-        operator meant something else.
+        listed expiry and whichever exchange the underlying is listed on. A
+        candle size this broker does not serve steps down to one minute rather
+        than refusing, because the operator asked to see a combination and the
+        size is incidental to that. The result says what was used, so correct it
+        on a second call only if the operator meant something else.
 
         Args:
             underlying: Underlying symbol for the rolling ATM series:
@@ -844,10 +1061,14 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 ``BSE_INDEX`` for SENSEX, BANKEX; ``NSE`` or ``BSE`` for a
                 stock; ``MCX`` for a commodity. Leave it empty to have it looked
                 up in the instrument master, which is right almost always.
-            expiry_date: Expiry in DDMMMYY format, for example ``08SEP26``.
-                Leave it empty for the nearest listed expiry, which is looked up
-                here. Only the rolling series needs it; a named contract carries
-                its own.
+            expiry_date: Which expiry to price. Either a date in DDMMMYY form,
+                for example ``08SEP26``, or one of ``current_week``,
+                ``next_week``, ``current_month`` and ``next_month``, which are
+                resolved against the listed expiries here. "The current month"
+                is the monthly contract, which is the last weekly of that
+                month, not the nearest one. Leave it empty for the nearest
+                listed expiry. Only the rolling series needs it; a named
+                contract carries its own.
             legs: The contracts to sum, at most eight, each either an OpenAlgo
                 symbol such as ``"NIFTY08SEP2623850CE"``, an exchange-qualified
                 ``"NFO:NIFTY08SEP2623850CE"``, the shorthand ``"23850CE"`` when
@@ -862,6 +1083,16 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 minute and ``M`` is one month.
             days: How many recent trading sessions the series spans, defaulting
                 to 1, which is the latest session. At most 5.
+            indicators: Studies the chart computes from the **combined** series,
+                at most six. Either shorthand strings such as
+                ``["supertrend", "ema:20", "rsi:14"]`` or objects such as
+                ``[{"id": "supertrend", "inputs": {"length": 10, "multiplier":
+                3}}]``. They read the combination, not its legs, so a
+                supertrend here is a supertrend on the straddle. Ids are the
+                chart's own: ``sma``, ``ema``, ``vwap``, ``bollinger``,
+                ``supertrend``, ``rsi``, ``macd``, ``atr``, ``adx`` and the
+                rest. Leave it out when the question is about the premium
+                alone.
 
         Returns:
             One line naming which series was drawn, the last combined value and
@@ -869,13 +1100,18 @@ class OptionVizToolkit(OpenAlgoToolkit):
             this answer, so describe what it shows rather than listing points.
         """
         entries = leg_entries(legs, "legs")
-        interval, notice = normalise_interval(interval, "api", self._intervals.accepted())
+        interval, notice = premium_interval(interval, self._intervals.accepted())
         notices = [notice] if notice else []
         sessions = normalise_int(days, "days", 1, MAX_PREMIUM_DAYS)
+        overlays = normalise_indicators(indicators)
 
         if entries:
-            return self._fixed_legs(entries, underlying, expiry_date, interval, sessions, notices)
-        return self._rolling_atm(underlying, exchange, expiry_date, interval, sessions, notices)
+            return self._fixed_legs(
+                entries, underlying, expiry_date, interval, sessions, overlays, notices
+            )
+        return self._rolling_atm(
+            underlying, exchange, expiry_date, interval, sessions, overlays, notices
+        )
 
     def _rolling_atm(
         self,
@@ -884,6 +1120,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         expiry_date: Any,
         interval: str,
         sessions: int,
+        overlays: Sequence[Mapping[str, Any]],
         notices: list[str],
     ) -> str:
         """Draw the rolling ATM straddle, computed by ``straddle_chart_service``.
@@ -898,6 +1135,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
             expiry_date: The model's expiry, or an empty value for the nearest.
             interval: The already-checked candle size.
             sessions: How many recent trading sessions to span.
+            overlays: Studies the chart computes from the combined series.
             notices: Collected notices, appended to.
 
         Returns:
@@ -956,6 +1194,8 @@ class OptionVizToolkit(OpenAlgoToolkit):
             title=f"{base} {expiry} rolling ATM straddle, {interval}",
             subtitle=subtitle,
             axis="Straddle premium",
+            interval=interval,
+            indicators=overlays,
             source="straddle_chart_service",
             notices=notices,
         )
@@ -986,6 +1226,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         expiry_date: Any,
         interval: str,
         sessions: int,
+        overlays: Sequence[Mapping[str, Any]],
         notices: list[str],
     ) -> str:
         """Draw the sum of the contracts the operator named, strikes held fixed.
@@ -996,6 +1237,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
             expiry_date: The model's expiry, used to expand a shorthand leg.
             interval: The already-checked candle size.
             sessions: How many recent trading sessions to span.
+            overlays: Studies the chart computes from the combined series.
             notices: Collected notices, appended to.
 
         Returns:
@@ -1122,6 +1364,8 @@ class OptionVizToolkit(OpenAlgoToolkit):
             title=f"{heading}, combined premium at {interval}",
             subtitle=subtitle,
             axis="Combined premium",
+            interval=interval,
+            indicators=overlays,
             source="history_service",
             notices=notices,
         )
@@ -1565,24 +1809,34 @@ class OptionVizToolkit(OpenAlgoToolkit):
         title: str,
         subtitle: str,
         axis: str,
+        interval: str,
+        indicators: Sequence[Mapping[str, Any]],
         source: str,
         notices: list[str],
     ) -> bool:
         """Put one combined premium line chart on the run's sink.
 
-        The combined series is the thick line and every leg is a thin one under
-        it, so the reader can see which leg moved. The figure is a line and only
-        a line: see the module docstring for why a candle would be a lie.
+        The combined series is the frame's bars and nothing else is drawn. The
+        figure is a line and only a line: see the module docstring for why a
+        combined candle would be a lie.
+
+        The combined series travels as bars rather than as one more line
+        because a study reads the chart's primary series. Sending it any other
+        way is what made "plot the straddle with a supertrend" impossible: the
+        line was there and there was nothing for the study to attach to.
 
         Args:
             series: The aligned rows, each carrying ``time`` in epoch seconds.
             combined: The combined value per row.
             legs: One entry per leg, carrying ``label``, ``colour`` and
-                ``values`` parallel to ``series``.
+                ``values`` parallel to ``series``. Read for the summary line
+                rather than drawn.
             title: Heading shown above the chart.
             subtitle: The line under the heading that says which of the two
                 series this is.
-            axis: The y axis title.
+            axis: What the values are, for the reader.
+            interval: The candle size the series was built at.
+            indicators: Studies the chart computes from the combined series.
             source: The service the data came from.
             notices: Collected notices, appended to when points are dropped to
                 fit the frame.
@@ -1598,57 +1852,52 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 "chart carries, so it starts later than the range asked for."
             )
         rows = list(series)[-keep:]
-        x = [_ist_label(row.get("time")) for row in rows]
-
-        traces: list[dict[str, Any]] = [
+        combined_values = list(combined)[-keep:]
+        bars = [
             {
-                "type": "scatter",
-                "mode": "lines",
-                "name": "Combined",
-                "x": x,
-                "y": list(combined)[-keep:],
-                "line": {"color": _COMBINED_COLOUR, "width": 2},
+                "time": int(row.get("time") or 0),
+                "open": float(value),
+                "high": float(value),
+                "low": float(value),
+                "close": float(value),
             }
+            for row, value in zip(rows, combined_values, strict=False)
+            if isinstance(value, (int, float)) and math.isfinite(float(value))
         ]
-        for leg in legs:
-            traces.append(
-                {
-                    "type": "scatter",
-                    "mode": "lines",
-                    "name": str(leg.get("label") or ""),
-                    "x": x,
-                    "y": list(leg.get("values") or [])[-keep:],
-                    "line": {"color": str(leg.get("colour") or _OTHER_LEG_COLOUR), "width": 1},
-                    "opacity": 0.65,
-                }
-            )
+        if not bars:
+            return False
 
-        spec = plotly_spec(
-            data=traces,
-            layout={
-                "margin": {"l": 56, "r": 24, "t": 48, "b": 48},
-                "xaxis": {"title": {"text": "Time (IST)"}},
-                "yaxis": {"title": {"text": axis}},
-                "legend": {"orientation": "h"},
-                "annotations": [
-                    {
-                        "x": 0,
-                        "xref": "paper",
-                        "xanchor": "left",
-                        "y": 1.12,
-                        "yref": "paper",
-                        "yanchor": "bottom",
-                        "showarrow": False,
-                        "text": subtitle,
-                        "font": {"size": 11},
-                    }
-                ],
-            },
-        )
+        # The legs are not drawn. A combined premium is one number, and the
+        # question "what is the straddle doing" is answered by that number: the
+        # individual premiums move against each other, so putting them on the
+        # same axis fills the card with two lines that cross and re-cross while
+        # the combination, the thing that was asked about, reads as the flattest
+        # of the three. `get_history` on a leg answers the other question.
+        #
+        # `legs` still arrives because the callers compute it on the way here
+        # and the summary line quotes from it.
+
+        spec: dict[str, Any] = {
+            "symbol": title,
+            "exchange": "",
+            "interval": interval,
+            # A line and only a line: see the module docstring for why a
+            # combined candle would be a lie.
+            "chart_type": "line",
+            "timezone": "Asia/Kolkata",
+            "bar_count": len(bars),
+            "bars": bars,
+            "indicators": list(indicators),
+            "value_label": axis,
+            "subtitle": subtitle,
+        }
+        if notices:
+            spec["notices"] = list(notices)
+
         return emit(
             self._sink,
             tool="plot_combined_premium",
-            kind="plotly",
+            kind=PREMIUM_VIZ,
             spec=spec,
             title=title,
             source=source,

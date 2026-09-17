@@ -282,6 +282,18 @@ export function OpenAlgoChart({
     const offs: Array<() => void> = []
 
     const build = async () => {
+      // The built-in studies live in their own tier and the widget does not
+      // pull it: on the base tier alone `registeredIndicators()` answers 0, and
+      // 102 once this import has run. Without it a host that offers an
+      // indicator picker opens an empty one on any install that happens to have
+      // no indicator modules of its own, because the loader below returns early
+      // when it finds none. Built-ins first, so a user module reusing a
+      // built-in id overrides it rather than the reverse.
+      try {
+        await import('openalgo-charts/indicators')
+      } catch {
+        // A chart without studies is still a chart.
+      }
       // User indicator modules register into the engine's global registry, so
       // this only has to succeed once per session and the loader de-duplicates
       // concurrent callers. It is documented never to throw; the guard is here

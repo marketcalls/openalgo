@@ -49,7 +49,31 @@ import type {
   DrawingText,
   DrawingTool,
 } from 'openalgo-charts/draw'
-import { runTransform } from 'openalgo-charts/transform'
+import {
+  runTransform,
+  parseExpression,
+  isPlainSymbol,
+  evaluateExpression,
+  type SymbolExpression,
+} from 'openalgo-charts/transform'
+
+/**
+ * Is this search text arithmetic rather than one instrument?
+ *
+ * A parse failure answers no: a half-typed `NIFTY/` arrives on every
+ * keystroke, and the ordinary symbol path already knows how to say that a
+ * symbol is unknown.
+ */
+function isChartExpression(text: string): boolean {
+  const s = (text || '').trim()
+  if (s === '' || isPlainSymbol(s)) return false
+  try {
+    parseExpression(s)
+    return true
+  } catch {
+    return false
+  }
+}
 
 // Re-exported so the React layer imports its chart types from this facade
 // rather than reaching into the library directly, as it already does for
@@ -181,6 +205,13 @@ export interface SymbolView {
   tick: number
   freezeQty: number
   quoteOnly: boolean
+  /**
+   * A chart of an expression (`NIFTY/RELIANCE`, `2*CE25000 - CE25200`) rather
+   * than an instrument. There is nothing to place an order in and nothing to
+   * subscribe to, so this is set alongside `quoteOnly`, and the order path
+   * refuses it by name rather than trusting that alias to hold.
+   */
+  synthetic?: boolean
   productOptions: string[]
   product: string
 }
@@ -1325,6 +1356,10 @@ export class TradingTerminal {
     if (this.refuseWhileReplaying()) return
     if (!this.sym || !this.trade) {
       this.toast('search a symbol first')
+      return
+    }
+    if (this.sym.synthetic) {
+      this.toast(`${this.sym.symbol} is a computed chart, not an instrument — there is nothing to trade`, 'err')
       return
     }
     if (this.sym.quoteOnly) {
@@ -3622,6 +3657,90 @@ export class TradingTerminal {
   private loadTicket = 0
 
   /* ── symbol selection ─────────────────────────────────────────────────── */
+  /**
+   * Chart an expression over several instruments: `NIFTY/RELIANCE`,
+   * `2*CE25000 - CE25200`, `(A+B)/2`.
+   *
+   * The legs are fetched in parallel and the first failure wins, because a
+   * combination missing a leg is not a chart with a gap, it is no chart at all.
+   * The engine folds them; this method only supplies bars and refuses to let
+   * the result look tradeable.
+   */
+  private async loadExpression(
+    source: string,
+    ticket: number,
+    opts: { silent?: boolean },
+  ): Promise<boolean> {
+    let expr: SymbolExpression
+    try {
+      expr = parseExpression(source)
+    } catch (e) {
+      if (!opts.silent) this.toast(`${this.cleanError(e)}`, 'err')
+      return false
+    }
+
+    const to = this.gridNow()
+    const from = to - lookbackDays(this.interval) * 86400
+    let bars: Bar[]
+    try {
+      const loaded = await Promise.all(
+        expr.symbols.map(async (leg) => {
+          // `NSE:RELIANCE` names its exchange; a bare symbol inherits the
+          // pane's, which is what a trader typing `NIFTY/RELIANCE` means.
+          const cut = leg.indexOf(':')
+          const exchange = cut > 0 ? leg.slice(0, cut) : (this.sym?.exchange ?? 'NSE')
+          const symbol = cut > 0 ? leg.slice(cut + 1) : leg
+          const rows = await (this.cachedBars ?? this.rest!).getBars({
+            symbol, exchange, interval: this.interval, from, to,
+          })
+          return [leg, rows] as const
+        }),
+      )
+      if (this.destroyed || ticket !== this.loadTicket) return false
+      const legs: Record<string, readonly Bar[]> = {}
+      for (const [leg, rows] of loaded) {
+        if (!rows.length) throw new Error(`no bars for ${leg}`)
+        legs[leg] = rows
+      }
+      bars = evaluateExpression(expr, legs)
+    } catch (e) {
+      if (this.destroyed || ticket !== this.loadTicket) return false
+      this.rawBars = []
+      if (!opts.silent) this.toast(`${source}: ${this.cleanError(e)}`, 'err')
+      return false
+    }
+    if (this.destroyed || ticket !== this.loadTicket) return false
+    if (!bars.length) {
+      if (!opts.silent) {
+        this.toast(`${source}: the legs share no bars on ${this.interval}`, 'err')
+      }
+      return false
+    }
+
+    // `quoteOnly` keeps the product picker and the depth ladder away; `synthetic`
+    // is what the order path refuses by name. A synthetic pane has no live
+    // subscription at all, so `connectLive` is not called.
+    this.sym = {
+      symbol: source,
+      exchange: '',
+      name: 'Computed chart',
+      lotsize: 1,
+      lots: false,
+      tick: 0,
+      freezeQty: 1,
+      quoteOnly: true,
+      synthetic: true,
+      productOptions: [],
+      product: '',
+    }
+    this.rawBars = [...bars]
+    this.lastLtp = null
+    this.liveBucket = null
+    this.noMoreHistory = true // paging an expression would have to page every leg
+    this.buildChart()
+    return true
+  }
+
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
     if (this.destroyed || !this.rest) return false
     /**
@@ -3656,6 +3775,12 @@ export class TradingTerminal {
       } catch {
         /* not subscribed */
       }
+    }
+    // An expression is not an instrument: there is no master record to look up,
+    // no lot size, no tick and nothing to subscribe to. It takes its own path
+    // and never reaches the order machinery below.
+    if (pick.expression === true || isChartExpression(pick.symbol)) {
+      return await this.loadExpression(pick.symbol, ticket, opts)
     }
     // authoritative metadata (lotsize / tick_size / freeze_qty)
     let info: Record<string, unknown> = { ...pick }

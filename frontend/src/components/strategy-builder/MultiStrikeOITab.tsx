@@ -1,44 +1,45 @@
-import {
-  ColorType,
-  CrosshairMode,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  LineSeries,
-  type UTCTimestamp,
-} from 'lightweight-charts'
+/**
+ * Open interest for every leg of the strategy, against the underlying.
+ *
+ * The underlying is the primary series, so a study added from the indicator
+ * picker is a study of the index. Open interest is not in the engine's bar
+ * model and there is one curve per leg, so neither could be the primary; they
+ * are overlays on the left axis, in contract counts, with their own compact
+ * formatter. The left axis rather than the right because the right one is
+ * already the underlying's: sharing it put a five-figure index and an
+ * eight-figure contract count on one scale, which drew the index as a flat line
+ * along the bottom.
+ */
+
+import type { SeriesApi } from 'openalgo-charts'
+import type { Widget } from 'openalgo-charts/widget'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type MultiStrikeOIData,
   type MultiStrikeOILeg,
+  type OIPoint,
   strategyChartApi,
 } from '@/api/strategy-chart'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { createMultiStrikeOIFeed, type StrategyFeedRequest } from '@/lib/chart/feeds/strategyFeed'
 import type { StrategyLeg } from '@/lib/strategyMath'
+import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
-import { showToast } from '@/utils/toast'
+import { type ChartTooltipRow, StrategyChartShell } from './StrategyChartShell'
 
-const CHART_HEIGHT = 480
+const DEFAULT_INTERVALS = ['1m', '3m', '5m', '10m', '15m', '30m', '1h']
 
-// Stable palette used to colour per-leg OI series. Cycles if more than 10 legs.
+/** Per-leg colours, cycled past the tenth leg. */
 const LEG_PALETTE = [
-  '#a855f7', // violet
-  '#3b82f6', // blue
-  '#ec4899', // pink
-  '#10b981', // emerald
-  '#f97316', // orange
-  '#06b6d4', // cyan
-  '#eab308', // yellow
-  '#ef4444', // red
-  '#84cc16', // lime
-  '#8b5cf6', // purple
+  '#a855f7',
+  '#3b82f6',
+  '#ec4899',
+  '#10b981',
+  '#f97316',
+  '#06b6d4',
+  '#eab308',
+  '#ef4444',
+  '#84cc16',
+  '#8b5cf6',
 ]
 
 interface MultiStrikeOITabProps {
@@ -50,38 +51,14 @@ interface MultiStrikeOITabProps {
   optionExchange: string
 }
 
-function formatIST(unixSeconds: number): { date: string; time: string } {
-  const d = new Date(unixSeconds * 1000)
-  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
-  const dd = ist.getUTCDate().toString().padStart(2, '0')
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ]
-  const mo = months[ist.getUTCMonth()]
-  const hh24 = ist.getUTCHours()
-  const hh = hh24.toString().padStart(2, '0')
-  const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-  const ampm = hh24 >= 12 ? 'PM' : 'AM'
-  return { date: `${dd} ${mo}`, time: `${hh}:${mm} ${ampm}` }
-}
-
 /**
- * Format an OI value in Indian short form (L = lakh, Cr = crore) — matches
- * the axis label style in the reference screenshot.
+ * Open interest in Indian short form.
+ *
+ * Contract counts run to eight digits on an index option, which is a price axis
+ * of unreadable numbers. Lakh and crore are the units these are quoted in.
  */
-function formatOI(v: number): string {
-  if (!Number.isFinite(v)) return '—'
+export function formatOI(v: number): string {
+  if (!Number.isFinite(v)) return '-'
   const abs = Math.abs(v)
   if (abs >= 1e7) return `${(v / 1e7).toFixed(2)}Cr`
   if (abs >= 1e5) return `${(v / 1e5).toFixed(2)}L`
@@ -91,23 +68,62 @@ function formatOI(v: number): string {
 
 function formatExpiry(expiry: string | undefined): string {
   if (!expiry) return ''
-  // "28APR26" → "28 APR"
   const m = /^(\d{2})([A-Z]{3})(\d{2})$/.exec(expiry.toUpperCase())
-  if (!m) return expiry
-  return `${m[1]} ${m[2]}`
+  return m ? `${m[1]} ${m[2]}` : expiry
 }
 
 function legLabel(leg: MultiStrikeOILeg, underlying: string): string {
   const side = leg.option_type === 'CE' ? 'CALL' : leg.option_type === 'PE' ? 'PUT' : ''
-  const expiry = formatExpiry(leg.expiry)
-  const strike = leg.strike ?? ''
-  return `${underlying} ${expiry} ${strike} ${side}`.replace(/\s+/g, ' ').trim()
+  return `${underlying} ${formatExpiry(leg.expiry)} ${leg.strike ?? ''} ${side}`
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
-function legsIdentity(legs: StrategyLeg[]): string {
+/**
+ * A key that is unique per leg rather than per symbol.
+ *
+ * Two legs of a strategy can name the same contract, a long and a short of the
+ * same strike among them. Keying by symbol merged those into one curve while
+ * still drawing two legend entries, so one of the two toggles moved nothing.
+ */
+function legKey(leg: MultiStrikeOILeg, index: number): string {
+  return `${index}:${leg.symbol}:${leg.side}`
+}
+
+/** Older points folded into a curve that is already drawn, oldest first. */
+function joinSeries(current: readonly OIPoint[], older: readonly OIPoint[]): OIPoint[] {
+  const byTime = new Map(older.map((p) => [p.time, p]))
+  for (const point of current) byTime.set(point.time, point)
+  return [...byTime.values()].sort((a, b) => a.time - b.time)
+}
+
+/**
+ * Fold an older page into what is already drawn.
+ *
+ * Legs are matched by position, which is what the whole tab keys on: the
+ * backend returns them in the order they were sent, and that order is the same
+ * for both requests because the leg set did not change between them. A leg the
+ * page did not answer for keeps the points it already had rather than being
+ * emptied.
+ *
+ * The spot and the leg list are kept from `current`: they describe the strategy
+ * now, not at the far end of the history the reader scrolled into.
+ */
+function mergeOlder(current: MultiStrikeOIData, older: MultiStrikeOIData): MultiStrikeOIData {
+  return {
+    ...current,
+    underlying_series: joinSeries(current.underlying_series, older.underlying_series),
+    legs: current.legs.map((leg, i) => ({
+      ...leg,
+      series: joinSeries(leg.series, older.legs[i]?.series ?? []),
+    })),
+  }
+}
+
+function legsIdentity(legs: StrategyLeg[], optionExchange: string): string {
   return legs
     .filter((l) => l.segment === 'OPTION' && l.active && l.symbol)
-    .map((l) => `${l.symbol}|${l.side}`)
+    .map((l) => `${l.symbol}|${optionExchange}|${l.side}`)
     .sort()
     .join(';')
 }
@@ -120,510 +136,224 @@ export default function MultiStrikeOITab({
   legs,
   optionExchange,
 }: MultiStrikeOITabProps) {
-  const { mode, appMode } = useThemeStore()
-  const isDarkMode = mode === 'dark'
-  const isAnalyzer = appMode === 'analyzer'
+  const mode = useThemeStore((s) => s.mode)
+  const appMode = useThemeStore((s) => s.appMode)
 
-  const [isLoading, setIsLoading] = useState(false)
-  const [intervals, setIntervals] = useState<string[]>([
-    '1m',
-    '3m',
-    '5m',
-    '10m',
-    '15m',
-    '30m',
-    '1h',
-  ])
-  const [selectedInterval, setSelectedInterval] = useState('5m')
-  const [selectedDays, setSelectedDays] = useState('3')
+  const [intervals, setIntervals] = useState<string[]>(DEFAULT_INTERVALS)
+  const [interval, setInterval] = useState('5m')
+  const [busy, setBusy] = useState(false)
   const [chartData, setChartData] = useState<MultiStrikeOIData | null>(null)
-  const [hiddenSeries, setHiddenSeries] = useState<Record<string, boolean>>({})
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [widget, setWidget] = useState<Widget | null>(null)
+  const [hidden, setHidden] = useState<Record<string, boolean>>({})
 
-  const chartContainerRef = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<IChartApi | null>(null)
-  const underlyingSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const requestGenerationRef = useRef(0)
-  // Keyed by leg symbol — survives leg reordering / re-render cycles.
-  const legSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map())
-  const tooltipRef = useRef<HTMLDivElement | null>(null)
-  const watermarkRef = useRef<HTMLDivElement | null>(null)
-  const chartDataRef = useRef<MultiStrikeOIData | null>(null)
-
-  const colors = useMemo(() => {
-    if (isAnalyzer) {
-      return {
-        text: '#d4bfff',
-        grid: 'rgba(139, 92, 246, 0.1)',
-        border: 'rgba(139, 92, 246, 0.2)',
-        crosshair: 'rgba(139, 92, 246, 0.5)',
-        crosshairLabel: '#4c1d95',
-        underlying: '#fbbf24',
-        watermark: 'rgba(139, 92, 246, 0.12)',
-        tooltipBg: 'rgba(30, 15, 60, 0.92)',
-        tooltipBorder: 'rgba(139, 92, 246, 0.3)',
-        tooltipText: '#d4bfff',
-        tooltipMuted: '#a78bfa',
-      }
-    }
-    if (isDarkMode) {
-      return {
-        text: '#a6adbb',
-        grid: 'rgba(166, 173, 187, 0.1)',
-        border: 'rgba(166, 173, 187, 0.2)',
-        crosshair: 'rgba(166, 173, 187, 0.5)',
-        crosshairLabel: '#1f2937',
-        underlying: '#fbbf24',
-        watermark: 'rgba(166, 173, 187, 0.12)',
-        tooltipBg: 'rgba(17, 24, 39, 0.92)',
-        tooltipBorder: 'rgba(166, 173, 187, 0.2)',
-        tooltipText: '#e2e8f0',
-        tooltipMuted: '#9ca3af',
-      }
-    }
-    return {
-      text: '#333',
-      grid: 'rgba(0, 0, 0, 0.1)',
-      border: 'rgba(0, 0, 0, 0.2)',
-      crosshair: 'rgba(0, 0, 0, 0.3)',
-      crosshairLabel: '#2563eb',
-      underlying: '#d97706',
-      watermark: 'rgba(0, 0, 0, 0.06)',
-      tooltipBg: 'rgba(255, 255, 255, 0.95)',
-      tooltipBorder: 'rgba(0, 0, 0, 0.15)',
-      tooltipText: '#1e293b',
-      tooltipMuted: '#6b7280',
-    }
-  }, [isDarkMode, isAnalyzer])
-
-  const colorsRef = useRef(colors)
-  colorsRef.current = colors
-
-  // Stable per-leg colour, indexed by the symbol's position in the current
-  // data payload. Rebuilt whenever chartData changes.
-  const legColorMap = useMemo(() => {
-    const map = new Map<string, string>()
-    if (chartData?.legs) {
-      chartData.legs.forEach((l, idx) => {
-        map.set(l.symbol, LEG_PALETTE[idx % LEG_PALETTE.length])
-      })
-    }
-    return map
-  }, [chartData])
-
-  // ── Chart init ────────────────────────────────────────────────
-  // biome-ignore lint/correctness/useExhaustiveDependencies: chart is rebuilt only on theme/day changes; hiddenSeries, legColorMap and applyDataToChart are intentionally excluded so toggling leg visibility or loading new data updates series in place (effects at lines ~478 and ~562) instead of tearing down and recreating the whole chart.
-  const initChart = useCallback(() => {
-    if (!chartContainerRef.current) return
-    if (chartRef.current) {
-      chartRef.current.remove()
-      chartRef.current = null
-    }
-    legSeriesRef.current.clear()
-
-    const container = chartContainerRef.current
-    const tooltip = tooltipRef.current
-    container.innerHTML = ''
-    if (tooltip) container.appendChild(tooltip)
-
-    const chart = createChart(container, {
-      width: container.offsetWidth,
-      height: CHART_HEIGHT,
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: colors.text,
-      },
-      grid: {
-        vertLines: { color: colors.grid, style: 1 as const, visible: true },
-        horzLines: { color: colors.grid, style: 1 as const, visible: true },
-      },
-      leftPriceScale: {
-        visible: true,
-        borderColor: colors.border,
-        scaleMargins: { top: 0.05, bottom: 0.05 },
-      },
-      rightPriceScale: {
-        visible: true,
-        borderColor: colors.border,
-        scaleMargins: { top: 0.05, bottom: 0.05 },
-      },
-      timeScale: {
-        borderColor: colors.border,
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: number) => {
-          const d = new Date(time * 1000)
-          const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
-          const hh = ist.getUTCHours().toString().padStart(2, '0')
-          const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-          if (parseInt(selectedDays, 10) > 1) {
-            const dd = ist.getUTCDate().toString().padStart(2, '0')
-            const mo = (ist.getUTCMonth() + 1).toString().padStart(2, '0')
-            return `${dd}/${mo} ${hh}:${mm}`
-          }
-          return `${hh}:${mm}`
-        },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: {
-          width: 1 as const,
-          color: colors.crosshair,
-          style: 2 as const,
-          labelVisible: false,
-        },
-        horzLine: {
-          width: 1 as const,
-          color: colors.crosshair,
-          style: 2 as const,
-          labelBackgroundColor: colors.crosshairLabel,
-        },
-      },
-    })
-
-    const watermark = document.createElement('div')
-    watermark.style.cssText = `position:absolute;z-index:2;font-family:Arial,sans-serif;font-size:48px;font-weight:bold;user-select:none;pointer-events:none;color:${colors.watermark}`
-    watermark.textContent = 'OpenAlgo'
-    container.appendChild(watermark)
-    watermarkRef.current = watermark
-    setTimeout(() => {
-      watermark.style.left = `${container.offsetWidth / 2 - watermark.offsetWidth / 2}px`
-      watermark.style.top = `${container.offsetHeight / 2 - watermark.offsetHeight / 2}px`
-    }, 0)
-
-    if (!tooltipRef.current) {
-      const tt = document.createElement('div')
-      tt.style.cssText =
-        'position:absolute;z-index:10;pointer-events:none;display:none;border-radius:6px;padding:8px 12px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;line-height:1.6;white-space:nowrap;'
-      container.appendChild(tt)
-      tooltipRef.current = tt
-    } else {
-      container.appendChild(tooltipRef.current)
-    }
-
-    const underlyingSeries = chart.addSeries(LineSeries, {
-      color: colors.underlying,
-      lineWidth: 2,
-      priceScaleId: 'left',
-      title: 'Underlying',
-      lastValueVisible: true,
-      priceLineVisible: true,
-      visible: !hiddenSeries.__underlying__,
-    })
-    chartRef.current = chart
-    underlyingSeriesRef.current = underlyingSeries
-
-    chart.subscribeCrosshairMove((param) => {
-      const tt = tooltipRef.current
-      if (!tt || !container) return
-      if (
-        !param.time ||
-        !param.point ||
-        param.point.x < 0 ||
-        param.point.y < 0 ||
-        param.point.x > container.offsetWidth ||
-        param.point.y > container.offsetHeight
-      ) {
-        tt.style.display = 'none'
-        return
-      }
-      const time = param.time as number
-      const c = colorsRef.current
-      const data = chartDataRef.current
-      if (!data) {
-        tt.style.display = 'none'
-        return
-      }
-
-      const rows: string[] = []
-      // Underlying
-      const uPt = data.underlying_series.find((p) => p.time === time)
-      if (uPt && !hiddenSeries.__underlying__) {
-        rows.push(
-          `<div style="display:flex;justify-content:space-between;gap:16px">
-            <span style="color:${c.underlying};font-weight:600">${data.underlying}</span>
-            <span style="color:${c.underlying};font-weight:600">${uPt.value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-          </div>`
-        )
-      }
-      // Each visible leg
-      for (const leg of data.legs) {
-        if (hiddenSeries[leg.symbol]) continue
-        const pt = leg.series.find((p) => p.time === time)
-        if (!pt) continue
-        const clr = legColorMap.get(leg.symbol) ?? '#888'
-        rows.push(
-          `<div style="display:flex;justify-content:space-between;gap:16px">
-            <span style="color:${clr};font-weight:600">${legLabel(leg, data.underlying)}</span>
-            <span style="color:${clr};font-weight:600">${formatOI(pt.value)}</span>
-          </div>`
-        )
-      }
-
-      if (rows.length === 0) {
-        tt.style.display = 'none'
-        return
-      }
-
-      const { date, time: timeStr } = formatIST(time)
-      tt.style.display = 'block'
-      tt.style.background = c.tooltipBg
-      tt.style.border = `1px solid ${c.tooltipBorder}`
-      tt.style.color = c.tooltipText
-      tt.innerHTML = `
-        ${rows.join('')}
-        <div style="display:flex;justify-content:space-between;gap:16px;margin-top:4px;border-top:1px solid ${c.tooltipBorder};padding-top:4px">
-          <span style="color:${c.tooltipMuted}">${date}</span>
-          <span style="color:${c.tooltipMuted}">${timeStr}</span>
-        </div>
-      `
-
-      const tooltipW = tt.offsetWidth
-      const tooltipH = tt.offsetHeight
-      const x = param.point.x
-      const y = param.point.y
-      const margin = 16
-      let left = x + margin
-      if (left + tooltipW > container.offsetWidth) left = x - tooltipW - margin
-      let top = y - tooltipH / 2
-      if (top < 0) top = 0
-      if (top + tooltipH > container.offsetHeight) top = container.offsetHeight - tooltipH
-      tt.style.left = `${left}px`
-      tt.style.top = `${top}px`
-    })
-
-    // Re-apply any existing data so re-inits (theme change, resize) don't blank.
-    if (chartDataRef.current) applyDataToChart(chartDataRef.current)
-
-    const handleResize = () => {
-      if (chartRef.current && container) {
-        chartRef.current.applyOptions({ width: container.offsetWidth })
-        if (watermarkRef.current) {
-          watermarkRef.current.style.left = `${container.offsetWidth / 2 - watermarkRef.current.offsetWidth / 2}px`
-          watermarkRef.current.style.top = `${container.offsetHeight / 2 - watermarkRef.current.offsetHeight / 2}px`
-        }
-      }
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colors, selectedDays])
-
-  const applyDataToChart = useCallback(
-    (data: MultiStrikeOIData) => {
-      const chart = chartRef.current
-      if (!chart) return
-
-      // Underlying
-      underlyingSeriesRef.current?.setData(
-        [...data.underlying_series]
-          .sort((a, b) => a.time - b.time)
-          .map((p) => ({ time: p.time as UTCTimestamp, value: p.value }))
-      )
-
-      // Leg series — reconcile against existing refs so toggling legs doesn't
-      // leak chart resources. Remove series for legs that disappeared.
-      const activeSymbols = new Set(data.legs.map((l) => l.symbol))
-      for (const [sym, series] of legSeriesRef.current.entries()) {
-        if (!activeSymbols.has(sym)) {
-          try {
-            chart.removeSeries(series)
-          } catch {
-            /* already removed */
-          }
-          legSeriesRef.current.delete(sym)
-        }
-      }
-
-      for (let i = 0; i < data.legs.length; i++) {
-        const leg = data.legs[i]
-        const color = LEG_PALETTE[i % LEG_PALETTE.length]
-        let series = legSeriesRef.current.get(leg.symbol)
-        if (!series) {
-          series = chart.addSeries(LineSeries, {
-            color,
-            lineWidth: 2,
-            priceScaleId: 'right',
-            title: legLabel(leg, data.underlying),
-            lastValueVisible: true,
-            priceLineVisible: false,
-            visible: !hiddenSeries[leg.symbol],
-          })
-          legSeriesRef.current.set(leg.symbol, series)
-        } else {
-          series.applyOptions({
-            color,
-            title: legLabel(leg, data.underlying),
-            visible: !hiddenSeries[leg.symbol],
-          })
-        }
-        series.setData(
-          [...leg.series]
-            .sort((a, b) => a.time - b.time)
-            .map((p) => ({ time: p.time as UTCTimestamp, value: p.value }))
-        )
-      }
-
-      chart.timeScale().fitContent()
-    },
-    [hiddenSeries]
+  const underlyingColor = useMemo(
+    () => (mode === 'dark' || appMode === 'analyzer' ? '#fbbf24' : '#d97706'),
+    [mode, appMode]
   )
 
-  useEffect(() => {
-    const cleanup = initChart()
-    return () => {
-      cleanup?.()
-      if (chartRef.current) {
-        chartRef.current.remove()
-        chartRef.current = null
-      }
-      legSeriesRef.current.clear()
-    }
-  }, [initChart])
+  const payloadLegs = useMemo(
+    () =>
+      legs
+        .filter((l) => l.segment === 'OPTION' && l.active && l.symbol)
+        .map((l) => ({
+          symbol: l.symbol,
+          exchange: optionExchange,
+          side: l.side,
+          segment: l.segment,
+          active: l.active,
+          price: l.price,
+          strike: l.strike,
+          optionType: l.optionType,
+          expiry: l.expiry,
+        })),
+    [legs, optionExchange]
+  )
 
-  // Toggle visibility without refetching
-  useEffect(() => {
-    underlyingSeriesRef.current?.applyOptions({ visible: !hiddenSeries.__underlying__ })
-    for (const [sym, series] of legSeriesRef.current.entries()) {
-      series.applyOptions({ visible: !hiddenSeries[sym] })
-    }
-  }, [hiddenSeries])
+  const request = useRef<StrategyFeedRequest | null>(null)
+  request.current =
+    underlying && exchange
+      ? {
+          underlying,
+          exchange,
+          underlyingSymbol,
+          underlyingExchange,
+          legs: payloadLegs,
+        }
+      : null
 
-  // Intervals
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only fetch of the available interval list; selectedInterval is read solely to seed a sensible default once and must not re-trigger the fetch when the user changes interval.
+  const feed = useMemo(
+    () =>
+      createMultiStrikeOIFeed({
+        read: () => request.current,
+        onPayload: (data, { paging }) => {
+          setChartData((prev) => (paging && prev && data ? mergeOlder(prev, data) : data))
+          if (data) setLoadError(null)
+        },
+      }),
+    []
+  )
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; `interval` is read to seed a default and must not re-trigger the fetch
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
+    void (async () => {
       try {
         const res = await strategyChartApi.getIntervals()
-        if (cancelled) return
-        if (res.status === 'success' && res.data) {
-          const all = [
-            ...(res.data.seconds || []),
-            ...(res.data.minutes || []),
-            ...(res.data.hours || []),
-          ]
-          if (all.length > 0) {
-            setIntervals(all)
-            if (!all.includes(selectedInterval)) {
-              setSelectedInterval(all.includes('5m') ? '5m' : all.includes('1m') ? '1m' : all[0])
-            }
-          }
+        if (cancelled || res.status !== 'success' || !res.data) return
+        const all = [
+          ...(res.data.seconds || []),
+          ...(res.data.minutes || []),
+          ...(res.data.hours || []),
+        ]
+        if (all.length === 0) return
+        setIntervals(all)
+        if (!all.includes(interval)) {
+          setInterval(all.includes('5m') ? '5m' : (all[0] ?? '5m'))
         }
       } catch {
-        // keep defaults
+        // Keep the defaults.
       }
     })()
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const identity = useMemo(() => legsIdentity(legs), [legs])
+  const overlays = useRef(new Map<string, SeriesApi>())
+  const legRows = useMemo(() => chartData?.legs ?? [], [chartData])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: legs is read inside but intentionally keyed via the stable `identity` string (memoized above) instead of the raw `legs` reference, so a new array with identical contents does not retrigger this network fetch; depending on `legs` directly would cause repeated OI data requests.
-  const loadData = useCallback(async () => {
-    const generation = ++requestGenerationRef.current
-    if (!underlying || !exchange) return
-    const payloadLegs = legs
-      .filter((l) => l.segment === 'OPTION' && l.active && l.symbol)
-      .map((l) => ({
-        symbol: l.symbol,
-        exchange: optionExchange,
-        side: l.side,
-        segment: l.segment,
-        active: l.active,
-        price: l.price,
-        strike: l.strike,
-        optionType: l.optionType,
-        expiry: l.expiry,
-      }))
-    if (payloadLegs.length === 0) {
-      setIsLoading(false)
-      chartDataRef.current = null
-      setChartData(null)
-      // Clear leg series
-      const chart = chartRef.current
-      if (chart) {
-        for (const series of legSeriesRef.current.values()) {
-          try {
-            chart.removeSeries(series)
-          } catch {
-            /* already removed */
-          }
-        }
-      }
-      legSeriesRef.current.clear()
-      underlyingSeriesRef.current?.setData([])
-      return
+  /**
+   * One line per leg on the left axis, reconciled against the payload rather
+   * than rebuilt from it.
+   *
+   * Reconciled because a refresh usually returns the same legs, and dropping
+   * every curve to recreate it would make each poll a visible flicker. Legs that
+   * left are removed, legs that stayed keep their series and are recoloured:
+   * the palette is positional, so removing a leg from the middle shifts the
+   * colour of everything after it, and a series left on its old colour would
+   * disagree with the legend under the chart.
+   */
+  useEffect(() => {
+    if (!widget || widget.isDestroyed) return
+    const series = overlays.current
+    const wanted = new Set(legRows.map((leg, i) => legKey(leg, i)))
+
+    for (const [key, line] of series) {
+      if (wanted.has(key)) continue
+      line.remove()
+      series.delete(key)
     }
-    setIsLoading(true)
-    try {
-      const res = await strategyChartApi.getMultiStrikeOI({
-        underlying,
-        exchange,
-        underlying_symbol: underlyingSymbol,
-        underlying_exchange: underlyingExchange,
-        legs: payloadLegs,
-        interval: selectedInterval,
-        days: parseInt(selectedDays, 10),
-      })
-      if (generation !== requestGenerationRef.current) return
-      if (res.status === 'success' && res.data) {
-        chartDataRef.current = res.data
-        setChartData(res.data)
-        applyDataToChart(res.data)
+
+    legRows.forEach((leg, i) => {
+      const key = legKey(leg, i)
+      const style = {
+        color: LEG_PALETTE[i % LEG_PALETTE.length],
+        lineWidth: 2,
+        title: legLabel(leg, chartData?.underlying ?? ''),
+      }
+      let line = series.get(key)
+      if (line) {
+        line.applyOptions(style)
       } else {
-        showToast.error(res.message || 'Failed to load OI data')
+        line = widget.chart.addSeries('line', {
+          priceScaleId: 'left',
+          style,
+          // Contract counts, not rupees: the axis and the crosshair tag both
+          // read in lakh and crore.
+          priceFormat: { type: 'custom', formatter: formatOI },
+        })
+        series.set(key, line)
       }
-    } catch (err) {
-      if (generation !== requestGenerationRef.current) return
-      const msg = err instanceof Error ? err.message : 'Failed to load OI data'
-      showToast.error(msg)
-    } finally {
-      if (generation === requestGenerationRef.current) setIsLoading(false)
+      line.setData(
+        [...leg.series]
+          .sort((a, b) => a.time - b.time)
+          .map((p) => ({ time: p.time, value: p.value }))
+      )
+    })
+  }, [widget, legRows, chartData?.underlying])
+
+  /** Drop every curve with the chart that owns them. */
+  useEffect(() => {
+    if (!widget) return
+    return () => {
+      if (!widget.isDestroyed) for (const line of overlays.current.values()) line.remove()
+      overlays.current.clear()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    underlying,
-    exchange,
-    underlyingSymbol,
-    underlyingExchange,
-    identity,
-    selectedInterval,
-    selectedDays,
-    optionExchange,
-    applyDataToChart,
-  ])
+  }, [widget])
 
   useEffect(() => {
-    const handle = setTimeout(() => {
-      loadData()
-    }, 300)
-    return () => {
-      clearTimeout(handle)
-      requestGenerationRef.current += 1
-    }
-  }, [loadData])
+    legRows.forEach((leg, i) => {
+      const key = legKey(leg, i)
+      overlays.current.get(key)?.applyOptions({ visible: !hidden[key] })
+    })
+  }, [legRows, hidden])
 
-  const toggle = useCallback((key: string) => {
-    setHiddenSeries((prev) => ({ ...prev, [key]: !prev[key] }))
+  useEffect(() => {
+    if (!widget) return
+    widget.series.applyOptions({
+      visible: !hidden.__underlying__,
+      color: underlyingColor,
+    })
+  }, [widget, hidden.__underlying__, underlyingColor])
+
+  /**
+   * Rows for the readout that follows the crosshair: the underlying, then every
+   * leg still showing.
+   *
+   * A hidden leg is left out rather than greyed, so the box says exactly what
+   * the chart is drawing. Legs are looked up by exact timestamp, because an OI
+   * series can be missing a bar the index has and a nearest-match would quote
+   * the wrong minute's open interest.
+   */
+  const tooltip = useCallback(
+    (time: number): ChartTooltipRow[] | null => {
+      const rows: ChartTooltipRow[] = []
+      if (!hidden.__underlying__) {
+        const spot = chartData?.underlying_series.find((p) => p.time === time)
+        if (spot) {
+          rows.push({
+            label: chartData?.underlying ?? 'Underlying',
+            value: spot.value.toLocaleString('en-IN', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            }),
+            color: underlyingColor,
+          })
+        }
+      }
+      legRows.forEach((leg, i) => {
+        const key = legKey(leg, i)
+        if (hidden[key]) return
+        const at = leg.series.find((p) => p.time === time)
+        if (!at) return
+        rows.push({
+          label: legLabel(leg, chartData?.underlying ?? ''),
+          value: formatOI(at.value),
+          color: LEG_PALETTE[i % LEG_PALETTE.length],
+        })
+      })
+      return rows.length > 0 ? rows : null
+    },
+    [chartData, legRows, hidden, underlyingColor]
+  )
+
+  const identity = useMemo(() => legsIdentity(legs, optionExchange), [legs, optionExchange])
+  const activeOptionLegs = payloadLegs.length
+  const missingOI = useMemo(() => legRows.filter((l) => !l.has_oi).length, [legRows])
+
+  const onData = useCallback((event: { error?: string }) => {
+    setLoadError(event.error ?? null)
   }, [])
 
-  const activeOptionLegs = useMemo(
-    () => legs.filter((l) => l.segment === 'OPTION' && l.active && l.symbol).length,
-    [legs]
-  )
-
-  const missingOI = useMemo(
-    () => (chartData?.legs ?? []).filter((l) => !l.has_oi).length,
-    [chartData]
-  )
+  const toggle = useCallback((key: string) => {
+    setHidden((prev) => ({ ...prev, [key]: !prev[key] }))
+  }, [])
 
   if (activeOptionLegs === 0) {
     return (
       <div className="rounded-xl border bg-card p-8 text-center shadow-sm">
-        <div className="text-sm text-muted-foreground">
+        <div className="text-muted-foreground text-sm">
           Add at least one active option leg to see Multi Strike OI.
         </div>
       </div>
@@ -631,122 +361,101 @@ export default function MultiStrikeOITab({
   }
 
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
-      {/* Controls */}
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <Select value={selectedInterval} onValueChange={setSelectedInterval}>
-          <SelectTrigger className="w-[110px]">
-            <SelectValue placeholder="Interval" />
-          </SelectTrigger>
-          <SelectContent>
-            {intervals.map((intv) => (
-              <SelectItem key={intv} value={intv}>
-                {intv}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select value={selectedDays} onValueChange={setSelectedDays}>
-          <SelectTrigger className="w-[110px]">
-            <SelectValue placeholder="Days" />
-          </SelectTrigger>
-          <SelectContent>
-            {['1', '3', '5', '10'].map((d) => (
-              <SelectItem key={d} value={d}>
-                {d} {d === '1' ? 'Day' : 'Days'}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Button variant="outline" size="sm" onClick={loadData} disabled={isLoading}>
-          {isLoading ? 'Loading...' : 'Refresh'}
-        </Button>
-
-        {chartData && (
-          <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+    <StrategyChartShell
+      feed={feed}
+      symbol={(underlying || 'UNDERLYING').toUpperCase()}
+      exchange={exchange}
+      interval={interval}
+      intervals={intervals}
+      onIntervalChange={setInterval}
+      reloadKey={identity}
+      busy={busy}
+      onBusyChange={setBusy}
+      persistKey="strategybuilder:multi-strike-oi"
+      onReady={setWidget}
+      onData={onData}
+      tooltip={tooltip}
+      readout={
+        chartData ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
             <div>
               <span className="text-muted-foreground">Spot </span>
-              <span className="font-medium" style={{ color: colors.underlying }}>
+              <span className="font-medium" style={{ color: underlyingColor }}>
                 {chartData.underlying_ltp?.toLocaleString('en-IN', {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
-                }) || '—'}
+                }) || '-'}
               </span>
             </div>
             <div>
               <span className="text-muted-foreground">Legs </span>
-              <span className="font-medium">{chartData.legs.length}</span>
+              <span className="font-medium">{legRows.length}</span>
             </div>
           </div>
-        )}
-      </div>
-
-      {missingOI > 0 && (
-        <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
-          {missingOI} leg{missingOI === 1 ? '' : 's'} returned no OI history — your broker may not
-          report historical OI for options.
-        </div>
-      )}
-      {chartData && !chartData.underlying_available && (
-        <div className="mb-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-[11px] text-blue-700 dark:text-blue-400">
-          Your broker doesn't return {selectedInterval} candles for the underlying index — showing
-          leg OI only. Try a coarser interval (e.g., 5m) to see the underlying overlay.
-        </div>
-      )}
-
-      {/* Chart */}
-      <div className="relative">
-        <div
-          ref={chartContainerRef}
-          className="relative w-full rounded-lg border border-border/50"
-          style={{ height: CHART_HEIGHT }}
-        />
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              Loading OI data...
+        ) : null
+      }
+      notices={
+        <>
+          {loadError ? (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[11px] text-red-700 dark:text-red-400">
+              {loadError}
             </div>
-          </div>
-        )}
-      </div>
-
-      {/* Legend + toggles */}
-      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-        <button
-          type="button"
-          onClick={() => toggle('__underlying__')}
-          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors ${
-            !hiddenSeries.__underlying__ ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
-          }`}
-        >
-          <span
-            className="inline-block h-0.5 w-5 rounded"
-            style={{ backgroundColor: colors.underlying }}
-          />
-          {underlying || 'Underlying'}
-        </button>
-        {chartData?.legs.map((leg, idx) => {
-          const clr = LEG_PALETTE[idx % LEG_PALETTE.length]
-          const hidden = hiddenSeries[leg.symbol]
-          return (
-            <button
-              key={leg.symbol}
-              type="button"
-              onClick={() => toggle(leg.symbol)}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors ${
-                !hidden ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
-              }`}
-              title={leg.symbol}
-            >
-              <span className="inline-block h-0.5 w-5 rounded" style={{ backgroundColor: clr }} />
-              {legLabel(leg, chartData.underlying)}
-            </button>
-          )
-        })}
-      </div>
-    </div>
+          ) : null}
+          {missingOI > 0 ? (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+              {missingOI} leg{missingOI === 1 ? '' : 's'} returned no OI history. Your broker may
+              not report historical open interest for options.
+            </div>
+          ) : null}
+          {chartData && !chartData.underlying_available ? (
+            <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-[11px] text-blue-700 dark:text-blue-400">
+              Your broker does not return {interval} candles for the underlying index, so only leg
+              OI is drawn. Try a coarser interval to see the underlying.
+            </div>
+          ) : null}
+        </>
+      }
+      legend={
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => toggle('__underlying__')}
+            aria-pressed={!hidden.__underlying__}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors',
+              !hidden.__underlying__ ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
+            )}
+          >
+            <span
+              className="inline-block h-0.5 w-5 rounded"
+              style={{ backgroundColor: underlyingColor }}
+            />
+            {underlying || 'Underlying'}
+          </button>
+          {legRows.map((leg, i) => {
+            const key = legKey(leg, i)
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => toggle(key)}
+                aria-pressed={!hidden[key]}
+                title={leg.symbol}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors',
+                  !hidden[key] ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
+                )}
+              >
+                <span
+                  className="inline-block h-0.5 w-5 rounded"
+                  style={{ backgroundColor: LEG_PALETTE[i % LEG_PALETTE.length] }}
+                />
+                {legLabel(leg, chartData?.underlying ?? '')}
+              </button>
+            )
+          })}
+        </div>
+      }
+    />
   )
 }

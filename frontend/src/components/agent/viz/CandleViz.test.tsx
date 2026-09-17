@@ -17,6 +17,7 @@ import { CandleViz } from './CandleViz'
 
 interface SeriesStub {
   type: string
+  options: Record<string, unknown>
   setData: ReturnType<typeof vi.fn>
   priceScale: () => { setOptions: ReturnType<typeof vi.fn> }
 }
@@ -29,7 +30,7 @@ interface ChartStub {
   destroyed: number
   fitted: number
   spacing: number[]
-  addSeries: (type: string) => SeriesStub
+  addSeries: (type: string, options?: Record<string, unknown>) => SeriesStub
   addPrimitive: (primitive: unknown, pane: number) => void
   addIndicator: (id: string) => void
   fitContent: () => void
@@ -57,9 +58,10 @@ const harness = vi.hoisted(() => {
           chart.timeScale.barSpacing = value
         },
       },
-      addSeries: (type: string) => {
+      addSeries: (type: string, options?: Record<string, unknown>) => {
         const series: SeriesStub = {
           type,
+          options: options ?? {},
           setData: vi.fn(),
           priceScale: () => ({ setOptions: vi.fn() }),
         }
@@ -246,21 +248,21 @@ describe('CandleViz', () => {
     expect(harness.createChart).not.toHaveBeenCalled()
   })
 
-  it('carries the OpenAlgo mark by default', async () => {
-    // The library has no watermark option: the mark is a primitive the host
-    // adds, so a chart that never adds one simply has none, and nothing fails.
-    // That is how it went missing here while /trading kept its own. Pinned by
-    // the asset and the corner, not merely by something having been added.
+  it('carries exactly one OpenAlgo mark, the one the engine draws', async () => {
+    // The engine draws a corner mark by default. A host that adds its own as a
+    // primitive on top of it gets two, stacked in the same corner, which is
+    // what this card did. Configuring the one that is already there is the fix
+    // and this is what pins it: the branding option carries the asset and the
+    // corner, and nothing is added beside it.
     render(<CandleViz spec={SPEC} title="RELIANCE NSE D" />)
     await waitFor(() => expect(harness.charts).toHaveLength(1))
 
-    const marks = harness.charts[0].primitives
-    expect(marks).toHaveLength(1)
-    expect(marks[0].pane).toBe(0)
-
-    const options = (marks[0].primitive as { options: Record<string, unknown> }).options
-    expect(options.src).toBe('/images/openalgo-glyph.svg')
-    expect(options.position).toBe('bottom-left')
-    expect(options.label).toBe('OpenAlgo Charts')
+    const chart = harness.charts[0]
+    const branding = chart.options.branding as Record<string, unknown>
+    expect(branding.src).toBe('/images/openalgo-glyph.svg')
+    expect(branding.position).toBe('bottom-left')
+    expect(branding.label).toBe('OpenAlgo Charts')
+    // No second mark, which is the whole point.
+    expect(chart.primitives).toHaveLength(0)
   })
 })

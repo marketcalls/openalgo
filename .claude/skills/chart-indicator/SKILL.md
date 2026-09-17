@@ -59,6 +59,27 @@ The descriptor contract has not changed since this skill was written, so an
 existing indicator keeps working on the pinned build. What changed around it,
 newest first:
 
+- **2.3.0: charts can be arithmetic over several instruments.**
+  `openalgo-charts/transform` gains `parseExpression` and `evaluateExpression`,
+  so `/trading` can chart `NIFTY/RELIANCE`, `2*CE25000 - CE25200` or any
+  expression over any number of legs. These belong to the **transform tier**,
+  not to the API object a custom indicator module receives, so nothing about
+  writing an indicator changes. Worth knowing for one reason: a study added to
+  a computed chart runs on the folded series, whose bars have no `volume` and
+  whose high and low are a bound rather than a measurement unless the host
+  asked for close-only. Volume studies read zero there, which is honest rather
+  than broken.
+- **2.2.1: inputs can carry help text, and a plot can label its own axis.**
+  Every `IndicatorInput` variant now takes an optional `tooltip`, which the
+  settings dialog renders as a small focusable `?` beside the label. Put the
+  explanation there rather than in a parenthetical that stretches the row.
+  `IndicatorPlot` now takes an optional `priceFormat`, the same `PriceFormat`
+  union `addSeries` uses, with a new `percent` variant: it suffixes the value
+  and does **not** scale it, so a study returning 0..1 reads `0.62%` and one
+  returning 0..100 reads `62.24%`. Multiplying inside `calc` to make the axis
+  read better would change the legend, the crosshair and everything computed off
+  the value. Like `style.precision` it belongs to a plot that owns its pane.
+  Both fields are optional, so an existing descriptor is unaffected.
 - **2.2.0: hosts can offer 85 drawing tools.** The draw tier adds channels,
   pitchforks, Fibonacci and Gann geometry, wavefronts and manual patterns.
   `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS` and `PATTERN_DRAWING_TOOLS`
