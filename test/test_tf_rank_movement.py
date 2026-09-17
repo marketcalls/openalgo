@@ -359,3 +359,45 @@ def test_movement_snapshot_marks_absent_against_the_days_latest_minute(monkeypat
     rows = {r["symbol"]: r for r in mod.movement_snapshot("2026-01-02")}
     assert rows["LIVE"]["present"] is True and rows["LIVE"]["event"] == "TOP5_ENTRY"
     assert rows["GONE"]["present"] is False and rows["GONE"]["event"] == "ABSENT"
+
+
+# --- the open: a fresh day, nothing carried over (plan §13/§39/§40) -----------
+
+
+def test_the_opening_snapshot_is_a_baseline_not_a_list_of_entries():
+    # 09:15, the first tick of the day. Every symbol is inside some zone for the
+    # first time, but none of them just entered it -- we never saw them outside.
+    # Without this the whole opening top 20 alerts in the first minute.
+    assert compute_symbol_movement("TOP", [[555, 1]], latest_minute=555)["event"] == "NEW"
+    assert compute_symbol_movement("MID", [[555, 12]], latest_minute=555)["event"] == "NEW"
+    assert compute_symbol_movement("LOW", [[555, 60]], latest_minute=555)["event"] == "NEW"
+
+
+def test_a_symbol_first_seen_mid_session_is_new_not_an_entry():
+    # Appears at 09:20 already inside the Top-20: still a baseline, not a move.
+    row = compute_symbol_movement("LATE", [[560, 15]], latest_minute=560)
+    assert row["event"] == "NEW"
+    assert row["top20"] is True  # standing is still recorded
+
+
+def test_a_real_entry_on_a_later_minute_still_fires():
+    # The suppression must not swallow genuine crossings.
+    assert (
+        compute_symbol_movement("X", [[555, 30], [556, 12], [557, 9]], latest_minute=557)["event"]
+        == "TOP10_ENTRY"
+    )
+    assert (
+        compute_symbol_movement("Y", [[555, 30], [557, 9], [559, 14], [561, 8]], latest_minute=561)[
+            "event"
+        ]
+        == "TOP10_RE_ENTRY"
+    )
+
+
+def test_an_empty_day_returns_nothing(monkeypatch):
+    # Before 09:15 tomorrow the day has no rows at all; the panel must simply
+    # show no badges rather than error.
+    import services.tf_rank_movement_service as mod
+
+    monkeypatch.setattr(mod, "get_boost_rank_timeline", lambda *a, **k: {})
+    assert mod.movement_snapshot("2026-09-18") == []

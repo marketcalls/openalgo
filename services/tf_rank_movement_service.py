@@ -26,11 +26,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from database.tf_boost_db import get_boost_rank_timeline
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# The recorder stamps rows in IST (services/tf_boost_snapshot_service), so the
+# "today" this engine reads must be IST too -- not the host's local date, which
+# is the same thing only by luck of where the server happens to run.
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass
@@ -374,11 +380,17 @@ def classify_event(
 
     Only transitions that happened on the latest observed minute count as the
     current event, so a Top-10 entry ten minutes ago does not keep re-firing
-    (plan §22/§58); its lasting form is SUSTAINED_TOP10 via the window."""
+    (plan §22/§58); its lasting form is SUSTAINED_TOP10 via the window.
+
+    A crossing recorded on the symbol's FIRST observation is not one: we never
+    saw it outside the zone, so being there is where it started, not something
+    it just did (plan §40). Without this the 09:15 snapshot classifies the whole
+    opening list as Top-5/10/20 entries -- the entire top 20 would alert in the
+    first minute of every session, and none of it would be movement."""
     candidates: list[str] = []
 
     for t in transitions:
-        if t.minute == state.last_seen_min:
+        if t.minute == state.last_seen_min and t.minute != state.first_seen_min:
             candidates.append(f"TOP{t.threshold}_{t.kind}")
 
     d = state.rank_delta
@@ -479,7 +491,7 @@ def movement_snapshot(date: str = "", list_type: str = "intraday_boost") -> list
 
     Reconstructed from the isolated DuckDB; degrades to [] on any read failure,
     like the other query services here."""
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or datetime.now(IST).strftime("%Y-%m-%d")
     per_symbol_days = get_boost_rank_timeline(day, day, list_type)
     # The latest minute anyone was recorded at is what "now" means for this
     # list, so it survives a closed market and a replay of an older date alike.
@@ -505,7 +517,7 @@ def rank_movement_service(
     `date` defaults to today (naive IST, matching how the recorder stores
     snapshot_date). Degrades to {} on any read failure, like the query service.
     """
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or datetime.now(IST).strftime("%Y-%m-%d")
     # get_boost_rank_timeline returns {symbol: {day: [[min, rank], ...]}}.
     per_symbol_days = get_boost_rank_timeline(day, day, list_type)
     timeline = {sym: days.get(day, []) for sym, days in per_symbol_days.items()}
