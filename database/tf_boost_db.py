@@ -405,6 +405,13 @@ def init_behaviour_table() -> None:
                 day                    DATE NOT NULL,
                 symbol                 VARCHAR NOT NULL,
                 list_type              VARCHAR NOT NULL,
+                -- Earliest minute-of-day an entry was allowed. In the PK because
+                -- the same day is worth studying twice: from the open, and from
+                -- after the opening volatility has settled, which is the only
+                -- one a stock-options trader can actually act on.
+                entry_after_min        INTEGER NOT NULL,
+                has_options            BOOLEAN,
+                entry_trigger          VARCHAR,
                 first_seen_rank        INTEGER,
                 best_rank              INTEGER,
                 final_rank             INTEGER,
@@ -430,7 +437,7 @@ def init_behaviour_table() -> None:
                 run_efficiency         DOUBLE,
                 notes                  VARCHAR,
                 created_at             TIMESTAMP DEFAULT current_timestamp,
-                PRIMARY KEY (day, symbol, list_type)
+                PRIMARY KEY (day, symbol, list_type, entry_after_min)
             )
         """)
 
@@ -473,8 +480,9 @@ def upsert_behaviour(rows: list[dict]) -> int:
     with get_connection() as conn:
         for row in rows:
             conn.execute(
-                "DELETE FROM tf_boost_behaviour WHERE day = ? AND symbol = ? AND list_type = ?",
-                [row["day"], row["symbol"], row["list_type"]],
+                "DELETE FROM tf_boost_behaviour WHERE day = ? AND symbol = ? AND list_type = ? "
+                "AND entry_after_min = ?",
+                [row["day"], row["symbol"], row["list_type"], row["entry_after_min"]],
             )
             conn.execute(
                 f"INSERT INTO tf_boost_behaviour ({', '.join(cols)}) VALUES ({placeholders})",
