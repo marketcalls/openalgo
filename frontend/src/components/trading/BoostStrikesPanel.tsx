@@ -49,6 +49,8 @@ const DEFAULT_LIST_HEIGHT = 240
 /** Below this a section shows fewer than three rows and stops being a list. */
 const MIN_SECTION = 96
 const MAX_SECTION = 600
+/** Shared by the strike header and every strike row, so the columns line up. */
+const STRIKE_GRID = 'grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-x-2'
 const STRIKES_SHOWN = 8
 
 function spreadPct(row: StrikeRow): number | null {
@@ -321,50 +323,56 @@ export function BoostStrikesPanel({ apiKey, onPick, activeSymbol }: Props) {
           </p>
         )}
         {!loading && liquid.length > 0 && (
-          <table className="w-full text-[12px]">
-            <thead className="text-[10px] text-muted-foreground">
-              <tr>
-                <th className="px-2 py-1 text-left font-normal">Strike</th>
-                <th className="py-1 text-right font-normal">LTP</th>
-                <th className="py-1 text-right font-normal">Spread</th>
-                <th className="py-1 text-right font-normal">Volume</th>
-                <th className="px-2 py-1 text-right font-normal">Lot</th>
-              </tr>
-            </thead>
-            <tbody className="tabular-nums">
-              {liquid.map((row) => {
-                const spread = spreadPct(row)
-                return (
-                  <tr key={row.symbol} className="hover:bg-accent">
-                    <td className="px-2 py-1">
-                      <span
-                        className={cn(
-                          'font-medium',
-                          row.side === 'CE' ? 'text-emerald-500' : 'text-red-500'
-                        )}
-                      >
-                        {row.strike} {row.side}
-                      </span>
-                      {row.label && (
-                        <span className="ml-1 text-[10px] text-muted-foreground">{row.label}</span>
-                      )}
-                    </td>
-                    <td className="py-1 text-right">{row.ltp.toFixed(2)}</td>
-                    <td
+          <div>
+            {/* A grid rather than a table: every row is a button that charts
+                the contract, and a button is the honest element for that.
+                The template is shared with the header so the columns line up. */}
+            <div className={cn(STRIKE_GRID, 'px-2 py-1 text-[10px] text-muted-foreground')}>
+              <span>Strike</span>
+              <span className="text-right">LTP</span>
+              <span className="text-right">Spread</span>
+              <span className="text-right">Volume</span>
+              <span className="text-right">Lot</span>
+            </div>
+            {liquid.map((row) => {
+              const spread = spreadPct(row)
+              return (
+                <button
+                  key={row.symbol}
+                  type="button"
+                  title={`Chart ${row.symbol}`}
+                  onClick={() => onPick?.({ symbol: row.symbol, exchange: 'NFO' })}
+                  className={cn(
+                    STRIKE_GRID,
+                    'w-full px-2 py-1 text-left text-[12px] tabular-nums hover:bg-accent',
+                    activeSymbol === row.symbol && 'bg-accent font-medium'
+                  )}
+                >
+                  <span className="truncate">
+                    <span
                       className={cn(
-                        'py-1 text-right',
-                        spread != null && spread > 2 && 'text-amber-500'
+                        'font-medium',
+                        row.side === 'CE' ? 'text-emerald-500' : 'text-red-500'
                       )}
                     >
-                      {spread != null ? `${spread.toFixed(1)}%` : '—'}
-                    </td>
-                    <td className="py-1 pl-2 text-right">{(row.volume / 1000).toFixed(0)}k</td>
-                    <td className="px-2 py-1 text-right text-muted-foreground">{row.lotsize}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      {row.strike} {row.side}
+                    </span>
+                    {row.label && (
+                      <span className="ml-1 text-[10px] text-muted-foreground">{row.label}</span>
+                    )}
+                  </span>
+                  <span className="text-right">{row.ltp.toFixed(2)}</span>
+                  <span
+                    className={cn('text-right', spread != null && spread > 2 && 'text-amber-500')}
+                  >
+                    {spread != null ? `${spread.toFixed(1)}%` : '—'}
+                  </span>
+                  <span className="text-right">{(row.volume / 1000).toFixed(0)}k</span>
+                  <span className="text-right text-muted-foreground">{row.lotsize}</span>
+                </button>
+              )
+            })}
+          </div>
         )}
       </div>
     </PanelShell>
