@@ -889,9 +889,16 @@ def setup_environment(app):
 
             if os.getenv("TF_BOOST_SNAPSHOT_ENABLED", "false").lower() == "true":
                 try:
-                    from services.tf_boost_snapshot_service import init_tf_boost_snapshot
+                    from services.tf_boost_snapshot_service import (
+                        init_tf_boost_daily_jobs,
+                        init_tf_boost_snapshot,
+                    )
 
                     init_tf_boost_snapshot()
+                    # The morning check and the post-close behaviour study ride
+                    # on the same scheduler: a day that is captured should also
+                    # be verified and studied without anyone remembering to.
+                    init_tf_boost_daily_jobs()
                     logger.debug("TF Boost snapshot scheduler initialized")
                 except Exception as e:
                     logger.error(f"Failed to initialize TF Boost snapshot scheduler: {e}")

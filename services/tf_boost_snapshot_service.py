@@ -24,6 +24,9 @@ whether a straight-line climber behaves differently from a chopper.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import threading
 from datetime import datetime
 from typing import Optional
@@ -264,3 +267,120 @@ def init_tf_boost_snapshot():
             "TF Boost snapshot scheduler started (isolated, in-memory jobstore, "
             "every minute 9-15 mon-fri Asia/Kolkata, 09:15-15:30 in-job guard)"
         )
+
+
+def _daily_log_path(now_ist: datetime) -> str:
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    log_dir = os.path.join(base, "log", "tf_boost_daily")
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, f"{now_ist:%Y-%m-%d}.log")
+
+
+def _append(now_ist: datetime, line: str) -> None:
+    """One day, one file, one line per event. A morning that failed has to leave
+    evidence -- the upstream only serves the live list, so a day not recorded is
+    a day that cannot be recovered or even described after the fact."""
+    try:
+        with open(_daily_log_path(now_ist), "a") as fh:
+            fh.write(f"[{now_ist:%H:%M:%S}] {line}\n")
+    except Exception as e:
+        logger.warning(f"tf_boost daily log write failed: {e}")
+
+
+def _run_morning_check():
+    """09:25 IST: is the day actually being recorded? Written down, not guessed."""
+    now_ist = datetime.now(IST)
+    try:
+        from database.tf_boost_db import get_connection as boost_conn
+        from services.tf_jwt_keepalive_service import get_tf_jwt_status
+
+        jwt = get_tf_jwt_status()
+        with boost_conn() as conn:
+            beats, last = conn.execute(
+                "SELECT count(*), max(snapshot_time) FROM tf_boost_heartbeat "
+                "WHERE snapshot_date = ?",
+                [now_ist.date()],
+            ).fetchone()
+            symbols = conn.execute(
+                "SELECT count(DISTINCT symbol) FROM tf_boost_snapshots "
+                "WHERE snapshot_date = ? AND list_type = 'intraday_boost'",
+                [now_ist.date()],
+            ).fetchone()[0]
+
+        healthy = bool(beats) and bool(symbols) and jwt.get("hasToken")
+        _append(
+            now_ist,
+            f"{'OK' if healthy else 'ATTENTION'} morning check -- {beats} beats "
+            f"(last {last}), {symbols} symbols recorded, token "
+            f"{'present' if jwt.get('hasToken') else 'MISSING'}, "
+            f"expires in {(jwt.get('expiresInSeconds') or 0) // 60} min",
+        )
+        if not healthy:
+            logger.error(
+                "TF Boost morning check failed: the day is not being recorded "
+                f"(beats={beats}, symbols={symbols}, token={jwt.get('hasToken')})"
+            )
+    except Exception as e:
+        logger.exception(f"tf_boost morning check failed: {e}")
+        _append(now_ist, f"ATTENTION morning check could not run: {e}")
+
+
+def _run_daily_study():
+    """15:45 IST: the post-close behaviour study, for both entry windows.
+
+    Run as a child process rather than in this thread: it makes a few hundred
+    broker history calls and takes minutes, and none of that belongs inside the
+    scheduler that has to fire on the next minute. Output goes to the day's log
+    file (never a pipe) and each child is waited on, so no descriptor is left
+    behind.
+    """
+    now_ist = datetime.now(IST)
+    day = now_ist.strftime("%Y-%m-%d")
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = os.path.join(base, "scripts", "tf_boost_behaviour.py")
+    _append(now_ist, "behaviour study starting")
+    for window in ("09:45", "10:00"):
+        try:
+            with open(_daily_log_path(now_ist), "a") as out:
+                proc = subprocess.Popen(
+                    [sys.executable, script, day, "--after", window],
+                    cwd=base,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                )
+                code = proc.wait(timeout=900)
+            _append(
+                datetime.now(IST),
+                f"{'OK' if code == 0 else 'ATTENTION'} study for {window} finished (exit {code})",
+            )
+        except Exception as e:
+            logger.exception(f"tf_boost daily study ({window}) failed: {e}")
+            _append(datetime.now(IST), f"ATTENTION study for {window} failed: {e}")
+
+
+def init_tf_boost_daily_jobs():
+    """Attach the morning check and the post-close study to the snapshot
+    scheduler. Same opt-in as the recorder: if the day is being captured, it
+    should also be checked and studied, without anyone remembering to."""
+    if _scheduler is None:
+        logger.warning("tf_boost daily jobs skipped: snapshot scheduler is not running")
+        return
+    _scheduler.add_job(
+        _run_morning_check,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=25, timezone=IST),
+        id="tf_boost_morning_check",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _run_daily_study,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=45, timezone=IST),
+        id="tf_boost_daily_study",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+        replace_existing=True,
+    )
+    logger.info("TF Boost daily jobs scheduled (morning check 09:25, behaviour study 15:45 IST)")
