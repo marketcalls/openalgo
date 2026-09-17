@@ -365,19 +365,40 @@ def get_boost_change_timeline(
     end_date = end_date or start_date
     try:
         with get_connection() as conn:
+            # Rows whose prev_close was later corrected are dropped: change_pct
+            # is computed against that reference, so every earlier value for
+            # that symbol is wrong by the size of the correction. TradeFinder
+            # published COLPAL against 1820.30 until 09:17 and 1860.00 after
+            # (+2.78% became roughly flat), and PAYTM against 1730 until 09:28,
+            # which is past any opening-settle window. Keeping only rows that
+            # agree with the day's final reference price is exact, where a clock
+            # cutoff is a guess.
             rows = conn.execute(
                 """
-                SELECT symbol,
-                       strftime(snapshot_date, '%Y-%m-%d') AS day,
-                       hour(snapshot_time) * 60 + minute(snapshot_time) AS min_of_day,
-                       change_pct
-                FROM tf_boost_snapshots
-                WHERE snapshot_date BETWEEN ? AND ?
-                  AND list_type = ?
-                  AND change_pct IS NOT NULL
-                ORDER BY symbol, snapshot_time
+                WITH settled AS (
+                    SELECT symbol, snapshot_date,
+                           arg_max(prev_close, snapshot_time) AS final_prev_close
+                    FROM tf_boost_snapshots
+                    WHERE snapshot_date BETWEEN ? AND ?
+                      AND list_type = ?
+                      AND prev_close IS NOT NULL
+                    GROUP BY symbol, snapshot_date
+                )
+                SELECT s.symbol,
+                       strftime(s.snapshot_date, '%Y-%m-%d') AS day,
+                       hour(s.snapshot_time) * 60 + minute(s.snapshot_time) AS min_of_day,
+                       s.change_pct
+                FROM tf_boost_snapshots s
+                LEFT JOIN settled f
+                       ON f.symbol = s.symbol AND f.snapshot_date = s.snapshot_date
+                WHERE s.snapshot_date BETWEEN ? AND ?
+                  AND s.list_type = ?
+                  AND s.change_pct IS NOT NULL
+                  AND (f.final_prev_close IS NULL OR s.prev_close IS NULL
+                       OR s.prev_close = f.final_prev_close)
+                ORDER BY s.symbol, s.snapshot_time
                 """,
-                [start_date, end_date, list_type],
+                [start_date, end_date, list_type, start_date, end_date, list_type],
             ).fetchall()
     except Exception as e:
         logger.warning(f"get_boost_change_timeline({start_date}..{end_date}, {list_type}): {e}")
