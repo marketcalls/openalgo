@@ -389,3 +389,95 @@ def get_boost_change_timeline(
             [int(min_of_day), float(change_pct)]
         )
     return timeline
+
+
+def init_behaviour_table() -> None:
+    """One row per symbol per day describing HOW it moved (idempotent).
+
+    Separate from tf_boost_snapshots because it answers a different question:
+    the snapshots are what the list showed minute by minute, this is the
+    post-mortem of a day's move -- where it turned, what it broke to get going,
+    how fast the first one and two percent came, and how much heat came with it.
+    """
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tf_boost_behaviour (
+                day                    DATE NOT NULL,
+                symbol                 VARCHAR NOT NULL,
+                list_type              VARCHAR NOT NULL,
+                first_seen_rank        INTEGER,
+                best_rank              INTEGER,
+                final_rank             INTEGER,
+                rank_at_trigger        INTEGER,
+                gap_pct                DOUBLE,
+                run_direction          VARCHAR,
+                trigger_min            INTEGER,
+                trigger_price          DOUBLE,
+                level_broken           VARCHAR,
+                level_price            DOUBLE,
+                vol_ratio              DOUBLE,
+                above_vwap             BOOLEAN,
+                cpr_bias               VARCHAR,
+                first_candle_range_pct DOUBLE,
+                mins_to_1pct           INTEGER,
+                mins_to_2pct           INTEGER,
+                mfe_pct                DOUBLE,
+                mae_pct                DOUBLE,
+                clean_1pct             BOOLEAN,
+                day_move_pct           DOUBLE,
+                run_move_pct           DOUBLE,
+                run_adverse_pct        DOUBLE,
+                run_efficiency         DOUBLE,
+                notes                  VARCHAR,
+                created_at             TIMESTAMP DEFAULT current_timestamp,
+                PRIMARY KEY (day, symbol, list_type)
+            )
+        """)
+
+
+def upsert_behaviour(rows: list[dict]) -> int:
+    """Replace the day's behaviour rows. Re-runnable: the same day recomputed
+    overwrites rather than duplicating."""
+    if not rows:
+        return 0
+    cols = [
+        "day",
+        "symbol",
+        "list_type",
+        "first_seen_rank",
+        "best_rank",
+        "final_rank",
+        "rank_at_trigger",
+        "gap_pct",
+        "run_direction",
+        "trigger_min",
+        "trigger_price",
+        "level_broken",
+        "level_price",
+        "vol_ratio",
+        "above_vwap",
+        "cpr_bias",
+        "first_candle_range_pct",
+        "mins_to_1pct",
+        "mins_to_2pct",
+        "mfe_pct",
+        "mae_pct",
+        "clean_1pct",
+        "day_move_pct",
+        "run_move_pct",
+        "run_adverse_pct",
+        "run_efficiency",
+        "notes",
+    ]
+    placeholders = ", ".join("?" for _ in cols)
+    with get_connection() as conn:
+        for row in rows:
+            conn.execute(
+                "DELETE FROM tf_boost_behaviour WHERE day = ? AND symbol = ? AND list_type = ?",
+                [row["day"], row["symbol"], row["list_type"]],
+            )
+            conn.execute(
+                f"INSERT INTO tf_boost_behaviour ({', '.join(cols)}) VALUES ({placeholders})",
+                [row.get(c) for c in cols],
+            )
+    return len(rows)
