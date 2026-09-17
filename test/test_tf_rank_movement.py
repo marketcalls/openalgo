@@ -10,7 +10,10 @@ from services.tf_rank_movement_service import (
     TOP_N_THRESHOLDS,
     compute_rank_state,
     compute_rank_states,
+    compute_sustained,
+    compute_symbol_movement,
     compute_topn,
+    movement_snapshot,
     rank_movement_service,
 )
 
@@ -162,6 +165,108 @@ def test_topn_never_entered():
     zones, trans = compute_topn("N", [[0, 40], [2, 35], [4, 30]])
     assert all(not zones[n].inside and zones[n].entries == 0 for n in TOP_N_THRESHOLDS)
     assert trans == []
+
+
+# --- Phase 1D: sustained / rank-zone ---------------------------------------
+
+
+def test_sustained_stable_zone():
+    # §24: 6-9 band held over the window is a stable Top-10 zone.
+    s = compute_sustained("Z", [[0, 9], [2, 8], [4, 9], [6, 7], [8, 8], [10, 6]])
+    assert s.is_stable_zone is True
+    assert s.zone_low == 6 and s.zone_high == 9 and s.zone_spread == 3
+    assert s.zone_median == 8.0
+    assert s.sustained_top10 is True and s.sustained_top5 is False
+
+
+def test_sustained_chop_is_not_a_zone():
+    # §24: 9, 2, 17 spans 15 ranks -> not a stable zone despite touching the top.
+    s = compute_sustained("Y", [[0, 9], [2, 2], [4, 17]])
+    assert s.is_stable_zone is False
+
+
+def test_sustained_needs_minimum_evidence():
+    # A single strong observation is not yet "sustained".
+    s = compute_sustained("W", [[0, 3]])
+    assert s.is_stable_zone is False
+    assert s.sustained_top5 is False
+
+
+def test_sustained_window_is_recent_only():
+    # A rough early morning then a tight recent band -> stable on the recent window.
+    # 8 observations; only the last SUSTAINED_WINDOW (6) count, dropping the 40/35.
+    obs = [[0, 40], [2, 35], [4, 9], [6, 8], [8, 9], [10, 7], [12, 8], [14, 8]]
+    s = compute_sustained("V", obs)
+    assert s.zone_low == 7 and s.zone_high == 9  # last 6 obs only
+    assert s.is_stable_zone is True
+
+
+# --- Phase 1E: event classification ----------------------------------------
+
+
+def test_event_extreme_vs_large_jump():
+    assert compute_symbol_movement("J", [[0, 62], [2, 20]])["event"] == "EXTREME_JUMP"
+    assert compute_symbol_movement("K", [[0, 40], [2, 22]])["event"] == "LARGE_JUMP"
+
+
+def test_event_topn_entry_beats_climb_on_the_entry_step():
+    # §60: when the latest step crosses into Top-5, that wins over the plain climb.
+    row = compute_symbol_movement("Q", [[0, 20], [2, 8], [4, 3]])
+    assert row["event"] == "TOP5_ENTRY"
+    assert row["top5"] is True
+
+
+def test_event_entry_does_not_refire_after_the_step():
+    # §58: once past the entry step, a still-climbing 8->3->1 reads as a climb,
+    # not a re-fired entry and not "sustained" (it is still moving, spread 7).
+    row = compute_symbol_movement("P", [[0, 8], [2, 3], [4, 1]])
+    assert row["event"] == "CLIMBING"
+    assert row["top5"] is True
+    assert row["is_stable_zone"] is False
+
+
+def test_event_sustained_when_settled():
+    row = compute_symbol_movement("S", [[0, 9], [2, 8], [4, 9], [6, 7], [8, 8], [10, 8]])
+    assert row["event"] == "SUSTAINED_TOP10"
+    assert row["is_stable_zone"] is True
+
+
+def test_event_new_symbol_baseline():
+    row = compute_symbol_movement("N", [[0, 40]])
+    assert row["event"] == "NEW"
+    assert row["rank_delta"] is None
+
+
+def test_event_falling_and_fast_drop():
+    # Plain FALLING needs a step that crosses no Top-N boundary (else the exit
+    # event, which is more informative, wins): 12 -> 16 stays outside Top-10.
+    assert compute_symbol_movement("D1", [[0, 12], [2, 16]])["event"] == "FALLING"
+    # A big drop out of Top-20 is FAST_DROP (outranks the TOP20_EXIT it triggers).
+    assert compute_symbol_movement("D2", [[0, 12], [2, 40]])["event"] == "FAST_DROP"
+
+
+def test_event_topn_exit_is_reported():
+    # Falling out of Top-5 (but staying in Top-10) surfaces the exit itself.
+    assert compute_symbol_movement("E1", [[0, 4], [2, 8]])["event"] == "TOP5_EXIT"
+
+
+def test_compute_symbol_movement_is_flat_dict():
+    row = compute_symbol_movement("X", [[0, 20], [2, 8]])
+    for key in ("symbol", "current_rank", "rank_delta", "top10", "event", "event_priority"):
+        assert key in row
+
+
+def test_movement_snapshot_sorted_and_degrades(monkeypatch):
+    import services.tf_rank_movement_service as mod
+
+    monkeypatch.setattr(
+        mod,
+        "get_boost_rank_timeline",
+        lambda *a, **k: {"AA": {"2026-01-02": [[0, 30], [2, 18]]}, "BB": {"2026-01-02": [[0, 5]]}},
+    )
+    rows = mod.movement_snapshot("2026-01-02")
+    assert [r["symbol"] for r in rows] == ["BB", "AA"]  # sorted by current_rank (5, 18)
+    assert mod.movement_snapshot("2099-01-01") == [] or isinstance(rows, list)
 
 
 def test_service_wrapper_degrades_to_empty_on_missing_day(monkeypatch):

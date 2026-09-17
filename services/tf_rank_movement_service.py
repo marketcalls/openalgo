@@ -252,6 +252,190 @@ def compute_topn(
     return zones, transitions
 
 
+# --- Phase 1D: sustained position / rank-zone -------------------------------
+# A rolling window over the most recent observations, so an established strong
+# zone (e.g. 6-9) is told apart from a one-off spike (9, 2, 17). Constants are
+# deliberately plain defaults, not tuned (plan §78) -- refine from live data.
+SUSTAINED_WINDOW = 6  # most-recent observations considered
+SUSTAINED_MIN_OBS = 3  # need at least this many before calling anything sustained
+STABLE_ZONE_MAX_SPREAD = 5  # worst-minus-best within the window to count as a zone
+
+
+@dataclass
+class SustainedState:
+    """Rolling-window view of how settled a symbol's rank is right now."""
+
+    window: int  # observations actually in the window
+    zone_low: int  # best (smallest) rank in the window
+    zone_high: int  # worst (largest) rank in the window
+    zone_spread: int  # zone_high - zone_low
+    zone_median: float
+    is_stable_zone: bool  # enough observations, tight enough spread
+    sustained_top5: bool
+    sustained_top10: bool
+    sustained_top20: bool
+
+
+def _median(values: list[int]) -> float:
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return float(s[mid]) if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def compute_sustained(
+    symbol: str,
+    observations: list[list[int]],
+    window: int = SUSTAINED_WINDOW,
+    max_spread: int = STABLE_ZONE_MAX_SPREAD,
+    thresholds: tuple[int, ...] = TOP_N_THRESHOLDS,
+) -> SustainedState | None:
+    """Pure: fold the last `window` observations into a stability view.
+
+    `is_stable_zone` needs both enough evidence (>= SUSTAINED_MIN_OBS) and a
+    tight spread, so a chop like 9, 2, 17 (spread 15) is never called a zone
+    (plan §24). `sustained_topN` means every observation in the window sat
+    inside Top-N -- an established position, not one tick that touched it."""
+    clean = _clean_observations(observations)
+    if not clean:
+        return None
+    win = [r for _, r in clean[-window:]]
+    low, high = min(win), max(win)
+    spread = high - low
+    # Sustained means SETTLED, not merely "every recent tick happened to be
+    # inside": a symbol still climbing 8 -> 3 -> 1 sits inside Top-10 the whole
+    # way but is not established there. So the flags require the same tight
+    # spread that defines a stable zone (plan §23/§24).
+    stable = len(win) >= SUSTAINED_MIN_OBS and spread <= max_spread
+    return SustainedState(
+        window=len(win),
+        zone_low=low,
+        zone_high=high,
+        zone_spread=spread,
+        zone_median=_median(win),
+        is_stable_zone=stable,
+        sustained_top5=stable and high <= thresholds[0],
+        sustained_top10=stable and high <= thresholds[1],
+        sustained_top20=stable and high <= thresholds[2],
+    )
+
+
+# --- Phase 1E: event classification -----------------------------------------
+# One salient label per symbol for the current step, chosen by priority (plan
+# §59/§60). Jump thresholds act on a single step's rank_delta; fast-climb on the
+# step's velocity. Not tuned -- plain starting points (plan §78).
+RANK_JUMP_LARGE = 15
+RANK_JUMP_EXTREME = 30
+FAST_CLIMB_MIN_VELOCITY = 5.0
+
+# Higher wins when several apply. Exit/drop rank below climbs so a symbol that
+# entered Top-5 on a fast move reads as the entry, not the drop it also had.
+_EVENT_PRIORITY: dict[str, int] = {
+    "EXTREME_JUMP": 100,
+    "LARGE_JUMP": 90,
+    "FAST_CLIMB": 80,
+    "TOP5_ENTRY": 75,
+    "TOP5_RE_ENTRY": 74,
+    "TOP10_ENTRY": 70,
+    "TOP10_RE_ENTRY": 69,
+    "TOP20_ENTRY": 60,
+    "TOP20_RE_ENTRY": 59,
+    "SUSTAINED_TOP5": 55,
+    "SUSTAINED_TOP10": 50,
+    "SUSTAINED_TOP20": 45,
+    "CLIMBING": 30,
+    "FAST_DROP": 25,
+    "TOP5_EXIT": 22,
+    "TOP10_EXIT": 21,
+    "TOP20_EXIT": 20,
+    "FALLING": 15,
+    "NEW": 10,
+    "NORMAL": 0,
+}
+
+
+def classify_event(
+    state: RankState,
+    zones: dict[int, TopNZone],
+    transitions: list[TopNTransition],
+    sustained: SustainedState | None,
+) -> tuple[str, int]:
+    """Pure: pick the single most salient event for the symbol's latest step.
+
+    Only transitions that happened on the latest observed minute count as the
+    current event, so a Top-10 entry ten minutes ago does not keep re-firing
+    (plan §22/§58); its lasting form is SUSTAINED_TOP10 via the window."""
+    candidates: list[str] = []
+
+    for t in transitions:
+        if t.minute == state.last_seen_min:
+            candidates.append(f"TOP{t.threshold}_{t.kind}")
+
+    d = state.rank_delta
+    if d is not None:
+        if d >= RANK_JUMP_EXTREME:
+            candidates.append("EXTREME_JUMP")
+        elif d >= RANK_JUMP_LARGE:
+            candidates.append("LARGE_JUMP")
+        if d <= -RANK_JUMP_LARGE:
+            candidates.append("FAST_DROP")
+        elif d > 0:
+            candidates.append("CLIMBING")
+        elif d < 0:
+            candidates.append("FALLING")
+
+    if state.rank_velocity is not None and state.rank_velocity >= FAST_CLIMB_MIN_VELOCITY:
+        candidates.append("FAST_CLIMB")
+
+    if sustained is not None:
+        if sustained.sustained_top5:
+            candidates.append("SUSTAINED_TOP5")
+        elif sustained.sustained_top10:
+            candidates.append("SUSTAINED_TOP10")
+        elif sustained.sustained_top20:
+            candidates.append("SUSTAINED_TOP20")
+
+    if state.observations == 1:
+        candidates.append("NEW")
+    if not candidates:
+        candidates.append("NORMAL")
+
+    event = max(candidates, key=lambda e: _EVENT_PRIORITY.get(e, 0))
+    return event, _EVENT_PRIORITY.get(event, 0)
+
+
+def compute_symbol_movement(symbol: str, observations: list[list[int]]) -> dict | None:
+    """Pure: the full current-day picture for one symbol as a flat dict — the
+    RankUIModel the API and frontend consume (plan §49/§92). None if unusable."""
+    state = compute_rank_state(symbol, observations)
+    if state is None:
+        return None
+    zones, transitions = compute_topn(symbol, observations)
+    sustained = compute_sustained(symbol, observations)
+    event, priority = classify_event(state, zones, transitions, sustained)
+    out = state.to_dict()
+    out.update(
+        {
+            "top5": zones[5].inside,
+            "top10": zones[10].inside,
+            "top20": zones[20].inside,
+            "top5_entries": zones[5].entries,
+            "top10_entries": zones[10].entries,
+            "top20_entries": zones[20].entries,
+            "sustained_top5": bool(sustained and sustained.sustained_top5),
+            "sustained_top10": bool(sustained and sustained.sustained_top10),
+            "sustained_top20": bool(sustained and sustained.sustained_top20),
+            "zone_low": sustained.zone_low if sustained else None,
+            "zone_high": sustained.zone_high if sustained else None,
+            "zone_median": sustained.zone_median if sustained else None,
+            "is_stable_zone": bool(sustained and sustained.is_stable_zone),
+            "event": event,
+            "event_priority": priority,
+        }
+    )
+    return out
+
+
 def compute_rank_states(timeline: dict[str, list[list[int]]]) -> dict[str, RankState]:
     """Pure: {symbol: [[minute, rank], ...]} -> {symbol: RankState}."""
     out: dict[str, RankState] = {}
@@ -260,6 +444,22 @@ def compute_rank_states(timeline: dict[str, list[list[int]]]) -> dict[str, RankS
         if state is not None:
             out[symbol] = state
     return out
+
+
+def movement_snapshot(date: str = "", list_type: str = "intraday_boost") -> list[dict]:
+    """I/O: the day's full per-symbol movement, newest rank first, for the API.
+
+    Reconstructed from the isolated DuckDB; degrades to [] on any read failure,
+    like the other query services here."""
+    day = date or datetime.now().strftime("%Y-%m-%d")
+    per_symbol_days = get_boost_rank_timeline(day, day, list_type)
+    rows: list[dict] = []
+    for sym, days in per_symbol_days.items():
+        row = compute_symbol_movement(sym, days.get(day, []))
+        if row is not None:
+            rows.append(row)
+    rows.sort(key=lambda r: r["current_rank"])
+    return rows
 
 
 def rank_movement_service(
@@ -350,6 +550,29 @@ def _demo() -> None:
     vanish = compute_topn("L", [[0, 20], [2, 8]])
     assert vanish[0][10].inside is True
     assert not any(t.kind == "EXIT" for t in vanish[1])
+
+    # §24 sustained zone 6-9 is stable; chop 9,2,17 is not.
+    zone = compute_sustained("Z", [[0, 9], [2, 8], [4, 9], [6, 7], [8, 8], [10, 6]])
+    assert zone.is_stable_zone and zone.zone_low == 6 and zone.zone_high == 9
+    assert zone.zone_spread == 3 and zone.sustained_top10 and not zone.sustained_top5
+    chop = compute_sustained("Y", [[0, 9], [2, 2], [4, 17]])
+    assert not chop.is_stable_zone  # spread 15
+
+    # §58 an entry only fires on the step it happens: the full 62->1 climb's
+    # latest step is 3->1 (a climb), not the earlier Top-5 entry at 8->3.
+    ev = compute_symbol_movement("P", climb)
+    assert ev["event"] == "CLIMBING" and ev["top5"] is True and ev["current_rank"] == 1
+
+    # §60 event priority: when the latest step IS the Top-5 entry, it wins the climb.
+    entry = compute_symbol_movement("Q", [[0, 20], [2, 8], [4, 3]])
+    assert entry["event"] == "TOP5_ENTRY" and entry["top5"] is True
+
+    # A single-step 62 -> 20 is a 42-rank delta: extreme jump outranks all else.
+    jump = compute_symbol_movement("J", [[0, 62], [2, 20]])
+    assert jump["event"] == "EXTREME_JUMP" and jump["rank_delta"] == 42
+    # A milder 40 -> 22 (delta 18) is a large, not extreme, jump.
+    mild = compute_symbol_movement("J2", [[0, 40], [2, 22]])
+    assert mild["event"] == "LARGE_JUMP"
 
     print("tf_rank_movement _demo: all assertions passed")
 
