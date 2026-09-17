@@ -275,3 +275,43 @@ def test_service_wrapper_degrades_to_empty_on_missing_day(monkeypatch):
 
     monkeypatch.setattr(mod, "get_boost_rank_timeline", lambda *a, **k: {})
     assert rank_movement_service("1999-01-01") == {}
+
+
+# --- Phase 1J: the remaining sequences the plan names (§75) -------------------
+
+
+def test_oscillation_inside_top10_is_one_entry():
+    # §75: 12 -> 9 -> 8 -> 9 -> 7. One Top-10 entry, no re-entry, and the dip
+    # to 9 must not read as leaving the zone.
+    obs = [[0, 12], [2, 9], [4, 8], [6, 9], [8, 7]]
+    _zones, transitions = compute_topn("OSC", obs)
+    entries = [x for x in transitions if x.threshold == 10 and x.kind == "ENTRY"]
+    assert len(entries) == 1 and entries[0].minute == 2
+    assert not [x for x in transitions if x.threshold == 10 and x.kind in ("EXIT", "RE_ENTRY")]
+
+
+def test_exit_then_return_is_a_re_entry():
+    # §75/§25: 9 -> 12 -> 9 leaves the Top-10 and comes back.
+    _zones, transitions = compute_topn("RE", [[0, 9], [2, 12], [4, 9]])
+    kinds = [(x.kind, x.minute) for x in transitions if x.threshold == 10]
+    assert kinds == [("ENTRY", 0), ("EXIT", 2), ("RE_ENTRY", 4)]
+
+
+def test_cumulative_universe_of_140_plus_symbols():
+    # §81: the day's universe is cumulative and far wider than one list, so the
+    # engine must handle every symbol seen today, not only those ranked now.
+    timeline = {f"SYM{i:03d}": [[0, 200 - i], [2, 199 - i], [4, 150 - i]] for i in range(160)}
+    states = compute_rank_states(timeline)
+    assert len(states) == 160
+    assert all(s.rank_delta == 49 for s in states.values())  # each improved 49 on the last step
+
+
+def test_new_day_reset_reads_only_that_day(monkeypatch):
+    # §39/§13: yesterday's path must not leak into today's state.
+    import services.tf_rank_movement_service as mod
+
+    timeline = {"AA": {"2026-01-01": [[0, 3], [2, 1]], "2026-01-02": [[0, 40], [2, 38]]}}
+    monkeypatch.setattr(mod, "get_boost_rank_timeline", lambda *a, **k: timeline)
+    rows = mod.movement_snapshot("2026-01-02")
+    assert rows[0]["first_seen_rank"] == 40 and rows[0]["current_rank"] == 38
+    assert rows[0]["best_rank"] == 38  # not yesterday's 1
