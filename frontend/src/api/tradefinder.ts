@@ -91,6 +91,42 @@ export interface BoostSnapshotsResponse {
   message?: string
 }
 
+/** One symbol's current-day rank-movement state, from the backend engine
+ * (/boostmovement). Mirrors services/tf_rank_movement_service.compute_symbol_movement. */
+export interface BoostMovementRow {
+  symbol: string
+  observations: number
+  current_rank: number
+  previous_rank: number | null
+  first_seen_rank: number
+  best_rank: number
+  worst_rank: number
+  rank_delta: number | null
+  rank_change_since_first_seen: number
+  rank_velocity: number | null
+  rank_acceleration: number | null
+  top5: boolean
+  top10: boolean
+  top20: boolean
+  top10_entries: number
+  sustained_top5: boolean
+  sustained_top10: boolean
+  sustained_top20: boolean
+  zone_low: number | null
+  zone_high: number | null
+  is_stable_zone: boolean
+  event: string
+  event_priority: number
+}
+
+export interface BoostMovementResponse {
+  status: 'success' | 'error'
+  list_type?: string
+  count?: number
+  symbols?: BoostMovementRow[]
+  message?: string
+}
+
 export const tradefinderApi = {
   getMarketPulse: async (apiKey: string): Promise<MarketPulseResponse> => {
     const response = await apiClient.post<MarketPulseResponse>('/tfmarketpulse', {
@@ -133,6 +169,19 @@ export const tradefinderApi = {
       list_type: listType,
       includeRanks: true,
       includePrices: opts.includePrices ?? false,
+    })
+    return response.data
+  },
+
+  /** Current-day rank-movement rows (delta, velocity, Top-N, sustained, event),
+   * reconstructed server-side from the snapshot history -- no upstream fetch. */
+  getBoostMovement: async (
+    apiKey: string,
+    listType: string = 'intraday_boost'
+  ): Promise<BoostMovementResponse> => {
+    const response = await apiClient.post<BoostMovementResponse>('/boostmovement', {
+      apikey: apiKey,
+      list_type: listType,
     })
     return response.data
   },

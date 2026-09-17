@@ -33,6 +33,7 @@ import {
   type BoostSnapshotsResponse,
   type JwtHealthResponse,
   type MarketPulseData,
+  type BoostMovementRow,
   type RankTimelinePoint,
   type SectorScopeData,
   type SectorStockItem,
@@ -501,6 +502,44 @@ function MomentumBadge({
   )
 }
 
+/** Salient backend rank-movement events worth a compact badge next to the
+ * symbol. CLIMBING/FALLING/NEW/NORMAL are omitted -- the rank-delta arrow
+ * already covers small moves, so only the strong events get a chip. */
+const MOVEMENT_BADGE: Record<string, { text: string; className: string }> = {
+  EXTREME_JUMP: { text: 'JUMP', className: 'text-amber-500' },
+  LARGE_JUMP: { text: 'JUMP', className: 'text-amber-400' },
+  FAST_CLIMB: { text: 'FAST', className: 'text-emerald-500' },
+  TOP5_ENTRY: { text: '→T5', className: 'text-emerald-500' },
+  TOP10_ENTRY: { text: '→T10', className: 'text-emerald-500' },
+  TOP20_ENTRY: { text: '→T20', className: 'text-emerald-400' },
+  TOP5_RE_ENTRY: { text: '↻T5', className: 'text-emerald-500' },
+  TOP10_RE_ENTRY: { text: '↻T10', className: 'text-emerald-500' },
+  TOP20_RE_ENTRY: { text: '↻T20', className: 'text-emerald-400' },
+  SUSTAINED_TOP5: { text: '◆T5', className: 'text-sky-400' },
+  SUSTAINED_TOP10: { text: '◆T10', className: 'text-sky-400' },
+  SUSTAINED_TOP20: { text: '◆T20', className: 'text-sky-500' },
+  TOP5_EXIT: { text: 'T5×', className: 'text-red-500' },
+  TOP10_EXIT: { text: 'T10×', className: 'text-red-500' },
+  TOP20_EXIT: { text: 'T20×', className: 'text-red-500' },
+  FAST_DROP: { text: 'DROP', className: 'text-red-500' },
+}
+
+function MovementBadge({ mv }: { mv: BoostMovementRow }) {
+  const badge = MOVEMENT_BADGE[mv.event]
+  if (!badge) return null
+  const vel = mv.rank_velocity != null ? ` · ${mv.rank_velocity.toFixed(1)}/min` : ''
+  const zone =
+    mv.is_stable_zone && mv.zone_low != null ? ` · zone ${mv.zone_low}-${mv.zone_high}` : ''
+  return (
+    <span
+      title={`${mv.event.replace(/_/g, ' ')} · ${mv.first_seen_rank}→${mv.current_rank}${vel}${zone}`}
+      className={cn('shrink-0 text-[10px] font-bold tabular-nums', badge.className)}
+    >
+      {badge.text}
+    </span>
+  )
+}
+
 /** One row: a label and a Switch, the same shape WatchlistPanel already uses
  * for its column toggles. Kept generic so both top-level features and the
  * nested column checkboxes render identically. */
@@ -901,6 +940,10 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
    * too, rather than accumulating forever. */
   const [climbFlags, setClimbFlags] = useState<Map<string, string>>(new Map())
   const [breakoutFlags, setBreakoutFlags] = useState<Map<string, string>>(new Map())
+  /** symbol -> current-day backend rank-movement row, for the active list.
+   * Polled from /boostmovement (reconstructed from the server's snapshots, no
+   * upstream fetch); empty on an older backend so rows just render no badge. */
+  const [movement, setMovement] = useState<Map<string, BoostMovementRow>>(new Map())
   /** Symbols already toasted today for each detector -- same dedup shape as
    * alertedSymbolsRef, but never cleared mid-session (unlike scoreCrossAlert,
    * a climb/breakout is a one-time event for the day, not a level that can
@@ -1056,6 +1099,38 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [apiKey, attempt, features.pollIntervalMs])
+
+  /* ── rank-movement: current-day engine state for the active boost list.
+     Polled every 60s (the snapshots are 1-minute, so faster buys nothing) and
+     only for the ranked lists, not Sectors. Degrades to an empty map. ── */
+  useEffect(() => {
+    if (view === 'sectors') {
+      setMovement(new Map())
+      return
+    }
+    let alive = true
+    const load = async () => {
+      if (!alive || document.hidden) return
+      try {
+        const res = await tradefinderApi.getBoostMovement(apiKey, view)
+        if (!alive) return
+        setMovement(
+          res.status === 'success' && res.symbols
+            ? new Map(res.symbols.map((r) => [r.symbol, r]))
+            : new Map()
+        )
+      } catch {
+        // Older backend without the endpoint: no badges, panel unaffected.
+        if (alive) setMovement(new Map())
+      }
+    }
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [apiKey, view])
 
   /* ── sector_scope: only fetched while that view is actually selected ── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a deliberate re-run trigger, not a value this effect reads; the refresh button bumps it to refetch without changing the contract
@@ -1520,6 +1595,9 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
                     <span className="flex min-w-0 items-center gap-1 truncate">
                       {features.columns.cpr && <CprDot item={item} />}
                       <span className="truncate">{item.symbol}</span>
+                      {movement.has(item.symbol) && (
+                        <MovementBadge mv={movement.get(item.symbol)!} />
+                      )}
                       {climbFlags.has(`${view}:${item.symbol}`) && (
                         <MomentumBadge
                           kind="climb"
