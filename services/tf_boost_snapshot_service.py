@@ -4,19 +4,16 @@ TF Boost Snapshot Scheduler — fully isolated APScheduler instance, in-memory
 jobstore only. Does not touch flow_scheduler / historify_scheduler infra or
 openalgo.db. Opt-in only (see TF_BOOST_SNAPSHOT_ENABLED gate in app.py).
 
-Every 2 minutes on the 09:15-anchored grid (09:15, 09:17, ... 15:29) IST on
-weekdays, snapshots TradeFinder's three market_pulse ranked lists, plus the
-sector rfactor index (as list_type "sector_index", same table), into
-db/tf_boost_snapshots.duckdb for the current-day rank-movement engine.
+Every minute during 09:15-15:30 IST on weekdays, snapshots TradeFinder's
+three market_pulse ranked lists, plus the sector rfactor index (as list_type
+"sector_index", same table), into db/tf_boost_snapshots.duckdb for later
+backtest replay.
 
-Why 2 minutes rather than five: the interesting thing a ranked list does is
-the transition, and five minutes is wide enough to hide one whole. Measured on
-16-Sep-2026, PATANJALI was rank 62 at 09:15 and rank 1 at 10:15 with nothing in
-between, so the hour in which it became the day's strongest stock is simply not
-in the record. A study cannot find an entry inside a gap. Two minutes keeps the
-grid fine enough to catch a transition while halving the old 1-minute upstream
-fetch and DB write load. Rows written on the earlier 1-minute beat remain a
-superset of this grid on the minutes they overlap.
+Why every minute rather than every five: the interesting thing a ranked list
+does is the transition, and five minutes is wide enough to hide one whole.
+Measured on 16-Sep-2026, PATANJALI was rank 62 at 09:15 and rank 1 at 10:15
+with nothing in between, so the hour in which it became the day's strongest
+stock is simply not in the record. A study cannot find an entry inside a gap.
 
 The intraday_boost rows also carry the enrichments the live /tfmarketpulse
 endpoint computes and discards - Kaufman steadiness, CPR width and bias, the
@@ -61,7 +58,7 @@ def _enrich_boost_items(items: list[dict]) -> None:
     carries exactly what the panel displayed at that minute. Each `ensure_`
     call is non-blocking and self-throttling - CPR and the first candle are
     once per symbol per day, steadiness once per symbol per five minutes - so
-    calling them on a 2-minute beat costs a dictionary lookup on most ticks.
+    calling them on a one-minute beat costs a dictionary lookup on most ticks.
 
     Never raises: enrichment is a bonus on top of the rank and the price, and a
     broker that will not answer must not cost the tick its snapshot.
@@ -249,13 +246,7 @@ def init_tf_boost_snapshot():
         _scheduler = BackgroundScheduler(timezone=IST)
         _scheduler.add_job(
             _run_snapshot_tick,
-            # Every 2 minutes on the 09:15-anchored grid (09:15, 09:17, 09:19, ...
-            # 15:29). Each +2 step from the odd minute :15 stays odd, so the whole
-            # grid is exactly the odd clock minutes -- "1-59/2" fires on it and
-            # halves the upstream fetch and DB write rate versus the old 1-minute
-            # beat. The 09:15-15:30 in-job guard trims the pre-open/post-close odd
-            # minutes the cron would otherwise catch inside hours 9 and 15.
-            trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="1-59/2", timezone=IST),
+            trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*", timezone=IST),
             id=TF_SNAPSHOT_JOB_ID,
             max_instances=1,
             coalesce=True,
@@ -264,6 +255,5 @@ def init_tf_boost_snapshot():
         _scheduler.start()
         logger.info(
             "TF Boost snapshot scheduler started (isolated, in-memory jobstore, "
-            "every 2 minutes on the 09:15-anchored odd-minute grid, 9-15 mon-fri "
-            "Asia/Kolkata, 09:15-15:30 in-job guard)"
+            "every minute 9-15 mon-fri Asia/Kolkata, 09:15-15:30 in-job guard)"
         )
