@@ -38,12 +38,7 @@ from database.tf_boost_db import (  # noqa: E402
     get_boost_rank_timeline,
 )
 from services.history_service import get_history  # noqa: E402
-from services.tf_rank_movement_service import (  # noqa: E402
-    RUN_LEADER_RANK,
-    RUN_MIN_CLIMB,
-    compute_rank_state,
-    compute_run,
-)
+from services.tf_rank_movement_service import compute_symbol_movement  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 EXPIRY = os.getenv("TF_AUDIT_EXPIRY", "29SEP26")
@@ -57,24 +52,26 @@ MORNING_CUTOFF_MIN = 10 * 60
 
 
 def first_badge(symbol, changes, ranks):
-    """The first minute the badge would have shown, using only data up to it."""
+    """The first minute the panel would actually show RUN, using only data up
+    to that minute.
+
+    Asks the engine rather than reimplementing its rule. An earlier version of
+    this script duplicated the logic and drifted: it counted 12 symbols as RUN
+    badges that the engine labels LARGE_JUMP or EXTREME_JUMP, because those
+    outrank a clean run and take the label. The panel never showed RUN for them,
+    so auditing them as RUN badges described a screen nobody saw.
+    """
     for i in range(10, len(changes)):
         upto = changes[i][0]
-        run = compute_run(changes[: i + 1])
-        if not run or not run.is_clean or run.direction is None:
-            continue
-        state = compute_rank_state(symbol, [p for p in ranks if p[0] <= upto])
-        if not state:
-            continue
-        rated = (
-            state.current_rank <= RUN_LEADER_RANK
-            or (state.first_seen_rank - state.current_rank) >= RUN_MIN_CLIMB
+        row = compute_symbol_movement(
+            symbol,
+            [p for p in ranks if p[0] <= upto],
+            upto,
+            changes[: i + 1],
         )
-        improving = state.rank_change_since_first_seen >= 0
-        agrees = improving if run.direction == "up" else not improving
-        if rated and agrees:
-            return upto, run, state, changes[i][1]
-    return None, None, None, None
+        if row and row["event"] in ("CLEAN_RUN_UP", "CLEAN_RUN_DOWN"):
+            return upto, row, changes[i][1]
+    return None, None, None
 
 
 def atm_contract(symbol, price, side):
@@ -232,7 +229,7 @@ def main() -> None:
         cps, rps = changes[symbol].get(day, []), ranks.get(symbol, {}).get(day, [])
         if len(cps) < 12 or not rps:
             continue
-        badge_min, run, state, day_change = first_badge(symbol, cps, rps)
+        badge_min, row, day_change = first_badge(symbol, cps, rps)
         if badge_min is None:
             continue
 
@@ -240,13 +237,13 @@ def main() -> None:
         if not stock_bars:
             problems.append(f"{symbol}: no stock candles")
             continue
-        stock = outcome(stock_bars, badge_min, run.direction)
+        stock = outcome(stock_bars, badge_min, row["run_direction"])
         if not stock:
             problems.append(f"{symbol}: no stock bar at the badge minute")
             continue
 
         # CHECK 1: the option side must match the badge direction.
-        side = "CE" if run.direction == "up" else "PE"
+        side = "CE" if row["run_direction"] == "up" else "PE"
         contract = atm_contract(ALIASES.get(symbol, symbol), stock["entry"], side)
         option = None
         if contract is None:
@@ -265,11 +262,11 @@ def main() -> None:
             {
                 "symbol": symbol,
                 "badge_min": badge_min,
-                "direction": run.direction,
+                "direction": row["run_direction"],
                 "side": side,
-                "rank": state.current_rank,
-                "eff": run.efficiency,
-                "travel": run.move_pct,
+                "rank": row["current_rank"],
+                "eff": row["run_efficiency"],
+                "travel": row["run_move_pct"],
                 "day_change": round(day_change, 2),
                 "stock": stock,
                 "option": option,
