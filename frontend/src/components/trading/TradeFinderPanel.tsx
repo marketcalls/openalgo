@@ -30,10 +30,10 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
+  type BoostMovementRow,
   type BoostSnapshotsResponse,
   type JwtHealthResponse,
   type MarketPulseData,
-  type BoostMovementRow,
   type RankTimelinePoint,
   type SectorScopeData,
   type SectorStockItem,
@@ -140,6 +140,10 @@ interface Features {
   cleanClimbAlert: boolean
   /** A stock that consolidated in a tight range then broke above it. */
   baseBreakoutAlert: boolean
+  /** Toast the strongest NEW backend rank-movement events (Top-10 entry or
+   * better: jumps, fast climbs, Top-5). The badges render regardless; this
+   * only decides whether a new one also interrupts. */
+  movementAlerts: boolean
   /** null = off (show the full list). Otherwise narrows the active ranked
    * list to its N highest directional_score rows -- "identify the
    * directional stock" without scanning past the choppy ones by eye. */
@@ -170,6 +174,7 @@ const DEFAULT_FEATURES: Features = {
   sectorRankTimeline: false,
   cleanClimbAlert: false,
   baseBreakoutAlert: false,
+  movementAlerts: false,
   topN: null,
 }
 
@@ -484,13 +489,7 @@ function CprDot({ item }: { item: TfListItem }) {
  * unlike the toasts, this stays visible for as long as the condition holds
  * this session, so scanning the list finds it without having caught the
  * popup. `detail` carries the specific numbers into the tooltip. */
-function MomentumBadge({
-  kind,
-  detail,
-}: {
-  kind: 'climb' | 'breakout'
-  detail: string
-}) {
+function MomentumBadge({ kind, detail }: { kind: 'climb' | 'breakout'; detail: string }) {
   const Icon = kind === 'climb' ? TrendingUp : ArrowUp
   return (
     <span title={detail} className="inline-flex shrink-0">
@@ -523,6 +522,13 @@ const MOVEMENT_BADGE: Record<string, { text: string; className: string }> = {
   TOP20_EXIT: { text: 'T20×', className: 'text-red-500' },
   FAST_DROP: { text: 'DROP', className: 'text-red-500' },
 }
+
+/** Only the strongest events raise a toast when `movementAlerts` is on --
+ * Top-10 entry/re-entry and above (jumps, fast climb, Top-5). Sustained and
+ * Top-20 stay visual-only; they are a state, not a moment. */
+const MOVEMENT_ALERT_MIN_PRIORITY = 68
+/** A symbol flickering around a threshold must not re-toast for a while. */
+const MOVEMENT_ALERT_COOLDOWN_MS = 5 * 60_000
 
 function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   const badge = MOVEMENT_BADGE[mv.event]
@@ -759,6 +765,15 @@ function FeatureSettings({
       <span className="block pb-1 text-[10px] text-muted-foreground">
         Flags a stock that consolidated in a tight range, then broke above it. Both badges refresh
         every 5 min, matching the snapshot cadence.
+      </span>
+      <FeatureRow
+        label="Rank movement alerts"
+        checked={features.movementAlerts}
+        onChange={(v) => set('movementAlerts', v)}
+      />
+      <span className="block pb-1 text-[10px] text-muted-foreground">
+        Toasts a new Top-10 entry, fast climb or rank jump on the active list. The badges show
+        either way.
       </span>
       <label className="flex flex-col gap-0.5 py-1 text-[12px]">
         <span className="text-foreground">Columns</span>
@@ -1131,6 +1146,50 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
       clearInterval(timer)
     }
   }, [apiKey, view])
+
+  /* ── rank-movement alerts: toast a NEW salient backend event. The first
+     populated poll only sets a baseline (otherwise every event already in
+     progress toasts at once on load), and the toggle-off path keeps that
+     baseline current so switching it on later never dumps a backlog. ── */
+  const movementAlertedRef = useRef<Map<string, string>>(new Map())
+  const movementCooldownRef = useRef<Map<string, number>>(new Map())
+  const movementAlertInitRef = useRef(false)
+  useEffect(() => {
+    if (movement.size === 0) return
+    const baseline = () => {
+      for (const [sym, mv] of movement) movementAlertedRef.current.set(sym, mv.event)
+    }
+    if (!movementAlertInitRef.current) {
+      movementAlertInitRef.current = true
+      baseline()
+      return
+    }
+    if (!featuresRef.current.movementAlerts) {
+      baseline()
+      return
+    }
+    const now = Date.now()
+    const fresh: string[] = []
+    for (const [sym, mv] of movement) {
+      if (mv.event_priority < MOVEMENT_ALERT_MIN_PRIORITY) continue
+      if (movementAlertedRef.current.get(sym) === mv.event) continue
+      movementAlertedRef.current.set(sym, mv.event)
+      const last = movementCooldownRef.current.get(sym) ?? 0
+      if (now - last < MOVEMENT_ALERT_COOLDOWN_MS) continue
+      movementCooldownRef.current.set(sym, now)
+      fresh.push(sym)
+    }
+    // Forget symbols that left the list so they can alert again on re-entry.
+    for (const sym of [...movementAlertedRef.current.keys()]) {
+      if (!movement.has(sym)) movementAlertedRef.current.delete(sym)
+    }
+    if (fresh.length === 0) return
+    const summary = fresh
+      .slice(0, 4)
+      .map((s) => `${s} ${movement.get(s)!.event.replace(/_/g, ' ').toLowerCase()}`)
+      .join(', ')
+    showToast.info(`Rank movers: ${summary}`)
+  }, [movement])
 
   /* ── sector_scope: only fetched while that view is actually selected ── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a deliberate re-run trigger, not a value this effect reads; the refresh button bumps it to refetch without changing the contract
@@ -1738,11 +1797,7 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
                   ) : (
                     <span />
                   )}
-                  {features.columns.directional ? (
-                    <DirectionalScoreCell item={item} />
-                  ) : (
-                    <span />
-                  )}
+                  {features.columns.directional ? <DirectionalScoreCell item={item} /> : <span />}
                 </button>
               ))
             )}
