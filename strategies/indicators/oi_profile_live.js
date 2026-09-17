@@ -234,6 +234,10 @@ export default function ({ registerIndicator, nulls }) {
         hasChange: false,
         maxPain: null,
         marketOpen: true,
+        // Set from the backend: some legs' previous-session OI is still being
+        // fetched, so the change columns are incomplete and the next beat
+        // should come soon rather than in three minutes.
+        changePending: false,
       }
 
       // Where every bar lands this frame. draw() paints from it and hitTest()
@@ -667,6 +671,11 @@ export default function ({ registerIndicator, nulls }) {
           const changeBody = await request(true)
           if (!changeBody) return
           applyChain(changeBody, state.mode === 'oi' ? 'oi' : 'change', true)
+          // An underlying nobody has looked at today has no previous-session
+          // OI cached for its legs. The backend fetches those in the
+          // background rather than holding the request, so the change columns
+          // arrive over the next few beats instead of all at once.
+          state.changePending = changeBody.oi_change_pending === true
         } catch {
           // A failed poll is not worth tearing the indicator down for.
         }
@@ -676,12 +685,17 @@ export default function ({ registerIndicator, nulls }) {
       // interval: a slow response cannot stack requests on top of itself.
       const beatSeconds = () => Math.max(60, Number(ctx.settings().refreshSeconds) || 180)
 
+      // While the backend is still filling in anchors, come back far sooner
+      // than the normal beat - the columns are visibly incomplete until then.
+      const PENDING_BEAT_SECONDS = 15
+
       const scheduleNext = (seconds) => {
         if (cancelled) return
         if (timer) clearTimeout(timer)
         // Up to 10s of jitter, so every chart open on this underlying does not
         // ask at the same instant.
-        timer = setTimeout(beat, (seconds ?? beatSeconds()) * 1000 + Math.random() * 10000)
+        const secs = seconds ?? (state.changePending ? PENDING_BEAT_SECONDS : beatSeconds())
+        timer = setTimeout(beat, secs * 1000 + Math.random() * 10000)
       }
 
       // A closed market cannot move, so the beat stretches rather than stops.
@@ -693,6 +707,8 @@ export default function ({ registerIndicator, nulls }) {
       const beat = async () => {
         // Nothing on screen to update: skip the fetch and come back later.
         if (!document.hidden) await fetchChain()
+        // A pending anchor pass outranks the closed-market stretch only while
+        // the market is open; a closed market has nothing left to fill.
         scheduleNext(state.marketOpen ? undefined : CLOSED_BEAT_SECONDS)
       }
 
@@ -710,6 +726,7 @@ export default function ({ registerIndicator, nulls }) {
         // than leave the previous underlying's bars up while the new one loads.
         state.chain = null
         state.maxPain = null
+        state.changePending = false
         ctx.requestRecompute()
         fetchChain(true).finally(() => scheduleNext())
       }, SETTINGS_POLL_MS)

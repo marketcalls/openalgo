@@ -37,6 +37,9 @@ export interface OIProfileDataResponse {
   strike_count?: number
   /** Whether the options exchange is in session. A closed market cannot move. */
   market_open?: boolean
+  /** Some legs' previous-session OI is still being fetched in the background,
+   *  so the change columns are incomplete. Ask again shortly. */
+  oi_change_pending?: boolean
 }
 
 export interface IntervalsResponse {

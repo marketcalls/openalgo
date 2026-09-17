@@ -1102,6 +1102,23 @@ def _restore_caches_background():
         except Exception as e:
             logger.debug(f"Cache restoration skipped: {e}")
 
+        try:
+            from services.nse_oi_bhavcopy import previous_session_oi
+
+            # NSE's daily F&O file carries the previous session's open interest
+            # for every contract in the market - the anchor "Change in OI" is
+            # measured from. One ~1MB download, under a second, and it answers
+            # every underlying at once, so the first chart of the day draws its
+            # change columns immediately rather than falling back to the path
+            # that asks the broker for a history call per option leg.
+            #
+            # Here rather than at first use because this thread already waits
+            # for the database and holds an app context, which the market
+            # calendar needs to work out which session to anchor on.
+            previous_session_oi("NFO")
+        except Exception as e:
+            logger.debug(f"NSE open interest warm-up skipped: {e}")
+
 
 threading.Thread(target=_restore_caches_background, daemon=True).start()
 

@@ -8,8 +8,15 @@ import services.oi_profile_service as svc
 
 
 @pytest.fixture(autouse=True)
-def _clear_profile_cache():
-    """Answers are shared for a TTL, so each test starts from an empty cache."""
+def _clear_profile_cache(monkeypatch):
+    """Answers are shared for a TTL, so each test starts from an empty cache.
+
+    NSE's bhavcopy is switched off by default too: it is a real download, and
+    these tests are about the per-leg fallback. The tests that are about the
+    file switch it back on with one built in the test.
+    """
+    monkeypatch.setattr(svc, "_nse_previous_session_oi", lambda exchange: None)
+    monkeypatch.setattr(svc, "_nse_cached_book", lambda exchange: None)
     svc._profile_cache.clear()
     yield
     svc._profile_cache.clear()
@@ -35,6 +42,20 @@ def _chain(expiry, ce_oi, pe_oi):
     )
 
 
+def _anchored(legs, exchange="NFO"):
+    """What the anchor pass ends up knowing for `legs`, warm pass included.
+
+    The pass itself no longer fetches inline - it hands the legs to a worker -
+    so a test about what it *learns* has to let that worker finish.
+    """
+    svc._prev_oi_cache.clear()
+    svc._fetch_prev_session_oi(legs, exchange, "k")
+    svc._anchor_executor.submit(lambda: None).result(timeout=30)
+    known, pending = svc._fetch_prev_session_oi(legs, exchange, "k")
+    assert pending is False, "every leg should have a final answer by now"
+    return known
+
+
 def test_two_expiries_sum_oi_and_change(monkeypatch):
     chains = {"09OCT25": _chain("09OCT25", 100, 40), "30OCT25": _chain("30OCT25", 250, 60)}
     monkeypatch.setattr(
@@ -47,7 +68,10 @@ def test_two_expiries_sum_oi_and_change(monkeypatch):
     monkeypatch.setattr(
         svc,
         "_fetch_prev_session_oi",
-        lambda symbols, ex, key, interval=None: {s["symbol"]: s["oi"] / 2 for s in symbols},
+        lambda symbols, ex, key, interval=None: (
+            {s["symbol"]: s["oi"] / 2 for s in symbols},
+            False,
+        ),
     )
 
     ok, resp, code = svc.get_oi_profile_data(
@@ -71,7 +95,9 @@ def test_two_expiries_sum_oi_and_change(monkeypatch):
 def test_single_expiry_still_works(monkeypatch):
     monkeypatch.setattr(svc, "get_option_chain", lambda **k: _chain("09OCT25", 100, 40))
     monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
-    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(
+        svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: ({}, False)
+    )
 
     ok, resp, _ = svc.get_oi_profile_data(
         underlying="NIFTY",
@@ -117,7 +143,9 @@ def test_a_repeat_request_is_served_from_the_cache(monkeypatch):
 
     monkeypatch.setattr(svc, "get_option_chain", _chain_once)
     monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
-    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(
+        svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: ({}, False)
+    )
 
     args = {
         "underlying": "NIFTY",
@@ -138,7 +166,9 @@ def test_a_repeat_request_is_served_from_the_cache(monkeypatch):
 
 def test_include_candles_false_skips_the_futures_lookup(monkeypatch):
     monkeypatch.setattr(svc, "get_option_chain", lambda **k: _chain("09OCT25", 100, 40))
-    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(
+        svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: ({}, False)
+    )
 
     def _boom(*a, **k):
         raise AssertionError("futures must not be looked up")
@@ -207,7 +237,9 @@ def test_strike_count_reaches_the_chain_and_keys_the_cache(monkeypatch):
 
     monkeypatch.setattr(svc, "get_option_chain", _chain_spy)
     monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
-    monkeypatch.setattr(svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: {})
+    monkeypatch.setattr(
+        svc, "_fetch_prev_session_oi", lambda symbols, ex, key, interval=None: ({}, False)
+    )
 
     base = {
         "underlying": "NIFTY",
@@ -261,7 +293,7 @@ def test_an_unreadable_leg_is_unknown_not_a_zero_anchor(monkeypatch):
     # fresh write. Absent means unknown, and unknown draws nothing.
     monkeypatch.setattr(svc, "_history_rows", lambda *a, **k: None)
     legs = [{"symbol": "NIFTY22SEP2623200PE", "oi": 8_506_420}]
-    assert svc._fetch_prev_session_oi(legs, "NFO", "k") == {}
+    assert _anchored(legs) == {}
 
 
 def test_a_leg_whose_history_has_no_oi_is_also_unknown(monkeypatch):
@@ -271,7 +303,7 @@ def test_a_leg_whose_history_has_no_oi_is_also_unknown(monkeypatch):
         lambda *a, **k: [_bar("2026-09-15 15:29", 0), _bar("2026-09-16 09:15", 0)],
     )
     legs = [{"symbol": "NIFTY22SEP2623200PE", "oi": 8_506_420}]
-    assert svc._fetch_prev_session_oi(legs, "NFO", "k") == {}
+    assert _anchored(legs) == {}
 
 
 def test_an_unknown_anchor_leaves_the_change_at_zero(monkeypatch):
@@ -295,3 +327,100 @@ def test_an_unknown_anchor_leaves_the_change_at_zero(monkeypatch):
     row = resp["oi_chain"][0]
     assert row["ce_oi"] == 100 and row["ce_oi_change"] == 0
     assert row["pe_oi"] == 40 and row["pe_oi_change"] == 0
+
+
+def test_a_cold_underlying_answers_at_once_and_reports_the_change_as_pending(monkeypatch):
+    # The symptom this exists for: switching the chart to a stock nobody has
+    # looked at today has no anchor for any of its legs, and fetching them
+    # inline made the request take a broker history call per leg. It held the
+    # connection for 30-90s, the chart's own history call for the new symbol
+    # timed out at 15s behind it, and switching twice put two chains' worth of
+    # calls in flight. The request must not wait for the anchor pass at all.
+    import threading
+    import time
+
+    released = threading.Event()
+
+    def slow_history(*a, **k):
+        released.wait(timeout=30)
+        return [_bar("2026-09-15 15:29", 50), _bar("2026-09-16 09:15", 60)]
+
+    monkeypatch.setattr(svc, "_history_rows", slow_history)
+    monkeypatch.setattr(
+        svc,
+        "get_option_chain",
+        lambda underlying, exchange, expiry_date, strike_count, api_key: _chain("09OCT25", 100, 40),
+    )
+    monkeypatch.setattr(svc, "_find_futures_symbol", lambda *a, **k: None)
+    svc._prev_oi_cache.clear()
+
+    started = time.monotonic()
+    ok, resp, _ = svc.get_oi_profile_data(
+        underlying="NIFTY",
+        exchange="NFO",
+        expiry_date="09OCT25",
+        interval="5m",
+        days=1,
+        api_key="k",
+        include_candles=False,
+    )
+    elapsed = time.monotonic() - started
+    released.set()
+
+    assert ok
+    assert elapsed < 1.0, f"the request waited {elapsed:.1f}s on the anchor pass"
+    assert resp["oi_change_pending"] is True
+    # Open interest is complete even so - only the change columns are waiting.
+    assert resp["oi_chain"][0]["ce_oi"] == 100
+
+    # And a pending answer is not pinned in the shared cache, or the client
+    # polling for the rest would keep getting the same gaps back.
+    assert not svc._profile_cache
+
+
+def test_a_newer_selection_abandons_the_chain_being_warmed(monkeypatch):
+    # Switching symbols twice in a minute used to put two chains' worth of
+    # broker history calls in flight at once - ~50 threads, a dropped market
+    # feed and a chart that never loaded. The warm pass has one worker and the
+    # newest selection wins: the old chain stops where it is, keeping whatever
+    # it already cached.
+    calls = []
+    later = [{"symbol": "LATER1", "oi": 10}, {"symbol": "LATER2", "oi": 10}]
+
+    def recording_history(symbol, *a, **k):
+        calls.append(symbol)
+        if len(calls) == 1:
+            # The user switches the chart while the first chain is warming.
+            svc._fetch_prev_session_oi(later, "NFO", "k")
+        return [_bar("2026-09-15 15:29", 50), _bar("2026-09-16 09:15", 60)]
+
+    monkeypatch.setattr(svc, "_history_rows", recording_history)
+    svc._prev_oi_cache.clear()
+
+    earlier = [{"symbol": f"EARLY{i}", "oi": 10} for i in range(5)]
+    svc._fetch_prev_session_oi(earlier, "NFO", "k")
+    svc._anchor_executor.submit(lambda: None).result(timeout=30)
+
+    assert [c for c in calls if c.startswith("EARLY")] == ["EARLY0"], calls
+    assert sorted(c for c in calls if c.startswith("LATER")) == ["LATER1", "LATER2"], calls
+
+
+def test_a_failed_warm_pass_does_not_wedge_the_pending_state(monkeypatch):
+    # Nobody reads the warm job's future. If it dies mid-chain, its legs must
+    # not stay listed as "being warmed" - that suppresses the resubmit, and the
+    # client would poll a pending answer every 10s that could never fill.
+    def exploding_history(*a, **k):
+        raise RuntimeError("broker said no")
+
+    monkeypatch.setattr(svc, "_history_rows", exploding_history)
+    svc._prev_oi_cache.clear()
+    legs = [{"symbol": "WEDGE1", "oi": 10}]
+
+    svc._fetch_prev_session_oi(legs, "NFO", "k")
+    svc._anchor_executor.submit(lambda: None).result(timeout=30)
+
+    calls = []
+    monkeypatch.setattr(svc, "_history_rows", lambda symbol, *a, **k: calls.append(symbol) or None)
+    svc._fetch_prev_session_oi(legs, "NFO", "k")
+    svc._anchor_executor.submit(lambda: None).result(timeout=30)
+    assert calls == ["WEDGE1"], "the next request must be able to retry the leg"

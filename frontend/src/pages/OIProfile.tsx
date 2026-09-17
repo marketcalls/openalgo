@@ -43,6 +43,11 @@ const INTERVAL_DAYS: Record<string, number> = {
 const LIVE_REFRESH_MS = 3 * 60 * 1000
 const CLOSED_REFRESH_MS = 15 * 60 * 1000
 
+// An underlying nobody has looked at today has no previous-session OI cached
+// for its legs; the backend fetches those in the background and says so rather
+// than holding the request. The change columns fill in over a few of these.
+const PENDING_REFRESH_MS = 10 * 1000
+
 // Strikes either side of ATM kept in view regardless of how narrow the day's
 // price range is, so the OI columns always carry some context.
 const MIN_STRIKES_IN_VIEW = 5
@@ -280,7 +285,11 @@ export default function OIProfile() {
   //
   // A drag-selected window is a fixed [start, end]; re-asking cannot change it.
   const liveRefreshPaused = Boolean(windowRange) || selectedExpiries.length === 0
-  const refreshMs = profileData?.market_open === false ? CLOSED_REFRESH_MS : LIVE_REFRESH_MS
+  const refreshMs = profileData?.oi_change_pending
+    ? PENDING_REFRESH_MS
+    : profileData?.market_open === false
+      ? CLOSED_REFRESH_MS
+      : LIVE_REFRESH_MS
 
   useEffect(() => {
     if (liveRefreshPaused) return
