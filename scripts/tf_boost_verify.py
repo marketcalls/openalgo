@@ -29,12 +29,7 @@ from database.tf_boost_db import (  # noqa: E402
     get_boost_rank_timeline,
 )
 from services.history_service import get_history  # noqa: E402
-from services.tf_rank_movement_service import (  # noqa: E402
-    RUN_LEADER_RANK,
-    RUN_MIN_CLIMB,
-    compute_rank_state,
-    compute_run,
-)
+from services.tf_rank_movement_service import compute_symbol_movement  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 TARGET_PCT = 1.0  # the move that pays on a stock option
@@ -42,22 +37,23 @@ ALIASES = {"TATAMOTORS": "TMPV"}
 
 
 def first_badge(symbol, changes, ranks):
-    """The first minute the badge would have shown, with no hindsight."""
+    """The first minute the panel would show RUN, with no hindsight.
+
+    Asks the engine instead of restating its rule. This function used to carry
+    its own copy and fell two changes behind it: no requirement that the price
+    direction agrees with the ranked list, and no allowance for a clean run
+    being outranked by a JUMP label, so it reported badges the panel never
+    showed. A rule that lives in two places is a rule that disagrees with
+    itself.
+    """
     for i in range(10, len(changes)):
         upto = changes[i][0]
-        run = compute_run(changes[: i + 1])
-        if not run or not run.is_clean:
-            continue
-        state = compute_rank_state(symbol, [p for p in ranks if p[0] <= upto])
-        if not state:
-            continue
-        rated = (
-            state.current_rank <= RUN_LEADER_RANK
-            or (state.first_seen_rank - state.current_rank) >= RUN_MIN_CLIMB
+        row = compute_symbol_movement(
+            symbol, [p for p in ranks if p[0] <= upto], upto, changes[: i + 1]
         )
-        if rated:
-            return upto, run, state
-    return None, None, None
+        if row and row["event"] in ("CLEAN_RUN_UP", "CLEAN_RUN_DOWN"):
+            return upto, row
+    return None, None
 
 
 def outcome(bars, badge_min, direction):
@@ -101,7 +97,7 @@ def main() -> None:
         cps, rps = changes[symbol].get(day, []), ranks.get(symbol, {}).get(day, [])
         if len(cps) < 12 or not rps:
             continue
-        badge_min, run, state = first_badge(symbol, cps, rps)
+        badge_min, row = first_badge(symbol, cps, rps)
         if badge_min is None:
             continue
         try:
@@ -119,14 +115,14 @@ def main() -> None:
             if not ok or not candles:
                 continue
             bars = [(datetime.fromtimestamp(b["timestamp"], IST), b) for b in candles]
-            result = outcome(bars, badge_min, run.direction)
+            result = outcome(bars, badge_min, row["run_direction"])
             if result:
                 rows.append(
                     {
                         "symbol": symbol,
                         "min": badge_min,
-                        "run": run,
-                        "rank": state.current_rank,
+                        "row": row,
+                        "rank": row["current_rank"],
                         **result,
                     }
                 )
@@ -152,7 +148,7 @@ def main() -> None:
         target = f"{r['minutes_to_target']}m" if r["minutes_to_target"] is not None else "-"
         line = (
             f"{r['symbol']:<12}{t:>7}{r['rank']:>5}{r['entry']:>10.2f}"
-            f"{r['run'].efficiency:>6.1f}{target:>8}{r['best']:>+7.2f}{r['heat']:>7.2f}"
+            f"{r['row']['run_efficiency']:>6.1f}{target:>8}{r['best']:>+7.2f}{r['heat']:>7.2f}"
             f"{r['close_pct']:>+10.2f}"
         )
         print(line)
