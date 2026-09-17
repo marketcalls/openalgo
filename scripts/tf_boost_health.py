@@ -32,6 +32,16 @@ def _fmt(t: datetime) -> str:
     return t.strftime("%H:%M")
 
 
+def _unreadable(exc: Exception) -> None:
+    """DuckDB gives the whole file to one process at a time, so this script
+    cannot read while the app happens to be mid-write or mid-request. It is a
+    collision, not damage: wait a moment and run it again."""
+    print(
+        f"[ATTENTION] snapshot database busy -- the app is using it. Try again in a few "
+        f"seconds. ({exc.__class__.__name__})"
+    )
+
+
 def main() -> None:
     now = datetime.now(IST)
     today = date.today()
@@ -45,6 +55,25 @@ def main() -> None:
         f"expires in {secs // 60} min refreshing={jwt.get('refreshing')}"
     )
 
+    try:
+        _report_recorder(now, today)
+    except Exception as exc:  # noqa: BLE001 -- any read failure reads the same to the user
+        _unreadable(exc)
+        return
+
+    print()
+    rows = movement_snapshot(list_type="intraday_boost")
+    live = [r for r in rows if r.get("present", True)]
+    hot = [r for r in live if r["event_priority"] >= 68]
+    print(
+        f"[{'OK' if rows else 'ATTENTION'}] movement engine: {len(rows)} symbols today, "
+        f"{len(live)} on the list now, {len(hot)} at alert strength"
+    )
+    for r in sorted(hot, key=lambda r: -r["event_priority"])[:5]:
+        print(f"    {r['symbol']:<14} {r['event']:<16} {r['first_seen_rank']}->{r['current_rank']}")
+
+
+def _report_recorder(now: datetime, today: date) -> None:
     with get_connection() as conn:
         hb = conn.execute(
             "select max(snapshot_time), count(*) from tf_boost_heartbeat where snapshot_date = ?",
@@ -95,16 +124,6 @@ def main() -> None:
                     else ""
                 )
             )
-
-    print()
-    rows = movement_snapshot(list_type="intraday_boost")
-    hot = [r for r in rows if r["event_priority"] >= 68]
-    print(
-        f"[{'OK' if rows else 'ATTENTION'}] movement engine: {len(rows)} symbols, "
-        f"{len(hot)} at alert strength"
-    )
-    for r in sorted(hot, key=lambda r: -r["event_priority"])[:5]:
-        print(f"    {r['symbol']:<14} {r['event']:<16} {r['first_seen_rank']}->{r['current_rank']}")
 
 
 if __name__ == "__main__":

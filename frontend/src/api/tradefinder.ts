@@ -117,6 +117,12 @@ export interface BoostMovementRow {
   is_stable_zone: boolean
   event: string
   event_priority: number
+  /** False when the symbol is missing from the latest snapshot: rank and
+   * trajectory are last-known, and `event` is ABSENT so nothing badges or
+   * alerts on a move that stopped hours ago. Optional -- an older backend
+   * omits it, and the badge map simply has no entry for ABSENT either way. */
+  present?: boolean
+  minutes_since_last_seen?: number
 }
 
 export interface BoostMovementResponse {

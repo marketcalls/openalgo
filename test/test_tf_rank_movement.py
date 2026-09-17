@@ -315,3 +315,47 @@ def test_new_day_reset_reads_only_that_day(monkeypatch):
     rows = mod.movement_snapshot("2026-01-02")
     assert rows[0]["first_seen_rank"] == 40 and rows[0]["current_rank"] == 38
     assert rows[0]["best_rank"] == 38  # not yesterday's 1
+
+
+# --- presence: an event is a statement about now (plan §42) -------------------
+
+
+def test_symbol_missing_from_the_latest_snapshot_is_absent():
+    # Climbed into the Top-5 at 09:17 and never appeared again: the standing
+    # stays available as last-known, but it is not a current event.
+    obs = [[555, 40], [556, 20], [557, 4]]
+    row = compute_symbol_movement("GONE", obs, latest_minute=929)
+    assert row["present"] is False
+    assert row["minutes_since_last_seen"] == 929 - 557
+    assert row["event"] == "ABSENT" and row["event_priority"] == 0
+    # Last-known standing survives, so the trajectory still renders (§42).
+    assert row["current_rank"] == 4 and row["first_seen_rank"] == 40 and row["top5"] is True
+
+
+def test_symbol_in_the_latest_snapshot_keeps_its_event():
+    obs = [[925, 12], [927, 9], [929, 4]]
+    row = compute_symbol_movement("LIVE", obs, latest_minute=929)
+    assert row["present"] is True and row["minutes_since_last_seen"] == 0
+    assert row["event"] == "TOP5_ENTRY"
+
+
+def test_one_missed_write_does_not_make_a_symbol_absent():
+    # The recorder skipping a single minute must not blank the whole list.
+    row = compute_symbol_movement("LIVE", [[925, 9], [927, 4]], latest_minute=929)
+    assert row["present"] is True and row["event"] == "TOP5_ENTRY"
+
+
+def test_movement_snapshot_marks_absent_against_the_days_latest_minute(monkeypatch):
+    import services.tf_rank_movement_service as mod
+
+    monkeypatch.setattr(
+        mod,
+        "get_boost_rank_timeline",
+        lambda *a, **k: {
+            "LIVE": {"2026-01-02": [[925, 12], [929, 4]]},
+            "GONE": {"2026-01-02": [[555, 40], [557, 4]]},
+        },
+    )
+    rows = {r["symbol"]: r for r in mod.movement_snapshot("2026-01-02")}
+    assert rows["LIVE"]["present"] is True and rows["LIVE"]["event"] == "TOP5_ENTRY"
+    assert rows["GONE"]["present"] is False and rows["GONE"]["event"] == "ABSENT"

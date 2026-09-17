@@ -331,6 +331,7 @@ FAST_CLIMB_MIN_VELOCITY = 5.0
 # Higher wins when several apply. Exit/drop rank below climbs so a symbol that
 # entered Top-5 on a fast move reads as the entry, not the drop it also had.
 _EVENT_PRIORITY: dict[str, int] = {
+    # A symbol not on the current list has no current event -- see ABSENT below.
     "EXTREME_JUMP": 100,
     "LARGE_JUMP": 90,
     "FAST_CLIMB": 80,
@@ -351,7 +352,16 @@ _EVENT_PRIORITY: dict[str, int] = {
     "FALLING": 15,
     "NEW": 10,
     "NORMAL": 0,
+    # Not on the latest snapshot: its standing is last-known, not current
+    # (plan §42). Kept at the bottom so no consumer alerts on it.
+    "ABSENT": 0,
 }
+
+# A symbol is "present" if it appears in the latest snapshot, allowing for one
+# missed write. Beyond that its event is history, not news: on 17-Sep-2026 every
+# symbol the engine reported at alert strength had last been seen at 09:17, six
+# hours earlier, because an event stays frozen at the symbol's last observation.
+PRESENCE_TOLERANCE_MIN = 2
 
 
 def classify_event(
@@ -404,15 +414,31 @@ def classify_event(
     return event, _EVENT_PRIORITY.get(event, 0)
 
 
-def compute_symbol_movement(symbol: str, observations: list[list[int]]) -> dict | None:
+def compute_symbol_movement(
+    symbol: str,
+    observations: list[list[int]],
+    latest_minute: int | None = None,
+) -> dict | None:
     """Pure: the full current-day picture for one symbol as a flat dict — the
-    RankUIModel the API and frontend consume (plan §49/§92). None if unusable."""
+    RankUIModel the API and frontend consume (plan §49/§92). None if unusable.
+
+    `latest_minute` is the most recent minute ANY symbol was snapshotted for
+    this list today. Pass it and a symbol missing from that snapshot is reported
+    as `present=False` with the event ABSENT: its rank, trajectory and Top-N
+    standing stay available as last-known (plan §42), but it no longer claims a
+    current event, so nothing badges or alerts on a move that stopped hours ago.
+    Omit it and every symbol is treated as present, which is only right for a
+    single-symbol call in a test."""
     state = compute_rank_state(symbol, observations)
     if state is None:
         return None
     zones, transitions = compute_topn(symbol, observations)
     sustained = compute_sustained(symbol, observations)
     event, priority = classify_event(state, zones, transitions, sustained)
+    stale_by = 0 if latest_minute is None else max(0, latest_minute - state.last_seen_min)
+    present = stale_by <= PRESENCE_TOLERANCE_MIN
+    if not present:
+        event, priority = "ABSENT", _EVENT_PRIORITY["ABSENT"]
     out = state.to_dict()
     out.update(
         {
@@ -431,6 +457,8 @@ def compute_symbol_movement(symbol: str, observations: list[list[int]]) -> dict 
             "is_stable_zone": bool(sustained and sustained.is_stable_zone),
             "event": event,
             "event_priority": priority,
+            "present": present,
+            "minutes_since_last_seen": stale_by,
         }
     )
     return out
@@ -453,9 +481,15 @@ def movement_snapshot(date: str = "", list_type: str = "intraday_boost") -> list
     like the other query services here."""
     day = date or datetime.now().strftime("%Y-%m-%d")
     per_symbol_days = get_boost_rank_timeline(day, day, list_type)
+    # The latest minute anyone was recorded at is what "now" means for this
+    # list, so it survives a closed market and a replay of an older date alike.
+    latest_minute = max(
+        (obs[-1][0] for days in per_symbol_days.values() for obs in [days.get(day, [])] if obs),
+        default=None,
+    )
     rows: list[dict] = []
     for sym, days in per_symbol_days.items():
-        row = compute_symbol_movement(sym, days.get(day, []))
+        row = compute_symbol_movement(sym, days.get(day, []), latest_minute)
         if row is not None:
             rows.append(row)
     rows.sort(key=lambda r: r["current_rank"])

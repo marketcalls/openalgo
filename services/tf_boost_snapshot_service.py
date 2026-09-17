@@ -46,8 +46,15 @@ _lock = threading.Lock()
 
 
 def _within_market_window(now_ist: datetime) -> bool:
+    """09:15 to 15:30 IST inclusive, judged on the MINUTE.
+
+    The cron fires at 15:30:00 but APScheduler dispatches a fraction later, so
+    an end of exactly 15:30:00.000000 rejected the tick every single day: the
+    closing minute -- the day's final ranked list -- was never recorded. Both
+    days in the store ended at 15:29 before this.
+    """
     start = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
-    end = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    end = now_ist.replace(hour=15, minute=30, second=59, microsecond=999999)
     return start <= now_ist <= end
 
 
