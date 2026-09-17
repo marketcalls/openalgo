@@ -17,6 +17,7 @@ intraday window.
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -26,6 +27,9 @@ from cachetools import TTLCache
 from database.market_calendar_db import is_market_open
 from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
+from services.nse_oi_bhavcopy import cached_previous_session_oi as _nse_cached_book
+from services.nse_oi_bhavcopy import previous_session_oi as _nse_previous_session_oi
+from services.nse_oi_bhavcopy import underlying_of as _underlying_of
 from services.option_chain_service import get_option_chain
 from services.strategy_chart_service import (
     _cap_last_n_trading_dates,
@@ -67,6 +71,28 @@ _PREV_OI_TTL = float(os.getenv("OI_PROFILE_PREV_OI_TTL", "43200"))  # 12 hours
 _PREV_OI_MAXSIZE = int(os.getenv("OI_PROFILE_PREV_OI_MAXSIZE", "4096"))
 _prev_oi_cache: TTLCache = TTLCache(maxsize=max(_PREV_OI_MAXSIZE, 1), ttl=max(_PREV_OI_TTL, 0.001))
 _prev_oi_cache_lock = threading.Lock()
+
+# A leg the broker has no readable anchor for. Cached like any other answer so
+# the warm pass stops re-asking for it every beat; read back as "unknown", never
+# as a zero anchor (a zero anchor reports the leg's whole OI as today's build).
+_NO_ANCHOR = -1.0
+
+# The anchor pass is warmed *off the request*. An underlying nobody has looked
+# at yet has no anchor for any of its ~80 legs, and fetching them inline made
+# every symbol switch a 30-90s request: the chart's own history call for the
+# new symbol timed out at 15s behind it, and switching twice in a minute put
+# two chains' worth of broker calls in flight at once. So a request returns the
+# open interest it already has, says the change columns are still filling, and
+# the legs it is missing are handed to one worker.
+#
+# One worker, module-level, never per-call (see the FD rules in CLAUDE.md), so
+# the broker sees at most one chain being warmed at a time. A newer selection
+# supersedes the running job rather than queueing behind it - whatever it had
+# already cached is kept, so nothing is refetched.
+_anchor_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oi-anchor")
+_anchor_lock = threading.Lock()
+_anchor_generation = 0
+_anchor_running: set[str] = set()  # symbols the current job still intends to fetch
 
 # Index symbols that need special exchange for quotes
 NSE_INDEX_SYMBOLS = {
@@ -285,14 +311,105 @@ def _anchor_intervals(interval: str) -> list[str]:
     return ["1m"] if interval == "1m" else ["1m", interval]
 
 
+def _resolve_from_nse(
+    symbols: list[str], book, options_exchange: str, today: str
+) -> tuple[dict[str, float], list[str]]:
+    """Split `symbols` into what NSE's file answers and what it cannot.
+
+    Everything it answers is written to the session cache, so a leg is resolved
+    once however many charts ask for it.
+    """
+    resolved: dict[str, float] = {}
+    remaining: list[str] = []
+    for symbol in symbols:
+        value = book.oi.get(symbol)
+        if value is None:
+            # The file lists every contract that traded or carried open
+            # interest that session. A leg missing from it, on an underlying
+            # the file does cover, held none - so its anchor is zero and all of
+            # today's open interest is a fresh build. Absence is evidence here,
+            # which is why it may set a zero anchor where a failed broker read
+            # may not. An underlying the file does not cover at all (an F&O
+            # name listed today) still goes to the broker.
+            underlying = _underlying_of(symbol)
+            if underlying is None or underlying not in book.underlyings:
+                remaining.append(symbol)
+                continue
+            value = 0.0
+        resolved[symbol] = value
+
+    if resolved:
+        with _prev_oi_cache_lock:
+            for symbol, value in resolved.items():
+                _prev_oi_cache[(symbol, options_exchange, today)] = value
+        with _anchor_lock:
+            for symbol in resolved:
+                _anchor_running.discard(symbol)
+    return resolved, remaining
+
+
+def _anchor_worker(
+    symbols: list[str],
+    options_exchange: str,
+    api_key: str,
+    today: str,
+    history_start: str,
+    generation: int,
+) -> None:
+    """Fill the previous-session OI cache for `symbols`, one call at a time.
+
+    Runs on the anchor worker, never on a request. Stops as soon as a newer
+    selection has taken over, so switching symbols abandons the old chain
+    instead of making the broker finish it.
+    """
+    try:
+        # One NSE file carries the whole market's previous close, so the legs
+        # it answers cost no broker calls at all. Only what it cannot speak for
+        # falls through to a history call each. This is the one place that may
+        # download it, which is why it is the worker and not a request.
+        book = _nse_previous_session_oi(options_exchange)
+        if book is not None:
+            answered, symbols = _resolve_from_nse(symbols, book, options_exchange, today)
+            logger.info(
+                f"NSE open interest answered {len(answered)} anchors; "
+                f"{len(symbols)} still need a history call"
+            )
+
+        for symbol in symbols:
+            with _anchor_lock:
+                if _anchor_generation != generation:
+                    return
+            rows = _history_rows(symbol, options_exchange, "D", history_start, today, api_key)
+            value = _previous_session_oi(rows) if rows else 0.0
+            if value <= 0:
+                logger.warning(f"No previous-session OI for {symbol}; its change stays unknown")
+                value = _NO_ANCHOR
+            with _prev_oi_cache_lock:
+                _prev_oi_cache[(symbol, options_exchange, today)] = value
+            with _anchor_lock:
+                _anchor_running.discard(symbol)
+    except Exception:
+        # Nobody reads this job's future, so an exception here would otherwise
+        # be silent - and worse, it would leave these symbols listed as being
+        # warmed, which suppresses the resubmit that would retry them. The
+        # client would then poll a pending answer that could never fill.
+        logger.exception("Anchor pass failed; its legs stay unknown until the next request")
+    finally:
+        with _anchor_lock:
+            if _anchor_generation == generation:
+                _anchor_running.clear()
+
+
 def _fetch_prev_session_oi(
     option_symbols: list[dict], options_exchange: str, api_key: str, interval: str = "5m"
-) -> dict[str, float]:
+) -> tuple[dict[str, float], bool]:
     """
-    Fetch the open interest each option closed the previous session on.
+    The open interest each option closed the previous session on.
 
     That figure is settled and cannot change again, so each symbol is fetched
-    once per session and then served from a cache.
+    once per session and then served from a cache. Reading it costs one broker
+    history call per leg, so this never fetches inline: it answers with what is
+    cached and hands the rest to the anchor worker.
 
     Args:
         option_symbols: List of dicts with 'symbol' key
@@ -301,7 +418,10 @@ def _fetch_prev_session_oi(
         interval: Unused by this path; kept because the chart passes it.
 
     Returns:
-        Dict mapping symbol -> open interest at the previous session's close
+        (symbol -> previous session's closing OI, whether legs are still
+        being warmed). A symbol the broker has no anchor for is absent from
+        the map and does not keep the second value True - unknown is a final
+        answer, not a pending one.
     """
     ist = pytz.timezone("Asia/Kolkata")
     today = datetime.now(ist).strftime("%Y-%m-%d")
@@ -310,11 +430,11 @@ def _fetch_prev_session_oi(
     # before the latest one.
     history_start = (datetime.now(ist) - timedelta(days=14)).strftime("%Y-%m-%d")
 
-    results = {}
+    results: dict[str, float] = {}
+    missing: list[str] = []
 
-    # Only fetch for symbols with non-zero current OI, and only those whose
-    # opening OI is not already known for this session.
-    symbols_to_fetch = []
+    # Only anchor symbols with non-zero current OI, and only those whose
+    # previous close is not already known for this session.
     with _prev_oi_cache_lock:
         for s in option_symbols:
             symbol = s["symbol"]
@@ -322,28 +442,42 @@ def _fetch_prev_session_oi(
                 continue
             cached = _prev_oi_cache.get((symbol, options_exchange, today))
             if cached is None:
-                symbols_to_fetch.append(symbol)
-            else:
+                missing.append(symbol)
+            elif cached != _NO_ANCHOR:
                 results[symbol] = cached
 
-    if not symbols_to_fetch:
-        return results
+    if not missing:
+        return results, False
 
-    def fetch_one(symbol: str) -> float | None:
-        rows = _history_rows(symbol, options_exchange, "D", history_start, today, api_key)
-        if rows:
-            prev_oi = _previous_session_oi(rows)
-            if prev_oi > 0:
-                return prev_oi
-        logger.warning(f"No previous-session OI for {symbol}; its change is reported as unknown")
-        return None
+    # Once the day's NSE file is in hand, every later symbol switch is answered
+    # from it here, with no network and nothing left pending. Only the first
+    # underlying of the day waits on the worker to fetch it.
+    book = _nse_cached_book(options_exchange)
+    if book is not None:
+        answered, missing = _resolve_from_nse(missing, book, options_exchange, today)
+        results.update(answered)
+        if not missing:
+            return results, False
 
-    fetched = _in_batches(symbols_to_fetch, fetch_one)
-    with _prev_oi_cache_lock:
-        for sym, open_oi in fetched.items():
-            _prev_oi_cache[(sym, options_exchange, today)] = open_oi
-    results.update(fetched)
-    return results
+    global _anchor_generation, _anchor_running
+    with _anchor_lock:
+        # A job already fetching everything this request wants needs no help;
+        # re-submitting would only restart it from the top.
+        if not set(missing) <= _anchor_running:
+            _anchor_generation += 1
+            generation = _anchor_generation
+            _anchor_running = set(missing)
+            _anchor_executor.submit(
+                _anchor_worker,
+                list(missing),
+                options_exchange,
+                api_key,
+                today,
+                history_start,
+                generation,
+            )
+
+    return results, True
 
 
 def _oi_entering(candles: list[dict], target_time: int) -> float:
@@ -626,6 +760,7 @@ def get_oi_profile_data(
         windowed = window_start is not None and window_end is not None
         oi_change_map = {}
         prev_oi_map = {}
+        change_pending = False
         if include_change:
             if windowed:
                 oi_change_map = _fetch_windowed_oi_changes(
@@ -637,7 +772,7 @@ def get_oi_profile_data(
                     api_key,
                 )
             else:
-                prev_oi_map = _fetch_prev_session_oi(
+                prev_oi_map, change_pending = _fetch_prev_session_oi(
                     option_symbols_for_history, options_exchange, api_key, interval
                 )
 
@@ -673,10 +808,18 @@ def get_oi_profile_data(
             # Lets a live overlay stop asking once the exchange has closed,
             # instead of polling a number that cannot move until tomorrow.
             "market_open": _market_open(options_exchange),
+            # Some legs have no anchor yet and are being fetched in the
+            # background. The open interest above is complete; the change
+            # columns are not, so a client showing them should ask again soon
+            # rather than wait out its usual beat.
+            "oi_change_pending": change_pending,
         }
 
-        with _profile_cache_lock:
-            _profile_cache[cache_key] = payload
+        # A half-filled answer must not be pinned for the whole TTL, or the
+        # client polling for the rest keeps being handed the same gaps.
+        if not change_pending:
+            with _profile_cache_lock:
+                _profile_cache[cache_key] = payload
 
         return True, payload, 200
 
