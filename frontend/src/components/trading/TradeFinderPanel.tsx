@@ -1119,10 +1119,12 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
      Polled every 60s (the snapshots are 1-minute, so faster buys nothing) and
      only for the ranked lists, not Sectors. Degrades to an empty map. ── */
   useEffect(() => {
-    if (view === 'sectors') {
-      setMovement(new Map())
-      return
-    }
+    // Drop the previous list's rows before the first fetch of the new one:
+    // they are keyed by symbol alone, so leaving them up would badge the new
+    // list's rows from the old list's state and feed the alert baseline below
+    // a movement map that does not belong to `view`.
+    setMovement(new Map())
+    if (view === 'sectors') return
     let alive = true
     const load = async () => {
       if (!alive || document.hidden) return
@@ -1148,19 +1150,21 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
   }, [apiKey, view])
 
   /* ── rank-movement alerts: toast a NEW salient backend event. The first
-     populated poll only sets a baseline (otherwise every event already in
-     progress toasts at once on load), and the toggle-off path keeps that
-     baseline current so switching it on later never dumps a backlog. ── */
+     populated poll of each list only sets a baseline (otherwise every event
+     already in progress toasts at once), and the toggle-off path keeps that
+     baseline current so switching it on later never dumps a backlog. Keys
+     carry the list, because the panel swaps `movement` wholesale when the
+     view changes and a shared key set would read that as 200 new events. ── */
   const movementAlertedRef = useRef<Map<string, string>>(new Map())
   const movementCooldownRef = useRef<Map<string, number>>(new Map())
-  const movementAlertInitRef = useRef(false)
+  const movementBaselinedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     if (movement.size === 0) return
     const baseline = () => {
-      for (const [sym, mv] of movement) movementAlertedRef.current.set(sym, mv.event)
+      for (const [sym, mv] of movement) movementAlertedRef.current.set(`${view}:${sym}`, mv.event)
     }
-    if (!movementAlertInitRef.current) {
-      movementAlertInitRef.current = true
+    if (!movementBaselinedRef.current.has(view)) {
+      movementBaselinedRef.current.add(view)
       baseline()
       return
     }
@@ -1172,16 +1176,19 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
     const fresh: string[] = []
     for (const [sym, mv] of movement) {
       if (mv.event_priority < MOVEMENT_ALERT_MIN_PRIORITY) continue
-      if (movementAlertedRef.current.get(sym) === mv.event) continue
-      movementAlertedRef.current.set(sym, mv.event)
-      const last = movementCooldownRef.current.get(sym) ?? 0
+      const key = `${view}:${sym}`
+      if (movementAlertedRef.current.get(key) === mv.event) continue
+      movementAlertedRef.current.set(key, mv.event)
+      const last = movementCooldownRef.current.get(key) ?? 0
       if (now - last < MOVEMENT_ALERT_COOLDOWN_MS) continue
-      movementCooldownRef.current.set(sym, now)
+      movementCooldownRef.current.set(key, now)
       fresh.push(sym)
     }
-    // Forget symbols that left the list so they can alert again on re-entry.
-    for (const sym of [...movementAlertedRef.current.keys()]) {
-      if (!movement.has(sym)) movementAlertedRef.current.delete(sym)
+    // Forget symbols that left THIS list, so a re-entry alerts again. Other
+    // lists' keys are left alone -- they are not in `movement` right now.
+    for (const key of [...movementAlertedRef.current.keys()]) {
+      const [listKey, sym] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
+      if (listKey === view && !movement.has(sym)) movementAlertedRef.current.delete(key)
     }
     if (fresh.length === 0) return
     const summary = fresh
@@ -1189,7 +1196,7 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
       .map((s) => `${s} ${movement.get(s)!.event.replace(/_/g, ' ').toLowerCase()}`)
       .join(', ')
     showToast.info(`Rank movers: ${summary}`)
-  }, [movement])
+  }, [movement, view])
 
   /* ── sector_scope: only fetched while that view is actually selected ── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a deliberate re-run trigger, not a value this effect reads; the refresh button bumps it to refetch without changing the contract
