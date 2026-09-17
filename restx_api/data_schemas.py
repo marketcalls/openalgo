@@ -68,6 +68,20 @@ class BoostSnapshotsSchema(Schema):
     includePrices = fields.Bool(required=False, load_default=False)
 
 
+class BoostMovementSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    # YYYY-MM-DD; omit for today. Current-day rank-movement state, so lookback
+    # windows are out of scope here (a single day).
+    date = fields.Str(required=False, load_default="")
+    list_type = fields.Str(
+        required=False,
+        load_default="intraday_boost",
+        validate=validate.OneOf(
+            ["intraday_boost", "breakout_beacon", "high_powered_stocks", "sector_index"]
+        ),
+    )
+
+
 class TfMarketPulseSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
 
