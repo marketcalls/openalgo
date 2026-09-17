@@ -39,10 +39,11 @@ from database.tf_boost_db import (  # noqa: E402
 )
 from services.history_service import get_history  # noqa: E402
 from services.tf_rank_movement_service import compute_symbol_movement  # noqa: E402
+from services.tf_symbol_alias import tradable_symbol  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 EXPIRY = os.getenv("TF_AUDIT_EXPIRY", "29SEP26")
-ALIASES = {"TATAMOTORS": "TMPV"}
+
 MIN_OPTION_VOLUME = 10_000  # below this the fill is not something to rely on
 # Only stocks that were ON the ranked list in the morning. The day's cumulative
 # universe is much wider -- a name that first appears at 14:00 was never on the
@@ -233,7 +234,7 @@ def main() -> None:
         if badge_min is None:
             continue
 
-        stock_bars = fetch_bars(ALIASES.get(symbol, symbol), "NSE", day, auth_token, broker)
+        stock_bars = fetch_bars(tradable_symbol(symbol), "NSE", day, auth_token, broker)
         if not stock_bars:
             problems.append(f"{symbol}: no stock candles")
             continue
@@ -244,7 +245,7 @@ def main() -> None:
 
         # CHECK 1: the option side must match the badge direction.
         side = "CE" if row["run_direction"] == "up" else "PE"
-        contract = atm_contract(ALIASES.get(symbol, symbol), stock["entry"], side)
+        contract = atm_contract(tradable_symbol(symbol), stock["entry"], side)
         option = None
         if contract is None:
             problems.append(f"{symbol}: no {EXPIRY} {side} contract")

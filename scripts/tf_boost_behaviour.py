@@ -39,6 +39,7 @@ from database.tf_boost_db import (  # noqa: E402
 )
 from services.history_service import get_history  # noqa: E402
 from services.tf_rank_movement_service import movement_snapshot  # noqa: E402
+from services.tf_symbol_alias import tradable_symbol  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 LIST_TYPE = "intraday_boost"
@@ -54,7 +55,7 @@ HEAT_LIMIT_PCT = 0.5  # adverse move that spoils a clean capture
 # TATAMOTORS -- the day's number one -- because the master now lists it as TMPV
 # under the same ISIN. Anything skipped is printed, so a new rename shows up as
 # a name rather than as a stock that quietly stopped being studied.
-SYMBOL_ALIASES = {"TATAMOTORS": "TMPV"}
+
 
 # Nobody trades stock options into the opening auction's volatility -- the book
 # settles after about ten o'clock, and an entry before that is a different (and
@@ -271,7 +272,7 @@ def analyse(day: str, entry_after_min: int) -> list[dict]:
     rows, skipped = [], []
     for n, (symbol, mv) in enumerate(sorted(movement.items()), start=1):
         try:
-            tradable = SYMBOL_ALIASES.get(symbol, symbol)
+            tradable = tradable_symbol(symbol)
             ok, res, _ = get_history(
                 tradable,
                 "NSE",

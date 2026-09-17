@@ -8,7 +8,7 @@
  * closes it.
  */
 
-import { Bot, List, Shapes, Table2, Zap } from 'lucide-react'
+import { Bot, Layers, List, Shapes, Table2, Zap } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
@@ -28,6 +28,10 @@ const PANELS = [
   { id: 'tradefinder', label: 'TradeFinder', icon: Zap },
   { id: 'objects', label: 'Objects', icon: Shapes },
   { id: 'agent', label: 'Assistant', icon: Bot },
+  // Below the assistant because it is the newest surface and the one a trader
+  // reaches for last: the badged names, and the contracts liquid enough to
+  // trade them with.
+  { id: 'boost', label: 'Boost strikes', icon: Layers },
 ] as const
 
 /**

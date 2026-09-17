@@ -30,10 +30,10 @@ from database.tf_boost_db import (  # noqa: E402
 )
 from services.history_service import get_history  # noqa: E402
 from services.tf_rank_movement_service import compute_symbol_movement  # noqa: E402
+from services.tf_symbol_alias import tradable_symbol  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 TARGET_PCT = 1.0  # the move that pays on a stock option
-ALIASES = {"TATAMOTORS": "TMPV"}
 
 
 def first_badge(symbol, changes, ranks):
@@ -102,7 +102,7 @@ def main() -> None:
             continue
         try:
             ok, res, _ = get_history(
-                ALIASES.get(symbol, symbol),
+                tradable_symbol(symbol),
                 "NSE",
                 "5m",
                 day,

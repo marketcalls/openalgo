@@ -53,6 +53,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { MOVEMENT_BADGE, minuteOfDay } from '@/lib/trading/boostBadge'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
@@ -502,41 +503,12 @@ function MomentumBadge({ kind, detail }: { kind: 'climb' | 'breakout'; detail: s
   )
 }
 
-/** Salient backend rank-movement events worth a compact badge next to the
- * symbol. CLIMBING/FALLING/NEW/NORMAL are omitted -- the rank-delta arrow
- * already covers small moves, so only the strong events get a chip. */
-const MOVEMENT_BADGE: Record<string, { text: string; className: string }> = {
-  EXTREME_JUMP: { text: 'JUMP', className: 'text-amber-500' },
-  LARGE_JUMP: { text: 'JUMP', className: 'text-amber-400' },
-  FAST_CLIMB: { text: 'FAST', className: 'text-emerald-500' },
-  TOP5_ENTRY: { text: '→T5', className: 'text-emerald-500' },
-  TOP10_ENTRY: { text: '→T10', className: 'text-emerald-500' },
-  TOP20_ENTRY: { text: '→T20', className: 'text-emerald-400' },
-  TOP5_RE_ENTRY: { text: '↻T5', className: 'text-emerald-500' },
-  TOP10_RE_ENTRY: { text: '↻T10', className: 'text-emerald-500' },
-  TOP20_RE_ENTRY: { text: '↻T20', className: 'text-emerald-400' },
-  SUSTAINED_TOP5: { text: '◆T5', className: 'text-sky-400' },
-  SUSTAINED_TOP10: { text: '◆T10', className: 'text-sky-400' },
-  SUSTAINED_TOP20: { text: '◆T20', className: 'text-sky-500' },
-  TOP5_EXIT: { text: 'T5×', className: 'text-red-500' },
-  TOP10_EXIT: { text: 'T10×', className: 'text-red-500' },
-  TOP20_EXIT: { text: 'T20×', className: 'text-red-500' },
-  FAST_DROP: { text: 'DROP', className: 'text-red-500' },
-  CLEAN_RUN_UP: { text: 'RUN↑', className: 'text-emerald-500' },
-  CLEAN_RUN_DOWN: { text: 'RUN↓', className: 'text-red-500' },
-}
-
 /** Only the strongest events raise a toast when `movementAlerts` is on --
- * Top-10 entry/re-entry and above (jumps, fast climb, Top-5). Sustained and
- * Top-20 stay visual-only; they are a state, not a moment. */
+ * Top-10 entry/re-entry and above (jumps, fast climb, Top-5, a clean run).
+ * Sustained and Top-20 stay visual-only; they are a state, not a moment. */
 const MOVEMENT_ALERT_MIN_PRIORITY = 68
 /** A symbol flickering around a threshold must not re-toast for a while. */
 const MOVEMENT_ALERT_COOLDOWN_MS = 5 * 60_000
-
-/** `run_from_min` is a minute-of-day; 574 reads as 09:34. */
-function minuteOfDay(min: number) {
-  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
-}
 
 function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   const badge = MOVEMENT_BADGE[mv.event]

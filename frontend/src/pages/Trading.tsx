@@ -7,6 +7,11 @@ import { Navbar } from '@/components/layout/Navbar'
 // highlighter's grammars and themes behind it. Statically imported, every
 // trader loading a chart paid for a chat they may never open. The heavy
 // visualization packages inside it are already lazy for the same reason.
+const BoostStrikesPanel = lazy(() =>
+  import('@/components/trading/BoostStrikesPanel').then((m) => ({
+    default: m.BoostStrikesPanel,
+  }))
+)
 const AgentPanel = lazy(() =>
   import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
 )
@@ -661,6 +666,15 @@ export default function Trading() {
               onPick={sendToFocusedPane}
               activeSymbol={paneSymbols[focusedPane] ?? null}
             />
+          )}
+          {apiKey && wsUrl && panel === 'boost' && (
+            <Suspense fallback={null}>
+              <BoostStrikesPanel
+                apiKey={apiKey}
+                onPick={sendToFocusedPane}
+                activeSymbol={paneSymbols[focusedPane] ?? undefined}
+              />
+            </Suspense>
           )}
           {apiKey && wsUrl && panel === 'agent' && (
             <Suspense fallback={null}>
