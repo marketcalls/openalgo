@@ -407,7 +407,7 @@ def test_an_empty_day_returns_nothing(monkeypatch):
 # --- Phase 2: the directional run ---------------------------------------------
 
 
-def _pts(values, start=555, step=1):
+def _pts(values, start=560, step=1):  # 09:20, after the settle window
     return [[start + i * step, v] for i, v in enumerate(values)]
 
 
@@ -432,7 +432,7 @@ def test_the_run_is_anchored_at_the_turn_not_the_open():
     values = [2.8, 2.2, 1.6, 1.1, 1.4, 1.9, 2.4, 2.7, 3.2, 3.6, 4.0, 4.3]
     r = compute_run(_pts(values))
     assert r.direction == "up"
-    assert r.from_min == 555 + 3  # the 1.1 trough, not the 09:15 open
+    assert r.from_min == 560 + 3  # the 1.1 trough, not the first print
     assert r.move_pct == 3.2 and r.adverse_pct == 0.0 and r.is_clean
 
 
@@ -452,14 +452,39 @@ def test_a_tiny_move_is_not_a_run():
 
 def test_the_run_event_needs_a_symbol_the_list_rates():
     climb = _pts([1.0, 1.3, 1.6, 1.5, 1.9, 2.3, 2.2, 2.8, 3.4, 3.9, 4.0])
-    ranks = [[555 + i, 8] for i in range(11)]  # a leader, holding rank 8
-    assert compute_symbol_movement("LEADER", ranks, 565, climb)["event"] == "CLEAN_RUN_UP"
+    ranks = [[560 + i, 8] for i in range(11)]  # a leader, holding rank 8
+    assert compute_symbol_movement("LEADER", ranks, 570, climb)["event"] == "CLEAN_RUN_UP"
     # Same clean move, but the list rates it 90th and it has not climbed.
-    ranks_low = [[555 + i, 90] for i in range(11)]
-    row = compute_symbol_movement("IGNORED", ranks_low, 565, climb)
+    ranks_low = [[560 + i, 90] for i in range(11)]
+    row = compute_symbol_movement("IGNORED", ranks_low, 570, climb)
     assert row["event"] != "CLEAN_RUN_UP" and row["run_clean"] is True
 
 
 def test_run_fields_are_absent_without_price_rows():
     row = compute_symbol_movement("NOPRICE", [[555, 9], [556, 4]], latest_minute=556)
     assert row["run_direction"] is None and row["run_clean"] is False
+
+
+def test_the_opening_prints_cannot_anchor_a_run():
+    # PATANJALI on 17-Sep-2026: the 09:15 and 09:16 snapshots both carried a
+    # stale +7.43% that the 09:17 feed corrected to -0.86%. Anchored there, the
+    # engine reported a 10.27-point "fall" in a stock that closed down 2.84%.
+    values = [[555, 7.43], [556, 7.43], [557, -0.86]]
+    values += [[560 + i, -0.9 - i * 0.1] for i in range(12)]  # the real session
+    r = compute_run(values)
+    assert r.direction == "down"
+    assert r.from_min >= 560  # never the pre-open print
+    assert abs(r.move_pct) < 2.0  # the real move, not the 10-point artefact
+
+
+def test_the_day_change_is_carried_beside_the_run():
+    # The run measures travel from a turn; the day change measures the stock.
+    # Both on the row, so neither can be read as the other.
+    changes = [
+        [560 + i, v]
+        for i, v in enumerate([3.0, 2.4, 1.8, 1.2, 0.9, 0.6, 0.3, 0.1, -0.2, -0.5, -0.8])
+    ]
+    ranks = [[560 + i, 12] for i in range(11)]
+    row = compute_symbol_movement("GAPPER", ranks, 570, changes)
+    assert row["day_change_pct"] == -0.8  # what the stock actually did
+    assert row["run_move_pct"] == -3.8  # how far it travelled from its high

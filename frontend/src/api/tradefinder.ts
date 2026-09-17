@@ -134,6 +134,10 @@ export interface BoostMovementRow {
   run_minutes?: number | null
   run_from_min?: number | null
   run_clean?: boolean
+  /** The stock's actual move against yesterday's close. Shown beside the run so
+   * the two are never confused: travelling 10 points down from a spiked opening
+   * print is not a 10% fall. */
+  day_change_pct?: number | null
 }
 
 export interface BoostMovementResponse {

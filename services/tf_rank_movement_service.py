@@ -350,6 +350,14 @@ RUN_ADVERSE_FLOOR = 0.15  # a move that never pulled back still divides by this
 # leader, or one that has climbed its way up today.
 RUN_LEADER_RANK = 20
 RUN_MIN_CLIMB = 10
+# The first prints of the day are not prices anyone traded. Measured on
+# 17-Sep-2026: the 09:15 and 09:16 snapshots carry the same pre-open figure and
+# the 09:16->09:17 correction has a median of 1.38 points and a worst of 8.93 --
+# PATANJALI read +7.43% and was -0.86% a minute later. Anchoring a run there
+# invented a 10-point "fall" in a stock that closed down 2.84%. Everything
+# before this minute is dropped from the run entirely; by 09:20 the median
+# minute-to-minute move is 0.11 points, which is a market, not an artefact.
+RUN_SETTLE_MIN = 9 * 60 + 20
 
 
 @dataclass
@@ -371,6 +379,7 @@ def compute_run(
     min_obs: int = RUN_MIN_OBS,
     min_move: float = RUN_MIN_MOVE_PCT,
     min_efficiency: float = RUN_MIN_EFFICIENCY,
+    settle_min: int = RUN_SETTLE_MIN,
 ) -> RunState | None:
     """Pure: fold [[minute, change_pct], ...] into the shape of the current move.
 
@@ -385,7 +394,7 @@ def compute_run(
     Direction is whichever end of the day is further from here, so a stock that
     turned down in the afternoon reports the decline it is in now.
     """
-    clean = _clean_observations(changes, cast=float)
+    clean = [p for p in _clean_observations(changes, cast=float) if p[0] >= settle_min]
     if len(clean) < min_obs:
         return None
     values = [v for _, v in clean]
@@ -593,6 +602,12 @@ def compute_symbol_movement(
             "run_minutes": run.run_minutes if run else None,
             "run_from_min": run.from_min if run else None,
             "run_clean": bool(run and run.is_clean),
+            # The stock's actual move against yesterday's close. Carried beside
+            # the run so the two can never be confused: a run of 10 points from
+            # a high is not a 10% fall.
+            "day_change_pct": (
+                round(float(changes[-1][1]), 2) if changes and len(changes[-1]) > 1 else None
+            ),
         }
     )
     return out

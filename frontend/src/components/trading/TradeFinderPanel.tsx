@@ -547,9 +547,13 @@ function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   // moved since it turned, and how much of that it has handed back.
   const run =
     mv.run_clean && mv.run_move_pct != null
-      ? ` · ${mv.run_move_pct > 0 ? '+' : ''}${mv.run_move_pct.toFixed(2)}% since ${
+      ? ` · moved ${mv.run_move_pct > 0 ? '+' : ''}${mv.run_move_pct.toFixed(2)} points since ${
           mv.run_from_min != null ? minuteOfDay(mv.run_from_min) : 'the turn'
-        }, gave back ${mv.run_adverse_pct?.toFixed(2)}%`
+        }, gave back ${mv.run_adverse_pct?.toFixed(2)}${
+          mv.day_change_pct != null
+            ? ` · stock is ${mv.day_change_pct > 0 ? '+' : ''}${mv.day_change_pct.toFixed(2)}% on the day`
+            : ''
+        }`
       : ''
   return (
     <span
