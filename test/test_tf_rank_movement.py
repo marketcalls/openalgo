@@ -488,3 +488,21 @@ def test_the_day_change_is_carried_beside_the_run():
     row = compute_symbol_movement("GAPPER", ranks, 570, changes)
     assert row["day_change_pct"] == -0.8  # what the stock actually did
     assert row["run_move_pct"] == -3.8  # how far it travelled from its high
+
+
+def test_a_clean_slow_climber_is_not_hidden_by_the_floor():
+    # DRREDDY's shape on 17-Sep-2026: climbing steadily, giving back almost
+    # nothing, but slowly. The old 1.0 floor kept it off the board while it
+    # climbed 59 -> 20 on rank; at 0.6 it is flagged while the move is still
+    # young, which is the point of an early signal.
+    values = [0.00, 0.08, 0.05, 0.16, 0.22, 0.19, 0.31, 0.44, 0.52, 0.49, 0.61, 0.70]
+    r = compute_run(_pts(values))
+    assert r.direction == "up"
+    assert r.adverse_pct <= 0.1  # barely gives anything back
+    assert r.move_pct < 1.0 and r.is_clean  # would have been blocked before
+
+
+def test_the_floor_still_rejects_drift():
+    # A move at noise level stays out however tidy it looks.
+    r = compute_run(_pts([0.00, 0.03, 0.02, 0.06, 0.09, 0.08, 0.12, 0.15, 0.14, 0.18, 0.21]))
+    assert not r.is_clean

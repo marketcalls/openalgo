@@ -343,7 +343,24 @@ def compute_sustained(
 # Untuned starting points (plan §78): review them against a live session before
 # trusting the thresholds, and expect the numbers, not the flag, to do the work.
 RUN_MIN_OBS = 10  # observations before the shape means anything
-RUN_MIN_MOVE_PCT = 1.0  # points of change_pct between origin and now
+# Points of change_pct between the turn and now. Lowered from 1.0 to 0.6 on the
+# evidence of 17-Sep-2026, where the higher floor was hiding clean movers rather
+# than filtering noise. Replaying the day and acting on the badge:
+#
+#   floor   flags   went on to pay   rate   median flag time
+#    1.00      61              14     23%              10:13
+#    0.60      73              19     26%              10:04
+#    0.50      75              21     28%              09:53
+#
+# More signals, earlier, and the hit rate does not fall -- which is the failure
+# a looser filter normally shows. 0.6 is the conservative end of the 0.4-0.6
+# band the day supports; below 0.5 nothing further is gained. DRREDDY climbed
+# 59->20 giving back 0.21 points and was blocked by the old floor for half an
+# hour; SBILIFE was blocked at 10:15 with an efficiency of 5.1.
+#
+# This is one day, and one day cannot settle a threshold. Review it against the
+# week's recorded data before trusting it.
+RUN_MIN_MOVE_PCT = 0.6
 RUN_MIN_EFFICIENCY = 3.0  # move divided by give-back
 RUN_ADVERSE_FLOOR = 0.15  # a move that never pulled back still divides by this
 # A clean run only counts as an event for a symbol the list already rates: a
