@@ -41,6 +41,7 @@ import {
   tradefinderApi,
 } from '@/api/tradefinder'
 import { watchlistApi } from '@/api/watchlist'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -912,6 +913,10 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
   }, [features.pauseAutoRefresh])
   /** Same reasoning as pauseRef, for retryBackoff -- read fresh inside the
    * poll effect's closure without making it an effect dependency. */
+  // The one app-wide Socket.IO connection, so the panel is told when a snapshot
+  // lands instead of discovering it on its own timer.
+  const { socket } = useSocketContext()
+
   const featuresRef = useRef(features)
   useEffect(() => {
     featuresRef.current = features
@@ -1161,12 +1166,19 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
       }
     }
     load()
+    // The snapshot is written 0.8s after the minute, so waiting on a blind 60s
+    // timer added another 31s on average before the badge reached the screen.
+    // The recorder now emits `boost_snapshot` the moment the row exists; the
+    // timer stays as the fallback for a disconnected socket or an older backend.
+    const onSnapshot = () => load()
+    socket?.on('boost_snapshot', onSnapshot)
     const timer = setInterval(load, 60_000)
     return () => {
       alive = false
+      socket?.off('boost_snapshot', onSnapshot)
       clearInterval(timer)
     }
-  }, [apiKey, view])
+  }, [apiKey, view, socket])
 
   /* ── rank-movement alerts: toast a NEW salient backend event. The first
      populated poll of each list only sets a baseline (otherwise every event

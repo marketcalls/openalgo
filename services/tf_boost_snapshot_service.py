@@ -229,6 +229,24 @@ def _run_snapshot_tick():
         except Exception as e:
             logger.warning(f"tf_boost_snapshot: DB write failed for sector index: {e}")
 
+    # Tell the panels the moment the row exists, rather than leaving them to
+    # find it on their own timer. The recorder writes 0.8s after the minute
+    # (median, measured 17-Sep-2026) but a 60s blind poll then sat on it for
+    # another 31s on average and up to a minute -- so a badge that the data
+    # supported at 10:04 could reach the screen at 10:05. One event closes that.
+    if total_inserted:
+        try:
+            from extensions import socketio
+
+            socketio.emit(
+                "boost_snapshot",
+                {"snapshot_time": snapshot_time.isoformat(), "rows": total_inserted},
+            )
+        except Exception as e:
+            # A panel that misses the nudge still refreshes on its own timer, so
+            # this must never cost the tick its snapshot.
+            logger.debug(f"tf_boost_snapshot: socket notify skipped: {e}")
+
     # Last, and unconditionally: a tick that fetched nothing is exactly the tick
     # a later study most needs to know about. The early returns this block
     # replaced are why 13 of 38 captured days cannot be told apart from quiet
