@@ -11,12 +11,13 @@
  * once would be slow and would spend the rate limit on contracts nobody opened.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { optionChainApi } from '@/api/option-chain'
 import { type BoostMovementRow, tradefinderApi } from '@/api/tradefinder'
 import { badgeFor } from '@/lib/trading/boostBadge'
 import { tradableSymbol } from '@/lib/trading/tfSymbol'
 import { cn } from '@/lib/utils'
+import { PANEL_HEADER, PanelShell } from './panelShell'
 
 interface Props {
   apiKey: string
@@ -42,6 +43,12 @@ interface StrikeRow {
 
 /** A contract nobody is trading cannot be got out of, whatever it shows. */
 const MIN_VOLUME = 10_000
+/** Where the split between the two sections is remembered. */
+const LIST_HEIGHT_KEY = 'oa-trading-boost-list-height'
+const DEFAULT_LIST_HEIGHT = 240
+/** Below this a section shows fewer than three rows and stops being a list. */
+const MIN_SECTION = 96
+const MAX_SECTION = 600
 const STRIKES_SHOWN = 8
 
 function spreadPct(row: StrikeRow): number | null {
@@ -147,6 +154,57 @@ export function BoostStrikesPanel({ apiKey, onPick, activeSymbol }: Props) {
     }
   }, [apiKey, selected])
 
+  // How much of the panel the stock list gets. A trader watching two names
+  // wants most of it on strikes; one watching twenty wants the opposite, and
+  // no single split serves both -- so it is dragged and remembered, the same
+  // way PanelShell treats the panel's own width.
+  const [listHeight, setListHeight] = useState(() => {
+    const saved = Number(localStorage.getItem(LIST_HEIGHT_KEY))
+    return Number.isFinite(saved) && saved >= MIN_SECTION && saved <= MAX_SECTION
+      ? saved
+      : DEFAULT_LIST_HEIGHT
+  })
+  const heightRef = useRef(listHeight)
+  const persistHeight = useCallback((value: number) => {
+    localStorage.setItem(LIST_HEIGHT_KEY, String(Math.round(value)))
+  }, [])
+  /** Moves the divider and keeps the ref in step in the same breath.
+   *
+   * Assigning the ref during render instead leaves it a beat behind: a drag
+   * that is one move and a release, or a key pressed and let go quickly, runs
+   * its handler before React has re-rendered, and what gets written to storage
+   * is the value from before the gesture. */
+  const applyHeight = useCallback((next: number) => {
+    const clamped = Math.min(MAX_SECTION, Math.max(MIN_SECTION, next))
+    heightRef.current = clamped
+    setListHeight(clamped)
+  }, [])
+
+  const startDrag = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      const startY = event.clientY
+      const startHeight = heightRef.current
+      const onMove = (e: PointerEvent) => {
+        // Dragging down grows the list above the handle.
+        applyHeight(startHeight + (e.clientY - startY))
+      }
+      const onUp = () => {
+        document.body.classList.remove('select-none', 'cursor-row-resize')
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
+        persistHeight(heightRef.current)
+      }
+      document.body.classList.add('select-none', 'cursor-row-resize')
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointercancel', onUp)
+    },
+    [persistHeight, applyHeight]
+  )
+
   const badge = movement.find((row) => row.symbol === selected)
   /** An up badge points at calls and a down badge at puts, so the side the
    * signal actually called is listed first rather than left to be found. */
@@ -163,122 +221,152 @@ export function BoostStrikesPanel({ apiKey, onPick, activeSymbol }: Props) {
   }, [strikes, preferredSide])
 
   return (
-    <div className="flex h-full min-h-0 flex-col text-[12px]">
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b px-2 py-1.5">
-          <span className="font-medium">Badged stocks</span>
-          <span className="text-[10px] text-muted-foreground">{movement.length}</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {movement.length === 0 && (
-            <p className="px-2 py-3 text-[11px] text-muted-foreground">
-              Nothing is badged right now. Stocks appear here once the engine has enough of today's
-              snapshots to call a move, from about 09:30.
-            </p>
-          )}
-          {movement.map((row) => {
-            const style = badgeFor(row.event)
-            return (
-              <button
-                key={row.symbol}
-                type="button"
-                onClick={() => {
-                  setSelected(row.symbol)
-                  onPick?.({ symbol: row.symbol, exchange: 'NSE' })
-                }}
-                className={cn(
-                  'flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-accent',
-                  selected === row.symbol && 'bg-accent',
-                  activeSymbol === row.symbol && 'font-medium'
-                )}
-              >
-                <span className="w-6 shrink-0 text-right tabular-nums text-muted-foreground">
-                  {row.current_rank}
-                </span>
-                <span className="flex-1 truncate">{row.symbol}</span>
-                {style && (
-                  <span className={cn('shrink-0 text-[10px] font-bold', style.className)}>
-                    {style.text}
-                  </span>
-                )}
-                <span className="w-14 shrink-0 text-right tabular-nums">
-                  {row.day_change_pct != null ? `${row.day_change_pct.toFixed(2)}%` : ''}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+    <PanelShell
+      id="oa-panel-boost"
+      label="Boost strikes"
+      storageKey="oa-trading-boost-width"
+      defaultWidth={300}
+    >
+      {/* The header's rule lands on the same line as every pane toolbar's, so
+          the workspace reads as one horizon rather than a panel bolted on. */}
+      <div className={PANEL_HEADER}>
+        <span className="flex-1 truncate text-[13px] font-medium">Badged stocks</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">{movement.length}</span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col border-t">
-        <div className="flex items-center justify-between border-b px-2 py-1.5">
-          <span className="font-medium">
-            {selected ? `${selected} strikes` : 'Strikes'}
-            {badge?.run_direction && (
-              <span className="ml-1 text-[10px] text-muted-foreground">{preferredSide} first</span>
-            )}
-          </span>
-          <span className="text-[10px] text-muted-foreground">{expiry ?? ''}</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {loading && <p className="px-2 py-3 text-[11px] text-muted-foreground">Loading…</p>}
-          {!loading && error && <p className="px-2 py-3 text-[11px] text-red-500">{error}</p>}
-          {!loading && !error && liquid.length === 0 && selected && (
-            <p className="px-2 py-3 text-[11px] text-muted-foreground">
-              No strike on this stock has traded {MIN_VOLUME.toLocaleString()} contracts today.
-              Anything thinner is hard to get out of.
-            </p>
-          )}
-          {!loading && liquid.length > 0 && (
-            <table className="w-full">
-              <thead className="text-[10px] text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1 text-left font-normal">strike</th>
-                  <th className="py-1 text-right font-normal">ltp</th>
-                  <th className="py-1 text-right font-normal">spread</th>
-                  <th className="py-1 text-right font-normal">volume</th>
-                  <th className="px-2 py-1 text-right font-normal">lot</th>
-                </tr>
-              </thead>
-              <tbody className="tabular-nums">
-                {liquid.map((row) => {
-                  const spread = spreadPct(row)
-                  return (
-                    <tr key={row.symbol} className="hover:bg-accent">
-                      <td className="px-2 py-1">
-                        <span
-                          className={cn(
-                            'font-medium',
-                            row.side === 'CE' ? 'text-emerald-500' : 'text-red-500'
-                          )}
-                        >
-                          {row.strike} {row.side}
-                        </span>
-                        {row.label && (
-                          <span className="ml-1 text-[10px] text-muted-foreground">
-                            {row.label}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1 text-right">{row.ltp.toFixed(2)}</td>
-                      <td
+      <div className="min-h-0 shrink-0 overflow-y-auto" style={{ height: listHeight }}>
+        {movement.length === 0 && (
+          <p className="px-2 py-3 text-[11px] text-muted-foreground">
+            Nothing is badged right now. Stocks appear here once the engine has enough of today's
+            snapshots to call a move, from about 09:30.
+          </p>
+        )}
+        {movement.map((row) => {
+          const style = badgeFor(row.event)
+          return (
+            <button
+              key={row.symbol}
+              type="button"
+              onClick={() => {
+                setSelected(row.symbol)
+                onPick?.({ symbol: row.symbol, exchange: 'NSE' })
+              }}
+              className={cn(
+                'flex w-full items-center gap-1.5 px-2 py-1 text-left text-[12px] hover:bg-accent',
+                selected === row.symbol && 'bg-accent',
+                activeSymbol === row.symbol && 'font-medium'
+              )}
+            >
+              <span className="w-5 shrink-0 text-right tabular-nums text-muted-foreground">
+                {row.current_rank}
+              </span>
+              <span className="flex-1 truncate">{row.symbol}</span>
+              {style && (
+                <span className={cn('shrink-0 text-[10px] font-bold', style.className)}>
+                  {style.text}
+                </span>
+              )}
+              <span className="w-12 shrink-0 text-right tabular-nums">
+                {row.day_change_pct != null ? `${row.day_change_pct.toFixed(2)}%` : ''}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* The divider between the sections, dragged like the panel's own edge.
+          Keyboard users get the arrow keys rather than a pointer gesture. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: the rule points at <hr>,
+          which cannot be focusable or carry pointer handlers. role=separator
+          with tabindex and aria-valuenow IS the ARIA window-splitter pattern. */}
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize badged stocks"
+        aria-valuenow={listHeight}
+        aria-valuemin={MIN_SECTION}
+        aria-valuemax={MAX_SECTION}
+        tabIndex={0}
+        onPointerDown={startDrag}
+        onKeyDown={(e) => {
+          const step = e.key === 'ArrowUp' ? -16 : e.key === 'ArrowDown' ? 16 : 0
+          if (!step) return
+          applyHeight(heightRef.current + step)
+          e.preventDefault()
+        }}
+        onKeyUp={() => persistHeight(heightRef.current)}
+        onBlur={() => persistHeight(heightRef.current)}
+        className="h-1 shrink-0 cursor-row-resize border-t bg-transparent transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
+      />
+
+      <div className={cn(PANEL_HEADER, 'border-t')}>
+        <span className="flex-1 truncate text-[13px] font-medium">
+          {selected ? `${selected} strikes` : 'Strikes'}
+        </span>
+        {badge?.run_direction && (
+          <span className="shrink-0 text-[10px] text-muted-foreground">{preferredSide} first</span>
+        )}
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {expiry ?? ''}
+        </span>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading && <p className="px-2 py-3 text-[11px] text-muted-foreground">Loading…</p>}
+        {!loading && error && <p className="px-2 py-3 text-[11px] text-red-500">{error}</p>}
+        {!loading && !error && liquid.length === 0 && selected && (
+          <p className="px-2 py-3 text-[11px] text-muted-foreground">
+            No strike on this stock has traded {MIN_VOLUME.toLocaleString()} contracts today.
+            Anything thinner is hard to get out of.
+          </p>
+        )}
+        {!loading && liquid.length > 0 && (
+          <table className="w-full text-[12px]">
+            <thead className="text-[10px] text-muted-foreground">
+              <tr>
+                <th className="px-2 py-1 text-left font-normal">Strike</th>
+                <th className="py-1 text-right font-normal">LTP</th>
+                <th className="py-1 text-right font-normal">Spread</th>
+                <th className="py-1 text-right font-normal">Volume</th>
+                <th className="px-2 py-1 text-right font-normal">Lot</th>
+              </tr>
+            </thead>
+            <tbody className="tabular-nums">
+              {liquid.map((row) => {
+                const spread = spreadPct(row)
+                return (
+                  <tr key={row.symbol} className="hover:bg-accent">
+                    <td className="px-2 py-1">
+                      <span
                         className={cn(
-                          'py-1 text-right',
-                          spread != null && spread > 2 && 'text-amber-500'
+                          'font-medium',
+                          row.side === 'CE' ? 'text-emerald-500' : 'text-red-500'
                         )}
                       >
-                        {spread != null ? `${spread.toFixed(1)}%` : '—'}
-                      </td>
-                      <td className="py-1 text-right">{(row.volume / 1000).toFixed(0)}k</td>
-                      <td className="px-2 py-1 text-right text-muted-foreground">{row.lotsize}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                        {row.strike} {row.side}
+                      </span>
+                      {row.label && (
+                        <span className="ml-1 text-[10px] text-muted-foreground">{row.label}</span>
+                      )}
+                    </td>
+                    <td className="py-1 text-right">{row.ltp.toFixed(2)}</td>
+                    <td
+                      className={cn(
+                        'py-1 text-right',
+                        spread != null && spread > 2 && 'text-amber-500'
+                      )}
+                    >
+                      {spread != null ? `${spread.toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="py-1 pl-2 text-right">{(row.volume / 1000).toFixed(0)}k</td>
+                    <td className="px-2 py-1 text-right text-muted-foreground">{row.lotsize}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
-    </div>
+    </PanelShell>
   )
 }
