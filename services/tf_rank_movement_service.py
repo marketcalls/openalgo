@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from database.tf_boost_db import get_boost_rank_timeline
+from database.tf_boost_db import get_boost_change_timeline, get_boost_rank_timeline
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -175,14 +175,19 @@ class TopNTransition:
     kind: str  # 'ENTRY' | 'RE_ENTRY' | 'EXIT'
 
 
-def _clean_observations(observations: list[list[int]]) -> list[tuple[int, int]]:
-    """Strictly-increasing [minute, rank] pairs; shared by the movement and
-    Top-N passes so both see the same de-duplicated series."""
-    clean: list[tuple[int, int]] = []
+def _clean_observations(observations, cast=int):
+    """Strictly-increasing [minute, value] pairs; shared by the movement, Top-N
+    and directional-run passes so they all see the same de-duplicated series.
+
+    `cast` is what the second element is: a rank is an int, a change_pct is a
+    float and must stay one -- truncating it turned every move into a whole
+    number of percent and every give-back into 0 or 1.
+    """
+    clean: list[tuple[int, float]] = []
     for pair in observations:
         if not pair or len(pair) < 2:
             continue
-        m, r = int(pair[0]), int(pair[1])
+        m, r = int(pair[0]), cast(pair[1])
         if clean and m <= clean[-1][0]:
             continue
         clean.append((m, r))
@@ -326,6 +331,96 @@ def compute_sustained(
     )
 
 
+# --- Phase 2: directional run (price) ---------------------------------------
+# What a trader means by "it is going one way and not giving it back". The
+# candles said this plainly on 17-Sep-2026: the day's best names had barely more
+# green 5-minute bars than red (SBILIFE 57%, HDFCLIFE 52%, ALKEM 48%) and half
+# of every bar was wick, so a run of green candles is not the signal. What
+# separated them was the deepest pullback from the running extreme -- under 1%
+# for every winner against a 3-4% move, and 3.07% for HYUNDAI, which went
+# nowhere. So a run is measured as move against give-back, not as a streak.
+#
+# Untuned starting points (plan §78): review them against a live session before
+# trusting the thresholds, and expect the numbers, not the flag, to do the work.
+RUN_MIN_OBS = 10  # observations before the shape means anything
+RUN_MIN_MOVE_PCT = 1.0  # points of change_pct between origin and now
+RUN_MIN_EFFICIENCY = 3.0  # move divided by give-back
+RUN_ADVERSE_FLOOR = 0.15  # a move that never pulled back still divides by this
+# A clean run only counts as an event for a symbol the list already rates: a
+# leader, or one that has climbed its way up today.
+RUN_LEADER_RANK = 20
+RUN_MIN_CLIMB = 10
+
+
+@dataclass
+class RunState:
+    """How one-directional the current move is, and how much it gave back."""
+
+    observations: int
+    direction: str | None  # 'up' | 'down' | None when it has not moved at all
+    move_pct: float  # change_pct now minus change_pct at the turn
+    adverse_pct: float  # deepest pullback since the turn, in points
+    efficiency: float  # abs(move) / max(adverse, RUN_ADVERSE_FLOOR)
+    from_min: int  # minute-of-day the run started
+    run_minutes: int  # how long it has been running
+    is_clean: bool  # moved enough, and kept most of it
+
+
+def compute_run(
+    changes: list[list[float]],
+    min_obs: int = RUN_MIN_OBS,
+    min_move: float = RUN_MIN_MOVE_PCT,
+    min_efficiency: float = RUN_MIN_EFFICIENCY,
+) -> RunState | None:
+    """Pure: fold [[minute, change_pct], ...] into the shape of the current move.
+
+    The run is anchored where the current direction began -- the day's low for an
+    up move, its high for a down one -- not at the first observation. Measuring
+    from the open charges a stock for a shakeout it has long since left behind:
+    SBILIFE on 17-Sep-2026 opened +2.79%, fell to +1.08% by 10:21 and then rose
+    all day to +4.25%. From the open that reads as a 2.29-point give-back and no
+    run at all; from the 09:56 turn it is a 3.75-point move that gave back 0.65,
+    which is what the trader watching it saw.
+
+    Direction is whichever end of the day is further from here, so a stock that
+    turned down in the afternoon reports the decline it is in now.
+    """
+    clean = _clean_observations(changes, cast=float)
+    if len(clean) < min_obs:
+        return None
+    values = [v for _, v in clean]
+    now = values[-1]
+    low_i, high_i = values.index(min(values)), values.index(max(values))
+    up_move, down_move = now - values[low_i], now - values[high_i]
+
+    if up_move == 0 and down_move == 0:
+        direction, anchor, move = None, len(values) - 1, 0.0
+    elif abs(up_move) >= abs(down_move):
+        direction, anchor, move = "up", low_i, up_move
+    else:
+        direction, anchor, move = "down", high_i, down_move
+
+    adverse = 0.0
+    if direction is not None:
+        extreme = values[anchor]
+        for value in values[anchor:]:
+            extreme = max(extreme, value) if direction == "up" else min(extreme, value)
+            give_back = (extreme - value) if direction == "up" else (value - extreme)
+            adverse = max(adverse, give_back)
+
+    efficiency = abs(move) / max(adverse, RUN_ADVERSE_FLOOR)
+    return RunState(
+        observations=len(clean),
+        direction=direction,
+        move_pct=round(move, 2),
+        adverse_pct=round(adverse, 2),
+        efficiency=round(efficiency, 2),
+        from_min=clean[anchor][0],
+        run_minutes=clean[-1][0] - clean[anchor][0],
+        is_clean=(direction is not None and abs(move) >= min_move and efficiency >= min_efficiency),
+    )
+
+
 # --- Phase 1E: event classification -----------------------------------------
 # One salient label per symbol for the current step, chosen by priority (plan
 # §59/§60). Jump thresholds act on a single step's rank_delta; fast-climb on the
@@ -339,6 +434,10 @@ FAST_CLIMB_MIN_VELOCITY = 5.0
 _EVENT_PRIORITY: dict[str, int] = {
     # A symbol not on the current list has no current event -- see ABSENT below.
     "EXTREME_JUMP": 100,
+    # A clean directional run outranks a fast climb: it is the state a trader is
+    # actually looking for, and it has held all day rather than for one step.
+    "CLEAN_RUN_UP": 85,
+    "CLEAN_RUN_DOWN": 84,
     "LARGE_JUMP": 90,
     "FAST_CLIMB": 80,
     "TOP5_ENTRY": 75,
@@ -375,6 +474,7 @@ def classify_event(
     zones: dict[int, TopNZone],
     transitions: list[TopNTransition],
     sustained: SustainedState | None,
+    run: RunState | None = None,
 ) -> tuple[str, int]:
     """Pure: pick the single most salient event for the symbol's latest step.
 
@@ -417,6 +517,17 @@ def classify_event(
         elif sustained.sustained_top20:
             candidates.append("SUSTAINED_TOP20")
 
+    # A clean run is only news for a symbol the list already rates -- a leader,
+    # or one that climbed here today. Otherwise a quiet stock drifting one way
+    # at rank 90 would outrank everything actually happening.
+    if run is not None and run.is_clean and run.direction is not None:
+        rated = (
+            state.current_rank <= RUN_LEADER_RANK
+            or (state.first_seen_rank - state.current_rank) >= RUN_MIN_CLIMB
+        )
+        if rated:
+            candidates.append("CLEAN_RUN_UP" if run.direction == "up" else "CLEAN_RUN_DOWN")
+
     if state.observations == 1:
         candidates.append("NEW")
     if not candidates:
@@ -430,6 +541,7 @@ def compute_symbol_movement(
     symbol: str,
     observations: list[list[int]],
     latest_minute: int | None = None,
+    changes: list[list[float]] | None = None,
 ) -> dict | None:
     """Pure: the full current-day picture for one symbol as a flat dict — the
     RankUIModel the API and frontend consume (plan §49/§92). None if unusable.
@@ -446,7 +558,8 @@ def compute_symbol_movement(
         return None
     zones, transitions = compute_topn(symbol, observations)
     sustained = compute_sustained(symbol, observations)
-    event, priority = classify_event(state, zones, transitions, sustained)
+    run = compute_run(changes) if changes else None
+    event, priority = classify_event(state, zones, transitions, sustained, run)
     stale_by = 0 if latest_minute is None else max(0, latest_minute - state.last_seen_min)
     present = stale_by <= PRESENCE_TOLERANCE_MIN
     if not present:
@@ -471,6 +584,15 @@ def compute_symbol_movement(
             "event_priority": priority,
             "present": present,
             "minutes_since_last_seen": stale_by,
+            # Phase 2 directional run -- None throughout when the day has no
+            # price rows yet, so an older consumer simply shows nothing.
+            "run_direction": run.direction if run else None,
+            "run_move_pct": run.move_pct if run else None,
+            "run_adverse_pct": run.adverse_pct if run else None,
+            "run_efficiency": run.efficiency if run else None,
+            "run_minutes": run.run_minutes if run else None,
+            "run_from_min": run.from_min if run else None,
+            "run_clean": bool(run and run.is_clean),
         }
     )
     return out
@@ -499,9 +621,15 @@ def movement_snapshot(date: str = "", list_type: str = "intraday_boost") -> list
         (obs[-1][0] for days in per_symbol_days.values() for obs in [days.get(day, [])] if obs),
         default=None,
     )
+    per_symbol_changes = get_boost_change_timeline(day, day, list_type)
     rows: list[dict] = []
     for sym, days in per_symbol_days.items():
-        row = compute_symbol_movement(sym, days.get(day, []), latest_minute)
+        row = compute_symbol_movement(
+            sym,
+            days.get(day, []),
+            latest_minute,
+            per_symbol_changes.get(sym, {}).get(day, []),
+        )
         if row is not None:
             rows.append(row)
     rows.sort(key=lambda r: r["current_rank"])

@@ -345,3 +345,47 @@ def get_boost_price_timeline(
     for symbol, day, min_of_day, ltp in rows:
         timeline.setdefault(symbol, {}).setdefault(day, []).append([int(min_of_day), float(ltp)])
     return timeline
+
+
+def get_boost_change_timeline(
+    start_date: str,
+    end_date: str | None = None,
+    list_type: str = "intraday_boost",
+) -> dict[str, dict[str, list[list[float]]]]:
+    """Return every symbol's change-from-previous-close over time:
+    {symbol: {day: [[minute_of_day, change_pct], ...]}}, sorted by time.
+
+    A third sibling of get_boost_rank_timeline, for the same reason the price
+    one exists: that function's exact [minute, rank] shape backs the ISI
+    backtest gate and is left alone. Percent rather than ltp because the
+    directional-run engine compares a move against its own pullback, and points
+    of percent are comparable across a 300-rupee stock and a 5000-rupee one.
+    Rows with a NULL change_pct are skipped. Returns {} on any failure.
+    """
+    end_date = end_date or start_date
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol,
+                       strftime(snapshot_date, '%Y-%m-%d') AS day,
+                       hour(snapshot_time) * 60 + minute(snapshot_time) AS min_of_day,
+                       change_pct
+                FROM tf_boost_snapshots
+                WHERE snapshot_date BETWEEN ? AND ?
+                  AND list_type = ?
+                  AND change_pct IS NOT NULL
+                ORDER BY symbol, snapshot_time
+                """,
+                [start_date, end_date, list_type],
+            ).fetchall()
+    except Exception as e:
+        logger.warning(f"get_boost_change_timeline({start_date}..{end_date}, {list_type}): {e}")
+        return {}
+
+    timeline: dict[str, dict[str, list[list[float]]]] = {}
+    for symbol, day, min_of_day, change_pct in rows:
+        timeline.setdefault(symbol, {}).setdefault(day, []).append(
+            [int(min_of_day), float(change_pct)]
+        )
+    return timeline

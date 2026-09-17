@@ -521,6 +521,8 @@ const MOVEMENT_BADGE: Record<string, { text: string; className: string }> = {
   TOP10_EXIT: { text: 'T10×', className: 'text-red-500' },
   TOP20_EXIT: { text: 'T20×', className: 'text-red-500' },
   FAST_DROP: { text: 'DROP', className: 'text-red-500' },
+  CLEAN_RUN_UP: { text: 'RUN↑', className: 'text-emerald-500' },
+  CLEAN_RUN_DOWN: { text: 'RUN↓', className: 'text-red-500' },
 }
 
 /** Only the strongest events raise a toast when `movementAlerts` is on --
@@ -530,15 +532,28 @@ const MOVEMENT_ALERT_MIN_PRIORITY = 68
 /** A symbol flickering around a threshold must not re-toast for a while. */
 const MOVEMENT_ALERT_COOLDOWN_MS = 5 * 60_000
 
+/** `run_from_min` is a minute-of-day; 574 reads as 09:34. */
+function minuteOfDay(min: number) {
+  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+}
+
 function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   const badge = MOVEMENT_BADGE[mv.event]
   if (!badge) return null
   const vel = mv.rank_velocity != null ? ` · ${mv.rank_velocity.toFixed(1)}/min` : ''
   const zone =
     mv.is_stable_zone && mv.zone_low != null ? ` · zone ${mv.zone_low}-${mv.zone_high}` : ''
+  // The run is the whole point of the badge when there is one: how far it has
+  // moved since it turned, and how much of that it has handed back.
+  const run =
+    mv.run_clean && mv.run_move_pct != null
+      ? ` · ${mv.run_move_pct > 0 ? '+' : ''}${mv.run_move_pct.toFixed(2)}% since ${
+          mv.run_from_min != null ? minuteOfDay(mv.run_from_min) : 'the turn'
+        }, gave back ${mv.run_adverse_pct?.toFixed(2)}%`
+      : ''
   return (
     <span
-      title={`${mv.event.replace(/_/g, ' ')} · ${mv.first_seen_rank}→${mv.current_rank}${vel}${zone}`}
+      title={`${mv.event.replace(/_/g, ' ')} · ${mv.first_seen_rank}→${mv.current_rank}${vel}${zone}${run}`}
       className={cn('shrink-0 text-[10px] font-bold tabular-nums', badge.className)}
     >
       {badge.text}

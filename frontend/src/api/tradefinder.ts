@@ -123,6 +123,17 @@ export interface BoostMovementRow {
    * omits it, and the badge map simply has no entry for ABSENT either way. */
   present?: boolean
   minutes_since_last_seen?: number
+  /** Phase 2 directional run: the current move measured from the turn it began
+   * at, not from the open. `run_efficiency` is the move divided by the deepest
+   * pullback since -- how much it has given back. Null on an older backend or
+   * before there are enough price rows. */
+  run_direction?: 'up' | 'down' | null
+  run_move_pct?: number | null
+  run_adverse_pct?: number | null
+  run_efficiency?: number | null
+  run_minutes?: number | null
+  run_from_min?: number | null
+  run_clean?: boolean
 }
 
 export interface BoostMovementResponse {
