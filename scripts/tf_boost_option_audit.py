@@ -146,7 +146,22 @@ def option_outcome(bars, badge_min):
     best = max(b["high"] for b in after)
     worst = min(b["low"] for b in after)
     volumes = [b["volume"] for b in after]
+    # Nobody holds an option to the bell. Walk the bars in order and see which
+    # came first, the target or the stop -- within a bar the stop is assumed to
+    # hit first, which is the pessimistic reading and the honest one.
+    paths = {}
+    for target, stop in ((25, 25), (50, 25), (15, 15)):
+        hit = None
+        for b in after:
+            if b["low"] <= entry * (1 - stop / 100):
+                hit = "stopped"
+                break
+            if b["high"] >= entry * (1 + target / 100):
+                hit = "target"
+                break
+        paths[f"t{target}s{stop}"] = hit or "neither"
     return {
+        **paths,
         "premium": round(entry, 2),
         "best_pct": round((best - entry) / entry * 100),
         "worst_pct": round((worst - entry) / entry * 100),
@@ -319,10 +334,21 @@ def report(day, results, problems):
         closes = [r["option"]["close_pct"] for r in liquid]
         winners = [c for c in closes if c > 0]
         print(
-            f"option at close: {len(winners)} of {len(liquid)} in profit, "
+            f"option held to the close: {len(winners)} of {len(liquid)} in profit, "
             f"median {statistics.median(closes):+.0f}%, best {max(closes):+.0f}%, "
             f"worst {min(closes):+.0f}%"
         )
+        print("\noption traded with a target and a stop (liquid contracts only):")
+        for key, target, stop in (("t15s15", 15, 15), ("t25s25", 25, 25), ("t50s25", 50, 25)):
+            won = sum(1 for r in liquid if r["option"][key] == "target")
+            lost = sum(1 for r in liquid if r["option"][key] == "stopped")
+            flat = sum(1 for r in liquid if r["option"][key] == "neither")
+            net = won * target - lost * stop
+            print(
+                f"   +{target}% target / {stop}% stop:  {won:>3} hit target, "
+                f"{lost:>3} stopped, {flat:>3} neither   net {net:+d}% across "
+                f"{len(liquid)} trades ({net / max(1, len(liquid)):+.1f}% each)"
+            )
     checked = sum(r["price_checked"] for r in results)
     outside = sum(r["price_outside"] for r in results)
     print(
