@@ -7,8 +7,10 @@ get their own cases then.
 """
 
 from services.tf_rank_movement_service import (
+    TOP_N_THRESHOLDS,
     compute_rank_state,
     compute_rank_states,
+    compute_topn,
     rank_movement_service,
 )
 
@@ -108,6 +110,58 @@ def test_compute_rank_states_maps_symbols():
     assert set(states) == {"UP", "DOWN", "SOLO"}  # EMPTY dropped
     assert states["UP"].rank_delta == 10
     assert states["DOWN"].rank_delta == -7
+
+
+def test_topn_climb_crosses_each_zone_once():
+    # §22/§27: 62 -> 1 enters Top-20, Top-10, Top-5 exactly once each.
+    obs = [[555, 62], [557, 58], [559, 45], [561, 40], [563, 20], [565, 8], [567, 3], [569, 1]]
+    zones, trans = compute_topn("PATANJALI", obs)
+    for n in TOP_N_THRESHOLDS:
+        assert zones[n].inside is True
+        assert zones[n].entries == 1
+        assert zones[n].last_event == f"TOP{n}_ENTRY"
+    assert {(t.threshold, t.kind) for t in trans} == {(5, "ENTRY"), (10, "ENTRY"), (20, "ENTRY")}
+
+
+def test_topn_no_repeat_while_inside():
+    # §22: many ticks inside Top-10 produce a single ENTRY, not one per tick.
+    zones, trans = compute_topn("H", [[0, 8], [2, 7], [4, 9], [6, 6], [8, 8]])
+    assert zones[10].entries == 1
+    assert zones[10].continuous_min == 8  # entered at min 0, last inside at min 8
+    assert zones[10].cumulative_min == 8
+    assert len([t for t in trans if t.threshold == 10]) == 1
+
+
+def test_topn_exit_closes_stretch_at_last_inside_minute():
+    # 8 (in) at 0, 9 (in) at 2, 25 (out) at 6: stretch is 2 minutes (0->2), not 6.
+    zones, trans = compute_topn("M", [[0, 8], [2, 9], [6, 25]])
+    assert zones[10].inside is False
+    assert zones[10].cumulative_min == 2
+    assert zones[10].continuous_min == 0
+    assert [t.kind for t in trans if t.threshold == 10] == ["ENTRY", "EXIT"]
+
+
+def test_topn_re_entry_is_distinct_from_persistence():
+    # §25: 8 -> 12 -> 15 -> 9 is ENTRY, EXIT, then RE_ENTRY into Top-10.
+    zones, trans = compute_topn("K", [[0, 8], [2, 12], [4, 15], [6, 9]])
+    assert zones[10].entries == 2
+    assert zones[10].inside is True
+    assert zones[10].last_event == "TOP10_RE_ENTRY"
+    assert [t.kind for t in trans if t.threshold == 10] == ["ENTRY", "EXIT", "RE_ENTRY"]
+
+
+def test_topn_disappearance_keeps_last_known_standing():
+    # §42: last seen inside Top-10 then no more snapshots -> stays inside, no EXIT.
+    zones, trans = compute_topn("L", [[0, 20], [2, 8]])
+    assert zones[10].inside is True
+    assert not any(t.kind == "EXIT" for t in trans)
+
+
+def test_topn_never_entered():
+    # A symbol that is always rank > 20 has empty zones and no transitions.
+    zones, trans = compute_topn("N", [[0, 40], [2, 35], [4, 30]])
+    assert all(not zones[n].inside and zones[n].entries == 0 for n in TOP_N_THRESHOLDS)
+    assert trans == []
 
 
 def test_service_wrapper_degrades_to_empty_on_missing_day(monkeypatch):

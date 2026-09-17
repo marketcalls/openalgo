@@ -76,14 +76,7 @@ def compute_rank_state(symbol: str, observations: list[list[int]]) -> RankState 
     if there is nothing usable.
     """
     # Keep only strictly-increasing minutes, guarding against dupes/disorder.
-    clean: list[tuple[int, int]] = []
-    for pair in observations:
-        if not pair or len(pair) < 2:
-            continue
-        m, r = int(pair[0]), int(pair[1])
-        if clean and m <= clean[-1][0]:
-            continue
-        clean.append((m, r))
+    clean = _clean_observations(observations)
     if not clean:
         return None
 
@@ -139,6 +132,124 @@ def compute_rank_state(symbol: str, observations: list[list[int]]) -> RankState 
         consecutive_improving=consec_improve,
         consecutive_deteriorating=consec_deteriorate,
     )
+
+
+# Top-N zones the engine tracks, best (smallest) first. Centralized here rather
+# than hardcoded per call site (plan §21/§86); Top-30 can be added if a consumer
+# ever needs it, but nothing does today.
+TOP_N_THRESHOLDS: tuple[int, ...] = (5, 10, 20)
+
+
+@dataclass
+class TopNZone:
+    """A symbol's current-day standing in one Top-N zone (rank <= threshold).
+
+    Times are minutes-of-day. `continuous_min` is the span of the open stretch
+    since the last entry (0 when outside); `cumulative_min` sums every stretch
+    spent inside today. Durations are measured between observed minutes, so a
+    gap in the snapshots widens them honestly rather than being invented."""
+
+    threshold: int
+    inside: bool
+    entered_min: int | None
+    entries: int
+    continuous_min: int
+    cumulative_min: int
+    last_event: str | None
+    last_event_min: int | None
+
+
+@dataclass
+class TopNTransition:
+    """A single threshold crossing. kind is ENTRY (first time in the zone today),
+    RE_ENTRY (a later entry after having left it, plan §25), or EXIT."""
+
+    minute: int
+    threshold: int
+    kind: str  # 'ENTRY' | 'RE_ENTRY' | 'EXIT'
+
+
+def _clean_observations(observations: list[list[int]]) -> list[tuple[int, int]]:
+    """Strictly-increasing [minute, rank] pairs; shared by the movement and
+    Top-N passes so both see the same de-duplicated series."""
+    clean: list[tuple[int, int]] = []
+    for pair in observations:
+        if not pair or len(pair) < 2:
+            continue
+        m, r = int(pair[0]), int(pair[1])
+        if clean and m <= clean[-1][0]:
+            continue
+        clean.append((m, r))
+    return clean
+
+
+def compute_topn(
+    symbol: str,
+    observations: list[list[int]],
+    thresholds: tuple[int, ...] = TOP_N_THRESHOLDS,
+) -> tuple[dict[int, TopNZone], list[TopNTransition]]:
+    """Pure: fold a symbol's timeline into per-zone standing plus the ordered
+    list of its threshold crossings.
+
+    A crossing fires only on the boundary (outside->inside or inside->outside),
+    so a symbol that sits inside Top-10 for an hour produces one ENTRY, not
+    thirty (plan §22). A symbol that simply stops appearing in the list is left
+    inside with its last-known standing rather than being forced to EXIT (plan
+    §42) -- an absent snapshot is not a rank.
+    """
+    clean = _clean_observations(observations)
+    zones: dict[int, TopNZone] = {}
+    transitions: list[TopNTransition] = []
+
+    for n in thresholds:
+        inside = False
+        entered_min: int | None = None
+        last_inside_min: int | None = None
+        entries = 0
+        cumulative = 0
+        last_event: str | None = None
+        last_event_min: int | None = None
+
+        for m, r in clean:
+            now_inside = r <= n
+            if now_inside and not inside:
+                entries += 1
+                entered_min = m
+                last_inside_min = m
+                kind = "ENTRY" if entries == 1 else "RE_ENTRY"
+                transitions.append(TopNTransition(m, n, kind))
+                last_event = f"TOP{n}_{kind}"
+                last_event_min = m
+            elif now_inside and inside:
+                last_inside_min = m
+            elif (not now_inside) and inside:
+                # First observation back outside: close the stretch at the last
+                # minute the symbol was actually seen inside, not this one.
+                if entered_min is not None and last_inside_min is not None:
+                    cumulative += last_inside_min - entered_min
+                transitions.append(TopNTransition(m, n, "EXIT"))
+                last_event = f"TOP{n}_EXIT"
+                last_event_min = m
+                entered_min = None
+            inside = now_inside
+
+        continuous = 0
+        if inside and entered_min is not None and last_inside_min is not None:
+            continuous = last_inside_min - entered_min
+            cumulative += continuous
+
+        zones[n] = TopNZone(
+            threshold=n,
+            inside=inside,
+            entered_min=entered_min,
+            entries=entries,
+            continuous_min=continuous,
+            cumulative_min=cumulative,
+            last_event=last_event,
+            last_event_min=last_event_min,
+        )
+
+    return zones, transitions
 
 
 def compute_rank_states(timeline: dict[str, list[list[int]]]) -> dict[str, RankState]:
@@ -210,6 +321,35 @@ def _demo() -> None:
     # Duplicate/disordered minutes are dropped, never a divide-by-zero.
     dup = compute_rank_state("F", [[0, 10], [0, 9], [2, 8], [1, 99]])
     assert dup.observations == 2 and dup.current_rank == 8
+
+    # §22/§27 Top-N: the 62->1 climb crosses Top-20, Top-10, Top-5 once each.
+    zones, trans = compute_topn("PATANJALI", climb)
+    assert zones[20].inside and zones[10].inside and zones[5].inside
+    assert zones[10].entries == 1 and zones[10].last_event == "TOP10_ENTRY"
+    kinds = [(t.threshold, t.kind) for t in trans]
+    assert kinds == [(5, "ENTRY"), (10, "ENTRY"), (20, "ENTRY")] or set(kinds) == {
+        (20, "ENTRY"),
+        (10, "ENTRY"),
+        (5, "ENTRY"),
+    }
+
+    # §22 no repeat: sitting inside Top-10 for many ticks is one ENTRY, not many.
+    inside_long = compute_topn("H", [[0, 8], [2, 7], [4, 9], [6, 6], [8, 8]])
+    assert inside_long[0][10].entries == 1
+    assert inside_long[0][10].continuous_min == 8  # entered at 0, last inside at 8
+    assert len([t for t in inside_long[1] if t.threshold == 10]) == 1
+
+    # §25 re-entry: 8 (in) -> 12,15 (out) -> 9 (in) is ENTRY then EXIT then RE_ENTRY.
+    reentry = compute_topn("K", [[0, 8], [2, 12], [4, 15], [6, 9]])
+    z10, t10 = reentry[0][10], [t for t in reentry[1] if t.threshold == 10]
+    assert z10.entries == 2 and z10.last_event == "TOP10_RE_ENTRY"
+    assert [t.kind for t in t10] == ["ENTRY", "EXIT", "RE_ENTRY"]
+
+    # §42 disappearance: last seen inside Top-10, then no more snapshots -> stays
+    # inside on last-known standing, no fabricated EXIT.
+    vanish = compute_topn("L", [[0, 20], [2, 8]])
+    assert vanish[0][10].inside is True
+    assert not any(t.kind == "EXIT" for t in vanish[1])
 
     print("tf_rank_movement _demo: all assertions passed")
 
