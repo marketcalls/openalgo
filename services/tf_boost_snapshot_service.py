@@ -28,7 +28,7 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -383,4 +383,70 @@ def init_tf_boost_daily_jobs():
         misfire_grace_time=1800,
         replace_existing=True,
     )
-    logger.info("TF Boost daily jobs scheduled (morning check 09:25, behaviour study 15:45 IST)")
+    # A one-off a few seconds after boot: off the startup path (which must not
+    # wait on the broker) but early enough that a late start still records.
+    _scheduler.add_job(
+        _startup_catchup,
+        trigger="date",
+        run_date=datetime.now(IST) + timedelta(seconds=20),
+        id="tf_boost_startup_catchup",
+        max_instances=1,
+        replace_existing=True,
+    )
+    logger.info(
+        "TF Boost daily jobs scheduled (morning check 09:25, behaviour study 15:45 IST, "
+        "catch-up on start)"
+    )
+
+
+def _study_already_done(day) -> bool:
+    try:
+        from database.tf_boost_db import get_connection as boost_conn
+
+        with boost_conn() as conn:
+            done = conn.execute(
+                "SELECT count(*) FROM tf_boost_behaviour WHERE day = ?", [day]
+            ).fetchone()[0]
+        return bool(done)
+    except Exception:
+        # No table yet, or the file is busy: treat as not done and let the study
+        # decide. Re-running a day replaces it, so a duplicate attempt is cheap.
+        return False
+
+
+def _startup_catchup():
+    """Make starting the app enough, whenever in the day it happens.
+
+    The jobs below only fire if the app happens to be running at 09:25 and
+    15:45. Someone who starts it at 09:40, or only in the evening, would
+    otherwise get a day with no morning line and no study -- and the study is
+    the research record. So every start writes down when recording began, and
+    picks up whatever the day has already missed.
+    """
+    now_ist = datetime.now(IST)
+    _append(now_ist, f"app started -- recording from {now_ist:%H:%M}")
+
+    if now_ist.weekday() >= 5:
+        return
+    try:
+        # Past the close with snapshots captured but no study: run it now.
+        if now_ist.hour * 60 + now_ist.minute >= 15 * 60 + 45:
+            from database.tf_boost_db import get_connection as boost_conn
+
+            with boost_conn() as conn:
+                captured = conn.execute(
+                    "SELECT count(*) FROM tf_boost_snapshots WHERE snapshot_date = ?",
+                    [now_ist.date()],
+                ).fetchone()[0]
+            if captured and not _study_already_done(now_ist.date()):
+                _append(now_ist, "study for today had not run yet -- catching up")
+                _run_daily_study()
+            return
+
+        # Started after the morning check but inside the session: still leave the
+        # health line, so a late start is visible as a late start.
+        if 9 * 60 + 25 < now_ist.hour * 60 + now_ist.minute <= 15 * 60 + 30:
+            _run_morning_check()
+    except Exception as e:
+        logger.exception(f"tf_boost startup catch-up failed: {e}")
+        _append(now_ist, f"ATTENTION startup catch-up failed: {e}")
