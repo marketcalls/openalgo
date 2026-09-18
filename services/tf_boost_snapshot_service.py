@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -106,6 +107,7 @@ def _run_snapshot_tick():
     """APScheduler job callable — must never raise, or crash the scheduler
     thread. The CronTrigger already narrows to hours 9-15 (mon-fri); this
     in-job guard enforces the exact 09:15-15:30 IST boundary."""
+    tick_started = time.monotonic()
     now_ist = datetime.now(IST)
     if not _within_market_window(now_ist):
         logger.debug(f"tf_boost_snapshot: {now_ist.time()} outside 09:15-15:30 IST, skipping")
@@ -257,6 +259,15 @@ def _run_snapshot_tick():
     # a later study most needs to know about. The early returns this block
     # replaced are why 13 of 38 captured days cannot be told apart from quiet
     # ones.
+    # A tick has 30 seconds before the next one is due. Naming the overrun is the
+    # difference between a gap with a cause and the silent ones above.
+    elapsed = time.monotonic() - tick_started
+    if elapsed > 20:
+        logger.warning(
+            f"tf_boost_snapshot: tick @ {snapshot_time} took {elapsed:.1f}s "
+            "-- close to its 30s slot, check the TradeFinder response time"
+        )
+
     record_heartbeat(
         snapshot_time,
         pulse_ok=result is not None,
@@ -284,7 +295,15 @@ def init_tf_boost_snapshot():
                 day_of_week="mon-fri", hour="9-15", minute="*", second="0,30", timezone=IST
             ),
             id=TF_SNAPSHOT_JOB_ID,
-            max_instances=1,
+            # Two, not one. With max_instances=1 a tick that overran its 30s slot
+            # silently took the next tick with it: APScheduler skips rather than
+            # queues, and logs it at WARNING on its own logger, so the minute just
+            # vanished. Three such minutes were lost on 18-Sep-2026 with nothing in
+            # errors.jsonl to say why. A second slot lets the next sample run while
+            # a slow TradeFinder response is still outstanding; DuckDB connections
+            # in one process share an instance and are MVCC-safe, and the two runs
+            # stamp different snapshot_times, so neither can overwrite the other.
+            max_instances=2,
             coalesce=True,
             misfire_grace_time=60,
         )
