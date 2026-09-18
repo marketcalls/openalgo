@@ -91,12 +91,12 @@ set "UV_CMD="
 where uv >nul 2>&1
 if not errorlevel 1 (
     set "UV_CMD=uv"
-    echo   [OK] uv found (standalone)
+    echo   [OK] uv found (standalone^)
 ) else (
     python -m uv --version >nul 2>&1
     if not errorlevel 1 (
         set "UV_CMD=python -m uv"
-        echo   [OK] uv found (Python module)
+        echo   [OK] uv found (Python module^)
     ) else (
         echo [ERROR] uv is not installed.
         echo Install with: pip install uv
@@ -147,13 +147,13 @@ if exist "%OPENALGO_DIR%\db\" (
     )
 
     if !BACKUP_COUNT! EQU 0 (
-        echo   No databases found to backup (fresh installation)
+        echo   No databases found to backup (fresh installation^)
         rd "%BACKUP_DIR%" 2>nul
     ) else (
         echo   [OK] Backup location: %BACKUP_DIR%
     )
 ) else (
-    echo   No database directory found (fresh installation)
+    echo   No database directory found (fresh installation^)
 )
 echo.
 
@@ -191,7 +191,7 @@ if errorlevel 1 (
 for /f "tokens=*" %%i in ('git rev-parse --short HEAD 2^>nul') do set "NEW_COMMIT=%%i"
 
 if "%CURRENT_COMMIT%"=="%NEW_COMMIT%" (
-    echo   [OK] Already up to date (%CURRENT_COMMIT%)
+    echo   [OK] Already up to date (%CURRENT_COMMIT%^)
 ) else (
     echo   [OK] Updated: %CURRENT_COMMIT% -^> %NEW_COMMIT%
 )
@@ -263,7 +263,7 @@ if exist "%OPENALGO_DIR%\upgrade\migrate_all.py" (
         echo   [OK] Database migrations completed.
     )
 ) else (
-    echo   [WARNING] No migration script found (upgrade\migrate_all.py)
+    echo   [WARNING] No migration script found (upgrade\migrate_all.py^)
 )
 echo.
 
@@ -273,7 +273,7 @@ REM ========================================
 if not exist "%OPENALGO_DIR%\frontend\dist\" (
     where npm >nul 2>&1
     if not errorlevel 1 (
-        echo [OPTIONAL] Building React frontend (dist\ not found)...
+        echo [OPTIONAL] Building React frontend (dist\ not found^)...
         pushd "%OPENALGO_DIR%\frontend"
         call npm ci
         call npm run build
