@@ -1819,6 +1819,32 @@ export class TradingTerminal {
     this.chart.on('objects:change', () => this.syncIndicators())
     // Scrolling back past the loaded range pages in older bars.
     this.chart.setHistoryLoader(() => void this.loadOlderHistory())
+
+    // Where an indicator gets another instrument's bars (openalgo-charts
+    // 2.4.0). A relative-strength or beta study is a ratio against a benchmark,
+    // and the engine is handed one symbol's history and owns no transport, so
+    // it asks and the host answers.
+    //
+    // It answers through the terminal's OWN cached feed rather than a second
+    // request path, which is what makes this cheap and correct: the same
+    // broker session, the same bar cache, and the same rule about never
+    // serving a forming bar from it. Nothing about the key reaches a chart
+    // setting, so a saved layout carries the study's symbol and no credential.
+    this.chart.setBarsProvider(async (request) => {
+      const feed = this.cachedBars ?? this.rest
+      if (!feed) return []
+      const bars = await feed.getBars({
+        symbol: request.symbol,
+        // An indicator naming only a symbol means "on this chart's exchange",
+        // which is the common case for a benchmark on the same venue.
+        exchange: request.exchange ?? this.sym?.exchange ?? '',
+        interval: request.interval,
+        from: request.from,
+        to: request.to,
+        signal: request.signal,
+      })
+      return bars
+    })
   }
 
   /** Safe link metadata for the active chart branding, if it supplies a destination. */
@@ -2592,9 +2618,43 @@ export class TradingTerminal {
       instanceId,
       name: inst.name,
       values: { ...inst.settings() },
-      inputs: descriptor.inputs.map(toField),
+      inputs: descriptor.inputs.map(toField).map((f) => this.fillIntervalOptions(f, inst.settings())),
       styleInputs: indicatorStyleInputs(descriptor).map(toField),
     })
+  }
+
+  /**
+   * Give an `interval` input (2.4.0) the timeframes this broker actually serves.
+   *
+   * The library's own widget offers its registered codes, which is the right
+   * answer for a generic host. Here we know better: the broker told us its
+   * intervals at boot, and offering one it does not serve is a control that
+   * looks fine and returns nothing. A descriptor that declares its own options
+   * keeps them.
+   *
+   * A value outside that list is kept as its own entry rather than dropped.
+   * The engine resolves more codes than any one broker serves (`1d` and `D`
+   * are the same bucket to it), so a descriptor defaulting to `1d` against a
+   * broker that lists `D` would otherwise show a select reading "Chart
+   * interval" while the study computed on `1d`: a control disagreeing with the
+   * value behind it, which is worse than no control.
+   */
+  private fillIntervalOptions(
+    field: IndicatorField,
+    values: Record<string, unknown>
+  ): IndicatorField {
+    if (field.type !== 'interval' || field.options !== undefined) return field
+    // The empty entry is "the chart's own interval", which is how a study says
+    // it is not folding at all.
+    const options = [
+      { label: 'Chart interval', value: '' as unknown },
+      ...this.availableIntervals.map((code) => ({ label: code, value: code as unknown })),
+    ]
+    const current = values[field.key]
+    if (typeof current === 'string' && current !== '' && !this.availableIntervals.includes(current)) {
+      options.push({ label: current, value: current })
+    }
+    return { ...field, options }
   }
 
   /** The descriptor's default settings, for the form's Defaults action. */
