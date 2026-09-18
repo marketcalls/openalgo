@@ -365,6 +365,7 @@ def get_boost_change_timeline(
     start_date: str,
     end_date: str | None = None,
     list_type: str = "intraday_boost",
+    symbol: str | None = None,
 ) -> dict[str, dict[str, list[list[float]]]]:
     """Return every symbol's change-from-previous-close over time:
     {symbol: {day: [[minute_of_day, change_pct], ...]}}, sorted by time.
@@ -409,11 +410,21 @@ def get_boost_change_timeline(
                 WHERE s.snapshot_date BETWEEN ? AND ?
                   AND s.list_type = ?
                   AND s.change_pct IS NOT NULL
+                  AND (? = '' OR s.symbol = ?)
                   AND (f.final_prev_close IS NULL OR s.prev_close IS NULL
                        OR s.prev_close = f.final_prev_close)
                 ORDER BY s.symbol, s.snapshot_time
                 """,
-                [start_date, end_date, list_type, start_date, end_date, list_type],
+                [
+                    start_date,
+                    end_date,
+                    list_type,
+                    start_date,
+                    end_date,
+                    list_type,
+                    symbol or "",
+                    symbol or "",
+                ],
             ).fetchall()
     except Exception as e:
         logger.warning(f"get_boost_change_timeline({start_date}..{end_date}, {list_type}): {e}")
@@ -613,6 +624,7 @@ def get_boost_rank_timeline_fine(
     start_date: str,
     end_date: str | None = None,
     list_type: str = "intraday_boost",
+    symbol: str | None = None,
 ) -> dict[str, dict[str, list[list[float]]]]:
     """Rank over time at the recorder's real resolution, not rounded to minutes.
 
@@ -639,9 +651,10 @@ def get_boost_rank_timeline_fine(
                 FROM tf_boost_snapshots
                 WHERE snapshot_date BETWEEN ? AND ?
                   AND list_type = ?
+                  AND (? = '' OR symbol = ?)
                 ORDER BY symbol, snapshot_time
                 """,
-                [start_date, end_date, list_type],
+                [start_date, end_date, list_type, symbol or "", symbol or ""],
             ).fetchall()
     except Exception as e:
         logger.warning(f"get_boost_rank_timeline_fine({start_date}..{end_date}): {e}")

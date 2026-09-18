@@ -32,6 +32,7 @@ from database.tf_boost_db import (
     get_boost_change_timeline,
     get_boost_rank_timeline_fine,
 )
+from services.tf_symbol_alias import snapshot_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -906,11 +907,52 @@ def run_episodes(symbol: str, ranks: list, changes: list) -> list[RunEpisode]:
     return episodes
 
 
+# Replaying a day for one symbol costs a few hundred milliseconds, and the chart
+# overlay asks once per poll per open chart. The answer only changes when a new
+# snapshot lands, so it is cached against the last minute recorded: a second
+# caller in the same half-minute pays nothing, and the next tick invalidates it
+# without anyone having to remember to.
+_EPISODE_CACHE: dict[tuple[str, str, str], tuple[float, list[dict]]] = {}
+
+
 def run_episodes_for(symbol: str, date: str = "", list_type: str = "intraday_boost") -> list[dict]:
-    """I/O: the day's badge stretches for one symbol, as flat dicts."""
+    """I/O: the day's badge stretches for one symbol, as flat dicts.
+
+    A chart shows the broker's name for a stock while the ranked list keeps
+    TradeFinder's, so a symbol that finds nothing is tried again under the name
+    the snapshots use. Without that a TMPV chart drew no zones at all, because
+    the list calls it TATAMOTORS.
+    """
     day = date or datetime.now(IST).strftime("%Y-%m-%d")
-    ranks = get_boost_rank_timeline_fine(day, day, list_type).get(symbol, {}).get(day, [])
-    changes = get_boost_change_timeline(day, day, list_type).get(symbol, {}).get(day, [])
+    wanted = symbol.strip().upper()
+
+    # Filtered in SQL: the unfiltered scan reads every symbol's whole day, which
+    # cost 356ms per call against 8ms for one -- and the chart overlay asks once
+    # per poll per open chart.
+    rank_timeline = get_boost_rank_timeline_fine(day, day, list_type, wanted)
+    if wanted not in rank_timeline:
+        alternate = snapshot_symbol(wanted)
+        if alternate != wanted:
+            rank_timeline = get_boost_rank_timeline_fine(day, day, list_type, alternate)
+            if alternate in rank_timeline:
+                wanted = alternate
+
+    ranks = rank_timeline.get(wanted, {}).get(day, [])
+    changes = get_boost_change_timeline(day, day, list_type, wanted).get(wanted, {}).get(day, [])
     if not ranks or len(changes) <= RUN_MIN_OBS:
         return []
-    return [asdict(e) for e in run_episodes(symbol, ranks, changes)]
+
+    key = (wanted, day, list_type)
+    latest = changes[-1][0]
+    cached = _EPISODE_CACHE.get(key)
+    if cached and cached[0] == latest:
+        return cached[1]
+
+    episodes = [asdict(e) for e in run_episodes(wanted, ranks, changes)]
+    # Bounded: one entry per symbol per day, and a day's worth is a few hundred
+    # small lists. Cleared wholesale when it grows past a session's universe so
+    # a long-running process cannot accumulate days.
+    if len(_EPISODE_CACHE) > 600:
+        _EPISODE_CACHE.clear()
+    _EPISODE_CACHE[key] = (latest, episodes)
+    return episodes
