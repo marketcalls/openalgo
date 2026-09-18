@@ -892,6 +892,7 @@ def setup_environment(app):
                     from services.tf_boost_snapshot_service import (
                         init_tf_boost_daily_jobs,
                         init_tf_boost_snapshot,
+                        init_tf_boost_watchdog,
                     )
 
                     init_tf_boost_snapshot()
@@ -899,6 +900,9 @@ def setup_environment(app):
                     # on the same scheduler: a day that is captured should also
                     # be verified and studied without anyone remembering to.
                     init_tf_boost_daily_jobs()
+                    # A machine that sleeps through the open takes the scheduler
+                    # with it and does not bring it back; the watchdog does.
+                    init_tf_boost_watchdog()
                     logger.debug("TF Boost snapshot scheduler initialized")
                 except Exception as e:
                     logger.error(f"Failed to initialize TF Boost snapshot scheduler: {e}")

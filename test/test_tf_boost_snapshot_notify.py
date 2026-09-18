@@ -125,3 +125,60 @@ def test_a_tick_that_writes_rows_announces_them(monkeypatch):
     assert payload["rows"] == 1
     # The minute is carried so a client can tell a fresh snapshot from a replay.
     assert payload["snapshot_time"].startswith("20")
+
+
+# --- watchdog: a scheduler that stops must not stay stopped -------------------
+
+
+def _run_watchdog_once(monkeypatch):
+    """Drive one pass of the loop.
+
+    The loop waits via utils.real_threading.wait_for, which polls is_set many
+    times inside one wait -- so a stub that counts is_set calls stops the loop
+    before its body ever runs. Patch the wait instead: false once (the body
+    runs), then true (the loop ends).
+    """
+    import utils.real_threading as rt
+
+    calls = {"n": 0}
+
+    def fake_wait(_event, _timeout, poll=0.02):
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    monkeypatch.setattr(rt, "wait_for", fake_wait)
+    svc._watchdog_loop(object())
+
+
+def test_the_watchdog_restarts_a_recorder_that_has_gone_quiet(monkeypatch):
+    # 18-Sep-2026: the machine slept through the open, woke at 10:01, and this
+    # scheduler never fired again -- zero heartbeats at 10:03 and 49 minutes of
+    # the session lost. Nobody was watching, so nothing restarted it.
+    restarts = []
+    monkeypatch.setattr(svc, "_restart_scheduler", lambda: restarts.append(True))
+    monkeypatch.setattr(svc, "_append", lambda *a, **k: None)
+    monkeypatch.setattr(svc, "_within_market_window", lambda _now: True)
+    # Four minutes without a heartbeat, inside the session.
+    monkeypatch.setattr(svc, "_heartbeat_age_seconds", lambda _now: 240.0)
+
+    _run_watchdog_once(monkeypatch)
+    assert restarts == [True]
+
+
+def test_the_watchdog_leaves_a_healthy_recorder_alone(monkeypatch):
+    restarts = []
+    monkeypatch.setattr(svc, "_restart_scheduler", lambda: restarts.append(True))
+    monkeypatch.setattr(svc, "_within_market_window", lambda _now: True)
+    monkeypatch.setattr(svc, "_heartbeat_age_seconds", lambda _now: 30.0)
+    _run_watchdog_once(monkeypatch)
+    assert restarts == []
+
+
+def test_the_watchdog_is_silent_outside_the_session(monkeypatch):
+    # Overnight there is no heartbeat and that is correct, not a stall.
+    restarts = []
+    monkeypatch.setattr(svc, "_restart_scheduler", lambda: restarts.append(True))
+    monkeypatch.setattr(svc, "_within_market_window", lambda _now: False)
+    monkeypatch.setattr(svc, "_heartbeat_age_seconds", lambda _now: 99_999.0)
+    _run_watchdog_once(monkeypatch)
+    assert restarts == []

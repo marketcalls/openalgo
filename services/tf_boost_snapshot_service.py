@@ -468,3 +468,105 @@ def _startup_catchup():
     except Exception as e:
         logger.exception(f"tf_boost startup catch-up failed: {e}")
         _append(now_ist, f"ATTENTION startup catch-up failed: {e}")
+
+
+# --- watchdog ----------------------------------------------------------------
+# A laptop that sleeps through the open takes the scheduler with it. On
+# 18-Sep-2026 the process was suspended overnight, woke at 10:01 with APScheduler
+# logging runs "missed by 0:00:59" for other jobs, and this scheduler never fired
+# again: zero heartbeats at 10:03, forty-nine minutes of the session gone and
+# unrecoverable, because the upstream only ever serves the live list. A restart
+# fixed it instantly, which is the whole point -- nobody was watching to do it.
+#
+# The watchdog cannot live on the scheduler it guards, so it runs on a real OS
+# thread of its own. It only reads the heartbeat table and restarts the
+# scheduler; it touches no green primitive, which is what makes that safe under
+# eventlet as well as on the dev server.
+WATCHDOG_POLL_SECONDS = 60
+# Three missed minutes is past any normal tick (median 0.8s, worst 43s observed)
+# and still catches the failure inside the same five minutes it began.
+WATCHDOG_STALE_SECONDS = 180
+
+_watchdog: object | None = None
+_watchdog_stop = None
+
+
+def _heartbeat_age_seconds(now_ist: datetime) -> float | None:
+    """Seconds since the last heartbeat today, or None if there is none yet."""
+    try:
+        from database.tf_boost_db import get_connection as boost_conn
+
+        with boost_conn() as conn:
+            last = conn.execute(
+                "SELECT max(snapshot_time) FROM tf_boost_heartbeat WHERE snapshot_date = ?",
+                [now_ist.date()],
+            ).fetchone()[0]
+        if last is None:
+            return None
+        return (now_ist.replace(tzinfo=None) - last).total_seconds()
+    except Exception as e:
+        logger.debug(f"tf_boost watchdog: could not read the heartbeat: {e}")
+        return None
+
+
+def _restart_scheduler() -> None:
+    """Tear the scheduler down and stand it back up, jobs and all."""
+    global _scheduler
+    with _lock:
+        old = _scheduler
+        _scheduler = None
+    if old is not None:
+        try:
+            old.shutdown(wait=False)
+        except Exception as e:
+            logger.debug(f"tf_boost watchdog: old scheduler would not shut down: {e}")
+    init_tf_boost_snapshot()
+    init_tf_boost_daily_jobs()
+
+
+def _watchdog_loop(stop_event) -> None:
+    from utils.real_threading import wait_for
+
+    while not wait_for(stop_event, WATCHDOG_POLL_SECONDS):
+        try:
+            now_ist = datetime.now(IST)
+            if not _within_market_window(now_ist) or now_ist.weekday() >= 5:
+                continue
+            age = _heartbeat_age_seconds(now_ist)
+            # No heartbeat at all yet is only alarming once the session has been
+            # running long enough for one to exist.
+            opened_minutes_ago = (now_ist.hour * 60 + now_ist.minute) - (9 * 60 + 15)
+            stale = age is not None and age > WATCHDOG_STALE_SECONDS
+            never = age is None and opened_minutes_ago > WATCHDOG_STALE_SECONDS / 60
+            if stale or never:
+                logger.error(
+                    "TF Boost recorder has written nothing for "
+                    f"{int(age) if age is not None else 'the whole session'} seconds -- "
+                    "restarting its scheduler"
+                )
+                _append(now_ist, "ATTENTION recorder stalled -- watchdog restarted it")
+                _restart_scheduler()
+        except Exception as e:
+            logger.exception(f"tf_boost watchdog: {e}")
+
+
+def init_tf_boost_watchdog() -> None:
+    """Start the watchdog once. Safe to call again; it will not double-start."""
+    global _watchdog, _watchdog_stop
+    if _watchdog is not None:
+        return
+    from utils.real_threading import Event, Thread
+
+    _watchdog_stop = Event()
+    _watchdog = Thread(
+        target=_watchdog_loop,
+        args=(_watchdog_stop,),
+        name="tf-boost-watchdog",
+        daemon=True,
+    )
+    _watchdog.start()
+    logger.info(
+        "TF Boost watchdog started (checks every "
+        f"{WATCHDOG_POLL_SECONDS}s, restarts the recorder after "
+        f"{WATCHDOG_STALE_SECONDS}s without a heartbeat)"
+    )
