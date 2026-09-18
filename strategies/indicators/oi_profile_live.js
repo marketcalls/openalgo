@@ -133,7 +133,13 @@ function resolveUnderlying(settings, symbol) {
   if (typed) return typed
   return String(symbol ?? '')
     .toUpperCase()
+    // A future or an option charted on its own is still a view of its
+    // underlying, so strip the contract off and profile what it is written on.
+    // Without the option case, charting TMPV29SEP26320CE asked the backend for
+    // the strikes of an option, which cannot exist: two failed calls and two
+    // console errors every time an option was charted.
     .replace(/\d{2}[A-Z]{3}\d{2}FUT$/, '')
+    .replace(/\d{2}[A-Z]{3}\d{2}[\d.]*(?:CE|PE)$/, '')
     .replace(/[^A-Z0-9]/g, '')
 }
 
