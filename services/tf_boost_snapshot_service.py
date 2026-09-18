@@ -111,11 +111,17 @@ def _run_snapshot_tick():
         logger.debug(f"tf_boost_snapshot: {now_ist.time()} outside 09:15-15:30 IST, skipping")
         return
 
-    # Aligned to the minute, naive IST (matches isi_v56_live_strategy.py's own
-    # naive-IST convention), so replay joins line up predictably. Rows written
-    # before this was a one-minute beat land on :00/:05/:10 and still read as
-    # the same series - the finer grid is a superset of the old one.
-    snapshot_time = now_ist.replace(second=0, microsecond=0, tzinfo=None)
+    # Aligned to the half minute, naive IST (matches isi_v56_live_strategy.py's
+    # own naive-IST convention), so replay joins line up predictably. Rows from
+    # the older one-minute beat land on :00 and still read as the same series --
+    # the finer grid is a superset of the old one.
+    #
+    # Half a minute rather than a whole one because the sampling interval is the
+    # floor on how late a badge can be. Measured 18-Sep-2026: a write lands 1.0s
+    # after its tick (p90 2.0s) and the socket push adds about a second, so a
+    # 60s beat gave a 65s worst case and a 30s beat gives 33s.
+    stamp_second = 0 if now_ist.second < 30 else 30
+    snapshot_time = now_ist.replace(second=stamp_second, microsecond=0, tzinfo=None)
     snapshot_date = snapshot_time.date()
     total_inserted = 0
     sector_ok = False
@@ -274,7 +280,9 @@ def init_tf_boost_snapshot():
         _scheduler = BackgroundScheduler(timezone=IST)
         _scheduler.add_job(
             _run_snapshot_tick,
-            trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*", timezone=IST),
+            trigger=CronTrigger(
+                day_of_week="mon-fri", hour="9-15", minute="*", second="0,30", timezone=IST
+            ),
             id=TF_SNAPSHOT_JOB_ID,
             max_instances=1,
             coalesce=True,
@@ -283,7 +291,7 @@ def init_tf_boost_snapshot():
         _scheduler.start()
         logger.info(
             "TF Boost snapshot scheduler started (isolated, in-memory jobstore, "
-            "every minute 9-15 mon-fri Asia/Kolkata, 09:15-15:30 in-job guard)"
+            "every 30s 9-15 mon-fri Asia/Kolkata, 09:15-15:30 in-job guard)"
         )
 
 

@@ -48,7 +48,16 @@ export function badgeFor(event: string | undefined): BadgeStyle | undefined {
   return event ? MOVEMENT_BADGE[event] : undefined
 }
 
-/** A minute-of-day as a clock time: 574 reads as 09:34. */
+/** A minute-of-day as a clock time: 574 reads as 09:34.
+ *
+ * The recorder samples twice a minute, so the value can carry a half -- 604.5
+ * is 10:04:30. Shown to the second in that case, because a trader reading "the
+ * move turned at 10:04" wants to know which half of the minute when the badge
+ * itself is promised inside forty seconds. */
 export function minuteOfDay(min: number): string {
-  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+  const whole = Math.floor(min)
+  const seconds = Math.round((min - whole) * 60)
+  const hh = String(Math.floor(whole / 60)).padStart(2, '0')
+  const mm = String(whole % 60).padStart(2, '0')
+  return seconds ? `${hh}:${mm}:${String(seconds).padStart(2, '0')}` : `${hh}:${mm}`
 }

@@ -28,7 +28,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from database.tf_boost_db import get_boost_change_timeline, get_boost_rank_timeline
+from database.tf_boost_db import (
+    get_boost_change_timeline,
+    get_boost_rank_timeline_fine,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -179,15 +182,21 @@ def _clean_observations(observations, cast=int):
     """Strictly-increasing [minute, value] pairs; shared by the movement, Top-N
     and directional-run passes so they all see the same de-duplicated series.
 
+    The minute is a FLOAT because the recorder samples twice a minute -- 604.5
+    is 10:04:30 -- so a badge can reach the screen inside 40 seconds. Rounding
+    it to a whole minute made the second sample of each minute collide with the
+    first and be dropped, which would have thrown half the record away while
+    looking like it worked.
+
     `cast` is what the second element is: a rank is an int, a change_pct is a
     float and must stay one -- truncating it turned every move into a whole
     number of percent and every give-back into 0 or 1.
     """
-    clean: list[tuple[int, float]] = []
+    clean: list[tuple[float, float]] = []
     for pair in observations:
         if not pair or len(pair) < 2:
             continue
-        m, r = int(pair[0]), cast(pair[1])
+        m, r = float(pair[0]), cast(pair[1])
         if clean and m <= clean[-1][0]:
             continue
         clean.append((m, r))
@@ -690,7 +699,9 @@ def movement_snapshot(date: str = "", list_type: str = "intraday_boost") -> list
     Reconstructed from the isolated DuckDB; degrades to [] on any read failure,
     like the other query services here."""
     day = date or datetime.now(IST).strftime("%Y-%m-%d")
-    per_symbol_days = get_boost_rank_timeline(day, day, list_type)
+    # The fine timeline: the recorder samples twice a minute and the engine
+    # must see both, or half of every move is invisible to it.
+    per_symbol_days = get_boost_rank_timeline_fine(day, day, list_type)
     # The latest minute anyone was recorded at is what "now" means for this
     # list, so it survives a closed market and a replay of an older date alike.
     latest_minute = max(
@@ -723,7 +734,9 @@ def rank_movement_service(
     """
     day = date or datetime.now(IST).strftime("%Y-%m-%d")
     # get_boost_rank_timeline returns {symbol: {day: [[min, rank], ...]}}.
-    per_symbol_days = get_boost_rank_timeline(day, day, list_type)
+    # The fine timeline: the recorder samples twice a minute and the engine
+    # must see both, or half of every move is invisible to it.
+    per_symbol_days = get_boost_rank_timeline_fine(day, day, list_type)
     timeline = {sym: days.get(day, []) for sym, days in per_symbol_days.items()}
     return compute_rank_states(timeline)
 

@@ -262,7 +262,7 @@ def test_movement_snapshot_sorted_and_degrades(monkeypatch):
 
     monkeypatch.setattr(
         mod,
-        "get_boost_rank_timeline",
+        "get_boost_rank_timeline_fine",
         lambda *a, **k: {"AA": {"2026-01-02": [[0, 30], [2, 18]]}, "BB": {"2026-01-02": [[0, 5]]}},
     )
     rows = mod.movement_snapshot("2026-01-02")
@@ -274,7 +274,7 @@ def test_service_wrapper_degrades_to_empty_on_missing_day(monkeypatch):
     # The I/O wrapper must not raise when the DB has nothing for the date.
     import services.tf_rank_movement_service as mod
 
-    monkeypatch.setattr(mod, "get_boost_rank_timeline", lambda *a, **k: {})
+    monkeypatch.setattr(mod, "get_boost_rank_timeline_fine", lambda *a, **k: {})
     assert rank_movement_service("1999-01-01") == {}
 
 
@@ -312,7 +312,7 @@ def test_new_day_reset_reads_only_that_day(monkeypatch):
     import services.tf_rank_movement_service as mod
 
     timeline = {"AA": {"2026-01-01": [[0, 3], [2, 1]], "2026-01-02": [[0, 40], [2, 38]]}}
-    monkeypatch.setattr(mod, "get_boost_rank_timeline", lambda *a, **k: timeline)
+    monkeypatch.setattr(mod, "get_boost_rank_timeline_fine", lambda *a, **k: timeline)
     rows = mod.movement_snapshot("2026-01-02")
     assert rows[0]["first_seen_rank"] == 40 and rows[0]["current_rank"] == 38
     assert rows[0]["best_rank"] == 38  # not yesterday's 1
@@ -351,7 +351,7 @@ def test_movement_snapshot_marks_absent_against_the_days_latest_minute(monkeypat
 
     monkeypatch.setattr(
         mod,
-        "get_boost_rank_timeline",
+        "get_boost_rank_timeline_fine",
         lambda *a, **k: {
             "LIVE": {"2026-01-02": [[925, 12], [929, 4]]},
             "GONE": {"2026-01-02": [[555, 40], [557, 4]]},
@@ -400,7 +400,7 @@ def test_an_empty_day_returns_nothing(monkeypatch):
     # show no badges rather than error.
     import services.tf_rank_movement_service as mod
 
-    monkeypatch.setattr(mod, "get_boost_rank_timeline", lambda *a, **k: {})
+    monkeypatch.setattr(mod, "get_boost_rank_timeline_fine", lambda *a, **k: {})
     assert mod.movement_snapshot("2026-09-18") == []
 
 
@@ -524,8 +524,10 @@ def test_a_falling_stock_climbing_the_list_is_not_treated_as_weakness():
     row = compute_symbol_movement("DIXON", ranks, 634, changes)
     assert row["run_direction"] == "down"
     assert row["run_clean"] is True
-    # Reported, but not badged: down runs are gated off on the evidence so far.
-    assert row["event"] != "CLEAN_RUN_DOWN"
+    # A rank climbing while the price falls is a decline with force behind it,
+    # so the badge follows the price. Before this was understood, the rule
+    # demanded a falling rank and threw the real decliners away.
+    assert row["event"] == "CLEAN_RUN_DOWN"
 
 
 def test_an_up_run_needs_its_rank_to_be_holding_or_climbing():
@@ -535,3 +537,31 @@ def test_an_up_run_needs_its_rank_to_be_holding_or_climbing():
     # Rank sliding away while the price rises: the move is losing force.
     sliding = [[560 + i, 8 + i] for i in range(11)]
     assert compute_symbol_movement("SLIDE", sliding, 570, climb)["event"] != "CLEAN_RUN_UP"
+
+
+# --- half-minute sampling: the badge must reach the screen inside 40 seconds ---
+
+
+def test_two_samples_in_one_minute_are_both_kept():
+    # Sampling twice a minute is what brings the worst-case latency under 40
+    # seconds. Keyed by whole minutes the second sample collides with the first
+    # and is dropped -- half the record gone, silently.
+    series = [[604.0, 1.0], [604.5, 1.2], [605.0, 1.4], [605.5, 1.7]]
+    state = compute_rank_state("HALF", [[m, int(v * 10)] for m, v in series])
+    assert state.observations == 4
+
+
+def test_velocity_is_still_per_minute_on_half_minute_samples():
+    # Half a minute of elapsed time must divide as 0.5, not as 1: a rank moving
+    # two places in thirty seconds is four places a minute, not two.
+    state = compute_rank_state("V", [[600.0, 10], [600.5, 8]])
+    assert state.rank_velocity == 4.0
+
+
+def test_a_run_measures_elapsed_minutes_across_half_minute_samples():
+    values = [1.0, 1.2, 1.4, 1.3, 1.6, 1.9, 2.1, 2.0, 2.4, 2.7, 3.0]
+    series = [[600 + i * 0.5, v] for i, v in enumerate(values)]
+    run = compute_run(series)
+    assert run.direction == "up"
+    assert run.run_minutes == 5.0  # eleven samples, half a minute apart
+    assert run.is_clean

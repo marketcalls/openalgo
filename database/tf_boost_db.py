@@ -287,14 +287,28 @@ def get_boost_rank_timeline(
         with get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT symbol,
-                       strftime(snapshot_date, '%Y-%m-%d') AS day,
-                       hour(snapshot_time) * 60 + minute(snapshot_time) AS min_of_day,
-                       rank
-                FROM tf_boost_snapshots
-                WHERE snapshot_date BETWEEN ? AND ?
-                  AND list_type = ?
-                ORDER BY symbol, snapshot_time
+                -- One point per MINUTE, last within the minute wins. The
+                -- recorder samples twice a minute; this function's exact
+                -- [minute, rank] shape backs the ISI backtest's top-N gate and
+                -- the rank sparkline, both of which expect one point per
+                -- minute, so the finer resolution is served by
+                -- get_boost_rank_timeline_fine instead of changing this.
+                SELECT symbol, day, min_of_day, rank FROM (
+                    SELECT symbol,
+                           strftime(snapshot_date, '%Y-%m-%d') AS day,
+                           hour(snapshot_time) * 60 + minute(snapshot_time) AS min_of_day,
+                           rank,
+                           row_number() OVER (
+                               PARTITION BY symbol, snapshot_date,
+                                            hour(snapshot_time) * 60 + minute(snapshot_time)
+                               ORDER BY snapshot_time DESC
+                           ) AS rn
+                    FROM tf_boost_snapshots
+                    WHERE snapshot_date BETWEEN ? AND ?
+                      AND list_type = ?
+                )
+                WHERE rn = 1
+                ORDER BY symbol, day, min_of_day
                 """,
                 [start_date, end_date, list_type],
             ).fetchall()
@@ -386,7 +400,8 @@ def get_boost_change_timeline(
                 )
                 SELECT s.symbol,
                        strftime(s.snapshot_date, '%Y-%m-%d') AS day,
-                       hour(s.snapshot_time) * 60 + minute(s.snapshot_time) AS min_of_day,
+                       hour(s.snapshot_time) * 60 + minute(s.snapshot_time)
+                           + second(s.snapshot_time) / 60.0 AS min_of_day,
                        s.change_pct
                 FROM tf_boost_snapshots s
                 LEFT JOIN settled f
@@ -407,7 +422,7 @@ def get_boost_change_timeline(
     timeline: dict[str, dict[str, list[list[float]]]] = {}
     for symbol, day, min_of_day, change_pct in rows:
         timeline.setdefault(symbol, {}).setdefault(day, []).append(
-            [int(min_of_day), float(change_pct)]
+            [float(min_of_day), float(change_pct)]
         )
 
     # Minutes the recorder missed, reconstructed from the broker's candles. A
@@ -592,3 +607,47 @@ def get_price_backfill(day: str) -> dict[str, list[list[float]]]:
     for symbol, minute, change_pct in rows:
         out.setdefault(symbol, []).append([int(minute), float(change_pct)])
     return out
+
+
+def get_boost_rank_timeline_fine(
+    start_date: str,
+    end_date: str | None = None,
+    list_type: str = "intraday_boost",
+) -> dict[str, dict[str, list[list[float]]]]:
+    """Rank over time at the recorder's real resolution, not rounded to minutes.
+
+    The recorder samples twice a minute so a badge can reach the screen inside
+    40 seconds; keyed by whole minutes the second sample of each minute collides
+    with the first and is silently dropped, which would throw half the record
+    away. The key here is minutes as a FLOAT -- 604.5 is 10:04:30 -- so elapsed
+    time still reads in minutes and a velocity is still per minute.
+
+    A sibling of get_boost_rank_timeline rather than a change to it: that
+    function's exact [minute, rank] shape backs the ISI backtest's top-N gate
+    and the rank sparkline, and both want one point per minute.
+    """
+    end_date = end_date or start_date
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol,
+                       strftime(snapshot_date, '%Y-%m-%d') AS day,
+                       hour(snapshot_time) * 60 + minute(snapshot_time)
+                           + second(snapshot_time) / 60.0 AS min_of_day,
+                       rank
+                FROM tf_boost_snapshots
+                WHERE snapshot_date BETWEEN ? AND ?
+                  AND list_type = ?
+                ORDER BY symbol, snapshot_time
+                """,
+                [start_date, end_date, list_type],
+            ).fetchall()
+    except Exception as e:
+        logger.warning(f"get_boost_rank_timeline_fine({start_date}..{end_date}): {e}")
+        return {}
+
+    timeline: dict[str, dict[str, list[list[float]]]] = {}
+    for symbol, day, min_of_day, rank in rows:
+        timeline.setdefault(symbol, {}).setdefault(day, []).append([float(min_of_day), int(rank)])
+    return timeline
