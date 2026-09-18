@@ -436,7 +436,9 @@ def test_the_run_is_anchored_at_the_turn_not_the_open():
     assert r.move_pct == 3.2 and r.adverse_pct == 0.0 and r.is_clean
 
 
-def test_a_clean_decline_is_a_run_too():
+def test_a_clean_decline_is_still_measured_even_though_it_does_not_badge():
+    # The engine reports the decline; classify_event is what withholds the badge
+    # while RUN_ALLOW_DOWN is off, so the evidence keeps accumulating.
     r = compute_run(_pts([0.5, 0.1, -0.6, -1.2, -1.1, -1.8, -2.4, -3.0, -3.3, -3.9, -4.2]))
     assert r.direction == "down" and r.move_pct == -4.7 and r.is_clean
 
@@ -506,3 +508,30 @@ def test_the_floor_still_rejects_drift():
     # A move at noise level stays out however tidy it looks.
     r = compute_run(_pts([0.00, 0.03, 0.02, 0.06, 0.09, 0.08, 0.12, 0.15, 0.14, 0.18, 0.21]))
     assert not r.is_clean
+
+
+def test_a_falling_stock_climbing_the_list_is_not_treated_as_weakness():
+    # DIXON, 18-Sep-2026: fell from -0.84% to -1.55% while its rank went 27 -> 8,
+    # because the list ranks by momentum score. Rank improving means the move has
+    # force, not that it is upward. The engine must read the decline correctly.
+    changes = [
+        [624 + i, v]
+        for i, v in enumerate(
+            [-0.84, -0.87, -0.91, -1.22, -1.55, -1.29, -1.40, -1.52, -1.60, -1.71, -1.80]
+        )
+    ]
+    ranks = [[624 + i, r] for i, r in enumerate([27, 23, 22, 16, 8, 9, 8, 7, 7, 6, 6])]
+    row = compute_symbol_movement("DIXON", ranks, 634, changes)
+    assert row["run_direction"] == "down"
+    assert row["run_clean"] is True
+    # Reported, but not badged: down runs are gated off on the evidence so far.
+    assert row["event"] != "CLEAN_RUN_DOWN"
+
+
+def test_an_up_run_needs_its_rank_to_be_holding_or_climbing():
+    climb = _pts([1.0, 1.3, 1.6, 1.5, 1.9, 2.3, 2.2, 2.8, 3.4, 3.9, 4.0])
+    holding = [[560 + i, 8] for i in range(11)]
+    assert compute_symbol_movement("HOLD", holding, 570, climb)["event"] == "CLEAN_RUN_UP"
+    # Rank sliding away while the price rises: the move is losing force.
+    sliding = [[560 + i, 8 + i] for i in range(11)]
+    assert compute_symbol_movement("SLIDE", sliding, 570, climb)["event"] != "CLEAN_RUN_UP"

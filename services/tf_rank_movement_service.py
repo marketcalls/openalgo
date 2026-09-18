@@ -367,6 +367,19 @@ RUN_ADVERSE_FLOOR = 0.15  # a move that never pulled back still divides by this
 # leader, or one that has climbed its way up today.
 RUN_LEADER_RANK = 20
 RUN_MIN_CLIMB = 10
+# Down runs are off, and this is a measured decision rather than a preference.
+# The old rule suppressed them as a side effect of getting the rank logic
+# backwards, which flattered it: replaying 17-Sep-2026, the badge that followed
+# a down run was right 4 times in 13 once the logic was corrected, and 2 in 5
+# before that. Their options were worse still -- 1 of 4 profitable, median -19%
+# against +102% and +92% for the two best up runs. Up runs only scores 59% on
+# direction and 44% on reaching +1%, matching the old rule's numbers without
+# borrowing its mistake.
+#
+# Turn this on when a week of recorded days says a down run is worth taking, and
+# not before. The engine still computes and reports the direction either way, so
+# the evidence keeps accumulating while the badge stays quiet.
+RUN_ALLOW_DOWN = False
 # The first prints of the day are not prices anyone traded. Measured on
 # 17-Sep-2026: the 09:15 and 09:16 snapshots carry the same pre-open figure and
 # the 09:16->09:17 correction has a median of 1.38 points and a worst of 8.93 --
@@ -559,13 +572,23 @@ def classify_event(
         # Across the day's badges, requiring agreement lifted direction accuracy
         # from 49% to 58% and the share reaching +1% from 34% to 44%, on 59
         # badges rather than 73.
-        # "Not deteriorating" rather than "improving": a stock that took rank 2
-        # in the morning and held it has nowhere better to go, and excluding it
-        # would drop exactly the leaders worth watching. No badge on 17-Sep-2026
-        # had an unchanged rank, so the two readings scored identically there.
-        improving = state.rank_change_since_first_seen >= 0
-        agrees = improving if run.direction == "up" else not improving
-        if rated and agrees:
+        # A rank that is holding or climbing means the move has FORCE. It does
+        # not mean the move is upward, which is what an earlier version of this
+        # assumed -- and Aakash caught it on DIXON, 18-Sep-2026:
+        #
+        #   10:24  rank 27  -0.84%      10:27  rank 16  -1.22%
+        #   10:28  rank  8  -1.55%      score rising 1.1 -> 1.7 as it fell
+        #
+        # The list ranks by momentum score, so a stock falling hard CLIMBS it.
+        # Measured across that morning: rank improved in 69% of falling stocks
+        # against 22% of rising ones. Requiring a down run's rank to deteriorate
+        # therefore rejected the real decliners -- DIXON 27->9, MARUTI 66->13,
+        # SUNPHARMA 43->12 -- and kept only the ones losing force.
+        #
+        # So force is read the same way in both directions, and the direction
+        # itself comes from price alone.
+        has_force = state.rank_change_since_first_seen >= 0
+        if rated and has_force and (run.direction == "up" or RUN_ALLOW_DOWN):
             candidates.append("CLEAN_RUN_UP" if run.direction == "up" else "CLEAN_RUN_DOWN")
 
     if state.observations == 1:
