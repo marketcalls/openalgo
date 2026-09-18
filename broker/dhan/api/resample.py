@@ -88,7 +88,11 @@ def aggregate(df: pd.DataFrame, interval: str, exchange: str) -> pd.DataFrame:
     else:
         hour, minute = _SESSION_OPEN.get(exchange, _DEFAULT_SESSION_OPEN)
         session_open = day + pd.Timedelta(hours=hour, minutes=minute)
+        # Dhan occasionally stamps a pre-open auction bar at 09:07 or 09:08.
+        # Fold it into the first bucket rather than opening an 08:45 or 05:15
+        # bar of its own; the auction price is the session's opening price.
         minutes = (wall - session_open) // pd.Timedelta(minutes=1)
+        minutes = minutes.where(minutes >= 0, 0)
         bucket = session_open + pd.to_timedelta((minutes // rule) * rule, unit="min")
 
     out = (

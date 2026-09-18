@@ -102,6 +102,19 @@ def test_intraday_buckets_never_span_days():
     assert _walls(out) == [datetime(2026, 9, 14, 13, 15), datetime(2026, 9, 15, 9, 15)]
 
 
+@pytest.mark.parametrize("interval", ["30m", "4h"])
+def test_preopen_bar_folds_into_first_bucket(interval):
+    # Dhan's 15m history has a stray 09:07 bar on a few days, e.g. SBIN 2021-08-12.
+    preopen = _intraday(datetime(2021, 8, 12, 9, 7), 1)
+    session = _intraday(datetime(2021, 8, 12, 9, 15), 4)
+    session["open"] = 200.0
+    out = aggregate(pd.concat([preopen, session]), interval, "NSE")
+
+    assert _walls(out)[0] == datetime(2021, 8, 12, 9, 15)
+    assert out.iloc[0]["open"] == 100.0  # the auction bar's price opens the session
+    assert out["volume"].sum() == 50
+
+
 def test_weekly_stamped_on_monday_even_when_monday_is_a_holiday():
     # Tue 15 .. Fri 18 Sep 2026, then Mon 21 .. Tue 22
     days = [date(2026, 9, d) for d in (15, 16, 17, 18, 21, 22)]
