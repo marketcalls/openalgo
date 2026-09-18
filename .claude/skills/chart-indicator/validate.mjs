@@ -128,39 +128,41 @@ const err = once(errors)
 const warn = once(warnings)
 const note = once(notes)
 
-// The library's IndicatorInput union, which has exactly SIX members.
+// The library's IndicatorInput union, which has exactly EIGHT members.
 //
-// This set previously also listed 'session', 'timeframe', 'symbol', 'price' and
-// 'time', described as added in 1.8.1. They were never added. openalgo-charts
-// 2.2.1 defines six variants and no more, and the widget's `controlsFromInputs`
+// This set once also listed 'session', 'timeframe', 'symbol' and 'price',
+// described as added in 1.8.1. They were never added, and whitelisting them
+// here let a file that declared one pass the gate and install: a renderer
 // switches on `input.type` with no default case, so an unrecognised type is
-// dropped without a word: the default still applies and the indicator computes
+// dropped without a word. The default still applies and the indicator computes
 // correctly, while the control never renders and the user cannot change it.
-// Whitelisting them here let exactly that file pass the gate and install.
 //
-// A free-form timeframe or session is therefore a `text` input the indicator
-// parses itself; one with a fixed set of choices is a `select`.
+// 2.4.0 genuinely added two, `interval` and `time`, and they are rendered by
+// both the packaged widget and OpenAlgo's own settings dialog. A session
+// remains a `text` input the indicator parses itself; a fixed set of choices
+// remains a `select`.
 //
 // The runtime list in `frontend/src/lib/trading/customIndicators.ts` is the
-// authority on what registers, and this has to agree with it: the semantic
-// string types the dialog does draw belong here, or a file the app runs
-// happily is refused by the gate. 'expiries' is ours rather than the
+// authority on what registers, and this has to agree with it, or a file the
+// app runs happily is refused by the gate. 'expiries' is ours rather than the
 // library's - the dialog renders it as a tick list of the underlying's
 // nearest option expiries and hands back a comma-separated string.
 const INPUT_TYPES = new Set([
-  'number', 'boolean', 'color', 'text', 'select', 'source',
-  'session', 'timeframe', 'symbol', 'expiries',
+  'number', 'boolean', 'color', 'text', 'select', 'source', 'interval', 'time',
+  'expiries',
 ])
-const STRING_INPUTS = new Set([
-  'text', 'select', 'source', 'session', 'timeframe', 'symbol', 'expiries',
-])
+const STRING_INPUTS = new Set(['text', 'select', 'source', 'interval', 'time', 'expiries'])
 const NUMBER_INPUTS = new Set(['number'])
 const SOURCES = new Set(['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume'])
 const PLACEMENTS = new Set(['onchart', 'pane'])
-const MARKER_POSITIONS = new Set(['aboveBar', 'belowBar', 'inBar', 'atPrice'])
+// `paneTop` and `paneBottom` (2.4.0) pin a marker to the plot edge, so unlike
+// the other four they need neither a bar under them nor a `price`.
+const MARKER_POSITIONS = new Set(['aboveBar', 'belowBar', 'inBar', 'atPrice', 'paneTop', 'paneBottom'])
 const MARKER_SHAPES = new Set([
   'arrowUp', 'arrowDown', 'circle', 'square', 'triangleUp', 'triangleDown',
   'diamond', 'flag', 'text', 'labelUp', 'labelDown',
+  // 2.4.0
+  'cross', 'xcross',
 ])
 const MARKER_SIZES = new Set(['tiny', 'small', 'medium', 'big'])
 const DRAW_KINDS = new Set(['line', 'box', 'label', 'polyline'])

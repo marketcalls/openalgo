@@ -55,10 +55,39 @@ when the indicator loads. Do not silently skip validation.
 
 ## Recent changes worth knowing
 
-The descriptor contract has not changed since this skill was written, so an
-existing indicator keeps working on the pinned build. What changed around it,
-newest first:
+The descriptor contract has only gained optional fields since this skill was
+written, so an existing indicator keeps working on the pinned build. What
+changed, newest first:
 
+- **2.4.0: the constructs a ported study most often could not express.** Every
+  item is optional and needs openalgo-charts 2.4.0 or later installed; the
+  validator checks against the installed build, so read
+  `node -p "require('./frontend/node_modules/openalgo-charts/package.json').version"`
+  before using any of them, and do not use them on an older pin.
+  `securitySeries(bars, interval, opts)` folds the chart's bars to a higher
+  timeframe, one value per bar, with the three readings named (as it stood at
+  that bar, the default; `offset: k` for the last completed bucket;
+  `lookahead: true` for final values, which repaints) and
+  `session: '0915-1530'` to anchor sub-day buckets to the session open. It
+  replaces every hand-rolled fold. `plot.offset` paints a column that many
+  bars ahead, the tail landing in the right margin, with fills and the legend
+  following. A `calc` that throws once installed is reported on the study's
+  data status instead of thrown into the render loop; throw
+  `IndicatorInputError` for a condition the user can fix (Pine
+  `runtime.error`). `alerts[].message` may be a function of the firing bar.
+  Marker shapes `cross` and `xcross`, positions `paneTop` and `paneBottom`
+  (Pine `location.top` / `location.bottom`). `fills[].overlay` for a band on
+  the price pane (Pine `force_overlay` on `fill`). `plot.colorParts` for a
+  wick and border coloured apart from the body (Pine `plotcandle` wick
+  colour). `tooltip` and `id` on `draws()` labels and boxes. Inputs
+  `interval` and `time` (Pine `input.timeframe` / `input.time`).
+  `table` options `fontSize: 'auto'` (Pine `size.auto`). And
+  `ctx.requestBars` on the attach context for another instrument's bars,
+  which `/trading` serves from the terminal's own cached feed: the same broker
+  session and the same bar cache the chart uses, so a benchmark costs no
+  second transport and no credential reaches a chart setting. Omit `exchange`
+  to mean the chart's own. It rejects on a host that registers no provider,
+  and a study should publish that as unsupported rather than invent a value.
 - **2.3.0: charts can be arithmetic over several instruments.**
   `openalgo-charts/transform` gains `parseExpression` and `evaluateExpression`,
   so `/trading` can chart `NIFTY/RELIANCE`, `2*CE25000 - CE25200` or any
@@ -180,6 +209,16 @@ newest first:
      context, replacing a hand-rolled session parser
    - `tier2_external_data.js` — `createTier2Indicator` and the manual `attach`
      lifecycle, for data the chart does not have
+   - `higher_timeframe_bands.js` (2.4.0) — `securitySeries` with two of its
+     three readings, a study in its own pane whose bands and fill carry
+     `overlay: true` onto the candles, an `interval` input, a marker pinned to
+     the pane edge, an alert message built from the firing bar, and
+     `IndicatorInputError` for an input the user can fix
+   - `displaced_cloud_zones.js` (2.4.0) — `plot.offset` for a cloud painted
+     ahead of its data, `colorParts` for a wick coloured apart from its body, a
+     `draws()` zone with a hover `tooltip`, a `time` input, and a table that
+     sizes its own type. Read it for the difference between a plot, which
+     cannot leave the bars, and a drawing, which never was on them
 5. **Draft to scratch. Validate. Iterate until it passes.**
 6. **Install**, then tell the user to reopen the indicator picker on `/trading`.
    No page reload is needed: the catalogue re-reads the folder every time the
@@ -211,18 +250,48 @@ the judgement is in the last two.
 | `barstate.*` | `ctx.barState` on the 4th `calc` argument |
 | session strings | `parseSessionSpec` + `inSessionAt` |
 | `ta.*` | the exported helper of the same job, see `reference/api.md` |
+| `request.security(syminfo.tickerid, tf, ...)` | `securitySeries(bars, tf, opts)` (2.4.0), see below |
+| `plot(x, offset = n)` | `plot.offset: n` (2.4.0) |
+| `input.timeframe` / `input.time` | `type: 'interval'` / `type: 'time'` (2.4.0) |
+| `runtime.error(msg)` | `throw new IndicatorInputError(msg)` (2.4.0) |
+| `alert(dynamic message)` | `alerts[].message` as a function of the bar (2.4.0) |
+| `plotshape(location.top / location.bottom)` | `position: 'paneTop'` / `'paneBottom'` (2.4.0) |
+| `shape.cross` / `shape.xcross` | `shape: 'cross'` / `'xcross'` (2.4.0) |
+| `plotcandle(wickcolor = ...)` | `plot.colorParts` returning `{ body, wick, border }` (2.4.0) |
+| `label.new(..., tooltip = ...)` | `tooltip` on a `draws()` label or box (2.4.0) |
+| `table.new(..., text_size = size.auto)` | `table` options `fontSize: 'auto'` (2.4.0) |
+| `indicator(precision = n)` | `style.precision: n` on the plot that owns the pane, never an input |
 
 Then the two that need thought:
 
-**A higher-timeframe request.** There is no `request.security`. Either fold the
-chart's own bars up to the higher timeframe, or fetch with
-`createTier2Indicator`. Folding is usually more correct: a request against a
-60-minute bar returns that whole bar's high, which is lookahead if your window
-is shorter than the bar.
+**A higher-timeframe request on the chart's own symbol.** From 2.4.0 this is
+`securitySeries(bars, interval, opts)`: one fold, three readings. The default
+reads the bucket as it stood at that bar and never uses a later one, which is
+what the live bar sees and what a non-repainting port wants. `offset: 1` is
+the last completed bucket, the `close[1]` pattern. `lookahead: true` is the
+source's `lookahead_on`: it reads final values on every bar of the bucket and
+repaints, so use it only to reproduce a source that did. Pass
+`session: '0915-1530'` so a 30-minute bucket on a 09:15 open runs 09:15 to
+09:45 rather than 09:00 to 09:30. On an older pin, fold by hand with
+`bucketStartOf` / `zonedDayIndex`, and say which reading you chose.
 
-**Anything drawn at a future bar.** Not expressible: a column is one value per
-bar and there is no bar yet. Shift the meaning back onto existing bars, or drop
-it. This is the one thing that can make a study genuinely unportable today.
+**A request against another symbol.** A screener over a pasted list of tickers
+is not a chart study and cannot be expressed: `calc` is flushed every frame,
+and forty requests belong to a scanner page. A single benchmark (a ratio, a
+beta, a spread) can be, from 2.4.0, through `ctx.requestBars` on the attach
+context or a Tier-2 descriptor's `series` and `calc`. `/trading` registers the
+provider, so this works here today; fetch in `attach`, stash in `store`, call
+`requestRecompute()`, and read it in `calc`. On a host that registers none the
+request rejects, which the study should publish as unsupported.
+
+**Anything drawn at a future bar.** Two cases, and they differ. A `draws()`
+line, box or label anchored at a time past the last bar renders: the time
+scale extrapolates at the last bar spacing, so a right-margin tag, a projected
+zone or a `bar_index + 3` label works today. A **plot column** cannot reach
+past the last bar, because a column is one value per bar; from 2.4.0
+`plot.offset: n` paints it `n` bars ahead instead, which is what a displaced
+cloud or `plot(x, offset = n)` means. On an older pin, shift the meaning back
+onto existing bars, or drop it and record the gap.
 
 ## Two layers of validation
 
@@ -280,6 +349,11 @@ hand-rolling anything, check whether one of these already covers it:
 | Reason about the timeframe | `intervalParts`, `isIntradayInterval`, ... |
 | A colour ramp or alpha | `fromGradient`, `withAlpha` |
 | Pivots, rank, correlation, linreg | `pivotHigh`, `pivotLow`, `percentRank`, `correlation`, `linreg`, ... |
+| A higher timeframe of the chart's own bars | `securitySeries(bars, interval, opts)` (2.4.0), never a hand-rolled fold |
+| A plot painted N bars ahead | `plot.offset` (2.4.0) |
+| Another instrument's bars | `ctx.requestBars` on the attach context (2.4.0), once the host registers a provider |
+| A table positioned, sized or coloured per cell | `table()` `options` (`position`, `cellWidth`, `widthPercent`, `fontSize`) and `TableCell` `bgColor` / `textColor` |
+| A dotted reference line | `levels()` entries take `lineStyle: 'dotted'` |
 | **Any built-in's maths** | `getIndicator(id).calc(bars, settings, {})`, never a reimplementation |
 
 Full list in `reference/api.md`, which is generated from the installed build.
@@ -302,9 +376,14 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
 
 ## Do not
 
-- Add colour or line-width inputs. The chart generates colour, opacity,
-  thickness, line style and plot style per plot automatically, seeded from each
-  plot's `style`. Your own width input becomes a second control that disagrees.
+- Add colour or line-width inputs **for plots**. The chart generates colour,
+  opacity, thickness, line style and plot style per plot automatically, seeded
+  from each plot's `style`. Your own width input becomes a second control that
+  disagrees. That rule is about plots only: a colour that `markers()`,
+  `draws()` or `background()` reads has no generated control, so a
+  `type: 'color'` input for it is right (the source's `input.color` for a
+  marker maps to exactly that), and a `fills` band takes its colours through
+  `colorUpKey` / `colorDownKey`.
 - Reuse a built-in id unless overriding it is the actual intent. Custom modules
   register last, so they win. The validator warns on this.
 - Add a precision or decimals input. Precision follows the pane, not the
@@ -315,7 +394,10 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
   of two decimals (an RSI reads `70.00`, a percentage study `0.61`). A study pane
   is not quoted in the instrument's tick, because an RSI is a dimensionless
   0..100 band. If a plot of yours really is a price, put it on the candles with
-  `overlay: true` rather than reaching for a precision knob.
+  `overlay: true` rather than reaching for a precision knob. A source's
+  `indicator(precision = n)` is a declared `style.precision: n` on the plot
+  that owns the pane, which is a style the chart honours, not an input the
+  user can turn.
 - Add an input for the tick size. `ctx.tickSize` carries it, and an
   input is a second source of truth that disagrees with the axis. Point value is
   the exception: the chart does not know it, so that one is an input at 1.
@@ -328,7 +410,7 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
 | --- | --- |
 | `strategies/indicators/*.js` | installed indicators, gitignored, never pushed |
 | `.claude/skills/chart-indicator/validate.mjs` | the gate |
-| `.claude/skills/chart-indicator/examples/` | ten validated worked examples |
+| `.claude/skills/chart-indicator/examples/` | twelve validated worked examples |
 | `.claude/skills/chart-indicator/reference/` | contract, API surface, pitfalls, cookbook |
 | `.claude/skills/chart-indicator/coverage.mjs` | fails if an API or capability is documented but never demonstrated |
 | `.claude/skills/chart-indicator/generate-api-index.mjs` | regenerates the export index in `reference/api.md`; `--check` fails when it is stale |

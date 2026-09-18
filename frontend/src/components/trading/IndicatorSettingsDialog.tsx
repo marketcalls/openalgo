@@ -28,26 +28,20 @@ const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4']
 const LINE_STYLES = ['solid', 'dashed', 'dotted']
 
 /**
- * Input types the engine defines as strings. The indicator parses the value,
- * so the dialog's job is a text box and a hint of the shape, not a widget per
- * type: a session picker or a symbol search would be a different control that
- * still has to hand back the same string.
+ * Input types the engine defines as strings the indicator parses itself, so the
+ * dialog's job is a text box and a hint of the shape rather than a widget per
+ * type. A session picker would be a different control that still has to hand
+ * back the same string.
+ *
+ * 'time' (2.4.0) is a wall-clock instant in the chart's timezone, carried as a
+ * string rather than as epoch seconds precisely so a layout saved in one zone
+ * restores to the same clock in another. It is a text box for the same reason
+ * a session is: the value is the string.
  */
-const TEXT_TYPES = new Set(['text', 'session', 'timeframe', 'symbol'])
+const TEXT_TYPES = new Set(['text', 'time'])
 const TEXT_PLACEHOLDER: Record<string, string | undefined> = {
-  session: '0915-1015 or 0930-1600:23456',
-  timeframe: '5m, 1h, D',
-  symbol: 'RELIANCE',
+  time: 'YYYY-MM-DD HH:MM',
 }
-
-/**
- * 'price' and 'time' are numbers, so the number control already fits. The
- * engine can resolve them from a chart click (`chart.beginPick`), but this
- * dialog is modal: offering that here means dismissing the dialog to reach the
- * chart and restoring it afterwards, which is a flow worth designing rather
- * than bolting on. Typing the value works today.
- */
-const NUMERIC_PICKABLE = new Set(['price', 'time'])
 
 /** Shared control chrome — compact, flat, dark-first. */
 export const CONTROL =
@@ -419,13 +413,19 @@ export function SettingsField({
     )
   }
 
-  if (field.type === 'source' || field.type === 'select') {
+  // 'interval' (2.4.0) is a select like the others: the terminal fills its
+  // options with the intervals this broker actually serves, so a study can
+  // never be handed a timeframe the feed cannot answer. Falling back to the
+  // chart's own interval (the empty value) is what an unfilled list means.
+  if (field.type === 'source' || field.type === 'select' || field.type === 'interval') {
     const opts = field.options
       ? field.options.map((o) => ({ label: o.label, value: String(o.value) }))
-      : (field.type === 'source' ? SOURCES : LINE_STYLES).map((o) => ({
-          label: o.charAt(0).toUpperCase() + o.slice(1),
-          value: o,
-        }))
+      : field.type === 'interval'
+        ? [{ label: 'Chart interval', value: '' }]
+        : (field.type === 'source' ? SOURCES : LINE_STYLES).map((o) => ({
+            label: o.charAt(0).toUpperCase() + o.slice(1),
+            value: o,
+          }))
     return (
       <>
         {label}
@@ -457,10 +457,6 @@ export function SettingsField({
   // Everything below falls through to the number control, so a string-valued
   // input needs its own branch: `<input type="number">` rejects a value like
   // '0915-1015' outright and renders an empty box with spinner arrows.
-  //
-  // 'session', 'timeframe' and 'symbol' are the semantic string types the
-  // library added: the indicator parses them itself, so the control is a text
-  // box with a hint of the shape expected rather than a bespoke widget.
   if (TEXT_TYPES.has(field.type)) {
     return (
       <>
@@ -477,10 +473,7 @@ export function SettingsField({
     )
   }
 
-  // 'price' and 'time' land here deliberately: both are numbers, so the stepper
-  // control is already the right one. See NUMERIC_PICKABLE for why there is no
-  // click-the-chart affordance in this modal yet.
-  const step = field.step ?? (NUMERIC_PICKABLE.has(field.type) ? 0.05 : 1)
+  const step = field.step ?? 1
   const nudge = (dir: 1 | -1) => {
     const cur = Number(value)
     const next = (Number.isFinite(cur) ? cur : 0) + dir * step

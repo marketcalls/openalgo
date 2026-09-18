@@ -169,7 +169,7 @@ export default function ({ registerIndicator, nulls }) {
     placement: 'onchart',
 
     inputs: [
-      { key: 'underlying', type: 'symbol', label: 'Underlying', default: '', group: 'Instrument' },
+      { key: 'underlying', type: 'text', label: 'Underlying', default: '', group: 'Instrument' },
       {
         key: 'exchange', type: 'select', label: 'Exchange', default: 'auto', group: 'Instrument',
         options: [

@@ -11,6 +11,7 @@
  * appeared on screen, and no assertion in a jsdom test should claim it did.
  */
 
+import type { Bar, LiveBarMeta } from 'openalgo-charts'
 import { useEffect, useRef, useState } from 'react'
 import type { OpenAlgoChartProps } from '@/components/chart/OpenAlgoChart'
 
@@ -32,6 +33,28 @@ export interface FakeWidgetState {
   loadedFrom?: number
   /** Ask the feed for the window before what is held, as scrolling left does. */
   pageOlder: () => Promise<void>
+  /** What the fake controller holds: the last load's bars and request. */
+  bars: Bar[]
+  request: { symbol: string; exchange: string; interval: string } | null
+  /** Live bars a host pushed into the controller, with their metadata. */
+  pushed: Array<[Bar, LiveBarMeta | undefined]>
+  /** Snapshot listeners a host registered on the controller. */
+  dataListeners: Array<(snapshot: unknown) => void>
+}
+
+/** Hand every controller listener a snapshot, the way a load or a repair does. */
+export function publishData(state: FakeWidgetState, reason: 'load' | 'refresh', bars: Bar[]): void {
+  state.bars = bars
+  const snapshot = {
+    request: state.request,
+    bars,
+    status: 'ready',
+    historyStatus: 'idle',
+    hasMore: null,
+    reason,
+    paused: false,
+  }
+  for (const cb of state.dataListeners) cb(snapshot)
 }
 
 function makeWidget(state: FakeWidgetState, reload: () => Promise<void>) {
@@ -50,6 +73,27 @@ function makeWidget(state: FakeWidgetState, reload: () => Promise<void>) {
     reload,
     openSettings: () => true,
     openIndicatorPicker: () => true,
+    dataController: {
+      subscribe: (cb: (snapshot: unknown) => void) => {
+        state.dataListeners.push(cb)
+        return () => {
+          state.dataListeners = state.dataListeners.filter((fn) => fn !== cb)
+        }
+      },
+      getState: () => ({
+        request: state.request,
+        bars: state.bars,
+        status: 'ready',
+        historyStatus: 'idle',
+        hasMore: null,
+        reason: 'load',
+        paused: false,
+      }),
+      bars: () => state.bars,
+      pushBar: (bar: Bar, meta?: LiveBarMeta) => {
+        state.pushed.push([bar, meta])
+      },
+    },
     series: {
       applyOptions: (style: Record<string, unknown>) => {
         Object.assign(state.primaryStyle, style)
@@ -113,6 +157,10 @@ export function fakeWidgetState(): FakeWidgetState {
     primaryStyle: {},
     crosshair: [],
     pageOlder: async () => {},
+    bars: [],
+    request: null,
+    pushed: [],
+    dataListeners: [],
   }
 }
 
@@ -157,6 +205,10 @@ export function fakeOpenAlgoChart(state: FakeWidgetState) {
           interval: p.interval,
         })
         state.loadedFrom = bars[0]?.time ?? state.loadedFrom
+        // The real controller publishes the load to its subscribers before the
+        // host hears about it through onData.
+        state.request = { symbol: p.symbol, exchange: p.exchange, interval: p.interval }
+        publishData(state, 'load', bars as Bar[])
         p.onData?.({ symbol: p.symbol, interval: p.interval, bars: bars.length })
       } catch (error) {
         p.onData?.({

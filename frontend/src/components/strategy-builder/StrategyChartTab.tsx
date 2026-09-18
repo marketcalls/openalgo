@@ -9,7 +9,7 @@
  * premium.
  */
 
-import type { SeriesApi } from 'openalgo-charts'
+import { type Bar, CandleBuilder, type DataLoadingSnapshot, intervalToSeconds, type SeriesApi } from 'openalgo-charts'
 import type { Widget } from 'openalgo-charts/widget'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -17,6 +17,7 @@ import {
   type StrategyChartPoint,
   strategyChartApi,
 } from '@/api/strategy-chart'
+import { useMarketData } from '@/hooks/useMarketData'
 import { createStrategyChartFeed, type StrategyFeedRequest } from '@/lib/chart/feeds/strategyFeed'
 import type { StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
@@ -42,6 +43,35 @@ interface StrategyChartTabProps {
  * quantity-independent, so refetching on a lot change would spend a broker
  * history call to redraw the same line.
  */
+/**
+ * Repair that follows the stream: a small refresh after each bar closes and an
+ * immediate one when a bucket is skipped, each asking the endpoint for the last
+ * few bars. The chart's own history poll stays closed; these only fire on the
+ * live bars the tab pushes.
+ */
+const LIVE_REPAIR = { refreshOnBarClose: true, refreshOnGap: true, refreshWindowBars: 5 } as const
+
+/**
+ * The underlying overlay is off until the reader turns it on, and the choice
+ * is remembered: on a premium chart the index is a second scale competing for
+ * the eye, and most readers open the tab for the spread.
+ */
+const UNDERLYING_KEY = 'strategybuilder:strategy-chart:underlying'
+function readUnderlyingPreference(): boolean {
+  try {
+    return localStorage.getItem(UNDERLYING_KEY) === 'on'
+  } catch {
+    return false
+  }
+}
+function writeUnderlyingPreference(on: boolean): void {
+  try {
+    localStorage.setItem(UNDERLYING_KEY, on ? 'on' : 'off')
+  } catch {
+    // Storage may be unavailable; the toggle still works for the session.
+  }
+}
+
 function legsIdentity(legs: StrategyLeg[], optionExchange: string): string {
   return legs
     .filter((l) => l.segment === 'OPTION' && l.active && l.symbol)
@@ -93,8 +123,11 @@ export default function StrategyChartTab({
   const [chartData, setChartData] = useState<StrategyChartData | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [widget, setWidget] = useState<Widget | null>(null)
-  const [showUnderlying, setShowUnderlying] = useState(true)
+  const [showUnderlying, setShowUnderlying] = useState(readUnderlyingPreference)
   const [showCombined, setShowCombined] = useState(true)
+  useEffect(() => {
+    writeUnderlyingPreference(showUnderlying)
+  }, [showUnderlying])
 
   const colors = useMemo(() => {
     if (appMode === 'analyzer') return { underlying: '#fbbf24', combined: '#a78bfa' }
@@ -148,6 +181,93 @@ export default function StrategyChartTab({
     []
   )
 
+  /**
+   * Live: one LTP subscription per leg over the app's shared socket, folded on
+   * every tick into the forming bar of the combined series and pushed into the
+   * chart's own controller, the way the trading terminal does for a symbol.
+   *
+   * The fold is the endpoint's formula, per share and quantity-independent: a
+   * sold leg counts positive, a bought leg negative, and the chart shows the
+   * absolute value. Every leg has to have printed over the socket before the
+   * fold means anything; a quote cached from an earlier visit is not a tick.
+   */
+  const legSubscriptions = useMemo(
+    () => payloadLegs.map((l) => ({ symbol: l.symbol, exchange: l.exchange })),
+    [payloadLegs]
+  )
+  const { data: marketData } = useMarketData({
+    symbols: legSubscriptions,
+    mode: 'LTP',
+    enabled: legSubscriptions.length > 0,
+  })
+  const [livePremium, setLivePremium] = useState<number | null>(null)
+  const live = useRef<{ interval: string; candle: CandleBuilder } | null>(null)
+  const lastFold = useRef<number | null>(null)
+
+  // The builder follows the controller: seeded from whatever it loads, so the
+  // first tick continues the bar history ended on, and reconciled with what a
+  // repair brings so its next tick does not write stale values back over it.
+  useEffect(() => {
+    const data = widget?.dataController
+    if (!data) return
+    live.current = null
+    lastFold.current = null
+    setLivePremium(null)
+    const seed = (bars: readonly Bar[], interval: string) => {
+      let intervalSec: number
+      try {
+        intervalSec = intervalToSeconds(interval)
+      } catch {
+        live.current = null // a calendar interval has no live bar to build
+        return
+      }
+      const last = bars[bars.length - 1]
+      const candle = new CandleBuilder({
+        intervalSec,
+        volumeMode: 'ltq-sum',
+        // The endpoint's bars are already on the session grid; anchoring to one
+        // keeps a 5m bar opening at 09:15 rather than on the epoch.
+        sessionAnchorSec: last?.time ?? 0,
+      })
+      if (last) candle.seed(last)
+      live.current = { interval, candle }
+    }
+    const state = data.getState()
+    if (state.request && state.bars.length) seed(state.bars, state.request.interval)
+    return data.subscribe((s: DataLoadingSnapshot) => {
+      if (!s.request) return
+      if (s.reason === 'load' && s.bars.length) {
+        seed(s.bars, s.request.interval)
+        lastFold.current = null
+      } else if (s.reason === 'refresh' && live.current) {
+        const current = live.current.candle.current()
+        const held = current ? s.bars.find((b) => b.time === current.time) : undefined
+        if (held) live.current.candle.reconcile(held)
+      }
+    })
+  }, [widget])
+
+  useEffect(() => {
+    const data = widget?.dataController
+    const fold = live.current
+    if (!data || !fold || payloadLegs.length === 0) return
+    let net = 0
+    for (const leg of payloadLegs) {
+      const tick = marketData.get(`${leg.exchange}:${leg.symbol}`)
+      const ltp = tick?.data?.ltp
+      if (tick?.updateSource !== 'websocket' || typeof ltp !== 'number' || !(ltp > 0)) return
+      net += (leg.side === 'SELL' ? 1 : -1) * ltp
+    }
+    const value = Math.abs(net)
+    if (value === lastFold.current) return
+    lastFold.current = value
+    const update = fold.candle.onTick({ time: Math.floor(Date.now() / 1000), price: value })
+    if (!update) return
+    if (update.provisional) data.pushBar(update.bar, { provisional: true })
+    else data.pushBar(update.bar)
+    setLivePremium(value)
+  }, [marketData, widget, payloadLegs])
+
   // The timeframe list the broker actually serves, fetched once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; `interval` is read to seed a default and must not re-trigger the fetch
   useEffect(() => {
@@ -184,6 +304,10 @@ export default function StrategyChartTab({
    * back on does not re-autoscale the pane under the reader.
    */
   const overlay = useRef<SeriesApi | null>(null)
+  // Read through a ref so the series is created with the current choice
+  // without recreating it on every toggle.
+  const underlyingOn = useRef(showUnderlying)
+  underlyingOn.current = showUnderlying
   useEffect(() => {
     if (!widget) {
       overlay.current = null
@@ -193,6 +317,9 @@ export default function StrategyChartTab({
       priceScaleId: 'left',
       style: { color: colors.underlying, lineWidth: 2 },
     })
+    // Hidden by default, so the choice has to be applied here as well as on
+    // toggle: the toggle effect ran before this series existed.
+    series.applyOptions({ visible: underlyingOn.current })
     overlay.current = series
     return () => {
       overlay.current = null
@@ -301,6 +428,7 @@ export default function StrategyChartTab({
       onReady={setWidget}
       onData={onData}
       tooltip={tooltip}
+      loading={LIVE_REPAIR}
       readout={
         chartData ? (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
@@ -320,7 +448,7 @@ export default function StrategyChartTab({
               <div>
                 <span className="text-muted-foreground">Current </span>
                 <span className="font-semibold" style={{ color: colors.combined }}>
-                  {money(point.combined_premium)}
+                  {money(livePremium ?? point.combined_premium)}
                 </span>
               </div>
             ) : null}
