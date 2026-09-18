@@ -36,6 +36,24 @@ IST = ZoneInfo("Asia/Kolkata")
 TARGET_PCT = 1.0  # the move that pays on a stock option
 
 
+def first_recorded_minute(day: str, list_type: str = "intraday_boost") -> int | None:
+    """The first minute actually captured live, not reconstructed. A badge dated
+    to it was already running when the recorder woke, so it is not an entry
+    anyone could have taken -- see the same guard in tf_boost_option_audit."""
+    from database.tf_boost_db import get_connection
+
+    try:
+        with get_connection() as conn:
+            value = conn.execute(
+                "SELECT min(hour(snapshot_time) * 60 + minute(snapshot_time)) "
+                "FROM tf_boost_snapshots WHERE snapshot_date = ? AND list_type = ?",
+                [day, list_type],
+            ).fetchone()[0]
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
 def first_badge(symbol, changes, ranks):
     """The first minute the panel would show RUN, with no hindsight.
 
@@ -90,6 +108,8 @@ def main() -> None:
         print(f"No snapshots for {day}.")
         return
 
+    already_running = 0
+    recording_began = first_recorded_minute(day)
     api_key = get_first_available_api_key()
     auth_token, broker = get_auth_token_broker(api_key, include_feed_token=False)
     rows = []
@@ -99,6 +119,9 @@ def main() -> None:
             continue
         badge_min, row = first_badge(symbol, cps, rps)
         if badge_min is None:
+            continue
+        if recording_began is not None and badge_min <= recording_began + 1:
+            already_running += 1
             continue
         try:
             ok, res, _ = get_history(

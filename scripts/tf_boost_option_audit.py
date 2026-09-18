@@ -52,6 +52,29 @@ MIN_OPTION_VOLUME = 10_000  # below this the fill is not something to rely on
 MORNING_CUTOFF_MIN = 10 * 60
 
 
+def first_recorded_minute(day: str, list_type: str = "intraday_boost") -> int | None:
+    """The first minute actually captured live, not reconstructed.
+
+    A badge dated to that minute was not a signal anyone could act on: nothing
+    was on screen before it. On 18-Sep-2026 recording began at 10:04 and eight
+    stocks were already mid-run, so they showed a first-badge time of 10:04 --
+    the moment the recorder woke, not the moment the move became visible.
+    Counting those as entries measures a screen nobody was watching.
+    """
+    from database.tf_boost_db import get_connection as boost_conn
+
+    try:
+        with boost_conn() as conn:
+            value = conn.execute(
+                "SELECT min(hour(snapshot_time) * 60 + minute(snapshot_time)) "
+                "FROM tf_boost_snapshots WHERE snapshot_date = ? AND list_type = ?",
+                [day, list_type],
+            ).fetchone()[0]
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
 def first_badge(symbol, changes, ranks):
     """The first minute the panel would actually show RUN, using only data up
     to that minute.
@@ -213,7 +236,8 @@ def main() -> None:
     api_key = get_first_available_api_key()
     auth_token, broker = get_auth_token_broker(api_key, include_feed_token=False)
 
-    results, problems = [], []
+    results, problems, already_running = [], [], []
+    recording_began = first_recorded_minute(day)
     # The whole intraday_boost list for the day. --morning narrows it to names
     # that were already on the list early, which on 17-Sep-2026 was 193 of 200
     # and therefore almost the same set.
@@ -232,6 +256,11 @@ def main() -> None:
             continue
         badge_min, row, day_change = first_badge(symbol, cps, rps)
         if badge_min is None:
+            continue
+        # A badge dated to the first recorded minute was already running when
+        # the recorder woke. It is not an entry anyone could have taken.
+        if recording_began is not None and badge_min <= recording_began + 1:
+            already_running.append(symbol)
             continue
 
         stock_bars = fetch_bars(tradable_symbol(symbol), "NSE", day, auth_token, broker)
@@ -279,6 +308,13 @@ def main() -> None:
             print(f"  ... {n}/{len(symbols)}")
 
     db_session.remove()
+    if already_running:
+        problems.append(
+            f"{len(already_running)} already mid-run when recording began at "
+            f"{recording_began // 60:02d}:{recording_began % 60:02d}, so their badge minute is "
+            f"not an entry: {', '.join(sorted(already_running)[:6])}"
+            + (" ..." if len(already_running) > 6 else "")
+        )
     report(day, results, problems)
 
 
