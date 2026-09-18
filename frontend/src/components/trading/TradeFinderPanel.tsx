@@ -1158,6 +1158,11 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
     }
   }, [apiKey, view, socket])
 
+  /** How many tracked symbols currently carry a badge -- counted from the same
+   * table MovementBadge draws from, so the header cannot claim a badge the rows
+   * do not show. */
+  const badgedCount = [...movement.values()].filter((mv) => MOVEMENT_BADGE[mv.event]).length
+
   /* ── rank-movement alerts: toast a NEW salient backend event. The first
      populated poll of each list only sets a baseline (otherwise every event
      already in progress toasts at once), and the toggle-off path keeps that
@@ -1582,12 +1587,21 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
         </Popover>
       </div>
 
-      {/* Movement badges missing because the data did not arrive, rather than
-          because nothing qualified. Without this the two are indistinguishable
-          on screen, and the difference is the whole question. */}
-      {movementError && view !== 'sectors' && (
-        <div className="shrink-0 border-b px-2 py-1 text-[10px] text-amber-500">
-          {movementError} -- rank badges are not showing
+      {/* Whether the movement data arrived, and how much of it. Badges missing
+          because nothing qualified, because nothing arrived, and because the
+          page is running an older bundle all looked identical on screen -- and
+          that is the whole question when someone says they cannot see a badge. */}
+      {view !== 'sectors' && (
+        <div className="shrink-0 border-b px-2 py-1 text-[10px]">
+          {movementError ? (
+            <span className="text-amber-500">{movementError} -- no rank badges</span>
+          ) : (
+            <span className="text-muted-foreground">
+              {movement.size === 0
+                ? 'Waiting for the movement engine'
+                : `${movement.size} symbols tracked, ${badgedCount} badged`}
+            </span>
+          )}
         </div>
       )}
 

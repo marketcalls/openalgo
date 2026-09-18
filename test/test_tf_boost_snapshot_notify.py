@@ -182,3 +182,55 @@ def test_the_watchdog_is_silent_outside_the_session(monkeypatch):
     monkeypatch.setattr(svc, "_heartbeat_age_seconds", lambda _now: 99_999.0)
     _run_watchdog_once(monkeypatch)
     assert restarts == []
+
+
+# --- backfill: a late start must not invert the run -------------------------
+
+
+def test_a_recorded_minute_always_beats_the_reconstruction():
+    # The repair fills holes only. If it ever overwrote a real snapshot the
+    # engine would be reading a candle where it thinks it has the ranked list.
+    from database import tf_boost_db as db
+
+    real = {"AAA": {"2026-09-18": [[604, 1.5], [605, 1.6]]}}
+    backfill = {"AAA": [[600, 0.1], [604, 99.9], [606, 0.2]]}
+
+    merged = {s: {d: list(v) for d, v in days.items()} for s, days in real.items()}
+    for symbol, points in backfill.items():
+        existing = merged.setdefault(symbol, {}).setdefault("2026-09-18", [])
+        have = {m for m, _ in existing}
+        existing.extend(p for p in points if p[0] not in have)
+        existing.sort(key=lambda p: p[0])
+
+    series = merged["AAA"]["2026-09-18"]
+    assert [m for m, _ in series] == [600, 604, 605, 606]
+    # 604 exists in the real record, so the reconstruction's 99.9 is ignored.
+    assert dict(series)[604] == 1.5
+    assert db.get_price_backfill is not None  # the union path is the one under test
+
+
+def test_the_backfill_reports_no_gap_when_recording_started_on_time(monkeypatch):
+    from services import tf_boost_backfill_service as bf
+
+    class _Conn:
+        def execute(self, sql, params=None):
+            self.sql = sql
+            return self
+
+        def fetchone(self):
+            # First recorded minute is the open itself: no hole.
+            return (bf.SESSION_OPEN_MIN,)
+
+        def fetchall(self):
+            return []
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def fake_connection(*_a, **_k):
+        yield _Conn()
+
+    monkeypatch.setattr(bf, "get_connection", fake_connection)
+    monkeypatch.setattr(bf, "init_price_backfill_table", lambda: None)
+    out = bf.backfill_day("2026-09-18")
+    assert out["gap_minutes"] == 0 and out["rows"] == 0

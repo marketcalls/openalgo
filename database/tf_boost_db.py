@@ -409,6 +409,19 @@ def get_boost_change_timeline(
         timeline.setdefault(symbol, {}).setdefault(day, []).append(
             [int(min_of_day), float(change_pct)]
         )
+
+    # Minutes the recorder missed, reconstructed from the broker's candles. A
+    # recorded minute always wins; the reconstruction only fills a hole, and a
+    # run measured from the wrong end of one is worse than no run at all.
+    for day in {d for days in timeline.values() for d in days} | {
+        start_date,
+        end_date or start_date,
+    }:
+        for symbol, points in get_price_backfill(day).items():
+            existing = timeline.setdefault(symbol, {}).setdefault(day, [])
+            have = {m for m, _ in existing}
+            existing.extend(p for p in points if p[0] not in have)
+            existing.sort(key=lambda p: p[0])
     return timeline
 
 
@@ -513,3 +526,69 @@ def upsert_behaviour(rows: list[dict]) -> int:
                 [row.get(c) for c in cols],
             )
     return len(rows)
+
+
+def init_price_backfill_table() -> None:
+    """Prices for minutes the recorder missed, kept apart from the snapshots.
+
+    The run engine measures a move from where it turned, so a series that
+    begins late measures the wrong thing: on 18-Sep-2026 the machine slept
+    until 10:04 and INDHOTEL, up 1.94% on the day having given back 0.47 and
+    the list's number one, read as a DOWN move of 0.39 because the only data
+    was a late pullback.
+
+    Deliberately not written into tf_boost_snapshots. Those rows are the record
+    of what the ranked list showed, and a candle cannot say whether a symbol was
+    on the list or where it ranked. Mixing a reconstruction in would corrupt the
+    one thing the snapshots are for.
+    """
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tf_boost_price_backfill (
+                day         DATE NOT NULL,
+                symbol      VARCHAR NOT NULL,
+                min_of_day  INTEGER NOT NULL,
+                change_pct  DOUBLE NOT NULL,
+                source      VARCHAR NOT NULL DEFAULT 'broker_1m',
+                created_at  TIMESTAMP DEFAULT current_timestamp,
+                PRIMARY KEY (day, symbol, min_of_day)
+            )
+        """)
+
+
+def upsert_price_backfill(rows: list[tuple]) -> int:
+    """rows: (day, symbol, min_of_day, change_pct). Re-runnable."""
+    if not rows:
+        return 0
+    init_price_backfill_table()
+    with get_connection() as conn:
+        for day, symbol, minute, change_pct in rows:
+            conn.execute(
+                "DELETE FROM tf_boost_price_backfill WHERE day = ? AND symbol = ? "
+                "AND min_of_day = ?",
+                [day, symbol, minute],
+            )
+            conn.execute(
+                "INSERT INTO tf_boost_price_backfill (day, symbol, min_of_day, change_pct) "
+                "VALUES (?, ?, ?, ?)",
+                [day, symbol, minute, float(change_pct)],
+            )
+    return len(rows)
+
+
+def get_price_backfill(day: str) -> dict[str, list[list[float]]]:
+    """{symbol: [[minute, change_pct], ...]} for one day, or {} if none."""
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT symbol, min_of_day, change_pct FROM tf_boost_price_backfill "
+                "WHERE day = ? ORDER BY symbol, min_of_day",
+                [day],
+            ).fetchall()
+    except Exception as e:
+        logger.debug(f"get_price_backfill({day}): {e}")
+        return {}
+    out: dict[str, list[list[float]]] = {}
+    for symbol, minute, change_pct in rows:
+        out.setdefault(symbol, []).append([int(minute), float(change_pct)])
+    return out

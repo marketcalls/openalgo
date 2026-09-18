@@ -447,6 +447,22 @@ def _startup_catchup():
     if now_ist.weekday() >= 5:
         return
     try:
+        # A morning that started late leaves the run engine measuring a move
+        # from the wrong end. Fill it from the broker's candles before anything
+        # reads it; the call returns quietly when there is no hole.
+        try:
+            from services.tf_boost_backfill_service import backfill_day
+
+            filled = backfill_day(now_ist.strftime("%Y-%m-%d"))
+            if filled.get("rows"):
+                _append(
+                    now_ist,
+                    f"reconstructed {filled['rows']} missed minutes across "
+                    f"{filled['symbols']} symbols ({filled['gap_minutes']} minute gap)",
+                )
+        except Exception as e:
+            logger.exception(f"tf_boost startup backfill failed: {e}")
+
         # Past the close with snapshots captured but no study: run it now.
         if now_ist.hour * 60 + now_ist.minute >= 15 * 60 + 45:
             from database.tf_boost_db import get_connection as boost_conn
