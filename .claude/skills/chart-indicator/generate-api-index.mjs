@@ -75,6 +75,10 @@ const CURATED = [
     'hasIndicator', 'indicatorDefaults', 'indicatorStyleInputs', 'plotStyleKeys',
     'registeredChartTypes', 'getChartType', 'registerChartType', 'registerBuiltinIndicators',
     'INDICATORS_TIER',
+    // 2.4.0. Curated here rather than left to the default bucket: both are
+    // written by an indicator author, and the fallback files anything
+    // unlisted under "chart infrastructure", which is the opposite of true.
+    'IndicatorInputError',
   ]],
   ['Reading bars', [
     'sourceValues', 'sourceValue', 'INDICATOR_SOURCES', 'toBar', 'mergeBars',
@@ -88,6 +92,9 @@ const CURATED = [
   ]],
   ['OHLC studies', [
     'trueRange', 'atr', 'rsi', 'supertrend', 'emaSeries', 'rsiSeries', 'supertrendSeries',
+    // 2.4.0: the higher-timeframe fold. It takes bars and returns OHLCV
+    // columns, so it belongs beside the other studies that read whole bars.
+    'securitySeries',
   ]],
   ['Sessions, time and timeframes', [
     'DEFAULT_TIMEZONE', 'IST_OFFSET_SECONDS', 'isValidTimezone', 'utcSecondsToZonedParts',

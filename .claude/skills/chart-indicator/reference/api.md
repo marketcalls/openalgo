@@ -169,6 +169,7 @@ while the sections above stayed true.
 | **2.2.0** | The draw tier grows to 85 tools and adds `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS` and `PATTERN_DRAWING_TOOLS`. These are host drawing descriptors, not exports on the custom indicator API object. Indicator descriptors and the 102 built-ins are unchanged; saved drawing documents remain version 2. |
 
 | **2.2.1** | Two optional descriptor fields, both additive. `IndicatorInput.tooltip` is help text for a row, which the settings dialog draws as a focusable `?` beside the label; the core ignores it. `IndicatorPlot.priceFormat` takes the exported `PriceFormat` union (`price` / `volume` / `percent` / `custom`) and sets the axis and crosshair formatting of the scale that plot maps to. `percent` suffixes the value and does NOT scale it, so a 0..1 study reads `0.62%`; like `style.precision` it belongs to a plot that owns its pane. `historical-volatility` and `bollinger-bandwidth` are the first built-ins to use either. The registry stays at 102 ids and no existing descriptor is affected. |
+| **2.4.0** | The constructs a ported study most often could not express. **`securitySeries(bars, interval, opts)`** folds the chart's own bars to a higher timeframe, one value per bar, with three readings: the default reads the bucket as it stood at that bar and never uses a later one, `offset: k` reads the last completed bucket held constant, and `lookahead: true` reads final values and repaints. `session: '0915-1530'` anchors sub-day buckets to the session open. **`IndicatorPlot.offset`** paints a column that many bars to the right, the tail landing in the right margin; a fill follows its first plot's offset and the legend reads what is drawn under the cursor. **A thrown `calc` is caught**, published as `{ state: 'error' }` on the instance data status and the `indicator:data-status` event, and cleared by the next good pass; the constructor's first pass still throws out of `addIndicator`. **`IndicatorInputError`** names a condition the user can fix. **`alerts[].message`** may be a function of the firing bar's context. Markers gain the shapes `cross` and `xcross` and the positions `paneTop` and `paneBottom`, which pin to the plot edge and need no bar or price. **`IndicatorFillSpec.overlay`** draws a band on the price pane. **`IndicatorPlot.colorParts`** returns `{ body, wick, border }`, carried as `Bar.wickColor` / `Bar.borderColor`. `draws()` labels and boxes take **`tooltip`** and **`id`**, which make them hit-testable. Two input types, **`interval`** and **`time`**. **`ChartTableOptions.fontSize: 'auto'`** fits each cell. And **`ctx.requestBars`** asks the host for another instrument's bars, served in `/trading` by the terminal's own cached feed. Every field is optional; the registry stays at 102 ids. |
 
 ## Complete export index
 
@@ -179,13 +180,13 @@ methods are not properties of that API object.
 
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
-All 368 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.3.2 build by `generate-api-index.mjs`; do not
+All 370 names on the API object, so nothing is a surprise. Generated from
+the installed openalgo-charts@2.4.0 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
-**Registration and introspection** (13)
+**Registration and introspection** (14)
 
-`registerIndicator`, `createTier2Indicator`, `registeredIndicators`, `getIndicator`, `hasIndicator`, `indicatorDefaults`, `indicatorStyleInputs`, `plotStyleKeys`, `registeredChartTypes`, `getChartType`, `registerChartType`, `registerBuiltinIndicators`, `INDICATORS_TIER`
+`registerIndicator`, `createTier2Indicator`, `registeredIndicators`, `getIndicator`, `hasIndicator`, `indicatorDefaults`, `indicatorStyleInputs`, `plotStyleKeys`, `registeredChartTypes`, `getChartType`, `registerChartType`, `registerBuiltinIndicators`, `INDICATORS_TIER`, `IndicatorInputError`
 
 **Reading bars** (10)
 
@@ -195,9 +196,9 @@ edit this section by hand.
 
 `sma`, `wma`, `rma`, `ema`, `smaSeededEma`, `stdev`, `dev`, `highest`, `lowest`, `highestBars`, `lowestBars`, `rollingSum`, `cumulative`, `linreg`, `swma`, `alma`, `vwma`, `percentRank`, `percentileNearestRank`, `correlation`, `nulls`, `connorsStreak`, `change`, `roc`, `stoch`, `cci`, `pivotHigh`, `pivotLow`
 
-**OHLC studies** (7)
+**OHLC studies** (8)
 
-`trueRange`, `atr`, `rsi`, `supertrend`, `emaSeries`, `rsiSeries`, `supertrendSeries`
+`trueRange`, `atr`, `rsi`, `supertrend`, `emaSeries`, `rsiSeries`, `supertrendSeries`, `securitySeries`
 
 **Sessions, time and timeframes** (48)
 
