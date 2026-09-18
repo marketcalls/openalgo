@@ -151,6 +151,24 @@ describe('OpenAlgoChart', () => {
     expect(latest().options.loading).toMatchObject({ pollIntervalMs: 0 })
   })
 
+  it('forwards stream-driven repair options and still keeps the poll closed', async () => {
+    render(
+      <OpenAlgoChart
+        feed={feed}
+        symbol="RELIANCE"
+        exchange="NSE"
+        interval="1m"
+        loading={{ refreshOnBarClose: true, refreshWindowBars: 5 }}
+      />
+    )
+    await waitFor(() => expect(harness.createWidget).toHaveBeenCalled())
+    expect(latest().options.loading).toMatchObject({
+      refreshOnBarClose: true,
+      refreshWindowBars: 5,
+      pollIntervalMs: 0,
+    })
+  })
+
   it('drives both engine clocks from the data horizon, not the wall clock', async () => {
     // Two separate failures came from the wall clock. The opening window is
     // built backwards from it, so a store whose newest candle is days old,

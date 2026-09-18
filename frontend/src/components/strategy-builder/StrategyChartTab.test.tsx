@@ -2,15 +2,19 @@ import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StrategyChartResponse } from '@/api/strategy-chart'
 import type { StrategyLeg } from '@/lib/strategyMath'
-import { fakeWidgetState, moveCrosshair } from '@/test/fakeChart'
+import { fakeWidgetState, moveCrosshair, publishData } from '@/test/fakeChart'
 import StrategyChartTab from './StrategyChartTab'
 
 const mocks = vi.hoisted(() => ({
   getIntervals: vi.fn(),
   getStrategyChart: vi.fn(),
   toastError: vi.fn(),
+  useMarketData: vi.fn(),
   chartState: { current: null as ReturnType<typeof fakeWidgetState> | null },
+  chartProps: { current: null as Record<string, unknown> | null },
 }))
+
+vi.mock('@/hooks/useMarketData', () => ({ useMarketData: mocks.useMarketData }))
 
 vi.mock('@/api/strategy-chart', () => ({
   strategyChartApi: {
@@ -28,6 +32,7 @@ vi.mock('@/components/chart/OpenAlgoChart', async () => {
   const { fakeOpenAlgoChart: build } = await import('@/test/fakeChart')
   return {
     OpenAlgoChart: (props: Record<string, unknown>) => {
+      mocks.chartProps.current = props
       const Component = build(mocks.chartState.current!)
       return Component(props as never)
     },
@@ -92,9 +97,19 @@ function renderTab(underlying: string) {
   )
 }
 
+/** A socket price for one leg, the shape the shared manager hands out. */
+function socketPrice(exchange: string, symbol: string, ltp: number, source: 'websocket' | 'rest' = 'websocket') {
+  return [`${exchange}:${symbol}`, { symbol, exchange, data: { ltp }, lastUpdate: Date.now(), updateSource: source }] as const
+}
+function marketData(entries: ReturnType<typeof socketPrice>[] = []) {
+  return { data: new Map(entries), isConnected: true, isPaused: false, isFallbackMode: false }
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
   vi.clearAllMocks()
+  localStorage.clear()
+  mocks.useMarketData.mockReturnValue(marketData())
   mocks.chartState.current = fakeWidgetState()
   mocks.getIntervals.mockResolvedValue({
     status: 'success',
@@ -173,6 +188,107 @@ describe('StrategyChartTab request sequencing', () => {
     })
 
     expect(mocks.getStrategyChart).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('StrategyChartTab live premium', () => {
+  const T = 1_700_000_000
+  const SOLD_PUT: StrategyLeg = { ...LEG, id: 'put', side: 'SELL', optionType: 'PE', symbol: 'TEST27AUG26100PE' }
+  const twoLegs = (underlying: string) => (
+    <StrategyChartTab
+      underlying={underlying}
+      exchange="CRYPTO"
+      underlyingSymbol={`${underlying}USDFUT`}
+      underlyingExchange="CRYPTO"
+      legs={[LEG, SOLD_PUT]}
+      optionExchange="CRYPTO"
+    />
+  )
+
+  it('folds every leg socket price into the forming bar and pushes it into the chart', async () => {
+    vi.setSystemTime((T + 60) * 1000)
+    mocks.getStrategyChart.mockResolvedValue(response('BTC', 111))
+    const view = render(twoLegs('BTC'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(mocks.useMarketData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbols: [
+          { symbol: 'TEST27AUG26100CE', exchange: 'CRYPTO' },
+          { symbol: 'TEST27AUG26100PE', exchange: 'CRYPTO' },
+        ],
+        mode: 'LTP',
+      })
+    )
+    // Bought call at 12, sold put at 30: the sold leg counts positive, so the
+    // spread is |30 - 12| = 18, folded into the bar history ended on.
+    mocks.useMarketData.mockReturnValue(
+      marketData([socketPrice('CRYPTO', 'TEST27AUG26100CE', 12), socketPrice('CRYPTO', 'TEST27AUG26100PE', 30)])
+    )
+    view.rerender(twoLegs('BTC'))
+    const pushed = mocks.chartState.current!.pushed
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0][0]).toMatchObject({ time: T, open: 10, high: 18, low: 10, close: 18 })
+    expect(pushed[0][1]).toBeUndefined()
+    expect(screen.getByText('18.00')).toBeInTheDocument()
+    // A repair that lands on the forming bar is reconciled into the builder,
+    // so the next tick builds on it rather than writing the old values back.
+    act(() => {
+      publishData(mocks.chartState.current!, 'refresh', [
+        { time: T, open: 9, high: 18, low: 9, close: 17 },
+      ])
+    })
+    mocks.useMarketData.mockReturnValue(
+      marketData([socketPrice('CRYPTO', 'TEST27AUG26100CE', 12), socketPrice('CRYPTO', 'TEST27AUG26100PE', 31)])
+    )
+    view.rerender(twoLegs('BTC'))
+    expect(pushed).toHaveLength(2)
+    expect(pushed[1][0]).toMatchObject({ time: T, open: 10, low: 9, close: 19 })
+  })
+
+  it('waits until every leg has printed over the socket, and never folds a cached quote', async () => {
+    vi.setSystemTime((T + 60) * 1000)
+    mocks.getStrategyChart.mockResolvedValue(response('BTC', 111))
+    const view = render(twoLegs('BTC'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    mocks.useMarketData.mockReturnValue(marketData([socketPrice('CRYPTO', 'TEST27AUG26100CE', 12)]))
+    view.rerender(twoLegs('BTC'))
+    mocks.useMarketData.mockReturnValue(
+      marketData([socketPrice('CRYPTO', 'TEST27AUG26100CE', 12), socketPrice('CRYPTO', 'TEST27AUG26100PE', 30, 'rest')])
+    )
+    view.rerender(twoLegs('BTC'))
+    expect(mocks.chartState.current!.pushed).toHaveLength(0)
+  })
+
+  it('asks the chart for stream-driven repair and leaves the poll to the chart', async () => {
+    mocks.getStrategyChart.mockResolvedValue(response('BTC', 111))
+    render(renderTab('BTC'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(mocks.chartProps.current?.loading).toEqual({
+      refreshOnBarClose: true,
+      refreshOnGap: true,
+      refreshWindowBars: 5,
+    })
+  })
+
+  it('starts with the underlying hidden, and the legend chip turns it on and remembers', async () => {
+    mocks.getStrategyChart.mockResolvedValue(response('BTC', 111))
+    render(renderTab('BTC'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    const overlay = mocks.chartState.current!.series[0]
+    expect(overlay.style.visible).toBe(false)
+    act(() => {
+      screen.getByTitle('Show BTC').click()
+    })
+    expect(overlay.style.visible).toBe(true)
+    expect(localStorage.getItem('strategybuilder:strategy-chart:underlying')).toBe('on')
   })
 })
 

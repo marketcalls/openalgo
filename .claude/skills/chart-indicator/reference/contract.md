@@ -14,8 +14,8 @@ not inferred from the type declarations.
   placement: 'onchart' | 'pane', // required
   inputs: IndicatorInput[],      // required (use [] for none)
   plots: IndicatorPlot[],        // required, at least one
-  fills?: IndicatorFillSpec[],
-  calc(bars, settings, store, ctx?): IndicatorValues,   // required
+  fills?: IndicatorFillSpec[],           // each may carry overlay: true (2.4.0)
+  calc(bars, settings, store, ctx?): IndicatorValues,   // required; a throw is reported, not fatal (2.4.0)
   calcTail?(bars, settings, fromIndex, previous, store, ctx?),
   markers?({ bars, values, settings }),
   draws?({ bars, values, settings }),          // 1.7.1
@@ -196,17 +196,20 @@ which is exactly what a warmup gap should do.
 | `text` | text box | |
 | `select` | dropdown | `options: [{ label, value }]` |
 | `source` | price-source dropdown | default must be a valid source |
+| `interval` | timeframe select (2.4.0) | a code the engine can bucket by; `''` means the chart's own interval |
+| `time` | wall-clock text (2.4.0) | `YYYY-MM-DD HH:MM` in the chart zone; `zonedStringToUtcSeconds` makes a bar time |
 
 Every input needs `key`, `type`, `label`, `default`. Valid sources: `open`,
 `high`, `low`, `close`, `hl2`, `hlc3`, `ohlc4`, `volume`.
 
-**Those six are the whole union.** There is no `session`, `timeframe`, `symbol`,
-`price`, `time` or `enum` input type. The widget's renderer switches on
-`input.type` with no default case, so an unrecognised type is dropped in
-silence: the default still applies and the study computes correctly, while the
-control never appears and the user cannot change it. A free-form timeframe or
-session is a `text` input you parse yourself; one with a fixed set of choices is
-a `select`.
+**Those eight are the whole union** (six before 2.4.0). There is no `session`,
+`symbol`, `price` or `enum` input type. A renderer switches on `input.type`
+with no default case, so an unrecognised type is dropped in silence: the
+default still applies and the study computes correctly, while the control never
+appears and the user cannot change it. A session is a `text` input you parse
+yourself; a fixed set of choices is a `select`. `/trading`'s own dialog
+whitelists input types, so `interval` and `time` reach it only once it lists
+them; on an older host they are dropped the same silent way.
 
 Any input may also carry `tooltip` (2.2.1), help text the dialog renders as a
 focusable `?` beside the label. A label has to stay short enough for a dense
@@ -234,8 +237,10 @@ coerce: `Math.max(2, Math.floor(Number(settings.length) || 20))`.
   style: { color: '#4f8cff', lineWidth: 2, lineStyle: 'dashed' },
   priceScaleId: 'right',     // own axis if you name a different one
   priceFormat: { type: 'percent' },  // 2.2.1: axis/crosshair format for this plot's scale
+  offset: 26,                // 2.4.0: paint the column 26 bars to the right (a displaced cloud)
   colorKey: 'lineColor',     // optional: an input key holding the colour
-  colorBy({ value, index, values, settings }) { return '#ef5350' } }
+  colorBy({ value, index, values, settings }) { return '#ef5350' },
+  colorParts({ value, index, values, settings }) { return { body: '#ef535080', wick: '#ef5350' } } }  // 2.4.0, candle plots
 ```
 
 Single-column plot types: `line`, `line-markers`, `step`, `area`, `histogram`,
@@ -317,16 +322,35 @@ puts it above with the tail pointing down. Plate text colour is automatic.
 ## Levels, range, table
 
 ```js
-levels: (settings) => [{ price: 70, title: '70', color: '#ef5350', dashed: true }]
+levels: (settings) => [{ price: 70, title: '70', color: '#ef5350', lineStyle: 'dotted', lineWidth: 1 }]
 range:  (settings) => ({ min: 0, max: 100 })     // or null
-table:  (ctx) => ({ rows: [['VWAP', '123.45'], ['Side', 'Above']] })   // or null
+table:  (ctx) => ({
+  rows: [
+    [{ text: 'VWAP', bold: true }, { text: '123.45', align: 'right' }],
+    [{ text: 'Side' }, { text: 'Above', bgColor: '#26a69a' }],   // textColor derives from bgColor
+  ],
+  options: { position: 'top-right', cellWidth: [64, 80], cellHeight: 18, fontSize: 11 },
+})   // or null
 ```
+
+A level's `lineStyle` is `'solid' | 'dashed' | 'dotted'` (a Pine `hline` with
+`line.style_dotted` maps directly); `dashed: true` is the older two-state form
+and `lineStyle` wins when both are given.
 
 `range` applies only when the indicator created its own pane; two indicators
 sharing a pane would otherwise fight over it. It is a fixed range, so navigation
 and the automatic-range animation added in 2.1.8 leave it authoritative.
+
 `table` is for things that are not a value per bar, such as a scoreboard or a
-seasonality matrix.
+seasonality matrix. Its `options` are the whole `ChartTableOptions` geometry:
+`position` (nine keywords, `top-left` through `bottom-right`), `margin`,
+`cellWidth` (a number or a per-column array), `cellHeight`, `widthPercent` /
+`heightPercent` to stretch to a share of the plot, `rowWeights`, `fontSize`
+(a number, or `'auto'` from 2.4.0 to fit each cell), `borderColor`,
+`borderWidth` and `background`. Each cell is a `TableCell` with `text`,
+`bgColor`, `textColor`, `align`, `fontSize` and `bold`. So a source's dashboard
+position, size, text size and per-cell colours all port; what does not exist is
+a cell tooltip.
 
 ## calcTail
 

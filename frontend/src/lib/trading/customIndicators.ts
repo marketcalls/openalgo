@@ -44,15 +44,23 @@ type ProblemReporter = (message: string) => void
 
 const INDEX_URL = '/custom-indicators/index.json'
 
-// Kept in step with the library's IndicatorInput union. 'session', 'timeframe'
-// and 'symbol' are strings the indicator parses itself; 'price' and 'time' are
-// numbers a host may also let the user pick off the chart.
+// The library's IndicatorInput union, plus the one type this app renders itself.
 //
-// 'expiries' is ours, not the library's: the settings dialog renders it as a
-// tick list of the underlying's nearest option expiries and stores the picks as
-// a comma-separated string. Adding a type here is half the job - a type this
-// list accepts but the dialog cannot draw registers fine and then shows the
-// user an empty row.
+// This set once carried 'session', 'timeframe', 'symbol' and 'price', which
+// openalgo-charts never defined. Permitting a type nothing renders is not
+// neutral: the settings dialog switches on `input.type` with no default case,
+// so the row is dropped in silence. The indicator still computes, using the
+// default forever, while the control the author wrote never appears and the
+// user cannot change it. A session stays a 'text' input the indicator parses;
+// a fixed set of choices stays a 'select'.
+//
+// 2.4.0 added two for real, and IndicatorSettingsDialog renders both:
+// 'interval' is a timeframe code the engine can bucket by, and 'time' is a
+// wall-clock string in the chart's zone.
+//
+// 'expiries' is ours, not the library's, and survives that rule because the
+// dialog does draw it: a tick list of the underlying's nearest option expiries,
+// stored as a comma-separated string.
 const INPUT_TYPES = new Set([
   'number',
   'boolean',
@@ -60,10 +68,7 @@ const INPUT_TYPES = new Set([
   'text',
   'select',
   'source',
-  'session',
-  'timeframe',
-  'symbol',
-  'price',
+  'interval',
   'time',
   'expiries',
 ])
