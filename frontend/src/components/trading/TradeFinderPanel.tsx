@@ -510,6 +510,19 @@ const MOVEMENT_ALERT_MIN_PRIORITY = 68
 /** A symbol flickering around a threshold must not re-toast for a while. */
 const MOVEMENT_ALERT_COOLDOWN_MS = 5 * 60_000
 
+/** A run that started an hour ago is a different trade from one that started
+ * four minutes ago, and on 18-Sep-2026 every badge on screen was between 54 and
+ * 100 minutes old with nothing saying so. The median time to +1% measured 92
+ * minutes FROM the badge, so age is not decoration -- it is most of the
+ * decision. Old ones are dimmed so a fresh one stands out in a scan. */
+const RUN_STALE_MINUTES = 45
+
+function runAge(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)}m`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h${String(Math.round(minutes - hours * 60)).padStart(2, '0')}`
+}
+
 function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   const badge = MOVEMENT_BADGE[mv.event]
   if (!badge) return null
@@ -532,12 +545,19 @@ function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   const unproven = UNPROVEN_EVENTS.has(mv.event)
     ? ' · not yet tested on a falling day -- the one day measured was a rising one, so there is no verdict either way'
     : ''
+  const age = mv.run_clean && mv.run_minutes != null ? mv.run_minutes : null
+  const stale = age != null && age >= RUN_STALE_MINUTES
   return (
     <span
       title={`${mv.event.replace(/_/g, ' ')} · ${mv.first_seen_rank}→${mv.current_rank}${vel}${zone}${run}${unproven}`}
-      className={cn('shrink-0 text-[10px] font-bold tabular-nums', badge.className)}
+      className={cn(
+        'flex shrink-0 items-center gap-0.5 text-[10px] font-bold tabular-nums',
+        badge.className,
+        stale && 'opacity-50'
+      )}
     >
       {badge.text}
+      {age != null && <span className="font-normal text-muted-foreground">{runAge(age)}</span>}
     </span>
   )
 }

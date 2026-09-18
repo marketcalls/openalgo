@@ -268,6 +268,11 @@ export function BoostStrikesPanel({ apiKey, onPick, activeSymbol }: Props) {
                   {style.text}
                 </span>
               )}
+              {row.run_clean && row.run_minutes != null && (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                  {Math.round(row.run_minutes)}m
+                </span>
+              )}
               <span className="w-12 shrink-0 text-right tabular-nums">
                 {row.day_change_pct != null ? `${row.day_change_pct.toFixed(2)}%` : ''}
               </span>
