@@ -36,6 +36,22 @@ IST = ZoneInfo("Asia/Kolkata")
 TARGET_PCT = 1.0  # the move that pays on a stock option
 
 
+def clock(minute) -> str:
+    """A minute-of-day as a clock time.
+
+    The recorder samples twice a minute, so this is a float: 604.5 is 10:04:30.
+    Formatting it with an integer spec raises, which would take the whole
+    evening study down on the first half-minute badge.
+    """
+    whole = int(minute)
+    seconds = round((minute - whole) * 60)
+    return (
+        f"{whole // 60:02d}:{whole % 60:02d}:{seconds:02d}"
+        if seconds
+        else f"{whole // 60:02d}:{whole % 60:02d}"
+    )
+
+
 def first_recorded_minute(day: str, list_type: str = "intraday_boost") -> int | None:
     """The first minute actually captured live, not reconstructed. A badge dated
     to it was already running when the recorder woke, so it is not an entry
@@ -167,7 +183,7 @@ def main() -> None:
     print(header)
     lines = []
     for r in rows:
-        t = f"{r['min'] // 60:02d}:{r['min'] % 60:02d}"
+        t = clock(r["min"])
         target = f"{r['minutes_to_target']}m" if r["minutes_to_target"] is not None else "-"
         line = (
             f"{r['symbol']:<12}{t:>7}{r['rank']:>5}{r['entry']:>10.2f}"

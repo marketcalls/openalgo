@@ -52,6 +52,22 @@ MIN_OPTION_VOLUME = 10_000  # below this the fill is not something to rely on
 MORNING_CUTOFF_MIN = 10 * 60
 
 
+def clock(minute) -> str:
+    """A minute-of-day as a clock time.
+
+    The recorder samples twice a minute, so this is a float: 604.5 is 10:04:30.
+    Formatting it with an integer spec raises, which would take the whole
+    evening study down on the first half-minute badge.
+    """
+    whole = int(minute)
+    seconds = round((minute - whole) * 60)
+    return (
+        f"{whole // 60:02d}:{whole % 60:02d}:{seconds:02d}"
+        if seconds
+        else f"{whole // 60:02d}:{whole % 60:02d}"
+    )
+
+
 def first_recorded_minute(day: str, list_type: str = "intraday_boost") -> int | None:
     """The first minute actually captured live, not reconstructed.
 
@@ -311,7 +327,7 @@ def main() -> None:
     if already_running:
         problems.append(
             f"{len(already_running)} already mid-run when recording began at "
-            f"{recording_began // 60:02d}:{recording_began % 60:02d}, so their badge minute is "
+            f"{clock(recording_began)}, so their badge minute is "
             f"not an entry: {', '.join(sorted(already_running)[:6])}"
             + (" ..." if len(already_running) > 6 else "")
         )
@@ -364,7 +380,7 @@ def report(day, results, problems):
     lines = []
     for r in results:
         s, o = r["stock"], r["option"]
-        t = f"{r['badge_min'] // 60:02d}:{r['badge_min'] % 60:02d}"
+        t = clock(r["badge_min"])
         line = (
             f"{r['symbol']:<12}{t:>6}{r['direction']:>5}{r['rank']:>4}"
             f"{r['day_change']:>+7.2f}{r['travel']:>+7.2f}"
