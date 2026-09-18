@@ -1243,7 +1243,17 @@ def sec_history(run: Runner) -> None:
         start = end - timedelta(days=days)
         df = run.client.history(symbol=sym, exchange=ex, interval=interval,
                                 start_date=str(start), end_date=str(end))
-        need(df is not None and len(df) > 0, f"{sym}@{ex} {interval} {days}d: empty")
+        # SDK contract: DataFrame on success, dict on error. An error dict has
+        # a non-zero len(), so a bare `len(df) > 0` guard lets it through and
+        # the failure then surfaces as AttributeError on df.index, throwing
+        # away the broker's actual message.
+        need(df is not None, f"{sym}@{ex} {interval} {days}d: history returned None")
+        if isinstance(df, dict):
+            raise AssertionError(
+                f"{sym}@{ex} {interval} {days}d: {str(df.get('message') or df)[:160]}")
+        need(hasattr(df, "index"),
+             f"{sym}@{ex}: history returned {type(df).__name__}, expected a DataFrame")
+        need(len(df) > 0, f"{sym}@{ex} {interval} {days}d: no candles returned")
         ts = _ts_series(df)
         need(ts == sorted(ts), f"{sym} {interval}: timestamps not monotonic")
         need(len(set(ts)) == len(ts), f"{sym} {interval}: duplicate timestamps")

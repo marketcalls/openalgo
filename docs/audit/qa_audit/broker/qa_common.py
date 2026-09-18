@@ -345,9 +345,24 @@ def resolve_matrix(run: Runner, exchanges: list[str]) -> dict:
 
         def fut(ex=ex, u=u):
             r = run.client.expiry(symbol=u, exchange=ex, instrumenttype="futures")
-            exp = (r.get("data") or [None])[0]
-            if not exp:
+            ds = (r or {}).get("data") or []
+            if not ds:
                 return None
+            # Skip a contract expiring today. On expiry day it has already
+            # settled by the time most of a session has run, so quotes come
+            # back all-zero except prev_close and history returns nothing -
+            # which reads as a broker defect when it is just a dead contract.
+            today = datetime.now(IST).date()
+            exp = None
+            for d in ds:
+                try:
+                    if datetime.strptime(d, "%d-%b-%y").date() > today:
+                        exp = d
+                        break
+                except ValueError:
+                    continue
+            if exp is None:
+                exp = ds[0]          # nothing later listed; fall back
             s = run.client.search(query=f"{u} FUT", exchange=ex).get("data") or []
             for row in s:
                 if row.get("expiry") == exp and row.get("instrumenttype") == "FUT":

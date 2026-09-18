@@ -146,3 +146,5 @@ docs/audit/qa_audit/**/qa_sandbox_*.xlsx
 docs/audit/qa_audit/**/qa_live_*.xlsx
 docs/audit/qa_audit/**/qa_sandbox_*.csv
 docs/audit/qa_audit/**/qa_live_*.csv
+# Excel writes a ~$-prefixed lock file next to any workbook left open.
+docs/audit/qa_audit/**/~$*
