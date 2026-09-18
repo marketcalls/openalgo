@@ -364,24 +364,36 @@ def _run_daily_study():
     day = now_ist.strftime("%Y-%m-%d")
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     script = os.path.join(base, "scripts", "tf_boost_behaviour.py")
-    _append(now_ist, "behaviour study starting")
-    for window in ("09:45", "10:00"):
+    _append(now_ist, "evening study starting")
+
+    # Every study the day needs, in the order a person would run them: what each
+    # stock did, what each badge did, and what the option on the badge's own
+    # side did. All three or the record is partial, and a partial record is what
+    # a week of evidence cannot be rebuilt from.
+    runs = [
+        ("behaviour 09:45", [sys.executable, script, day, "--after", "09:45"]),
+        ("behaviour 10:00", [sys.executable, script, day, "--after", "10:00"]),
+        (
+            "verify sheet",
+            [sys.executable, os.path.join(base, "scripts", "tf_boost_verify.py"), day],
+        ),
+        (
+            "option audit",
+            [sys.executable, os.path.join(base, "scripts", "tf_boost_option_audit.py"), day],
+        ),
+    ]
+    for label, argv in runs:
         try:
             with open(_daily_log_path(now_ist), "a") as out:
-                proc = subprocess.Popen(
-                    [sys.executable, script, day, "--after", window],
-                    cwd=base,
-                    stdout=out,
-                    stderr=subprocess.STDOUT,
-                )
-                code = proc.wait(timeout=900)
+                proc = subprocess.Popen(argv, cwd=base, stdout=out, stderr=subprocess.STDOUT)
+                code = proc.wait(timeout=1800)
             _append(
                 datetime.now(IST),
-                f"{'OK' if code == 0 else 'ATTENTION'} study for {window} finished (exit {code})",
+                f"{'OK' if code == 0 else 'ATTENTION'} {label} finished (exit {code})",
             )
         except Exception as e:
-            logger.exception(f"tf_boost daily study ({window}) failed: {e}")
-            _append(datetime.now(IST), f"ATTENTION study for {window} failed: {e}")
+            logger.exception(f"tf_boost evening study ({label}) failed: {e}")
+            _append(datetime.now(IST), f"ATTENTION {label} failed: {e}")
 
 
 def init_tf_boost_daily_jobs():
