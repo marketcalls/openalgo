@@ -1629,6 +1629,7 @@ _BROKER_PROBE_HOSTS = {
     "definedge": "trading.definedgesecurities.com",
     "wisdom": "api.wisdomcapital.in",
     "groww": "api.groww.in",
+    "acagarwalxts": "symphony.acagarwal.com",
 }
 
 

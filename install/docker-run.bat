@@ -37,10 +37,10 @@ if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
 set SETUP_FAILED=0
 
 REM XTS Brokers that require market data credentials
-set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom
+set XTS_BROKERS=fivepaisaxts,acagarwalxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom
 
 REM Valid brokers list
-set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha
+set VALID_BROKERS=fivepaisa,fivepaisaxts,acagarwalxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha
 
 REM Banner
 echo.
@@ -156,7 +156,7 @@ echo   Broker Configuration
 echo   ========================================
 echo.
 echo   Valid brokers:
-echo   fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge,
+echo   fivepaisa, fivepaisaxts, acagarwalxts, aliceblue, angel, arrow, compositedge,
 echo   definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,
 echo   groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,
 echo   mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,
@@ -509,7 +509,7 @@ echo   - Strategies: %OPENALGO_DIR%\strategies\
 echo   - Logs:       %OPENALGO_DIR%\log\
 echo.
 echo XTS Brokers (require market data credentials):
-echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom
+echo   fivepaisaxts, acagarwalxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom
 echo.
 goto end
 
