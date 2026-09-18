@@ -562,6 +562,15 @@ WATCHDOG_POLL_SECONDS = 60
 # Three missed minutes is past any normal tick (median 0.8s, worst 43s observed)
 # and still catches the failure inside the same five minutes it began.
 WATCHDOG_STALE_SECONDS = 180
+# The TradeFinder token is refreshed by its own BackgroundScheduler every 20
+# minutes, and that scheduler has no watchdog of its own -- it is the same shape
+# that wedged the recorder when this machine slept on 18-Sep-2026. The token is
+# worse to lose: the recorder keeps beating but every fetch fails, so a whole
+# session is heartbeats with no data. It also has to be watched around the
+# clock, not just in market hours, because it expires overnight and over a
+# weekend. Below this much life left, with no refresh in flight, the keep-alive
+# has stopped doing its job.
+TOKEN_LOW_SECONDS = 25 * 60
 
 _watchdog: object | None = None
 _watchdog_stop = None
@@ -600,12 +609,55 @@ def _restart_scheduler() -> None:
     init_tf_boost_daily_jobs()
 
 
+def _check_token(now_ist: datetime) -> None:
+    """Restart the TradeFinder keep-alive if it has stopped refreshing.
+
+    Never raises: the watchdog exists to keep things alive, so it must not be
+    the thing that dies.
+    """
+    try:
+        import services.tf_jwt_keepalive_service as keepalive
+        from services.tf_jwt_keepalive_service import (
+            get_tf_jwt_status,
+            init_tf_jwt_keepalive_scheduler,
+        )
+
+        status = get_tf_jwt_status()
+        remaining = status.get("expiresInSeconds") or 0
+        if not status.get("hasToken"):
+            return  # nothing to keep alive; the morning check reports this
+        if status.get("refreshing") or remaining > TOKEN_LOW_SECONDS:
+            return
+
+        logger.error(
+            f"TradeFinder token down to {remaining // 60} minutes with no refresh running "
+            "-- restarting the keep-alive scheduler"
+        )
+        _append(now_ist, f"ATTENTION token at {remaining // 60} min -- restarted the keep-alive")
+        with keepalive._scheduler_lock:
+            old = keepalive._scheduler
+            keepalive._scheduler = None
+        if old is not None:
+            try:
+                old.shutdown(wait=False)
+            except Exception as e:
+                logger.debug(f"tf_jwt keep-alive would not shut down: {e}")
+        init_tf_jwt_keepalive_scheduler()
+    except Exception as e:
+        logger.exception(f"tf_boost watchdog: token check failed: {e}")
+
+
 def _watchdog_loop(stop_event) -> None:
     from utils.real_threading import wait_for
 
     while not wait_for(stop_event, WATCHDOG_POLL_SECONDS):
         try:
             now_ist = datetime.now(IST)
+
+            # Checked every pass, weekend included: a token that dies on Sunday
+            # takes Monday's whole session with it.
+            _check_token(now_ist)
+
             if not _within_market_window(now_ist) or now_ist.weekday() >= 5:
                 continue
             age = _heartbeat_age_seconds(now_ist)

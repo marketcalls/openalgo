@@ -234,3 +234,58 @@ def test_the_backfill_reports_no_gap_when_recording_started_on_time(monkeypatch)
     monkeypatch.setattr(bf, "init_price_backfill_table", lambda: None)
     out = bf.backfill_day("2026-09-18")
     assert out["gap_minutes"] == 0 and out["rows"] == 0
+
+
+# --- the token is watched around the clock ------------------------------------
+
+
+def test_a_healthy_token_is_left_alone(monkeypatch):
+    import services.tf_jwt_keepalive_service as keepalive
+
+    restarted = []
+    monkeypatch.setattr(
+        keepalive,
+        "get_tf_jwt_status",
+        lambda: {"hasToken": True, "expiresInSeconds": 7200, "refreshing": False},
+    )
+    monkeypatch.setattr(
+        keepalive, "init_tf_jwt_keepalive_scheduler", lambda *a, **k: restarted.append(True)
+    )
+    svc._check_token(datetime.now(IST))
+    assert restarted == []
+
+
+def test_a_token_running_out_with_no_refresh_restarts_the_keepalive(monkeypatch):
+    # The failure this exists for: the keep-alive's own scheduler wedges the way
+    # the recorder's did, the token quietly runs down, and the next session is
+    # heartbeats with no data at all.
+    import services.tf_jwt_keepalive_service as keepalive
+
+    restarted = []
+    monkeypatch.setattr(
+        keepalive,
+        "get_tf_jwt_status",
+        lambda: {"hasToken": True, "expiresInSeconds": 300, "refreshing": False},
+    )
+    monkeypatch.setattr(
+        keepalive, "init_tf_jwt_keepalive_scheduler", lambda *a, **k: restarted.append(True)
+    )
+    monkeypatch.setattr(svc, "_append", lambda *a, **k: None)
+    svc._check_token(datetime.now(IST))
+    assert restarted == [True]
+
+
+def test_a_refresh_already_running_is_not_interrupted(monkeypatch):
+    import services.tf_jwt_keepalive_service as keepalive
+
+    restarted = []
+    monkeypatch.setattr(
+        keepalive,
+        "get_tf_jwt_status",
+        lambda: {"hasToken": True, "expiresInSeconds": 60, "refreshing": True},
+    )
+    monkeypatch.setattr(
+        keepalive, "init_tf_jwt_keepalive_scheduler", lambda *a, **k: restarted.append(True)
+    )
+    svc._check_token(datetime.now(IST))
+    assert restarted == []
