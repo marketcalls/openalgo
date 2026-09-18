@@ -955,6 +955,9 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
    * Polled from /boostmovement (reconstructed from the server's snapshots, no
    * upstream fetch); empty on an older backend so rows just render no badge. */
   const [movement, setMovement] = useState<Map<string, BoostMovementRow>>(new Map())
+  /** Why the badges are missing, when they are. Null means they simply are not
+   * due yet -- the engine needs ten of today's snapshots before it calls a run. */
+  const [movementError, setMovementError] = useState<string | null>(null)
   /** Symbols already toasted today for each detector -- same dedup shape as
    * alertedSymbolsRef, but never cleared mid-session (unlike scoreCrossAlert,
    * a climb/breakout is a one-time event for the day, not a level that can
@@ -1127,14 +1130,17 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
       try {
         const res = await tradefinderApi.getBoostMovement(apiKey, view)
         if (!alive) return
-        setMovement(
-          res.status === 'success' && res.symbols
-            ? new Map(res.symbols.map((r) => [r.symbol, r]))
-            : new Map()
-        )
+        const ok = res.status === 'success' && res.symbols
+        setMovement(ok ? new Map(res.symbols!.map((r) => [r.symbol, r])) : new Map())
+        // An empty board and a board that failed to load look identical, which
+        // is how "I don't see the badge" became unanswerable: nobody could tell
+        // whether nothing qualified or nothing arrived. Say which.
+        setMovementError(ok ? null : (res.message ?? 'Movement data unavailable'))
       } catch {
-        // Older backend without the endpoint: no badges, panel unaffected.
-        if (alive) setMovement(new Map())
+        if (alive) {
+          setMovement(new Map())
+          setMovementError('Could not reach the movement engine')
+        }
       }
     }
     load()
@@ -1575,6 +1581,15 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
           </PopoverContent>
         </Popover>
       </div>
+
+      {/* Movement badges missing because the data did not arrive, rather than
+          because nothing qualified. Without this the two are indistinguishable
+          on screen, and the difference is the whole question. */}
+      {movementError && view !== 'sectors' && (
+        <div className="shrink-0 border-b px-2 py-1 text-[10px] text-amber-500">
+          {movementError} -- rank badges are not showing
+        </div>
+      )}
 
       {/* Off by default, like every feature here -- filters the active list
           by typed text once turned on in settings. */}
