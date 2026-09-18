@@ -10,6 +10,7 @@ import jwt
 import pandas as pd
 
 from broker.dhan.api.baseurl import get_url
+from broker.dhan.api.resample import DERIVED_INTERVALS, DERIVED_TIMEFRAMES, get_derived_history
 from broker.dhan.mapping.transform_data import map_exchange_type
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
@@ -159,6 +160,8 @@ class BrokerData:
             # Daily
             "D": "D",  # Daily data
         }
+        # 30m, 4h, W and M are aggregated from native candles (see resample.py).
+        self.timeframe_map.update(DERIVED_TIMEFRAMES)
 
     def _convert_to_dhan_request(self, symbol, exchange):
         """Convert symbol and exchange to Dhan format"""
@@ -381,6 +384,10 @@ class BrokerData:
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
+        if interval in DERIVED_INTERVALS:
+            return get_derived_history(
+                self.get_history, symbol, exchange, interval, start_date, end_date
+            )
         try:
             # Check if interval is supported
             if interval not in self.timeframe_map:
