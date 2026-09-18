@@ -396,6 +396,36 @@ def _run_daily_study():
             _append(datetime.now(IST), f"ATTENTION {label} failed: {e}")
 
 
+def _run_latency_check():
+    """09:35: prove the badge reaches a client inside the 40s budget.
+
+    The budget is Aakash's -- forty seconds is workable, more is not. Adding the
+    parts up gives about 32s (30s sampling, ~1s write, ~1s push), but a push that
+    never arrives looks exactly like a fast one until it is measured, and it can
+    only be measured while the market is open. Left to a person to run, this is
+    the check that never gets run.
+    """
+    now_ist = datetime.now(IST)
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = os.path.join(base, "scripts", "tf_boost_latency_check.py")
+    try:
+        with open(_daily_log_path(now_ist), "a") as out:
+            out.write(f"[{now_ist:%H:%M:%S}] latency check starting\n")
+            out.flush()
+            proc = subprocess.Popen(
+                [sys.executable, script, "4"], cwd=base, stdout=out, stderr=subprocess.STDOUT
+            )
+            code = proc.wait(timeout=600)
+        _append(
+            datetime.now(IST),
+            f"{'OK' if code == 0 else 'ATTENTION'} latency check finished (exit {code}) "
+            "-- read the WITHIN/OVER line above",
+        )
+    except Exception as e:
+        logger.exception(f"tf_boost latency check failed: {e}")
+        _append(datetime.now(IST), f"ATTENTION latency check failed: {e}")
+
+
 def init_tf_boost_daily_jobs():
     """Attach the morning check and the post-close study to the snapshot
     scheduler. Same opt-in as the recorder: if the day is being captured, it
@@ -407,6 +437,16 @@ def init_tf_boost_daily_jobs():
         _run_morning_check,
         trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=25, timezone=IST),
         id="tf_boost_morning_check",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        replace_existing=True,
+    )
+    # Ten minutes after the morning check, by which time badges are flowing.
+    _scheduler.add_job(
+        _run_latency_check,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=35, timezone=IST),
+        id="tf_boost_latency_check",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
@@ -432,8 +472,8 @@ def init_tf_boost_daily_jobs():
         replace_existing=True,
     )
     logger.info(
-        "TF Boost daily jobs scheduled (morning check 09:25, behaviour study 15:45 IST, "
-        "catch-up on start)"
+        "TF Boost daily jobs scheduled (morning check 09:25, latency check 09:35, "
+        "evening study 15:45 IST, catch-up on start)"
     )
 
 
