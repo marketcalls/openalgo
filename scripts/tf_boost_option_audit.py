@@ -282,15 +282,42 @@ def main() -> None:
     report(day, results, problems)
 
 
+def day_breadth(results) -> dict:
+    """Which way the day went, measured on the list itself.
+
+    Judging a down signal on a day when 64 of the list rose and 15 fell says
+    more about the day than about the signal -- that was the mistake in the
+    first read of 17-Sep-2026. Averaging a rising day with a falling one across
+    a week produces a number describing neither, so each day carries its own
+    direction beside its results.
+    """
+    ups = sum(1 for r in results if r["day_change"] > 0)
+    downs = sum(1 for r in results if r["day_change"] < 0)
+    total = max(1, ups + downs)
+    share = ups / total
+    return {
+        "up": ups,
+        "down": downs,
+        "kind": "rising" if share >= 0.65 else "falling" if share <= 0.35 else "mixed",
+        "up_share": round(share * 100),
+    }
+
+
 def report(day, results, problems):
     results.sort(key=lambda r: r["badge_min"])
     opposite = [r for r in results if r["stock"]["ran_opposite"]]
     with_opt = [r for r in results if r["option"]]
     liquid = [r for r in with_opt if r["option"]["liquid"]]
 
+    breadth = day_breadth(results)
     print(
         f"\n{'=' * 104}\n{day} -- every RUN badge, the stock, and the September "
-        f"option on the side the badge called\n{'=' * 104}\n"
+        f"option on the side the badge called\n{'=' * 104}"
+    )
+    print(
+        f"the day itself: {breadth['kind'].upper()} -- {breadth['up']} of the badged stocks up, "
+        f"{breadth['down']} down ({breadth['up_share']}% up). A down signal judged on a rising "
+        f"day, or the reverse, is judging the day.\n"
     )
     header = (
         f"{'symbol':<12}{'badge':>6}{'dir':>5}{'rk':>4}{'day%':>7}{'travel':>7}"
@@ -317,7 +344,21 @@ def report(day, results, problems):
         lines.append(line)
 
     print(f"\n{'-' * 104}")
+    print(
+        f"day kind                       {breadth['kind']} ({breadth['up_share']}% of badged "
+        f"stocks up on the day)"
+    )
     print(f"badges                         {len(results)}")
+    for label, group in (
+        ("up badges", [r for r in results if r["direction"] == "up"]),
+        ("down badges", [r for r in results if r["direction"] == "down"]),
+    ):
+        if not group:
+            continue
+        went = sum(1 for r in group if not r["stock"]["ran_opposite"])
+        print(
+            f"  {label:<28} {len(group):>3}, {went} went their way ({went / len(group) * 100:.0f}%)"
+        )
     print(
         f"ran the OPPOSITE way           {len(opposite)} "
         f"({len(opposite) / max(1, len(results)) * 100:.0f}%)  -- never gave 0.5% the badge's "

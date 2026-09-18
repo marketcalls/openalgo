@@ -376,10 +376,17 @@ RUN_MIN_CLIMB = 10
 # direction and 44% on reaching +1%, matching the old rule's numbers without
 # borrowing its mistake.
 #
-# Turn this on when a week of recorded days says a down run is worth taking, and
-# not before. The engine still computes and reports the direction either way, so
-# the evidence keeps accumulating while the badge stays quiet.
-RUN_ALLOW_DOWN = False
+# On at Aakash's request, 18-Sep-2026, and he was right to ask. The numbers
+# above come from 17-Sep-2026, which was a strongly rising day: 64 of the list
+# up against 15 down. Shorts failing on a day like that says almost nothing
+# about the signal, and the market does not only rise -- some days the decline
+# IS the move worth taking. Judging down runs on a single up-day was the error,
+# not showing them.
+#
+# The week's study records each day's breadth for exactly this reason, so an
+# aggregate can separate a rising day from a falling one instead of averaging
+# the two into nonsense.
+RUN_ALLOW_DOWN = True
 # The first prints of the day are not prices anyone traded. Measured on
 # 17-Sep-2026: the 09:15 and 09:16 snapshots carry the same pre-open figure and
 # the 09:16->09:17 correction has a median of 1.38 points and a worst of 8.93 --

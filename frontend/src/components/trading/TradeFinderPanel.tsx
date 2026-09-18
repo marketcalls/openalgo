@@ -53,7 +53,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { MOVEMENT_BADGE, minuteOfDay } from '@/lib/trading/boostBadge'
+import { MOVEMENT_BADGE, minuteOfDay, UNPROVEN_EVENTS } from '@/lib/trading/boostBadge'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
@@ -528,9 +528,13 @@ function MovementBadge({ mv }: { mv: BoostMovementRow }) {
             : ''
         }`
       : ''
+  // Named in the tooltip, because a chip cannot carry a caveat on its own.
+  const unproven = UNPROVEN_EVENTS.has(mv.event)
+    ? ' · not yet tested on a falling day -- the one day measured was a rising one, so there is no verdict either way'
+    : ''
   return (
     <span
-      title={`${mv.event.replace(/_/g, ' ')} · ${mv.first_seen_rank}→${mv.current_rank}${vel}${zone}${run}`}
+      title={`${mv.event.replace(/_/g, ' ')} · ${mv.first_seen_rank}→${mv.current_rank}${vel}${zone}${run}${unproven}`}
       className={cn('shrink-0 text-[10px] font-bold tabular-nums', badge.className)}
     >
       {badge.text}

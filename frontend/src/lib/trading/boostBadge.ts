@@ -33,8 +33,16 @@ export const MOVEMENT_BADGE: Record<string, BadgeStyle> = {
   TOP20_EXIT: { text: 'T20×', className: 'text-red-500' },
   FAST_DROP: { text: 'DROP', className: 'text-red-500' },
   CLEAN_RUN_UP: { text: 'RUN↑', className: 'text-emerald-500' },
+  // The only day measured so far, 17-Sep-2026, was a strongly rising one -- 64
+  // of the list up against 15 down -- so its verdict on down runs says more
+  // about that day than about the signal. The market does not only go up, so
+  // the badge is shown; it is marked untested rather than judged.
   CLEAN_RUN_DOWN: { text: 'RUN↓', className: 'text-red-500' },
 }
+
+/** Events whose badge is not yet backed by evidence, so the tooltip says so
+ * rather than letting the chip imply the same standing as the rest. */
+export const UNPROVEN_EVENTS = new Set(['CLEAN_RUN_DOWN'])
 
 export function badgeFor(event: string | undefined): BadgeStyle | undefined {
   return event ? MOVEMENT_BADGE[event] : undefined
