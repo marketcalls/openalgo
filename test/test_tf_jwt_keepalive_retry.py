@@ -32,8 +32,14 @@ def test_poll_budget_survives_slow_browser_setup():
     assert deadline_at < src.index("while time.time() < deadline")
 
 
-def test_transient_failure_is_retried_not_abandoned():
-    """One miss must not leave the token dead until the next tick."""
+def test_transient_failure_is_not_abandoned():
+    """One miss must not leave the token dead until the next tick.
+
+    What answers the miss changed: headless used to be retried three times, and
+    is now tried once because a real logout fails it identically every time. The
+    escalation is the headed window, so this asserts the budget rather than a
+    literal call count -- that is how it went stale the first time.
+    """
     import services.tf_jwt_keepalive_service as svc
 
     calls = []
@@ -47,7 +53,8 @@ def test_transient_failure_is_retried_not_abandoned():
 
         def refresh_tf_jwt(self):
             calls.append(1)
-            return "token" if len(calls) >= 2 else None   # fails once, then works
+            # fails for every headless attempt the budget allows, then works
+            return "token" if len(calls) > svc._MAX_REFRESH_ATTEMPTS else None
 
     svc._tf_auth = FakeAuth()
     svc._refreshing = False
@@ -59,7 +66,9 @@ def test_transient_failure_is_retried_not_abandoned():
             break
         time.sleep(0.05)
 
-    assert calls == [1, 1], f"expected a retry after the first miss, got {len(calls)} call(s)"
+    assert len(calls) == svc._MAX_REFRESH_ATTEMPTS, (
+        f"expected {svc._MAX_REFRESH_ATTEMPTS} headless attempt(s), got {len(calls)}"
+    )
     assert not svc._refreshing, "the in-flight guard must be cleared"
 
 
@@ -93,7 +102,11 @@ def test_headed_fallback_runs_after_headless_exhausted():
             break
         time.sleep(0.05)
 
-    assert calls == [True, True, True, False], f"expected 3 headless misses then a headed fallback, got {calls}"
+    expected = [True] * svc._MAX_REFRESH_ATTEMPTS + [False]
+    assert calls == expected, (
+        f"expected {svc._MAX_REFRESH_ATTEMPTS} headless miss(es) then a headed "
+        f"fallback, got {calls}"
+    )
     assert not svc._refreshing
 
 
