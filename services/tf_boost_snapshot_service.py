@@ -351,6 +351,22 @@ def _run_morning_check():
         _append(now_ist, f"ATTENTION morning check could not run: {e}")
 
 
+def _wait_or_kill(proc, timeout: int) -> int:
+    """Wait for a study child, and make sure it is reaped even if it overruns.
+
+    A bare proc.wait(timeout=...) raises and walks away, leaving the child
+    running against a log file this process has already closed. In a Gunicorn
+    worker that never restarts, that is a stray process and its descriptors kept
+    until the host does something about it.
+    """
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=30)
+        raise
+
+
 def _run_daily_study():
     """15:45 IST: the post-close behaviour study, for both entry windows.
 
@@ -386,7 +402,7 @@ def _run_daily_study():
         try:
             with open(_daily_log_path(now_ist), "a") as out:
                 proc = subprocess.Popen(argv, cwd=base, stdout=out, stderr=subprocess.STDOUT)
-                code = proc.wait(timeout=1800)
+                code = _wait_or_kill(proc, 1800)
             _append(
                 datetime.now(IST),
                 f"{'OK' if code == 0 else 'ATTENTION'} {label} finished (exit {code})",
@@ -415,7 +431,7 @@ def _run_latency_check():
             proc = subprocess.Popen(
                 [sys.executable, script, "4"], cwd=base, stdout=out, stderr=subprocess.STDOUT
             )
-            code = proc.wait(timeout=600)
+            code = _wait_or_kill(proc, 600)
         _append(
             datetime.now(IST),
             f"{'OK' if code == 0 else 'ATTENTION'} latency check finished (exit {code}) "
