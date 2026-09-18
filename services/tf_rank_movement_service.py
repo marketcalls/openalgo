@@ -842,3 +842,75 @@ def _demo() -> None:
 
 if __name__ == "__main__":
     _demo()
+
+
+@dataclass
+class RunEpisode:
+    """One stretch during which a symbol carried a RUN badge.
+
+    A badge is a live state: it appears when the move becomes clean and goes
+    when it stops being. Drawn on a chart, a stretch is what a trader actually
+    wants -- when it started, how long it held, and what the price did inside
+    it -- which a single current-state row cannot show.
+    """
+
+    direction: str
+    start_min: float  # when the badge appeared
+    end_min: float  # last minute it was still showing
+    anchor_min: float  # where the move itself turned, which precedes the badge
+    peak_efficiency: float
+    move_pct: float
+    ongoing: bool
+
+
+def run_episodes(symbol: str, ranks: list, changes: list) -> list[RunEpisode]:
+    """Pure: replay a symbol's day and return every stretch it carried a badge.
+
+    Walks the series once, asking the same question the panel asked at each
+    minute, so an episode is exactly what was on screen rather than a
+    reconstruction from the final state. That distinction matters: the final
+    state cannot tell you a run ended at 11:20 and another began at 13:05.
+    """
+    episodes: list[RunEpisode] = []
+    current: dict | None = None
+    for i in range(RUN_MIN_OBS, len(changes)):
+        upto = changes[i][0]
+        row = compute_symbol_movement(
+            symbol, [p for p in ranks if p[0] <= upto], upto, changes[: i + 1]
+        )
+        badged = bool(row and row["event"].startswith("CLEAN_RUN"))
+        if badged:
+            direction = row["run_direction"]
+            if current and current["direction"] == direction:
+                current["end_min"] = upto
+                current["peak_efficiency"] = max(
+                    current["peak_efficiency"], row["run_efficiency"] or 0
+                )
+                current["move_pct"] = row["run_move_pct"]
+            else:
+                if current:
+                    episodes.append(RunEpisode(**current, ongoing=False))
+                current = {
+                    "direction": direction,
+                    "start_min": upto,
+                    "end_min": upto,
+                    "anchor_min": row["run_from_min"] if row["run_from_min"] is not None else upto,
+                    "peak_efficiency": row["run_efficiency"] or 0,
+                    "move_pct": row["run_move_pct"] or 0,
+                }
+        elif current:
+            episodes.append(RunEpisode(**current, ongoing=False))
+            current = None
+    if current:
+        episodes.append(RunEpisode(**current, ongoing=True))
+    return episodes
+
+
+def run_episodes_for(symbol: str, date: str = "", list_type: str = "intraday_boost") -> list[dict]:
+    """I/O: the day's badge stretches for one symbol, as flat dicts."""
+    day = date or datetime.now(IST).strftime("%Y-%m-%d")
+    ranks = get_boost_rank_timeline_fine(day, day, list_type).get(symbol, {}).get(day, [])
+    changes = get_boost_change_timeline(day, day, list_type).get(symbol, {}).get(day, [])
+    if not ranks or len(changes) <= RUN_MIN_OBS:
+        return []
+    return [asdict(e) for e in run_episodes(symbol, ranks, changes)]

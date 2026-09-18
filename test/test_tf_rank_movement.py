@@ -16,6 +16,7 @@ from services.tf_rank_movement_service import (
     compute_topn,
     movement_snapshot,
     rank_movement_service,
+    run_episodes,
 )
 
 
@@ -565,3 +566,68 @@ def test_a_run_measures_elapsed_minutes_across_half_minute_samples():
     assert run.direction == "up"
     assert run.run_minutes == 5.0  # eleven samples, half a minute apart
     assert run.is_clean
+
+
+# --- run episodes: what the chart draws ---------------------------------------
+
+
+def test_an_episode_ends_when_the_badge_goes():
+    # A badge is a live state. The chart needs the stretch it was showing, and a
+    # run that stops must close its episode rather than run to the end of day.
+    changes = [
+        [600 + i * 0.5, v]
+        for i, v in enumerate(
+            [
+                0.0,
+                0.3,
+                0.6,
+                0.9,
+                1.2,
+                1.5,
+                1.8,
+                2.1,
+                2.4,
+                2.7,
+                3.0,
+                3.2,
+                2.0,
+                1.0,
+                0.2,
+                0.1,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        )
+    ]
+    ranks = [[600 + i * 0.5, 5] for i in range(len(changes))]
+    episodes = run_episodes("EP", ranks, changes)
+    assert episodes, "a clean climb should open an episode"
+    first = episodes[0]
+    assert first.direction == "up"
+    assert first.end_min < changes[-1][0], "the episode must close, not run to the last bar"
+
+
+def test_episodes_are_separate_when_a_run_restarts():
+    # An earlier run that ended and a later one that began are two stretches,
+    # and a chart that merged them would claim a badge was up when it was not.
+    up = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0]
+    flat = [1.0] * 12
+    again = [1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8, 4.2, 4.6, 5.0]
+    values = up + flat + again
+    changes = [[600 + i * 0.5, v] for i, v in enumerate(values)]
+    ranks = [[600 + i * 0.5, 5] for i in range(len(changes))]
+    episodes = run_episodes("EP2", ranks, changes)
+    assert len(episodes) >= 2, f"expected two stretches, got {len(episodes)}"
+    assert episodes[0].end_min < episodes[1].start_min
+
+
+def test_an_ongoing_run_is_marked_ongoing():
+    values = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0, 3.3]
+    changes = [[600 + i * 0.5, v] for i, v in enumerate(values)]
+    ranks = [[600 + i * 0.5, 5] for i in range(len(changes))]
+    episodes = run_episodes("EP3", ranks, changes)
+    assert episodes and episodes[-1].ongoing is True

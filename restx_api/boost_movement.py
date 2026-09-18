@@ -6,7 +6,7 @@ from marshmallow import ValidationError
 
 from database.auth_db import get_auth_token_broker
 from limiter import limiter
-from services.tf_rank_movement_service import movement_snapshot
+from services.tf_rank_movement_service import movement_snapshot, run_episodes_for
 from utils.logging import get_logger
 
 from .data_schemas import BoostMovementSchema
@@ -41,6 +41,25 @@ class BoostMovement(Resource):
             if auth_token is None:
                 return make_response(
                     jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
+                )
+
+            # A single symbol asks a different question -- when did the badge
+            # come and go today -- and gets a different answer, because that is
+            # what a chart can draw and the current-state row cannot show.
+            symbol = (data.get("symbol") or "").strip().upper()
+            if symbol:
+                episodes = run_episodes_for(symbol, date=data["date"], list_type=data["list_type"])
+                return make_response(
+                    jsonify(
+                        {
+                            "status": "success",
+                            "symbol": symbol,
+                            "list_type": data["list_type"],
+                            "count": len(episodes),
+                            "episodes": episodes,
+                        }
+                    ),
+                    200,
                 )
 
             rows = movement_snapshot(date=data["date"], list_type=data["list_type"])

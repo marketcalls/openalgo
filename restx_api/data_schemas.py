@@ -40,7 +40,9 @@ def validate_option_offset(data: str) -> bool:
 class QuotesSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)  # Single symbol
-    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
+    )  # Exchange (e.g., NSE, BSE)
 
 
 class SymbolExchangePair(Schema):
@@ -51,7 +53,9 @@ class SymbolExchangePair(Schema):
 class BoostSnapshotsSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     date = fields.Str(required=True)  # YYYY-MM-DD (window end / the backtest day)
-    lookbackDays = fields.Int(required=False, load_default=1, validate=validate.Range(min=1, max=365))
+    lookbackDays = fields.Int(
+        required=False, load_default=1, validate=validate.Range(min=1, max=365)
+    )
     list_type = fields.Str(
         required=False,
         load_default="intraday_boost",
@@ -80,6 +84,10 @@ class BoostMovementSchema(Schema):
             ["intraday_boost", "breakout_beacon", "high_powered_stocks", "sector_index"]
         ),
     )
+    # One symbol's badge stretches instead of the whole list: when it appeared,
+    # when it went, and what the move did inside it. The chart overlay asks for
+    # this, because a stretch is what can be drawn on price.
+    symbol = fields.Str(required=False, load_default="", validate=validate.Length(max=40))
 
 
 class TfMarketPulseSchema(Schema):
@@ -104,7 +112,9 @@ class TfJwtKeepAliveSchema(Schema):
     # Refresh only if the cached server-side TF JWT has less than this many
     # seconds left — keeps frequent pings cheap (no browser launch) unless
     # the token is actually close to expiry.
-    minSeconds = fields.Int(required=False, load_default=1800, validate=validate.Range(min=60, max=3600))
+    minSeconds = fields.Int(
+        required=False, load_default=1800, validate=validate.Range(min=60, max=3600)
+    )
 
 
 class MultiQuotesSchema(Schema):
@@ -117,7 +127,9 @@ class MultiQuotesSchema(Schema):
 class HistorySchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
+    )  # Exchange (e.g., NSE, BSE)
     interval = fields.Str(
         required=True,
         validate=validate.OneOf(SUPPORTED_INTERVALS),
@@ -132,7 +144,9 @@ class HistorySchema(Schema):
 class DepthSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
+    )  # Exchange (e.g., NSE, BSE)
 
 
 class IntervalsSchema(Schema):
@@ -140,9 +154,13 @@ class IntervalsSchema(Schema):
 
 
 class SymbolSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     symbol = fields.Str(required=True)  # Symbol code (e.g., RELIANCE)
-    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
+    )  # Exchange (e.g., NSE, BSE)
 
 
 class TickerSchema(Schema):
@@ -165,9 +183,13 @@ class TickerSchema(Schema):
 
 
 class SearchSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     query = fields.Str(required=True)  # Search query/symbol name
-    exchange = fields.Str(required=False, validate=validate.OneOf(VALID_EXCHANGES))  # Optional exchange filter (e.g., NSE, BSE)
+    exchange = fields.Str(
+        required=False, validate=validate.OneOf(VALID_EXCHANGES)
+    )  # Optional exchange filter (e.g., NSE, BSE)
 
 
 #: Exchanges that list derivatives. Defined once: the same list was repeated in
@@ -178,7 +200,9 @@ F_AND_O_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "NCDEX", "CRYPTO"
 
 
 class ExpirySchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     symbol = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY)
     exchange = fields.Str(
         required=True, validate=validate.OneOf(F_AND_O_EXCHANGES)
@@ -189,12 +213,16 @@ class ExpirySchema(Schema):
 
 
 class OptionSymbolSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     strategy = fields.Str(
         required=False, allow_none=True
     )  # DEPRECATED: Strategy name (optional, will be removed in future versions)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
-    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, NFO)
+    exchange = fields.Str(
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
+    )  # Exchange (NSE_INDEX, NSE, NFO)
     expiry_date = fields.Str(
         required=False
     )  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
@@ -210,7 +238,9 @@ class OptionSymbolSchema(Schema):
 
 
 class OptionGreeksSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
     exchange = fields.Str(
         required=True, validate=validate.OneOf(F_AND_O_EXCHANGES)
@@ -233,7 +263,9 @@ class OptionGreeksSchema(Schema):
 
 
 class InstrumentsSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     exchange = fields.Str(
         required=False,
         validate=validate.OneOf(VALID_EXCHANGES),
@@ -244,7 +276,9 @@ class InstrumentsSchema(Schema):
 
 
 class OptionChainSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     underlying = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(
         required=True, validate=validate.OneOf(VALID_EXCHANGES)
@@ -264,14 +298,18 @@ class OptionChainSchema(Schema):
 
 
 class MarketHolidaysSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     year = fields.Int(
         required=False, validate=validate.Range(min=2020, max=2050)
     )  # Year to get holidays for (defaults to current year)
 
 
 class MarketTimingsSchema(Schema):
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     date = fields.Str(required=True)  # Date in YYYY-MM-DD format
 
 
@@ -287,7 +325,9 @@ class OptionSymbolRequest(Schema):
 class MultiOptionGreeksSchema(Schema):
     """Schema for batch option greeks requests"""
 
-    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256)
+    )  # API Key for authentication
     symbols = fields.List(
         fields.Nested(OptionSymbolRequest),
         required=True,
