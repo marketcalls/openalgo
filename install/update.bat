@@ -117,9 +117,23 @@ if "%CURRENT_BRANCH%"=="" set "CURRENT_BRANCH=main"
 echo [INFO] Current version: %CURRENT_COMMIT% (branch: %CURRENT_BRANCH%)
 echo.
 
-REM Generate timestamp for backups
-for /f "tokens=2 delims==" %%i in ('wmic os get localdatetime /value 2^>nul ^| findstr LocalDateTime') do set "DT=%%i"
-set "TIMESTAMP=%DT:~0,8%_%DT:~8,6%"
+REM Generate timestamp for backups. WMIC is absent from Windows 11 24H2 and
+REM later, so read the clock from PowerShell in the format update.sh already uses.
+REM An empty timestamp must stop the update: it builds a backup folder name
+REM containing a colon, which Windows cannot create, and Step 1 would then report
+REM a backup it never made.
+set "TIMESTAMP="
+for /f "delims=" %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul') do set "TIMESTAMP=%%i"
+if not defined TIMESTAMP (
+    echo [ERROR] Could not read the current date and time, so this update cannot
+    echo         name a folder to back your databases up into.
+    echo         That step needs Windows PowerShell. Once it is available on this
+    echo         machine, run the update again. Nothing has been changed.
+    echo.
+    popd
+    pause
+    exit /b 1
+)
 
 REM ========================================
 REM Step 1: Backup databases
@@ -128,22 +142,47 @@ echo [Step 1/5] Backing up databases...
 
 set "BACKUP_DIR=%OPENALGO_DIR%\db\backup_%TIMESTAMP%"
 set "BACKUP_COUNT=0"
+set "BACKUP_FAILED="
 
 if exist "%OPENALGO_DIR%\db\" (
     md "%BACKUP_DIR%" 2>nul
+    if not exist "%BACKUP_DIR%\" (
+        echo [ERROR] Could not create the backup folder:
+        echo           %BACKUP_DIR%
+        echo         Your databases have not been touched. Check that the disk has
+        echo         free space and that you can write to the openalgo folder, then
+        echo         run the update again.
+        echo.
+        popd
+        pause
+        exit /b 1
+    )
 
-    for %%f in (openalgo.db logs.db latency.db sandbox.db) do (
+    REM Count a database as backed up only once the copy is actually there.
+    REM Counting on the source file existing reports a backup that never happened.
+    for %%f in (openalgo.db logs.db latency.db sandbox.db historify.duckdb) do (
         if exist "%OPENALGO_DIR%\db\%%f" (
             copy /y "%OPENALGO_DIR%\db\%%f" "%BACKUP_DIR%\%%f" >nul 2>&1
-            echo   Backed up: %%f
-            set /a BACKUP_COUNT+=1
+            if exist "%BACKUP_DIR%\%%f" (
+                echo   Backed up: %%f
+                set /a BACKUP_COUNT+=1
+            ) else (
+                echo   [ERROR] Could not copy %%f into the backup folder.
+                set "BACKUP_FAILED=1"
+            )
         )
     )
 
-    if exist "%OPENALGO_DIR%\db\historify.duckdb" (
-        copy /y "%OPENALGO_DIR%\db\historify.duckdb" "%BACKUP_DIR%\historify.duckdb" >nul 2>&1
-        echo   Backed up: historify.duckdb
-        set /a BACKUP_COUNT+=1
+    if defined BACKUP_FAILED (
+        echo.
+        echo [ERROR] Your databases could not be backed up, so this update has
+        echo         stopped without changing anything.
+        echo         Close OpenAlgo if it is running, make sure the disk has free
+        echo         space, then run the update again.
+        echo.
+        popd
+        pause
+        exit /b 1
     )
 
     if !BACKUP_COUNT! EQU 0 (
