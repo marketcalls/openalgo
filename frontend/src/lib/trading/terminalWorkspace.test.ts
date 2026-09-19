@@ -33,6 +33,44 @@ afterEach(() => {
 })
 
 describe('workspace pane preference ownership', () => {
+  it('locks every terminal order ticket throughout an external grid transition', async () => {
+    const { instance } = terminal(null)
+    const place = vi.fn(async () => ({ orderId: 'fixture-order' }))
+    Object.assign(instance, { trade: { place } })
+    const order = {
+      symbol: 'BHEL',
+      exchange: 'NSE',
+      action: 'BUY',
+      quantity: 1,
+      product: 'MIS',
+      pricetype: 'MARKET',
+    } as const
+    instance.setWorkspaceTransitionLocked(true)
+    await expect(instance.placeTicket(order)).rejects.toThrow(/workspace.*loading/i)
+    expect(place).not.toHaveBeenCalled()
+    instance.setWorkspaceTransitionLocked(false)
+    await expect(instance.placeTicket(order)).resolves.toEqual({ orderId: 'fixture-order' })
+    expect(place).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a stale ticket after its grid has been destroyed', async () => {
+    const { instance } = terminal(null)
+    const place = vi.fn(async () => ({ orderId: 'fixture-order' }))
+    Object.assign(instance, { trade: { place } })
+    instance.destroy()
+    await expect(
+      instance.placeTicket({
+        symbol: 'BHEL',
+        exchange: 'NSE',
+        action: 'BUY',
+        quantity: 1,
+        product: 'MIS',
+        pricetype: 'MARKET',
+      })
+    ).rejects.toThrow(/closed/i)
+    expect(place).not.toHaveBeenCalled()
+  })
+
   it('prepares a pane with isolated preferences without rewriting the visible grid', () => {
     localStorage.setItem('oa-trading-p0-magnet', '1')
     const staged = new Map([

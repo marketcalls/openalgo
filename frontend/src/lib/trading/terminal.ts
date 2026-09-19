@@ -867,6 +867,7 @@ export class TradingTerminal {
   private destroyed = false
   private initialWorkspacePane: WorkspacePane | null = null
   private preparingWorkspace = false
+  private workspaceTransitionLocked = false
 
   private readonly onVisibilityChange = () => {
     this.data?.setVisible(document.visibilityState !== 'hidden')
@@ -3340,11 +3341,23 @@ export class TradingTerminal {
    * did not use.
    */
   private tradingLocked(): boolean {
-    return this.preparingWorkspace || this.replay !== null || this.replayPicking
+    return (
+      this.destroyed ||
+      this.preparingWorkspace ||
+      this.workspaceTransitionLocked ||
+      this.replay !== null ||
+      this.replayPicking
+    )
+  }
+
+  /** Locks existing panes while their owning page prepares a replacement grid. */
+  setWorkspaceTransitionLocked(locked: boolean): void {
+    this.workspaceTransitionLocked = locked
   }
 
   private tradingLockMessage(): string {
-    return this.preparingWorkspace
+    if (this.destroyed) return 'This chart is closed. Use the active chart to trade.'
+    return this.preparingWorkspace || this.workspaceTransitionLocked
       ? 'Workspace is loading. Wait for it to finish before trading.'
       : 'Replay is a simulation. Leave replay to trade.'
   }
