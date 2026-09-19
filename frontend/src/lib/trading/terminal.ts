@@ -56,7 +56,11 @@ import {
   runTransform,
   type SymbolExpression,
 } from 'openalgo-charts/transform'
-import { parseIndicatorStates } from 'openalgo-charts/workspace'
+import {
+  parseIndicatorStates,
+  parseWorkspacePayload,
+  type WorkspacePane,
+} from 'openalgo-charts/workspace'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
   type IndicatorTemplateMode,
@@ -495,6 +499,8 @@ export interface TerminalOptions {
   legendEl: HTMLElement
   /** localStorage namespace so each grid pane restores independently (default 'oa-trading'). */
   storageKey?: string
+  /** Isolated preferences for prepared panes; null disables persistence. Defaults to browser storage. */
+  preferences?: Pick<Storage, 'getItem' | 'setItem'> | null
   /** Reads the app's current theme so the canvas chrome tracks it. */
   getTheme: () => { mode: ThemeMode; appMode: AppMode }
   callbacks: TerminalCallbacks
@@ -655,6 +661,8 @@ export class TradingTerminal {
   private readonly getTheme: () => { mode: ThemeMode; appMode: AppMode }
   private readonly cb: TerminalCallbacks
   private readonly sk: string
+  private readonly preferences: Pick<Storage, 'getItem' | 'setItem'> | null | undefined
+  private preferenceFailure = false
 
   private chart: ChartInstance | null = null
   private offBranding: (() => void) | null = null
@@ -863,6 +871,7 @@ export class TradingTerminal {
     this.getTheme = opts.getTheme
     this.cb = opts.callbacks
     this.sk = opts.storageKey || 'oa-trading'
+    this.preferences = opts.preferences
     this.interval = this.lsGet('interval') || '5m'
     this.ctype = this.lsGet('ctype') || 'candlestick'
     this.restoreChartTools()
@@ -877,12 +886,31 @@ export class TradingTerminal {
    * their last symbol after upgrading. Writes always go to the namespaced key.
    */
   private lsGet(key: string): string | null {
-    const v = localStorage.getItem(`${this.sk}-${key}`)
-    if (v !== null) return v
-    return this.sk.endsWith('-p0') ? localStorage.getItem(`-${key}`) : null
+    try {
+      const storage = this.preferences === undefined ? globalThis.localStorage : this.preferences
+      if (!storage) return null
+      const value = storage.getItem(`${this.sk}-${key}`)
+      if (value !== null) return value
+      return this.sk.endsWith('-p0') ? storage.getItem(`-${key}`) : null
+    } catch {
+      this.reportPreferenceFailure('Chart preferences are unavailable. Using defaults.')
+      return null
+    }
   }
   private lsSet(key: string, val: string): void {
-    localStorage.setItem(`${this.sk}-${key}`, val)
+    try {
+      const storage = this.preferences === undefined ? globalThis.localStorage : this.preferences
+      storage?.setItem(`${this.sk}-${key}`, val)
+    } catch {
+      this.reportPreferenceFailure(
+        'Chart preferences could not be saved. Changes remain in this view.'
+      )
+    }
+  }
+  private reportPreferenceFailure(message: string): void {
+    if (this.preferenceFailure) return
+    this.preferenceFailure = true
+    this.cb.onToast(message, 'err')
   }
 
   /* ── tick-size / formatting bound to the loaded instrument ────────────── */
@@ -2972,6 +3000,47 @@ export class TradingTerminal {
       this.announcedIndicators = announced
       this.cb.onIndicatorsChange?.(announced)
     }
+  }
+
+  captureWorkspacePane(id: string): WorkspacePane {
+    const chart = this.chart
+    const symbol = this.sym
+    if (this.destroyed || !chart || !symbol) throw new Error('Chart is not available')
+    if (this.replay || this.replayPicking) throw new Error('Leave replay before saving a workspace')
+    const context = chart.getDataContext()
+    if (
+      context?.symbol !== symbol.symbol ||
+      context.exchange !== symbol.exchange ||
+      context.interval !== this.interval
+    )
+      throw new Error('Chart history is still loading')
+    if (this.restoringIndicatorsOn === chart) throw new Error('Studies are still loading')
+    if (this.drawLegacy || (this.drawEnabled && !this.draw))
+      throw new Error('Drawings are still loading')
+    return parseWorkspacePayload({
+      layout: {
+        rows: 1,
+        columns: 1,
+        slots: [{ paneId: id, row: 0, column: 0, rowSpan: 1, columnSpan: 1 }],
+      },
+      activePaneId: id,
+      panes: [
+        {
+          id,
+          symbol: symbol.symbol,
+          exchange: symbol.exchange,
+          interval: this.interval,
+          chartType: this.ctype,
+          chart: { ...chart.getState(), drawings: this.draw?.toJSON() ?? this.drawJson },
+          settings: this.chartSettingsSaved,
+          volume: this.volumeOn,
+          magnet: this.draw?.magnetMode() ?? (this.drawMagnet ? 'strong' : 'off'),
+          stay: this.drawStay,
+          comparisons: [],
+          comparisonMode: 'price',
+        },
+      ],
+    }).panes[0]
   }
 
   captureIndicatorTemplate(): IndicatorState[] {
