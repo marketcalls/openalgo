@@ -21,6 +21,7 @@ import {
   writeDockTab,
 } from '@/components/trading/dock/dockState'
 import { TradingDock } from '@/components/trading/dock/TradingDock'
+import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
@@ -35,10 +36,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
+import { useChartWorkspaceCatalog } from '@/hooks/useChartWorkspaceCatalog'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
 import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 
 const NO_DRAW: DrawStats = {
   count: 0,
@@ -106,6 +109,10 @@ function readSync(): SyncState {
 }
 
 export default function Trading() {
+  const account = useAuthStore((state) =>
+    state.isAuthenticated ? (state.user?.username ?? null) : null
+  )
+  const workspaceCatalog = useChartWorkspaceCatalog(account)
   const [layoutId, setLayoutId] = useState(() => {
     const saved = localStorage.getItem(LAYOUT_KEY)
     return LAYOUTS.some((l) => l.id === saved) ? (saved as string) : 'single'
@@ -625,6 +632,11 @@ export default function Trading() {
                         <>
                           {layoutPicker}
                           {syncPicker}
+                          <IndicatorTemplates
+                            key={account}
+                            {...workspaceCatalog}
+                            target={panelTarget}
+                          />
                           {armedControl}
                         </>
                       ) : undefined

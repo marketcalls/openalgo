@@ -623,7 +623,11 @@ export function ChartPane({
       data-trading-dialog-open={paneDialogOpen ? 'true' : undefined}
       style={style}
       className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
-      onPointerDownCapture={() => onFocusPane?.(terminalRef.current, paneId)}
+      onPointerDownCapture={(event) => {
+        // Workspace controls keep the chart selected before the control opened.
+        if ((event.target as Element).closest('[data-workspace-control]')) return
+        onFocusPane?.(terminalRef.current, paneId)
+      }}
     >
       {/* Per-pane control row. One line: the row scrolls rather than wrapping,
           so the view actions stay beside the instrument controls instead of

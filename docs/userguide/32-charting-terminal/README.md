@@ -3,7 +3,8 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. It is powered by `openalgo-charts` 2.2.0: a from-scratch canvas
+it. This development branch uses a locally verified `openalgo-charts` 2.4.0
+candidate: a from-scratch canvas
 charting engine with 17 chart types, 102 built-in indicators plus any you write
 yourself, and 85 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
@@ -50,6 +51,30 @@ per pane. The average shares the volume scale, starts after a full period and
 updates as the current bar forms. Hiding volume hides the average as well.
 During replay, both use only the bars revealed by the playhead, including the
 formed portion of an intrabar candle.
+
+## Indicator Templates
+
+Click the chart you want to work with, then open **Templates** beside the grid
+controls. Enter a name and choose **Save current studies**. A template retains
+every study instance, including repeated studies, parameters, plot styles,
+visibility and shared oscillator panes. It can be used on another symbol.
+
+Select a saved template and choose **Replace studies** to replace the selected
+chart's studies, or **Add studies** to keep them and append the template. Added
+oscillators get new panes while studies grouped together stay together. An empty
+template shows **No studies**; replacing with it clears the studies. If a custom
+study is unavailable, the terminal lists its ID and keeps the current studies.
+
+Use **Rename**, **Duplicate**, or **Delete** to manage the selected template.
+**Export JSON** downloads a portable file; **Import template JSON** accepts a
+template file up to 5 MB and creates a new saved entry. This importer accepts
+indicator templates only.
+
+Templates are private to your account in this browser. They are not synchronized
+to another device. Browser-storage failures remain visible and preserve the
+entered name so you can retry; **Refresh templates** reads changes from another
+tab. Template files contain study configuration, not credentials or orders.
+Applying a template preserves chart prices, drawings and the visible time range.
 
 ## Chart Branding and Watermark
 
