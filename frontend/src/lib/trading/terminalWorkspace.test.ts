@@ -33,6 +33,22 @@ afterEach(() => {
 })
 
 describe('workspace pane preference ownership', () => {
+  it('announces changed chart configuration without treating execution preferences as workspace edits', () => {
+    const { instance, callbacks } = terminal()
+    callbacks.onWorkspaceChange = vi.fn()
+    instance.setGrid(false, true)
+    expect(callbacks.onWorkspaceChange).toHaveBeenCalledOnce()
+    instance.setGrid(false, true)
+    instance.setArmed(true)
+    instance.setQty(10)
+    instance.setProduct('MIS')
+    expect(callbacks.onWorkspaceChange).toHaveBeenCalledOnce()
+    instance.setDrawStay(true)
+    expect(callbacks.onWorkspaceChange).toHaveBeenCalledTimes(2)
+    instance.destroy()
+    instance.setGrid(true, true)
+    expect(callbacks.onWorkspaceChange).toHaveBeenCalledTimes(2)
+  })
   it('locks every terminal order ticket throughout an external grid transition', async () => {
     const { instance } = terminal(null)
     const place = vi.fn(async () => ({ orderId: 'fixture-order' }))

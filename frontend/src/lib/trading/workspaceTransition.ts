@@ -35,10 +35,17 @@ export class WorkspaceTransition<T extends PreparedWorkspaceGrid> {
   private pending: Preparation<T> | null = null
   private closed = false
   private readonly onPending: (pending: boolean) => void
+  private readonly onCleanupError: (error: unknown) => void
 
-  constructor(initial: T | null = null, onPending: (pending: boolean) => void = () => {}) {
+  constructor(
+    initial: T | null = null,
+    onPending: (pending: boolean) => void = () => {},
+    onCleanupError: (error: unknown) => void = (error) =>
+      console.error('Workspace cleanup failed', error)
+  ) {
     this.current = initial
     this.onPending = onPending
+    this.onCleanupError = onCleanupError
   }
 
   async open(
@@ -70,7 +77,7 @@ export class WorkspaceTransition<T extends PreparedWorkspaceGrid> {
       publish(grid)
       this.current = grid
       this.pending = null
-      previous?.destroy()
+      this.dispose(previous)
       this.onPending(false)
       return grid
     } catch (error) {
@@ -97,8 +104,9 @@ export class WorkspaceTransition<T extends PreparedWorkspaceGrid> {
     if (this.closed) return
     this.closed = true
     this.cancel()
-    this.current?.destroy()
+    const current = this.current
     this.current = null
+    this.dispose(current)
   }
 
   private assertCurrent(operation: Preparation<T>): void {
@@ -110,6 +118,15 @@ export class WorkspaceTransition<T extends PreparedWorkspaceGrid> {
   private release(operation: Preparation<T>): void {
     if (operation.released || !operation.grid) return
     operation.released = true
-    operation.grid.destroy()
+    this.dispose(operation.grid)
+  }
+
+  private dispose(grid: T | null): void {
+    try {
+      grid?.destroy()
+    } catch (error) {
+      // A cleanup failure must not roll back an already published replacement.
+      this.onCleanupError(error)
+    }
   }
 }

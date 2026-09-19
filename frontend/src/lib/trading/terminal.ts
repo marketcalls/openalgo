@@ -282,6 +282,8 @@ export interface ConfirmedOrder {
 }
 
 export interface TerminalCallbacks {
+  /** Chart configuration changed; live price updates do not fire this callback. */
+  onWorkspaceChange?(): void
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
   onIntervalChange?(interval: string): void
   onToast(msg: string, kind: ToastKind): void
@@ -917,6 +919,7 @@ export class TradingTerminal {
     }
   }
   private lsSet(key: string, val: string): void {
+    const changed = key !== 'product' && this.lsGet(key) !== val
     try {
       const storage = this.preferences === undefined ? globalThis.localStorage : this.preferences
       storage?.setItem(`${this.sk}-${key}`, val)
@@ -925,6 +928,14 @@ export class TradingTerminal {
         'Chart preferences could not be saved. Changes remain in this view.'
       )
     }
+    if (
+      changed &&
+      !this.destroyed &&
+      !this.preparingWorkspace &&
+      !this.replay &&
+      !this.replayPicking
+    )
+      this.cb.onWorkspaceChange?.()
   }
   private reportPreferenceFailure(message: string): void {
     if (this.preferenceFailure) return

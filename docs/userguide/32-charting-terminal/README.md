@@ -26,7 +26,7 @@ says so and links to `/apikey`.
 |---|---|
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera |
 | Left rail | Drawing tools in ten groups, magnet, keep-armed lock, undo, redo, delete |
-| Centre | One to eight chart panes in a grid |
+| Centre | Chart grid with up to eight panes in presets, or sixteen in an imported workspace |
 | Right panel | Watchlist, option chain, Objects, or the chart assistant |
 | Right rail | The four controls that open those panels |
 | Bottom dock | Orders, positions, trades and GTT across every symbol |
@@ -66,6 +66,40 @@ Hover a candle to read its OHLC, volume and study values while live data continu
 arriving. Crosshair sync makes each follower read its own candle at the mapped
 time. Moving outside the chart or beyond its data returns to the latest displayed
 candle, including during replay.
+
+## Chart Workspaces
+
+Open **Workspaces**, enter a name, and choose **Save as** to save the complete
+grid. It retains each chart's instrument, interval, chart type, settings,
+studies, drawings and drawing preferences, along with grid proportions, selected
+chart and sync switches. **Save** updates the current named workspace.
+
+Choose a saved workspace and select **Open** to restore it. The displayed charts
+remain available until every replacement chart has loaded successfully. Loading
+locks chart interactions and order entry; a failed load leaves the previous grid
+in place and displays the error. **Cancel workspace loading** keeps the previous
+grid and releases the pending charts. Workspace changes turn One-Click off. The last
+successfully opened workspace is restored when the trading page reloads.
+
+**New workspace** opens a clean single chart for BHEL on NSE at a five-minute
+interval, using the entered name. **Rename**, **Duplicate** and **Delete** manage
+saved entries. Deleting an entry keeps its displayed charts available as an
+unnamed grid. Recent entries list successfully opened workspaces.
+
+Enable **Autosave chart changes** to save configuration edits after a short pause.
+Price ticks do not trigger workspace writes. Autosave applies only to a named
+workspace. Storage errors remain visible and leave changes unsaved; use **Save**
+to retry or **Refresh** to reread the saved catalog.
+
+**Export JSON** downloads the selected saved workspace. **Import workspace JSON**
+accepts files up to 5 MB, gives the imported workspace a new identity and prepares
+its charts before displaying them. Unsupported intervals, missing studies and
+unsupported comparison configurations are rejected with an error.
+
+Workspaces belong to your account in this browser and do not synchronize across
+devices. Files contain chart configuration only; credentials, order books,
+positions and One-Click state are excluded. The first named save preserves your
+existing per-chart browser preferences.
 
 ## Indicator Templates
 

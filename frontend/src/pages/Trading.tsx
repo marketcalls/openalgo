@@ -1,5 +1,6 @@
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
+import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
 
@@ -27,6 +28,8 @@ import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
+import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
+import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,9 +40,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { useChartWorkspaceCatalog } from '@/hooks/useChartWorkspaceCatalog'
+import { useWorkspaceAutosave } from '@/hooks/useWorkspaceAutosave'
+import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
+import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
+import { capturePresetWorkspace } from '@/lib/trading/workspaceGrid'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -112,7 +119,18 @@ export default function Trading() {
   const account = useAuthStore((state) =>
     state.isAuthenticated ? (state.user?.username ?? null) : null
   )
+  return <TradingWorkspace key={account ?? 'signed-out'} account={account} />
+}
+
+function TradingWorkspace({ account }: { account: string | null }) {
   const workspaceCatalog = useChartWorkspaceCatalog(account)
+  const workspacePending = useRef(false)
+  const visibleGrid = useRef<PreparedChartGrid | null>(null)
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const savedWorkspaceSnapshot = useRef<WorkspacePayload | undefined>(undefined)
+  const [workspaceMessage, setWorkspaceMessage] = useState('Unsaved')
+  const [saveStamp, setSaveStamp] = useState(0)
+  const restoreAttempted = useRef(false)
   const [layoutId, setLayoutId] = useState(() => {
     const saved = localStorage.getItem(LAYOUT_KEY)
     return LAYOUTS.some((l) => l.id === saved) ? (saved as string) : 'single'
@@ -178,6 +196,7 @@ export default function Trading() {
   const terminalsRef = useRef<Record<string, TradingTerminal | null>>({})
 
   const noteTerminal = useCallback((paneId: string, terminal: TradingTerminal | null) => {
+    if (visibleGrid.current) return
     if (terminal) terminalsRef.current[paneId] = terminal
     else delete terminalsRef.current[paneId]
   }, [])
@@ -198,15 +217,22 @@ export default function Trading() {
   /** The pane a panel acts on: the focused one, else any pane that is up. */
   const panelTarget = useCallback(
     () =>
-      terminalsRef.current[focusedPane] ??
-      activeRef.current ??
-      Object.values(terminalsRef.current)[0] ??
-      null,
+      workspacePending.current
+        ? null
+        : (terminalsRef.current[focusedPane] ??
+          activeRef.current ??
+          Object.values(terminalsRef.current)[0] ??
+          null),
     [focusedPane]
   )
 
   const focusPane = useCallback((t: TradingTerminal | null, paneId?: string) => {
+    if (workspacePending.current) return
     activeRef.current = t
+    if (visibleGrid.current && t) {
+      setMagnet(t.drawStats().magnet)
+      setStay(t.drawStats().stay)
+    }
     if (paneId) setFocusedPane(paneId)
     if (t) setStats(t.drawStats())
   }, [])
@@ -239,6 +265,7 @@ export default function Trading() {
    */
   const tradingLocked = useCallback(
     () =>
+      workspacePending.current ||
       Object.values(terminalsRef.current).some(
         (t) => t !== null && (t.replayActive() || t.replayPickingBar())
       ),
@@ -284,7 +311,10 @@ export default function Trading() {
   const objectsPaneId = paneObjects[focusedPane]
     ? focusedPane
     : (Object.keys(paneObjects)[0] ?? focusedPane)
-  const objectsPaneLabel = `Pane ${Number(objectsPaneId.slice(1)) + 1}${
+  const objectsPaneNumber = visibleGrid.current
+    ? visibleGrid.current.payload.panes.findIndex((pane) => pane.id === objectsPaneId) + 1
+    : Number(objectsPaneId.slice(1)) + 1
+  const objectsPaneLabel = `Pane ${objectsPaneNumber}${
     paneSymbols[objectsPaneId] ? ` · ${paneSymbols[objectsPaneId]}` : ''
   }`
   const railStats: DrawStats = { ...stats, tool, magnet, stay }
@@ -295,6 +325,7 @@ export default function Trading() {
    * tier, so the terminal -- not this page and not the rail -- can answer.
    */
   const onDrawKey = useCallback((e: KeyboardEvent) => {
+    if (workspacePending.current) return false
     const t = activeRef.current
     if (!t || !t.handleDrawKey(e)) return false
     setTool(t.drawStats().tool)
@@ -303,6 +334,7 @@ export default function Trading() {
   }, [])
 
   const act = (fn: (t: TradingTerminal) => void) => {
+    if (workspacePending.current) return
     const t = activeRef.current
     if (!t) return
     fn(t)
@@ -395,6 +427,7 @@ export default function Trading() {
     // that switch goes off and converges the group on its agreed symbol when
     // the symbol switch comes on, neither of which a fresh group would do.
     linkGroup?.setOptions(sync)
+    visibleGrid.current?.linkGroup.setOptions(sync)
   }, [sync, linkGroup])
 
   useEffect(() => {
@@ -431,6 +464,213 @@ export default function Trading() {
 
   const layout = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0]
 
+  const lockWorkspace = useCallback((pending: boolean) => {
+    workspacePending.current = pending
+    for (const terminal of Object.values(terminalsRef.current)) {
+      terminal?.setWorkspaceTransitionLocked(pending)
+      if (pending) terminal?.setArmed(false)
+    }
+  }, [])
+  const publishWorkspace = useCallback((grid: PreparedChartGrid) => {
+    visibleGrid.current = grid
+    terminalsRef.current = Object.fromEntries(grid.terminals)
+    setPaneSymbols(Object.fromEntries(grid.symbols))
+    setPaneObjects(Object.fromEntries(grid.objects))
+    const focused = grid.terminals.get(grid.payload.activePaneId) ?? null
+    activeRef.current = focused
+    setFocusedPane(grid.payload.activePaneId)
+    setSync(grid.payload.sync)
+    setArmed(false)
+    setTool(null)
+    const draw = focused?.drawStats() ?? NO_DRAW
+    setStats(draw)
+    setMagnet(draw.magnet)
+    setStay(draw.stay)
+  }, [])
+  const workspace = useWorkspaceGridTransition(account, publishWorkspace, lockWorkspace)
+
+  const captureWorkspace = () => {
+    if (workspacePending.current) throw new Error('Wait for the workspace to finish loading')
+    if (visibleGrid.current) return visibleGrid.current.capture(focusedPane, sync)
+    const panes = layout.cells.map((_, index) => {
+      const id = `p${index}`,
+        terminal = terminalsRef.current[id]
+      if (!terminal) throw new Error('Every chart must be ready before saving')
+      return terminal.captureWorkspacePane(id)
+    })
+    return capturePresetWorkspace(
+      layout,
+      panes,
+      panes.some((pane) => pane.id === focusedPane) ? focusedPane : panes[0].id,
+      sync
+    )
+  }
+  const autosave = useWorkspaceAutosave({
+    identity: activeWorkspaceId ? `${account}:${activeWorkspaceId}` : null,
+    enabled: workspaceCatalog.catalog?.autosave === true,
+    paused: workspace.pending,
+    capture: captureWorkspace,
+    save: async (payload) => {
+      if (!activeWorkspaceId) throw new Error('Save this workspace with a name first')
+      await workspaceCatalog.run((repository) =>
+        repository.saveWorkspace(activeWorkspaceId, payload)
+      )
+    },
+  })
+  useEffect(() => {
+    if (activeWorkspaceId && saveStamp > 0) {
+      autosave.markSaved(savedWorkspaceSnapshot.current)
+      savedWorkspaceSnapshot.current = undefined
+    }
+  }, [activeWorkspaceId, saveStamp, autosave.markSaved])
+  useEffect(() => {
+    if (workspace.pending) setArmed(false)
+  }, [workspace.pending])
+  const openWorkspace = async (document: WorkspaceDocument) => {
+    const revision = workspaceCatalog.catalog?.revision
+    await workspace.open(document, (signal) =>
+      workspaceCatalog.run((repository) =>
+        repository.openWorkspace(document.id, { signal, expectedRevision: revision })
+      )
+    )
+    setActiveWorkspaceId(document.id)
+    setWorkspaceMessage('Saved')
+    setSaveStamp((value) => value + 1)
+  }
+  const saveWorkspaceAs = async (name: string) => {
+    const payload = captureWorkspace()
+    const document = await workspaceCatalog.run(async (repository) => {
+      const saved = await repository.createWorkspace(name, payload)
+      await repository.openWorkspace(saved.id)
+      return saved
+    })
+    savedWorkspaceSnapshot.current = payload
+    setActiveWorkspaceId(document.id)
+    setWorkspaceMessage('Saved')
+    setSaveStamp((value) => value + 1)
+    return document
+  }
+  const createWorkspace = async (name: string) => {
+    const payload = capturePresetWorkspace(
+      LAYOUTS[0],
+      [
+        {
+          id: 'p0',
+          symbol: 'BHEL',
+          exchange: 'NSE',
+          interval: '5m',
+          chartType: 'candlestick',
+          chart: { version: 1 },
+          settings: {},
+          volume: true,
+          magnet: 'off',
+          stay: false,
+          comparisons: [],
+          comparisonMode: 'price',
+        },
+      ],
+      'p0',
+      SYNC_DEFAULT
+    )
+    return prepareNewWorkspace(payload, (repository) => repository.createWorkspace(name, payload))
+  }
+  const prepareNewWorkspace = async (
+    payload: WorkspacePayload,
+    create: Parameters<typeof workspaceCatalog.run<WorkspaceDocument>>[0]
+  ) => {
+    let saved: WorkspaceDocument | undefined
+    await workspace.open(payload, (signal) =>
+      workspaceCatalog.run(async (repository) => {
+        signal.throwIfAborted()
+        saved = await create(repository)
+        signal.throwIfAborted()
+        await repository.openWorkspace(saved.id, { signal })
+      })
+    )
+    if (!saved) throw new Error('Workspace was not saved')
+    setActiveWorkspaceId(saved.id)
+    setWorkspaceMessage('Saved')
+    setSaveStamp((value) => value + 1)
+    return saved
+  }
+  const changeLayout = (id: string) => {
+    if (workspacePending.current) return
+    if (!visibleGrid.current) {
+      setLayoutId(id)
+      setWorkspaceMessage('Unsaved')
+      autosave.changed()
+      return
+    }
+    try {
+      const next = LAYOUTS.find((item) => item.id === id)!
+      const current = captureWorkspace()
+      const panes = next.cells.map((_, index) => ({
+        ...(current.panes[index] ?? current.panes[0]),
+        id: `p${index}`,
+      }))
+      const payload = capturePresetWorkspace(next, panes, 'p0', sync)
+      void workspace
+        .open(payload, async () => {})
+        .then(() => {
+          setLayoutId(id)
+          setWorkspaceMessage('Unsaved')
+          autosave.changed()
+        })
+        .catch(() => {})
+    } catch (error) {
+      setWorkspaceMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+  useEffect(() => {
+    if (
+      restoreAttempted.current ||
+      workspaceCatalog.loading ||
+      !workspaceCatalog.catalog ||
+      !apiKey ||
+      !wsUrl
+    )
+      return
+    restoreAttempted.current = true
+    const document = workspaceCatalog.catalog.workspaces.find(
+      (item) => item.id === workspaceCatalog.catalog?.activeWorkspaceId
+    )
+    if (document) void openWorkspace(document).catch(() => {})
+  })
+  const workspaceMenu = (
+    <WorkspaceMenu
+      {...workspaceCatalog}
+      activeId={activeWorkspaceId}
+      transitionPending={workspace.pending}
+      cancelOpening={workspace.cancel}
+      status={autosave.status}
+      error={autosave.error || workspaceCatalog.error}
+      saveAs={saveWorkspaceAs}
+      create={createWorkspace}
+      openWorkspace={openWorkspace}
+      importWorkspace={(document) =>
+        prepareNewWorkspace(document, async (repository) => {
+          const saved = await repository.importDocument(document)
+          if (saved.kind !== 'workspace') throw new Error('Expected a chart workspace')
+          return saved
+        })
+      }
+      save={async () => {
+        if (!activeWorkspaceId) throw new Error('Save this workspace with a name first')
+        autosave.changed()
+        await autosave.flush()
+      }}
+      onRemoved={(id) => {
+        if (activeWorkspaceId === id) {
+          setActiveWorkspaceId(null)
+          setWorkspaceMessage('Unsaved')
+        }
+      }}
+    />
+  )
+  const paneCount = workspace.current?.payload.panes.length ?? layout.cells.length
+  const activeLayoutId = workspace.current?.payload.layout.preset ?? layoutId
+  const activeLayoutLabel = LAYOUTS.find((item) => item.id === activeLayoutId)?.label ?? 'Custom'
+
   /**
    * The layout picker, rendered beside the first pane's Indicators button.
    *
@@ -450,8 +690,8 @@ export default function Trading() {
           variant="outline"
           size="icon"
           className="h-8 w-8 shrink-0"
-          title={`Layout: ${layout.label}`}
-          aria-label={`Chart layout: ${layout.label}`}
+          title={`Layout: ${activeLayoutLabel}`}
+          aria-label={`Chart layout: ${activeLayoutLabel}`}
         >
           <LayoutGrid className="h-4 w-4" />
         </Button>
@@ -461,7 +701,7 @@ export default function Trading() {
           {LAYOUTS.map((l) => (
             <DropdownMenuItem
               key={l.id}
-              onSelect={() => setLayoutId(l.id)}
+              onSelect={() => changeLayout(l.id)}
               title={l.label}
               className={cn(
                 'flex aspect-square flex-col items-center justify-center gap-1 rounded border',
@@ -496,10 +736,10 @@ export default function Trading() {
         <Button
           variant="outline"
           size="icon"
-          disabled={layout.cells.length < 2}
-          className={cn('h-8 w-8 shrink-0', syncOn && layout.cells.length > 1 && 'text-primary')}
+          disabled={paneCount < 2}
+          className={cn('h-8 w-8 shrink-0', syncOn && paneCount > 1 && 'text-primary')}
           title={
-            layout.cells.length < 2
+            paneCount < 2
               ? 'Chart sync needs more than one pane'
               : syncOn
                 ? 'Chart sync is on'
@@ -536,7 +776,10 @@ export default function Trading() {
           >
             <TickBox
               checked={sync[key]}
-              onChange={(next) => setSync((p) => ({ ...p, [key]: next }))}
+              onChange={(next) => {
+                setSync((p) => ({ ...p, [key]: next }))
+                autosave.changed()
+              }}
               label={label}
               className="mt-0.5"
             />
@@ -578,7 +821,32 @@ export default function Trading() {
       <Navbar fluid />
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Rail + grid */}
-        <main className="flex min-h-0 flex-1">
+        <div aria-live="polite">
+          {autosave.error && (
+            <p role="alert" className="px-3 py-1 text-sm text-destructive">
+              Workspace not saved: {autosave.error}
+            </p>
+          )}
+          {workspaceMessage !== 'Saved' && workspaceMessage !== 'Unsaved' && (
+            <p role="alert" className="px-3 py-1 text-sm text-destructive">
+              {workspaceMessage}
+            </p>
+          )}
+          {workspace.pending && (
+            <output className="flex items-center gap-3 px-3 py-1 text-sm">
+              Loading workspace...
+              <Button variant="ghost" size="sm" onClick={workspace.cancel}>
+                Cancel
+              </Button>
+            </output>
+          )}
+          {workspace.error && (
+            <p role="alert" className="px-3 py-1 text-sm text-destructive">
+              {workspace.error}
+            </p>
+          )}
+        </div>
+        <main className="flex min-h-0 flex-1" inert={workspace.pending ? true : undefined}>
           {showRail && apiKey && wsUrl && (
             <DrawingRail
               stats={railStats}
@@ -586,12 +854,22 @@ export default function Trading() {
               onUndo={() => act((t) => t.undoDraw())}
               onRedo={() => act((t) => t.redoDraw())}
               onRemove={(all) => act((t) => t.removeDrawings(all))}
-              onMagnet={(v) => setMagnet(v)}
-              onStay={(v) => setStay(v)}
+              onMagnet={(v) => {
+                setMagnet(v)
+                if (visibleGrid.current)
+                  for (const terminal of visibleGrid.current.terminals.values())
+                    terminal.setMagnet(v)
+              }}
+              onStay={(v) => {
+                setStay(v)
+                if (visibleGrid.current)
+                  for (const terminal of visibleGrid.current.terminals.values())
+                    terminal.setDrawStay(v)
+              }}
               onShortcut={onDrawKey}
             />
           )}
-          <div className="min-h-0 min-w-0 flex-1">
+          <div className="relative min-h-0 min-w-0 flex-1">
             {noApiKey ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                 <p className="text-sm text-muted-foreground">No API key found for charting.</p>
@@ -600,46 +878,97 @@ export default function Trading() {
                 </a>
               </div>
             ) : apiKey && wsUrl && linkGroup ? (
-              <div
-                className="grid h-full min-h-0 gap-2 p-2"
-                style={{
-                  gridTemplateColumns: layout.cols,
-                  gridTemplateRows: layout.rows,
-                  gridTemplateAreas: layout.areas,
-                }}
-              >
-                {layout.cells.map((cell, i) => (
-                  <ChartPane
-                    key={`p${i}`}
-                    paneId={`p${i}`}
+              <div className="relative h-full">
+                {!workspace.current && (
+                  <div
+                    key="unnamed"
+                    className="grid h-full min-h-0 gap-2 p-2"
+                    style={{
+                      gridTemplateColumns: layout.cols,
+                      gridTemplateRows: layout.rows,
+                      gridTemplateAreas: layout.areas,
+                    }}
+                  >
+                    {layout.cells.map((cell, i) => (
+                      <ChartPane
+                        key={`p${i}`}
+                        paneId={`p${i}`}
+                        apiKey={apiKey}
+                        wsUrl={wsUrl}
+                        style={{ gridArea: cell }}
+                        sharedTool={tool}
+                        sharedMagnet={magnet}
+                        sharedStay={stay}
+                        onWorkspaceChange={autosave.changed}
+                        onFocusPane={focusPane}
+                        onSymbolChange={(id, key) => {
+                          if (!visibleGrid.current) noteSymbol(id, key)
+                        }}
+                        onTerminalChange={noteTerminal}
+                        onObjectsChange={(id, objects) => {
+                          if (!visibleGrid.current) noteObjects(id, objects)
+                        }}
+                        onDrawStats={(value) => {
+                          if (!visibleGrid.current) setStats(value)
+                        }}
+                        onToggleRail={() => setShowRail((v) => !v)}
+                        railVisible={showRail}
+                        linkGroup={linkGroup}
+                        armed={armed}
+                        transitionLocked={workspace.pending}
+                        layoutPicker={
+                          i === 0 ? (
+                            <>
+                              {layoutPicker}
+                              {syncPicker}
+                              {workspaceMenu}
+                              <IndicatorTemplates
+                                key={account}
+                                {...workspaceCatalog}
+                                target={panelTarget}
+                              />
+                              {armedControl}
+                            </>
+                          ) : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+                {workspace.grids.map((owner) => (
+                  <WorkspaceGrid
+                    key={owner.key}
+                    owner={owner}
+                    active={workspace.current === owner}
                     apiKey={apiKey}
                     wsUrl={wsUrl}
-                    style={{ gridArea: cell }}
                     sharedTool={tool}
-                    sharedMagnet={magnet}
-                    sharedStay={stay}
+                    transitionLocked={workspace.pending}
+                    armed={armed}
+                    railVisible={showRail}
+                    onToggleRail={() => setShowRail((value) => !value)}
+                    onWorkspaceChange={autosave.changed}
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
-                    onTerminalChange={noteTerminal}
                     onObjectsChange={noteObjects}
                     onDrawStats={setStats}
-                    onToggleRail={() => setShowRail((v) => !v)}
-                    railVisible={showRail}
-                    linkGroup={linkGroup}
-                    armed={armed}
+                    onTerminalChange={(id, terminal) => {
+                      if (visibleGrid.current !== owner) return
+                      if (terminal) terminalsRef.current[id] = terminal
+                      else delete terminalsRef.current[id]
+                    }}
                     layoutPicker={
-                      i === 0 ? (
-                        <>
-                          {layoutPicker}
-                          {syncPicker}
-                          <IndicatorTemplates
-                            key={account}
-                            {...workspaceCatalog}
-                            target={panelTarget}
-                          />
-                          {armedControl}
-                        </>
-                      ) : undefined
+                      <>
+                        {layoutPicker}
+                        {syncPicker}
+                        {workspaceMenu}
+                        <IndicatorTemplates
+                          key={account}
+                          {...workspaceCatalog}
+                          target={panelTarget}
+                        />
+                        {armedControl}
+                      </>
                     }
                   />
                 ))}

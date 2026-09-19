@@ -4,6 +4,7 @@
 // control. Reserve the glyph for where it distinguishes something.
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
 import type { ChartObjects, LinkGroup } from 'openalgo-charts'
+import type { WorkspacePane } from 'openalgo-charts/workspace'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { GridIcon, PencilIcon, VolumeIcon } from '@/components/chart/menuIcons'
 import { Button } from '@/components/ui/button'
@@ -184,6 +185,11 @@ interface Props {
   paneId: string
   apiKey: string
   wsUrl: string
+  initialWorkspacePane?: WorkspacePane
+  transitionLocked?: boolean
+  onInitialized?(paneId: string, terminal: TradingTerminal): void
+  onInitializationError?(paneId: string, error: unknown): void
+  onWorkspaceChange?(): void
   /** Grid placement (e.g. `{ gridArea }`) applied to the pane's root. */
   style?: React.CSSProperties
   /**
@@ -244,6 +250,11 @@ export function ChartPane({
   paneId,
   apiKey,
   wsUrl,
+  initialWorkspacePane,
+  transitionLocked = false,
+  onInitialized,
+  onInitializationError,
+  onWorkspaceChange,
   style,
   sharedTool,
   sharedMagnet,
@@ -268,7 +279,15 @@ export function ChartPane({
    */
   const paneRef = useRef<HTMLElement>(null)
   const terminalRef = useRef<TradingTerminal | null>(null)
-  const aliveRef = useRef(true)
+  const workspaceCbRef = useRef(onWorkspaceChange)
+  workspaceCbRef.current = onWorkspaceChange
+  const preparedRef = useRef(false)
+  const initializedCbRef = useRef(onInitialized)
+  initializedCbRef.current = onInitialized
+  const initializationErrorCbRef = useRef(onInitializationError)
+  initializationErrorCbRef.current = onInitializationError
+  const lockedRef = useRef(transitionLocked)
+  lockedRef.current = transitionLocked
   const statsCbRef = useRef(onDrawStats)
   statsCbRef.current = onDrawStats
   // Held in a ref for the same reason as statsCbRef: the terminal's callbacks
@@ -375,114 +394,146 @@ export function ChartPane({
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
-    aliveRef.current = true
+    let current = true
+    preparedRef.current = false
+    setReady(false)
     let terminal: TradingTerminal | null = null
 
     const callbacks: TerminalCallbacks = {
+      onWorkspaceChange: () => {
+        if (current && preparedRef.current) workspaceCbRef.current?.()
+      },
       onReady: ({ intervalGroups: g, interval: iv, chartType: ct }) => {
-        if (!aliveRef.current) return
+        if (!current) return
         setIntervalGroups(g)
         setIntervalState(iv)
         setChartTypeState(ct)
-        setReady(true)
       },
       onToast: (msg, kind) => {
+        if (!current) return
         if (kind === 'ok') showToast.success(msg)
         else if (kind === 'err') showToast.error(msg)
         else showToast.info(msg)
       },
-      onIntervalChange: (iv) => aliveRef.current && setIntervalState(iv),
-      onWsState: (s) => aliveRef.current && setWsState(s),
+      onIntervalChange: (iv) => current && setIntervalState(iv),
+      onWsState: (s) => current && setWsState(s),
       onSymbolLoaded: (view) => {
-        if (!aliveRef.current) return
+        if (!current) return
         setSym(view)
         setQty(1)
         symbolCbRef.current?.(paneId, `${view.exchange}:${view.symbol}`)
+        if (preparedRef.current) workspaceCbRef.current?.()
       },
-      onBrandingChange: (link) => aliveRef.current && setBranding(link),
+      onBrandingChange: (link) => current && setBranding(link),
       onLtp: () => {}, // legend overlay + canvas render the live price
       onDrawChange: (s) => {
-        if (!aliveRef.current) return
+        if (!current) return
         statsCbRef.current?.(s)
         noteHistory(s)
       },
-      onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
-      onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
-      onChartSettings: (req) => aliveRef.current && setChartSettings(req),
-      onObjectsChange: (objects) => objectsCbRef.current?.(paneId, objects),
-      onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      onIndicatorsChange: (list) => current && setIndicators(list),
+      onIndicatorSettings: (req) => current && setIndSettings(req),
+      onChartSettings: (req) => current && setChartSettings(req),
+      onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
+      onDrawSelect: (sel) => current && setDrawSel(sel),
       // The legend readout is a second switch for the same thing as the context
       // menu row, so the menu label has to follow it.
-      onVolumeChange: (on) => aliveRef.current && setVolumeOn(on),
+      onVolumeChange: (on) => current && setVolumeOn(on),
       onReplayChange: (state) => {
-        if (!aliveRef.current) return
+        if (!current) return
         setReplay(state)
         setPicking(terminalRef.current?.replayPickingBar() ?? false)
         if (state === null) setConfirmLeave(false)
       },
       onDrawTextEdit: (r) => {
-        if (!aliveRef.current) return
+        if (!current) return
         // The ref, not the local: `terminal` is still unassigned while this
         // object literal is being built. Callbacks only fire after construction.
         const style = terminalRef.current?.drawTextStyle(r.id)
         if (style) setTextReq({ id: r.id, tool: r.tool, style })
       },
-      onOrderTicket: (req) => aliveRef.current && setTicket(req),
+      onOrderTicket: (req) => current && setTicket(req),
+    }
+
+    const release = () => {
+      current = false
+      preparedRef.current = false
+      terminalCbRef.current?.(paneId, null)
+      terminal?.destroy()
+      if (terminalRef.current === terminal) terminalRef.current = null
+    }
+    const fail = (error: unknown) => {
+      if (!current) return
+      release()
+      setReady(false)
+      if (initializationErrorCbRef.current) initializationErrorCbRef.current(paneId, error)
+      else showToast.error(error instanceof Error ? error.message : 'Chart initialization failed')
     }
 
     if (chartRef.current && legendRef.current) {
-      terminal = new TradingTerminal({
-        apiKey,
-        wsUrl,
-        container: chartRef.current,
-        legendEl: legendRef.current,
-        storageKey: `oa-trading-${paneId}`,
-        getTheme: () => {
-          const s = useThemeStore.getState()
-          return { mode: s.mode, appMode: s.appMode }
-        },
-        callbacks,
-      })
-      terminalRef.current = terminal
-      terminalCbRef.current?.(paneId, terminal)
-      terminal.setArmed(armedRef.current)
-      terminal.init()
-      terminal.setLinkGroup(linkGroup ?? null)
-      const stats0 = terminal.drawStats()
-      statsCbRef.current?.(stats0)
-      noteHistory(stats0)
-      setGrid(terminal.gridState())
-      setVolumeOn(terminal.volumeVisible())
+      try {
+        const owner = new TradingTerminal({
+          apiKey,
+          wsUrl,
+          container: chartRef.current,
+          legendEl: legendRef.current,
+          storageKey: `oa-trading-${paneId}`,
+          initialWorkspacePane,
+          getTheme: () => {
+            const s = useThemeStore.getState()
+            return { mode: s.mode, appMode: s.appMode }
+          },
+          callbacks,
+        })
+        terminal = owner
+        terminalRef.current = owner
+        owner.setWorkspaceTransitionLocked(lockedRef.current)
+        owner.setArmed(armedRef.current && !lockedRef.current)
+        terminalCbRef.current?.(paneId, owner)
+        owner.setLinkGroup(linkGroup ?? null)
+        void owner
+          .init()
+          .then(() => {
+            if (!current) return
+            preparedRef.current = true
+            const stats = owner.drawStats()
+            statsCbRef.current?.(stats)
+            noteHistory(stats)
+            setGrid(owner.gridState())
+            setVolumeOn(owner.volumeVisible())
+            setReady(true)
+            initializedCbRef.current?.(paneId, owner)
+          })
+          .catch(fail)
+      } catch (error) {
+        fail(error)
+      }
     }
 
     return () => {
-      aliveRef.current = false
-      terminalCbRef.current?.(paneId, null)
-      terminal?.destroy()
-      terminalRef.current = null
+      if (current) release()
     }
-    // linkGroup is owned by the page's effect, so its identity
-    // is stable and listing it here does not re-run the boot effect.
-  }, [paneId, apiKey, wsUrl, noteHistory, linkGroup])
+  }, [paneId, apiKey, wsUrl, noteHistory, linkGroup, initialWorkspacePane])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
   useEffect(() => {
-    if (sharedTool === undefined) return
+    if (sharedTool === undefined || (initialWorkspacePane && !preparedRef.current)) return
     void terminalRef.current?.setDrawTool(sharedTool)
-  }, [sharedTool])
+  }, [sharedTool, initialWorkspacePane])
   useEffect(() => {
-    if (sharedMagnet === undefined) return
+    if (sharedMagnet === undefined || (initialWorkspacePane && !preparedRef.current)) return
     terminalRef.current?.setMagnet(sharedMagnet)
-  }, [sharedMagnet])
+  }, [sharedMagnet, initialWorkspacePane])
 
   useEffect(() => {
-    if (sharedStay === undefined) return
+    if (sharedStay === undefined || (initialWorkspacePane && !preparedRef.current)) return
     terminalRef.current?.setDrawStay(sharedStay)
-  }, [sharedStay])
+  }, [sharedStay, initialWorkspacePane])
   /* ── follow the page-level One-Click switch ───────────────────────────── */
   useEffect(() => {
-    terminalRef.current?.setArmed(armed)
-  }, [armed])
+    terminalRef.current?.setWorkspaceTransitionLocked(transitionLocked)
+    terminalRef.current?.setArmed(armed && !transitionLocked)
+  }, [armed, transitionLocked])
 
   /* ── keep the canvas theme in sync with the app theme ─────────────────── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: mode/appMode are the trigger — the effect re-themes the canvas whenever the app theme changes
@@ -623,6 +674,15 @@ export function ChartPane({
       data-trading-dialog-open={paneDialogOpen ? 'true' : undefined}
       style={style}
       className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+      onPointerUpCapture={() => {
+        if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
+      }}
+      onWheelCapture={() => {
+        if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
+      }}
+      onKeyUpCapture={() => {
+        if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
+      }}
       onPointerDownCapture={(event) => {
         // Workspace controls keep the chart selected before the control opened.
         if ((event.target as Element).closest('[data-workspace-control]')) return

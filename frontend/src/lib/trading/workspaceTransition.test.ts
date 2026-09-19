@@ -20,6 +20,85 @@ async function flush() {
 }
 
 describe('transactional workspace ownership', () => {
+  it('retains the published grid and unlocks when the previous grid cleanup throws', async () => {
+    const old = grid(),
+      next = grid(),
+      pending = vi.fn(),
+      cleanup = vi.fn()
+    const failure = new Error('Old feed cleanup failed')
+    old.destroy.mockImplementation(() => {
+      throw failure
+    })
+    const owner = new WorkspaceTransition(old, pending, cleanup)
+    await expect(
+      owner.open(
+        () => next,
+        async () => {},
+        () => {}
+      )
+    ).resolves.toBe(next)
+    expect(next.destroy).not.toHaveBeenCalled()
+    expect(pending).toHaveBeenLastCalledWith(false)
+    expect(cleanup).toHaveBeenCalledWith(failure)
+    owner.destroy()
+    expect(next.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('unlocks after a cancelled staging cleanup throws and can open another grid', async () => {
+    const old = grid(),
+      staging = grid(new Promise(() => {})),
+      next = grid()
+    const pending = vi.fn(),
+      cleanup = vi.fn()
+    staging.destroy.mockImplementation(() => {
+      throw new Error('Staging cleanup failed')
+    })
+    const owner = new WorkspaceTransition(old, pending, cleanup)
+    const opening = owner.open(
+      () => staging,
+      async () => {},
+      () => {}
+    )
+    const rejected = expect(opening).rejects.toThrow(/cancel/i)
+    expect(() => owner.cancel()).not.toThrow()
+    await rejected
+    expect(pending).toHaveBeenLastCalledWith(false)
+    expect(old.destroy).not.toHaveBeenCalled()
+    expect(cleanup).toHaveBeenCalledOnce()
+    await expect(
+      owner.open(
+        () => next,
+        async () => {},
+        () => {}
+      )
+    ).resolves.toBe(next)
+    owner.destroy()
+  })
+
+  it('releases the active grid on teardown even when pending cleanup throws', async () => {
+    const old = grid(),
+      staging = grid(new Promise(() => {}))
+    staging.destroy.mockImplementation(() => {
+      throw new Error('Staging cleanup failed')
+    })
+    const owner = new WorkspaceTransition(
+      old,
+      () => {},
+      () => {}
+    )
+    const opening = owner.open(
+      () => staging,
+      async () => {},
+      () => {}
+    )
+    const rejected = expect(opening).rejects.toThrow(/cancel/i)
+    expect(() => owner.destroy()).not.toThrow()
+    await rejected
+    owner.destroy()
+    expect(old.destroy).toHaveBeenCalledOnce()
+    expect(staging.destroy).toHaveBeenCalledOnce()
+  })
+
   it('releases a grid even when its factory cancels ownership before returning', async () => {
     const old = grid(),
       next = grid(),
