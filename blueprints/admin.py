@@ -28,6 +28,7 @@ from database.qty_freeze_db import (
 from database.qty_freeze_db import db_session as freeze_db_session
 from limiter import limiter
 from utils.logging import get_logger
+from utils.safe_redirect import safe_local_redirect_target
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
@@ -42,7 +43,11 @@ admin_bp = Blueprint("admin_bp", __name__, url_prefix="/admin")
 def ratelimit_handler(e):
     """Handle rate limit exceeded errors"""
     flash("Rate limit exceeded. Please try again later.", "error")
-    return redirect(request.referrer or url_for("admin_bp.index"))
+    # "admin_bp.index" doesn't exist: the Jinja admin routes were migrated to
+    # React, and the admin dashboard is now served by react.react_admin_index.
+    fallback = url_for("react.react_admin_index")
+    target = safe_local_redirect_target(request.referrer, fallback, request.host)
+    return redirect(target)
 
 
 # ============================================================================
