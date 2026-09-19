@@ -1,0 +1,55 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openalgo
+
+resources:
+  - namespace.yaml
+  - pvcs.yaml
+  - configmap.yaml
+  # secrets-template.yaml is intentionally NOT included here.
+  # Users MUST copy it to secrets.yaml and configure before deploying
+  # This prevents accidental deployment with placeholder credentials
+  - statefulset.yaml
+  - service.yaml
+  - ingress.yaml
+  - secrets.yaml
+  - networkpolicy.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: openalgo
+  app.kubernetes.io/version: "1.0.0"
+  app.kubernetes.io/managed-by: kustomize
+
+# Metadata applied to all resources
+commonAnnotations:
+  description: "OpenAlgo Algorithmic Trading Platform"
+
+# Image configurations (uncomment and customize)
+# images:
+#   - name: openalgo
+#     newName: your-registry.com/openalgo
+#     newTag: v1.0.0
+
+# ConfigMap generator (alternative to configmap.yaml)
+# configMapGenerator:
+#   - name: openalgo-config
+#     literals:
+#       - FLASK_ENV=production
+#       - FLASK_DEBUG=0
+
+# Secret generator (DO NOT USE for actual secrets, use external secret management)
+# secretGenerator:
+#   - name: openalgo-secret
+#     files:
+#       - .env=path/to/.env
+
+# Patches for environment-specific customizations
+# patchesStrategicMerge:
+#   - overlays/production.yaml
+
+# Replicas (for Deployment only, not StatefulSet with SQLite)
+# replicas:
+#   - name: openalgo
+#     count: 1

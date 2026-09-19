@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openalgo
+  namespace: openalgo
+  labels:
+    app: openalgo
+  annotations:
+    # Uncomment and configure based on your ingress controller
+    
+    # For nginx ingress controller:
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    
+    # For WebSocket support:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "openalgo"
+    
+    # For cert-manager (automatic TLS):
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    
+    # For Traefik ingress controller:
+    # traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: nginx  # Change to your ingress class: nginx, traefik, etc.
+  
+  # TLS configuration (uncomment and configure your domain)
+  # tls:
+  # - hosts:
+  #   - openalgo.yourdomain.com
+  #   secretName: openalgo-tls
+  
+  rules:
+  - host: openalgo.yourdomain.com  # CHANGE THIS to your actual domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openalgo
+            port:
+              number: 5000
+  
+  # Alternative: Access via IP (for testing)
+  # - http:
+  #     paths:
+  #     - path: /
+  #       pathType: Prefix
+  #       backend:
+  #         service:
+  #           name: openalgo
+  #           port:
+  #             number: 5000
