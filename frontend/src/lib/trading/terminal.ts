@@ -68,6 +68,11 @@ import {
   readStoredIndicators,
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
+import {
+  createWorkspacePanePreferences,
+  parseTerminalWorkspacePane,
+  validateWorkspacePaneSupport,
+} from './workspaceState'
 
 export { dedupeIndicators } from './indicatorTemplates'
 
@@ -501,6 +506,8 @@ export interface TerminalOptions {
   storageKey?: string
   /** Isolated preferences for prepared panes; null disables persistence. Defaults to browser storage. */
   preferences?: Pick<Storage, 'getItem' | 'setItem'> | null
+  /** A named workspace starts in isolated preferences and rejects incomplete restoration. */
+  initialWorkspacePane?: WorkspacePane
   /** Reads the app's current theme so the canvas chrome tracks it. */
   getTheme: () => { mode: ThemeMode; appMode: AppMode }
   callbacks: TerminalCallbacks
@@ -689,6 +696,7 @@ export class TradingTerminal {
   private drawLegacy: readonly unknown[] | null = null
   private drawTool: string | null = null
   private drawMagnet = false
+  private drawMagnetMode: 'off' | 'weak' | 'strong' = 'off'
   private drawStay = false
   /** True once a drawing control has been touched — gates the lazy tier fetch. */
   private drawEnabled = false
@@ -857,12 +865,21 @@ export class TradingTerminal {
   /** Serialises agent chart commands. See {@link applyChartCommands}. */
   private chartCommandQueue: Promise<void> = Promise.resolve()
   private destroyed = false
+  private initialWorkspacePane: WorkspacePane | null = null
+  private preparingWorkspace = false
 
   private readonly onVisibilityChange = () => {
     this.data?.setVisible(document.visibilityState !== 'hidden')
   }
 
   constructor(opts: TerminalOptions) {
+    const initial = opts.initialWorkspacePane
+      ? parseTerminalWorkspacePane(opts.initialWorkspacePane)
+      : null
+    if (initial && !CHART_TYPES[initial.chartType])
+      throw new Error(`Unsupported workspace chart type: ${initial.chartType}`)
+    this.initialWorkspacePane = initial
+    this.preparingWorkspace = initial !== null
     this.apiKey = opts.apiKey
     this.wsUrl = opts.wsUrl
     this.container = opts.container
@@ -871,7 +888,7 @@ export class TradingTerminal {
     this.getTheme = opts.getTheme
     this.cb = opts.callbacks
     this.sk = opts.storageKey || 'oa-trading'
-    this.preferences = opts.preferences
+    this.preferences = initial ? createWorkspacePanePreferences(initial, this.sk) : opts.preferences
     this.interval = this.lsGet('interval') || '5m'
     this.ctype = this.lsGet('ctype') || 'candlestick'
     this.restoreChartTools()
@@ -1489,7 +1506,7 @@ export class TradingTerminal {
   async placeTicket(order: ConfirmedOrder): Promise<{ orderId: string }> {
     // The ticket was refused before it opened; this covers a replay started
     // while it stood open. No toast here: the dialog shows the reason.
-    if (this.tradingLocked()) throw new Error('Replay is a simulation. Leave replay to trade.')
+    if (this.tradingLocked()) throw new Error(this.tradingLockMessage())
     if (!this.trade) throw new Error('trading is not available')
     const stop = order.pricetype === 'SL' || order.pricetype === 'SL-M'
     try {
@@ -1761,7 +1778,7 @@ export class TradingTerminal {
     // reason -- `restoreChartSettings` and the grid re-apply further down both
     // write to this chart, and an awaited snapshot would land after them.
     this.snapshotChartDefaults()
-    void this.restoreChartSettings()
+    if (!this.preparingWorkspace) void this.restoreChartSettings()
     // A theme or chart-type switch throws the old Chart away, so membership has
     // to be re-established against the new one or the pane silently drops out
     // of the group it still believes it is in.
@@ -1893,8 +1910,10 @@ export class TradingTerminal {
 
     // Re-apply everything the rebuild just discarded.
     this.chart.setGridOptions({ vertLines: this.gridV, horzLines: this.gridH })
-    if (this.drawEnabled) void this.attachDrawing()
-    if (this.activeIndicators.length) void this.applyIndicators()
+    if (!this.preparingWorkspace) {
+      if (this.drawEnabled) void this.attachDrawing()
+      if (this.activeIndicators.length) void this.applyIndicators()
+    }
     // The gear on an indicator's legend row. openalgo-charts is canvas-only and
     // ships no DOM, so it emits and the host renders the form.
     this.chart.on('indicatorSettings', (p) => {
@@ -1989,6 +2008,14 @@ export class TradingTerminal {
       /* ignore */
     }
     this.drawMagnet = this.lsGet('magnet') === '1'
+    const magnetMode = this.lsGet('magnet-mode')
+    this.drawMagnetMode =
+      magnetMode === 'weak' || magnetMode === 'strong' || magnetMode === 'off'
+        ? magnetMode
+        : this.drawMagnet
+          ? 'strong'
+          : 'off'
+    this.drawMagnet = this.drawMagnetMode !== 'off'
     this.drawStay = this.lsGet('stay') === '1'
     const grid = this.lsGet('grid')
     if (grid && grid.length === 2) {
@@ -2133,6 +2160,7 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
+    const chart = this.chart
     const {
       DrawingController,
       drawingShortcuts,
@@ -2143,9 +2171,9 @@ export class TradingTerminal {
     } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
-    if (this.destroyed || !this.chart || this.draw) return
+    if (this.destroyed || this.chart !== chart || this.draw) return
     const draw = new DrawingController(this.chart, {
-      magnet: this.drawMagnet,
+      magnet: this.drawMagnetMode,
       stayInDrawingMode: this.drawStay,
     })
     this.draw = draw
@@ -2473,8 +2501,10 @@ export class TradingTerminal {
   /** Snap drawing anchors to the hovered bar's O/H/L/C. */
   setMagnet(on: boolean): void {
     this.drawMagnet = on
+    this.drawMagnetMode = on ? 'strong' : 'off'
     this.draw?.setOptions({ magnet: on })
     this.lsSet('magnet', on ? '1' : '0')
+    this.lsSet('magnet-mode', this.drawMagnetMode)
     this.cb.onDrawChange?.(this.drawStats())
   }
 
@@ -2955,7 +2985,7 @@ export class TradingTerminal {
    * time. A malformed entry is dropped: a stale setting must never stop the
    * terminal booting.
    */
-  private async restoreChartSettings(): Promise<void> {
+  private async restoreChartSettings(strict = false): Promise<void> {
     const chart = this.chart
     if (!chart || !Object.keys(this.chartSettingsSaved).length) return
     try {
@@ -2971,7 +3001,8 @@ export class TradingTerminal {
       )
       this.installProfile()
       this.refreshDisplayedVolume()
-    } catch {
+    } catch (error) {
+      if (strict) throw error
       /* ignore */
     }
   }
@@ -3034,7 +3065,8 @@ export class TradingTerminal {
           chart: { ...chart.getState(), drawings: this.draw?.toJSON() ?? this.drawJson },
           settings: this.chartSettingsSaved,
           volume: this.volumeOn,
-          magnet: this.draw?.magnetMode() ?? (this.drawMagnet ? 'strong' : 'off'),
+          magnet:
+            this.draw?.magnetMode() ?? this.drawMagnetMode ?? (this.drawMagnet ? 'strong' : 'off'),
           stay: this.drawStay,
           comparisons: [],
           comparisonMode: 'price',
@@ -3308,13 +3340,19 @@ export class TradingTerminal {
    * did not use.
    */
   private tradingLocked(): boolean {
-    return this.replay !== null || this.replayPicking
+    return this.preparingWorkspace || this.replay !== null || this.replayPicking
+  }
+
+  private tradingLockMessage(): string {
+    return this.preparingWorkspace
+      ? 'Workspace is loading. Wait for it to finish before trading.'
+      : 'Replay is a simulation. Leave replay to trade.'
   }
 
   /** Says no once, in the words of the reason, rather than doing nothing. */
   private refuseWhileReplaying(): boolean {
     if (!this.tradingLocked()) return false
-    this.toast('Replay is a simulation. Leave replay to trade.', 'err')
+    this.toast(this.tradingLockMessage(), 'err')
     return true
   }
 
@@ -4045,7 +4083,10 @@ export class TradingTerminal {
     return true
   }
 
-  async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
+  async loadSymbol(
+    pick: SearchRow,
+    opts: { silent?: boolean; strict?: boolean } = {}
+  ): Promise<boolean> {
     if (this.destroyed || !this.rest) return false
     /**
      * Claim this load. Two awaits follow -- the symbol lookup and the bars --
@@ -4099,8 +4140,14 @@ export class TradingTerminal {
         symbol: pick.symbol,
         exchange: pick.exchange,
       })
+      if (
+        opts.strict &&
+        (!j.data || j.data.symbol !== pick.symbol || j.data.exchange !== pick.exchange)
+      )
+        throw new Error(`Workspace symbol metadata is unavailable: ${pick.exchange}:${pick.symbol}`)
       info = { ...pick, ...(j.data || {}) }
-    } catch {
+    } catch (error) {
+      if (opts.strict) throw error
       /* search row already carries the essentials */
     }
     // A newer load claimed the pane while this one was waiting.
@@ -4549,7 +4596,94 @@ export class TradingTerminal {
   }
 
   /* ── bootstrap + teardown ─────────────────────────────────────────────── */
-  async init() {
+  private assertWorkspacePreparation(chart?: ChartInstance): void {
+    if (this.destroyed || !this.preparingWorkspace)
+      throw new Error('Workspace preparation was cancelled')
+    if (chart && this.chart !== chart) throw new Error('Workspace chart changed during preparation')
+  }
+
+  private async restoreInitialWorkspace(pane: WorkspacePane): Promise<void> {
+    const chart = this.chart
+    if (!chart) throw new Error('Workspace chart is unavailable')
+    this.assertWorkspacePreparation(chart)
+    const context = chart.getDataContext()
+    if (
+      context?.symbol !== pane.symbol ||
+      context.exchange !== pane.exchange ||
+      context.interval !== pane.interval
+    )
+      throw new Error('Workspace chart context changed during preparation')
+    await this.restoreChartSettings(true)
+    this.assertWorkspacePreparation(chart)
+    this.applyingIndicators = true
+    try {
+      const report = chart.restoreState(pane.chart)
+      if (!report.applied || report.indicators !== (pane.chart.indicators?.length ?? 0))
+        throw new Error('Workspace studies and settings could not be restored completely')
+      // Host series own their data; the engine returns only style descriptors.
+      const primary = report.series.find(
+        (series) =>
+          series.paneIndex === 0 &&
+          series.priceScaleId === 'right' &&
+          series.type === CHART_TYPES[pane.chartType].series
+      )
+      if (primary) this.price?.applyOptions(primary.style)
+      const volume = report.series.find(
+        (series) =>
+          series.paneIndex === 0 && series.priceScaleId === '' && series.type === 'histogram'
+      )
+      if (volume) this.volume?.applyOptions(volume.style)
+      const average = report.series.find(
+        (series) => series.paneIndex === 0 && series.priceScaleId === '' && series.type === 'line'
+      )
+      if (average) this.volumeMA?.applyOptions(average.style)
+      // The host volume switch stays authoritative across future chart rebuilds.
+      this.setVolumeVisible(pane.volume)
+    } finally {
+      this.applyingIndicators = false
+    }
+    this.syncIndicators()
+    const document = pane.chart.drawings ?? emptyDrawings()
+    if (!isDrawingsDocument(document)) throw new Error('Unsupported workspace drawing document')
+    if (document.drawings.length) {
+      const { migrateDrawings, getDrawingTool } = await import('openalgo-charts/draw')
+      this.assertWorkspacePreparation(chart)
+      const migrated = migrateDrawings(document)
+      const ids = new Set(document.drawings.map((drawing) => drawing.id))
+      if (
+        migrated.drawings.length !== document.drawings.length ||
+        ids.size !== document.drawings.length ||
+        migrated.drawings.some(
+          (drawing, index) =>
+            drawing.id !== document.drawings[index].id ||
+            !getDrawingTool(drawing.tool) ||
+            drawing.paneIndex >= chart.panes().length
+        )
+      )
+        throw new Error('Workspace drawings could not be restored completely')
+      this.drawJson = migrated
+      this.drawEnabled = true
+      await this.attachDrawing()
+      this.assertWorkspacePreparation(chart)
+      if (this.draw?.toJSON().drawings.length !== migrated.drawings.length)
+        throw new Error('Workspace drawings could not be restored completely')
+    }
+  }
+
+  async init(): Promise<void> {
+    try {
+      await this.initialize()
+    } catch (error) {
+      if (this.initialWorkspacePane) this.destroy()
+      throw error
+    }
+  }
+
+  private async initialize(): Promise<void> {
+    if (this.destroyed) {
+      if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
+      return
+    }
     this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
     this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
     this.exprFeed = new ExpressionFeed(this.cachedBars, () => this.exprLegExchange)
@@ -4580,14 +4714,35 @@ export class TradingTerminal {
     try {
       const j = await this.api<{ data?: IntervalData }>('intervals')
       groups = intervalGroups(j.data || {})
-    } catch {
+    } catch (error) {
+      if (this.initialWorkspacePane) throw error
       groups = intervalGroups({ minutes: ['1m', '5m', '15m'], hours: ['1h'], days: ['D'] })
     }
     // The pane may have closed while intervals loaded. Do not reopen its resources.
-    if (this.destroyed) return
-    this.interval = pickInterval(groups, this.lsGet('interval'))
+    if (this.destroyed) {
+      if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
+      return
+    }
     this.availableIntervals = groups.flatMap((group) => group.items)
-    if (isProfileKind(this.ctype)) {
+    if (this.initialWorkspacePane) {
+      const pane = this.initialWorkspacePane
+      await this.loadIndicators()
+      this.assertWorkspacePreparation()
+      validateWorkspacePaneSupport(pane, {
+        chartTypes: new Set(Object.keys(CHART_TYPES)),
+        intervals: new Set(this.availableIntervals),
+        indicators: new Set(registeredIndicators().map((study) => study.id)),
+      })
+      if (
+        isProfileKind(this.ctype) &&
+        !profileIntervalSupported(this.ctype, pane.interval, this.profileBlockMinutes())
+      )
+        throw new Error(`Unsupported workspace profile interval: ${pane.interval}`)
+      this.interval = pane.interval
+    } else {
+      this.interval = pickInterval(groups, this.lsGet('interval'))
+    }
+    if (!this.initialWorkspacePane && isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval) this.interval = interval
       else this.ctype = 'candlestick'
@@ -4652,6 +4807,29 @@ export class TradingTerminal {
     if (this.bookTimer) clearInterval(this.bookTimer)
     this.bookTimer = setInterval(() => this.pollBook(), 8000)
 
+    if (this.initialWorkspacePane) {
+      const pane = this.initialWorkspacePane
+      const rows = isChartExpression(pane.symbol)
+        ? [{ symbol: pane.symbol, exchange: pane.exchange, expression: true }]
+        : await this.search(pane.symbol, pane.exchange)
+      this.assertWorkspacePreparation()
+      const row = rows.find(
+        (value) => value.symbol === pane.symbol && value.exchange === pane.exchange
+      )
+      if (!row) throw new Error(`Workspace symbol is unavailable: ${pane.exchange}:${pane.symbol}`)
+      const loaded = await this.loadSymbol(row, { silent: true, strict: true })
+      this.assertWorkspacePreparation()
+      if (!loaded)
+        throw new Error(
+          `Workspace history is unavailable: ${pane.exchange}:${pane.symbol} ${pane.interval}`
+        )
+      await this.restoreInitialWorkspace(pane)
+      this.assertWorkspacePreparation()
+      this.initialWorkspacePane = null
+      this.preparingWorkspace = false
+      return
+    }
+
     // restore the last symbol; fall back to BHEL/NSE if it's gone or has no data.
     let loaded = false
     try {
@@ -4679,6 +4857,7 @@ export class TradingTerminal {
   }
 
   destroy() {
+    if (this.destroyed) return
     this.destroyed = true
     this.offBranding?.()
     this.offBranding = null
