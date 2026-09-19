@@ -40,6 +40,7 @@ export function createWorkspacePanePreferences(
       chartsettings: JSON.stringify(pane.settings),
       indicators: JSON.stringify({ version: 2, indicators: pane.chart.indicators ?? [] }),
       draw: JSON.stringify(pane.chart.drawings ?? { version: 2, drawings: [] }),
+      alerts: JSON.stringify(pane.chart.alerts ?? { version: 1, alerts: [] }),
     }).map(([key, value]) => [`${namespace}-${key}`, value])
   )
   return {

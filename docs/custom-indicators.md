@@ -377,6 +377,15 @@ crossing the moment you add the indicator. Listen with:
 chart.on('indicator:alert', ({ indicatorId, alertId, title, message, time, index }) => { ... })
 ```
 
+The terminal's **Alerts** editor also lets a trader select a particular study
+instance and one of its plots. Its default **Bar close** policy evaluates the
+confirmed candle when the next candle arrives. **Intrabar touch** may fire for
+a reading that disappears before the candle closes. Missing plot readings do
+not become zero. These trader-created conditions use `alert:triggered` and
+share `alertId`, `title`, `message`, `time` and `index` with descriptor alerts.
+The terminal displays local notices and suppresses delivery during replay and
+primary-history transitions. Alert events do not submit orders.
+
 ## Candles as a plot
 
 A plot can be fed by four columns instead of one, which is how a Heikin Ashi or

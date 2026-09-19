@@ -11,6 +11,18 @@ const ema = (period = 9): IndicatorState => ({
 const available = new Set(['ema', 'rsi', 'macd'])
 
 describe('indicator template planning', () => {
+  it('keeps existing study identities but gives imported template studies fresh identities', () => {
+    const existing = { ...ema(), instanceId: 'anchored-study' }
+    const incoming = { ...ema(21), instanceId: 'anchored-study' }
+    const appended = planIndicatorTemplate([existing], [incoming], 'append', available, 1)
+    expect(appended[0].instanceId).toBe('anchored-study')
+    expect(appended[1]).not.toHaveProperty('instanceId')
+    expect(
+      planIndicatorTemplate([existing], [incoming], 'replace', available, 1)[0]
+    ).not.toHaveProperty('instanceId')
+    expect(incoming.instanceId).toBe('anchored-study')
+  })
+
   it('retains identical instances, visibility and detached plot settings', () => {
     const input = [ema(), { ...ema(), visible: false }, ema(21)]
     const result = planIndicatorTemplate([], input, 'replace', available, 1)

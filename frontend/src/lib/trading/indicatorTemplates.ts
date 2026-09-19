@@ -4,6 +4,7 @@ import { parseIndicatorStates, WorkspaceDocumentError } from 'openalgo-charts/wo
 export type IndicatorTemplateMode = 'replace' | 'append'
 
 export interface StoredIndicatorRecord {
+  instanceId?: string
   indicatorId: string
   settings: Record<string, unknown>
   visible?: boolean
@@ -79,6 +80,8 @@ export function planIndicatorTemplate(
   }
   const previous = parseIndicatorStates(current)
   const additions = parseIndicatorStates(incoming)
+  // Templates copy study settings; existing alerts must keep their original anchors.
+  for (const item of additions) delete item.instanceId
   if (mode === 'append') {
     if (!Number.isInteger(nextPaneIndex) || nextPaneIndex < 1 || nextPaneIndex > 32) {
       throw new WorkspaceDocumentError('Invalid next indicator pane')

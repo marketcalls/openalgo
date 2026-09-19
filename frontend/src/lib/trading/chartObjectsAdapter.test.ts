@@ -26,6 +26,27 @@ function source(item: ChartObjectDrawing): ChartObjectDrawingSource {
 }
 
 describe('CurrentDrawingSource', () => {
+  it('resolves alert geometry only from the current drawing controller', () => {
+    const current = new CurrentDrawingSource()
+    expect(current.alertInfo('line').available).toBe(false)
+    expect(current.valueAt('line', 10)).toBeUndefined()
+    const first = {
+      ...source(drawing('line')),
+      alertInfo: () => ({ available: true, paneIndex: 0, levels: [{ id: 'line', title: 'Line' }] }),
+      valueAt: vi.fn(() => ({ price: 123, paneIndex: 0 })),
+    }
+    current.attach(first)
+    expect(current.alertInfo('line').available).toBe(true)
+    expect(current.valueAt('line', 10, 'line')?.price).toBe(123)
+    expect(first.valueAt).toHaveBeenCalledWith('line', 10, 'line')
+    const second = { ...first, valueAt: () => ({ price: 456, paneIndex: 0 }) }
+    current.attach(second)
+    current.detach(first)
+    expect(current.valueAt('line', 10)?.price).toBe(456)
+    current.detach(second)
+    expect(current.alertInfo('line').available).toBe(false)
+  })
+
   it('is an inert structural source before the lazy drawing tier attaches', () => {
     const current = new CurrentDrawingSource()
 

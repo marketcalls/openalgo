@@ -267,7 +267,13 @@ function TradingWorkspace({ account }: { account: string | null }) {
     () =>
       workspacePending.current ||
       Object.values(terminalsRef.current).some(
-        (t) => t !== null && (t.replayActive() || t.replayPickingBar())
+        (t) =>
+          t !== null &&
+          (t.replayActive() ||
+            t.replayPickingBar() ||
+            t.replayLoadingBars() ||
+            t.dataUnavailable() ||
+            t.alertDialogOpen())
       ),
     []
   )

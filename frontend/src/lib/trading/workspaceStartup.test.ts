@@ -46,6 +46,11 @@ function create(initialWorkspacePane = saved()) {
   const terminal = new TradingTerminal(options as TerminalOptions)
   terminals.push(terminal)
   const chart = {
+    on: vi.fn(() => () => {}),
+    emit: vi.fn(),
+    primaryBars: () => [],
+    alertState: () => initialWorkspacePane.chart.alerts,
+    setAlertState: vi.fn(),
     panes: () => [{}],
     getDataContext: () => ({ symbol: 'BHEL', exchange: 'NSE', interval: '15m' }),
     restoreState: vi.fn(() => ({

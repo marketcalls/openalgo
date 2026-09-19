@@ -389,6 +389,7 @@ export function ChartPane({
   const [replay, setReplay] = useState<ReplayState | null>(null)
   /** True while a start bar is being chosen, before replay owns the data. */
   const [picking, setPicking] = useState(false)
+  const [replayLoading, setReplayLoading] = useState(false)
   /** The confirm shown on leaving: the playhead is the only record of the walk. */
   const [confirmLeave, setConfirmLeave] = useState(false)
 
@@ -443,6 +444,7 @@ export function ChartPane({
         if (!current) return
         setReplay(state)
         setPicking(terminalRef.current?.replayPickingBar() ?? false)
+        setReplayLoading(terminalRef.current?.replayLoadingBars() ?? false)
         if (state === null) setConfirmLeave(false)
       },
       onDrawTextEdit: (r) => {
@@ -828,6 +830,16 @@ export function ChartPane({
           )}
         </Button>
 
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0"
+          title="Alerts"
+          onClick={() => void terminalRef.current?.openAlerts()}
+        >
+          Alerts
+        </Button>
+
         {/* The layout picker sits here, immediately after Indicators, because
             that is where a chart terminal puts it. It is page-level, so only
             the first pane is given one. */}
@@ -839,18 +851,24 @@ export function ChartPane({
         <Button
           variant="outline"
           size="sm"
-          className={cn('h-8 shrink-0 gap-1', (replay || picking) && 'border-primary text-primary')}
+          className={cn(
+            'h-8 shrink-0 gap-1',
+            (replay || picking || replayLoading) && 'border-primary text-primary'
+          )}
           onClick={() => {
             if (replay) setConfirmLeave(true)
+            else if (replayLoading) terminalRef.current?.stopReplay()
             else if (picking) terminalRef.current?.cancelReplayPick()
             else terminalRef.current?.startReplay()
           }}
           title={
             replay
               ? 'Leave replay'
-              : picking
-                ? 'Cancel bar selection'
-                : 'Replay this session from a bar you pick'
+              : replayLoading
+                ? 'Cancel replay loading'
+                : picking
+                  ? 'Cancel bar selection'
+                  : 'Replay this session from a bar you pick'
           }
         >
           <ReplayIcon className="h-4 w-4" />
@@ -1045,11 +1063,13 @@ export function ChartPane({
           everything to its right is greyed while it is being picked: choosing a
           start with the next twenty bars readable is choosing on hindsight.
         */}
-        {picking && (
+        {(picking || replayLoading) && (
           <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-popover/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
             <span>
-              <span className="font-medium">Select a bar</span>{' '}
-              <span className="text-muted-foreground">to replay from</span>
+              <span className="font-medium">
+                {replayLoading ? 'Loading replay history' : 'Select a bar'}
+              </span>{' '}
+              {!replayLoading && <span className="text-muted-foreground">to replay from</span>}
             </span>
             <button
               type="button"

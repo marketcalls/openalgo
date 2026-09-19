@@ -72,6 +72,7 @@ describe('prepared workspace configuration', () => {
       version: 2,
       indicators: input.chart.indicators,
     })
+    expect(JSON.parse(storage.getItem('staged-p0-alerts')!)).toEqual({ version: 1, alerts: [] })
     expect(JSON.parse(storage.getItem('staged-p0-chartsettings')!)).toEqual({
       'volume.maPeriod': 20,
     })

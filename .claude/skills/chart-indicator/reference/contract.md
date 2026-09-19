@@ -132,13 +132,33 @@ title, message, time, index }`.
 
 `ctx.emit(event, payload)` on the attach context covers the imperative case.
 
+The development candidate also exports `AlertController` for trader-created
+price, study-plot, drawing and named candle conditions. These use
+`alert:triggered`, whose delivery fields `alertId`, `title`, `message`, `time`
+and `index` match the descriptor event above. The terminal displays both locally;
+neither event places an order. A trader alert defaults to `onBarClose` and
+`once`. Descriptor alerts retain their existing timing contract.
+
+Saved chart studies carry `instanceId` so plot alerts restore to the same study.
+An indicator template deliberately drops this identity when creating a new
+instance. Custom hosts must restore drawings before their alerts and retain
+unrelated alert/drawing documents when applying a partial chart restore.
+
 ## Bars
 
 ```js
 { time: number,   // UTC SECONDS, not milliseconds
   open: number, high: number, low: number, close: number,
-  volume?: number }
+  volume?: number,
+  oi?: number }
 ```
+
+`oi` is a level, not a flow. When folding bars, retain the latest defined
+reading in the bucket and never sum readings. Zero is a real value; absence
+means unavailable. Instrument capability is separate from per-bar availability:
+`chart.hasOpenInterest` is true for a supported instrument, false for an
+unsupported one, and undefined when metadata is unknown. A supported instrument
+can still have no reading on its forming candle.
 
 `volume` is genuinely optional. Index series carry none, so guard any divide by
 it.

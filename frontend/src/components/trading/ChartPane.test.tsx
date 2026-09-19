@@ -1,7 +1,7 @@
 import type { WorkspacePane } from 'openalgo-charts/workspace'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SymbolView, TerminalOptions } from '@/lib/trading/terminal'
-import { act, cleanup, render } from '@/test/test-utils'
+import { act, cleanup, fireEvent, render } from '@/test/test-utils'
 import { ChartPane } from './ChartPane'
 
 interface Owner {
@@ -14,6 +14,7 @@ interface Owner {
   setMagnet: ReturnType<typeof vi.fn>
   setDrawStay: ReturnType<typeof vi.fn>
   setDrawTool: ReturnType<typeof vi.fn>
+  openAlerts: ReturnType<typeof vi.fn>
 }
 const fake = vi.hoisted(() => ({ owners: [] as Owner[], toast: vi.fn() }))
 vi.mock('@/utils/toast', () => ({
@@ -33,6 +34,7 @@ vi.mock('@/lib/trading/terminal', () => ({
     setWorkspaceTransitionLocked = vi.fn()
     setLinkGroup = vi.fn()
     setDrawTool = vi.fn(async () => {})
+    openAlerts = vi.fn(async () => true)
     setMagnet = vi.fn()
     setDrawStay = vi.fn()
     applyTheme = vi.fn()
@@ -84,6 +86,13 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('chart pane preparation ownership', () => {
+  it('opens alerts from the pane toolbar', async () => {
+    const view = render(<ChartPane {...props} />)
+    await act(async () => fake.owners[0].resolve())
+    fireEvent.click(view.getByRole('button', { name: 'Alerts', exact: true }))
+    expect(fake.owners[0].openAlerts).toHaveBeenCalledOnce()
+  })
+
   it('does not start drawing attachment from the shared rail before a prepared chart exists', async () => {
     const { rerender } = render(
       <ChartPane {...props} initialWorkspacePane={pane} sharedTool={null} />

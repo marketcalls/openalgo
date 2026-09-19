@@ -69,6 +69,53 @@ describe('workspace pane preference ownership', () => {
     expect(place).toHaveBeenCalledTimes(1)
   })
 
+  it('locks order tickets while replay history is loading', async () => {
+    const { instance } = terminal(null)
+    const place = vi.fn(async () => ({ orderId: 'fixture-order' }))
+    Object.assign(instance, { trade: { place }, replayLoading: true })
+    await expect(
+      instance.placeTicket({
+        symbol: 'BHEL',
+        exchange: 'NSE',
+        action: 'BUY',
+        quantity: 1,
+        product: 'MIS',
+        pricetype: 'MARKET',
+      })
+    ).rejects.toThrow(/replay/i)
+    expect(place).not.toHaveBeenCalled()
+  })
+
+  it('announces the replay loading lock before awaiting finer history and releases it on cancellation', async () => {
+    const { instance, callbacks } = terminal(null)
+    const paused = vi.fn()
+    let resolve!: (bars: unknown) => void
+    const pending = new Promise((done) => {
+      resolve = done
+    })
+    const bar = { time: 1000, open: 100, high: 100, low: 100, close: 100 }
+    callbacks.onReplayChange = vi.fn()
+    Object.assign(instance, {
+      chart: { panes: () => [], destroy() {} },
+      price: {},
+      shownBars: [bar, { ...bar, time: 1060 }],
+      data: { setPaused: paused, destroy() {} },
+      loadReplaySubBars: () => pending,
+    })
+    const start = (
+      instance as unknown as { beginReplayAt(index: number): Promise<void> }
+    ).beginReplayAt(0)
+    expect((instance as unknown as { replayLoading: boolean }).replayLoading).toBe(true)
+    expect(callbacks.onReplayChange).toHaveBeenCalledWith(null)
+    instance.stopReplay()
+    resolve([])
+    await start
+    expect(instance.replayActive()).toBe(false)
+    expect((instance as unknown as { replayLoading: boolean }).replayLoading).toBe(false)
+    expect(paused).toHaveBeenLastCalledWith(false)
+    Object.assign(instance, { chart: null, price: null, data: null })
+  })
+
   it('refuses a stale ticket after its grid has been destroyed', async () => {
     const { instance } = terminal(null)
     const place = vi.fn(async () => ({ orderId: 'fixture-order' }))

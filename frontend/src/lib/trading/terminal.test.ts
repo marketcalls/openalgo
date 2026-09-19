@@ -332,9 +332,10 @@ describe('chart object lifecycle', () => {
     const restored: { id: string; paneIndex?: number }[] = []
     const terminal = Object.assign(Object.create(TradingTerminal.prototype), {
       chart: {
-        addIndicator: (id: string, _settings: unknown, options: { paneIndex?: number } = {}) => {
-          restored.push({ id, paneIndex: options.paneIndex })
-          return { setVisible: () => {} }
+        restoreState: (input: { indicators: IndicatorState[] }) => {
+          for (const record of input.indicators)
+            restored.push({ id: record.indicatorId, paneIndex: record.paneIndex })
+          return { applied: true, indicators: input.indicators.length }
         },
       },
       destroyed: false,
@@ -362,6 +363,7 @@ describe('chart object lifecycle', () => {
       offData: null,
       data: null,
       objects: { destroy: () => order.push('objects') },
+      detachAlerts: () => order.push('alerts'),
       cb: { onObjectsChange: () => {} },
       offProfileObject: null,
       detachDrawing: () => order.push('drawing'),
@@ -383,7 +385,7 @@ describe('chart object lifecycle', () => {
 
     methods.destroy.call(terminal)
 
-    expect(order).toEqual(['objects', 'drawing', 'chart'])
+    expect(order).toEqual(['alerts', 'objects', 'drawing', 'chart'])
     expect(terminal.objects).toBeNull()
     expect(terminal.chart).toBeNull()
   })
@@ -426,11 +428,25 @@ describe('chart object lifecycle', () => {
       'indicators',
       JSON.stringify({
         version: 2,
-        indicators: [{ indicatorId: 'ema', settings: { period: 9 }, visible: false, paneIndex: 0 }],
+        indicators: [
+          {
+            instanceId: 'ema-next',
+            indicatorId: 'ema',
+            settings: { period: 9 },
+            visible: false,
+            paneIndex: 0,
+          },
+        ],
       })
     )
     expect(terminal.activeIndicators).toEqual([
-      { indicatorId: 'ema', settings: { period: 9 }, visible: false, paneIndex: 0 },
+      {
+        instanceId: 'ema-next',
+        indicatorId: 'ema',
+        settings: { period: 9 },
+        visible: false,
+        paneIndex: 0,
+      },
     ])
   })
 })
@@ -459,7 +475,7 @@ describe('terminal indicator templates', () => {
       panes: () => [{}],
       restoreState: (input: { indicators: IndicatorState[] }) => {
         if (!terminal.applyingIndicators) throw new Error('Intermediate state was not guarded')
-        expect(Object.keys(input).sort()).toEqual(['indicators', 'version'])
+        expect(Object.keys(input).sort()).toEqual(['alerts', 'drawings', 'indicators', 'version'])
         state = input.indicators
         writes++
         if (failNext) {

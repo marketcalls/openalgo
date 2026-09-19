@@ -411,6 +411,25 @@ There is no keyboard shortcut that places, modifies or cancels an order from the
 chart. Order entry is deliberately pointer-driven here; the keyboard-driven
 order surface is the [Scalping Terminal](../../scalping).
 
+## Chart Alerts (development candidate)
+
+Open **Alerts** in a chart's toolbar, then **Create alert**. Choose a price,
+a particular study and plot, a drawing level, or a named candle condition.
+The list supports editing, enabling, disabling and deleting alerts and shows
+triggered and expired records. Each pane owns its alerts.
+
+**Bar close** is the default. It evaluates the confirmed candle when the next
+candle arrives. **Intrabar touch** can fire on a wick or study reading that is
+absent from the final candle. Missing readings remain unavailable, including
+open interest missing from the live quote stream. Alerts retain the symbol,
+exchange and interval where they were created.
+
+Delivery is a local notice in the open terminal. Alerts do not place orders or
+send external notifications. History loading, replay selection, replay history
+loading and playback suppress evaluation. Leaving replay reseeds observations
+without delivering historical matches. Named workspace configuration follows
+the workspace's Save and Autosave controls.
+
 ## Market Replay
 
 The replay button steps the chart forward bar by bar from a point you choose.
