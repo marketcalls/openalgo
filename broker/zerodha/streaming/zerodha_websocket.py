@@ -484,8 +484,30 @@ class ZerodhaWebSocket:
             return False
 
     def wait_for_connection(self, timeout: float = 15.0) -> bool:
-        """Wait for WebSocket connection to be established"""
-        return self._connection_ready.wait(timeout=timeout)
+        """Wait for WebSocket connection to be established.
+
+        Polls in short slices instead of a single blocking wait on
+        `_connection_ready`, so we can bail out EARLY the moment `self.running`
+        flips to False. On an immediate broker-side rejection (e.g. a 403 for
+        an account without WS/streaming entitlement), `_run_websocket`'s
+        fatal-error handling detects it within ~100-200ms and, if the DB token
+        is unchanged (nothing to gain by retrying), sets `self.running = False`
+        right away -- but a single `_connection_ready.wait(timeout)` would
+        still block for the FULL timeout with nothing left to wait for. The
+        caller (zerodha_adapter.connect()) already branches on `self.running`
+        to build its final status/message, so this changes nothing about the
+        eventual result -- only how quickly it arrives.
+        """
+        deadline = time.time() + timeout
+        poll_interval = 0.1
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            if self._connection_ready.wait(timeout=min(poll_interval, remaining)):
+                return True
+            if not self.running:
+                return False
 
     def is_connected(self) -> bool:
         """Check if WebSocket is connected"""
