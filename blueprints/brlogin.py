@@ -558,6 +558,12 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "deltaexchange_demo":
+        code = "deltaexchange_demo"
+        logger.debug(f"DeltaExchange Demo broker - code: {code}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "dhan_sandbox":
         code = "dhan_sandbox"
         logger.debug("Dhan Sandbox broker - authentication initiated")
