@@ -888,6 +888,13 @@ export function createVoiceController(options: VoiceControllerOptions = {}): Voi
     delegation?.abort()
     delegation = null
 
+    // A session that is over must not leave a run approvable. Nothing else
+    // clears this: `offerApproval` clears it only when an approval succeeds, so
+    // without this the last order read back stays the target of the next thing
+    // the trader says into a new session, for as long as its server-side window
+    // has left to run.
+    pendingApproval = null
+
     for (const role of ['trader', 'agent'] as const) {
       const holder = open[role]
       if (holder) clearTimeout(holder.timer)

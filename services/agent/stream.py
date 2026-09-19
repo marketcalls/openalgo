@@ -329,6 +329,31 @@ def _int_or_zero(value: Any) -> int:
     return number if number > 0 else 0
 
 
+def _close_voice_approval(run_id: Any) -> None:
+    """Close a run's spoken approval window, if it had one.
+
+    The mirror of the `note_pause` call in
+    :meth:`EventTranslator._on_run_paused`, and best effort for the same
+    reason: a window that cannot be closed here must not take a turn down with
+    it. The window also expires on its own, so the cost of a failure is that an
+    abandoned run stays approvable for the rest of its configured seconds,
+    which is where this started.
+
+    Args:
+        run_id: The run whose window to close. Unknown and empty ids are
+            ignored, so a caller need not know whether the run ever paused.
+    """
+    key = str(run_id or "").strip()
+    if not key:
+        return
+    try:
+        from services.agent import voice as agent_voice
+
+        agent_voice.forget_pause(key)
+    except Exception:
+        logger.exception("Could not close the voice approval window")
+
+
 # Set once if the catalog cannot price a call, so a broken or absent price
 # table costs one log line per worker rather than one per model request.
 _cost_lookup_warned = False
@@ -868,6 +893,11 @@ class EventTranslator:
         if self._done_emitted:
             return []
         self._done_emitted = True
+        # A cancelled run is abandoned, so its spoken approval window closes
+        # with it. Without this the window outlives the run for its full
+        # duration, and a bare "yes" said to something else inside that time
+        # reaches an order the trader has already walked away from.
+        _close_voice_approval(self.run_id or getattr(event, "run_id", None))
         return [Done(reason=DoneReason.CANCELLED)]
 
     def _on_run_completed(self, event: Any) -> list[Frame]:
@@ -1446,6 +1476,13 @@ def stream_continue(
         SSE text, exactly as :func:`stream_run` does.
     """
     translator = EventTranslator(conversation_id, model=model, tool_frames=tool_frames)
+
+    # The run has been decided, whichever way and by whichever surface, so it
+    # stops being approvable by voice here. Closing it on the card's resume is
+    # what keeps a spoken "yes" a moment later from landing on a run that has
+    # already been answered on screen. A voice approval has popped the window
+    # itself before reaching this point, so this is a no-op for that path.
+    _close_voice_approval(run_id)
 
     def _start() -> Iterator[Any]:
         # Resolved on the producer thread, not here: it reads agno's session
