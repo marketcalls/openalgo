@@ -656,7 +656,7 @@ close_all_clients()
 | `iv_chart_service.py` | Historical IV chart data. |
 | `iv_smile_service.py` | IV smile data. |
 | `multi_strike_oi_service.py` | Multi-strike open-interest series. |
-| `oi_profile_service.py` | Open-interest profile. |
+| `oi_profile_service.py` | Open-interest profile. Change-in-OI anchors come from NSE's F&O bhavcopy (`nse_oi_bhavcopy.py`), never fetched inside a request - see [../oi-profile-anchors.md](../oi-profile-anchors.md). |
 | `oi_tracker_service.py` | OI tracking and max-pain calculation. |
 | `straddle_chart_service.py` | Straddle chart series. |
 | `strategy_chart_service.py` | Multi-leg strategy chart series. |

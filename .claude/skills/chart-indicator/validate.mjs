@@ -141,8 +141,17 @@ const note = once(notes)
 // both the packaged widget and OpenAlgo's own settings dialog. A session
 // remains a `text` input the indicator parses itself; a fixed set of choices
 // remains a `select`.
-const INPUT_TYPES = new Set(['number', 'boolean', 'color', 'text', 'select', 'source', 'interval', 'time'])
-const STRING_INPUTS = new Set(['text', 'select', 'source', 'interval', 'time'])
+//
+// The runtime list in `frontend/src/lib/trading/customIndicators.ts` is the
+// authority on what registers, and this has to agree with it, or a file the
+// app runs happily is refused by the gate. 'expiries' is ours rather than the
+// library's - the dialog renders it as a tick list of the underlying's
+// nearest option expiries and hands back a comma-separated string.
+const INPUT_TYPES = new Set([
+  'number', 'boolean', 'color', 'text', 'select', 'source', 'interval', 'time',
+  'expiries',
+])
+const STRING_INPUTS = new Set(['text', 'select', 'source', 'interval', 'time', 'expiries'])
 const NUMBER_INPUTS = new Set(['number'])
 const SOURCES = new Set(['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume'])
 const PLACEMENTS = new Set(['onchart', 'pane'])

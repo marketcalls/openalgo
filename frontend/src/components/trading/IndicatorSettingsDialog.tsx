@@ -17,6 +17,8 @@ import { TickBox } from './TickBox'
 
 interface Props {
   req: IndicatorSettingsRequest | null
+  /** The pane's symbol, so an `expiries` field knows whose expiries to list. */
+  symbol?: string
   onApply(instanceId: string, patch: Record<string, unknown>): void
   onDefaults(instanceId: string): Promise<Record<string, unknown> | null>
   onClose(): void
@@ -45,7 +47,7 @@ const TEXT_PLACEHOLDER: Record<string, string | undefined> = {
 export const CONTROL =
   'h-7 rounded border border-border bg-background px-2 text-[13px] text-foreground outline-none transition-colors focus:border-primary'
 
-export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: Props) {
+export function IndicatorSettingsDialog({ req, symbol, onApply, onDefaults, onClose }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [tab, setTab] = useState<'inputs' | 'style'>('inputs')
 
@@ -154,15 +156,28 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
             </div>
           ) : (
             <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
-              {fields.map((f) => (
-                <SettingsField
-                  key={f.key}
-                  field={f}
-                  id={`${req.instanceId}-${f.key}`}
-                  value={values[f.key]}
-                  onChange={(v) => set(f.key, v)}
-                />
-              ))}
+              {fields.map((f) =>
+                f.type === 'expiries' ? (
+                  <ExpiryPicker
+                    key={f.key}
+                    field={f}
+                    id={`${req.instanceId}-${f.key}`}
+                    value={values[f.key]}
+                    count={Number(values.expiries) || 1}
+                    exchange={exchangeOf(values.exchange, underlyingOf(values.underlying, symbol))}
+                    underlying={underlyingOf(values.underlying, symbol)}
+                    onChange={(v) => set(f.key, v)}
+                  />
+                ) : (
+                  <SettingsField
+                    key={f.key}
+                    field={f}
+                    id={`${req.instanceId}-${f.key}`}
+                    value={values[f.key]}
+                    onChange={(v) => set(f.key, v)}
+                  />
+                )
+              )}
             </div>
           )}
           {fields.length === 0 && (
@@ -214,6 +229,133 @@ function groupsOf(fields: IndicatorField[]): [string, IndicatorField[]][] {
     out.set(k, list)
   }
   return [...out]
+}
+
+/**
+ * The expiry pick list, the way Sensibull ticks its own: the nearest option
+ * expiries for the underlying, each a checkbox, stored as a comma-separated
+ * string so it stays one ordinary indicator setting.
+ *
+ * Ticking nothing leaves the string empty, which the indicator reads as "the
+ * nearest N", so the boxes show that fallback pre-ticked until the user makes
+ * a choice of their own.
+ */
+const EXPIRY_CHOICES = 8
+
+/** Same derivation the OI Profile indicator uses: typed name, else the chart's. */
+function underlyingOf(typed: unknown, symbol: string | undefined): string {
+  const t = String(typed ?? '')
+    .trim()
+    .toUpperCase()
+  if (t) return t
+  return String(symbol ?? '')
+    .toUpperCase()
+    .replace(/\d{2}[A-Z]{3}\d{2}FUT$/, '')
+    .replace(/[^A-Z0-9]/g, '')
+}
+
+/** Same Auto rule the OI Profile uses: the BSE indices trade on BFO. */
+function exchangeOf(typed: unknown, underlying: string): string {
+  const t = String(typed ?? '')
+    .trim()
+    .toUpperCase()
+  if (t && t !== 'AUTO') return t
+  return /^(SENSEX|BANKEX)/.test(underlying) ? 'BFO' : 'NFO'
+}
+
+/** 22SEP26 -> "22 Sep", which is how a trader reads an expiry off a chain. */
+function expiryLabel(e: string): string {
+  const m = /^(\d{2})([A-Z]{3})/.exec(e)
+  return m ? `${m[1]} ${m[2].charAt(0)}${m[2].slice(1).toLowerCase()}` : e
+}
+
+function ExpiryPicker({
+  field,
+  id,
+  value,
+  count,
+  exchange,
+  underlying,
+  onChange,
+}: {
+  field: IndicatorField
+  id: string
+  value: unknown
+  count: number
+  exchange: string
+  underlying: string
+  onChange(v: unknown): void
+}) {
+  const [available, setAvailable] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!underlying) return
+    let alive = true
+    const url =
+      `/search/api/expiries?exchange=${encodeURIComponent(exchange)}` +
+      `&underlying=${encodeURIComponent(underlying)}&instrumenttype=options`
+    fetch(url, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!alive) return
+        const list = Array.isArray(body?.expiries) ? body.expiries : []
+        // The search API answers 26-NOV-25; the profile wants 26NOV25.
+        setAvailable(
+          list
+            .slice(0, EXPIRY_CHOICES)
+            .map((e: unknown) => String(e).replace(/-/g, '').toUpperCase())
+        )
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [exchange, underlying])
+
+  const picked = String(value ?? '')
+    .toUpperCase()
+    .split(',')
+    .map((e) => e.replace(/[^A-Z0-9]/g, ''))
+    .filter(Boolean)
+  // Nothing ticked means the indicator's own "nearest N" fallback, so show it.
+  const shown = picked.length ? picked : available.slice(0, Math.max(1, count))
+
+  const toggle = (e: string) => {
+    const next = shown.includes(e) ? shown.filter((x) => x !== e) : [...shown, e]
+    // Keep chain order, not click order, so the string reads like the list.
+    onChange(available.filter((x) => next.includes(x)).join(','))
+  }
+
+  const label = (
+    <span id={id} className="self-start pt-0.5 text-[13px] text-muted-foreground">
+      {field.label}
+    </span>
+  )
+
+  if (available.length === 0) {
+    return (
+      <>
+        {label}
+        <span className="text-[13px] text-muted-foreground">
+          {underlying ? 'No expiries found' : 'Set an underlying'}
+        </span>
+      </>
+    )
+  }
+
+  return (
+    <>
+      {label}
+      <fieldset className="flex min-w-0 flex-col gap-1.5 border-0 p-0" aria-labelledby={id}>
+        {available.map((e) => (
+          <label key={e} className="flex cursor-pointer items-center gap-2 text-[13px]">
+            <TickBox id={`${id}-${e}`} checked={shown.includes(e)} onChange={() => toggle(e)} />
+            {expiryLabel(e)}
+          </label>
+        ))}
+      </fieldset>
+    </>
+  )
 }
 
 /**

@@ -367,7 +367,12 @@ describe('chart object lifecycle', () => {
       chart,
       destroyed: false,
       activeIndicators: [],
-      announcedIndicators: [{ id: indicator.id, name: indicator.name }],
+      // The announced shape carries the descriptor id as well as the instance
+      // one, so a host button bound to a particular study can match on it.
+      announcedIndicators: [
+        { id: indicator.id, indicatorId: indicator.indicatorId, name: indicator.name },
+      ],
+      cb: {},
       restoringIndicatorsOn: null,
       applyingIndicators: false,
       loadIndicators: vi.fn().mockRejectedValue(new Error('chunk failed')),
