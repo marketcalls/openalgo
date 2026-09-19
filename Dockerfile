@@ -1,3 +1,6 @@
+# Base images are pinned to an immutable digest for supply-chain reproducibility
+# (see marketcalls/openalgo#1857). To refresh a pin after a deliberate version
+# bump: `docker buildx imagetools inspect <tag>` and copy the reported Digest.
 # ------------------------------ Python Builder Stage ----------------------- #
 # Base images track Debian 13 "trixie". Debian 11 "bullseye" reached end of LTS
 # on 2026-08-31 and its security pool was drained days later, so every build
@@ -5,7 +8,7 @@
 # package index still advertised them. Debian 12 "bookworm" is not the fix --
 # its regular security support ended 2026-07-11 and it is already LTS-only.
 # Trixie has security support to 2028-08-09 (LTS to 2030-06-30).
-FROM python:3.12-trixie AS python-builder
+FROM python:3.12-trixie@sha256:cd7c412d000912f29075a1b8803e43cb2f38bb67f104019df526df5ceaf30569 AS python-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -20,7 +23,7 @@ RUN pip install --no-cache-dir uv && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:22-trixie-slim AS frontend-builder
+FROM node:22-trixie-slim@sha256:7b8a0c89c54499bee567618f96578e1a12a800f062fbdbfd1fb6a443fa6f6284 AS frontend-builder
 WORKDIR /app
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm ci
@@ -29,7 +32,7 @@ RUN cd frontend && npm run build
 
 # --------------------------------------------------------------------------- #
 # ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-trixie AS production
+FROM python:3.12-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS production
 # 0 – set timezone to IST (Asia/Kolkata) & install runtime dependencies
 #     chromium + fonts-liberation are required by Kaleido 1.x (plotly static
 #     image export) which drives a real headless Chromium via choreographer.
