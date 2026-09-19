@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import zlib
 from pathlib import Path
 
 from utils.logging import get_logger
@@ -69,6 +70,19 @@ def _is_compressible(path: Path) -> bool:
     return path.stat().st_size >= _MIN_SOURCE_BYTES
 
 
+def _holds(variant: Path, raw: bytes) -> bool:
+    """Whether ``variant`` decompresses to exactly ``raw``.
+
+    The tie-break for the one case mtimes cannot answer, below. Anything
+    unreadable or not valid gzip counts as not holding it, so a truncated or
+    corrupt variant is regenerated rather than served.
+    """
+    try:
+        return gzip.decompress(variant.read_bytes()) == raw
+    except (OSError, EOFError, gzip.BadGzipFile, zlib.error):
+        return False
+
+
 def _is_current(source: Path, variant: Path) -> bool:
     """Whether ``variant`` was generated from the present contents of ``source``.
 
@@ -77,12 +91,41 @@ def _is_current(source: Path, variant: Path) -> bool:
     exactly the stale case that needs regenerating. A zero-length variant is
     treated as stale so that a run interrupted before ``os.replace`` cannot
     leave an empty file that would be served as a valid empty asset.
+
+    **Equal mtimes are ambiguous and must not be read as current.** They mean
+    either that the variant was generated from this source moments ago, or that
+    the source was rewritten within the same filesystem timestamp tick and the
+    variant now holds the previous build's bytes. Windows stamps file times on a
+    ~15.6 ms system clock, the whole tree compresses in about 0.11 s, and
+    ``index.html`` is not content-hashed, so a deploy that pulls and boots in one
+    step can land both writes inside one tick. Treating that as current left the
+    old variant in place, and since ``serve_assets`` prefers any ``.gz`` sibling
+    for a gzip client and the response is cached ``immutable`` for a year, the
+    superseded bytes would be served in place of the asset and no rebuild could
+    correct it.
+
+    So the fast path is a strict ``>``, and only the exact tie falls through to
+    reading the variant back. That keeps a normal boot to one stat per file -
+    variants are written seconds after a checkout, not within a tick of it - and
+    pays for content comparison only where stat genuinely cannot decide.
     """
     try:
         variant_stat = variant.stat()
     except OSError:
         return False
-    return variant_stat.st_size > 0 and variant_stat.st_mtime >= source.stat().st_mtime
+    if variant_stat.st_size == 0:
+        return False
+
+    source_mtime = source.stat().st_mtime
+    if variant_stat.st_mtime > source_mtime:
+        return True
+    if variant_stat.st_mtime < source_mtime:
+        return False
+
+    try:
+        return _holds(variant, source.read_bytes())
+    except OSError:
+        return False
 
 
 def _remove_variant(variant: Path) -> bool:
