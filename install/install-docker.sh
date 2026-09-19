@@ -42,14 +42,14 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,acagarwalxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
 # Function to check if broker is XTS based
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
+    local xts_brokers="fivepaisaxts,acagarwalxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
     [[ ",$xts_brokers," == *",$broker,"* ]]
 }
 
@@ -113,7 +113,7 @@ done
 # Get broker name
 while true; do
     log "\nValid brokers:" "$BLUE"
-    echo "fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange,"
+    echo "fivepaisa, fivepaisaxts, acagarwalxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange,"
     echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
     echo "rmoney, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha,"
