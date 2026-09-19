@@ -392,6 +392,7 @@ class FlowOpenAlgoClient:
         expiry_date: str,
         offset: str = "ATM",
         option_type: str = "CE",
+        include_quotes: bool = False,
     ) -> dict[str, Any]:
         """Get option symbol resolved from underlying/expiry/offset"""
         from services.option_symbol_service import get_option_symbol
@@ -404,6 +405,7 @@ class FlowOpenAlgoClient:
             offset=offset,
             option_type=option_type,
             api_key=self.api_key,
+            include_quotes=include_quotes,
         )
         return self._handle_response(success, response, status_code)
 
