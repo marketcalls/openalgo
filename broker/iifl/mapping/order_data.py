@@ -314,6 +314,10 @@ def transform_positions_data(positions_data):
         average_price = net_amount
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places
         average_price_formatted = f"{average_price:.2f}"
+        pnl = position.get("pnl", 0.0)
+        if netqty == 0:
+            # XTS exposes closed-position P&L as RealizedMTM rather than pnl.
+            pnl = position.get("RealizedMTM", pnl)
 
         transformed_position = {
             "symbol": position.get("TradingSymbol", ""),
@@ -322,7 +326,7 @@ def transform_positions_data(positions_data):
             "quantity": position.get("Quantity", 0),
             "average_price": average_price_formatted,
             "ltp": position.get("ltp", 0.0),
-            "pnl": position.get("pnl", 0.0),
+            "pnl": pnl,
         }
         # logger.info(f"Transformed Position: {transformed_position}")
         transformed_data.append(transformed_position)
