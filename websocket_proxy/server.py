@@ -30,6 +30,8 @@ from .port_check import find_available_port, is_port_in_use
 
 # Initialize logger
 logger = get_logger("websocket_proxy")
+WS_CONNECT_READY_TIMEOUT = 30
+WS_CONNECT_READY_POLL_INTERVAL = 1
 
 
 class WebSocketProxy:
@@ -382,6 +384,7 @@ class WebSocketProxy:
                     "total_symbols": health["subscriptions"]["unique_symbols"],
                     "clients_connected": health["clients"]["connected_count"],
                     "brokers": health["broker_adapters"]["brokers"],
+                    "adapter_health": self.get_adapter_health(),
                 }
                 with open(tmp_path, "w") as f:
                     json.dump(snapshot, f)
@@ -1105,6 +1108,64 @@ class WebSocketProxy:
                     logger.exception(f"Broker error for {broker_name}: {error_str}")
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
+
+        # Some adapters return from connect() before their broker handshake has
+        # completed. Do not report a successful auth handshake until the
+        # adapter's underlying connection is actually ready; otherwise a broker
+        # HTTP 401/403 is hidden behind a locally successful WebSocket login.
+        adapter = self.broker_adapters.get(user_id)
+        adapter_ready = False
+        if adapter is not None:
+            for attempt in range(WS_CONNECT_READY_TIMEOUT):
+                if bool(getattr(adapter, "connected", False)):
+                    adapter_ready = True
+                    logger.info(
+                        f"Broker adapter ready for user {user_id} after "
+                        f"{attempt * WS_CONNECT_READY_POLL_INTERVAL}s"
+                    )
+                    break
+                logger.info(
+                    f"Waiting for broker adapter for user {user_id} to become "
+                    f"ready ({attempt + 1}/{WS_CONNECT_READY_TIMEOUT})"
+                )
+                await aio.sleep(WS_CONNECT_READY_POLL_INTERVAL)
+        if not adapter_ready:
+            logger.warning(
+                f"Broker adapter readiness wait failed for user {user_id} "
+                f"after {WS_CONNECT_READY_TIMEOUT * WS_CONNECT_READY_POLL_INTERVAL}s"
+            )
+            current_adapter = self.broker_adapters.get(user_id)
+            owns_adapter = adapter is not None and current_adapter is adapter
+            if owns_adapter:
+                self.broker_adapters.pop(user_id, None)
+                try:
+                    adapter.disconnect()
+                except Exception as disconnect_error:
+                    logger.warning(
+                        f"Error disconnecting unready adapter for user {user_id}: "
+                        f"{disconnect_error}"
+                    )
+                try:
+                    from .broker_factory import cleanup_pools_for_user
+
+                    cleanup_pools_for_user(user_id, broker_name=broker_name)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Error cleaning unready adapter pool for user {user_id}: "
+                        f"{cleanup_error}"
+                    )
+            else:
+                logger.info(
+                    f"Skipping cleanup for unready adapter for user {user_id}; "
+                    "another authentication attempt owns the current adapter"
+                )
+            self.user_mapping.pop(client_id, None)
+            await self.send_error(
+                client_id,
+                "BROKER_CONNECTION_ERROR",
+                "Upstream broker WebSocket did not become ready after authentication",
+            )
+            return
 
         # Send success response with broker information
         await self.send_message(
