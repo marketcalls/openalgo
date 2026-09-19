@@ -85,8 +85,9 @@ interface SyncState {
   crosshair: boolean
   viewport: boolean
   symbol: boolean
+  interval: boolean
 }
-const SYNC_DEFAULT: SyncState = { crosshair: true, viewport: true, symbol: false }
+const SYNC_DEFAULT: SyncState = { crosshair: true, viewport: true, symbol: false, interval: false }
 
 function readSync(): SyncState {
   try {
@@ -97,6 +98,7 @@ function readSync(): SyncState {
       crosshair: p.crosshair ?? SYNC_DEFAULT.crosshair,
       viewport: p.viewport ?? SYNC_DEFAULT.viewport,
       symbol: p.symbol ?? SYNC_DEFAULT.symbol,
+      interval: p.interval ?? SYNC_DEFAULT.interval,
     }
   } catch {
     return SYNC_DEFAULT
@@ -121,8 +123,7 @@ export default function Trading() {
    * rebuild, so changing a layout, theme or chart type does not quietly drop a
    * pane out of the group it still thinks it belongs to.
    */
-  const linkRef = useRef<LinkGroup | null>(null)
-  if (linkRef.current === null) linkRef.current = createLinkGroup(sync)
+  const [linkGroup, setLinkGroup] = useState<LinkGroup | null>(null)
 
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [wsUrl, setWsUrl] = useState<string | null>(null)
@@ -386,12 +387,14 @@ export default function Trading() {
     // setOptions, not a rebuild: the engine clears the linked crosshairs when
     // that switch goes off and converges the group on its agreed symbol when
     // the symbol switch comes on, neither of which a fresh group would do.
-    linkRef.current?.setOptions(sync)
-  }, [sync])
+    linkGroup?.setOptions(sync)
+  }, [sync, linkGroup])
 
   useEffect(() => {
-    const group = linkRef.current
-    return () => group?.destroy()
+    // Setup owns the group so an effect restart cannot reuse a destroyed one.
+    const group = createLinkGroup()
+    setLinkGroup(group)
+    return () => group.destroy()
   }, [])
 
   // Fetch the API key + WS URL once; every pane shares them.
@@ -479,7 +482,7 @@ export default function Trading() {
    * sync with, so an inviting control there would promise something it cannot
    * do; disabled with its state still readable is the honest version.
    */
-  const syncOn = sync.crosshair || sync.viewport || sync.symbol
+  const syncOn = sync.crosshair || sync.viewport || sync.symbol || sync.interval
   const syncPicker = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -509,6 +512,7 @@ export default function Trading() {
             ['crosshair', 'Crosshair', 'Mirror the hovered bar'],
             ['viewport', 'Time range', 'Mirror pan and zoom'],
             ['symbol', 'Symbol', 'Load the same instrument everywhere'],
+            ['interval', 'Interval', 'Use the same interval where supported'],
           ] as const
         ).map(([key, label, hint]) => (
           // A label, not a button, and the row carries no click handler of its
@@ -518,8 +522,7 @@ export default function Trading() {
           // do nothing at all. The label forwards a click on the text to the
           // input, so every part of the row toggles it exactly once.
           //
-          // Not a DropdownMenuItem either: these are three independent
-          // switches and the menu has to stay open while all three are set.
+          // Independent switches keep the menu open while they are set.
           <label
             key={key}
             className="flex w-full cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent"
@@ -589,7 +592,7 @@ export default function Trading() {
                   Generate an API key
                 </a>
               </div>
-            ) : apiKey && wsUrl ? (
+            ) : apiKey && wsUrl && linkGroup ? (
               <div
                 className="grid h-full min-h-0 gap-2 p-2"
                 style={{
@@ -615,7 +618,7 @@ export default function Trading() {
                     onDrawStats={setStats}
                     onToggleRail={() => setShowRail((v) => !v)}
                     railVisible={showRail}
-                    linkGroup={linkRef.current}
+                    linkGroup={linkGroup}
                     armed={armed}
                     layoutPicker={
                       i === 0 ? (

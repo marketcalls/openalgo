@@ -461,7 +461,7 @@ export function ChartPane({
       terminal?.destroy()
       terminalRef.current = null
     }
-    // linkGroup is held in a ref by the page and created once, so its identity
+    // linkGroup is owned by the page's effect, so its identity
     // is stable and listing it here does not re-run the boot effect.
   }, [paneId, apiKey, wsUrl, noteHistory, linkGroup])
 

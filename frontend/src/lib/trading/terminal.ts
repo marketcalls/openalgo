@@ -121,6 +121,14 @@ import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
+import {
+  VOLUME_DEFAULTS,
+  volumeAverage,
+  volumeAveragePoint,
+  volumePoint,
+  volumeSettingsView,
+  volumeValues,
+} from './volumeSettings'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
   type IntervalData,
@@ -305,7 +313,9 @@ export interface BrandingLink {
 }
 
 /** Tools whose content is typed rather than dragged. */
-const TEXT_TOOLS = new Set(Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text))
+const TEXT_TOOLS = new Set(
+  Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text)
+)
 
 /** The colour forms emitted by the chart palette and the host token rasterizer. */
 function drawingRgb(color: string): number[] | null {
@@ -316,7 +326,9 @@ function drawingRgb(color: string): number[] | null {
   } else if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
     rgb = [1, 3, 5].map((offset) => parseInt(value.slice(offset, offset + 2), 16))
   } else {
-    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(value)
+    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(
+      value
+    )
     if (match) rgb = match.slice(1, 4).map(Number)
   }
   return rgb
@@ -325,7 +337,15 @@ function drawingRgb(color: string): number[] | null {
 /** Native colour inputs require hex even when the canvas theme uses rgb(). */
 function drawingColorInput(color: string): string {
   const rgb = drawingRgb(color)
-  return rgb ? `#${rgb.map(channel => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}` : '#000000'
+  return rgb
+    ? `#${rgb
+        .map((channel) =>
+          Math.max(0, Math.min(255, Math.round(channel)))
+            .toString(16)
+            .padStart(2, '0')
+        )
+        .join('')}`
+    : '#000000'
 }
 
 /** Match the renderer's automatic plate text while preserving an unset override. */
@@ -660,6 +680,8 @@ export class TradingTerminal {
   private offBranding: (() => void) | null = null
   private price: SeriesApi | null = null
   private volume: SeriesApi | null = null
+  private volumeMA: SeriesApi | null = null
+  private displayedVolume: Bar[] = []
 
   /* Drawing + indicator state. buildChart() throws the chart away on every
      interval / chart-type / theme change, so both round-trip through plain
@@ -961,19 +983,11 @@ export class TradingTerminal {
     if (cfg.transform) {
       const t = runTransform(cfg.transform(this.boxOf()), this.rawBars)
       this.price.setData(t)
-      this.volume.setData(this.bucketVolume(t))
+      this.setVolumeData(t, this.bucketVolume(t))
       this.shownBars = t
     } else {
       this.price.setData(this.rawBars)
-      this.volume.setData(
-        this.rawBars.map((b) => ({
-          time: b.time,
-          open: 0,
-          high: b.volume || 0,
-          low: 0,
-          close: b.volume || 0,
-        }))
-      )
+      this.setVolumeData(this.rawBars)
       this.shownBars = this.rawBars
     }
     this.shownCount = this.shownBars.length
@@ -1068,19 +1082,83 @@ export class TradingTerminal {
     // `update` appends or replaces by time on its own, which is exactly the
     // append-or-replace the caller has already applied to `rawBars`.
     this.price.update(bar)
-    this.volume.update({
-      time: bar.time,
-      open: 0,
-      high: bar.volume || 0,
-      low: 0,
-      close: bar.volume || 0,
-    })
+    const settings = volumeValues(this.chartSettingsSaved)
+    const point = volumePoint(
+      bar,
+      this.rawBars.at(-2)?.close,
+      bar.volume ?? 0,
+      this.volumeCandleStyle(),
+      settings['volume.colorByDirection'] === true
+    )
+    const last = this.displayedVolume.length - 1
+    if (last >= 0 && this.displayedVolume[last].time === point.time)
+      this.displayedVolume[last] = point
+    else this.displayedVolume.push(point)
+    this.volume.update(point)
+    if (settings['volume.showMA'] && this.volumeMA) {
+      this.volumeMA.update(
+        volumeAveragePoint(
+          this.displayedVolume,
+          this.displayedVolume.length - 1,
+          Number(settings['volume.maPeriod'])
+        )
+      )
+    }
     // Untransformed, the shown series *is* rawBars, which the caller mutated in
     // place, so only the count can have moved.
     this.shownBars = this.rawBars
     this.shownCount = this.rawBars.length
     this.profileLayer?.refresh()
     return true
+  }
+
+  private volumeCandleStyle(): SeriesStyle {
+    const theme = this.chart?.theme()
+    return {
+      upColor: theme?.upColor,
+      downColor: theme?.downColor,
+      ...this.chart?.primarySeriesInfo()?.style,
+    }
+  }
+
+  private setVolumeData(prices: readonly Bar[], amounts?: readonly Bar[]): void {
+    if (!this.volume || !this.chart) return
+    const settings = volumeValues(this.chartSettingsSaved)
+    const style = this.volumeCandleStyle()
+    const byTime = amounts ? new Map(amounts.map((bar) => [bar.time, bar.close])) : null
+    this.displayedVolume = prices.map((bar, index) =>
+      volumePoint(
+        bar,
+        prices[index - 1]?.close,
+        byTime?.get(bar.time) ?? bar.volume ?? 0,
+        style,
+        settings['volume.colorByDirection'] === true
+      )
+    )
+    this.volume.setData(this.displayedVolume)
+    if (!this.volumeMA) {
+      this.volumeMA = this.chart.addSeries('line', {
+        paneIndex: 0,
+        priceScaleId: '',
+        priceFormat: { type: 'volume' },
+        style: { priceLineVisible: false, lastValueVisible: false },
+      })
+    }
+    this.volumeMA.applyOptions({
+      visible: this.volumeOn && !isProfileKind(this.ctype) && settings['volume.showMA'] === true,
+      color: String(settings['volume.maColor']),
+      lineWidth: Number(settings['volume.maWidth']),
+      lineStyle: settings['volume.maStyle'] as 'solid' | 'dashed' | 'dotted',
+    })
+    this.volumeMA.setData(
+      settings['volume.showMA']
+        ? volumeAverage(this.displayedVolume, Number(settings['volume.maPeriod']))
+        : []
+    )
+  }
+
+  private refreshDisplayedVolume(): void {
+    if (this.price && this.volume) this.setVolumeData(this.price.getData(), this.volume.getData())
   }
 
   private bucketVolume(tbars: Bar[]): Bar[] {
@@ -1321,7 +1399,10 @@ export class TradingTerminal {
       return
     }
     if (this.sym.synthetic) {
-      this.toast(`${this.sym.symbol} is a computed chart, not an instrument — there is nothing to trade`, 'err')
+      this.toast(
+        `${this.sym.symbol} is a computed chart, not an instrument — there is nothing to trade`,
+        'err'
+      )
       return
     }
     if (this.sym.quoteOnly) {
@@ -1656,6 +1737,8 @@ export class TradingTerminal {
       priceFormat: { type: 'volume' },
     })
     this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
+    this.volumeMA = null
+    this.displayedVolume = []
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
     if (!this.volumeOn || isProfileKind(this.ctype)) this.volume.applyOptions({ visible: false })
@@ -2180,8 +2263,13 @@ export class TradingTerminal {
     const theme = this.chart?.theme()
     const lineColor = d.style.color ?? theme?.lineColor ?? '#4f8cff'
     const plate = d.tool !== 'text' && d.tool !== 'table'
-    const backgroundColor = t.backgroundColor ?? (plate ? lineColor
-      : d.tool === 'table' || t.background === true ? theme?.background ?? '#ffffff' : '#434651')
+    const backgroundColor =
+      t.backgroundColor ??
+      (plate
+        ? lineColor
+        : d.tool === 'table' || t.background === true
+          ? (theme?.background ?? '#ffffff')
+          : '#434651')
     const plateFill = d.tool === 'callout' || d.tool === 'price-label' ? lineColor : backgroundColor
     const color = t.color ?? (plate ? drawingTextContrast(plateFill) : lineColor)
     return {
@@ -2191,7 +2279,10 @@ export class TradingTerminal {
       // (a price label is 12px, the text tool 14px). Seeding the dialog with a
       // host constant instead would enlarge a label whose caption alone was
       // edited.
-      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
+      fontSize:
+        t.fontSize ??
+        this.toolDefaultText(d.tool)?.fontSize ??
+        (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
       bold: t.bold === true,
       italic: t.italic === true,
       background: d.tool !== 'text' || t.background === true,
@@ -2618,7 +2709,9 @@ export class TradingTerminal {
       instanceId,
       name: inst.name,
       values: { ...inst.settings() },
-      inputs: descriptor.inputs.map(toField).map((f) => this.fillIntervalOptions(f, inst.settings())),
+      inputs: descriptor.inputs
+        .map(toField)
+        .map((f) => this.fillIntervalOptions(f, inst.settings())),
       styleInputs: indicatorStyleInputs(descriptor).map(toField),
     })
   }
@@ -2651,7 +2744,11 @@ export class TradingTerminal {
       ...this.availableIntervals.map((code) => ({ label: code, value: code as unknown })),
     ]
     const current = values[field.key]
-    if (typeof current === 'string' && current !== '' && !this.availableIntervals.includes(current)) {
+    if (
+      typeof current === 'string' &&
+      current !== '' &&
+      !this.availableIntervals.includes(current)
+    ) {
       options.push({ label: current, value: current })
     }
     return { ...field, options }
@@ -2705,13 +2802,16 @@ export class TradingTerminal {
           : toField(i as { key: string; type: string; label?: string; group?: string })
       ),
     }))
-    return profileSettingsView(
-      {
-        tabs,
-        values: { ...readChartSettings(chart) },
-        defaults: { ...this.chartDefaults },
-      },
-      this.ctype,
+    return volumeSettingsView(
+      profileSettingsView(
+        {
+          tabs,
+          values: { ...readChartSettings(chart) },
+          defaults: { ...this.chartDefaults },
+        },
+        this.ctype,
+        this.chartSettingsSaved
+      ),
       this.chartSettingsSaved
     )
   }
@@ -2763,7 +2863,9 @@ export class TradingTerminal {
     const { applyChartSettings } = await import('openalgo-charts')
     if (chart !== this.chart || this.destroyed) return
     const enginePatch = Object.fromEntries(
-      Object.entries(patch).filter(([key]) => !key.startsWith('profiles.'))
+      Object.entries(patch).filter(
+        ([key]) => !key.startsWith('profiles.') && !key.startsWith('volume.')
+      )
     )
     const merged = { ...this.chartSettingsSaved, ...patch }
     if (
@@ -2783,12 +2885,16 @@ export class TradingTerminal {
       ...this.chartDefaults,
       ...profileDefaults('tpo'),
       ...profileDefaults('session-volume-profile'),
+      ...VOLUME_DEFAULTS,
     }
     for (const kind of ['tpo', 'session-volume-profile'] as const) {
       const normalized = profileValues(kind, merged)
       for (const key of Object.keys(normalized)) {
         if (key in merged) merged[key] = normalized[key]
       }
+    }
+    for (const [key, value] of Object.entries(volumeValues(merged))) {
+      if (key in merged) merged[key] = value
     }
     const kept: Record<string, string | number | boolean> = {}
     for (const [k, v] of Object.entries(merged)) {
@@ -2799,6 +2905,7 @@ export class TradingTerminal {
     this.chartSettingsSaved = kept
     this.lsSet('chartsettings', JSON.stringify(kept))
     this.adoptGridFromPatch(patch)
+    this.refreshDisplayedVolume()
     if (isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval && interval !== this.interval) {
@@ -2848,10 +2955,13 @@ export class TradingTerminal {
       applyChartSettings(
         chart,
         Object.fromEntries(
-          Object.entries(this.chartSettingsSaved).filter(([key]) => !key.startsWith('profiles.'))
+          Object.entries(this.chartSettingsSaved).filter(
+            ([key]) => !key.startsWith('profiles.') && !key.startsWith('volume.')
+          )
         )
       )
       this.installProfile()
+      this.refreshDisplayedVolume()
     } catch {
       /* ignore */
     }
@@ -2974,6 +3084,8 @@ export class TradingTerminal {
     if (!this.link || !this.chart) return
     this.link.add(this.chart, {
       symbol: this.linkSymbol(),
+      interval: this.interval,
+      onInterval: (next) => this.setInterval(next) === next,
       onSymbol: (next) => {
         // Ignore an echo of what this pane already shows: the group puts a
         // joining member onto the agreed symbol, and reloading a chart onto the
@@ -3028,6 +3140,12 @@ export class TradingTerminal {
   setVolumeVisible(on: boolean): void {
     this.volumeOn = on
     this.volume?.applyOptions({ visible: on && !isProfileKind(this.ctype) })
+    this.volumeMA?.applyOptions({
+      visible:
+        on &&
+        !isProfileKind(this.ctype) &&
+        volumeValues(this.chartSettingsSaved)['volume.showMA'] === true,
+    })
     this.lsSet('vol', on ? '1' : '0')
   }
 
@@ -3206,6 +3324,7 @@ export class TradingTerminal {
     this.replayPicking = false
     this.setReplayShade(null)
     const driven = this.volume ? [this.price, this.volume] : [this.price]
+    if (this.volumeMA) driven.push(this.volumeMA)
     // Walk what the price series is showing, not the raw feed: on Heikin Ashi
     // or Renko those are different arrays of different lengths, so replaying
     // rawBars would repaint the chart as plain candles and put the playhead at
@@ -3236,6 +3355,7 @@ export class TradingTerminal {
       startIndex: from,
       subBars: sub ?? undefined,
       onFrame: (state) => {
+        this.refreshDisplayedVolume()
         this.profileLayer?.refresh(true)
         this.cb.onReplayChange?.(state)
       },
@@ -3752,7 +3872,7 @@ export class TradingTerminal {
   private async loadExpression(
     source: string,
     ticket: number,
-    opts: { silent?: boolean },
+    opts: { silent?: boolean }
   ): Promise<boolean> {
     let expr: SymbolExpression
     try {
@@ -3981,6 +4101,11 @@ export class TradingTerminal {
 
   /* ── toolbar setters (called by the React page) ───────────────────────── */
   setInterval(iv: string): string {
+    if (iv === this.interval) return iv
+    if (!this.availableIntervals.includes(iv)) {
+      this.toast(`The connected feed does not support ${iv}`, 'err')
+      return this.interval
+    }
     if (
       isProfileKind(this.ctype) &&
       !profileIntervalSupported(this.ctype, iv, this.profileBlockMinutes())
@@ -3997,6 +4122,7 @@ export class TradingTerminal {
     this.interval = iv
     this.lsSet('interval', iv)
     this.cb.onIntervalChange?.(iv)
+    if (this.link && this.chart) this.link.setInterval(this.chart, iv)
     if (this.sym) this.reloadCurrent()
     return iv
   }

@@ -33,6 +33,24 @@ says so and links to `/apikey`.
 The chart grid takes whatever the rails and panels leave. Only the right panel
 and the dock can be resized; the panes follow the layout preset you pick.
 
+## Interval Sync and Volume
+
+In a multi-chart layout, open **Chart sync** and enable **Interval** to follow
+interval changes across panes. This switch is independent of symbol, time-range
+and crosshair sync. A pane whose feed or session-profile chart cannot use the
+selected interval keeps its current interval and explains why.
+
+In **Chart settings > Appearance**, **Snap to candle center** keeps the vertical
+crosshair on the nearest candle. The horizontal price cursor still follows the
+pointer unless the separate price magnet is enabled.
+
+The **Volume** settings tab controls candle-direction colours and an optional
+simple moving average. Its period, colour, thickness and line style are saved
+per pane. The average shares the volume scale, starts after a full period and
+updates as the current bar forms. Hiding volume hides the average as well.
+During replay, both use only the bars revealed by the playhead, including the
+formed portion of an intrabar candle.
+
 ## Chart Branding and Watermark
 
 Each chart shows the OpenAlgo mark in its bottom-left corner. Activate the mark

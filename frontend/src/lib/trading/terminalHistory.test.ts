@@ -15,6 +15,8 @@ type TerminalState = {
   chart: ReturnType<typeof createChart>
   price: SeriesApi
   volume: SeriesApi
+  volumeMA: SeriesApi | null
+  ctype: string
   rawBars: Bar[]
   shownBars: Bar[]
   builder: CandleBuilder
@@ -52,6 +54,8 @@ type TerminalState = {
     destroy(): void
   } | null
   setPriceData(): void
+  updateLiveBar(bar: Bar): boolean
+  chartSettingsSaved: Record<string, string | number | boolean>
   buildChart(): void
   beginReplayAt(index: number): Promise<void>
   runReconcile(): Promise<void>
@@ -145,7 +149,7 @@ function mount() {
   })
   state.chart.applySize(800, 600)
   state.price = state.chart.addSeries('candlestick')
-  state.volume = state.chart.addSeries('histogram')
+  state.volume = state.chart.addSeries('histogram', { priceScaleId: '' })
   state.sym = {
     symbol: 'NIFTY29SEP26FUT',
     exchange: 'NFO',
@@ -176,6 +180,149 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
+
+describe('built-in volume and average', () => {
+  it('follows candle colours and corrects direction on a live replacement', () => {
+    const { state } = mount()
+    state.price.applyOptions({ upColor: '#00aa00', downColor: '#aa0000' })
+    state.rawBars[1] = { ...state.rawBars[1], open: 105, close: 101 }
+    state.setPriceData()
+    expect(state.volume.getData().map((b) => b.color)).toEqual([
+      '#00aa00',
+      '#aa0000',
+      '#00aa00',
+      '#00aa00',
+    ])
+    const update = { ...state.rawBars[3], open: 105, close: 102 }
+    state.rawBars[3] = update
+    state.updateLiveBar(update)
+    expect(state.volume.getData()[3].color).toBe('#aa0000')
+  })
+
+  it('exposes volume controls and updates a configurable average on the volume scale', async () => {
+    const { terminal, state } = mount()
+    state.rawBars = state.rawBars.map((b, i) => ({ ...b, volume: [10, 20, 30, 60][i] }))
+    state.setPriceData()
+    const settings = await terminal.chartSettings()
+    expect(settings?.tabs.find((tab) => tab.id === 'volume')).toBeDefined()
+    expect(settings?.defaults['volume.showMA']).toBe(false)
+    await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 3 })
+    expect(state.volumeMA).toBeTruthy()
+    const average = () => state.volumeMA!.getData().map((b) => b.close)
+    expect(average().slice(0, 3)).toEqual([NaN, NaN, 20])
+    expect(average()[3]).toBeCloseTo(110 / 3)
+    expect(state.volumeMA!.priceScale()).toBe(state.volume.priceScale())
+    state.rawBars[3] = { ...state.rawBars[3], volume: 90 }
+    state.updateLiveBar(state.rawBars[3])
+    expect(average()[3]).toBeCloseTo(140 / 3)
+    terminal.setVolumeVisible(false)
+    const lines = state.chart
+      .panes()[0]
+      .series()
+      .filter((series) => series.type === 'line')
+    expect(lines.some((series) => series.style.visible === false)).toBe(true)
+  })
+
+  it('recomputes settings against only the replay prefix and restores live volume on exit', async () => {
+    const { terminal, state } = mount()
+    state.rawBars = state.rawBars.map((b, i) => ({ ...b, volume: [10, 20, 30, 600][i] }))
+    state.setPriceData()
+    await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 2 })
+    await state.beginReplayAt(1)
+    expect(state.volumeMA?.getData().map((b) => b.close)).toEqual([NaN, 15])
+    await terminal.applyChartSettings({ 'volume.maPeriod': 1 })
+    expect(state.volumeMA?.getData().map((b) => b.close)).toEqual([10, 20])
+    terminal.replayStep()
+    expect(state.volumeMA?.getData().map((b) => b.close)).toEqual([10, 20, 30])
+    terminal.stopReplay()
+    expect(state.volumeMA?.getData().map((b) => b.close)).toEqual([10, 20, 30, 600])
+  })
+
+  it('follows custom candle colours after settings changes without refetching history', async () => {
+    const { terminal, state } = mount()
+    await terminal.applyChartSettings({ 'symbol.upColor': '#112233' })
+    expect(state.volume.getData()[0].color).toBe('#112233')
+    state.price.applyOptions({
+      colorByPreviousClose: true,
+      upColor: '#00aa00',
+      downColor: '#aa0000',
+    })
+    state.rawBars[1] = { ...state.rawBars[1], open: 90, close: 99 }
+    state.setPriceData()
+    expect(state.volume.getData()[1].color).toBe('#aa0000')
+  })
+
+  it.each([
+    'heikin-ashi',
+    'renko',
+  ])('preserves transformed volume and colours for %s', async (ctype) => {
+    const { terminal, state } = mount()
+    state.ctype = ctype
+    state.rawBars = state.rawBars.map((b, i) => ({ ...b, volume: [10, 20, 30, 60][i] }))
+    state.setPriceData()
+    await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 1 })
+    const prices = state.price.getData()
+    const volumes = state.volume.getData()
+    expect(volumes.length).toBeGreaterThan(1)
+    expect(volumes.reduce((total, b) => total + b.close, 0)).toBe(120)
+    expect(volumes.map((b) => b.time)).toEqual(prices.map((b) => b.time))
+    const style = state.chart.primarySeriesInfo()!.style
+    const theme = state.chart.theme()
+    expect(volumes.map((b) => b.color)).toEqual(
+      prices.map((b) =>
+        b.close >= b.open ? (style.upColor ?? theme.upColor) : (style.downColor ?? theme.downColor)
+      )
+    )
+    await state.beginReplayAt(1)
+    expect(state.volumeMA!.getData().map((b) => b.close)).toEqual(
+      volumes.slice(0, 2).map((b) => b.close)
+    )
+  })
+
+  it('uses only the formed sub-bars for replay volume and its average', async () => {
+    const { terminal, state } = mount()
+    state.interval = '5m'
+    state.rawBars = [bar(300, 101, 50), bar(600, 102, 500), bar(900, 103, 5000)]
+    state.rest = {
+      getBars: async () =>
+        Array.from({ length: 15 }, (_, i) =>
+          bar(300 + i * 60, 100 + i, i < 5 ? 10 : i < 10 ? 100 : 1000)
+        ),
+    }
+    state.setPriceData()
+    await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 2 })
+    await state.beginReplayAt(0)
+    terminal.replayStep()
+    expect(terminal.replayState()?.subSteps).toBe(5)
+    expect(state.volume.getData().map((b) => b.close)).toEqual([50, 100])
+    expect(state.volumeMA!.getData().map((b) => b.close)).toEqual([NaN, 75])
+    terminal.replayStep()
+    expect(state.volume.getData().map((b) => b.close)).toEqual([50, 200])
+    expect(state.volumeMA!.getData().map((b) => b.close)).toEqual([NaN, 125])
+    terminal.replaySeek(0)
+    expect(state.volume.getData().map((b) => b.close)).toEqual([50])
+    expect(state.volumeMA!.getData().map((b) => b.close)).toEqual([NaN])
+  })
+
+  it('appends live averages and clears stored overrides when resetting defaults', async () => {
+    const { terminal, state } = mount()
+    await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 2 })
+    const next = bar(300, 101, 400)
+    state.rawBars.push(next)
+    state.updateLiveBar(next)
+    expect(state.volumeMA!.getData().at(-1)?.close).toBe(250)
+    await terminal.applyChartSettings({ 'volume.colorByDirection': false })
+    expect(state.volume.getData().every((b) => b.color === undefined)).toBe(true)
+    const defaults = (await terminal.chartSettings())!.defaults
+    await terminal.applyChartSettings(
+      Object.fromEntries(Object.entries(defaults).filter(([key]) => key.startsWith('volume.')))
+    )
+    expect(
+      Object.keys(state.chartSettingsSaved).filter((key) => key.startsWith('volume.'))
+    ).toEqual([])
+    expect(state.volumeMA!.getData()).toEqual([])
+  })
+})
 
 function pendingHistory(state: TerminalState) {
   const pending = deferred<Bar[]>()
@@ -410,13 +557,21 @@ describe('a combination stays live', () => {
   // into the combined series through the same builder and pushBar path an
   // instrument uses, so the repair after each bar closes applies to it too.
   const T = Date.UTC(2026, 8, 16, 4, 15) / 1000 // 09:45 IST, a minute boundary
-  const leg = (time: number, close: number) => ({ time, open: close, high: close, low: close, close })
+  const leg = (time: number, close: number) => ({
+    time,
+    open: close,
+    high: close,
+    low: close,
+    close,
+  })
 
   function wire() {
     const { state } = mount()
     const subscribe = vi.fn()
     const unsubscribe = vi.fn()
-    let onLtp: ((e: { symbol: string; exchange: string; ltp: number; timeSec: number }) => void) | undefined
+    let onLtp:
+      | ((e: { symbol: string; exchange: string; ltp: number; timeSec: number }) => void)
+      | undefined
     state.ws = {
       onLtp: (cb: typeof onLtp) => {
         onLtp = cb
@@ -437,8 +592,20 @@ describe('a combination stays live', () => {
         NIFTY22SEP2623200PE: [leg(T - 60, 199), leg(T, 200)],
       },
     }
-    state.sym = { ...state.sym, symbol: 'NIFTY22SEP2623200CE+NIFTY22SEP2623200PE', exchange: '', quoteOnly: true, synthetic: true }
-    return { state, subscribe, unsubscribe, pushBar, tick: (e: NonNullable<typeof onLtp> extends (e: infer E) => void ? E : never) => onLtp?.(e) }
+    state.sym = {
+      ...state.sym,
+      symbol: 'NIFTY22SEP2623200CE+NIFTY22SEP2623200PE',
+      exchange: '',
+      quoteOnly: true,
+      synthetic: true,
+    }
+    return {
+      state,
+      subscribe,
+      unsubscribe,
+      pushBar,
+      tick: (e: NonNullable<typeof onLtp> extends (e: infer E) => void ? E : never) => onLtp?.(e),
+    }
   }
 
   it('subscribes LTP for every leg and folds each tick with the other legs latest price', () => {
@@ -451,9 +618,13 @@ describe('a combination stays live', () => {
     ])
     // Only the call leg ticks: the put is still at the close its history ended on.
     tick({ symbol: 'NIFTY22SEP2623200CE', exchange: 'NFO', ltp: 101, timeSec: T + 10 })
-    expect(pushBar).toHaveBeenLastCalledWith(expect.objectContaining({ time: T, close: 301, open: 300 }))
+    expect(pushBar).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: T, close: 301, open: 300 })
+    )
     tick({ symbol: 'NIFTY22SEP2623200PE', exchange: 'NFO', ltp: 205, timeSec: T + 20 })
-    expect(pushBar).toHaveBeenLastCalledWith(expect.objectContaining({ time: T, close: 306, high: 306, low: 300 }))
+    expect(pushBar).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: T, close: 306, high: 306, low: 300 })
+    )
     // A tick for an instrument that is not a leg is ignored.
     tick({ symbol: 'NIFTY29SEP26FUT', exchange: 'NFO', ltp: 23000, timeSec: T + 30 })
     expect(pushBar).toHaveBeenCalledTimes(2)
