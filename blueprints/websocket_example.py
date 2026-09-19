@@ -180,7 +180,10 @@ def api_get_websocket_apikey():
             {"status": "error", "message": "No API key found. Please generate an API key first."}
         ), 404
 
-    return jsonify({"status": "success", "api_key": api_key}), 200
+    resp = jsonify({"status": "success", "api_key": api_key})
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp, 200
 
 
 @websocket_bp.route("/api/websocket/config", methods=["GET"])

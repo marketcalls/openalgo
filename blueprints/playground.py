@@ -305,7 +305,10 @@ def get_api_key():
         return jsonify({"error": "Not authenticated"}), 401
 
     api_key = get_api_key_for_tradingview(login_username)
-    return jsonify({"api_key": api_key or ""})
+    resp = jsonify({"api_key": api_key or ""})
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @playground_bp.route("/collections")
