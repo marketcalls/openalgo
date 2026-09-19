@@ -752,6 +752,7 @@ export class TradingTerminal {
   private tradeBtns: BuySellButtonsInstance | null = null
   /** The bar the OHLC readout is currently showing; replayed into the export. */
   private legendBar: Bar | null = null
+  private legendTime: number | null = null
   /**
    * Canvas primitives that are interaction affordances rather than chart
    * content. They are detached for the duration of a screenshot and re-attached
@@ -1018,6 +1019,7 @@ export class TradingTerminal {
     }
     this.shownCount = this.shownBars.length
     this.profileLayer?.refresh(true)
+    this.refreshLegend()
   }
 
   private dataKey(request: { symbol: string; exchange: string; interval: string }): string {
@@ -1147,6 +1149,10 @@ export class TradingTerminal {
     }
   }
 
+  private volumeAvailable(): boolean {
+    return this.sym?.synthetic === true || !QUOTE_ONLY.has(this.sym?.exchange ?? '')
+  }
+
   private setVolumeData(prices: readonly Bar[], amounts?: readonly Bar[]): void {
     if (!this.volume || !this.chart) return
     const settings = volumeValues(this.chartSettingsSaved)
@@ -1171,7 +1177,11 @@ export class TradingTerminal {
       })
     }
     this.volumeMA.applyOptions({
-      visible: this.volumeOn && !isProfileKind(this.ctype) && settings['volume.showMA'] === true,
+      visible:
+        this.volumeOn &&
+        this.volumeAvailable() &&
+        !isProfileKind(this.ctype) &&
+        settings['volume.showMA'] === true,
       color: String(settings['volume.maColor']),
       lineWidth: Number(settings['volume.maWidth']),
       lineStyle: settings['volume.maStyle'] as 'solid' | 'dashed' | 'dotted',
@@ -1239,6 +1249,26 @@ export class TradingTerminal {
     this.legendEl.innerHTML = legendHtml(this.legendModel(bar))
   }
 
+  /** Resolve the selected time again after history replacement or pagination. */
+  private refreshLegend(bars: readonly Bar[] = this.shownBars): void {
+    let selected = bars.at(-1) ?? null
+    if (this.legendTime !== null) {
+      let lo = 0
+      let hi = bars.length - 1
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1
+        const bar = bars[mid]
+        if (bar.time === this.legendTime) {
+          selected = bar
+          break
+        }
+        if (bar.time < this.legendTime) lo = mid + 1
+        else hi = mid - 1
+      }
+    }
+    this.setLegend(selected)
+  }
+
   /**
    * The legend is rewritten on every crosshair move, so its controls are bound
    * by delegation on the container that survives. Binding per render would leak
@@ -1281,7 +1311,7 @@ export class TradingTerminal {
       interval: this.interval,
       exchange: sym.exchange,
       lotsize: sym.lots ? sym.lotsize : null,
-      bar,
+      bar: bar && !this.volumeAvailable() ? { ...bar, volume: undefined } : bar,
       prevClose: this.closeBefore(bar),
       fmt: (n) => this.fmt(n),
       fmtVolume: compactVolume,
@@ -1662,6 +1692,7 @@ export class TradingTerminal {
   }
 
   private buildChart() {
+    this.legendTime = null
     this.stopReplay()
     this.detachObjects()
     this.profileLayer?.dispose()
@@ -1680,6 +1711,7 @@ export class TradingTerminal {
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme,
+      navigation: { mousePan: 'horizontal' },
       // Corner clock and bar countdown. Both are off by default in the engine,
       // deliberately: a countdown repaints every second, and on the historical
       // range a chart usually opens on it counts against a bar that closed months
@@ -1767,7 +1799,8 @@ export class TradingTerminal {
     this.displayedVolume = []
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
-    if (!this.volumeOn || isProfileKind(this.ctype)) this.volume.applyOptions({ visible: false })
+    if (!this.volumeOn || !this.volumeAvailable() || isProfileKind(this.ctype))
+      this.volume.applyOptions({ visible: false })
     this.installObjects()
     // Same reasoning for the settings patch: a chart-type or theme switch
     // rebuilds the chart, and without this the user's colours, timezone and
@@ -1825,8 +1858,9 @@ export class TradingTerminal {
     } else this.tradeBtns = null
 
     this.chart.subscribeCrosshairMove((e) => {
-      this.setLegend(e.bar || (this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null))
-      this.moveReplayPick(e.index ?? null)
+      this.legendTime = e.bar?.time ?? null
+      this.refreshLegend(this.replay ? (this.price?.getData() ?? []) : this.shownBars)
+      if (e.source !== 'linked') this.moveReplayPick(e.index ?? null)
     })
 
     // Committing the pick on a plain DOM click rather than `subscribeClick`,
@@ -1907,7 +1941,7 @@ export class TradingTerminal {
     this.posLine = null
     this.position = null
     if (this.trade && this.sym) this.pollBook()
-    this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+    this.refreshLegend()
 
     // Re-apply everything the rebuild just discarded.
     this.chart.setGridOptions({ vertLines: this.gridV, horzLines: this.gridH })
@@ -3270,10 +3304,13 @@ export class TradingTerminal {
    */
   setVolumeVisible(on: boolean): void {
     this.volumeOn = on
-    this.volume?.applyOptions({ visible: on && !isProfileKind(this.ctype) })
+    this.volume?.applyOptions({
+      visible: on && this.volumeAvailable() && !isProfileKind(this.ctype),
+    })
     this.volumeMA?.applyOptions({
       visible:
         on &&
+        this.volumeAvailable() &&
         !isProfileKind(this.ctype) &&
         volumeValues(this.chartSettingsSaved)['volume.showMA'] === true,
     })
@@ -3505,6 +3542,7 @@ export class TradingTerminal {
       subBars: sub ?? undefined,
       onFrame: (state) => {
         this.refreshDisplayedVolume()
+        this.refreshLegend(price.getData())
         this.profileLayer?.refresh(true)
         this.cb.onReplayChange?.(state)
       },
@@ -3620,7 +3658,7 @@ export class TradingTerminal {
     // the live chart comes back caught up rather than frozen at the moment
     // replay started. Only a transformed chart has to rebuild from scratch.
     this.setPriceData()
-    this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+    this.refreshLegend()
     this.cb.onReplayChange?.(null)
   }
 
@@ -3746,7 +3784,7 @@ export class TradingTerminal {
     // The legend belongs to the bar on screen. During replay that is the
     // playhead's, written by onReplayChange, not the live one.
     if (!this.replay) {
-      this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+      this.refreshLegend()
     }
   }
 

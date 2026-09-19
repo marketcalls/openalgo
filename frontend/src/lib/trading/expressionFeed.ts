@@ -23,7 +23,10 @@ export function isChartExpression(text: string): boolean {
  * `NSE:RELIANCE` names its exchange; a bare leg inherits the pane's, which is
  * what a trader typing `NIFTY/RELIANCE` means.
  */
-export function resolveLeg(leg: string, defaultExchange: string): { symbol: string; exchange: string } {
+export function resolveLeg(
+  leg: string,
+  defaultExchange: string
+): { symbol: string; exchange: string } {
   const cut = leg.indexOf(':')
   return cut > 0
     ? { exchange: leg.slice(0, cut), symbol: leg.slice(cut + 1) }
@@ -67,12 +70,15 @@ export class ExpressionFeed implements DataFeed {
     )
     const legs: Record<string, readonly Bar[]> = Object.fromEntries(loaded)
     this.legBars = legs
-    return evaluateExpression(expr, legs)
+    // Combined leg activity uses each distinct leg once, independent of price
+    // signs and coefficients. Price-only live quotes add no invented quantity.
+    return evaluateExpression(expr, legs, { volume: 'sum' })
   }
 
   /** A warm snapshot exists only for instruments; a combination is always folded fresh. */
   getCachedBars(req: BarsRequest): Promise<Bar[] | undefined> {
-    if (isChartExpression(req.symbol) || !this.inner.getCachedBars) return Promise.resolve(undefined)
+    if (isChartExpression(req.symbol) || !this.inner.getCachedBars)
+      return Promise.resolve(undefined)
     return this.inner.getCachedBars(req)
   }
 }

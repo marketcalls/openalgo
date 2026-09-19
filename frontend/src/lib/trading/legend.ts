@@ -98,7 +98,7 @@ export function buildChartLegend(input: LegendInput): LegendRun[] {
 
   const bar = input.bar
   if (bar) {
-    let text =
+    const text =
       `O ${input.fmt(bar.open)} H ${input.fmt(bar.high)} ` +
       `L ${input.fmt(bar.low)} C ${input.fmt(bar.close)}`
     const tone = bar.close >= bar.open ? 'up' : 'down'
@@ -107,7 +107,7 @@ export function buildChartLegend(input: LegendInput): LegendRun[] {
     // whose elements are not one bar each, so it is shown only when it is real.
     // Split into its own run rather than concatenated, so it can carry the
     // switch for the bars it is reading.
-    if (typeof bar.volume === 'number' && Number.isFinite(bar.volume) && bar.volume > 0) {
+    if (typeof bar.volume === 'number' && Number.isFinite(bar.volume) && bar.volume >= 0) {
       runs.push({
         text: `V ${input.fmtVolume(bar.volume)}`,
         tone,
@@ -180,7 +180,9 @@ export function legendHtml(runs: readonly LegendRun[]): string {
           'text-decoration:' + (off ? 'line-through' : 'none'),
           'text-underline-offset:3px',
           off ? 'opacity:.5' : '',
-        ].filter(Boolean).join(';')
+        ]
+          .filter(Boolean)
+          .join(';')
         const title = off ? 'Show volume' : 'Hide volume'
         return (
           `<span data-legend-action="${run.action}" role="button" tabindex="0"` +

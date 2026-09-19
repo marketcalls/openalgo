@@ -5,8 +5,8 @@ import {
   DataLoadingController,
   type SeriesApi,
 } from 'openalgo-charts'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseExpression, type SymbolExpression } from 'openalgo-charts/transform'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type SymbolView, TradingTerminal } from './terminal'
 
 // Exercise the terminal and chart together. Only canvas painting and the
@@ -69,6 +69,7 @@ type TerminalState = {
   replayPicking: boolean
   commitReplayPick(): void
   setVolumeVisible(visible: boolean): void
+  onTick(event: { ltp: number; timeSec: number }): void
 }
 
 const bar = (time: number, close: number, volume = 100): Bar => ({
@@ -181,7 +182,83 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+describe('selected candle readout', () => {
+  it('does not move the replay picker in response to a linked readout', () => {
+    const { state, terminal } = mount()
+    state.buildChart()
+    state.chart.applySize(800, 600)
+    terminal.startReplay()
+    const selected = terminal.replayPickBar()
+    state.chart.setLinkedCrosshairIndex(2)
+    expect(terminal.replayPickBar()).toEqual(selected)
+  })
+
+  it('keeps the hovered candle through ticks and history replacement, then follows latest on leave', () => {
+    const { state, container, legendEl } = mount()
+    state.buildChart()
+    state.chart.applySize(800, 600)
+    const move = (index: number) =>
+      container.dispatchEvent(
+        new MouseEvent('pointermove', {
+          clientX: state.chart.timeScale.indexToX(index),
+          clientY: 200,
+        })
+      )
+    move(1)
+    expect(legendEl.textContent).toContain('C 101.00')
+    state.onTick({ ltp: 150, timeSec: 245 })
+    expect(legendEl.textContent).toContain('C 101.00')
+    state.rawBars = [
+      bar(0, 99),
+      ...state.rawBars.map((b) => (b.time === 120 ? { ...b, close: 111 } : b)),
+    ]
+    state.setPriceData()
+    expect(legendEl.textContent).toContain('C 111.00')
+    container.dispatchEvent(new MouseEvent('pointerleave'))
+    expect(legendEl.textContent).toContain('C 150.00')
+  })
+
+  it('uses only displayed replay bars when the pointer is outside the data', async () => {
+    const { state, terminal, legendEl } = mount()
+    await state.beginReplayAt(1)
+    expect(legendEl.textContent).toContain('C 101.00')
+    terminal.replayStep()
+    expect(legendEl.textContent).toContain('C 102.00')
+    terminal.stopReplay()
+    expect(legendEl.textContent).toContain('C 103.00')
+  })
+})
+
 describe('built-in volume and average', () => {
+  it.each([
+    'NSE_INDEX',
+    'BSE_INDEX',
+    'MCX_INDEX',
+    'GLOBAL_INDEX',
+  ])('hides index volume and its average on %s without losing the user preference', async (exchange) => {
+    const { terminal, state } = mount()
+    state.sym.exchange = exchange
+    state.sym.quoteOnly = true
+    await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 2 })
+    terminal.setVolumeVisible(true)
+    expect(
+      state.chart
+        .getState()
+        .series.filter((s) => s.priceScaleId === '')
+        .every((s) => s.style.visible === false)
+    ).toBe(true)
+    expect(terminal.volumeVisible()).toBe(true)
+    state.sym.exchange = 'NFO'
+    state.sym.synthetic = true
+    terminal.setVolumeVisible(true)
+    expect(
+      state.chart
+        .getState()
+        .series.filter((s) => s.priceScaleId === '')
+        .every((s) => s.style.visible === true)
+    ).toBe(true)
+  })
+
   it('follows candle colours and corrects direction on a live replacement', () => {
     const { state } = mount()
     state.price.applyOptions({ upColor: '#00aa00', downColor: '#aa0000' })
@@ -629,6 +706,15 @@ describe('a combination stays live', () => {
     tick({ symbol: 'NIFTY29SEP26FUT', exchange: 'NFO', ltp: 23000, timeSec: T + 30 })
     expect(pushBar).toHaveBeenCalledTimes(2)
     expect(state.rawBars.at(-1)).toMatchObject({ time: T, close: 306 })
+  })
+
+  it('preserves reconciled combined volume when a price-only leg quote arrives', () => {
+    const { state, tick } = wire()
+    state.rawBars = [{ ...leg(T, 300), volume: 2500 }]
+    state.connectExpressionLive(state.expr!)
+    tick({ symbol: 'NIFTY22SEP2623200CE', exchange: 'NFO', ltp: 105, timeSec: T + 10 })
+    expect(state.rawBars.at(-1)).toMatchObject({ close: 305, volume: 2500 })
+    expect(state.price.getData().at(-1)).toMatchObject({ close: 305, volume: 2500 })
   })
 
   it('opens the current bucket provisionally when the folded history stopped one bar short', () => {

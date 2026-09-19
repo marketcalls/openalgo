@@ -66,9 +66,17 @@ describe('buildChartLegend', () => {
   it('omits volume when the chart type does not carry one', () => {
     // Renko and point-and-figure elements are not one bar each.
     expect(flat(input({ bar: { open: 1, high: 2, low: 0.5, close: 1.5 } }))).not.toContain(' V ')
-    expect(
-      flat(input({ bar: { open: 1, high: 2, low: 0.5, close: 1.5, volume: 0 } }))
-    ).not.toContain(' V ')
+  })
+
+  it('distinguishes zero volume from unavailable or invalid volume', () => {
+    expect(flat(input({ bar: { open: 1, high: 2, low: 0.5, close: 1.5, volume: 0 } }))).toContain(
+      ' V 0K'
+    )
+    for (const volume of [undefined, NaN, Infinity, -1]) {
+      expect(
+        flat(input({ bar: { open: 1, high: 2, low: 0.5, close: 1.5, volume } }))
+      ).not.toContain(' V ')
+    }
   })
 
   it('still names the instrument before any bar or price has arrived', () => {
@@ -85,11 +93,12 @@ describe('buildChartLegend', () => {
 
   it("reports the bar's own change, absolute and percent, signed and toned", () => {
     // close 24451 against a previous close of 24455.5: down 4.50, or 0.02%.
-    expect(buildChartLegend(input()).at(-1))
-      .toEqual({ text: '-4.50 (-0.02%)', tone: 'down' })
+    expect(buildChartLegend(input()).at(-1)).toEqual({ text: '-4.50 (-0.02%)', tone: 'down' })
     // close 24451 against 24400: up 51.00, or 0.21%.
-    expect(buildChartLegend(input({ prevClose: 24400 })).at(-1))
-      .toEqual({ text: '+51.00 (+0.21%)', tone: 'up' })
+    expect(buildChartLegend(input({ prevClose: 24400 })).at(-1)).toEqual({
+      text: '+51.00 (+0.21%)',
+      tone: 'up',
+    })
   })
 
   it('shows no change at all when there is no bar behind this one', () => {

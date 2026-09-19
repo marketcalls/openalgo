@@ -2,7 +2,13 @@ import type { Bar, BarsRequest, DataFeed } from 'openalgo-charts'
 import { describe, expect, it, vi } from 'vitest'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 
-const bar = (time: number, close: number): Bar => ({ time, open: close, high: close, low: close, close })
+const bar = (time: number, close: number): Bar => ({
+  time,
+  open: close,
+  high: close,
+  low: close,
+  close,
+})
 
 function inner(answers: Record<string, Bar[]>) {
   const requests: BarsRequest[] = []
@@ -17,13 +23,31 @@ function inner(answers: Record<string, Bar[]>) {
 }
 
 describe('ExpressionFeed', () => {
+  it('retains combined leg activity for straddles, spreads and repeated symbols', async () => {
+    const { feed } = inner({
+      'NFO:CE': [{ ...bar(60, 100), volume: 20 }],
+      'NFO:PE': [{ ...bar(60, 200), volume: 30 }],
+    })
+    const expression = new ExpressionFeed(feed, () => 'NFO')
+    for (const symbol of ['CE+PE', 'CE-PE', '2*CE+PE', 'CE+CE+PE']) {
+      const bars = await expression.getBars({ symbol, exchange: 'NFO', interval: '1m' })
+      expect(bars[0].volume).toBe(50)
+    }
+  })
+
   it('fetches every leg through the inner feed with the pane exchange and folds them', async () => {
     const { feed, requests } = inner({
       'NFO:CE': [bar(60, 100), bar(120, 101)],
       'NFO:PE': [bar(60, 200), bar(120, 202)],
     })
     const expression = new ExpressionFeed(feed, () => 'NFO')
-    const bars = await expression.getBars({ symbol: 'CE+PE', exchange: '', interval: '1m', from: 0, to: 130 })
+    const bars = await expression.getBars({
+      symbol: 'CE+PE',
+      exchange: '',
+      interval: '1m',
+      from: 0,
+      to: 130,
+    })
     expect(bars.map((b) => [b.time, b.close])).toEqual([
       [60, 300],
       [120, 303],
@@ -37,21 +61,33 @@ describe('ExpressionFeed', () => {
 
   it('keeps the exchange a leg names for itself', async () => {
     const { feed, requests } = inner({ 'NSE:RELIANCE': [bar(60, 10)], 'NFO:NIFTY': [bar(60, 20)] })
-    await new ExpressionFeed(feed, () => 'NFO').getBars({ symbol: 'NSE:RELIANCE+NIFTY', exchange: '', interval: '1m' })
+    await new ExpressionFeed(feed, () => 'NFO').getBars({
+      symbol: 'NSE:RELIANCE+NIFTY',
+      exchange: '',
+      interval: '1m',
+    })
     expect(requests.map((r) => `${r.exchange}:${r.symbol}`)).toEqual(['NSE:RELIANCE', 'NFO:NIFTY'])
   })
 
   it('refuses a combination with a missing leg rather than charting a gap', async () => {
     const { feed } = inner({ 'NFO:CE': [bar(60, 100)] })
     await expect(
-      new ExpressionFeed(feed, () => 'NFO').getBars({ symbol: 'CE+PE', exchange: '', interval: '1m' })
+      new ExpressionFeed(feed, () => 'NFO').getBars({
+        symbol: 'CE+PE',
+        exchange: '',
+        interval: '1m',
+      })
     ).rejects.toThrow('no bars for PE')
   })
 
   it('passes a plain symbol straight through, cache peek included', async () => {
     const { feed, requests } = inner({ 'NFO:NIFTY29SEP26FUT': [bar(60, 23000)] })
     const expression = new ExpressionFeed(feed, () => 'NSE')
-    const bars = await expression.getBars({ symbol: 'NIFTY29SEP26FUT', exchange: 'NFO', interval: '1m' })
+    const bars = await expression.getBars({
+      symbol: 'NIFTY29SEP26FUT',
+      exchange: 'NFO',
+      interval: '1m',
+    })
     expect(bars).toHaveLength(1)
     expect(requests).toHaveLength(1)
     await expression.getCachedBars({ symbol: 'NIFTY29SEP26FUT', exchange: 'NFO', interval: '1m' })

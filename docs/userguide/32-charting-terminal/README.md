@@ -52,6 +52,21 @@ updates as the current bar forms. Hiding volume hides the average as well.
 During replay, both use only the bars revealed by the playhead, including the
 formed portion of an intrabar candle.
 
+The readout includes zero volume as `V 0`. Index symbols have no traded volume,
+so their volume bars, average and volume readout stay hidden. Switching back to
+a traded instrument restores your volume preference.
+
+For a combined symbol, volume is the sum of each distinct expression leg's
+reported volume, once per matching candle. Subtraction and price coefficients
+do not subtract or multiply that activity. An unavailable leg amount leaves the
+combined volume unavailable. Price-only live quotes preserve the last reported
+amount; history reconciliation supplies updated volume.
+
+Hover a candle to read its OHLC, volume and study values while live data continues
+arriving. Crosshair sync makes each follower read its own candle at the mapped
+time. Moving outside the chart or beyond its data returns to the latest displayed
+candle, including during replay.
+
 ## Indicator Templates
 
 Click the chart you want to work with, then open **Templates** beside the grid
@@ -239,8 +254,10 @@ anchor meanings are preserved by the upgrade.
   pointer. It uses the same chart gesture on supported trackpads and browsers.
 - Scroll over a visible price axis to expand or compress that price scale around
   the pointed price. This makes the scale manual, so it stays where you put it.
-- Drag inside the plot with a mouse or pen to pan both time and price. Touch
-  panning also moves both axes.
+- Drag inside the plot with a mouse or pen to pan through time while preserving
+  automatic price fitting. The Navigation setting can explicitly enable panning
+  both axes. Dragging a price axis still adjusts it manually. Touch panning moves
+  both axes.
 
 While a price scale is automatic, its range eases as navigation brings a new
 high or low into view. A manually adjusted or fixed scale stays authoritative.
