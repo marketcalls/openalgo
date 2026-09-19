@@ -235,7 +235,7 @@ export function SettingsField({
   onChange(v: unknown): void
 }) {
   const label = (
-    <label htmlFor={id} className="text-[13px] text-muted-foreground">
+    <label htmlFor={id} title={field.unavailable} className="text-[13px] text-muted-foreground">
       {field.label}
     </label>
   )
@@ -244,7 +244,12 @@ export function SettingsField({
     return (
       <>
         {label}
-        <TickBox id={id} checked={value === true} onChange={onChange} />
+        <TickBox
+          id={id}
+          checked={value === true}
+          onChange={onChange}
+          disabled={!!field.unavailable}
+        />
       </>
     )
   }
@@ -258,6 +263,7 @@ export function SettingsField({
           <input
             id={id}
             type="color"
+            disabled={!!field.unavailable}
             value={v}
             onChange={(e) => onChange(e.target.value)}
             aria-label={field.label}
@@ -290,6 +296,7 @@ export function SettingsField({
         <div className="relative w-full">
           <select
             id={id}
+            disabled={!!field.unavailable}
             value={String(value ?? '')}
             onChange={(e) => onChange(e.target.value)}
             className={cn(CONTROL, 'w-full appearance-none pr-7')}
@@ -322,6 +329,7 @@ export function SettingsField({
         <input
           id={id}
           type="text"
+          disabled={!!field.unavailable}
           value={typeof value === 'string' ? value : ''}
           onChange={(e) => onChange(e.target.value)}
           placeholder={TEXT_PLACEHOLDER[field.type]}
@@ -350,6 +358,7 @@ export function SettingsField({
         <input
           id={id}
           type="number"
+          disabled={!!field.unavailable}
           value={typeof value === 'number' || typeof value === 'string' ? String(value) : ''}
           min={field.min}
           max={field.max}
@@ -363,6 +372,7 @@ export function SettingsField({
           <button
             type="button"
             aria-label="Increase"
+            disabled={!!field.unavailable}
             onClick={() => nudge(1)}
             className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
           >
@@ -373,6 +383,7 @@ export function SettingsField({
           <button
             type="button"
             aria-label="Decrease"
+            disabled={!!field.unavailable}
             onClick={() => nudge(-1)}
             className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
           >

@@ -43,6 +43,17 @@ const flat = (i: LegendInput) =>
     .join(' ')
 
 describe('buildChartLegend', () => {
+  it('shows optional OI for the selected bar, including zero, without inventing missing readings', () => {
+    const bar = { open: 1, high: 2, low: 0.5, close: 1.5, oi: 0 }
+    expect(flat(input({ bar }))).not.toContain(' OI ')
+    expect(flat(input({ bar, openInterest: true }))).toContain(' OI 0K')
+    expect(flat(input({ bar, openInterest: true, hasOpenInterest: false }))).not.toContain(' OI ')
+    expect(flat(input({ bar: { ...bar, oi: 12000 }, openInterest: true }))).toContain(' OI 12K')
+    for (const oi of [undefined, NaN, Infinity]) {
+      expect(flat(input({ bar: { ...bar, oi }, openInterest: true }))).not.toContain(' OI ')
+    }
+  })
+
   it('names the instrument, its timeframe and its exchange', () => {
     expect(flat(input())).toContain('NIFTY25AUG26FUT · 15m · NFO')
   })

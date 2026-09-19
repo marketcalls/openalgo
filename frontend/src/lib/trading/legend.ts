@@ -50,6 +50,7 @@ export interface LegendBar {
   low: number
   close: number
   volume?: number
+  oi?: number
 }
 
 export interface LegendInput {
@@ -80,6 +81,9 @@ export interface LegendInput {
   fmtVolume(value: number): string
   /** The bars are switched off, so their readout says so rather than lying. */
   volumeHidden?: boolean
+  /** Opt-in position-level reading, independent of volume visibility. */
+  openInterest?: boolean
+  hasOpenInterest?: boolean
 }
 
 /**
@@ -114,6 +118,14 @@ export function buildChartLegend(input: LegendInput): LegendRun[] {
         action: 'volume',
         dim: input.volumeHidden === true,
       })
+    }
+    if (
+      input.openInterest === true &&
+      input.hasOpenInterest !== false &&
+      typeof bar.oi === 'number' &&
+      Number.isFinite(bar.oi)
+    ) {
+      runs.push({ text: `OI ${input.fmtVolume(bar.oi)}`, tone })
     }
   }
 

@@ -68,6 +68,7 @@ import {
   readStoredIndicators,
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
+import { openInterestCapability } from './openInterest'
 import {
   createWorkspacePanePreferences,
   parseTerminalWorkspacePane,
@@ -214,6 +215,8 @@ export interface SymbolView {
   tick: number
   freezeQty: number
   quoteOnly: boolean
+  /** Instrument capability; an absent live observation does not change it. */
+  hasOpenInterest?: boolean
   /**
    * A chart of an expression (`NIFTY/RELIANCE`, `2*CE25000 - CE25200`) rather
    * than an instrument. There is nothing to place an order in and nothing to
@@ -404,6 +407,8 @@ export interface IndicatorField {
   min?: number
   max?: number
   step?: number
+  /** A disabled control keeps its saved value and explains the missing capability. */
+  unavailable?: string
 }
 
 /**
@@ -1327,6 +1332,8 @@ export class TradingTerminal {
       fmt: (n) => this.fmt(n),
       fmtVolume: compactVolume,
       volumeHidden: !this.volumeOn,
+      openInterest: this.chart?.statusLineOptions().openInterest,
+      hasOpenInterest: this.chart?.hasOpenInterest,
     })
     if (isProfileKind(this.ctype)) {
       runs.splice(2, 0, { text: CHART_TYPES[this.ctype].label, tone: 'meta' })
@@ -1771,7 +1778,14 @@ export class TradingTerminal {
     })
     this.chart.setDataContext(
       this.sym
-        ? { symbol: this.sym.symbol, exchange: this.sym.exchange, interval: this.interval }
+        ? {
+            symbol: this.sym.symbol,
+            exchange: this.sym.exchange,
+            interval: this.interval,
+            hasOpenInterest: this.sym.synthetic
+              ? false
+              : (this.sym.hasOpenInterest ?? openInterestCapability(this.sym.exchange)),
+          }
         : { interval: this.interval }
     )
     this.offBranding = this.chart.on('branding:changed', () => {
@@ -2884,7 +2898,12 @@ export class TradingTerminal {
       inputs: t.inputs.map((i) =>
         i.type === 'colorPair'
           ? (i as unknown as ChartSettingsPairField)
-          : toField(i as { key: string; type: string; label?: string; group?: string })
+          : {
+              ...toField(i as { key: string; type: string; label?: string; group?: string }),
+              ...(i.key === 'statusLine.openInterest' && chart.hasOpenInterest === false
+                ? { unavailable: 'Open interest is unavailable for this instrument.' }
+                : {}),
+            }
       ),
     }))
     return volumeSettingsView(
@@ -2991,6 +3010,7 @@ export class TradingTerminal {
     this.lsSet('chartsettings', JSON.stringify(kept))
     this.adoptGridFromPatch(patch)
     this.refreshDisplayedVolume()
+    this.refreshLegend(this.replay ? (this.price?.getData() ?? []) : this.shownBars)
     if (isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval && interval !== this.interval) {
@@ -3047,6 +3067,7 @@ export class TradingTerminal {
       )
       this.installProfile()
       this.refreshDisplayedVolume()
+      this.refreshLegend(this.replay ? (this.price?.getData() ?? []) : this.shownBars)
     } catch (error) {
       if (strict) throw error
       /* ignore */
@@ -4132,6 +4153,7 @@ export class TradingTerminal {
       freezeQty: 1,
       quoteOnly: true,
       synthetic: true,
+      hasOpenInterest: false,
       productOptions: [],
       product: '',
     }
@@ -4236,6 +4258,7 @@ export class TradingTerminal {
       tick: resolveTick(exchange, info.tick_size),
       freezeQty: Number(info.freeze_qty) || 1,
       quoteOnly: QUOTE_ONLY.has(exchange),
+      hasOpenInterest: openInterestCapability(exchange, info),
       productOptions,
       product: this.product,
     }
@@ -4746,7 +4769,16 @@ export class TradingTerminal {
       if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
       return
     }
-    this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
+    this.rest = new OpenAlgoDataFeed({
+      baseUrl: '',
+      apiKey: this.apiKey,
+      hasOpenInterest: (request) => {
+        const sym = this.sym
+        return sym?.symbol === request.symbol && sym.exchange === request.exchange
+          ? (sym.hasOpenInterest ?? openInterestCapability(sym.exchange))
+          : openInterestCapability(request.exchange ?? '')
+      },
+    })
     this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
     this.exprFeed = new ExpressionFeed(this.cachedBars, () => this.exprLegExchange)
     // Repair follows the stream: one small refresh a moment after each bar

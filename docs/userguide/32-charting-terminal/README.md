@@ -5,12 +5,12 @@
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
 it. This development branch uses a locally verified `openalgo-charts` 2.4.0
 candidate: a from-scratch canvas
-charting engine with 17 chart types, 102 built-in indicators plus any you write
+charting engine with 17 chart types, 105 built-in indicators plus any you write
 yourself, and 85 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
-Everything on the page is live over the WebSocket feed. Nothing on it polls for
-prices.
+Price updates arrive over the WebSocket feed. History refreshes reconcile bars
+and supply fields the live quote stream does not report.
 
 ## Opening It
 
@@ -66,6 +66,33 @@ Hover a candle to read its OHLC, volume and study values while live data continu
 arriving. Crosshair sync makes each follower read its own candle at the mapped
 time. Moving outside the chart or beyond its data returns to the latest displayed
 candle, including during replay.
+
+## Open Interest
+
+The indicator picker includes **Open Interest**, **Open Interest Change** and
+**Open Interest Buildup**. The first plots the reported level, the second plots
+the change between adjacent available readings, and the third colours candles
+for the four price/OI regimes. Missing readings leave gaps. A reported zero is
+a real reading, and folded bars keep the latest level instead of adding levels.
+
+Enable **Chart settings > Readout > Open interest** to include the selected
+candle's OI in the chart readout and exported image. It starts off. Hovered OI
+stays on the selected candle while prices continue updating. If the forming bar
+has no OI, its reading is absent; the terminal does not carry a historical level
+forward as a live observation.
+
+Capability comes from instrument metadata and known exchange segments. Cash,
+index and crypto spot instruments suppress placeholder history OI. Futures,
+options and perpetual futures retain supplied readings. An unclassified
+instrument's capability stays unknown. The readout switch is disabled for an
+unsupported instrument while retaining your preference for the next supported
+one. Capability says whether OI applies, not whether the broker supplies it on
+every bar. The current quote stream does not supply OI.
+
+Study templates and chart workspaces retain OI studies and appearance. Workspaces
+also retain the readout preference; observations come from the restored
+instrument's history. Expressions and price-generated chart elements do not
+have a meaningful position level and omit OI.
 
 ## Chart Workspaces
 

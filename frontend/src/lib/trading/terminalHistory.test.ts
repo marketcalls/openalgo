@@ -183,6 +183,54 @@ function deferred<T>() {
 }
 
 describe('selected candle readout', () => {
+  it('repaints the saved OI readout after asynchronous settings restoration', async () => {
+    const { state, terminal, legendEl } = mount()
+    state.rawBars = state.rawBars.map((bar) => ({ ...bar, oi: 12000 }))
+    state.buildChart()
+    await terminal.applyChartSettings({ 'statusLine.openInterest': true })
+    expect(legendEl.textContent).toContain(' OI 12.00K')
+    state.buildChart()
+    await vi.dynamicImportSettled()
+    expect(legendEl.textContent).toContain(' OI 12.00K')
+  })
+
+  it('retains OI capability and the selected reading through live gaps and rebuilds', async () => {
+    const { state, terminal, container, legendEl } = mount()
+    state.rawBars = state.rawBars.map((bar, i) => ({ ...bar, oi: i === 1 ? 0 : 1000 + i }))
+    state.builder.seed(state.rawBars[3])
+    state.buildChart()
+    state.chart.applySize(800, 600)
+    expect(state.chart.hasOpenInterest).toBe(true)
+    expect(legendEl.textContent).not.toContain(' OI ')
+    await terminal.applyChartSettings({ 'statusLine.openInterest': true })
+    expect(legendEl.textContent).toContain(' OI 1.00K')
+    container.dispatchEvent(
+      new MouseEvent('pointermove', {
+        clientX: state.chart.timeScale.indexToX(1),
+        clientY: 200,
+      })
+    )
+    expect(legendEl.textContent).toContain(' OI 0')
+    state.onTick({ ltp: 150, timeSec: 245 })
+    expect(legendEl.textContent).toContain(' OI 0')
+    container.dispatchEvent(new MouseEvent('pointerleave'))
+    expect(legendEl.textContent).not.toContain(' OI ')
+    expect(state.price.getData().at(-1)?.oi).toBeUndefined()
+    state.buildChart()
+    expect(state.chart.hasOpenInterest).toBe(true)
+    await vi.dynamicImportSettled()
+    expect(state.chart.statusLineOptions().openInterest).toBe(true)
+    state.sym = { ...state.sym, symbol: 'NIFTY', exchange: 'NSE_INDEX', quoteOnly: true }
+    state.buildChart()
+    expect(state.chart.hasOpenInterest).toBe(false)
+    const settings = await terminal.chartSettings()
+    const field = settings?.tabs
+      .flatMap((tab) => tab.inputs)
+      .find((field) => field.key === 'statusLine.openInterest')
+    expect(field).toHaveProperty('unavailable', 'Open interest is unavailable for this instrument.')
+    expect(settings?.values['statusLine.openInterest']).toBe(true)
+  })
+
   it('does not move the replay picker in response to a linked readout', () => {
     const { state, terminal } = mount()
     state.buildChart()
