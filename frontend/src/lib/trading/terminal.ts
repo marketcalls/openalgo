@@ -13,7 +13,7 @@
  * cancel, real-time order stream, REST fallback) is unchanged.
  */
 
-import type { ChartObjectSnapshot, LinkGroup } from 'openalgo-charts'
+import type { ChartObjectSnapshot, IndicatorState, LinkGroup } from 'openalgo-charts'
 import {
   type Bar,
   BuySellButtons,
@@ -35,6 +35,7 @@ import {
   ReplayShade,
   type ReplayState,
   readChartSettings,
+  registeredIndicators,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
@@ -50,12 +51,21 @@ import type {
   DrawingTool,
 } from 'openalgo-charts/draw'
 import {
-  runTransform,
-  parseExpression,
   evaluateExpression,
+  parseExpression,
+  runTransform,
   type SymbolExpression,
 } from 'openalgo-charts/transform'
+import { parseIndicatorStates } from 'openalgo-charts/workspace'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
+import {
+  type IndicatorTemplateMode,
+  planIndicatorTemplate,
+  readStoredIndicators,
+  type StoredIndicatorRecord,
+} from './indicatorTemplates'
+
+export { dedupeIndicators } from './indicatorTemplates'
 
 // Re-exported so the React layer imports its chart types from this facade
 // rather than reaching into the library directly, as it already does for
@@ -117,18 +127,10 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
-import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
-import {
-  VOLUME_DEFAULTS,
-  volumeAverage,
-  volumeAveragePoint,
-  volumePoint,
-  volumeSettingsView,
-  volumeValues,
-} from './volumeSettings'
+import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
   type IntervalData,
@@ -155,6 +157,14 @@ import {
   readProfileSettings,
 } from './profileSettings'
 import { profileSettingsView } from './profileSettingsView'
+import {
+  VOLUME_DEFAULTS,
+  volumeAverage,
+  volumeAveragePoint,
+  volumePoint,
+  volumeSettingsView,
+  volumeValues,
+} from './volumeSettings'
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
@@ -526,38 +536,8 @@ export function resolveTick(exchange: string, tickSize: unknown): number {
   return Number(tickSize) || 0.05
 }
 
-/**
- * Drop indicators that repeat an earlier one exactly.
- *
- * Two overlapping symbol loads used to re-apply the tracked list against the
- * same chart, doubling every indicator; the doubled list was then persisted,
- * so it doubled again on each rebuild until a legend of thirty identical rows
- * covered the chart. The load ticket stops that happening; this is what lets
- * a layout already carrying duplicates heal instead of needing them removed
- * by hand.
- *
- * Settings are part of the identity on purpose. Two EMAs at 20 and 50 are a
- * normal thing to want, so only an exact repeat -- indistinguishable on the
- * chart, and therefore an accident -- is collapsed.
- */
-export function dedupeIndicators<T extends { indicatorId: string; settings: unknown }>(
-  records: T[]
-): T[] {
-  const seen = new Set<string>()
-  return records.filter((rec) => {
-    const key = `${rec.indicatorId}:${JSON.stringify(rec.settings)}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-export interface SavedIndicatorRecord {
-  indicatorId: string
-  settings: Record<string, unknown>
-  /** Missing in saves written before visibility persistence. */
-  visible?: boolean
-}
+/** Persist each study instance, including its visibility and pane placement. */
+export type SavedIndicatorRecord = StoredIndicatorRecord
 
 /** Avoid storage and React work for generic object events that changed no indicator. */
 export function sameIndicatorRecords(
@@ -1976,8 +1956,7 @@ export class TradingTerminal {
     }
     try {
       const raw = this.lsGet('indicators')
-      const parsed = raw ? (JSON.parse(raw) as typeof this.activeIndicators) : []
-      if (Array.isArray(parsed)) this.activeIndicators = parsed
+      this.activeIndicators = readStoredIndicators(raw ? JSON.parse(raw) : [])
     } catch {
       /* ignore */
     }
@@ -2670,11 +2649,13 @@ export class TradingTerminal {
       // half-applied chart and truncate it.
       this.applyingIndicators = true
       try {
-        // syncIndicators writes the result back, so a layout that already
-        // carries duplicates heals on the next load.
-        for (const rec of dedupeIndicators(this.activeIndicators)) {
+        // Legacy duplicate healing happens during migration. Modern templates
+        // may intentionally contain identical studies, including a shared pane.
+        for (const rec of this.activeIndicators) {
           try {
-            const inst = this.chart.addIndicator(rec.indicatorId, rec.settings)
+            const inst = this.chart.addIndicator(rec.indicatorId, rec.settings, {
+              paneIndex: rec.paneIndex,
+            })
             inst.setVisible(rec.visible !== false)
           } catch {
             /* an id that is no longer registered — skip rather than break the chart */
@@ -2980,15 +2961,63 @@ export class TradingTerminal {
       indicatorId: i.indicatorId,
       settings: { ...i.settings() },
       visible: i.visible(),
+      paneIndex: i.paneIndex,
     }))
     if (!sameIndicatorRecords(this.activeIndicators, next)) {
       this.activeIndicators = next
-      this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+      this.lsSet('indicators', JSON.stringify({ version: 2, indicators: this.activeIndicators }))
     }
     const announced = this.listIndicators().map(({ id, name }) => ({ id, name }))
     if (!sameIndicatorInstances(this.announcedIndicators, announced)) {
       this.announcedIndicators = announced
       this.cb.onIndicatorsChange?.(announced)
+    }
+  }
+
+  captureIndicatorTemplate(): IndicatorState[] {
+    if (this.destroyed || !this.chart) throw new Error('Chart is not available')
+    return parseIndicatorStates(this.chart.getState().indicators ?? [])
+  }
+
+  async applyIndicatorTemplate(
+    input: IndicatorState[],
+    mode: IndicatorTemplateMode
+  ): Promise<void> {
+    const incoming = parseIndicatorStates(input)
+    const chart = this.chart
+    if (this.destroyed || !chart) throw new Error('Chart is not available')
+    await this.loadIndicators()
+    if (this.destroyed || this.chart !== chart)
+      throw new Error('The chart changed while studies were loading')
+    if (this.restoringIndicatorsOn === chart)
+      throw new Error('Studies are still loading. Try again when loading finishes.')
+    const previous = parseIndicatorStates(chart.getState().indicators ?? [])
+    const planned = planIndicatorTemplate(
+      previous,
+      incoming,
+      mode,
+      new Set(registeredIndicators().map((descriptor) => descriptor.id)),
+      chart.panes().length
+    )
+    this.applyingIndicators = true
+    try {
+      const report = chart.restoreState({ version: 1, indicators: planned })
+      if (!report.applied) throw new Error(report.reason ?? 'Template could not be applied')
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart) {
+        try {
+          chart.restoreState({ version: 1, indicators: previous })
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Template failed and previous studies could not be restored'
+          )
+        }
+      }
+      throw error
+    } finally {
+      this.applyingIndicators = false
+      if (!this.destroyed && this.chart === chart) this.syncIndicators()
     }
   }
 
