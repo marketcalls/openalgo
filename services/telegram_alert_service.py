@@ -35,6 +35,40 @@ _http_client = httpx.Client(timeout=30.0)
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
+def _placed_nothing(order_type: str, response: dict[str, Any]) -> bool:
+    """Whether a successful smart order resulted in no order at all.
+
+    A smart order targets a position size, so the adapter placing nothing is a
+    correct outcome rather than a failure, and the two response shapes are
+    distinct: a placed order carries an order id and no message, and a
+    no-action result carries a message and no order id. Both halves are
+    required. An order that went in but whose id the adapter failed to parse
+    has neither, and must not be announced as "no order was placed" - it falls
+    through to the unchanged heading and the old "Order ID: N/A".
+
+    Read off the shape rather than the message text, so this holds whatever
+    wording an adapter uses.
+
+    Args:
+        order_type: The api_type the alert is being sent for.
+        response: The order response dict.
+
+    Returns:
+        bool: True when this is a smart order that placed nothing.
+    """
+    return (
+        order_type == "placesmartorder"
+        and response.get("status") == "success"
+        and not response.get("orderid")
+        and bool(response.get("message"))
+    )
+
+
+def _no_action_reason(response: dict[str, Any]) -> str:
+    """The adapter's explanation for placing no order, for a trader to read."""
+    return response.get("message") or "No order was placed."
+
+
 class TelegramAlertService:
     """Service for sending order-related alerts via Telegram"""
 
@@ -43,6 +77,10 @@ class TelegramAlertService:
         self.alert_templates = {
             "placeorder": "*Order Placed*\n{details}",
             "placesmartorder": "*Smart Order Placed*\n{details}",
+            # A smart order aims at a target position size, so placing nothing
+            # is a correct outcome and needs its own heading. Under the
+            # "Placed" heading it read as an executed order (issue #2054).
+            "placesmartorder_no_action": "*Smart Order - No Action Taken*\n{details}",
             "basketorder": "*Basket Order Executed*\n{details}",
             "splitorder": "*Split Order Executed*\n{details}",
             "optionsorder": "*Options Order Executed*\n{details}",
@@ -97,7 +135,18 @@ class TelegramAlertService:
                     ]
                 )
                 if response.get("status") == "success":
-                    details.append(f"Order ID: `{response.get('orderid', 'N/A')}`")
+                    if response.get("orderid"):
+                        details.append(f"Order ID: `{response.get('orderid')}`")
+                    elif _placed_nothing(order_type, response):
+                        # A success with a message and no order id is the
+                        # adapter reporting that it placed nothing on purpose.
+                        # "Order ID: N/A" under the Placed heading told the user
+                        # an order had gone in.
+                        details.append(f"Result: {_no_action_reason(response)}")
+                    else:
+                        # Neither an id nor a reason. Something went in and the
+                        # id was lost, so say no more than the old line did.
+                        details.append("Order ID: `N/A`")
 
             elif order_type == "basketorder":
                 if response.get("status") == "success":
@@ -429,7 +478,12 @@ class TelegramAlertService:
             )
 
             # Format message
-            template = self.alert_templates.get(order_type, "*Order Update*\n{details}")
+            template_key = (
+                f"{order_type}_no_action"
+                if _placed_nothing(order_type, response)
+                else order_type
+            )
+            template = self.alert_templates.get(template_key, "*Order Update*\n{details}")
             details = self.format_order_details(order_type, order_data, response)
             message = template.format(details=details)
 
