@@ -1,5 +1,5 @@
 import { act, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { usePageVisibility } from './usePageVisibility'
 
 const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
@@ -8,10 +8,12 @@ function visibility(value: DocumentVisibilityState) {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value })
 }
 
+beforeEach(() => vi.useFakeTimers())
 afterEach(() => {
   if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
   else Reflect.deleteProperty(document, 'visibilityState')
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 function Observer() {
@@ -24,6 +26,20 @@ function state() {
 }
 
 describe('page visibility notifications', () => {
+  it('commits visibility in a later browser task, after microtask checkpoints', async () => {
+    visibility('visible')
+    render(<Observer />)
+    await act(async () => {
+      visibility('hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+      await Promise.resolve()
+    })
+    expect(state().isVisible).toBe(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(state().isVisible).toBe(false)
+  })
   it('defers a browser visibility event until an interrupted render has finished', async () => {
     visibility('visible')
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -51,6 +67,9 @@ describe('page visibility notifications', () => {
         </>
       )
     })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(state().isVisible).toBe(false)
     expect(errors).not.toHaveBeenCalled()
   })
@@ -69,6 +88,9 @@ describe('page visibility notifications', () => {
       document.dispatchEvent(new Event('visibilitychange'))
       now = 9000
     })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(state()).toMatchObject({ isVisible: true, wasHidden: true, lastVisibilityChange: 6000 })
   })
 
@@ -80,6 +102,9 @@ describe('page visibility notifications', () => {
       visibility('hidden')
       document.dispatchEvent(new Event('visibilitychange'))
       view.unmount()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
     })
     expect(errors).not.toHaveBeenCalled()
   })

@@ -870,10 +870,12 @@ describe('StrategyBuilder live request orchestration', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
     })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
@@ -1101,10 +1103,12 @@ describe('StrategyBuilder live request orchestration', () => {
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
       await act(async () => {
         document.dispatchEvent(new Event('visibilitychange'))
+        await new Promise((resolve) => setTimeout(resolve, 0))
       })
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
       await act(async () => {
         document.dispatchEvent(new Event('visibilitychange'))
+        await new Promise((resolve) => setTimeout(resolve, 0))
       })
 
       await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(4))
@@ -1734,10 +1738,12 @@ describe('StrategyBuilder identity orchestration', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
     })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))

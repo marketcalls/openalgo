@@ -77,6 +77,7 @@ export function usePageVisibility(): UsePageVisibilityReturn {
     if (typeof document === 'undefined') return
 
     let active = true
+    const pending = new Set<ReturnType<typeof setTimeout>>()
     const applyVisibilityChange = (nowVisible: boolean, now: number) => {
       if (!active) return
 
@@ -105,8 +106,13 @@ export function usePageVisibility(): UsePageVisibilityReturn {
       const visible = document.visibilityState === 'visible'
       const time = Date.now()
       // A browser navigation can deliver this while React is rendering the
-      // outgoing page. Commit after that stack, retaining the event snapshot.
-      queueMicrotask(() => applyVisibilityChange(visible, time))
+      // outgoing page. A microtask can still run at a nested browser checkpoint;
+      // use the next task and retain the event's time and visibility snapshot.
+      const task = setTimeout(() => {
+        pending.delete(task)
+        applyVisibilityChange(visible, time)
+      }, 0)
+      pending.add(task)
     }
 
     // Listen for visibility changes
@@ -134,6 +140,8 @@ export function usePageVisibility(): UsePageVisibilityReturn {
 
     return () => {
       active = false
+      for (const task of pending) clearTimeout(task)
+      pending.clear()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('focus', handleFocus)
       window.removeEventListener('blur', handleBlur)
