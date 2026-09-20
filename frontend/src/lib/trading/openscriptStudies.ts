@@ -139,7 +139,17 @@ export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
       // adapter compiles a program and has no opinion about whether the host
       // can show anybody a file, and this host can, because it is the one
       // serving them.
-      charts.registerIndicator({ ...(descriptor as object), hasSource: true } as never)
+      // `markerAnchor` decides what a signal's "above" and "below" are measured
+      // against. A script writes `at = "below"` meaning below the candle, and
+      // the chart's default is the study's own first plot: a study that
+      // declares an invisible mid-body column first, so its marks have a
+      // series with a point on every bar, then draws every mark through the
+      // middle of the candle it is about. Price is what the author meant.
+      charts.registerIndicator({
+        ...(descriptor as object),
+        hasSource: true,
+        markerAnchor: 'price',
+      } as never)
       result.loaded.push(script.file)
     } catch (error) {
       // Forget the key so the next call tries again. A compile that failed

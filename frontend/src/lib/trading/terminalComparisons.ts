@@ -19,6 +19,7 @@ import {
   tryResolveInterval,
 } from 'openalgo-charts'
 import type { WorkspaceComparison } from 'openalgo-charts/workspace'
+import { nextComparisonColor } from './comparisonColors'
 import { intervalSeconds } from './intervals'
 import { replayTiming } from './replayTiming'
 
@@ -486,7 +487,10 @@ export class TerminalComparisons {
   private validate(specs: readonly WorkspaceComparison[]): WorkspaceComparison[] {
     if (specs.length > 32) throw new Error('A chart supports at most 32 comparisons')
     const ids = new Set<string>(),
-      sources = new Set<string>()
+      sources = new Set<string>(),
+      // Colours already spoken for in this batch, so two comparisons added in
+      // one `replace` cannot be handed the same one.
+      colours = new Set<string>()
     return specs.map((spec) => {
       if (
         ![spec.id, spec.symbol, spec.exchange].every(
@@ -502,12 +506,23 @@ export class TerminalComparisons {
         throw new Error('Duplicate comparison source or ID')
       ids.add(spec.id)
       sources.add(source)
+      // Every comparison leaves here with a colour, whether it arrived with
+      // one or not. This is the only path into `definitions`, so it is the one
+      // place that can promise it: a spec restored from a workspace saved
+      // before comparisons had colours, or written by hand, would otherwise
+      // reach the chart uncoloured and be painted the engine's default line
+      // blue, which is the colour a comparison must never be.
+      const colour =
+        typeof spec.color === 'string' && spec.color.trim()
+          ? spec.color
+          : nextComparisonColor(colours)
+      colours.add(colour)
       return {
         id: spec.id,
         symbol: spec.symbol,
         exchange: spec.exchange,
         visible: spec.visible,
-        ...(spec.color !== undefined ? { color: spec.color } : {}),
+        color: colour,
       }
     })
   }

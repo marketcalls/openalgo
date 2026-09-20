@@ -154,6 +154,7 @@ import {
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
+import { COMPARISON_PALETTE } from './comparisonColors'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
@@ -3517,7 +3518,10 @@ export class TradingTerminal {
         symbol: row.symbol,
         exchange: row.exchange,
         label: `${row.exchange}:${row.symbol}`,
-        color: row.color ?? '#4f8cff',
+        // Always set by the time a row exists; the palette entry keeps a
+        // swatch from being blank if that ever stops being true, and keeps it
+        // from being the one colour a comparison is not allowed to be.
+        color: row.color ?? COMPARISON_PALETTE[0],
         status:
           row.status === 'ready'
             ? 'ready'
@@ -3599,13 +3603,17 @@ export class TradingTerminal {
       throw new Error('The chart changed while comparison history was loading')
     if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
       throw new Error('Leave replay before adding a comparison')
-    const palette = ['#4f8cff', '#f5a623', '#a78bfa', '#10b981', '#f472b6', '#22d3ee']
+    // No colour: `TerminalComparisons` assigns one, because it is the only
+    // place that sees every colour already on this chart. Choosing here by
+    // counting what exists handed the third comparison the second's colour as
+    // soon as the first was removed, and its first entry was the engine's own
+    // default line blue, so comparison one looked like a line the chart had
+    // drawn by accident.
     await this.comparisons.add({
       id: crypto.randomUUID(),
       symbol,
       exchange,
       visible: true,
-      color: palette[this.comparisons.specs().length % palette.length],
     })
   }
 
