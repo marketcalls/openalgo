@@ -14,7 +14,7 @@
 
 - Charts publication comes first. Version 2.4.5 is published and verified; do not change its tag or package.
 - Keep the score frozen. No new comparison product names, emoji or long dashes.
-- Preserve original checkouts and concurrent work. Only this isolated consumer is edited.
+- Preserve original checkouts and concurrent work during implementation. After successful validation and merge, fast-forward the clean original OpenAlgo checkout for the authorized rollout. Preserve the original Charts edits.
 - Broker orders remain authoritative. No live orders in validation; credentials stay in the browser.
 - UTC seconds for chart data. Retain existing host timestamp boundaries and timezone behavior.
 - Lock all workspace order routes during replay selection, loading and playback.
@@ -101,8 +101,9 @@ The terminal exposes `comparisonState(): TerminalComparisonState`, `addCompariso
 - [x] Run the required fd-audit after stream/subscription changes. Update the canonical terminal guide with actual resulting behavior.
 - [x] Freeze runtime inputs, run complete consumer tests/build, then the existing three-engine consumer browser harness and inspect screenshots. Preserve failures and repair with regressions.
 - [x] Obtain fresh independent integration review; address material findings and rerun affected checks.
-- [ ] Validate authenticated read-only history/source/feed behavior against the connected broker using the isolated consumer; no execution requests.
-- [ ] Commit and push the authorized consumer change while preserving the original checkout; update the handover reply and release ledger with actual evidence and remaining limits.
+- [x] Validate authenticated read-only history/source/feed behavior against the connected broker using the isolated consumer; no execution requests.
+- [x] Commit and push the authorized consumer change while preserving the original checkout; update the handover reply and release ledger with actual evidence and remaining limits.
+- [x] Merge after successful CI, install the generated assets in the original OpenAlgo checkout and verify the actual served page.
 
 ## Execution record
 
@@ -166,3 +167,52 @@ unkeyed history capture were corrected in the external validation runner. These
 routed timings are not uninstrumented host performance measurements. Publication
 of the consumer and actual original-checkout rollout remain pending; the isolated
 build and browser checks alone do not establish deployment.
+
+
+## Delivery complete
+
+The final connected-broker check passes on the retained production-build page.
+All 1309 defined NFO futures OI readings match fresh broker history by timestamp
+and the plotted study. Three live/forming bars without OI remain blank. Latest
+broker, exported and plotted values all equal 1024855. Comparison add/remove and
+percentage mode, alert onBarClose defaults and shared replay restoration also pass
+(1312 loaded rows, 1277 revealed rows, then all 1312 restored).
+
+An early external runner incorrectly polled study readiness through repeated CSV
+downloads. It was stopped when the user reported them. The corrected runner reads
+CSV Blobs in memory and emits no browser downloads. Final broker evidence is in
+consumer-245-broker-recovered-2026-09-20T15-01-10-800Z/summary.json under the external
+artifacts directory. Storage preservation, temporary database removal and page
+cleanup all passed. The market was closed; this validates authenticated historical
+data and UI behavior, not an open-market full-day session or live order execution.
+
+Consumer commit 6e914b354 passed every PR CI job in run 35517952000 and was merged
+through https://github.com/marketcalls/openalgo/pull/2083 as 621eaab62. The merged tree
+matches the verified branch exactly. Issue 2077 closed with that merge. Main CI run
+35518540216 passed all jobs, including Node 20/22/24 tests, coverage and builds,
+metadata, backend checks, browser checks, container builds and the image manifest.
+Its production-assets commit is 1c3d11cbd.
+
+The clean original D:/OpenAlgo-Voice/openalgo checkout fast-forwarded from
+f579de58d to 1c3d11cbd. npm ci completed with zero reported vulnerabilities, and
+both the manifest and installed package report 2.4.5. Asset compression refreshed
+successfully. The running backend required no restart.
+
+Actual served-page validation, with assetOverlay=false, passes history/shared
+controls, comparisons, alert defaults and replay (1440 to 1405 to 1440 rows).
+There were zero page errors, failed module requests/responses, execution attempts
+or browser downloads. Storage, database and test-page cleanup passed. Served HTML
+matches the original dist exactly, SHA-256
+01d267a15e5c5e1243a63810729377891959f111a6e0f93dac6b8d8a7e6c46b1.
+Report: consumer-245-broker-2026-09-20T15-16-28-877Z/summary.json.
+
+The user-visible chart was refreshed and its candle-colored volume inspected.
+The dedicated test browser's fixed 1480 viewport caused the reported unused screen
+area. Its launcher now uses viewport=null; a graceful restart preserved login and
+broker connection. The page and chart retain their full 1920-pixel window and
+1822-pixel canvases after both reload and new-tab creation. This required no
+application change. Evidence: consumer-245-original-final-viewport.json and
+consumer-245-original-final-colored-volume.png.
+
+The original Charts checkout still contains its eight preserved OI plumbing edits.
+The published 2.4.5 package and tag were not changed. The score remains frozen.
