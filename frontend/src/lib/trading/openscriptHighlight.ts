@@ -25,6 +25,10 @@ export type SpanKind =
   | 'string'
   | 'number'
   | 'keyword'
+  /** A name the standard library provides and calls: `plot`, `ema`, `input`. */
+  | 'call'
+  /** A name the standard library provides as a value: `close`, `aqua`, `math`. */
+  | 'builtin'
   | 'identifier'
   | 'punctuation'
   | 'plain'
@@ -44,11 +48,34 @@ export interface HighlightedSpan {
  */
 const LIMIT = 64 * 1024
 
-/** A reserved word is a token whose kind is the word itself. */
-function kindOf(tokenKind: string, text: string): SpanKind {
-  if (tokenKind === 'identifier') return 'identifier'
+/**
+ * What one token is drawn as.
+ *
+ * A reserved word is a token whose kind is the word itself, which is how the
+ * lexer spells one. A name the standard library provides is asked of the
+ * language through `isLibraryName`, never of a list kept here: a list would be
+ * right the day it was written and wrong at the next release, and a built-in
+ * that quietly stopped being coloured is the last thing anybody would check.
+ *
+ * Whether such a name is a function or a value is decided by what follows it,
+ * not by a second table. `plot` is always written `plot(`, `close` never is.
+ * That keeps the distinction in the one place that cannot drift from the
+ * language: the token stream.
+ */
+function kindOf(
+  tokenKind: string,
+  text: string,
+  followedByCall: boolean,
+  isLibrary: (name: string) => boolean,
+  namespaces: ReadonlySet<string>
+): SpanKind {
   if (tokenKind === 'stringLiteral') return 'string'
   if (tokenKind === 'numberLiteral') return 'number'
+  if (tokenKind === 'identifier') {
+    if (isLibrary(text)) return followedByCall ? 'call' : 'builtin'
+    if (namespaces.has(text)) return 'builtin'
+    return 'identifier'
+  }
   if (/^[a-zA-Z]+$/.test(tokenKind)) return tokenKind === text ? 'keyword' : 'identifier'
   return 'punctuation'
 }
@@ -126,15 +153,21 @@ export async function highlight(source: string): Promise<HighlightedSpan[]> {
     return [{ text: source, kind: 'plain' }]
   }
 
+  const { isLibraryName, NAMESPACES } = await import('openalgo-script')
+  const namespaces: ReadonlySet<string> = new Set(NAMESPACES as readonly string[])
+
   const spans: HighlightedSpan[] = []
   let at = 0
-  for (const token of tokens) {
+  for (const [index, token] of tokens.entries()) {
+    // The next token decides whether a library name is a call or a value.
+    // `newline` tokens carry no text, so the very next entry is the one to ask.
+    const followedByCall = tokens[index + 1]?.kind === '('
     const { offset, length } = token.span
     if (offset > at) trivia(source.slice(at, offset), spans)
     if (length > 0) {
       spans.push({
         text: source.slice(offset, offset + length),
-        kind: kindOf(token.kind, token.text),
+        kind: kindOf(token.kind, token.text, followedByCall, isLibraryName, namespaces),
       })
       at = offset + length
     } else if (offset > at) {
@@ -159,6 +192,8 @@ export const SPAN_CLASS: Record<SpanKind, string> = {
   string: 'oscript-string',
   number: 'oscript-number',
   keyword: 'oscript-keyword',
+  call: 'oscript-call',
+  builtin: 'oscript-builtin',
   identifier: 'oscript-identifier',
   punctuation: 'oscript-punctuation',
   plain: 'oscript-plain',

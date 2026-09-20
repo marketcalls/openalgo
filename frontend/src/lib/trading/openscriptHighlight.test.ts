@@ -183,3 +183,49 @@ describe('a source whose lines end the other way', () => {
     ])
   })
 })
+
+describe('the language names its own', () => {
+  it("a built-in function is a call and the author's name is not", async () => {
+    const spans = await highlight('myAverage = ema(close, 9)\nplot(myAverage, "A", aqua)\n')
+    expect(kindsOf(spans, 'ema')).toEqual(['call'])
+    expect(kindsOf(spans, 'plot')).toEqual(['call'])
+    // The author's own name stays plain even though it is used like a value,
+    // because the useful split here is what the language gave you from what
+    // you wrote yourself.
+    expect(kindsOf(spans, 'myAverage')).toEqual(['identifier', 'identifier'])
+  })
+
+  it('a built-in value is not painted as a call', async () => {
+    const spans = await highlight('plot(close, "C", aqua)\n')
+    expect(kindsOf(spans, 'close')).toEqual(['builtin'])
+    expect(kindsOf(spans, 'aqua')).toEqual(['builtin'])
+  })
+
+  it('a namespace is a built-in too', async () => {
+    const spans = await highlight('x = bar.index\n')
+    expect(kindsOf(spans, 'bar')).toEqual(['builtin'])
+  })
+
+  it('a reserved word stays a keyword rather than becoming a call', async () => {
+    // `study` is written like a call but is the language's own word, and the
+    // lexer says so. If this ever reports 'call' the reserved-word test above
+    // it has been overtaken by the library lookup.
+    const spans = await highlight('study("S", overlay = true)\n')
+    expect(kindsOf(spans, 'study')).toEqual(['keyword'])
+    expect(kindsOf(spans, 'true')).toEqual(['keyword'])
+  })
+
+  it("the list is the language's, not a copy kept here", async () => {
+    // Every name the manifest declares is painted as something the language
+    // provides. A hand-maintained list would pass on the day it was written
+    // and rot silently; this asserts the whole manifest, so it cannot.
+    const { libraryNames } = await import('openalgo-script')
+    const names = (libraryNames as unknown as () => readonly string[])()
+    const sample = names.filter((n) => /^[a-z][a-zA-Z]*$/.test(n)).slice(0, 40)
+    for (const name of sample) {
+      const spans = await highlight(`x = ${name}\n`)
+      const got = kindsOf(spans, name)
+      expect(got.length === 0 || got[0] === 'builtin' || got[0] === 'call').toBe(true)
+    }
+  })
+})

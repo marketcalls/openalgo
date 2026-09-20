@@ -893,6 +893,8 @@
   --oscript-string: oklch(0.52 0.11 155);
   --oscript-number: oklch(0.55 0.11 65);
   --oscript-keyword: oklch(0.5 0.13 285);
+  --oscript-call: oklch(0.5 0.12 235);
+  --oscript-builtin: oklch(0.48 0.09 200);
   --oscript-punctuation: oklch(0.55 0.02 260);
 }
 
@@ -901,6 +903,8 @@
   --oscript-string: oklch(0.78 0.13 155);
   --oscript-number: oklch(0.8 0.12 75);
   --oscript-keyword: oklch(0.76 0.12 290);
+  --oscript-call: oklch(0.78 0.11 235);
+  --oscript-builtin: oklch(0.8 0.09 200);
   --oscript-punctuation: oklch(0.62 0.02 260);
 }
 
@@ -916,6 +920,16 @@
 }
 .oscript-keyword {
   color: var(--oscript-keyword);
+}
+/* A function the language provides: plot, ema, input. */
+.oscript-call {
+  color: var(--oscript-call);
+}
+/* A value the language provides: close, aqua, math. Kept apart from a call
+   because one is a thing you do and the other is a thing you read, and a
+   reader scanning for where the work happens wants to tell them apart. */
+.oscript-builtin {
+  color: var(--oscript-builtin);
 }
 .oscript-punctuation {
   color: var(--oscript-punctuation);
