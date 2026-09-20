@@ -37,8 +37,26 @@
  * it does not parse yet.
  */
 
-import { AlertTriangle, Check, FileCode2, Loader2, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  Loader2,
+  MoreHorizontal,
+  Play,
+  Plus,
+  TerminalSquare,
+  Trash2,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   type CompileResult,
   compileSource,
@@ -55,6 +73,13 @@ import {
   starterFor,
 } from '@/lib/trading/openscriptFiles'
 import { type HighlightedSpan, highlight, SPAN_CLASS } from '@/lib/trading/openscriptHighlight'
+import {
+  forgetScript,
+  noteOpened,
+  readLastOpened,
+  readRecents,
+  writeLastOpened,
+} from '@/lib/trading/openscriptSession'
 import { cn } from '@/lib/utils'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
@@ -99,6 +124,18 @@ export const EDITOR_TEXT = 'whitespace-pre px-2 py-2 font-mono text-[12px] track
  */
 function withoutCarriageReturns(text: string): string {
   return text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text
+}
+
+/**
+ * A file name without its extension, which is what a person calls a script.
+ *
+ * Every script in the directory ends the same way, so the suffix is four
+ * characters of nothing repeated on every row of a menu and in a header that is
+ * short of room. The full name is still the title attribute, because it is what
+ * the server, the chart's indicator id and any error message will say.
+ */
+function stemOf(file: string): string {
+  return file.replace(/\.oscript$/, '')
 }
 
 /** Where the caret is, counted the way the diagnostics count: from one. */
@@ -164,6 +201,30 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
   const [scrolled, setScrolled] = useState({ top: 0, left: 0 })
   const [caret, setCaret] = useState({ line: 1, column: 1 })
   const [spans, setSpans] = useState<HighlightedSpan[]>([])
+  /** The scripts opened most recently, newest first, across sessions. */
+  const [recents, setRecents] = useState<string[]>(readRecents)
+  /**
+   * Whether the console drawer is down.
+   *
+   * Closed by default, because the panel's whole problem was spending its
+   * height on things nobody was reading. Nothing is hidden by it: the status
+   * bar says how many errors there are in words, and the button that opens
+   * this carries the count, so a script that will not run says so whether the
+   * drawer is up or down.
+   */
+  const [consoleOpen, setConsoleOpen] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
+  /**
+   * Whether the naming form was opened from a menu, and so is owed focus.
+   *
+   * A menu puts focus back on its trigger when it closes, which is right for
+   * every item in it except the one that opens a form: there it takes focus
+   * straight off the field the form exists for, and the trader types into
+   * nothing and watches the panel ignore them. A ref rather than state because
+   * it is read inside the close handler on the way past, and re-rendering to
+   * record it would be a render for a fact nothing draws.
+   */
+  const wantsNameFocus = useRef(false)
 
   const dirty = open !== null && source !== saved
   const nameFault = naming ? nameProblem(newName) : null
@@ -171,6 +232,41 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
   const runnable = open !== null && !dirty && result?.ok === true
   const errorCount = result?.diagnostics.filter((one) => one.severity === 'error').length ?? 0
   const warningCount = result?.diagnostics.filter((one) => one.severity === 'warning').length ?? 0
+  const noteCount = result?.diagnostics.length ?? 0
+
+  /**
+   * What the open script declares itself to be.
+   *
+   * The compiler's answer while one is open, falling back to what the list was
+   * told when it looked. Without the fallback the badge blinks off for the
+   * moment between opening a script and its first compile, which reads as the
+   * panel losing track of what it is holding.
+   */
+  const kind: ScriptKind | null =
+    result?.kind ??
+    (open === null
+      ? null
+      : (scripts
+          ?.filter((script) => script.file === open)
+          .map((script) => kinds[`${script.file}@${script.mtime}`])
+          .find((one) => one !== undefined) ?? null))
+
+  /**
+   * The recents, filtered to scripts that still exist, and the rest after them.
+   *
+   * Filtered against the server's list rather than trusted, because the stored
+   * list is this browser's memory and the directory is the truth: a script
+   * deleted from another tab would otherwise sit at the top of the menu
+   * offering to open a file that is gone.
+   */
+  const recentlyOpened = useMemo(
+    () => (scripts === null ? [] : recents.filter((file) => scripts.some((s) => s.file === file))),
+    [recents, scripts]
+  )
+  const others = useMemo(
+    () => (scripts ?? []).filter((script) => !recentlyOpened.includes(script.file)),
+    [scripts, recentlyOpened]
+  )
 
   /** One entry per line, so the gutter is exactly as tall as the text. */
   const lines = useMemo(() => source.split('\n').length, [source])
@@ -248,6 +344,9 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       setOpen(file)
       setSource(text)
       setSaved(text)
+      // Remembered only once the read succeeded. A name that could not be
+      // opened must not become the one the panel returns to next time.
+      setRecents(noteOpened(file))
       setResult(await compileSource(file, text))
     } catch (error) {
       setResult({
@@ -278,6 +377,34 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
     onOpened?.()
   }, [openFile, open, openScript, onOpened])
 
+  /**
+   * Reopen whatever was last being edited.
+   *
+   * The panel is unmounted while another one is up, so without this every
+   * glance at the watchlist costs the trader their place. Runs once, and only
+   * when nothing else has already claimed the editor: a chart asking to show a
+   * study's source wins, because that request is about the thing on screen now
+   * rather than about the last time the panel was open.
+   *
+   * The file is checked against the server's list first. A script deleted from
+   * another tab would otherwise be asked for on every load and answer with a
+   * failure the trader had no part in causing.
+   */
+  useEffect(() => {
+    if (open !== null || scripts === null || busy) return
+    if (openFile !== null && openFile !== undefined) return
+    const last = readLastOpened()
+    if (last === null) return
+    if (!scripts.some((script) => script.file === last)) {
+      writeLastOpened(null)
+      return
+    }
+    void openScript(last)
+    // `scripts` arriving is the trigger, once. `open` is in the list so the
+    // guard above sees the file it just opened rather than a stale null, and
+    // that same guard is what keeps this from running a second time.
+  }, [scripts, open, busy, openFile, openScript])
+
   const store = useCallback(async () => {
     if (open === null || busy) return
     setBusy(true)
@@ -305,6 +432,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
     setBusy(true)
     try {
       await deleteScript(open)
+      setRecents(forgetScript(open))
       setOpen(null)
       setSource('')
       setSaved('')
@@ -333,6 +461,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       setOpen(file)
       setSource(starter)
       setSaved(starter)
+      setRecents(noteOpened(file))
       setResult(await compileSource(file, starter))
       await refresh()
     } catch (error) {
@@ -345,6 +474,51 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       setBusy(false)
     }
   }, [newName, newKind, refresh])
+
+  const startNaming = useCallback(() => {
+    setNewName('')
+    setNameTouched(false)
+    setNaming(true)
+  }, [])
+
+  /** The same, from a menu, which has to hand the field its focus. */
+  const startNamingFromMenu = useCallback(() => {
+    wantsNameFocus.current = true
+    startNaming()
+  }, [startNaming])
+
+  /**
+   * Takes the focus a closing menu was about to put back on its trigger.
+   *
+   * Deferred a frame because the form is mounted by the same state change that
+   * closes the menu, and on the tick this runs the field may not exist yet.
+   */
+  const keepNameFocus = useCallback((event: Event) => {
+    if (!wantsNameFocus.current) return
+    wantsNameFocus.current = false
+    event.preventDefault()
+    requestAnimationFrame(() => nameRef.current?.focus())
+  }, [])
+
+  /**
+   * Put the open script on the chart.
+   *
+   * The one thing it cannot report is having no chart to reach, which is why
+   * `onAddToChart` answers a boolean: a button that does nothing and says
+   * nothing is the failure this panel keeps being caught by. The console is
+   * opened with the complaint, because the drawer is shut by default and a
+   * refusal nobody can see is the same as no refusal at all.
+   */
+  const applyToChart = useCallback(() => {
+    if (open === null) return
+    if (onAddToChart(idForScript(open))) return
+    setResult((previous) => ({
+      ok: previous?.ok ?? false,
+      diagnostics: previous?.diagnostics ?? [],
+      problem: 'There is no chart open to add this study to.',
+    }))
+    setConsoleOpen(true)
+  }, [open, onAddToChart])
 
   // Ctrl+S is what anyone editing text reaches for, and without it the browser
   // opens its own save dialog over the panel.
@@ -371,31 +545,147 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       // line in a numbered gutter is where a reader loses their place.
       maxWidth={760}
     >
+      {/* The header is the whole navigation. It replaced a title row that
+          repeated the panel's own name and a list of every script pinned under
+          it, which together spent a third of the panel's height on things
+          nobody reads while writing: the title says what the rail button
+          already said, and the list shows twenty files to choose the one you
+          are already in. The name is a menu instead, the scripts you actually
+          move between sit at the top of it, and the height goes to the code. */}
       <div className={PANEL_HEADER}>
-        <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">Scripts</div>
-          <div className="truncate text-[10px] text-muted-foreground">
-            {open ? `${open}${result?.kind ? ` · ${result.kind}` : ''}` : 'Studies and strategies'}
-          </div>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex min-w-0 max-w-[55%] items-center gap-1.5 rounded px-1.5 py-1 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              title={open ?? 'Choose a script'}
+            >
+              <span className="truncate text-sm font-medium">
+                {open === null ? 'No script' : stemOf(open)}
+              </span>
+              {kind !== null && (
+                <span
+                  className={cn(
+                    'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide',
+                    kind === 'strategy'
+                      ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                      : 'bg-primary/15 text-primary'
+                  )}
+                >
+                  {kind}
+                </span>
+              )}
+              <ChevronDown
+                className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                strokeWidth={1.5}
+              />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="max-h-80 w-64 overflow-y-auto"
+            onCloseAutoFocus={keepNameFocus}
+          >
+            {recentlyOpened.length > 0 && (
+              <>
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Recent
+                </DropdownMenuLabel>
+                {recentlyOpened.map((file) => (
+                  <DropdownMenuItem
+                    key={`recent-${file}`}
+                    onSelect={() => void openScript(file)}
+                    className={cn('text-xs', file === open && 'text-primary')}
+                  >
+                    <span className="truncate">{stemOf(file)}</span>
+                  </DropdownMenuItem>
+                ))}
+                {others.length > 0 && <DropdownMenuSeparator />}
+              </>
+            )}
+            {others.map((script) => (
+              <DropdownMenuItem
+                key={script.file}
+                onSelect={() => void openScript(script.file)}
+                className="text-xs"
+              >
+                <span className="truncate">{stemOf(script.file)}</span>
+              </DropdownMenuItem>
+            ))}
+            {scripts !== null && scripts.length === 0 && (
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                No scripts yet.
+              </DropdownMenuLabel>
+            )}
+            {listError !== null && (
+              <DropdownMenuLabel className="text-xs font-normal text-destructive">
+                {listError}
+              </DropdownMenuLabel>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-xs" onSelect={startNamingFromMenu}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+              New script
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* Put it on the chart. An icon rather than a labelled button because
+            it is the one control pressed over and over while writing, it sits
+            beside the name of the thing it will run, and the words cost the
+            room the name needs. It still says what it does on hover and to a
+            screen reader, which is what a bare glyph owes a reader. */}
         <button
           type="button"
-          className={CHIP}
-          onClick={() => {
-            setNewName('')
-            setNameTouched(false)
-            setNaming(true)
-          }}
-          disabled={busy}
+          onClick={applyToChart}
+          disabled={!runnable}
+          aria-label={open === null ? 'Apply to chart' : `Apply ${stemOf(open)} to the chart`}
+          title={
+            runnable
+              ? 'Apply to chart'
+              : 'Save a script that compiles, and it can be applied to the chart.'
+          }
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
         >
-          <Plus className="h-3 w-3" strokeWidth={1.5} />
-          New
+          <Play className="h-3.5 w-3.5" strokeWidth={1.5} />
         </button>
-        <button type="button" className={CHIP} onClick={remove} disabled={busy || open === null}>
-          <Trash2 className="h-3 w-3" strokeWidth={1.5} />
-          Delete
-        </button>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={store}
+            disabled={busy || !dirty}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium leading-none text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:translate-y-px disabled:pointer-events-none disabled:opacity-40"
+          >
+            Save
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Script actions"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <MoreHorizontal className="h-4 w-4" strokeWidth={1.5} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48" onCloseAutoFocus={keepNameFocus}>
+              <DropdownMenuItem className="text-xs" onSelect={startNamingFromMenu}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+                New script
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-xs text-destructive focus:text-destructive"
+                disabled={busy || open === null}
+                onSelect={() => void remove()}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+                Delete script
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {naming && (
@@ -404,6 +694,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
             Name
           </label>
           <input
+            ref={nameRef}
             id="new-script-name"
             // Focused on open, so a trader who chose New can simply type. It is
             // the only field in a row that was summoned by a button, so taking
@@ -479,56 +770,6 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
         </div>
       )}
 
-      {/* The list. Capped so the editor always has room: a trader with twenty
-          scripts should still see the one they are writing. */}
-      <div className="max-h-[26%] shrink-0 overflow-y-auto border-b">
-        {scripts === null && (
-          // Shaped like the rows it will become, so the panel does not jump
-          // when they arrive.
-          <div className="space-y-1 p-2" aria-hidden>
-            <div className="h-6 animate-pulse rounded bg-muted" />
-            <div className="h-6 w-2/3 animate-pulse rounded bg-muted" />
-          </div>
-        )}
-        {listError && <p className="px-2 py-4 text-center text-xs text-destructive">{listError}</p>}
-        {scripts !== null && !listError && scripts.length === 0 && (
-          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            No scripts yet. Choose New to write one.
-          </p>
-        )}
-        {scripts?.map((script) => (
-          <button
-            key={script.file}
-            type="button"
-            onClick={() => openScript(script.file)}
-            className={cn(
-              'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:translate-y-px',
-              open === script.file && 'bg-accent text-foreground'
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">{script.file}</span>
-            {/* Which of the two it is, so the list can be read at a glance
-                rather than by opening each one. Absent until the source has
-                been looked at, because a wrong badge is worse than none. */}
-            {kinds[`${script.file}@${script.mtime}`] && (
-              <span
-                className={cn(
-                  'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide',
-                  kinds[`${script.file}@${script.mtime}`] === 'strategy'
-                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                    : 'bg-primary/15 text-primary'
-                )}
-              >
-                {kinds[`${script.file}@${script.mtime}`]}
-              </span>
-            )}
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {Math.max(1, Math.round(script.bytes / 1024))} kB
-            </span>
-          </button>
-        ))}
-      </div>
-
       {open === null ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
           {/* A failure with no script open used to land in a console that only
@@ -541,9 +782,25 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
               {result.problem}
             </pre>
           )}
-          <p className="text-xs text-muted-foreground">
-            Choose a script to edit it, or write a new one.
+          {/* The list used to be the answer to "how do I open one", pinned
+              under the header at all times. It is a menu now, so the empty
+              state has to say where it went: an instruction that names a
+              control the reader can see beats one that assumes they will
+              find it. */}
+          <p className="max-w-[16rem] text-xs leading-relaxed text-muted-foreground">
+            {scripts !== null && scripts.length > 0
+              ? 'Open one from the name at the top of this panel, or write a new one.'
+              : 'Nothing written yet.'}
           </p>
+          <button
+            type="button"
+            onClick={startNaming}
+            disabled={busy}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium leading-none transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+            New script
+          </button>
         </div>
       ) : (
         <>
@@ -636,132 +893,132 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
             </div>
           </div>
 
-          <div className="shrink-0 border-t">
-            {/* The console. Each diagnostic is drawn in its parts rather than
-                as one block of text, because a reader scanning it wants the
-                severity first, the place second and the words third, and a
-                single string can only be one colour. */}
-            {(result?.diagnostics?.length ?? 0) > 0 && (
-              <div className="max-h-40 space-y-2 overflow-auto px-2 py-2">
-                {result?.diagnostics.map((one) => {
-                  const bad = one.severity === 'error'
-                  return (
-                    <div
-                      key={`${one.code}:${one.line}:${one.column}`}
-                      className="font-mono text-[11px] leading-[1.45]"
-                    >
-                      <div className="flex items-baseline gap-1.5">
-                        <span
+          {/* The console, in a drawer. It carries the same parts it always
+              did, because a reader scanning compiler output wants the severity
+              first, the place second and the words third, and a single string
+              can only be one colour. What changed is that it is no longer
+              always down: it was taking a third of the panel to say what the
+              status bar says in a sentence, on a panel whose whole problem was
+              having no room for the code. */}
+          {consoleOpen && (
+            <div className="max-h-[38%] shrink-0 overflow-auto border-t bg-muted/20">
+              {noteCount === 0 && result?.problem === undefined && (
+                <p className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+                  Nothing to report.
+                </p>
+              )}
+              {noteCount > 0 && (
+                <div className="space-y-2 px-2 py-2">
+                  {result?.diagnostics.map((one) => {
+                    const bad = one.severity === 'error'
+                    return (
+                      <div
+                        key={`${one.code}:${one.line}:${one.column}`}
+                        className="font-mono text-[11px] leading-[1.45]"
+                      >
+                        <div className="flex items-baseline gap-1.5">
+                          <span
+                            className={cn(
+                              'shrink-0 rounded px-1 py-px text-[10px] font-medium',
+                              bad
+                                ? 'bg-destructive/15 text-destructive'
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            )}
+                          >
+                            {one.code}
+                          </span>
+                          <span className="text-muted-foreground">
+                            line {one.line}, column {one.column}
+                          </span>
+                        </div>
+                        {/* The offending line, with the span underlined beneath
+                            it. The gutter marks which line; this marks where. */}
+                        {one.sourceLine !== '' && (
+                          <pre className="mt-1 overflow-x-auto whitespace-pre text-foreground">
+                            {one.sourceLine}
+                            {'\n'}
+                            <span className={bad ? 'text-destructive' : 'text-amber-500'}>
+                              {' '.repeat(Math.max(0, one.column - 1))}
+                              {'^'.repeat(one.length)}
+                            </span>
+                          </pre>
+                        )}
+                        <p
                           className={cn(
-                            'shrink-0 rounded px-1 py-px text-[10px] font-medium',
-                            bad
-                              ? 'bg-destructive/15 text-destructive'
-                              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            'mt-1',
+                            bad ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
                           )}
                         >
-                          {one.code}
-                        </span>
-                        <span className="text-muted-foreground">
-                          line {one.line}, column {one.column}
-                        </span>
-                      </div>
-                      {/* The offending line, with the span underlined beneath
-                          it. The gutter marks which line; this marks where. */}
-                      {one.sourceLine !== '' && (
-                        <pre className="mt-1 overflow-x-auto whitespace-pre text-foreground">
-                          {one.sourceLine}
-                          {'\n'}
-                          <span className={bad ? 'text-destructive' : 'text-amber-500'}>
-                            {' '.repeat(Math.max(0, one.column - 1))}
-                            {'^'.repeat(one.length)}
-                          </span>
-                        </pre>
-                      )}
-                      <p
-                        className={cn(
-                          'mt-1',
-                          bad ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
-                        )}
-                      >
-                        {one.message}
-                      </p>
-                      {one.fix && (
-                        <p className="mt-0.5 text-muted-foreground">
-                          <span className="font-medium">Fix: </span>
-                          {one.fix}
+                          {one.message}
                         </p>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-            {result?.problem && (
-              <pre className="max-h-32 overflow-auto whitespace-pre-wrap px-2 py-2 font-mono text-[11px] leading-[1.45] text-destructive">
-                {result.problem}
-              </pre>
-            )}
-            <div className="flex items-center gap-1.5 px-2 py-1.5">
-              {/* Where the caret is, in the same counting the diagnostics use,
-                  so "line 7, column 12" in the console and the readout here
-                  mean the same place. */}
-              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-                {caret.line}:{caret.column}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                {busy ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
-                    Working
-                  </span>
-                ) : dirty ? (
-                  'Unsaved changes'
-                ) : result?.ok === false ? (
-                  <span className="inline-flex items-center gap-1.5 text-destructive">
-                    <AlertTriangle className="h-3 w-3" strokeWidth={1.5} />
-                    {errorCount === 1 ? '1 error' : `${errorCount} errors`}, so it will not run yet
-                  </span>
-                ) : result?.ok ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <Check className="h-3 w-3" strokeWidth={1.5} />
-                    {warningCount > 0
-                      ? `Ready to add, with ${warningCount === 1 ? '1 warning' : `${warningCount} warnings`}`
-                      : 'Ready to add'}
-                  </span>
-                ) : (
-                  'Ready'
-                )}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!open) return
-                  if (onAddToChart(idForScript(open))) return
-                  setResult((previous) => ({
-                    ok: previous?.ok ?? false,
-                    diagnostics: previous?.diagnostics ?? [],
-                    problem: 'There is no chart open to add this study to.',
-                  }))
-                }}
-                disabled={!runnable}
-                title={
-                  runnable
-                    ? undefined
-                    : 'Save a script that compiles, and it can be added to the chart.'
-                }
-                className={CHIP}
-              >
-                Add to chart
-              </button>
-              <button
-                type="button"
-                onClick={store}
-                disabled={busy || !dirty}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium leading-none text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:translate-y-px disabled:pointer-events-none disabled:opacity-40"
-              >
-                Save
-              </button>
+                        {one.fix && (
+                          <p className="mt-0.5 text-muted-foreground">
+                            <span className="font-medium">Fix: </span>
+                            {one.fix}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {result?.problem && (
+                <pre className="whitespace-pre-wrap px-2 py-2 font-mono text-[11px] leading-[1.45] text-destructive">
+                  {result.problem}
+                </pre>
+              )}
             </div>
+          )}
+
+          {/* The status bar: one row, always there, never more than one row.
+              The console button on the left is the way in to the detail and
+              carries the count so a script that will not run says so with the
+              drawer shut. The caret sits on the right in the same counting the
+              diagnostics use, so "line 7, column 12" there and "7:12" here
+              mean the same place. */}
+          <div className="flex h-7 shrink-0 items-center gap-2 border-t px-1.5">
+            <button
+              type="button"
+              onClick={() => setConsoleOpen((down) => !down)}
+              aria-expanded={consoleOpen}
+              aria-label={consoleOpen ? 'Hide the console' : 'Show the console'}
+              title={consoleOpen ? 'Hide the console' : 'Show the console'}
+              className={cn(
+                'inline-flex h-5 shrink-0 items-center gap-1 rounded px-1 text-[10px] leading-none transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                consoleOpen ? 'bg-accent text-foreground' : 'text-muted-foreground',
+                errorCount > 0 && 'text-destructive'
+              )}
+            >
+              <TerminalSquare className="h-3.5 w-3.5" strokeWidth={1.5} />
+              {noteCount > 0 && <span className="tabular-nums">{noteCount}</span>}
+            </button>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+              {busy ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
+                  Working
+                </span>
+              ) : dirty ? (
+                'Unsaved changes'
+              ) : result?.ok === false ? (
+                <span className="inline-flex items-center gap-1.5 text-destructive">
+                  <AlertTriangle className="h-3 w-3" strokeWidth={1.5} />
+                  {errorCount === 1 ? '1 error' : `${errorCount} errors`}, so it will not run yet
+                </span>
+              ) : result?.ok ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Check className="h-3 w-3" strokeWidth={1.5} />
+                  {warningCount > 0
+                    ? `Ready, with ${warningCount === 1 ? '1 warning' : `${warningCount} warnings`}`
+                    : 'Ready'}
+                </span>
+              ) : (
+                'Ready'
+              )}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+              Ln {caret.line}, Col {caret.column}
+            </span>
           </div>
         </>
       )}
