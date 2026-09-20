@@ -105,7 +105,10 @@ describe('it stays out of the way when it cannot help', () => {
       'comment',
       'string',
       'number',
+      'color',
       'keyword',
+      'call',
+      'builtin',
       'identifier',
       'punctuation',
       'plain',
@@ -181,6 +184,29 @@ describe('a source whose lines end the other way', () => {
     expect(spans.filter((s) => s.kind === 'comment').map((s) => s.text)).toEqual([
       '// a note about and the band',
     ])
+  })
+})
+
+describe('two kinds this used to paint as names', () => {
+  // Both are what the package's own highlighter fixed by asking the language
+  // instead of asking the shape of a token's kind. The rule here was "a kind
+  // made of letters is a keyword if it equals its own text and a name
+  // otherwise", which is true of a reserved word and also true of hexColor,
+  // indent, newline and dedent.
+
+  it('a hexadecimal colour is a colour, not a name', async () => {
+    const spans = await highlight('plot(close, "C", #ff8800)\n')
+    expect(kindsOf(spans, '#ff8800')).toEqual(['color'])
+  })
+
+  it("a line's indentation is not a name", async () => {
+    // The span covering the four leading spaces used to be an identifier, which
+    // is invisible until a theme gives identifiers a weight or a background and
+    // every indented line grows a stripe.
+    const spans = await highlight('if close > open\n    x = 1\n')
+    const indent = spans.filter((span) => span.text.trim() === '' && span.text.includes('  '))
+    expect(indent.length).toBeGreaterThan(0)
+    for (const span of indent) expect(span.kind).toBe('plain')
   })
 })
 

@@ -892,6 +892,7 @@
   --oscript-comment: oklch(0.55 0.02 260);
   --oscript-string: oklch(0.52 0.11 155);
   --oscript-number: oklch(0.55 0.11 65);
+  --oscript-color: oklch(0.52 0.12 20);
   --oscript-keyword: oklch(0.5 0.13 285);
   --oscript-call: oklch(0.5 0.12 235);
   --oscript-builtin: oklch(0.48 0.09 200);
@@ -902,6 +903,7 @@
   --oscript-comment: oklch(0.62 0.02 260);
   --oscript-string: oklch(0.78 0.13 155);
   --oscript-number: oklch(0.8 0.12 75);
+  --oscript-color: oklch(0.78 0.12 25);
   --oscript-keyword: oklch(0.76 0.12 290);
   --oscript-call: oklch(0.78 0.11 235);
   --oscript-builtin: oklch(0.8 0.09 200);
@@ -917,6 +919,12 @@
 }
 .oscript-number {
   color: var(--oscript-number);
+}
+/* A hexadecimal colour literal. It is a literal like a number and not like a
+   name, which is what it used to be painted as: the token's kind is hexColor,
+   and a rule that asked whether a kind was made of letters answered yes to it. */
+.oscript-color {
+  color: var(--oscript-color);
 }
 .oscript-keyword {
   color: var(--oscript-keyword);

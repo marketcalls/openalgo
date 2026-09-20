@@ -1,22 +1,28 @@
 /**
- * Colouring an OpenScript source, using the compiler's own lexer.
+ * Colouring an OpenScript source, using the language's own highlighter.
  *
- * **Nothing here knows the language.** The tokens come from the same lexer the
- * compiler runs, which is step one of the same pipeline that produces the
- * program. A hand written regex highlighter is a second, worse implementation
- * of the language that drifts the first time a keyword is added and nobody
- * notices until a release: the word simply stops being coloured, and the
- * highlighter is the last place anyone looks.
+ * **Nothing here knows the language.** The pieces come from
+ * `openalgo-script/editor`, which is the compiler wearing a different hat: the
+ * real lexer produces the tokens, and what each one is painted as is decided by
+ * the language's own tables of reserved words, operator marks and library names.
+ * A word added to the language is coloured the day it lexes, and this file does
+ * not change.
  *
- * The kinds are read rather than listed, for the same reason. A token whose
- * `kind` is its own text is a reserved word, because that is how the lexer
- * spells one; a kind of `identifier` is a name; anything whose kind is not made
- * of letters is punctuation. So a word added to the language is coloured the
- * day it lexes, and this file does not change.
+ * This used to be a reading of the token stream done here, and it was right
+ * about most of it and quietly wrong about the rest. A reserved word was "a
+ * token whose kind is its own text", which is true and is also true of every
+ * punctuation mark; the test that a kind is made of letters passed for
+ * `hexColor`, `indent`, `newline` and `dedent`, so a colour literal and a line's
+ * leading spaces were both painted as identifiers. Comments were recovered here
+ * too, by scanning the gaps between tokens for a comment marker. None of that
+ * was unreasonable and all of it was a second implementation of the language
+ * kept in step by attention.
  *
- * Comments are the one thing the lexer does not hand back, because the parser
- * has no use for them. They are recovered from the gaps between tokens, which
- * is the only place they can be.
+ * What is still ours is the palette: which of the language's eleven kinds share
+ * a colour in this product, and whether a library name written with a bracket
+ * after it is painted differently from one read as a value. Those are design
+ * decisions about this editor, not facts about the language, which is exactly
+ * the line the package draws.
  */
 
 /** What a span is drawn as. Kept small: a palette, not a syntax theme. */
@@ -24,6 +30,8 @@ export type SpanKind =
   | 'comment'
   | 'string'
   | 'number'
+  /** A hexadecimal colour literal, which the language has and most do not. */
+  | 'color'
   | 'keyword'
   /** A name the standard library provides and calls: `plot`, `ema`, `input`. */
   | 'call'
@@ -49,69 +57,33 @@ export interface HighlightedSpan {
 const LIMIT = 64 * 1024
 
 /**
- * What one token is drawn as.
+ * The language's eleven kinds, as this product's palette.
  *
- * A reserved word is a token whose kind is the word itself, which is how the
- * lexer spells one. A name the standard library provides is asked of the
- * language through `isLibraryName`, never of a list kept here: a list would be
- * right the day it was written and wrong at the next release, and a built-in
- * that quietly stopped being coloured is the last thing anybody would check.
- *
- * Whether such a name is a function or a value is decided by what follows it,
- * not by a second table. `plot` is always written `plot(`, `close` never is.
- * That keeps the distinction in the one place that cannot drift from the
- * language: the token stream.
+ * Ten of the eleven map straight across. `builtin` is the one that does not,
+ * because this editor paints a library call differently from a library value,
+ * and the language has no opinion about that: `plot` and `close` are both names
+ * the manifest holds. Which of the two a name is is decided below by what
+ * follows it, which is the one question this file still asks of the token
+ * stream and the only one it can answer without knowing the language.
  */
-function kindOf(
-  tokenKind: string,
-  text: string,
-  followedByCall: boolean,
-  isLibrary: (name: string) => boolean,
-  namespaces: ReadonlySet<string>
-): SpanKind {
-  if (tokenKind === 'stringLiteral') return 'string'
-  if (tokenKind === 'numberLiteral') return 'number'
-  if (tokenKind === 'identifier') {
-    if (isLibrary(text)) return followedByCall ? 'call' : 'builtin'
-    if (namespaces.has(text)) return 'builtin'
-    return 'identifier'
-  }
-  if (/^[a-zA-Z]+$/.test(tokenKind)) return tokenKind === text ? 'keyword' : 'identifier'
-  return 'punctuation'
-}
-
-/**
- * Splits trivia into its comment and its whitespace.
- *
- * A comment runs to the end of its line, and trivia between two tokens can hold
- * a comment, a newline and the indentation of the next line, in that order.
- */
-function trivia(text: string, out: HighlightedSpan[]): void {
-  let rest = text
-  while (rest.length > 0) {
-    const start = rest.indexOf('//')
-    if (start === -1) {
-      out.push({ text: rest, kind: 'plain' })
-      return
-    }
-    if (start > 0) out.push({ text: rest.slice(0, start), kind: 'plain' })
-    const end = rest.indexOf('\n', start)
-    if (end === -1) {
-      out.push({ text: rest.slice(start), kind: 'comment' })
-      return
-    }
-    out.push({ text: rest.slice(start, end), kind: 'comment' })
-    rest = rest.slice(end)
-    // The newline and anything after it go round again, so a comment on one
-    // line does not swallow the line below it.
-    const nextComment = rest.indexOf('//')
-    if (nextComment === -1) {
-      out.push({ text: rest, kind: 'plain' })
-      return
-    }
-    out.push({ text: rest.slice(0, nextComment), kind: 'plain' })
-    rest = rest.slice(nextComment)
-  }
+const PALETTE: Record<string, SpanKind> = {
+  keyword: 'keyword',
+  builtin: 'builtin',
+  name: 'identifier',
+  number: 'number',
+  string: 'string',
+  color: 'color',
+  comment: 'comment',
+  // The language tells an operator from a bracket; this palette does not, and a
+  // panel with two greys in it reads as a panel that could not decide.
+  operator: 'punctuation',
+  punctuation: 'punctuation',
+  whitespace: 'plain',
+  // Not "wrong": a character the language does not have, a region somebody
+  // pasted as a block comment, a continuation backslash. The compiler's own
+  // diagnostics are what say whether any of it is a mistake, and painting it red
+  // here would be this file having a second opinion about the language.
+  unknown: 'plain',
 }
 
 /**
@@ -119,63 +91,58 @@ function trivia(text: string, out: HighlightedSpan[]): void {
  *
  * Covering every character is what lets the result be drawn under a transparent
  * text area and line up with it: a span dropped anywhere shifts every character
- * after it, and the caret stops sitting where the letters are.
+ * after it, and the caret stops sitting where the letters are. The package
+ * guarantees it of the pieces it returns, over every script in its own
+ * repository and a corpus of malformed ones, so this file keeps the property
+ * rather than having to establish it.
  */
 export async function highlight(source: string): Promise<HighlightedSpan[]> {
   if (source.length === 0) return []
   if (source.length > LIMIT) return [{ text: source, kind: 'plain' }]
 
-  let tokens: { kind: string; span: { offset: number; length: number }; text: string }[]
   try {
-    const { sourceFile, lex, DiagnosticBag, normaliseSource } = await import('openalgo-script')
+    const { normaliseSource } = await import('openalgo-script')
 
-    // **A token's offset is into the normalised source, not the text handed
-    // in.** The compiler collapses line endings before it lexes, so on a file
-    // with carriage returns every offset is short by one per line seen so far
-    // and the drift accumulates. Slicing the raw text by those offsets returns
-    // the wrong characters, and the damage is subtle rather than obvious: the
-    // colours stay plausible near the top of the file and slide a word at a
-    // time from there, which reads as a highlighter that cannot tell a comment
-    // from code rather than as an off-by-one.
+    // **Every offset the package produces indexes the normalised source**, not
+    // the text handed in: the compiler drops a byte order mark and collapses
+    // line endings before it lexes. The pieces carry their own text, so nothing
+    // here indexes anything, but their texts then concatenate to the normalised
+    // source rather than to what the caller passed, and this module's one
+    // promise to its caller is that they reconstruct the source exactly.
     //
-    // Colouring the normalised text instead would break the one property this
-    // module owes its caller, which is that the spans reconstruct what was
-    // passed in exactly. So a source that is not already normalised is handed
-    // back unpainted, and the editor keeps its text normalised so that never
-    // happens in practice.
+    // So a source that is not already in that form is handed back unpainted, and
+    // the editor keeps its text normalised so that never happens in practice.
+    // The alternative, painting the normalised text, drops the carriage returns
+    // out of the panel while leaving them in the file.
     if (normaliseSource(source) !== source) return [{ text: source, kind: 'plain' }]
 
-    const file = sourceFile('editor.oscript', source)
-    // A source that does not lex still colours as far as it got: the bag
-    // collects the complaints and the tokens before them are still tokens.
-    tokens = lex(file, new DiagnosticBag()) as never
+    const { highlight: pieces } = await import('openalgo-script/editor')
+    const held = pieces(source)
+
+    return held.map((piece, index) => ({
+      text: piece.text,
+      kind:
+        piece.kind === 'builtin' && opensCall(held, index)
+          ? 'call'
+          : (PALETTE[piece.kind] ?? 'plain'),
+    }))
   } catch {
+    // A source the package refuses to read is still a source somebody is
+    // looking at. Unpainted is the honest answer and it never loses a
+    // character.
     return [{ text: source, kind: 'plain' }]
   }
+}
 
-  const { isLibraryName, NAMESPACES } = await import('openalgo-script')
-  const namespaces: ReadonlySet<string> = new Set(NAMESPACES as readonly string[])
-
-  const spans: HighlightedSpan[] = []
-  let at = 0
-  for (const [index, token] of tokens.entries()) {
-    // The next token decides whether a library name is a call or a value.
-    // `newline` tokens carry no text, so the very next entry is the one to ask.
-    const followedByCall = tokens[index + 1]?.kind === '('
-    const { offset, length } = token.span
-    if (offset > at) trivia(source.slice(at, offset), spans)
-    if (length > 0) {
-      spans.push({
-        text: source.slice(offset, offset + length),
-        kind: kindOf(token.kind, token.text, followedByCall, isLibraryName, namespaces),
-      })
-      at = offset + length
-    } else if (offset > at) {
-      at = offset
-    }
+/** Whether the next piece that is not a space opens an argument list. */
+function opensCall(pieces: readonly { kind: string; text: string }[], index: number): boolean {
+  for (let at = index + 1; at < pieces.length; at += 1) {
+    const next = pieces[at]
+    if (next === undefined) return false
+    if (next.kind === 'whitespace') continue
+    return next.text === '('
   }
-  if (at < source.length) trivia(source.slice(at), spans)
-  return spans
+  return false
 }
 
 /**
@@ -191,6 +158,7 @@ export const SPAN_CLASS: Record<SpanKind, string> = {
   comment: 'oscript-comment',
   string: 'oscript-string',
   number: 'oscript-number',
+  color: 'oscript-color',
   keyword: 'oscript-keyword',
   call: 'oscript-call',
   builtin: 'oscript-builtin',
