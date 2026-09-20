@@ -100,12 +100,21 @@ export function ScriptPanel({ onAddToChart }: Props) {
   const [result, setResult] = useState<CompileResult | null>(null)
   const [naming, setNaming] = useState(false)
   const [newName, setNewName] = useState('')
+  /**
+   * Whether the name field has been used yet.
+   *
+   * Without it the row opens already complaining that the script has no name,
+   * which is true and useless: nobody has typed anything. A form that is red
+   * before it is touched teaches people to ignore the red.
+   */
+  const [nameTouched, setNameTouched] = useState(false)
   const [scrolled, setScrolled] = useState({ top: 0, left: 0 })
   const [caret, setCaret] = useState({ line: 1, column: 1 })
   const [spans, setSpans] = useState<HighlightedSpan[]>([])
 
   const dirty = open !== null && source !== saved
-  const nameError = naming ? nameProblem(newName) : null
+  const nameFault = naming ? nameProblem(newName) : null
+  const nameError = nameTouched ? nameFault : null
   const runnable = open !== null && !dirty && result?.ok === true
 
   /** One entry per line, so the gutter is exactly as tall as the text. */
@@ -253,7 +262,16 @@ export function ScriptPanel({ onAddToChart }: Props) {
             {open ?? 'OpenScript studies'}
           </div>
         </div>
-        <button type="button" className={CHIP} onClick={() => setNaming(true)} disabled={busy}>
+        <button
+          type="button"
+          className={CHIP}
+          onClick={() => {
+            setNewName('')
+            setNameTouched(false)
+            setNaming(true)
+          }}
+          disabled={busy}
+        >
           <Plus className="h-3 w-3" strokeWidth={1.5} />
           New
         </button>
@@ -270,10 +288,21 @@ export function ScriptPanel({ onAddToChart }: Props) {
           </label>
           <input
             id="new-script-name"
+            // Focused on open, so a trader who chose New can simply type. It is
+            // the only field in a row that was summoned by a button, so taking
+            // focus steals it from nothing.
+            // biome-ignore lint/a11y/noAutofocus: see above
+            autoFocus
             value={newName}
-            onChange={(event) => setNewName(event.target.value)}
+            onChange={(event) => {
+              setNewName(event.target.value)
+              setNameTouched(true)
+            }}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') void create()
+              if (event.key === 'Enter') {
+                setNameTouched(true)
+                void create()
+              }
               if (event.key === 'Escape') setNaming(false)
             }}
             className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
@@ -281,7 +310,18 @@ export function ScriptPanel({ onAddToChart }: Props) {
           />
           {nameError && <p className="text-[11px] text-destructive">{nameError}</p>}
           <div className="flex gap-1.5">
-            <button type="button" className={CHIP} onClick={create} disabled={nameError !== null}>
+            <button
+              type="button"
+              className={CHIP}
+              onClick={() => {
+                setNameTouched(true)
+                void create()
+              }}
+              // The real fault, not the one the reader has been shown yet: a
+              // button that is enabled and does nothing is worse than one that
+              // is disabled with a reason beside it.
+              disabled={nameFault !== null || busy}
+            >
               Create
             </button>
             <button type="button" className={CHIP} onClick={() => setNaming(false)}>
@@ -327,8 +367,20 @@ export function ScriptPanel({ onAddToChart }: Props) {
       </div>
 
       {open === null ? (
-        <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
-          Choose a script to edit it, or write a new one.
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+          {/* A failure with no script open used to land in a console that only
+              renders beside an open one, so a create that was refused closed
+              the row and did nothing visible. That is the worst shape a
+              failure can take: the trader concludes the button is broken and
+              there is nothing anywhere to correct them. */}
+          {result?.problem && !result.ok && (
+            <pre className="max-h-40 w-full overflow-auto whitespace-pre-wrap rounded border border-destructive/40 bg-destructive/5 px-2 py-2 text-left font-mono text-[11px] leading-[1.45] text-destructive">
+              {result.problem}
+            </pre>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Choose a script to edit it, or write a new one.
+          </p>
         </div>
       ) : (
         <>

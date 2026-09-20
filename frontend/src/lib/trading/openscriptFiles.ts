@@ -11,6 +11,8 @@
  * that was never wrong.
  */
 
+import { fetchCSRFToken } from '@/api/client'
+
 export interface StoredScript {
   file: string
   mtime: number
@@ -84,11 +86,27 @@ export async function readScript(file: string, signal?: AbortSignal): Promise<st
   return response.text()
 }
 
+/**
+ * The headers a write needs.
+ *
+ * Every method that changes something carries a CSRF token: Flask-WTF protects
+ * POST, PUT, PATCH and DELETE, and `api/client.ts` states that set once. Without
+ * the token the write is refused before it reaches the route, which looks from
+ * the panel exactly like a save that did nothing.
+ */
+async function writeHeaders(): Promise<HeadersInit> {
+  return {
+    'Content-Type': 'application/json',
+    'X-CSRFToken': await fetchCSRFToken(),
+  }
+}
+
 /** Creates or replaces one script, and answers with what the server stored. */
 export async function saveScript(file: string, source: string): Promise<StoredScript> {
   const response = await fetch(`${BASE}/${encodeURIComponent(file)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    headers: await writeHeaders(),
     body: JSON.stringify({ source }),
   })
   if (!response.ok) {
@@ -100,7 +118,11 @@ export async function saveScript(file: string, source: string): Promise<StoredSc
 
 /** Removes one script and the backup taken of it. */
 export async function deleteScript(file: string): Promise<void> {
-  const response = await fetch(`${BASE}/${encodeURIComponent(file)}`, { method: 'DELETE' })
+  const response = await fetch(`${BASE}/${encodeURIComponent(file)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: await writeHeaders(),
+  })
   if (!response.ok) {
     throw new Error(await readMessage(response, `${file} could not be deleted.`))
   }
