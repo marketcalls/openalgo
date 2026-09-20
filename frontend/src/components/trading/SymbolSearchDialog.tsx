@@ -1,10 +1,10 @@
 import { Search } from 'lucide-react'
+import { isPlainSymbol, parseExpression } from 'openalgo-charts/transform'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
-import { isPlainSymbol, parseExpression } from 'openalgo-charts/transform'
 
 /**
  * The operator keypad, in the order it is drawn. `1/` wraps the whole box
@@ -194,9 +194,21 @@ interface Props {
   onPick: (row: SearchRow) => void
   /** Seeds the input (usually the pane's current symbol) and is text-selected on open. */
   initialQuery?: string
+  mode?: 'symbol' | 'comparison'
+  title?: string
+  container?: HTMLElement | null
 }
 
-export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initialQuery }: Props) {
+export function SymbolSearchDialog({
+  open,
+  onOpenChange,
+  search,
+  onPick,
+  initialQuery,
+  mode = 'symbol',
+  title = 'Symbol Search',
+  container,
+}: Props) {
   const { allExchanges } = useSupportedExchanges()
   const [query, setQuery] = useState('')
   const [rows, setRows] = useState<SearchRow[]>([])
@@ -225,8 +237,11 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
     return ['ALL', ...CHIP_ORDER.filter((c) => present.has(c))]
   }, [allExchanges])
 
-  const expression = useMemo(() => isExpression(query), [query])
-  const { prefix, leg } = useMemo(() => splitLeg(query), [query])
+  const expression = useMemo(() => mode === 'symbol' && isExpression(query), [query, mode])
+  const { prefix, leg } = useMemo(
+    () => (mode === 'comparison' ? { prefix: '', leg: query } : splitLeg(query)),
+    [query, mode]
+  )
 
   const filtered = useMemo(() => {
     const q = leg.trim().toUpperCase()
@@ -295,6 +310,7 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
 
   /** Load this and close. The only path that leaves the dialog. */
   const pick = (row: SearchRow) => {
+    if (mode === 'comparison' && row.expression) return
     onPick(row)
     onOpenChange(false)
   }
@@ -341,10 +357,11 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        container={container}
         className="flex max-h-[80vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <DialogTitle className="px-5 pt-5 pb-3 text-xl">Symbol Search</DialogTitle>
+        <DialogTitle className="px-5 pt-5 pb-3 text-xl">{title}</DialogTitle>
 
         {/* Search input */}
         <div className="flex items-center gap-2 border-y px-5 py-3">
@@ -354,40 +371,46 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search symbol, or build an expression…"
+            placeholder={
+              mode === 'comparison'
+                ? 'Search comparison symbol'
+                : 'Search symbol, or build an expression…'
+            }
             className="w-full bg-transparent text-base outline-none placeholder:text-muted-foreground"
-            aria-label="Search symbol"
+            aria-label={mode === 'comparison' ? 'Search comparison symbol' : 'Search symbol'}
           />
           {/* Each key carries its own label, so the row needs no group role of its
               own: a wrapper role here would only add a landmark with nothing to say. */}
-          <div className="flex shrink-0 items-center gap-0.5">
-            {OPERATORS.map((op) => (
-              <button
-                type="button"
-                key={op.insert}
-                title={op.title}
-                aria-label={op.title}
-                // `mousedown`, not `click`: the field must not lose focus first,
-                // or the caret position being written to is already gone.
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  const node = inputRef.current
-                  if (!node) return
-                  const start = node.selectionStart ?? query.length
-                  const end = node.selectionEnd ?? start
-                  const next =
-                    op.insert === '1/'
-                      ? `1/(${query.trim()})`
-                      : query.slice(0, start) + op.insert + query.slice(end)
-                  setQuery(next)
-                  caretRef.current = op.insert === '1/' ? next.length : start + op.insert.length
-                }}
-                className="flex h-6 w-6 items-center justify-center rounded text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                {op.label}
-              </button>
-            ))}
-          </div>
+          {mode === 'symbol' && (
+            <div className="flex shrink-0 items-center gap-0.5">
+              {OPERATORS.map((op) => (
+                <button
+                  type="button"
+                  key={op.insert}
+                  title={op.title}
+                  aria-label={op.title}
+                  // `mousedown`, not `click`: the field must not lose focus first,
+                  // or the caret position being written to is already gone.
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    const node = inputRef.current
+                    if (!node) return
+                    const start = node.selectionStart ?? query.length
+                    const end = node.selectionEnd ?? start
+                    const next =
+                      op.insert === '1/'
+                        ? `1/(${query.trim()})`
+                        : query.slice(0, start) + op.insert + query.slice(end)
+                    setQuery(next)
+                    caretRef.current = op.insert === '1/' ? next.length : start + op.insert.length
+                  }}
+                  className="flex h-6 w-6 items-center justify-center rounded text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {op.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Segment chips (broker-supported only) */}
@@ -458,9 +481,11 @@ export function SymbolSearchDialog({ open, onOpenChange, search, onPick, initial
           {expression ? (
             <>
               Press Enter to chart{' '}
-              <span className="font-medium text-foreground">{query.trim()}</span>. A computed
-              chart cannot be traded.
+              <span className="font-medium text-foreground">{query.trim()}</span>. A computed chart
+              cannot be traded.
             </>
+          ) : mode === 'comparison' ? (
+            'Search and select a symbol to compare with the current chart.'
           ) : (
             'Start typing to search, then press Enter to load the highlighted symbol. Operators build an expression.'
           )}

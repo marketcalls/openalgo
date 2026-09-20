@@ -246,7 +246,7 @@ function guardCalc(
  * Fetch, import and run every user module that has not been seen yet.
  *
  * Never throws. A missing folder, a logged-out session and a syntax error in one
- * user file all have to leave the other 102 indicators working, so the index is
+ * user file all have to leave the other 105 indicators working, so the index is
  * treated as optional and each module is isolated from the next.
  */
 export function loadCustomIndicators(

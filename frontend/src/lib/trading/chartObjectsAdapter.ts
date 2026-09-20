@@ -1,4 +1,5 @@
 import type {
+  AlertDrawingProvider,
   ChartObjectDrawing,
   ChartObjectDrawingSource,
   ChartObjectProvider,
@@ -13,10 +14,10 @@ import type { ProfileKind } from './profileSettings'
  * controller immediately redirects every operation; a late cleanup may only
  * detach the controller it originally installed.
  */
-export class CurrentDrawingSource implements ChartObjectDrawingSource {
-  private current: ChartObjectDrawingSource | null = null
+export class CurrentDrawingSource implements ChartObjectDrawingSource, AlertDrawingProvider {
+  private current: (ChartObjectDrawingSource & Partial<AlertDrawingProvider>) | null = null
 
-  attach(source: ChartObjectDrawingSource): void {
+  attach(source: ChartObjectDrawingSource & Partial<AlertDrawingProvider>): void {
     this.current = source
   }
 
@@ -30,6 +31,20 @@ export class CurrentDrawingSource implements ChartObjectDrawingSource {
 
   get(id: string): ChartObjectDrawing | undefined {
     return this.current?.get(id)
+  }
+
+  valueAt(id: string, time: number, level?: string) {
+    return this.current?.valueAt?.(id, time, level)
+  }
+
+  alertInfo(id: string): ReturnType<AlertDrawingProvider['alertInfo']> {
+    return (
+      this.current?.alertInfo?.(id) ?? {
+        available: false,
+        reason: 'Drawings are still loading',
+        levels: [],
+      }
+    )
   }
 
   selection(): readonly string[] {

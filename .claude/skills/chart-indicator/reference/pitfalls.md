@@ -211,8 +211,12 @@ never draws.
 ## 13. Reusing a built-in id overrides it
 
 Custom modules register after the built-in tier, so a duplicate id replaces the
-built-in for the whole app. There are 102 of them; `sma`, `rsi`, `macd`,
+built-in for the whole app. There are 105 of them; `sma`, `rsi`, `macd`,
 `supertrend`, `vwap`, `range-analysis` are all taken.
+
+**2.4.5 adds three more reserved ids:** `open-interest`, `open-interest-change`
+and `open-interest-buildup`. Check an existing custom file against those ids
+before upgrading; prefix your own ids when an override is not intended.
 
 **The catalogue grew from 91 to 102 in 1.8.3, so a file written before that can
 shadow a built-in that did not exist when it was named.** The ids added were

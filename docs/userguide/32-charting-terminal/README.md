@@ -3,13 +3,13 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. It is powered by `openalgo-charts` 2.2.0: a from-scratch canvas
-charting engine with 17 chart types, 102 built-in indicators plus any you write
+it. The terminal uses published `openalgo-charts` 2.4.5: a from-scratch canvas
+charting engine with 17 chart types, 105 built-in indicators plus any you write
 yourself, and 85 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
-Everything on the page is live over the WebSocket feed. Nothing on it polls for
-prices.
+Price updates arrive over the WebSocket feed. History refreshes reconcile bars
+and supply fields the live quote stream does not report.
 
 ## Opening It
 
@@ -23,15 +23,180 @@ says so and links to `/apikey`.
 
 | Region | What it holds |
 |---|---|
-| Top bar | Symbol, interval, chart type, product, quantity, indicators, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera |
+| Top bar | Symbol, interval, chart type, product, quantity, indicators, comparisons, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera and CSV export |
 | Left rail | Drawing tools in ten groups, magnet, keep-armed lock, undo, redo, delete |
-| Centre | One to eight chart panes in a grid |
+| Centre | Chart grid with up to eight panes in presets, or sixteen in an imported workspace |
 | Right panel | Watchlist, option chain, Objects, or the chart assistant |
 | Right rail | The four controls that open those panels |
 | Bottom dock | Orders, positions, trades and GTT across every symbol |
 
 The chart grid takes whatever the rails and panels leave. Only the right panel
 and the dock can be resized; the panes follow the layout preset you pick.
+
+One toolbar serves the whole grid. Click a chart, move keyboard focus to its
+chart region, or use the **Chart 1 / Chart 2** selector to choose the chart that
+the toolbar controls. The selected chart has a highlighted border. Its symbol,
+interval, chart type, studies, alerts, comparisons and quantity remain
+independent when you select another chart. Enabled sync options still apply.
+Replay keeps the chart that started it as its owner until the session ends.
+
+Adding panes does not repeat the toolbar. Removing the selected pane selects a
+surviving chart, and a saved workspace restores its selected chart. In full
+screen, the selected chart's controls move inside that chart; grid controls
+return when you leave full screen. On narrow screens, scroll the toolbar
+horizontally to reach its remaining controls. The selected-chart selector stays
+visible as the controls scroll.
+
+## Comparing Symbols
+
+Select a chart, open **Compare**, then choose **Add comparison**. Search for a
+broker-supported instrument in **Add comparison symbol** and select its row.
+You can add several independent symbols. The menu lists each one with its
+colour and shows loading or unavailable-history messages beside that symbol.
+**Remove** affects only the comparison on that row.
+
+Choose **Price** to compare quoted prices or **Percentage** to compare relative
+moves. Comparisons use the selected chart's interval. Missing observations stay
+as gaps. Comparison search accepts instruments; arithmetic expressions remain
+available through the chart's main symbol search.
+
+Each chart retains its comparison list and scale mode. Named workspaces save
+these settings with the rest of that chart. Comparison controls are unavailable
+during replay selection, loading and playback.
+
+## Saving Images and Data
+
+Open the selected chart's camera menu and choose **Download image**, **Copy image**
+or **Download CSV**. CSV contains the displayed price data, study outputs and
+comparison columns. Missing readings remain blank. A chart without available
+history reports an error instead of downloading a file.
+
+CSV is unavailable while selecting a replay start or loading replay history.
+During active replay it exports the revealed chart data without future rows.
+In selected-chart replay, a chart outside the replay continues to export its
+displayed live data. Exporting does not change the saved workspace.
+
+## Interval Sync and Volume
+
+In a multi-chart layout, open **Chart sync** and enable **Interval** to follow
+interval changes across panes. This switch is independent of symbol, time-range
+and crosshair sync. A pane whose feed or session-profile chart cannot use the
+selected interval keeps its current interval and explains why.
+
+In **Chart settings > Appearance**, **Snap to candle center** keeps the vertical
+crosshair on the nearest candle. The horizontal price cursor still follows the
+pointer unless the separate price magnet is enabled.
+
+The **Volume** settings tab controls candle-direction colours and an optional
+simple moving average. Its period, colour, thickness and line style are saved
+per pane. The average shares the volume scale, starts after a full period and
+updates as the current bar forms. Hiding volume hides the average as well.
+During replay, both use only the bars revealed by the playhead, including the
+formed portion of an intrabar candle.
+
+The readout includes zero volume as `V 0`. Index symbols have no traded volume,
+so their volume bars, average and volume readout stay hidden. Switching back to
+a traded instrument restores your volume preference.
+
+For a combined symbol, volume is the sum of each distinct expression leg's
+reported volume, once per matching candle. Subtraction and price coefficients
+do not subtract or multiply that activity. An unavailable leg amount leaves the
+combined volume unavailable. Price-only live quotes preserve the last reported
+amount; history reconciliation supplies updated volume.
+
+Hover a candle to read its OHLC, volume and study values while live data continues
+arriving. Crosshair sync makes each follower read its own candle at the mapped
+time. Moving outside the chart or beyond its data returns to the latest displayed
+candle, including during replay.
+
+## Open Interest
+
+The indicator picker includes **Open Interest**, **Open Interest Change** and
+**Open Interest Buildup**. The first plots the reported level, the second plots
+the change between adjacent available readings, and the third colours candles
+for the four price/OI regimes. Missing readings leave gaps. A reported zero is
+a real reading, and folded bars keep the latest level instead of adding levels.
+
+Enable **Chart settings > Readout > Open interest** to include the selected
+candle's OI in the chart readout and exported image. It starts off. Hovered OI
+stays on the selected candle while prices continue updating. If the forming bar
+has no OI, its reading is absent; the terminal does not carry a historical level
+forward as a live observation.
+
+Capability comes from instrument metadata and known exchange segments. Cash,
+index and crypto spot instruments suppress placeholder history OI. Futures,
+options and perpetual futures retain supplied readings. An unclassified
+instrument's capability stays unknown. The readout switch is disabled for an
+unsupported instrument while retaining your preference for the next supported
+one. Capability says whether OI applies, not whether the broker supplies it on
+every bar. The current quote stream does not supply OI.
+
+Study templates and chart workspaces retain OI studies and appearance. Workspaces
+also retain the readout preference; observations come from the restored
+instrument's history. Expressions and price-generated chart elements do not
+have a meaningful position level and omit OI.
+
+## Chart Workspaces
+
+Open **Workspaces**, enter a name, and choose **Save as** to save the complete
+grid. It retains each chart's instrument, interval, chart type, settings,
+studies, comparisons, drawings and drawing preferences, along with grid proportions, selected
+chart and sync switches. **Save** updates the current named workspace.
+
+Choose a saved workspace and select **Open** to restore it. The displayed charts
+remain available until every replacement chart has loaded successfully. Loading
+locks chart interactions and order entry; a failed load leaves the previous grid
+in place and displays the error. **Cancel workspace loading** keeps the previous
+grid and releases the pending charts. Workspace changes turn One-Click off. The last
+successfully opened workspace is restored when the trading page reloads.
+
+**New workspace** opens a clean single chart for BHEL on NSE at a five-minute
+interval, using the entered name. **Rename**, **Duplicate** and **Delete** manage
+saved entries. Deleting an entry keeps its displayed charts available as an
+unnamed grid. Recent entries list successfully opened workspaces.
+
+Enable **Autosave chart changes** to save configuration edits after a short pause.
+Price ticks do not trigger workspace writes. Autosave applies only to a named
+workspace. Storage errors remain visible and leave changes unsaved; use **Save**
+to retry or **Refresh** to reread the saved catalog.
+
+Replay selection, history loading and playback pause autosave. Unsaved changes
+remain dirty and resume saving after cancellation or exit restores the live
+charts. Stop replay before explicitly saving a workspace.
+
+**Export JSON** downloads the selected saved workspace. **Import workspace JSON**
+accepts files up to 5 MB, gives the imported workspace a new identity and prepares
+its charts before displaying them. Unsupported intervals, missing studies and
+unsupported comparison configurations are rejected with an error.
+
+Workspaces belong to your account in this browser and do not synchronize across
+devices. Files contain chart configuration only; credentials, order books,
+positions and One-Click state are excluded. The first named save preserves your
+existing per-chart browser preferences.
+
+## Indicator Templates
+
+Click the chart you want to work with, then open **Templates** beside the grid
+controls. Enter a name and choose **Save current studies**. A template retains
+every study instance, including repeated studies, parameters, plot styles,
+visibility and shared oscillator panes. It can be used on another symbol.
+
+Select a saved template and choose **Replace studies** to replace the selected
+chart's studies, or **Add studies** to keep them and append the template. Added
+oscillators get new panes while studies grouped together stay together. An empty
+template shows **No studies**; replacing with it clears the studies. If a custom
+study is unavailable, the terminal lists its ID and keeps the current studies.
+
+Use **Rename**, **Duplicate**, or **Delete** to manage the selected template.
+**Export JSON** downloads a portable file; **Import template JSON** accepts a
+template file up to 5 MB and creates a new saved entry. This importer accepts
+indicator templates only.
+
+Templates are private to your account in this browser. They are not synchronized
+to another device. Browser-storage failures remain visible and preserve the
+entered name so you can retry; **Refresh templates** reads changes from another
+tab. Template files contain study configuration, not credentials or orders.
+Applying a template preserves chart prices, drawings and the visible time range.
 
 ## Chart Branding and Watermark
 
@@ -196,8 +361,10 @@ anchor meanings are preserved by the upgrade.
   pointer. It uses the same chart gesture on supported trackpads and browsers.
 - Scroll over a visible price axis to expand or compress that price scale around
   the pointed price. This makes the scale manual, so it stays where you put it.
-- Drag inside the plot with a mouse or pen to pan both time and price. Touch
-  panning also moves both axes.
+- Drag inside the plot with a mouse or pen to pan through time while preserving
+  automatic price fitting. The Navigation setting can explicitly enable panning
+  both axes. Dragging a price axis still adjusts it manually. Touch panning moves
+  both axes.
 
 While a price scale is automatic, its range eases as navigation brings a new
 high or low into view. A manually adjusted or fixed scale stays authoritative.
@@ -290,15 +457,63 @@ There is no keyboard shortcut that places, modifies or cancels an order from the
 chart. Order entry is deliberately pointer-driven here; the keyboard-driven
 order surface is the [Scalping Terminal](../../scalping).
 
+## Chart Alerts
+
+Open **Alerts** in a chart's toolbar, then **Create alert**. Choose a price,
+a particular study and plot, a drawing level, or a named candle condition.
+The list supports editing, enabling, disabling and deleting alerts and shows
+triggered and expired records. Each pane owns its alerts.
+
+You can also right-click a price, a study plot or a supported drawing and choose
+its create-alert action. A study plot keeps the exact study instance and plot
+you clicked; a drawing action uses the clicked drawing even if another drawing
+is selected.
+
+**Bar close** is the default. It evaluates the confirmed candle when the next
+candle arrives. **Intrabar touch** can fire on a wick or study reading that is
+absent from the final candle. Missing readings remain unavailable, including
+open interest missing from the live quote stream. Alerts retain the symbol,
+exchange and interval where they were created.
+
+Delivery is a local notice in the open terminal. Alerts do not place orders or
+send external notifications. History loading, replay selection, replay history
+loading and playback suppress evaluation. Leaving replay reseeds observations
+without delivering historical matches. Named workspace configuration follows
+the workspace's Save and Autosave controls.
+
+For an alert already saved in a named workspace, its fired or expired state is
+stored separately from chart configuration. A fired once-only alert remains
+fired after reload even with Autosave off. New alerts and edited conditions
+still require Save or Autosave. Runtime history is isolated by account,
+workspace and pane; it applies only when the saved alert condition still
+matches. Save as creates independent history, and deleting a workspace removes
+its history. Browser storage failures produce an error notice.
+
 ## Market Replay
 
-The replay button steps the chart forward bar by bar from a point you choose.
-You pick the starting bar yourself, with everything to its right shaded, because
-choosing a start with the next twenty bars visible is choosing with hindsight.
+Select a chart and click **Replay**, then choose its starting bar. The shared
+transport identifies that chart for the whole session. Selecting another chart
+or moving keyboard focus does not redirect replay. **Selected chart** replays
+only its owner; **All charts** uses one clock across every visible chart.
+Hidden charts being prepared for another workspace do not join the session.
 
-The transport gives you previous, play or pause, next, a scrub bar, a speed
-selector and exit. A watermark marks the chart as replayed and the trading
-panel comes off it.
+While picking, future bars are shaded on the owner and, with **All charts**,
+on the other charts at the same time boundary. **Cancel** leaves selection or
+history loading immediately. Every visible chart must be available, and replay
+prepares their histories before playback starts. If a required history fails,
+the session returns to live charts and displays the error.
+
+The single transport provides previous, play or pause, next, a scrub bar, speed
+and exit. Across different intervals, progress follows the combined observation
+times, so a chart advances only when it has an available observation. Switch the
+scope after loading to include all charts or return to the original chart.
+The transport follows the fullscreen chart without creating a second session.
+Replayed charts carry a watermark and hide their trading panel.
+
+**Exit**, or the toolbar's **Replay** button during playback, asks whether to
+leave. **Stay** keeps the playhead; **Leave** restores live charts. Changing a
+symbol, interval, chart type, layout or workspace stops the session before that
+change proceeds.
 
 Live ticks and history refreshes continue in the background during replay.
 They do not reveal candles beyond the playhead or move its viewport, including
@@ -306,7 +521,8 @@ when an older history page finishes loading. Exit replay to return to the
 updated live chart.
 
 **No order can leave the chart during replay.** Every order route on the page,
-including the dock's and the GTT tab's, refuses with the same message. Replay is
+including sibling charts, the dock and the GTT tab, refuses during selection,
+history loading and playback. Replay is
 a simulation, and the prices on screen are not the market's.
 
 ## The Chart Assistant
@@ -325,7 +541,7 @@ It needs a model configured first, at `/agent/config`.
 
 Reloading the page brings back the grid layout, the pane sync settings, the open
 right panel and its width, the dock's open tab and height, the One-Click state,
-and per pane: the symbol, interval, chart type, product, indicators, drawings,
+and per pane: the symbol, interval, chart type, product, indicators, comparisons, drawings,
 magnet, keep-armed, grid, volume and watermark settings.
 
 Watchlists are stored on the server, so they follow you between devices.

@@ -194,9 +194,7 @@ describe('useOptionChainLive', () => {
       useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
     )
 
-    await waitFor(() =>
-      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_100)
-    )
+    await waitFor(() => expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_100))
   })
 
   it('recalculates two different strikes independently from their WebSocket ticks', async () => {
@@ -372,9 +370,7 @@ describe('useOptionChainLive', () => {
     ])
     rerender()
 
-    await waitFor(() =>
-      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_001)
-    )
+    await waitFor(() => expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_001))
     expect(result.current.data?.underlying_ltp).toBe(100_075)
   })
 
@@ -399,9 +395,7 @@ describe('useOptionChainLive', () => {
     const { result, rerender } = renderHook(() =>
       useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
     )
-    await waitFor(() =>
-      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_010)
-    )
+    await waitFor(() => expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_010))
 
     marketDataCapture.isConnected = false
     marketDataCapture.isAuthenticated = false
@@ -429,9 +423,7 @@ describe('useOptionChainLive', () => {
       ],
     ])
     rerender()
-    await waitFor(() =>
-      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_020)
-    )
+    await waitFor(() => expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_020))
   })
 
   it('resyncs the server clock immediately after visibility is restored', async () => {
@@ -454,9 +446,15 @@ describe('useOptionChainLive', () => {
     const firstOffset = result.current.clockOffsetMs
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     await waitFor(() => expect(requestCount).toBe(2))
     await waitFor(() => expect(result.current.clockOffsetMs).not.toBe(firstOffset))
