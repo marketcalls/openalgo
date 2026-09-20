@@ -50,6 +50,7 @@ import {
   needsThreshold,
   plotChoices,
   plotValueAt,
+  snapPrice,
   studyChoices,
   titleFor,
   toAlertInput,
@@ -146,13 +147,16 @@ export function AlertsDialog({ handle, onClose }: Props) {
               : handle
                 ? lastClose(handle.chart)
                 : null
+      // Seeded on the tick. The value may have come from a pixel, and a pixel
+      // maps to a price with fifteen decimals behind it.
+      const onTick = (n: number): number => (kind === 'price' ? snapPrice(n, handle?.at) : n)
       return {
         kind,
         condition: (existing?.condition ?? 'crossing') as AlertConditionId,
-        value: seeded === null || seeded === undefined ? '' : String(seeded),
+        value: seeded === null || seeded === undefined ? '' : String(onTick(seeded)),
         upperValue:
           source?.kind === 'price' && source.upperPrice !== undefined
-            ? String(source.upperPrice)
+            ? String(onTick(source.upperPrice))
             : source?.kind === 'indicator' && source.upperValue !== undefined
               ? String(source.upperValue)
               : '',
@@ -200,7 +204,7 @@ export function AlertsDialog({ handle, onClose }: Props) {
       setProblem(fault)
       return
     }
-    const input = toAlertInput(draft, handle.chart, handle.drawings, handle.symbol)
+    const input = toAlertInput(draft, handle.chart, handle.drawings, handle.symbol, handle.at)
     if (input === null) return
     try {
       if (view.kind === 'edit' && view.alertId) handle.alerts.update(view.alertId, input)
@@ -332,7 +336,12 @@ export function AlertsDialog({ handle, onClose }: Props) {
                         : null
                   patch({
                     kind,
-                    value: seededValue === null ? draft.value : String(seededValue),
+                    value:
+                      seededValue === null
+                        ? draft.value
+                        : String(
+                            kind === 'price' ? snapPrice(seededValue, handle?.at) : seededValue
+                          ),
                   })
                 }}
               />
@@ -487,7 +496,7 @@ export function AlertsDialog({ handle, onClose }: Props) {
               <Input
                 value={draft.title}
                 onChange={(event) => patch({ title: event.target.value })}
-                placeholder={handle ? titleFor(draft, handle.chart, handle.symbol) : ''}
+                placeholder={handle ? titleFor(draft, handle.chart, handle.symbol, handle.at) : ''}
                 aria-label="Alert name"
                 className="h-9 text-sm"
               />

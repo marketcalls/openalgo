@@ -23,6 +23,38 @@ import {
   utcSecondsToZonedParts,
   zonedWallClockToUtcSeconds,
 } from 'openalgo-charts'
+import { snapTick } from './format'
+
+/**
+ * The instrument's tick, and a price to sanity-check it against.
+ *
+ * Carried together because `snapTick` needs both: a tick larger than about one
+ * percent of the price is a unit mismatch rather than a real instrument, and
+ * the reference price is how that is caught.
+ */
+export interface AlertTick {
+  tick: number | undefined
+  refPrice: number
+}
+
+/**
+ * A price on the instrument's tick.
+ *
+ * Every price this dialog stores goes through here. A price picked off the
+ * chart comes from a pixel, and a pixel maps to a price with fifteen decimals
+ * behind it: right-clicking at 1,293.63 produced an alert armed at
+ * 1293.6305656934308, a price the instrument cannot trade at and a box nobody
+ * can read. The snapping belongs here rather than at each place a price is
+ * picked up, because there are four of them and a new one is one line away.
+ *
+ * Only a price. A study threshold is in the plot's own units, and an
+ * oscillator that runs nought to a hundred has nothing to do with the
+ * instrument's tick.
+ */
+export function snapPrice(price: number, at: AlertTick | undefined): number {
+  if (!Number.isFinite(price) || at === undefined) return price
+  return snapTick(price, at.tick, at.refPrice)
+}
 
 /** The slice of the chart this module reads. Narrow on purpose: it is the mock. */
 export interface AlertChart {
@@ -284,7 +316,12 @@ export function defaultExpiry(zone: string, now = new Date()): string {
  * without opening any. "Chart alert" was the engine's default, and a list of
  * six of those tells you nothing about any of them.
  */
-export function titleFor(draft: AlertDraft, chart: AlertChart, symbol: string): string {
+export function titleFor(
+  draft: AlertDraft,
+  chart: AlertChart,
+  symbol: string,
+  at?: AlertTick
+): string {
   const condition = ALERT_CONDITIONS.find((one) => one.value === draft.condition)?.label ?? ''
   const subject =
     draft.kind === 'indicator'
@@ -294,9 +331,15 @@ export function titleFor(draft: AlertDraft, chart: AlertChart, symbol: string): 
         : symbol
   if (draft.kind === 'barCondition') return `${symbol} ${draft.barConditionId}`
   if (!needsThreshold(draft.kind)) return `${subject} ${condition.toLowerCase()}`
+  // Named after the price it will be armed at, not the one under the pointer.
+  const shown = (text: string): string => {
+    const n = Number(text)
+    if (draft.kind !== 'price' || !Number.isFinite(n)) return text
+    return String(snapPrice(n, at))
+  }
   const bounds = isRangeCondition(draft.condition)
-    ? `${draft.value} and ${draft.upperValue}`
-    : draft.value
+    ? `${shown(draft.value)} and ${shown(draft.upperValue)}`
+    : shown(draft.value)
   return `${subject} ${condition.toLowerCase()} ${bounds}`
 }
 
@@ -311,11 +354,14 @@ export function toAlertInput(
   draft: AlertDraft,
   chart: AlertChart,
   drawings: AlertDrawings | null,
-  symbol: string
+  symbol: string,
+  at?: AlertTick
 ): AlertInput | null {
   if (draftProblem(draft, chart, drawings) !== null) return null
-  const value = Number(draft.value)
-  const upper = isRangeCondition(draft.condition) ? Number(draft.upperValue) : undefined
+  const onTick = draft.kind === 'price'
+  const value = onTick ? snapPrice(Number(draft.value), at) : Number(draft.value)
+  const rawUpper = isRangeCondition(draft.condition) ? Number(draft.upperValue) : undefined
+  const upper = rawUpper === undefined ? undefined : onTick ? snapPrice(rawUpper, at) : rawUpper
   const source: AlertSource =
     draft.kind === 'price'
       ? { kind: 'price', price: value, ...(upper === undefined ? {} : { upperPrice: upper }) }

@@ -30,6 +30,7 @@ import {
   needsThreshold,
   plotChoices,
   plotValueAt,
+  snapPrice,
   studyChoices,
   titleFor,
   toAlertInput,
@@ -303,5 +304,73 @@ describe('the draft as the engine takes it', () => {
 
   it('sends no message at all rather than an empty one', () => {
     expect(toAlertInput(draft({ message: '   ' }), chart(), drawings, 'R')?.message).toBeUndefined()
+  })
+})
+
+describe('a stored price sits on the instrument tick', () => {
+  const at = { tick: 0.05, refPrice: 1293 }
+
+  it('snaps the price a pixel produced', () => {
+    // The reported case, exactly: right-clicking at 1,293.63 armed an alert at
+    // 1293.6305656934308. A pixel maps to a price with fifteen decimals behind
+    // it, and no instrument trades at that.
+    expect(snapPrice(1293.6305656934308, at)).toBe(1293.65)
+    expect(snapPrice(1293.61, at)).toBe(1293.6)
+  })
+
+  it('snaps what is saved, not only what is shown', () => {
+    const input = toAlertInput(
+      draft({ value: '1293.6305656934308' }),
+      chart(),
+      drawings,
+      'RELIANCE',
+      at
+    )
+    expect(input?.source).toMatchObject({ kind: 'price', price: 1293.65 })
+  })
+
+  it('snaps both bounds of a channel', () => {
+    const input = toAlertInput(
+      draft({ condition: 'enteringRange', value: '1293.6305', upperValue: '1301.2207' }),
+      chart(),
+      drawings,
+      'RELIANCE',
+      at
+    )
+    expect(input?.source).toMatchObject({ price: 1293.65, upperPrice: 1301.2 })
+  })
+
+  it('names the alert after the price it will be armed at', () => {
+    // Otherwise the list says one number and the chart line sits at another,
+    // and the difference is a tick nobody can see in either place.
+    expect(titleFor(draft({ value: '1293.6305656934308' }), chart(), 'RELIANCE', at)).toBe(
+      'RELIANCE crossing 1293.65'
+    )
+  })
+
+  it('leaves a study threshold in its own units', () => {
+    // An oscillator that runs nought to a hundred has nothing to do with the
+    // instrument's tick, and snapping 30.02 to 30.05 would be inventing
+    // precision the plot does not have.
+    const input = toAlertInput(
+      draft({ kind: 'indicator', value: '30.0217' }),
+      chart(),
+      drawings,
+      'R',
+      at
+    )
+    expect(input?.source).toMatchObject({ kind: 'indicator', value: 30.0217 })
+    // And the name follows the same rule, or the list would advertise a
+    // precision the plot does not have while the alert watches another number.
+    expect(titleFor(draft({ kind: 'indicator', value: '30.0217' }), chart(), 'R', at)).toContain(
+      '30.0217'
+    )
+  })
+
+  it('passes a price straight through when the tick is unknown', () => {
+    // A chart with no instrument metadata yet. Better an unrounded price than
+    // one snapped to a tick invented for the occasion.
+    expect(snapPrice(1293.6305656934308, undefined)).toBe(1293.6305656934308)
+    expect(snapPrice(Number.NaN, at)).toBeNaN()
   })
 })

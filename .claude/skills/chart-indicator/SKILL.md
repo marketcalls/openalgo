@@ -59,6 +59,23 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.4.6: source access, marker anchoring and a legend that reads.** Three
+  optional descriptor fields, all of which an existing indicator can ignore.
+  `hasSource: true` puts a braces button on the legend row beside the gear and
+  emits `indicatorSource` with `{ instanceId, indicatorId, paneIndex }`; the
+  host owns the code and decides what the button opens, so set it only for a
+  descriptor whose source a host can actually show. `markerAnchor: 'price'`
+  measures a marker's `aboveBar` and `belowBar` against the instrument's
+  candles rather than the descriptor's own first plot, which is what a buy or
+  sell signal on an overlay means: below is below the low. The default stays
+  `'plot'`, so a mark that belongs to a line keeps sitting on the line, and the
+  field is ignored on a study that owns a pane. Legend readings now skip a plot
+  drawn in a fully transparent colour, which matters if you declare an
+  invisible column to anchor markers or fills to: it no longer reserves the
+  width of a price in the row. Legend glyphs also scale with their button
+  rather than the row's text, and `ChartOptions.legendIconSize` sets that
+  button across the chart.
+
 - **2.4.5: optional open interest and host contracts.** The published build has
   105 built-ins, including `open-interest`, `open-interest-change` and
   `open-interest-buildup`. `Bar.oi` is an optional reading: preserve zero, keep

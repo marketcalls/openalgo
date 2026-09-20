@@ -144,7 +144,7 @@ export interface DrawStats {
 
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
-import type { AlertChart, AlertDrawings } from './alertsModel'
+import type { AlertChart, AlertDrawings, AlertTick } from './alertsModel'
 import {
   applyChartCommands,
   applyIndicatorCommands,
@@ -465,6 +465,8 @@ export interface AlertsHandle {
   drawings: AlertDrawings | null
   /** What this chart is showing, for naming an alert after it. */
   symbol: string
+  /** The instrument's tick, so every stored price sits on one. */
+  at: AlertTick
   /** A source to open the editor on, from a legend or a right-click. */
   source?: AlertSource
 }
@@ -3098,6 +3100,7 @@ export class TradingTerminal {
           chart: chart as unknown as AlertChart,
           drawings: (this.draw ?? null) as AlertDrawings | null,
           symbol: this.sym?.symbol ?? '',
+          at: { tick: this.sym?.tick, refPrice: this.refPrice() },
           ...(source ? { source } : {}),
         })
         return true
@@ -5638,9 +5641,15 @@ export class TradingTerminal {
         }
       }
     } else if (event.paneIndex === 0 && event.price !== null && Number.isFinite(event.price)) {
+      // Snapped to the instrument's tick, not the raw price under the pointer.
+      // A pixel maps to a price with fifteen decimals behind it, so the menu
+      // offered "Create price alert at 1,293.63" and the dialog it opened put
+      // 1293.6305656934308 in the box: the label and the field disagreed, and
+      // the alert was armed at a price the instrument cannot trade at.
+      const price = this.snap(event.price)
       alert = {
-        label: `Create price alert at ${this.fmt(event.price)}`,
-        source: { kind: 'price', price: event.price },
+        label: `Create price alert at ${this.fmt(price)}`,
+        source: { kind: 'price', price },
       }
     }
     const box = this.container.getBoundingClientRect()

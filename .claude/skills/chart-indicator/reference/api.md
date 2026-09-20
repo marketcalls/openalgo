@@ -180,6 +180,7 @@ are identified separately so a custom module can use the right surface.
 | **2.0.0** | The render backend port (`createRenderBackend`, `registerRenderBackend`, `Canvas2dBackend`, `resolveRenderBackend`, `backendDegradation`) plus SVG export and watermark helpers. All chart infrastructure: an indicator never touches a backend, and the WebGL2 path renders the same plots. |
 | **2.1.2** | A Tier-2 study's history requests and live callbacks are isolated by data key, so a response for a setting you have left cannot land on the current one. |
 | **2.1.5** | Drawing previews survive past the newest candle. No indicator surface changed. |
+| **2.4.6** | Three optional descriptor fields. `hasSource` adds a source button to the legend row and emits `indicatorSource`; the host owns the code. `markerAnchor: 'price'` measures `aboveBar` and `belowBar` against the instrument's candles rather than the first plot, so a signal sits above the high and below the low; the default `'plot'` is unchanged and the field is ignored off pane 0. A legend reading is skipped for a plot drawn in a fully transparent colour, so an invisible anchor column no longer reserves the width of a price. Chart-wide `legendIconSize` sizes the legend's action buttons. |
 | **2.1.6** | Tier-2 studies receive the host's symbol, exchange and interval through `dataContext`, follow source-range changes, cancel obsolete fetches and expose loading, ready, empty, unsupported and error states with retry. `supports(ctx)` lets a provider decline a context explicitly. `DataLoadingController`, `HistoryRequestPool`, `sharedHistoryRequests` and `BAR_CACHE_VERSION` also joined the core export, but they belong to chart hosts rather than indicator descriptors. |
 | **2.1.7** | Hidden indicator state survives layout restoration and plot-style edits, and reference levels follow instance visibility. The new `ChartObjects` export lets hosts inventory indicators and display their Tier-2 status, but it is host infrastructure and does not change the descriptor contract. The built-in registry remains at 102 ids. |
 | **2.1.8** | Normalized wheel and trackpad navigation, price-axis wheel scaling and eased automatic price ranges are engine behavior; manual scales and an indicator's fixed `range()` remain authoritative. Responsive mobile controls and their reduced-motion fallback belong to the packaged widget. OpenAlgo `/trading` uses a bare `Chart`, so it inherits the gestures while retaining its own controls. No descriptor or built-in-registry change. |
@@ -199,7 +200,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 387 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.4.5 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.4.6 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (14)
