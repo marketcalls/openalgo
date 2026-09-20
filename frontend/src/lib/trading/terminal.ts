@@ -152,7 +152,13 @@ import {
   isAgentDrawingId,
 } from './chartContract'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
-import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
+import {
+  applyChartDialogMetrics,
+  buildChartTheme,
+  mutedTradeColors,
+  resolveCssColor,
+  volumeColor,
+} from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
@@ -3059,6 +3065,10 @@ export class TradingTerminal {
         // A split pane must not clip source controls or shrink a phone dialog.
         ui.root.style.position = 'fixed'
         ui.root.style.zIndex = '100'
+        // The engine's dialogs are a step smaller than this app's controls in
+        // every dimension. Applied after `createAlertUi`, which writes the
+        // engine's own token set as it builds the root.
+        applyChartDialogMetrics(ui.root)
         const fullscreen = () => {
           ui.close()
           mount().appendChild(ui.root)
