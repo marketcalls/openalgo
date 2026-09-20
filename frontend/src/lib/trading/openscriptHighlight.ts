@@ -100,7 +100,24 @@ export async function highlight(source: string): Promise<HighlightedSpan[]> {
 
   let tokens: { kind: string; span: { offset: number; length: number }; text: string }[]
   try {
-    const { sourceFile, lex, DiagnosticBag } = await import('openalgo-script')
+    const { sourceFile, lex, DiagnosticBag, normaliseSource } = await import('openalgo-script')
+
+    // **A token's offset is into the normalised source, not the text handed
+    // in.** The compiler collapses line endings before it lexes, so on a file
+    // with carriage returns every offset is short by one per line seen so far
+    // and the drift accumulates. Slicing the raw text by those offsets returns
+    // the wrong characters, and the damage is subtle rather than obvious: the
+    // colours stay plausible near the top of the file and slide a word at a
+    // time from there, which reads as a highlighter that cannot tell a comment
+    // from code rather than as an off-by-one.
+    //
+    // Colouring the normalised text instead would break the one property this
+    // module owes its caller, which is that the spans reconstruct what was
+    // passed in exactly. So a source that is not already normalised is handed
+    // back unpainted, and the editor keeps its text normalised so that never
+    // happens in practice.
+    if (normaliseSource(source) !== source) return [{ text: source, kind: 'plain' }]
+
     const file = sourceFile('editor.oscript', source)
     // A source that does not lex still colours as far as it got: the bag
     // collects the complaints and the tokens before them are still tokens.

@@ -117,11 +117,27 @@ export async function listScripts(signal?: AbortSignal): Promise<StoredScript[]>
   return Array.isArray(body) ? (body as StoredScript[]) : []
 }
 
-/** One script's source, exactly as it was saved. */
+/**
+ * Normalises line endings the way the compiler does.
+ *
+ * The editor works in the language's own normal form so that the text on
+ * screen, the offsets the compiler reports and the colours drawn behind it all
+ * count characters the same way. A file written on a machine that ends lines
+ * with a carriage return would otherwise put the compiler one character ahead
+ * per line, and every diagnostic position and every colour would drift down the
+ * file. Taken from the compiler rather than written here, because it is the
+ * language's rule and a second copy of it is a second answer.
+ */
+export async function normalise(source: string): Promise<string> {
+  const { normaliseSource } = await import('openalgo-script')
+  return normaliseSource(source)
+}
+
+/** One script's source, in the normal form the editor and the compiler share. */
 export async function readScript(file: string, signal?: AbortSignal): Promise<string> {
   const response = await fetch(`${BASE}/${encodeURIComponent(file)}?v=${Date.now()}`, { signal })
   if (!response.ok) throw new Error(`${file} could not be opened.`)
-  return response.text()
+  return normalise(await response.text())
 }
 
 /**

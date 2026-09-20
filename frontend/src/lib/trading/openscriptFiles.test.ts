@@ -19,7 +19,8 @@ import { compileSource, kindOf, starterFor } from './openscriptFiles'
 const CLEAN = 'version 1\nstudy("Probe", overlay = true)\nplot(close, "C", aqua)\n'
 // `Close` is not a name this language defines: the spelling is `close`. The
 // checker files OS2001 and the emitter still hands back a program.
-const UNDEFINED_NAME = 'version 1\nstudy("Probe", overlay = true)\nplot(ema(Close, 30), "C", aqua)\n'
+const UNDEFINED_NAME =
+  'version 1\nstudy("Probe", overlay = true)\nplot(ema(Close, 30), "C", aqua)\n'
 
 describe('whether a script would run', () => {
   it('a clean script is ok and says nothing', async () => {
@@ -91,7 +92,7 @@ describe('what the console is given to draw', () => {
   })
 })
 
-describe('a new script is the trader\'s, not a template\'s', () => {
+describe("a new script is the trader's, not a template's", () => {
   it('declares the name that was typed', async () => {
     const source = starterFor('emavalues', 'study')
     expect(source).toContain('study("Emavalues"')

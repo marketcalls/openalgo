@@ -71,9 +71,35 @@ const LINE_HEIGHT = 18
  * One string rather than two copies: a font, a size, a padding or a wrap rule
  * that differs between them puts the caret a character away from the letter it
  * belongs to, and the drift grows across the line.
+ *
+ * **Nothing here may wrap, and the gutter is why.** The gutter draws one row
+ * per line of source at a fixed line box, because that is what a line number
+ * is. A wrapped line occupies two rows of text and one row of gutter, so the
+ * two columns are different heights, the same scroll offset moves them by
+ * different fractions of their own content, and the numbers slide out of step
+ * with the lines they name. It looked like the file was being cut short: the
+ * gutter reached 48 while the text was still at 34.
+ *
+ * So a long line scrolls sideways instead, which is what a code editor does
+ * anyway. The text area also needs `wrap="off"`, because a textarea soft wraps
+ * on its own attribute and will ignore this.
  */
-const EDITOR_TEXT =
-  'whitespace-pre-wrap break-words px-2 py-2 font-mono text-[12px] tracking-normal'
+export const EDITOR_TEXT = 'whitespace-pre px-2 py-2 font-mono text-[12px] tracking-normal'
+
+/**
+ * The text with carriage returns taken out.
+ *
+ * The editor works in the language's own normal form, so that the characters on
+ * screen, the offsets the compiler reports and the colours drawn behind them
+ * all count the same way. A paste from a file written on a machine that ends
+ * lines with a carriage return would otherwise put the compiler one character
+ * ahead per line, and both the colouring and every reported position would
+ * drift further down the file. The scan is over a few kilobytes and only
+ * rewrites when there is something to rewrite.
+ */
+function withoutCarriageReturns(text: string): string {
+  return text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text
+}
 
 /** Where the caret is, counted the way the diagnostics count: from one. */
 function caretAt(area: HTMLTextAreaElement): { line: number; column: number } {
@@ -521,10 +547,17 @@ export function ScriptPanel({ onAddToChart }: Props) {
                 two layers share a font, a line box and padding to the pixel,
                 because one character of drift is a caret that no longer sits
                 on its letter. */}
-            <div className="relative min-w-0 flex-1">
+            {/* This is what clips the coloured layer, and it has to be this
+                element rather than the layer itself. A layer that clipped its
+                own overflow would only ever hold one viewport of text: the
+                content past its box is cut before the transform moves it, so
+                scrolling down revealed the cut edge as empty space and the file
+                looked truncated. The layer is therefore its full natural
+                height and this box is the window onto it. */}
+            <div className="relative min-w-0 flex-1 overflow-hidden">
               <pre
                 aria-hidden
-                className={cn(EDITOR_TEXT, 'pointer-events-none absolute inset-0 overflow-hidden')}
+                className={cn(EDITOR_TEXT, 'pointer-events-none absolute left-0 top-0 min-w-full')}
                 style={{
                   lineHeight: `${LINE_HEIGHT}px`,
                   transform: `translate(${-scrolled.left}px, ${-scrolled.top}px)`,
@@ -541,7 +574,12 @@ export function ScriptPanel({ onAddToChart }: Props) {
               </pre>
               <textarea
                 value={source}
-                onChange={(event) => setSource(event.target.value)}
+                // A paste can bring carriage returns in, and the editor works
+                // in the language's own normal form so the text, the compiler's
+                // positions and the colours behind them all count characters
+                // the same way. Cheap: it is a scan of a few kilobytes and it
+                // only rewrites when there was something to rewrite.
+                onChange={(event) => setSource(withoutCarriageReturns(event.target.value))}
                 onKeyDown={onKeyDown}
                 onSelect={(event) => setCaret(caretAt(event.currentTarget))}
                 onScroll={(event) =>
@@ -554,6 +592,10 @@ export function ScriptPanel({ onAddToChart }: Props) {
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
+                // A textarea soft wraps on this attribute and ignores the CSS,
+                // so turning it off here is what actually keeps one line of
+                // source on one row. See EDITOR_TEXT for why that matters.
+                wrap="off"
                 aria-label={`Source of ${open}`}
                 className={cn(
                   EDITOR_TEXT,

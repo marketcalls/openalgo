@@ -115,3 +115,71 @@ describe('it stays out of the way when it cannot help', () => {
     }
   })
 })
+
+describe('a word is one colour, wherever it sits', () => {
+  it('a keyword inside a string stays string-coloured', async () => {
+    // Reported from the panel: "and" and "the" inside a title were painted as
+    // keywords, so one string carried three colours. The lexer hands the whole
+    // literal back as a single token, so any splitting is this file's doing.
+    const spans = await highlight('shade = input(true, "Shade between the band and price")')
+    const literal = spans.filter((s) => s.text.includes('band'))
+    expect(literal).toHaveLength(1)
+    expect(literal[0]?.kind).toBe('string')
+    expect(literal[0]?.text).toBe('"Shade between the band and price"')
+  })
+
+  it('a comment holding language words stays comment-coloured', async () => {
+    const spans = await highlight('// the band is not a plot and it is two columns\nx = 1\n')
+    const comment = spans.filter((s) => s.kind === 'comment')
+    expect(comment).toHaveLength(1)
+    expect(comment[0]?.text).toBe('// the band is not a plot and it is two columns')
+  })
+
+  it('every span of one string literal is the same kind', async () => {
+    const spans = await highlight('study("Supertrend", overlay = true, precision = 2)')
+    const inTitle = spans.filter((s) => /Supertrend/.test(s.text))
+    expect(inTitle).toHaveLength(1)
+    expect(inTitle[0]?.kind).toBe('string')
+  })
+})
+
+describe('a source whose lines end the other way', () => {
+  // The defect this catches: a token's offset is into the source AFTER the
+  // compiler collapses line endings, so on a file with carriage returns every
+  // offset is short by one per line seen so far. Slicing the raw text by those
+  // offsets returns the wrong characters, and the drift accumulates: the top of
+  // the file looks right and a word at a time slides out of place below it. It
+  // shipped because the coverage test above passes either way. Concatenation is
+  // still the whole source when the pieces are cut in the wrong places; only
+  // the KINDS are wrong, so the kinds are what this asserts.
+  const CRLF = 'version 1\r\n// a note about and the band\r\nstudy("Probe")\r\nx = 1\r\n'
+
+  it('still reconstructs the source exactly', async () => {
+    await covers(CRLF)
+  })
+
+  it('is handed back unpainted rather than painted wrongly', async () => {
+    // The contract for a source that is not in the language's normal form:
+    // one plain span, covering everything. Not a colour in sight is the right
+    // answer here, because every colour available would be on the wrong
+    // characters. Against the behaviour that shipped this returns many spans
+    // whose text is sliced a character early, worsening down the file: the
+    // word study arrives carrying the previous line break, and the literal
+    // starts two characters late.
+    const spans = await highlight(CRLF)
+    expect(spans).toHaveLength(1)
+    expect(spans[0]?.kind).toBe('plain')
+    expect(spans[0]?.text).toBe(CRLF)
+  })
+
+  it('the same source with plain line endings is coloured properly', async () => {
+    // The control: the normalised form of the same text is painted correctly,
+    // which is what says the problem was the line endings and not the source.
+    const spans = await highlight(CRLF.replace(/\r\n/g, '\n'))
+    expect(kindsOf(spans, 'study')).toEqual(['keyword'])
+    expect(kindsOf(spans, '"Probe"')).toEqual(['string'])
+    expect(spans.filter((s) => s.kind === 'comment').map((s) => s.text)).toEqual([
+      '// a note about and the band',
+    ])
+  })
+})
