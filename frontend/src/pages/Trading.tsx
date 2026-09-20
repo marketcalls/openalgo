@@ -26,6 +26,7 @@ import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
+import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
@@ -1202,6 +1203,11 @@ function TradingWorkspace({ account }: { account: string | null }) {
           )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
+          )}
+          {apiKey && wsUrl && panel === 'scripts' && (
+            <ScriptPanel
+              onAddToChart={(indicatorId) => act((t) => void t.addIndicatorById(indicatorId))}
+            />
           )}
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}

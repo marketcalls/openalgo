@@ -8,15 +8,31 @@ It is not a replacement for the custom indicators described in
 meant for different people. The difference that matters is below, and it is
 worth reading before you choose between them.
 
-## What is in place today
+## Writing one
 
-**The store is in place. The editor panel is not.** OpenAlgo now keeps your
-scripts, serves them to the chart, and refuses anything that is not a script.
-Authoring them in the browser and plotting the result arrives with the panel.
+Open the chart at `/trading`, choose **Scripts** on the right rail, and select
+**New**. You get a working study to edit rather than an empty file.
 
-Nothing here is reachable from the interface yet, so there is nothing to try in
-`/trading` at the moment. This page exists so that the folder, the naming rule
-and the size limit are written down in one place rather than discovered.
+The panel is an editor, a compiler and the chart, in that order:
+
+- **It compiles as you save.** There is no build step. If the script will not
+  run, the console under the editor says what is wrong, on which line, and what
+  to do about it, in the compiler's own words. The line is marked in the gutter.
+- **It saves either way.** A script that does not compile is still written to
+  disk. Being half way through a thought is not a reason to lose it.
+- **Add to chart** puts the study on the focused chart without going near the
+  indicator picker. It is available once the script is saved and compiling.
+- **Ctrl+S** saves, so the browser does not open its own save dialog over the
+  panel.
+
+Colours come from the language's own lexer, which is the same one the compiler
+runs. A word added to the language is coloured the day it lexes, because nothing
+here keeps a second list of what the keywords are.
+
+Editing is a plain text area today, deliberately. The language ships its editor
+intelligence, completion, hover, signature help and inline diagnostics, as
+headless functions in a later release, built to drop into a full code editor
+component. Wiring one in now would mean wiring it twice.
 
 ## Where your scripts live
 
@@ -87,7 +103,7 @@ already proxies, so a hosted install needs no configuration change.
 | `DELETE /openscript/<name>.oscript` | Removes one, and the backup taken of it |
 
 A save keeps a `.bak` beside the script holding what was there before, because
-the browser editor will be the only copy. The write is atomic: a save that is
+the browser editor is the only copy. The write is atomic: a save that is
 interrupted leaves the previous script whole rather than half of the new one.
 
 ## The language itself

@@ -2883,6 +2883,19 @@ export class TradingTerminal {
     // fail silently either: without this the indicator is simply absent and
     // there is nothing anywhere to say why.
     for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    // The trader's OpenScript sources, compiled here and registered the same
+    // way. After the custom modules so that neither tier can be shadowed by a
+    // half-loaded one above it, and on every call for the same reason the
+    // custom loader runs on every call: a script saved from the panel appears
+    // on the next picker open rather than after a reload. A script already
+    // compiled at its current modification time costs nothing.
+    const { loadOpenScriptStudies } = await import('./openscriptStudies')
+    const studies = await loadOpenScriptStudies()
+    // A script that will not compile is the one thing a trader cannot discover
+    // any other way: there is no build step between saving and running, so this
+    // toast is the compiler's only route to the person who wrote the mistake.
+    for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
   }
 
   /** Restore sources before the evaluator validates their saved identities. */
@@ -3685,7 +3698,8 @@ export class TradingTerminal {
       ) &&
       !this.rawBars.some((bar) => Number.isFinite(bar.oi))
     ) {
-      const supported = this.sym?.hasOpenInterest ?? openInterestCapability(this.sym?.exchange ?? '')
+      const supported =
+        this.sym?.hasOpenInterest ?? openInterestCapability(this.sym?.exchange ?? '')
       this.toast(
         supported === false
           ? 'Open interest is not available for this instrument.'
