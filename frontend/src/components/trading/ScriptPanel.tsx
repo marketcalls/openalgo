@@ -45,12 +45,14 @@ import {
   deleteScript,
   fileNameFor,
   idForScript,
+  kindOf,
   listScripts,
   nameProblem,
   readScript,
-  STARTER_SOURCE,
+  type ScriptKind,
   type StoredScript,
   saveScript,
+  starterFor,
 } from '@/lib/trading/openscriptFiles'
 import { type HighlightedSpan, highlight, SPAN_CLASS } from '@/lib/trading/openscriptHighlight'
 import { cn } from '@/lib/utils'
@@ -82,12 +84,15 @@ function caretAt(area: HTMLTextAreaElement): { line: number; column: number } {
 
 interface Props {
   /**
-   * Puts a study on the focused chart.
+   * Puts a study on the chart, and says whether there was one to put it on.
    *
    * The terminal recompiles and re-registers before it adds, so a script saved
-   * a moment ago is the version that arrives.
+   * a moment ago is the version that arrives, and it reports its own failures.
+   * The one thing it cannot report is having no chart to reach, which is why
+   * this answers false rather than nothing: a button that does nothing and says
+   * nothing is the failure this panel keeps being caught by.
    */
-  onAddToChart: (indicatorId: string) => void
+  onAddToChart: (indicatorId: string) => boolean
 }
 
 export function ScriptPanel({ onAddToChart }: Props) {
@@ -108,6 +113,16 @@ export function ScriptPanel({ onAddToChart }: Props) {
    * before it is touched teaches people to ignore the red.
    */
   const [nameTouched, setNameTouched] = useState(false)
+  const [newKind, setNewKind] = useState<ScriptKind>('study')
+  /**
+   * What each listed script declares itself to be, keyed by name and time.
+   *
+   * Filled in after the list arrives rather than returned with it: the route
+   * that lists files serves text and knows nothing about the language, and
+   * teaching it to peek inside for a keyword would put language knowledge in
+   * the one place that must never need updating when the language changes.
+   */
+  const [kinds, setKinds] = useState<Record<string, ScriptKind>>({})
   const [scrolled, setScrolled] = useState({ top: 0, left: 0 })
   const [caret, setCaret] = useState({ line: 1, column: 1 })
   const [spans, setSpans] = useState<HighlightedSpan[]>([])
@@ -116,6 +131,8 @@ export function ScriptPanel({ onAddToChart }: Props) {
   const nameFault = naming ? nameProblem(newName) : null
   const nameError = nameTouched ? nameFault : null
   const runnable = open !== null && !dirty && result?.ok === true
+  const errorCount = result?.diagnostics.filter((one) => one.severity === 'error').length ?? 0
+  const warningCount = result?.diagnostics.filter((one) => one.severity === 'warning').length ?? 0
 
   /** One entry per line, so the gutter is exactly as tall as the text. */
   const lines = useMemo(() => source.split('\n').length, [source])
@@ -158,6 +175,33 @@ export function ScriptPanel({ onAddToChart }: Props) {
     return () => controller.abort()
   }, [refresh])
 
+  /**
+   * Work out what each listed script is, once per script per edit.
+   *
+   * Keyed by name and modification time, so an edited script is asked again and
+   * an untouched one costs nothing. One small fetch each, and a trader has a
+   * handful of scripts rather than a directory of them.
+   */
+  useEffect(() => {
+    if (!scripts || scripts.length === 0) return
+    const controller = new AbortController()
+    void (async () => {
+      for (const script of scripts) {
+        const key = `${script.file}@${script.mtime}`
+        if (kinds[key] !== undefined) continue
+        try {
+          const found = await kindOf(await readScript(script.file, controller.signal))
+          if (controller.signal.aborted || found === null) continue
+          setKinds((previous) => ({ ...previous, [key]: found }))
+        } catch {
+          // A script that cannot be read gets no badge. It is a label, not a
+          // feature, and failing to draw one is not worth a message.
+        }
+      }
+    })()
+    return () => controller.abort()
+  }, [scripts, kinds])
+
   const openScript = useCallback(async (file: string) => {
     setBusy(true)
     setResult(null)
@@ -168,7 +212,11 @@ export function ScriptPanel({ onAddToChart }: Props) {
       setSaved(text)
       setResult(await compileSource(file, text))
     } catch (error) {
-      setResult({ ok: false, problem: error instanceof Error ? error.message : String(error) })
+      setResult({
+        ok: false,
+        diagnostics: [],
+        problem: error instanceof Error ? error.message : String(error),
+      })
     } finally {
       setBusy(false)
     }
@@ -186,7 +234,11 @@ export function ScriptPanel({ onAddToChart }: Props) {
       setSaved(source)
       await refresh()
     } catch (error) {
-      setResult({ ok: false, problem: error instanceof Error ? error.message : String(error) })
+      setResult({
+        ok: false,
+        diagnostics: [],
+        problem: error instanceof Error ? error.message : String(error),
+      })
     } finally {
       setBusy(false)
     }
@@ -203,7 +255,11 @@ export function ScriptPanel({ onAddToChart }: Props) {
       setResult(null)
       await refresh()
     } catch (error) {
-      setResult({ ok: false, problem: error instanceof Error ? error.message : String(error) })
+      setResult({
+        ok: false,
+        diagnostics: [],
+        problem: error instanceof Error ? error.message : String(error),
+      })
     } finally {
       setBusy(false)
     }
@@ -216,18 +272,23 @@ export function ScriptPanel({ onAddToChart }: Props) {
     setNewName('')
     setBusy(true)
     try {
-      await saveScript(file, STARTER_SOURCE)
+      const starter = starterFor(newName, newKind)
+      await saveScript(file, starter)
       setOpen(file)
-      setSource(STARTER_SOURCE)
-      setSaved(STARTER_SOURCE)
-      setResult(await compileSource(file, STARTER_SOURCE))
+      setSource(starter)
+      setSaved(starter)
+      setResult(await compileSource(file, starter))
       await refresh()
     } catch (error) {
-      setResult({ ok: false, problem: error instanceof Error ? error.message : String(error) })
+      setResult({
+        ok: false,
+        diagnostics: [],
+        problem: error instanceof Error ? error.message : String(error),
+      })
     } finally {
       setBusy(false)
     }
-  }, [newName, refresh])
+  }, [newName, newKind, refresh])
 
   // Ctrl+S is what anyone editing text reaches for, and without it the browser
   // opens its own save dialog over the panel.
@@ -259,7 +320,7 @@ export function ScriptPanel({ onAddToChart }: Props) {
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium">Scripts</div>
           <div className="truncate text-[10px] text-muted-foreground">
-            {open ?? 'OpenScript studies'}
+            {open ? `${open}${result?.kind ? ` · ${result.kind}` : ''}` : 'Studies and strategies'}
           </div>
         </div>
         <button
@@ -309,6 +370,37 @@ export function ScriptPanel({ onAddToChart }: Props) {
             placeholder="range-breakout"
           />
           {nameError && <p className="text-[11px] text-destructive">{nameError}</p>}
+
+          {/* Which of the two it is, chosen before it is written rather than
+              discovered from line two. They are different things: a study
+              computes and draws, a strategy does that and also places orders,
+              and the starter each one opens with is different because of it. */}
+          <fieldset className="space-y-1">
+            <legend className="mb-1 text-[11px] text-muted-foreground">Kind</legend>
+            <div className="flex gap-1.5">
+              {(['study', 'strategy'] as const).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  aria-pressed={newKind === kind}
+                  onClick={() => setNewKind(kind)}
+                  className={cn(
+                    CHIP,
+                    'capitalize',
+                    newKind === kind && 'border-primary/70 bg-primary/15 text-foreground'
+                  )}
+                >
+                  {kind}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              {newKind === 'study'
+                ? 'Computes and draws on the chart.'
+                : 'Draws, and places orders. Backtesting is not built yet.'}
+            </p>
+          </fieldset>
+
           <div className="flex gap-1.5">
             <button
               type="button"
@@ -359,6 +451,21 @@ export function ScriptPanel({ onAddToChart }: Props) {
             )}
           >
             <span className="min-w-0 flex-1 truncate">{script.file}</span>
+            {/* Which of the two it is, so the list can be read at a glance
+                rather than by opening each one. Absent until the source has
+                been looked at, because a wrong badge is worse than none. */}
+            {kinds[`${script.file}@${script.mtime}`] && (
+              <span
+                className={cn(
+                  'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide',
+                  kinds[`${script.file}@${script.mtime}`] === 'strategy'
+                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    : 'bg-primary/15 text-primary'
+                )}
+              >
+                {kinds[`${script.file}@${script.mtime}`]}
+              </span>
+            )}
             <span className="shrink-0 text-[10px] text-muted-foreground">
               {Math.max(1, Math.round(script.bytes / 1024))} kB
             </span>
@@ -458,13 +565,67 @@ export function ScriptPanel({ onAddToChart }: Props) {
           </div>
 
           <div className="shrink-0 border-t">
+            {/* The console. Each diagnostic is drawn in its parts rather than
+                as one block of text, because a reader scanning it wants the
+                severity first, the place second and the words third, and a
+                single string can only be one colour. */}
+            {(result?.diagnostics?.length ?? 0) > 0 && (
+              <div className="max-h-40 space-y-2 overflow-auto px-2 py-2">
+                {result?.diagnostics.map((one) => {
+                  const bad = one.severity === 'error'
+                  return (
+                    <div
+                      key={`${one.code}:${one.line}:${one.column}`}
+                      className="font-mono text-[11px] leading-[1.45]"
+                    >
+                      <div className="flex items-baseline gap-1.5">
+                        <span
+                          className={cn(
+                            'shrink-0 rounded px-1 py-px text-[10px] font-medium',
+                            bad
+                              ? 'bg-destructive/15 text-destructive'
+                              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                          )}
+                        >
+                          {one.code}
+                        </span>
+                        <span className="text-muted-foreground">
+                          line {one.line}, column {one.column}
+                        </span>
+                      </div>
+                      {/* The offending line, with the span underlined beneath
+                          it. The gutter marks which line; this marks where. */}
+                      {one.sourceLine !== '' && (
+                        <pre className="mt-1 overflow-x-auto whitespace-pre text-foreground">
+                          {one.sourceLine}
+                          {'\n'}
+                          <span className={bad ? 'text-destructive' : 'text-amber-500'}>
+                            {' '.repeat(Math.max(0, one.column - 1))}
+                            {'^'.repeat(one.length)}
+                          </span>
+                        </pre>
+                      )}
+                      <p
+                        className={cn(
+                          'mt-1',
+                          bad ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
+                        )}
+                      >
+                        {one.message}
+                      </p>
+                      {one.fix && (
+                        <p className="mt-0.5 text-muted-foreground">
+                          <span className="font-medium">Fix: </span>
+                          {one.fix}
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
             {result?.problem && (
-              <pre
-                className={cn(
-                  'max-h-32 overflow-auto whitespace-pre-wrap px-2 py-2 font-mono text-[11px] leading-[1.45]',
-                  result.ok ? 'text-muted-foreground' : 'text-destructive'
-                )}
-              >
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap px-2 py-2 font-mono text-[11px] leading-[1.45] text-destructive">
                 {result.problem}
               </pre>
             )}
@@ -486,12 +647,14 @@ export function ScriptPanel({ onAddToChart }: Props) {
                 ) : result?.ok === false ? (
                   <span className="inline-flex items-center gap-1.5 text-destructive">
                     <AlertTriangle className="h-3 w-3" strokeWidth={1.5} />
-                    Saved, and it will not run yet
+                    {errorCount === 1 ? '1 error' : `${errorCount} errors`}, so it will not run yet
                   </span>
                 ) : result?.ok ? (
                   <span className="inline-flex items-center gap-1.5">
                     <Check className="h-3 w-3" strokeWidth={1.5} />
-                    Ready to add
+                    {warningCount > 0
+                      ? `Ready to add, with ${warningCount === 1 ? '1 warning' : `${warningCount} warnings`}`
+                      : 'Ready to add'}
                   </span>
                 ) : (
                   'Ready'
@@ -499,7 +662,15 @@ export function ScriptPanel({ onAddToChart }: Props) {
               </span>
               <button
                 type="button"
-                onClick={() => open && onAddToChart(idForScript(open))}
+                onClick={() => {
+                  if (!open) return
+                  if (onAddToChart(idForScript(open))) return
+                  setResult((previous) => ({
+                    ok: previous?.ok ?? false,
+                    diagnostics: previous?.diagnostics ?? [],
+                    problem: 'There is no chart open to add this study to.',
+                  }))
+                }}
                 disabled={!runnable}
                 title={
                   runnable

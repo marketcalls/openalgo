@@ -1206,7 +1206,19 @@ function TradingWorkspace({ account }: { account: string | null }) {
           )}
           {apiKey && wsUrl && panel === 'scripts' && (
             <ScriptPanel
-              onAddToChart={(indicatorId) => act((t) => void t.addIndicatorById(indicatorId))}
+              // `panelTarget`, not `act`. Both reach a chart, but `act` wants
+              // the pane a toolbar button was pressed over and answers null
+              // until one has been focused, so adding a study did nothing at
+              // all until the trader happened to click the chart first. This is
+              // the helper written for a panel: the focused pane, else any pane
+              // that is up. It is the same one the watchlist and the assistant
+              // use for the same reason.
+              onAddToChart={(indicatorId) => {
+                const target = panelTarget()
+                if (!target) return false
+                void target.addIndicatorById(indicatorId)
+                return true
+              }}
             />
           )}
 

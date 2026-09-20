@@ -19,13 +19,51 @@ export interface StoredScript {
   bytes: number
 }
 
+/**
+ * One thing the compiler has to say, in the pieces a console can colour.
+ *
+ * Returned in parts rather than as a rendered block, because a reader scanning
+ * a console is looking for the severity first, the place second and the words
+ * third, and a single string can only be one colour. The catalogue already
+ * separates the message from the fix; throwing that apart and re-joining it
+ * into one line would be undoing work the language did.
+ */
+export interface EditorDiagnostic {
+  code: string
+  severity: 'error' | 'warning'
+  line: number
+  column: number
+  length: number
+  message: string
+  fix: string
+  /** The line of source it points at, so the console can show the offence. */
+  sourceLine: string
+}
+
 /** A compile result the panel can draw: either a program, or what is wrong. */
 export interface CompileResult {
+  /**
+   * Whether this script would actually run.
+   *
+   * **Read from the severities, never from whether a program came out.** The
+   * emitter recovers, so a script with an undefined name still produces a
+   * program while the checker files an error against it. Treating that as
+   * success is how the panel came to say "ready to add" over a red diagnostic
+   * and offer to put a study on the chart that cannot compute.
+   */
   ok: boolean
-  /** The whole diagnostic text, code and line and fix included, when it failed. */
+  diagnostics: EditorDiagnostic[]
+  /** What the script declares itself to be, when it got far enough to say. */
+  kind?: ScriptKind
+  /**
+   * A failure that is not a diagnostic: a save refused, a network fault.
+   *
+   * Kept apart from the diagnostics because it is not about the script and a
+   * reader should not have to work out which of the two they are looking at.
+   */
   problem?: string
   /**
-   * The line the first diagnostic sits on, for the editor's gutter to mark.
+   * The line the first error sits on, for the editor's gutter to mark.
    *
    * One line rather than all of them: the gutter is four characters wide and a
    * column of marks would say less than one does. The console underneath
@@ -140,33 +178,51 @@ export async function deleteScript(file: string): Promise<void> {
  * read-through into four saves.
  */
 export async function compileSource(file: string, source: string): Promise<CompileResult> {
-  const { sourceFile, lex, parseTokens, check, emit, DiagnosticBag, renderDiagnostics } =
-    await import('openalgo-script')
+  const { sourceFile, lex, parseTokens, check, emit, DiagnosticBag } = await import(
+    'openalgo-script'
+  )
 
   const handle = sourceFile(file, source)
   const bag = new DiagnosticBag()
   const tokens = lex(handle, bag)
   const tree = parseTokens(handle, tokens, bag)
   const checked = check(handle, tree, bag)
-  const result = emit(handle, checked, bag, {})
+  const emitted = emit(handle, checked, bag, {})
 
-  const found = bag.ordered()
-  const firstLine = found.length > 0 ? found[0].span?.line : undefined
+  const lines = source.split('\n')
+  const diagnostics: EditorDiagnostic[] = bag.ordered().map((one) => ({
+    code: one.code,
+    severity: one.severity,
+    line: one.span?.line ?? 1,
+    column: one.span?.column ?? 1,
+    length: Math.max(1, one.span?.length ?? 1),
+    message: one.message,
+    fix: one.fix,
+    sourceLine: lines[(one.span?.line ?? 1) - 1] ?? '',
+  }))
 
-  if (result.program === undefined) {
-    const rendered = renderDiagnostics(handle, found)
-    return {
-      ok: false,
-      problem: rendered || 'This script did not compile.',
-      line: firstLine,
-    }
+  const errors = diagnostics.filter((one) => one.severity === 'error')
+  const ok = errors.length === 0 && emitted.program !== undefined
+  const firstError = errors[0] ?? diagnostics[0]
+
+  return {
+    ok,
+    diagnostics,
+    // Taken from the compiled program, which is the language's own answer,
+    // falling back to the declaration the lexer found when nothing compiled.
+    kind:
+      (emitted.program?.meta?.kind as ScriptKind | undefined) ??
+      (await kindOf(source)) ??
+      undefined,
+    line: firstError?.line,
+    // A program that did not come out, with nothing filed against the script,
+    // is the compiler's own fault rather than the author's, and saying nothing
+    // at all would leave them staring at a panel with no opinion.
+    problem:
+      emitted.program === undefined && diagnostics.length === 0
+        ? 'This script did not compile, and the compiler gave no reason. Please report it.'
+        : undefined,
   }
-  // A program that compiled may still carry warnings worth reading, and the
-  // renderer already formats them the way the catalogue writes them.
-  if (found.length > 0) {
-    return { ok: true, problem: renderDiagnostics(handle, found), line: firstLine }
-  }
-  return { ok: true }
 }
 
 /**
@@ -183,14 +239,91 @@ export function idForScript(file: string): string {
   return `openscript:${file.replace(/\.oscript$/, '')}`
 }
 
-/** The starting point a new script is created with, so nothing opens blank. */
-export const STARTER_SOURCE = [
-  'version 1',
-  'study("My study", overlay = true)',
-  '',
-  'length = input(20, "Length")',
-  'average = sma(close, length)',
-  '',
-  'plot(average, "Average", aqua)',
-  '',
-].join('\n')
+/**
+ * What a script declares itself to be.
+ *
+ * A study computes and draws. A strategy does that and also places orders, so
+ * the two are different things to write and different things to run, and a
+ * panel that does not say which is which leaves a trader to read line two.
+ */
+export type ScriptKind = 'study' | 'strategy'
+
+/**
+ * Which kind a source declares, asked of the language rather than guessed.
+ *
+ * The lexer already tells a reserved word from a name, so the declaration is
+ * the first token that is one of the two. A regular expression over the text
+ * would be a second, worse implementation of the language: it would find the
+ * word inside a comment or a string and be wrong in a way nobody would think
+ * to test.
+ */
+export async function kindOf(source: string): Promise<ScriptKind | null> {
+  try {
+    const { sourceFile, lex, DiagnosticBag } = await import('openalgo-script')
+    const tokens = lex(sourceFile('kind.oscript', source), new DiagnosticBag())
+    for (const token of tokens) {
+      if (token.kind === 'study' || token.kind === 'strategy') return token.kind
+    }
+  } catch {
+    // A source that will not lex has no kind to report, which the caller draws
+    // as no badge rather than as a wrong one.
+  }
+  return null
+}
+
+/**
+ * The title a new script declares, from the name the trader typed.
+ *
+ * A file name cannot hold a space and a chart legend should, so the separators
+ * become spaces. Capitalised because it is a title and a legend reads better
+ * for it. It sits on line two of a file the trader is already looking at, so
+ * anything this gets slightly wrong is one edit away.
+ */
+function titleFrom(name: string): string {
+  const words = name
+    .trim()
+    .replace(/\.oscript$/i, '')
+    .replace(/[-_]+/g, ' ')
+    .trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/**
+ * The starting point a new script is created with, so nothing opens blank.
+ *
+ * It declares the name the trader typed rather than a placeholder. A study
+ * called "My study" on every chart is the kind of small wrongness that makes a
+ * tool feel like it is not really theirs, and the legend is where they meet it.
+ */
+export function starterFor(name: string, kind: ScriptKind): string {
+  const title = titleFrom(name)
+  if (kind === 'strategy') {
+    return [
+      'version 1',
+      `strategy("${title}", overlay = true, qty = 1)`,
+      '',
+      'fast = ema(close, 9)',
+      'slow = ema(close, 21)',
+      '',
+      'plot(fast, "Fast", aqua)',
+      'plot(slow, "Slow", orange)',
+      '',
+      'if crossUp(fast, slow)',
+      '    buy(qty = 1)',
+      '',
+      'if crossDown(fast, slow)',
+      '    close()',
+      '',
+    ].join('\n')
+  }
+  return [
+    'version 1',
+    `study("${title}", overlay = true)`,
+    '',
+    'length = input(20, "Length")',
+    'average = sma(close, length)',
+    '',
+    'plot(average, "Average", aqua)',
+    '',
+  ].join('\n')
+}
