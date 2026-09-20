@@ -52,6 +52,23 @@ afterEach(() => {
 })
 
 describe('staged workspace grid', () => {
+  it('rejects replay callbacks from hidden or outgoing grid controls', () => {
+    const owner = grid(),
+      start = vi.fn()
+    const props = { owner, apiKey: 'fixture', wsUrl: 'ws://fixture.invalid', onReplayStart: start }
+    const view = render(<WorkspaceGrid {...props} active={false} />)
+    const stale = fake.props.get('right')!.onReplayStart
+    stale?.('right')
+    expect(start).not.toHaveBeenCalled()
+    view.rerender(<WorkspaceGrid {...props} active />)
+    stale?.('right')
+    expect(start).toHaveBeenCalledExactlyOnceWith('right')
+    view.rerender(<WorkspaceGrid {...props} active transitionLocked />)
+    stale?.('right')
+    expect(start).toHaveBeenCalledOnce()
+    owner.destroy()
+  })
+
   it('publishes controls only for the selected pane in the active grid', () => {
     const owner = grid()
     const host = document.createElement('div')

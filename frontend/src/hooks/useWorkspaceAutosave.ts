@@ -4,6 +4,8 @@ interface Options<T> {
   identity: string | null
   enabled: boolean
   paused?: boolean
+  /** Synchronous ownership guard for timers that run before React commits. */
+  isPaused?(): boolean
   capture(): T
   save(snapshot: T): Promise<void>
 }
@@ -25,6 +27,10 @@ interface View {
 export function useWorkspaceAutosave<T>(options: Options<T>) {
   const latest = useRef(options)
   latest.current = options
+  const paused = useCallback(
+    () => latest.current.paused === true || latest.current.isPaused?.() === true,
+    []
+  )
   const ownerRef = useRef<Owner | null>(null)
   const [view, setView] = useState<View>({
     identity: options.identity,
@@ -49,7 +55,7 @@ export function useWorkspaceAutosave<T>(options: Options<T>) {
 
   const flushOwner = useCallback(
     async function write(owner: Owner): Promise<void> {
-      if (!owns(owner) || !owner.identity || latest.current.paused) return
+      if (!owns(owner) || !owner.identity || paused()) return
       clear(owner)
       if (owner.running) {
         await owner.running
@@ -84,20 +90,23 @@ export function useWorkspaceAutosave<T>(options: Options<T>) {
       } finally {
         owner.running = null
       }
-      if (owns(owner) && owner.dirty && latest.current.enabled && !latest.current.paused)
+      if (owns(owner) && owner.dirty && latest.current.enabled && !paused())
         owner.timer = setTimeout(() => {
           void write(owner).catch(() => {})
         }, 600)
     },
-    [clear, note, owns]
+    [clear, note, owns, paused]
   )
 
   const schedule = useCallback(
     (owner: Owner) => {
       clear(owner)
-      if (!owns(owner) || !owner.identity || !owner.dirty || latest.current.paused || owner.running)
-        return
+      if (!owns(owner) || !owner.identity || !owner.dirty || paused() || owner.running) return
       owner.timer = setTimeout(() => {
+        if (paused()) {
+          owner.timer = null
+          return
+        }
         if (latest.current.enabled) void flushOwner(owner).catch(() => {})
         else if (owns(owner)) {
           owner.timer = null
@@ -110,7 +119,7 @@ export function useWorkspaceAutosave<T>(options: Options<T>) {
         }
       }, 600)
     },
-    [clear, flushOwner, note, owns]
+    [clear, flushOwner, note, owns, paused]
   )
 
   useEffect(() => {

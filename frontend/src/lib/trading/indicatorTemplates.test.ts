@@ -11,6 +11,13 @@ const ema = (period = 9): IndicatorState => ({
 const available = new Set(['ema', 'rsi', 'macd'])
 
 describe('indicator template planning', () => {
+  it('rejects appending into a pane occupied by an existing study', () => {
+    const existing = [{ indicatorId: 'rsi', settings: {}, paneIndex: 3 }]
+    expect(() =>
+      planIndicatorTemplate(existing, [{ ...ema(), paneIndex: 1 }], 'append', available, 3)
+    ).toThrow(/pane/i)
+    expect(existing[0].paneIndex).toBe(3)
+  })
   it('keeps existing study identities but gives imported template studies fresh identities', () => {
     const existing = { ...ema(), instanceId: 'anchored-study' }
     const incoming = { ...ema(21), instanceId: 'anchored-study' }

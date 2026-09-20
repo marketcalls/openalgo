@@ -1,13 +1,16 @@
 import {
   type Bar,
   CandleBuilder,
+  comparisonController,
   createChart,
   DataLoadingController,
+  ReplayGroup,
   type SeriesApi,
 } from 'openalgo-charts'
 import { parseExpression, type SymbolExpression } from 'openalgo-charts/transform'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type SymbolView, TradingTerminal } from './terminal'
+import { WorkspaceReplayCoordinator } from './workspaceReplay'
 
 // Exercise the terminal and chart together. Only canvas painting and the
 // asynchronous broker boundary are replaced; replay and data writes are real.
@@ -182,7 +185,412 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+describe('workspace replay terminal ownership', () => {
+  it('publishes picker availability and shades followers without giving them selection ownership', () => {
+    const owner = mount()
+    const follower = mount()
+    const preview = vi.fn((time: number) => follower.terminal.setWorkspaceReplayPreview(time))
+    owner.terminal.beginWorkspaceReplayPick(vi.fn(), vi.fn(), preview)
+    expect(preview).toHaveBeenLastCalledWith(180)
+    owner.terminal.moveReplayPick(2)
+    expect(preview).toHaveBeenLastCalledWith(240)
+    expect(follower.terminal.replayPickingBar()).toBe(false)
+    const shades = (
+      follower.state as unknown as { replayShades: { options: { index: number | null } }[] }
+    ).replayShades
+    expect(shades).toHaveLength(1)
+    follower.terminal.setWorkspaceReplayPreview(null)
+    owner.terminal.cancelReplayPick()
+  })
+
+  it('falls back to completed candles when finer history is not ordered', async () => {
+    const { terminal, state } = mount()
+    state.interval = '5m'
+    state.rawBars = [bar(0, 100), bar(300, 110), bar(600, 120)]
+    state.setPriceData()
+    state.rest = { getBars: async () => [bar(60, 101), bar(0, 100)] }
+    const prepared = await terminal.prepareReplayMember({
+      id: 'p0',
+      sessionId: 1,
+      signal: new AbortController().signal,
+    })
+    terminal.setReplayParticipation(1, true)
+    const group = new ReplayGroup([prepared.member], { startTime: 300 })
+    group.step()
+    expect(state.price.getData().map((row) => row.close)).toEqual([100, 110])
+    group.destroy()
+    terminal.restoreReplayMember(1)
+  })
+  it('does not restore an active member before its group releases display ownership', async () => {
+    const { terminal, state } = mount()
+    const signal = new AbortController()
+    const prepared = await terminal.prepareReplayMember({
+      id: 'p0',
+      sessionId: 1,
+      signal: signal.signal,
+    })
+    terminal.setReplayParticipation(1, true)
+    const group = new ReplayGroup([prepared.member], { startTime: 180 })
+    state.onTick({ ltp: 150, timeSec: 305 })
+    signal.abort()
+    expect(state.price.getData().at(-1)?.close).toBe(101)
+    group.destroy()
+    terminal.restoreReplayMember(1)
+    expect(state.price.getData().at(-1)?.close).toBe(150)
+  })
+
+  it('restores current live data through the real workspace coordinator exit', async () => {
+    const { terminal, state } = mount()
+    const error = vi.fn()
+    const coordinator = new WorkspaceReplayCoordinator({ onChange() {}, onError: error })
+    coordinator.setMembers([{ id: 'p0', terminal }])
+    coordinator.start('p0')
+    terminal.moveReplayPick(1)
+    terminal.commitReplayPick()
+    await vi.waitFor(() => expect(coordinator.state().phase).toBe('active'))
+    state.onTick({ ltp: 150, timeSec: 305 })
+    coordinator.stop()
+    expect(state.price.getData().at(-1)?.close).toBe(150)
+    expect(coordinator.state().phase).toBe('idle')
+    expect(error).not.toHaveBeenCalled()
+    coordinator.destroy()
+  })
+
+  it('exports displayed OI, study and comparison data without future replay rows', async () => {
+    const { terminal, state } = mount()
+    await import('openalgo-charts/indicators')
+    state.rawBars[1].oi = 0
+    state.setPriceData()
+    state.chart.addIndicator('sma', { length: 2 })
+    comparisonController(state.chart, { mode: 'percentage', baseline: 'common' }).add({
+      symbol: 'OTHER',
+      bars: [bar(60, 10), bar(120, 11), bar(180, 12), bar(240, 13)],
+    })
+    await state.beginReplayAt(1)
+    const rows = terminal.exportDataCsv().trim().split('\r\n')
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toContain('volume,oi,indicator:')
+    expect(rows[0]).toContain('comparison:1:OTHER:close')
+    expect(rows[1]).toContain('60,99,102,98,100,100,,')
+    expect(rows[2]).toContain('120,100,103,99,101,100,0,100.5,11')
+    terminal.stopReplay()
+  })
+  it('refuses execution while a shared member owns the display even before the workspace callback', async () => {
+    const { terminal, state } = mount()
+    const place = vi.fn(async () => ({ orderId: 'fixture' }))
+    Object.assign(state, { trade: { place } })
+    await terminal.prepareReplayMember({
+      id: 'p0',
+      sessionId: 1,
+      signal: new AbortController().signal,
+    })
+    terminal.setReplayParticipation(1, true)
+    await expect(
+      terminal.placeTicket({
+        symbol: 'BHEL',
+        exchange: 'NSE',
+        action: 'BUY',
+        quantity: 1,
+        product: 'MIS',
+        pricetype: 'MARKET',
+      })
+    ).rejects.toThrow(/replay/i)
+    expect(place).not.toHaveBeenCalled()
+    terminal.restoreReplayMember(1)
+  })
+  it('commits the selected candle availability time and cancels exactly once', () => {
+    const { terminal } = mount()
+    const picked = vi.fn()
+    const cancelled = vi.fn()
+    expect(terminal.beginWorkspaceReplayPick(picked, cancelled)).toBe(true)
+    terminal.moveReplayPick(2)
+    terminal.commitReplayPick()
+    expect(picked).toHaveBeenCalledWith(240)
+    expect(cancelled).not.toHaveBeenCalled()
+    expect(terminal.replayPickingBar()).toBe(false)
+    expect(terminal.beginWorkspaceReplayPick(picked, cancelled)).toBe(true)
+    terminal.cancelReplayPick()
+    terminal.cancelReplayPick()
+    expect(cancelled).toHaveBeenCalledOnce()
+  })
+
+  it('keeps live ticks out of a shared replay and restores their current values on exit', async () => {
+    const { terminal, state } = mount()
+    terminal.setWorkspaceReplayLocked(true)
+    const prepared = await terminal.prepareReplayMember({
+      id: 'p0',
+      sessionId: 1,
+      signal: new AbortController().signal,
+    })
+    terminal.setReplayParticipation(1, true)
+    const group = new ReplayGroup([prepared.member], {
+      startTime: 180,
+      onChange: (snapshot) => {
+        for (const member of snapshot.members)
+          terminal.setReplayParticipation(1, member.active, member.state)
+      },
+    })
+    expect(state.price.getData().map((row) => row.time)).toEqual([60, 120])
+    expect(terminal.replayActive()).toBe(true)
+    expect(terminal.replayState()?.index).toBe(1)
+    state.onTick({ ltp: 150, timeSec: 305 })
+    expect(state.price.getData().at(-1)?.close).toBe(101)
+    expect(state.rawBars.at(-1)?.close).toBe(150)
+    group.destroy()
+    terminal.restoreReplayMember(1)
+    terminal.setWorkspaceReplayLocked(false)
+    expect(terminal.replayActive()).toBe(false)
+    expect(state.price.getData().at(-1)?.close).toBe(150)
+  })
+
+  it('recaptures an inactive member from its live series when scope expands', async () => {
+    const a = mount()
+    const b = mount()
+    const signal = new AbortController().signal
+    const first = await a.terminal.prepareReplayMember({ id: 'p0', sessionId: 1, signal })
+    const second = await b.terminal.prepareReplayMember({ id: 'p1', sessionId: 1, signal })
+    expect(second.member.options.bars).toBeUndefined()
+    a.terminal.setReplayParticipation(1, true)
+    const group = new ReplayGroup([first.member, second.member], {
+      focusedId: 'p0',
+      startTime: 180,
+    })
+    b.terminal.restoreReplayMember(1)
+    b.state.onTick({ ltp: 160, timeSec: 305 })
+    expect(b.state.price.getData()).toHaveLength(5)
+    b.terminal.setReplayParticipation(1, true)
+    group.setScope('all')
+    group.seekTime(360)
+    expect(b.state.price.getData().at(-1)?.close).toBe(160)
+    group.destroy()
+    a.terminal.restoreReplayMember(1)
+    b.terminal.restoreReplayMember(1)
+  })
+
+  it('cancels pending preparation without letting an old completion release a newer session', async () => {
+    const { terminal, state } = mount()
+    state.interval = '5m'
+    const history = deferred<Bar[]>()
+    state.rest = { getBars: () => history.promise }
+    const setPaused = vi.fn()
+    Object.assign(state, { data: { setPaused, destroy() {} } })
+    const old = new AbortController()
+    const pending = terminal.prepareReplayMember({ id: 'p0', sessionId: 1, signal: old.signal })
+    const refused = expect(pending).rejects.toThrow(/cancel|changed/i)
+    expect(setPaused).toHaveBeenLastCalledWith(true)
+    old.abort()
+    terminal.restoreReplayMember(1)
+    state.interval = '1m'
+    await terminal.prepareReplayMember({
+      id: 'p0',
+      sessionId: 2,
+      signal: new AbortController().signal,
+    })
+    terminal.setReplayParticipation(2, true)
+    const count = setPaused.mock.calls.length
+    history.resolve([])
+    await refused
+    terminal.restoreReplayMember(1)
+    expect(setPaused).toHaveBeenCalledTimes(count)
+    expect(terminal.replayActive()).toBe(true)
+    terminal.restoreReplayMember(2)
+    Object.assign(state, { data: null })
+  })
+
+  it('retains transformed candles without requesting raw intrabar replacements', async () => {
+    const { terminal, state } = mount()
+    state.ctype = 'heikin-ashi'
+    state.interval = '5m'
+    const getBars = vi.fn(async () => bars)
+    state.rest = { getBars }
+    const prepared = await terminal.prepareReplayMember({
+      id: 'p0',
+      sessionId: 1,
+      signal: new AbortController().signal,
+    })
+    expect(getBars).not.toHaveBeenCalled()
+    expect(prepared.member.options.subBars).toBeUndefined()
+    terminal.restoreReplayMember(1)
+  })
+
+  it('invalidates the workspace before changing a terminal source', () => {
+    const { terminal, state } = mount()
+    const invalidate = vi.fn(() => {
+      expect(state.interval).toBe('1m')
+      terminal.setReplayInvalidationHandler(null)
+    })
+    terminal.setReplayInvalidationHandler(invalidate)
+    terminal.setInterval('5m')
+    expect(invalidate).toHaveBeenCalledOnce()
+  })
+})
+
+describe('terminal comparison workspace integration', () => {
+  it('releases primary resources when comparison cleanup reports an error', async () => {
+    const { terminal, state } = mount()
+    state.rest = { getBars: async () => bars }
+    await terminal.addComparison('OTHER', 'NSE')
+    const helper = (terminal as unknown as { comparisons: { destroy(): void } }).comparisons
+    const release = helper.destroy.bind(helper)
+    const failure = new Error('comparison cleanup failed')
+    vi.spyOn(helper, 'destroy').mockImplementation(() => {
+      release()
+      throw failure
+    })
+    const destroyData = vi.fn()
+    const closeSocket = vi.fn()
+    Object.assign(state, { data: { destroy: destroyData }, ws: { close: closeSocket } })
+    state.bookTimer = setInterval(() => {}, 5000)
+    const chart = state.chart
+    const destroyChart = vi.spyOn(chart, 'destroy')
+
+    expect(() => terminal.destroy()).toThrow(failure)
+    expect(destroyData).toHaveBeenCalledOnce()
+    expect(closeSocket).toHaveBeenCalledOnce()
+    expect(destroyChart).toHaveBeenCalledOnce()
+    expect(state.bookTimer).toBeNull()
+    expect(state.chart).toBeNull()
+    await vi.runOnlyPendingTimersAsync()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not rebind queued comparisons while a newer symbol lookup is pending', async () => {
+    const { terminal, state } = mount()
+    const getBars = vi.fn(async () => bars)
+    state.rest = { getBars }
+    await terminal.addComparison('OTHER', 'NSE')
+    getBars.mockClear()
+    const lookup = deferred<{ data: Record<string, unknown> }>()
+    vi.spyOn(terminal, 'api').mockReturnValue(lookup.promise)
+    const bindings = terminal as unknown as {
+      installComparisons(): void
+      comparisonLoad: Promise<void>
+    }
+    bindings.installComparisons()
+    const load = terminal.loadSymbol({ symbol: 'NEW', exchange: 'NSE' })
+    try {
+      await bindings.comparisonLoad
+      expect(getBars).not.toHaveBeenCalled()
+    } finally {
+      terminal.destroy()
+      lookup.resolve({ data: {} })
+      await load
+    }
+  })
+
+  it('marks comparison configuration dirty without treating history refreshes as workspace edits', async () => {
+    const { terminal, state } = mount()
+    state.rest = { getBars: async () => bars }
+    const changed = vi.fn()
+    const callbacks = (terminal as unknown as { cb: { onWorkspaceChange?: () => void } }).cb
+    callbacks.onWorkspaceChange = changed
+    await terminal.addComparison('OTHER', 'NSE')
+    changed.mockClear()
+    await terminal.addComparison('THIRD', 'NSE')
+    expect(changed).toHaveBeenCalledOnce()
+    terminal.setComparisonMode('price')
+    expect(changed).toHaveBeenCalledTimes(2)
+    await (
+      terminal as unknown as { comparisons: { refresh(): Promise<void> } }
+    ).comparisons.refresh()
+    expect(changed).toHaveBeenCalledTimes(2)
+    terminal.removeComparison(terminal.comparisonState().items[0].id)
+    expect(changed).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses a comparison if replay starts while its chart binding is pending', async () => {
+    const { terminal, state } = mount()
+    const getBars = vi.fn(async () => bars)
+    state.rest = { getBars }
+    const pending = terminal.addComparison('OTHER', 'NSE')
+    terminal.startReplay()
+    await expect(pending).rejects.toThrow(/replay/i)
+    expect(getBars).not.toHaveBeenCalled()
+    expect(terminal.comparisonState().items).toHaveLength(0)
+    terminal.cancelReplayPick()
+  })
+
+  it('refuses CSV while a replay start is being picked', () => {
+    const { terminal } = mount()
+    terminal.startReplay()
+    expect(() => terminal.exportDataCsv()).toThrow(/select|replay|loading/i)
+    terminal.cancelReplayPick()
+    expect(terminal.exportDataCsv().trim().split('\r\n')).toHaveLength(5)
+  })
+
+  it('owns multiple comparisons, their common mode and complete workspace capture', async () => {
+    const { terminal, state } = mount()
+    state.rest = { getBars: async () => bars.map((row) => bar(row.time, row.close / 10)) }
+    state.chart.setDataContext({
+      symbol: state.sym.symbol,
+      exchange: state.sym.exchange,
+      interval: state.interval,
+    })
+    await terminal.addComparison('OTHER', 'NSE')
+    await terminal.addComparison('THIRD', 'NSE')
+    terminal.setComparisonMode('percentage')
+    expect(terminal.comparisonState()).toMatchObject({
+      mode: 'percentage',
+      items: [
+        { symbol: 'OTHER', exchange: 'NSE', status: 'ready' },
+        { symbol: 'THIRD', exchange: 'NSE', status: 'ready' },
+      ],
+    })
+    const before = terminal.captureWorkspacePane('p0')
+    expect(before.comparisonMode).toBe('percent')
+    expect(before.chart.panes?.[0].priceScale.mode).toBe('linear')
+    expect(before.comparisons.map((item) => item.symbol)).toEqual(['OTHER', 'THIRD'])
+    terminal.removeComparison(terminal.comparisonState().items[0].id)
+    const after = terminal.captureWorkspacePane('p0')
+    expect(after.comparisons.map((item) => item.symbol)).toEqual(['THIRD'])
+    expect(before.comparisons).toHaveLength(2)
+    expect(terminal.exportDataCsv().split('\r\n')[0]).toContain('comparison:1:THIRD:close')
+    expect(state.price.getData().map((row) => row.close)).toEqual([100, 101, 102, 103])
+  })
+})
+
 describe('selected candle readout', () => {
+  it.each([
+    false,
+    true,
+  ])('explains absent OI without claiming a warmup shortage (capability %s)', async (supported) => {
+    const { state, terminal } = mount()
+    state.sym.hasOpenInterest = supported
+    const toast = vi.fn()
+    const host = terminal as unknown as {
+      cb: { onToast: typeof toast }
+      warnIfStarved(inst: unknown): void
+    }
+    host.cb.onToast = toast
+    await import('openalgo-charts/indicators')
+    const study = state.chart.addIndicator('open-interest', {})
+    host.warnIfStarved(study)
+
+    expect(toast).toHaveBeenCalledWith(
+      supported
+        ? 'The loaded history contains no open interest readings.'
+        : 'Open interest is not available for this instrument.',
+      ''
+    )
+  })
+
+  it('treats zero OI as a reading and retains ordinary study warmup feedback', async () => {
+    const { state, terminal } = mount()
+    state.rawBars = state.rawBars.map((row) => ({ ...row, oi: 0 }))
+    state.setPriceData()
+    const toast = vi.fn()
+    const host = terminal as unknown as {
+      cb: { onToast: typeof toast }
+      warnIfStarved(inst: unknown): void
+    }
+    host.cb.onToast = toast
+    await import('openalgo-charts/indicators')
+    host.warnIfStarved(state.chart.addIndicator('open-interest', {}))
+    expect(toast).not.toHaveBeenCalled()
+    host.warnIfStarved(state.chart.addIndicator('sma', { length: 100 }))
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/needs more history/), '')
+  })
+
   it('repaints the saved OI readout after asynchronous settings restoration', async () => {
     const { state, terminal, legendEl } = mount()
     state.rawBars = state.rawBars.map((bar) => ({ ...bar, oi: 12000 }))

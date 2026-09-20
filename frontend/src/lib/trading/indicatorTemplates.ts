@@ -1,7 +1,6 @@
-import type { IndicatorState } from 'openalgo-charts'
 import { parseIndicatorStates, WorkspaceDocumentError } from 'openalgo-charts/workspace'
 
-export type IndicatorTemplateMode = 'replace' | 'append'
+export { type IndicatorTemplateMode, planIndicatorTemplate } from 'openalgo-charts/workspace'
 
 export interface StoredIndicatorRecord {
   instanceId?: string
@@ -65,43 +64,4 @@ export function readStoredIndicators(input: unknown): StoredIndicatorRecord[] {
     legacy.push(record)
   }
   return dedupeIndicators(legacy)
-}
-
-/** Plan first so a missing custom study cannot erase the current configuration. */
-export function planIndicatorTemplate(
-  current: IndicatorState[],
-  incoming: IndicatorState[],
-  mode: IndicatorTemplateMode,
-  available: ReadonlySet<string>,
-  nextPaneIndex: number
-): IndicatorState[] {
-  if (mode !== 'replace' && mode !== 'append') {
-    throw new WorkspaceDocumentError('Unsupported indicator template mode')
-  }
-  const previous = parseIndicatorStates(current)
-  const additions = parseIndicatorStates(incoming)
-  // Templates copy study settings; existing alerts must keep their original anchors.
-  for (const item of additions) delete item.instanceId
-  if (mode === 'append') {
-    if (!Number.isInteger(nextPaneIndex) || nextPaneIndex < 1 || nextPaneIndex > 32) {
-      throw new WorkspaceDocumentError('Invalid next indicator pane')
-    }
-    const panes = [
-      ...new Set(additions.map((item) => item.paneIndex).filter((index) => index > 0)),
-    ].sort((a, b) => a - b)
-    for (const item of additions) {
-      if (item.paneIndex > 0) item.paneIndex = nextPaneIndex + panes.indexOf(item.paneIndex)
-      if (item.paneIndex > 31) throw new WorkspaceDocumentError('Indicator pane limit exceeded')
-    }
-  }
-  const planned = mode === 'replace' ? additions : [...previous, ...additions]
-  if (planned.length > 256)
-    throw new WorkspaceDocumentError('At most 256 indicator instances are supported')
-  const missing = [
-    ...new Set(
-      planned.filter((item) => !available.has(item.indicatorId)).map((item) => item.indicatorId)
-    ),
-  ]
-  if (missing.length) throw new WorkspaceDocumentError(`Missing indicators: ${missing.join(', ')}`)
-  return planned
 }

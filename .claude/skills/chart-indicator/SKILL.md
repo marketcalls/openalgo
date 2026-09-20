@@ -59,6 +59,21 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.4.5: optional open interest and host contracts.** The published build has
+  105 built-ins, including `open-interest`, `open-interest-change` and
+  `open-interest-buildup`. `Bar.oi` is an optional reading: preserve zero, keep
+  missing readings as gaps, and never sum OI when folding bars. `securitySeries`
+  exposes a nullable `oi` column. Capability comes from host instrument metadata,
+  not from whether one bar has a reading. See `reference/api.md` for an example.
+  Host trader alerts can target a study's stable instance id and plot key; keep
+  those plot keys stable and distinguish these alerts from descriptor `alerts`.
+  The host owns delivery and pauses trader evaluation during loading and replay.
+  `Instrument`, `ReplayGroup`, `exportChartDataCsv` and trading capability helpers
+  are host APIs, not a reason for a study to mutate the chart, control replay or
+  submit orders. Workspace/template APIs live in `openalgo-charts/workspace`,
+  outside the core-plus-indicators object handed to a custom module. Existing
+  descriptor fields remain compatible. Calculate from the supplied bars so a
+  replayed study cannot reveal later history.
 - **2.4.0: the constructs a ported study most often could not express.** Every
   item is optional and needs openalgo-charts 2.4.0 or later installed; the
   validator checks against the installed build, so read
@@ -184,7 +199,7 @@ changed, newest first:
    resets per day or per session.
 2. **Before writing a formula, check `reference/cookbook.md`.** Every
    author-facing call is demonstrated there, and the first section is the one
-   that saves the most work: the 102 built-ins are descriptors, so
+   that saves the most work: the 105 built-ins are descriptors, so
    `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
    rather than a reimplementation that can drift from the chart's.
 3. **Load the context you need.** `reference/contract.md` for the descriptor

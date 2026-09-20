@@ -8,6 +8,65 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('workspace autosave ownership', () => {
+  it('checks replay ownership again when a queued timer fires before React commits', async () => {
+    let replaying = false
+    const capture = vi.fn(() => ({ symbol: 'BHEL' })),
+      save = vi.fn(async () => {})
+    const { result } = renderHook(() =>
+      useWorkspaceAutosave({
+        identity: 'one',
+        enabled: true,
+        paused: false,
+        isPaused: () => replaying,
+        capture,
+        save,
+      })
+    )
+    act(() => result.current.changed())
+    replaying = true
+    await act(async () => vi.advanceTimersByTimeAsync(1000))
+    expect(capture).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+    expect(result.current.error).toBeNull()
+    replaying = false
+    await act(async () => result.current.flush())
+    expect(save).toHaveBeenCalledExactlyOnceWith({ symbol: 'BHEL' })
+  })
+
+  it('retains dirty configuration through replay selection, loading and cancellation', async () => {
+    let value = { source: 'live', color: 'blue' }
+    const capture = vi.fn(() => value),
+      save = vi.fn(async () => {})
+    const { result, rerender } = renderHook(
+      ({ phase }: { phase: 'idle' | 'picking' | 'loading' | 'active' }) =>
+        useWorkspaceAutosave({
+          identity: 'one',
+          enabled: true,
+          paused: phase !== 'idle',
+          capture,
+          save,
+        }),
+      { initialProps: { phase: 'idle' as 'idle' | 'picking' | 'loading' | 'active' } }
+    )
+    act(() => result.current.markSaved())
+    value = { source: 'live', color: 'red' }
+    act(() => result.current.changed())
+    capture.mockClear()
+    for (const phase of ['picking', 'loading', 'active'] as const) {
+      rerender({ phase })
+      value = { source: 'replay', color: 'red' }
+      act(() => result.current.changed())
+      await act(async () => vi.advanceTimersByTimeAsync(1000))
+      expect(capture).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+    }
+    value = { source: 'live', color: 'red' }
+    rerender({ phase: 'idle' })
+    await act(async () => vi.advanceTimersByTimeAsync(1000))
+    expect(save).toHaveBeenCalledExactlyOnceWith({ source: 'live', color: 'red' })
+    expect(result.current.status).toBe('Saved')
+  })
+
   it('keeps unchanged gestures saved while autosave is disabled', async () => {
     const save = vi.fn(async () => {})
     const { result } = renderHook(() =>

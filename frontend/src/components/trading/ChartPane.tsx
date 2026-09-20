@@ -30,14 +30,17 @@ import {
   type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
+  type TerminalComparisonState,
   type TerminalContextMenu,
   TradingTerminal,
 } from '@/lib/trading/terminal'
+import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { ChartToolbar } from './ChartToolbar'
+import { ComparisonMenu } from './ComparisonMenu'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorPickerDialog } from './IndicatorPickerDialog'
@@ -195,6 +198,10 @@ interface Props {
   onInitialized?(paneId: string, terminal: TradingTerminal): void
   onInitializationError?(paneId: string, error: unknown): void
   onWorkspaceChange?(): void
+  /** A page owner replaces the individual replay transport. */
+  onReplayStart?(paneId: string): void
+  workspaceReplay?: WorkspaceReplaySnapshot
+  onBeforeSourceChange?(): void
   /** Grid placement (e.g. `{ gridArea }`) applied to the pane's root. */
   style?: React.CSSProperties
   /**
@@ -258,6 +265,9 @@ export function ChartPane({
   onInitialized,
   onInitializationError,
   onWorkspaceChange,
+  onReplayStart,
+  workspaceReplay,
+  onBeforeSourceChange,
   style,
   sharedTool,
   sharedMagnet,
@@ -339,6 +349,10 @@ export function ChartPane({
 
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
+  const [comparisons, setComparisons] = useState<TerminalComparisonState>({
+    mode: 'price',
+    items: [],
+  })
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
@@ -443,6 +457,7 @@ export function ChartPane({
         noteHistory(s)
       },
       onIndicatorsChange: (list) => current && setIndicators(list),
+      onComparisonsChange: (state) => current && setComparisons(state),
       onIndicatorSettings: (req) => current && setIndSettings(req),
       onChartSettings: (req) => current && setChartSettings(req),
       onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
@@ -555,10 +570,33 @@ export function ChartPane({
 
   /* ── toolbar actions ──────────────────────────────────────────────────── */
   const changeInterval = (iv: string) => {
+    onBeforeSourceChange?.()
     setIntervalState(terminalRef.current?.setInterval(iv) ?? iv)
   }
   const changeChartType = (v: string) => {
+    onBeforeSourceChange?.()
     setChartTypeState(terminalRef.current?.setChartType(v) ?? v)
+  }
+  const downloadCsv = () => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    try {
+      const url = URL.createObjectURL(
+        new Blob([terminal.exportDataCsv()], { type: 'text/csv;charset=utf-8' })
+      )
+      const link = document.createElement('a')
+      try {
+        link.href = url
+        link.download = `${sym?.symbol ?? paneId}-${interval}.csv`.replace(/[^a-zA-Z0-9._-]/g, '_')
+        document.body.append(link)
+        link.click()
+      } finally {
+        link.remove()
+        URL.revokeObjectURL(url)
+      }
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : 'Unable to export chart data')
+    }
   }
   const changeProduct = (p: string) => {
     if (!sym) return
@@ -825,7 +863,7 @@ export function ChartPane({
             />
           </div>
 
-          {/* Indicators. A dialog rather than a dropdown: 88 built-ins in a
+          {/* Indicators. A dialog rather than a dropdown: 105 built-ins in a
             264px column was a scroll race, with no way to jump to a category
             and no memory of what you reach for daily. */}
           <Button
@@ -859,6 +897,26 @@ export function ChartPane({
 
           {/* Workspace controls share the selected chart's row. */}
           {!fullscreen && layoutPicker}
+          <ComparisonMenu
+            state={comparisons}
+            disabled={
+              !ready ||
+              transitionLocked ||
+              (workspaceReplay
+                ? workspaceReplay.phase !== 'idle'
+                : Boolean(replay || picking || replayLoading))
+            }
+            container={menuHost}
+            search={(query, exchange, limit) =>
+              terminalRef.current?.search(query, exchange, limit) ?? Promise.resolve([])
+            }
+            onAdd={(symbol, exchange) =>
+              terminalRef.current?.addComparison(symbol, exchange) ??
+              Promise.reject(new Error('Chart is not ready'))
+            }
+            onRemove={(id) => terminalRef.current?.removeComparison(id)}
+            onModeChange={(value) => terminalRef.current?.setComparisonMode(value)}
+          />
 
           {/* Replay. A toolbar action rather than a context-menu entry: it changes
             what the whole chart is showing, and the transport bar it opens has
@@ -868,22 +926,30 @@ export function ChartPane({
             size="sm"
             className={cn(
               'h-8 shrink-0 gap-1',
-              (replay || picking || replayLoading) && 'border-primary text-primary'
+              (workspaceReplay
+                ? workspaceReplay.phase !== 'idle'
+                : replay || picking || replayLoading) && 'border-primary text-primary'
             )}
             onClick={() => {
+              if (onReplayStart) {
+                onReplayStart(paneId)
+                return
+              }
               if (replay) setConfirmLeave(true)
               else if (replayLoading) terminalRef.current?.stopReplay()
               else if (picking) terminalRef.current?.cancelReplayPick()
               else terminalRef.current?.startReplay()
             }}
             title={
-              replay
-                ? 'Leave replay'
-                : replayLoading
-                  ? 'Cancel replay loading'
-                  : picking
-                    ? 'Cancel bar selection'
-                    : 'Replay this session from a bar you pick'
+              workspaceReplay && workspaceReplay.phase !== 'idle'
+                ? 'Stop workspace replay'
+                : replay
+                  ? 'Leave replay'
+                  : replayLoading
+                    ? 'Cancel replay loading'
+                    : picking
+                      ? 'Cancel bar selection'
+                      : 'Replay this session from a bar you pick'
             }
           >
             <ReplayIcon className="h-4 w-4" />
@@ -997,6 +1063,31 @@ export function ChartPane({
                     </button>
                     <button
                       type="button"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent disabled:opacity-40"
+                      disabled={
+                        workspaceReplay
+                          ? workspaceReplay.phase === 'picking' ||
+                            workspaceReplay.phase === 'loading'
+                          : picking || replayLoading
+                      }
+                      title={
+                        workspaceReplay?.phase === 'picking' ||
+                        workspaceReplay?.phase === 'loading' ||
+                        picking ||
+                        replayLoading
+                          ? 'Finish selecting and loading replay before exporting data'
+                          : 'Export displayed chart data'
+                      }
+                      onClick={() => {
+                        setSnapOpen(false)
+                        downloadCsv()
+                      }}
+                    >
+                      <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
+                      Download CSV
+                    </button>
+                    <button
+                      type="button"
                       className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
                       onClick={() => {
                         setSnapOpen(false)
@@ -1079,7 +1170,7 @@ export function ChartPane({
           everything to its right is greyed while it is being picked: choosing a
           start with the next twenty bars readable is choosing on hindsight.
         */}
-        {(picking || replayLoading) && (
+        {!onReplayStart && (picking || replayLoading) && (
           <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-popover/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
             <span>
               <span className="font-medium">
@@ -1097,7 +1188,7 @@ export function ChartPane({
           </div>
         )}
 
-        {confirmLeave && (
+        {!onReplayStart && confirmLeave && (
           <div className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45">
             <div className="w-[340px] rounded-lg border border-border bg-popover p-4 shadow-xl">
               <h4 className="mb-2 text-sm font-medium">Leave replay?</h4>
@@ -1127,7 +1218,7 @@ export function ChartPane({
           </div>
         )}
 
-        {replay && (
+        {!onReplayStart && replay && (
           <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
             <button
               type="button"
@@ -1374,7 +1465,10 @@ export function ChartPane({
         search={(q, ex, limit) =>
           terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
         }
-        onPick={(row) => terminalRef.current?.loadSymbol(row)}
+        onPick={(row) => {
+          onBeforeSourceChange?.()
+          void terminalRef.current?.loadSymbol(row)
+        }}
         initialQuery={sym?.symbol}
       />
 

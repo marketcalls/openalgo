@@ -49,6 +49,7 @@ function create(initialWorkspacePane = saved()) {
     on: vi.fn(() => () => {}),
     emit: vi.fn(),
     primaryBars: () => [],
+    timezone: () => 'Asia/Kolkata',
     alertState: () => initialWorkspacePane.chart.alerts,
     setAlertState: vi.fn(),
     panes: () => [{}],

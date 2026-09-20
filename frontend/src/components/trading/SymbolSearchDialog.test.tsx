@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, userEvent, waitFor } from '@/test/test-utils'
-import { useBrokerStore } from '@/stores/brokerStore'
 import type { SearchRow } from '@/lib/trading/terminal'
+import { useBrokerStore } from '@/stores/brokerStore'
+import { render, screen, userEvent, waitFor } from '@/test/test-utils'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 const ROWS: SearchRow[] = [
@@ -12,12 +12,7 @@ const ROWS: SearchRow[] = [
 
 function renderDialog(onPick: (row: SearchRow) => void = () => {}) {
   return render(
-    <SymbolSearchDialog
-      open
-      onOpenChange={() => {}}
-      search={async () => ROWS}
-      onPick={onPick}
-    />
+    <SymbolSearchDialog open onOpenChange={() => {}} search={async () => ROWS} onPick={onPick} />
   )
 }
 
@@ -30,6 +25,27 @@ async function focusedBox() {
 }
 
 describe('SymbolSearchDialog', () => {
+  it('labels comparison search and never submits a typed arithmetic expression', async () => {
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        mode="comparison"
+        title="Add comparison symbol"
+        onOpenChange={() => {}}
+        search={async () => []}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    const box = screen.getByRole('textbox', { name: 'Search comparison symbol' })
+    await waitFor(() => expect(box).toHaveFocus())
+    expect(screen.getByRole('heading', { name: 'Add comparison symbol' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
+    await userEvent.type(box, 'NSE:INFY+NSE:BHEL{Enter}')
+    expect(picked).toEqual([])
+    expect(screen.queryByText('Operators build an expression.', { exact: false })).toBeNull()
+  })
+
   beforeEach(() => {
     useBrokerStore.setState({
       capabilities: {
@@ -96,7 +112,7 @@ describe('SymbolSearchDialog', () => {
     expect(picked).toHaveLength(1)
     expect(picked[0].symbol).toBe('NIFTY100EW/NIFTY100QUALTY30')
     expect(picked[0].expression).toBe(true)
-  });
+  })
 
   it('still picks an ordinary row when the box holds a plain symbol', async () => {
     const picked: SearchRow[] = []
@@ -113,11 +129,11 @@ describe('SymbolSearchDialog', () => {
     expect(picked).toHaveLength(1)
     expect(picked[0].expression).toBeUndefined()
     expect(picked[0].exchange).not.toBe('')
-  });
+  })
 
   it('the operator keys write into the box and the reciprocal wraps it', async () => {
     renderDialog()
-    const box = await focusedBox() as HTMLInputElement
+    const box = (await focusedBox()) as HTMLInputElement
 
     await userEvent.type(box, 'NIFTY100EW')
     await userEvent.click(screen.getByLabelText('Divide'))
@@ -126,22 +142,20 @@ describe('SymbolSearchDialog', () => {
 
     await userEvent.click(screen.getByLabelText('Reciprocal'))
     expect(box.value).toBe('1/(NIFTY100EW/NIFTY100QUALTY30)')
-  });
+  })
 
   it('offers every operator the engine parses, exponentiation included', () => {
     renderDialog()
     for (const name of ['Divide', 'Subtract', 'Add', 'Multiply', 'Exponentiation', 'Reciprocal']) {
       expect(screen.getByLabelText(name)).toBeInTheDocument()
     }
-  });
+  })
 
   it('warns that a computed chart cannot be traded', async () => {
     renderDialog()
     await userEvent.type(screen.getByLabelText('Search symbol'), 'NIFTY100EW/NIFTY100QUALTY30')
-    await waitFor(() =>
-      expect(screen.getByText(/cannot be traded/)).toBeInTheDocument()
-    )
-  });
+    await waitFor(() => expect(screen.getByText(/cannot be traded/)).toBeInTheDocument())
+  })
 
   /**
    * The bug this pins: searching the WHOLE box meant that the moment an
@@ -170,13 +184,13 @@ describe('SymbolSearchDialog', () => {
     // The last search asked for the leg after the operator, never the whole box.
     expect(queries.at(-1)).toBe('NIFTY1')
     expect(queries).not.toContain('NIFTY100EW+NIFTY1')
-  });
+  })
 
   it('completing a leg keeps the dialog open and writes the exchange in', async () => {
     const picked: SearchRow[] = []
     renderDialog((row) => picked.push(row))
 
-    const box = await focusedBox() as HTMLInputElement
+    const box = (await focusedBox()) as HTMLInputElement
     await userEvent.type(box, 'NIFTY100EW+NIFTY100Q')
     await waitFor(() => expect(screen.getByText('NIFTY100QUALTY30')).toBeInTheDocument())
     await userEvent.click(screen.getByText('NIFTY100QUALTY30'))
@@ -185,5 +199,5 @@ describe('SymbolSearchDialog', () => {
     // loaded: the user is still building.
     expect(box.value).toBe('NIFTY100EW+NSE_INDEX:NIFTY100QUALTY30')
     expect(picked).toHaveLength(0)
-  });
+  })
 })

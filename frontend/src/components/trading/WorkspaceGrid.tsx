@@ -80,6 +80,22 @@ export function WorkspaceGrid({
           onWorkspaceChange={() => {
             if (visible() && !locked) latest.current.props.onWorkspaceChange?.()
           }}
+          onReplayStart={
+            props.onReplayStart
+              ? (paneId) => {
+                  if (visible() && !latest.current.props.transitionLocked)
+                    latest.current.props.onReplayStart?.(paneId)
+                }
+              : undefined
+          }
+          onBeforeSourceChange={
+            props.onBeforeSourceChange
+              ? () => {
+                  if (visible() && !latest.current.props.transitionLocked)
+                    latest.current.props.onBeforeSourceChange?.()
+                }
+              : undefined
+          }
           onInitialized={initialized}
           onInitializationError={failed}
           onTerminalChange={register}

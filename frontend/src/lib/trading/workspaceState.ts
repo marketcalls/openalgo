@@ -16,7 +16,6 @@ export function parseTerminalWorkspacePane(input: unknown): WorkspacePane {
     activePaneId: id,
     panes: [input],
   }).panes[0]
-  if (pane.comparisons.length) throw new Error('This host cannot restore workspace comparisons yet')
   return pane
 }
 
@@ -41,6 +40,7 @@ export function createWorkspacePanePreferences(
       indicators: JSON.stringify({ version: 2, indicators: pane.chart.indicators ?? [] }),
       draw: JSON.stringify(pane.chart.drawings ?? { version: 2, drawings: [] }),
       alerts: JSON.stringify(pane.chart.alerts ?? { version: 1, alerts: [] }),
+      comparisons: JSON.stringify({ mode: pane.comparisonMode, items: pane.comparisons }),
     }).map(([key, value]) => [`${namespace}-${key}`, value])
   )
   return {

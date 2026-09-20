@@ -30,6 +30,7 @@ import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
+import { WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -48,6 +49,10 @@ import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/aler
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
 import { capturePresetWorkspace } from '@/lib/trading/workspaceGrid'
+import {
+  WorkspaceReplayCoordinator,
+  type WorkspaceReplaySnapshot,
+} from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -196,15 +201,97 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * builds, so the panels work from the first paint.
    */
   const terminalsRef = useRef<Record<string, TradingTerminal | null>>({})
-
-  const noteTerminal = useCallback((paneId: string, terminal: TradingTerminal | null) => {
-    if (visibleGrid.current) return
-    if (terminal) terminalsRef.current[paneId] = terminal
-    else {
-      if (activeRef.current === terminalsRef.current[paneId]) activeRef.current = null
-      delete terminalsRef.current[paneId]
+  const layoutIdRef = useRef(layoutId)
+  layoutIdRef.current = layoutId
+  const replayCoordinator = useRef<WorkspaceReplayCoordinator | null>(null)
+  const [replaySnapshot, setReplaySnapshot] = useState<WorkspaceReplaySnapshot>({
+    phase: 'idle',
+    scope: 'focused',
+    ownerId: null,
+    state: null,
+  })
+  const replaySnapshotRef = useRef(replaySnapshot)
+  const [replayError, setReplayError] = useState<string | null>(null)
+  const [confirmReplayExit, setConfirmReplayExit] = useState(false)
+  const replayPaneIds = useCallback(
+    () =>
+      visibleGrid.current
+        ? visibleGrid.current.payload.panes.map((pane) => pane.id)
+        : (LAYOUTS.find((item) => item.id === layoutIdRef.current) ?? LAYOUTS[0]).cells.map(
+            (_, index) => `p${index}`
+          ),
+    []
+  )
+  const updateReplayMembers = useCallback(() => {
+    replayCoordinator.current?.setMembers(
+      replayPaneIds().flatMap((id) => {
+        const terminal = terminalsRef.current[id]
+        return terminal ? [{ id, terminal }] : []
+      })
+    )
+  }, [replayPaneIds])
+  useEffect(() => {
+    let current = true
+    const coordinator = new WorkspaceReplayCoordinator({
+      onChange: (snapshot) => {
+        replaySnapshotRef.current = snapshot
+        if (current) {
+          setReplaySnapshot(snapshot)
+          if (snapshot.phase !== 'active') setConfirmReplayExit(false)
+        }
+      },
+      onError: (error) => {
+        if (current)
+          setReplayError(error instanceof Error ? error.message : 'Unable to replay this workspace')
+      },
+    })
+    replayCoordinator.current = coordinator
+    updateReplayMembers()
+    return () => {
+      current = false
+      coordinator.destroy()
+      if (replayCoordinator.current === coordinator) replayCoordinator.current = null
     }
+  }, [updateReplayMembers])
+  const stopWorkspaceReplay = useCallback(() => {
+    setConfirmReplayExit(false)
+    replayCoordinator.current?.stop()
   }, [])
+  const requestReplayExit = useCallback(() => {
+    if (replaySnapshotRef.current.phase === 'active') setConfirmReplayExit(true)
+    else stopWorkspaceReplay()
+  }, [stopWorkspaceReplay])
+  const startWorkspaceReplay = useCallback(
+    (paneId: string) => {
+      if (workspacePending.current) return
+      setReplayError(null)
+      const coordinator = replayCoordinator.current
+      if (!coordinator) return
+      if (coordinator.state().phase !== 'idle') requestReplayExit()
+      else {
+        if (replayPaneIds().some((id) => !terminalsRef.current[id])) {
+          setReplayError('Every visible chart must be ready before replay')
+          return
+        }
+        updateReplayMembers()
+        coordinator.start(paneId)
+      }
+    },
+    [replayPaneIds, requestReplayExit, updateReplayMembers]
+  )
+
+  const noteTerminal = useCallback(
+    (paneId: string, terminal: TradingTerminal | null) => {
+      if (visibleGrid.current) return
+      if (terminal) terminalsRef.current[paneId] = terminal
+      else {
+        if (activeRef.current === terminalsRef.current[paneId]) activeRef.current = null
+        delete terminalsRef.current[paneId]
+      }
+      updateReplayMembers()
+    },
+    [updateReplayMembers]
+  )
 
   const noteObjects = useCallback((paneId: string, objects: ChartObjects | null) => {
     setPaneObjects((previous) => {
@@ -255,9 +342,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
    */
   const sendToFocusedPane = useCallback(
     (row: SearchRow) => {
+      stopWorkspaceReplay()
       void panelTarget()?.loadSymbol(row)
     },
-    [panelTarget]
+    [panelTarget, stopWorkspaceReplay]
   )
 
   /**
@@ -271,6 +359,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const tradingLocked = useCallback(
     () =>
       workspacePending.current ||
+      replaySnapshotRef.current.phase !== 'idle' ||
       Object.values(terminalsRef.current).some(
         (t) =>
           t !== null &&
@@ -303,9 +392,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
 
   const applyChartCommands = useCallback(
     (commands: AgentChartCommand[]) => {
+      stopWorkspaceReplay()
       void panelTarget()?.applyChartCommands(commands)
     },
-    [panelTarget]
+    [panelTarget, stopWorkspaceReplay]
   )
 
   /**
@@ -475,29 +565,37 @@ function TradingWorkspace({ account }: { account: string | null }) {
 
   const layout = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0]
 
-  const lockWorkspace = useCallback((pending: boolean) => {
-    workspacePending.current = pending
-    for (const terminal of Object.values(terminalsRef.current)) {
-      terminal?.setWorkspaceTransitionLocked(pending)
-      if (pending) terminal?.setArmed(false)
-    }
-  }, [])
-  const publishWorkspace = useCallback((grid: PreparedChartGrid) => {
-    visibleGrid.current = grid
-    terminalsRef.current = Object.fromEntries(grid.terminals)
-    setPaneSymbols(Object.fromEntries(grid.symbols))
-    setPaneObjects(Object.fromEntries(grid.objects))
-    const focused = grid.terminals.get(grid.payload.activePaneId) ?? null
-    activeRef.current = focused
-    setFocusedPane(grid.payload.activePaneId)
-    setSync(grid.payload.sync)
-    setArmed(false)
-    setTool(null)
-    const draw = focused?.drawStats() ?? NO_DRAW
-    setStats(draw)
-    setMagnet(draw.magnet)
-    setStay(draw.stay)
-  }, [])
+  const lockWorkspace = useCallback(
+    (pending: boolean) => {
+      if (pending) stopWorkspaceReplay()
+      workspacePending.current = pending
+      for (const terminal of Object.values(terminalsRef.current)) {
+        terminal?.setWorkspaceTransitionLocked(pending)
+        if (pending) terminal?.setArmed(false)
+      }
+    },
+    [stopWorkspaceReplay]
+  )
+  const publishWorkspace = useCallback(
+    (grid: PreparedChartGrid) => {
+      visibleGrid.current = grid
+      terminalsRef.current = Object.fromEntries(grid.terminals)
+      updateReplayMembers()
+      setPaneSymbols(Object.fromEntries(grid.symbols))
+      setPaneObjects(Object.fromEntries(grid.objects))
+      const focused = grid.terminals.get(grid.payload.activePaneId) ?? null
+      activeRef.current = focused
+      setFocusedPane(grid.payload.activePaneId)
+      setSync(grid.payload.sync)
+      setArmed(false)
+      setTool(null)
+      const draw = focused?.drawStats() ?? NO_DRAW
+      setStats(draw)
+      setMagnet(draw.magnet)
+      setStay(draw.stay)
+    },
+    [updateReplayMembers]
+  )
   const workspace = useWorkspaceGridTransition(account, publishWorkspace, lockWorkspace)
 
   const bindAlertRuntime = (
@@ -515,6 +613,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
 
   const captureWorkspace = () => {
     if (workspacePending.current) throw new Error('Wait for the workspace to finish loading')
+    if (replaySnapshotRef.current.phase !== 'idle')
+      throw new Error('Stop replay before saving the workspace')
     if (visibleGrid.current) return visibleGrid.current.capture(focusedPane, sync)
     const panes = layout.cells.map((_, index) => {
       const id = `p${index}`,
@@ -532,7 +632,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const autosave = useWorkspaceAutosave({
     identity: activeWorkspaceId ? `${account}:${activeWorkspaceId}` : null,
     enabled: workspaceCatalog.catalog?.autosave === true,
-    paused: workspace.pending,
+    paused: workspace.pending || replaySnapshot.phase !== 'idle',
+    isPaused: () => workspacePending.current || replaySnapshotRef.current.phase !== 'idle',
     capture: captureWorkspace,
     save: async (payload) => {
       if (!activeWorkspaceId) throw new Error('Save this workspace with a name first')
@@ -630,6 +731,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
     if (workspacePending.current) return
     const next = LAYOUTS.find((item) => item.id === id)
     if (!next) return
+    stopWorkspaceReplay()
     if (!visibleGrid.current && !activeWorkspaceId) {
       if (!next.cells.some((_, index) => `p${index}` === focusedPane)) {
         focusPane(terminalsRef.current.p0 ?? null, 'p0')
@@ -699,6 +801,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
       }
       save={async () => {
         if (!activeWorkspaceId) throw new Error('Save this workspace with a name first')
+        if (replaySnapshotRef.current.phase !== 'idle')
+          throw new Error('Stop replay before saving the workspace')
         autosave.changed()
         await autosave.flush()
       }}
@@ -817,6 +921,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
             <TickBox
               checked={sync[key]}
               onChange={(next) => {
+                if (key === 'symbol' || key === 'interval') stopWorkspaceReplay()
                 setSync((p) => ({ ...p, [key]: next }))
                 autosave.changed()
               }}
@@ -985,6 +1090,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         sharedMagnet={magnet}
                         sharedStay={stay}
                         onWorkspaceChange={autosave.changed}
+                        onReplayStart={startWorkspaceReplay}
+                        workspaceReplay={replaySnapshot}
+                        onBeforeSourceChange={stopWorkspaceReplay}
                         onFocusPane={focusPane}
                         onSymbolChange={(id, key) => {
                           if (!visibleGrid.current) noteSymbol(id, key)
@@ -1022,6 +1130,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     railVisible={showRail}
                     onToggleRail={() => setShowRail((value) => !value)}
                     onWorkspaceChange={autosave.changed}
+                    onReplayStart={startWorkspaceReplay}
+                    workspaceReplay={replaySnapshot}
+                    onBeforeSourceChange={stopWorkspaceReplay}
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
                     onObjectsChange={noteObjects}
@@ -1030,10 +1141,30 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       if (visibleGrid.current !== owner) return
                       if (terminal) terminalsRef.current[id] = terminal
                       else delete terminalsRef.current[id]
+                      updateReplayMembers()
                     }}
                     layoutPicker={workspaceControls}
                   />
                 ))}
+                <WorkspaceReplayBar
+                  snapshot={replaySnapshot}
+                  error={replayError}
+                  ownerLabel={
+                    replaySnapshot.ownerId
+                      ? (paneSymbols[replaySnapshot.ownerId] ?? replaySnapshot.ownerId)
+                      : undefined
+                  }
+                  onScopeChange={(scope) => replayCoordinator.current?.setScope(scope)}
+                  onPlay={(speed) => replayCoordinator.current?.play(speed)}
+                  onPause={() => replayCoordinator.current?.pause()}
+                  onStep={() => replayCoordinator.current?.step()}
+                  onStepBack={() => replayCoordinator.current?.stepBack()}
+                  onSeek={(index) => replayCoordinator.current?.seek(index)}
+                  onStop={requestReplayExit}
+                  confirmExit={confirmReplayExit}
+                  onCancelExit={() => setConfirmReplayExit(false)}
+                  onConfirmExit={stopWorkspaceReplay}
+                />
               </div>
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">

@@ -29,8 +29,9 @@ import {
   createChart,
   DataLoadingController,
   type DataLoadingSnapshot,
-  type IPrimitive,
+  exportChartDataCsv,
   getIndicator,
+  type IPrimitive,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
@@ -67,10 +68,11 @@ import type { AlertUi } from 'openalgo-charts/widget'
 import {
   parseIndicatorStates,
   parseWorkspacePayload,
+  type WorkspaceComparison,
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
-import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import { mergeAlertRuntime } from './alertRuntime'
+import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
   type IndicatorTemplateMode,
   planIndicatorTemplate,
@@ -78,6 +80,9 @@ import {
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
 import { openInterestCapability } from './openInterest'
+import { replayTiming } from './replayTiming'
+import { TerminalComparisons } from './terminalComparisons'
+import type { PreparedReplayMember } from './workspaceReplay'
 import {
   createWorkspacePanePreferences,
   parseTerminalWorkspacePane,
@@ -294,6 +299,7 @@ export interface ConfirmedOrder {
 }
 
 export interface TerminalCallbacks {
+  onComparisonsChange?(state: TerminalComparisonState): void
   /** Chart configuration changed; live price updates do not fire this callback. */
   onWorkspaceChange?(): void
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
@@ -339,6 +345,21 @@ export interface TerminalCallbacks {
    * nothing is placed until it confirms.
    */
   onOrderTicket?(req: OrderTicketRequest): void
+}
+
+export interface TerminalComparisonItem {
+  id: string
+  symbol: string
+  exchange: string
+  label: string
+  color: string
+  status: 'loading' | 'ready' | 'error'
+  error?: string
+}
+
+export interface TerminalComparisonState {
+  mode: 'price' | 'percentage'
+  items: readonly TerminalComparisonItem[]
 }
 
 export interface BrandingLink {
@@ -877,6 +898,26 @@ export class TradingTerminal {
   private replayHistoryAbort: AbortController | null = null
   /** The price axis's autoscale state before replay forced it on. */
   private replayAutoScale = true
+  private workspaceReplayLocked = false
+  private replayInvalidation: (() => void) | null = null
+  private workspaceReplayPick: {
+    onPick(time: number): void
+    onCancel(): void
+    onPreview?(time: number): void
+  } | null = null
+  private workspaceReplayMember: {
+    sessionId: number
+    chart: ChartInstance
+    price: SeriesApi
+    data: DataLoadingController | null
+    active: boolean
+    preparing: boolean
+    state: ReplayState | null
+    autoScale: boolean
+    positioned: boolean
+    isCurrent(): boolean
+    detachAbort(): void
+  } | null = null
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
@@ -907,9 +948,16 @@ export class TradingTerminal {
   private initialWorkspacePane: WorkspacePane | null = null
   private preparingWorkspace = false
   private workspaceTransitionLocked = false
+  private comparisons: TerminalComparisons | null = null
+  private comparisonLoad: Promise<void> = Promise.resolve()
+  private comparisonPreferences: { items: WorkspaceComparison[]; mode: 'price' | 'percent' } = {
+    items: [],
+    mode: 'percent',
+  }
 
   private readonly onVisibilityChange = () => {
     this.data?.setVisible(document.visibilityState !== 'hidden')
+    this.comparisons?.setVisibleHost(document.visibilityState !== 'hidden')
   }
 
   constructor(opts: TerminalOptions) {
@@ -932,6 +980,46 @@ export class TradingTerminal {
     this.interval = this.lsGet('interval') || '5m'
     this.ctype = this.lsGet('ctype') || 'candlestick'
     this.restoreChartTools()
+    const comparisons = this.lsGet('comparisons')
+    if (comparisons) {
+      try {
+        const saved = JSON.parse(comparisons)
+        if (
+          !saved ||
+          !Array.isArray(saved.items) ||
+          !['price', 'percent'].includes(saved.mode) ||
+          !saved.items.every(
+            (item: { visible?: unknown } | null) => typeof item?.visible === 'boolean'
+          )
+        )
+          throw new Error('Invalid comparison preferences')
+        const pane = parseTerminalWorkspacePane({
+          id: 'comparison-preferences',
+          symbol: 'comparison-preferences',
+          exchange: '',
+          interval: '1d',
+          chartType: 'line',
+          chart: { version: 1 },
+          comparisons: saved.items,
+          comparisonMode: saved.mode,
+        })
+        const sources = new Set<string>()
+        for (const item of pane.comparisons) {
+          const source = JSON.stringify([item.symbol, item.exchange])
+          if (
+            ![item.id, item.symbol, item.exchange].every((value) => value.trim().length > 0) ||
+            sources.has(source)
+          )
+            throw new Error('Invalid comparison preferences')
+          sources.add(source)
+        }
+        this.comparisonPreferences = { items: pane.comparisons, mode: pane.comparisonMode }
+      } catch {
+        this.reportPreferenceFailure(
+          'Saved comparisons could not be read. Add them again to this chart.'
+        )
+      }
+    }
     if (!CHART_TYPES[this.ctype]) this.ctype = 'candlestick'
   }
 
@@ -971,6 +1059,7 @@ export class TradingTerminal {
       !this.replay &&
       !this.replayPicking &&
       !this.replayLoading &&
+      !this.workspaceReplayLocked &&
       !this.dataUnavailable()
     )
       this.cb.onWorkspaceChange?.()
@@ -1053,7 +1142,7 @@ export class TradingTerminal {
   private setPriceData() {
     // History can finish during replay. Keep its live snapshot up to date,
     // but leave both displayed series and their timeline to the playhead.
-    if (this.replay) return
+    if (this.replayOwnsDisplay()) return
     if (!this.price || !this.volume || !this.rawBars.length) return
     const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
     if (cfg.transform) {
@@ -1118,7 +1207,7 @@ export class TradingTerminal {
     }
 
     this.rawBars = next
-    if (snapshot.paused || this.replay) return
+    if (snapshot.paused || this.replayOwnsDisplay()) return
 
     const key = this.dataKey(request)
     if (!this.chart || !this.price || !this.volume || this.chartDataKey !== key) {
@@ -1126,6 +1215,7 @@ export class TradingTerminal {
       this.buildChart()
     } else {
       this.setPriceData()
+      if (snapshot.reason === 'prepend') this.installComparisons()
     }
 
     // Prepending shifts logical indexes. Preserve the same candles in view,
@@ -1745,6 +1835,7 @@ export class TradingTerminal {
   private buildChart() {
     this.legendTime = null
     this.stopReplay()
+    this.comparisons?.detach()
     this.detachAlerts()
     this.detachObjects()
     this.profileLayer?.dispose()
@@ -1877,6 +1968,7 @@ export class TradingTerminal {
     // of the group it still believes it is in.
     this.joinLink()
     this.setPriceData()
+    if (!this.preparingWorkspace) this.installComparisons()
     this.installProfile()
 
     this.applyDefaultViewport()
@@ -1918,7 +2010,7 @@ export class TradingTerminal {
 
     this.chart.subscribeCrosshairMove((e) => {
       this.legendTime = e.bar?.time ?? null
-      this.refreshLegend(this.replay ? (this.price?.getData() ?? []) : this.shownBars)
+      this.refreshLegend(this.replayActive() ? (this.price?.getData() ?? []) : this.shownBars)
       if (e.source !== 'linked') this.moveReplayPick(e.index ?? null)
     })
 
@@ -2838,7 +2930,9 @@ export class TradingTerminal {
       this.destroyed ||
       this.preparingWorkspace ||
       this.workspaceTransitionLocked ||
+      this.workspaceReplayLocked ||
       this.replay !== null ||
+      this.replayOwnsDisplay() ||
       this.replayPicking ||
       this.replayLoading ||
       this.dataUnavailable()
@@ -3192,6 +3286,8 @@ export class TradingTerminal {
       this.toast('The broker has no interval compatible with this TPO block size', 'err')
       return
     }
+    if ('time.timezone' in enginePatch && enginePatch['time.timezone'] !== chart.timezone())
+      this.stopReplay()
     applyChartSettings(chart, enginePatch)
     const defaults = {
       ...this.chartDefaults,
@@ -3218,7 +3314,7 @@ export class TradingTerminal {
     this.lsSet('chartsettings', JSON.stringify(kept))
     this.adoptGridFromPatch(patch)
     this.refreshDisplayedVolume()
-    this.refreshLegend(this.replay ? (this.price?.getData() ?? []) : this.shownBars)
+    this.refreshLegend(this.replayActive() ? (this.price?.getData() ?? []) : this.shownBars)
     if (isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval && interval !== this.interval) {
@@ -3275,7 +3371,7 @@ export class TradingTerminal {
       )
       this.installProfile()
       this.refreshDisplayedVolume()
-      this.refreshLegend(this.replay ? (this.price?.getData() ?? []) : this.shownBars)
+      this.refreshLegend(this.replayActive() ? (this.price?.getData() ?? []) : this.shownBars)
     } catch (error) {
       if (strict) throw error
       /* ignore */
@@ -3314,7 +3410,12 @@ export class TradingTerminal {
     const symbol = this.sym
     if (this.destroyed || !chart || !symbol) throw new Error('Chart is not available')
     if (this.dataUnavailable()) throw new Error('Chart history is loading or unavailable')
-    if (this.replay || this.replayPicking || this.replayLoading)
+    if (
+      this.replayOwnsDisplay() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      this.workspaceReplayLocked
+    )
       throw new Error('Leave replay before saving a workspace')
     const context = chart.getDataContext()
     if (
@@ -3340,14 +3441,17 @@ export class TradingTerminal {
           exchange: symbol.exchange,
           interval: this.interval,
           chartType: this.ctype,
-          chart: { ...chart.getState(), drawings: this.draw?.toJSON() ?? this.drawJson },
+          chart: {
+            ...(this.comparisons?.captureBaseState() ?? chart.getState()),
+            drawings: this.draw?.toJSON() ?? this.drawJson,
+          },
           settings: this.chartSettingsSaved,
           volume: this.volumeOn,
           magnet:
             this.draw?.magnetMode() ?? this.drawMagnetMode ?? (this.drawMagnet ? 'strong' : 'off'),
           stay: this.drawStay,
-          comparisons: [],
-          comparisonMode: 'price',
+          comparisons: this.comparisons?.specs() ?? this.comparisonPreferences?.items ?? [],
+          comparisonMode: this.comparisons?.mode ?? this.comparisonPreferences?.mode ?? 'price',
         },
       ],
     }).panes[0]
@@ -3358,6 +3462,136 @@ export class TradingTerminal {
     const indicators = parseIndicatorStates(this.chart.getState().indicators ?? [])
     for (const indicator of indicators) delete indicator.instanceId
     return indicators
+  }
+
+  exportDataCsv(): string {
+    if (this.destroyed || !this.chart || this.dataUnavailable())
+      throw new Error('Chart history is unavailable for export')
+    if (
+      this.replayPicking ||
+      this.replayLoading ||
+      (this.workspaceReplayLocked && !this.workspaceReplayMember)
+    )
+      throw new Error('Finish replay selection and loading before exporting data')
+    return exportChartDataCsv(this.chart)
+  }
+
+  comparisonState(): TerminalComparisonState {
+    return {
+      mode:
+        (this.comparisons?.mode ?? this.comparisonPreferences?.mode) === 'percent'
+          ? 'percentage'
+          : 'price',
+      items: (this.comparisons?.rows() ?? []).map((row) => ({
+        id: row.id,
+        symbol: row.symbol,
+        exchange: row.exchange,
+        label: `${row.exchange}:${row.symbol}`,
+        color: row.color ?? '#4f8cff',
+        status:
+          row.status === 'ready'
+            ? 'ready'
+            : ['idle', 'loading', 'refreshing'].includes(row.status)
+              ? 'loading'
+              : 'error',
+        ...(row.error ? { error: row.error } : {}),
+      })),
+    }
+  }
+
+  private installComparisons(): void {
+    const chart = this.chart
+    const feed = this.cachedBars ?? this.rest
+    if (!chart || !feed || this.destroyed) return
+    let setup = Promise.resolve()
+    if (!this.comparisons) {
+      const comparisons = new TerminalComparisons({
+        feed,
+        ws: { url: this.wsUrl, apiKey: this.apiKey },
+        now: () => this.gridNow(),
+        onChange: () => {
+          if (this.destroyed || this.comparisons !== comparisons) return
+          this.comparisonPreferences = { items: comparisons.specs(), mode: comparisons.mode }
+          this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
+          this.cb.onComparisonsChange?.(this.comparisonState())
+        },
+      })
+      this.comparisons = comparisons
+      setup = comparisons.replace(this.comparisonPreferences.items, this.comparisonPreferences.mode)
+    }
+    const comparisons = this.comparisons
+    const interval = this.interval
+    const ticket = this.loadTicket
+    const symbolOwner = this.sym
+    const isCurrent = () =>
+      !this.destroyed &&
+      chart === this.chart &&
+      interval === this.interval &&
+      ticket === this.loadTicket &&
+      symbolOwner === this.sym
+    const to = this.gridNow()
+    this.comparisonLoad = setup.then(async () => {
+      if (!isCurrent()) return
+      comparisons.setVisibleHost(document.visibilityState !== 'hidden')
+      await comparisons.bind(chart, {
+        interval,
+        from: this.rawBars[0]?.time ?? to - lookbackDays(interval) * 86400,
+        to,
+        timezone: chart.timezone(),
+      })
+      if (isCurrent()) this.cb.onComparisonsChange?.(this.comparisonState())
+    })
+    void this.comparisonLoad.catch((error) => {
+      if (isCurrent() && !this.preparingWorkspace)
+        this.toast(`Comparison history: ${this.cleanError(error)}`, 'err')
+    })
+  }
+
+  async addComparison(symbol: string, exchange: string): Promise<void> {
+    const chart = this.chart
+    const interval = this.interval
+    const symbolOwner = this.sym
+    if (!chart || this.destroyed || this.dataUnavailable())
+      throw new Error('Chart history is unavailable')
+    if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
+      throw new Error('Leave replay before adding a comparison')
+    if (isChartExpression(symbol)) throw new Error('Choose an instrument for comparison')
+    if (!this.comparisons) this.installComparisons()
+    await this.comparisonLoad.catch(() => {})
+    if (
+      this.destroyed ||
+      chart !== this.chart ||
+      interval !== this.interval ||
+      symbolOwner !== this.sym ||
+      this.dataUnavailable() ||
+      !this.comparisons
+    )
+      throw new Error('The chart changed while comparison history was loading')
+    if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
+      throw new Error('Leave replay before adding a comparison')
+    const palette = ['#4f8cff', '#f5a623', '#a78bfa', '#10b981', '#f472b6', '#22d3ee']
+    await this.comparisons.add({
+      id: crypto.randomUUID(),
+      symbol,
+      exchange,
+      visible: true,
+      color: palette[this.comparisons.specs().length % palette.length],
+    })
+  }
+
+  removeComparison(id: string): void {
+    this.comparisons?.remove(id)
+  }
+
+  setComparisonMode(mode: 'price' | 'percentage'): void {
+    if (mode !== 'price' && mode !== 'percentage') throw new Error('Invalid comparison mode')
+    const selected = mode === 'percentage' ? 'percent' : 'price'
+    if (this.comparisons) this.comparisons.setMode(selected)
+    else {
+      this.comparisonPreferences.mode = selected
+      this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
+      this.cb.onComparisonsChange?.(this.comparisonState())
+    }
   }
 
   async applyIndicatorTemplate(
@@ -3432,7 +3666,11 @@ export class TradingTerminal {
    * Reading `values()` is safe here: the engine flushes any pending recompute on
    * that call, so this sees the result of the add rather than the frame before.
    */
-  private warnIfStarved(inst: { name: string; values(): Record<string, unknown> }): void {
+  private warnIfStarved(inst: {
+    name: string
+    indicatorId: string
+    values(): Record<string, unknown>
+  }): void {
     const loaded = this.rawBars.length
     if (!loaded) return
     const cols = Object.values(inst.values()).filter(Array.isArray) as unknown[][]
@@ -3441,6 +3679,21 @@ export class TradingTerminal {
       col.some((v) => typeof v === 'number' && Number.isFinite(v))
     )
     if (anyFinite) return
+    if (
+      ['open-interest', 'open-interest-change', 'open-interest-buildup'].includes(
+        inst.indicatorId
+      ) &&
+      !this.rawBars.some((bar) => Number.isFinite(bar.oi))
+    ) {
+      const supported = this.sym?.hasOpenInterest ?? openInterestCapability(this.sym?.exchange ?? '')
+      this.toast(
+        supported === false
+          ? 'Open interest is not available for this instrument.'
+          : 'The loaded history contains no open interest readings.',
+        ''
+      )
+      return
+    }
     this.toast(
       `${inst.name} needs more history than the ${loaded} bars loaded, so it has nothing to draw yet. Widen the range or pick a longer interval.`,
       ''
@@ -3608,7 +3861,254 @@ export class TradingTerminal {
 
   /** True while the chart is showing a replayed prefix rather than live data. */
   replayActive(): boolean {
-    return this.replay !== null
+    return this.replay !== null || this.workspaceReplayMember?.active === true
+  }
+
+  private replayOwnsDisplay(): boolean {
+    return this.replayActive() || this.workspaceReplayMember?.preparing === true
+  }
+
+  setWorkspaceReplayLocked(locked: boolean): void {
+    this.workspaceReplayLocked = locked
+    this.syncAlertPause()
+    this.showTradeButtons(
+      !locked && !this.replayOwnsDisplay() && !this.replayPicking && !this.replayLoading
+    )
+    if (!locked) {
+      this.workspaceReplayMember?.detachAbort()
+      this.workspaceReplayMember = null
+    }
+  }
+
+  setReplayInvalidationHandler(handler: (() => void) | null): void {
+    this.replayInvalidation = handler
+  }
+
+  beginWorkspaceReplayPick(
+    onPick: (time: number) => void,
+    onCancel: () => void,
+    onPreview?: (time: number) => void
+  ): boolean {
+    if (this.destroyed || this.replayOwnsDisplay() || this.replayPicking || this.replayLoading)
+      return false
+    this.startReplay()
+    if (!this.replayPicking) return false
+    this.workspaceReplayPick = { onPick, onCancel, onPreview }
+    this.publishReplayPreview()
+    return true
+  }
+
+  private publishReplayPreview(): void {
+    const index = this.replayPickIndex
+    if (index === null || !this.chart || !this.workspaceReplayPick?.onPreview) return
+    const bar = this.shownBars[index]
+    if (!bar) return
+    this.workspaceReplayPick.onPreview(
+      replayTiming(this.interval, this.chart.timezone()).barEndTime(bar, index)
+    )
+  }
+
+  setWorkspaceReplayPreview(time: number | null): void {
+    if (time === null) {
+      this.setReplayShade(null)
+      return
+    }
+    if (!this.chart) return
+    const timing = replayTiming(this.interval, this.chart.timezone())
+    let last = -1
+    for (let index = 0; index < this.shownBars.length; index++) {
+      if (timing.barEndTime(this.shownBars[index], index) > time) break
+      last = index
+    }
+    this.setReplayShade(last)
+  }
+
+  async prepareReplayMember({
+    id,
+    sessionId,
+    signal,
+  }: {
+    id: string
+    sessionId: number
+    signal: AbortSignal
+  }): Promise<PreparedReplayMember> {
+    const chart = this.chart
+    const price = this.price
+    if (this.destroyed || !chart || !price || this.dataUnavailable() || price.getData().length < 2)
+      throw new Error('Every replay chart needs available history')
+    if (signal.aborted) throw new Error('Replay preparation was cancelled')
+    if (this.replay || this.workspaceReplayMember?.active)
+      throw new Error('This chart already has a replay owner')
+    const data = this.data
+    const sym = this.sym
+    const interval = this.interval
+    const ctype = this.ctype
+    const timezone = chart.timezone()
+    const previous = this.workspaceReplayMember
+    if (previous) this.restoreReplayMember(previous.sessionId)
+    previous?.detachAbort()
+    const member = {
+      sessionId,
+      chart,
+      price,
+      data,
+      active: false,
+      preparing: true,
+      state: null as ReplayState | null,
+      autoScale: price.priceScale().autoScale,
+      positioned: false,
+      isCurrent: () =>
+        !this.destroyed &&
+        !signal.aborted &&
+        this.workspaceReplayMember === member &&
+        this.chart === chart &&
+        this.price === price &&
+        this.data === data &&
+        this.sym === sym &&
+        this.interval === interval &&
+        this.ctype === ctype &&
+        chart.timezone() === timezone,
+      detachAbort: () => signal.removeEventListener('abort', cancel),
+    }
+    const cancel = () => {
+      if (this.workspaceReplayMember !== member || !member.preparing) return
+      this.replayHistoryAbort?.abort()
+      this.restoreReplayMember(sessionId)
+    }
+    this.workspaceReplayMember = member
+    signal.addEventListener('abort', cancel, { once: true })
+    this.replayLoading = true
+    this.replayPicking = false
+    this.workspaceReplayPick = null
+    this.setReplayShade(null)
+    this.syncAlertPause()
+    data?.setPaused(true)
+    this.showTradeButtons(false)
+    this.cb.onReplayChange?.(null)
+    try {
+      const transformed = Boolean(CHART_TYPES[ctype]?.transform)
+      const finer = transformed ? undefined : TradingTerminal.REPLAY_SUB[interval]
+      let sub = finer ? await this.loadReplaySubBars() : null
+      if (!member.isCurrent())
+        throw new Error('Replay preparation was cancelled or the chart changed')
+      let timing = replayTiming(interval, timezone, sub?.length ? finer : undefined)
+      if (sub?.length) {
+        const candidates = sub
+        const endTime = timing.subBarEndTime!
+        const valid = candidates.every((bar, index) => {
+          if (![bar.time, bar.open, bar.high, bar.low, bar.close].every(Number.isFinite))
+            return false
+          if (index > 0 && bar.time <= candidates[index - 1].time) return false
+          try {
+            const end = endTime(bar, index)
+            return (
+              Number.isFinite(end) &&
+              end > bar.time &&
+              (index === candidates.length - 1 || end <= candidates[index + 1].time)
+            )
+          } catch {
+            return false
+          }
+        })
+        if (!valid) {
+          sub = null
+          this.replaySub = null
+          timing = replayTiming(interval, timezone)
+        }
+      }
+      const series = this.volume ? [price, this.volume] : [price]
+      if (this.volumeMA) series.push(this.volumeMA)
+      return {
+        isCurrent: member.isCurrent,
+        member: {
+          id,
+          chart,
+          options: {
+            series,
+            // Inactive members must be prepared again from their current live series.
+            timing,
+            ...(sub?.length ? { subBars: sub } : {}),
+            onFrame: (state) => {
+              if (!member.isCurrent() || !member.active) return
+              member.state = state
+              this.refreshDisplayedVolume()
+              this.refreshLegend(price.getData())
+              this.profileLayer?.refresh(true)
+              this.cb.onReplayChange?.(state)
+            },
+          },
+        },
+      }
+    } catch (error) {
+      this.restoreReplayMember(sessionId)
+      throw error
+    }
+  }
+
+  setReplayParticipation(sessionId: number, active: boolean, state?: ReplayState): void {
+    const member = this.workspaceReplayMember
+    if (!member || member.sessionId !== sessionId || !member.isCurrent()) return
+    if (!active) {
+      this.restoreReplayMember(sessionId)
+      return
+    }
+    if (!member.active) {
+      member.autoScale = member.price.priceScale().autoScale
+      member.positioned = false
+    }
+    member.active = true
+    member.preparing = false
+    this.replayLoading = false
+    member.data?.setPaused(true)
+    member.chart.setAutoScale(true)
+    this.showReplayMark(true)
+    this.showTradeButtons(false)
+    this.syncAlertPause()
+    if (state) {
+      member.state = state
+      if (!member.positioned) {
+        const to = state.index + 4
+        member.chart.setVisibleLogicalRange(
+          state.index > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+        )
+        member.positioned = true
+      }
+      this.cb.onReplayChange?.(state)
+    }
+  }
+
+  restoreReplayMember(sessionId: number): void {
+    const member = this.workspaceReplayMember
+    if (!member || member.sessionId !== sessionId || (!member.active && !member.preparing)) return
+    member.active = false
+    member.preparing = false
+    member.state = null
+    member.positioned = false
+    this.replayLoading = false
+    if (this.chart !== member.chart || this.price !== member.price) return
+    let failed = false
+    let failure: unknown
+    const attempt = (action: () => void) => {
+      try {
+        action()
+      } catch (error) {
+        if (!failed) {
+          failed = true
+          failure = error
+        }
+      }
+    }
+    attempt(() => this.showReplayMark(false))
+    attempt(() => member.chart.setAutoScale(member.autoScale))
+    if (this.data === member.data) attempt(() => member.data?.setPaused(false))
+    if (!this.destroyed) {
+      attempt(() => this.setPriceData())
+      attempt(() => this.refreshLegend())
+      attempt(() => this.syncAlertPause())
+      attempt(() => this.showTradeButtons(!this.workspaceReplayLocked))
+      attempt(() => this.cb.onReplayChange?.(null))
+    }
+    if (failed) throw failure
   }
 
   /**
@@ -3632,9 +4132,11 @@ export class TradingTerminal {
       this.destroyed ||
       this.preparingWorkspace ||
       this.workspaceTransitionLocked ||
+      this.workspaceReplayLocked ||
       this.alertDialogOpen() ||
       this.dataUnavailable() ||
       this.replay !== null ||
+      this.replayOwnsDisplay() ||
       this.replayPicking ||
       this.replayLoading
     )
@@ -3665,7 +4167,7 @@ export class TradingTerminal {
   }
 
   replayState(): ReplayState | null {
-    return this.replay?.state() ?? null
+    return this.workspaceReplayMember?.state ?? this.replay?.state() ?? null
   }
 
   /**
@@ -3693,7 +4195,13 @@ export class TradingTerminal {
    */
   startReplay(startIndex?: number): void {
     if (this.dataUnavailable()) return
-    if (this.replay || this.replayPicking || this.replayLoading || !this.chart || !this.price)
+    if (
+      this.replayOwnsDisplay() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      !this.chart ||
+      !this.price
+    )
       return
     if (this.shownBars.length < 2) return
     if (startIndex !== undefined) {
@@ -3717,6 +4225,7 @@ export class TradingTerminal {
     if (clamped === this.replayPickIndex) return
     this.replayPickIndex = clamped
     this.setReplayShade(clamped)
+    this.publishReplayPreview()
   }
 
   /** The bar under the cursor right now, for a host that labels the prompt. */
@@ -3728,6 +4237,24 @@ export class TradingTerminal {
   /** Commit the pick. A click on the plot lands here. */
   commitReplayPick(): void {
     if (!this.replayPicking || this.replayPickIndex === null) return
+    const workspace = this.workspaceReplayPick
+    if (workspace) {
+      const index = this.replayPickIndex
+      const bar = this.shownBars[index]
+      if (!bar || !this.chart) return
+      try {
+        const time = replayTiming(this.interval, this.chart.timezone()).barEndTime(bar, index)
+        this.workspaceReplayPick = null
+        this.replayPicking = false
+        this.replayPickIndex = null
+        this.setReplayShade(null)
+        workspace.onPick(time)
+      } catch (error) {
+        this.toast(this.cleanError(error), 'err')
+        this.cancelReplayPick()
+      }
+      return
+    }
     void this.beginReplayAt(this.replayPickIndex)
   }
 
@@ -3737,12 +4264,15 @@ export class TradingTerminal {
       return
     }
     if (!this.replayPicking) return
+    const workspace = this.workspaceReplayPick
+    this.workspaceReplayPick = null
     this.replayPicking = false
     this.replayPickIndex = null
     this.syncAlertPause()
     this.setReplayShade(null)
     this.showTradeButtons(true)
     this.cb.onReplayChange?.(null)
+    workspace?.onCancel()
   }
 
   /**
@@ -3929,6 +4459,7 @@ export class TradingTerminal {
    */
   private showTradeButtons(on: boolean): void {
     if (!this.chart || !this.tradeBtns) return
+    if (this.workspaceReplayLocked) on = false
     if (on) this.chart.addPrimitive(this.tradeBtns, 0)
     else this.chart.removePrimitive(this.tradeBtns)
   }
@@ -3949,6 +4480,13 @@ export class TradingTerminal {
 
   /** Leave replay and put the live chart back exactly where the user left it. */
   stopReplay(): void {
+    this.replayInvalidation?.()
+    const member = this.workspaceReplayMember
+    if (member) {
+      this.restoreReplayMember(member.sessionId)
+      member.detachAbort()
+      this.workspaceReplayMember = null
+    }
     this.replayLoadTicket++
     this.replayHistoryAbort?.abort()
     this.replayHistoryAbort = null
@@ -4089,7 +4627,7 @@ export class TradingTerminal {
         // it, then vanishes on the next replay frame when setData rewrites the
         // prefix. rawBars keeps accumulating either way, so leaving replay finds
         // the session already caught up.
-        if (this.replay) {
+        if (this.replayOwnsDisplay()) {
           this.cb.onLtp(e.ltp)
           return
         }
@@ -4099,7 +4637,7 @@ export class TradingTerminal {
     }
     // The legend belongs to the bar on screen. During replay that is the
     // playhead's, written by onReplayChange, not the live one.
-    if (!this.replay) {
+    if (!this.replayOwnsDisplay()) {
       this.refreshLegend()
     }
   }
@@ -4504,6 +5042,7 @@ export class TradingTerminal {
     // that snapshot back. Carrying it across a symbol change would restore the
     // previous instrument's data onto the new one.
     this.stopReplay()
+    this.comparisons?.detach()
     // swap the live stream: drop the previous symbol's subscription
     if (
       this.ws &&
@@ -4634,6 +5173,7 @@ export class TradingTerminal {
       this.buildChart()
     } else {
       this.setPriceData()
+      this.installComparisons()
     }
     this.cb.onLtp(this.lastLtp)
     this.cb.onSymbolLoaded(this.sym)
@@ -5126,6 +5666,9 @@ export class TradingTerminal {
         throw new Error('Workspace drawings could not be restored completely')
     }
     this.attachAlerts(chart)
+    this.installComparisons()
+    await this.comparisonLoad
+    this.assertWorkspacePreparation(chart)
   }
 
   async init(): Promise<void> {
@@ -5326,7 +5869,19 @@ export class TradingTerminal {
 
   destroy() {
     if (this.destroyed) return
+    this.replayInvalidation?.()
+    this.replayInvalidation = null
+    if (this.workspaceReplayMember || this.workspaceReplayPick) this.stopReplay()
     this.destroyed = true
+    let comparisonError: unknown
+    let comparisonFailed = false
+    try {
+      this.comparisons?.destroy()
+    } catch (error) {
+      comparisonFailed = true
+      comparisonError = error
+    }
+    this.comparisons = null
     this.offBranding?.()
     this.offBranding = null
     this.cb.onBrandingChange?.(null)
@@ -5375,5 +5930,6 @@ export class TradingTerminal {
     this.chart = null
     this.ws = null
     this.screenshotExcluded.length = 0
+    if (comparisonFailed) throw comparisonError
   }
 }

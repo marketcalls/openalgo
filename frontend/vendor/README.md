@@ -1,22 +1,15 @@
-# Local chart candidate
+# Published chart dependency
 
-`openalgo-charts-2.4.0-0939bcc.tgz` contains the chart library built from local
-commit `0939bcc` on `feat/production-chart-workspace`. It supplies interval
-linking, candle-center crosshair, volume studies and the optional portable
-workspace/template repository with atomic browser storage used by this branch.
-It also preserves market event time when a cached quote arrives later.
+The frontend now pins published `openalgo-charts` 2.4.5 from the npm registry.
+`package-lock.json` records the registry archive URL and its SHA-512 integrity.
+The installed package was checked against all 33 files in that archive.
 
-This candidate includes optional open interest, three OI studies, trader alert
-evaluation and portable state, shared alert dialogs in the widget tier, and exact
-study plot identities for context actions.
-The installed package was compared with all 33 files in the packed chart build.
+The retained `openalgo-charts-2.4.0-*.tgz` archives are previous development
+candidates. They are no longer referenced by the package manifest or lockfile.
+Do not replace the published pin with an absolute worktree path.
 
-The frontend uses a relative file dependency; the lockfile records its SHA-512
-integrity. This is an intermediate development candidate, not a published npm
-release. Replace it with the final verified package when the workspace work is
-complete. Do not point the dependency at an absolute worktree path.
-
-Portable grids include optional row/column weights to retain unequal pane sizes.
-
-Activation writes accept cancellation and an expected catalog revision so obsolete
-preparations cannot select a newer saved definition.
+This release includes portable workspace/template storage, OI studies and
+alerts, coordinated replay, comparisons, CSV export and optional instrument,
+localization and trading capability contracts. Package availability does not
+mean every control has been integrated into `/trading`; the terminal guide
+describes the host behavior that is currently wired.

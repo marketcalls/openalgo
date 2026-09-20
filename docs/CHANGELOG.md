@@ -8,6 +8,11 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+- Upgrade `/trading` to the published openalgo-charts 2.4.5 package, with 105 built-in studies, open interest readouts and chart alerts. Open interest is a level: aggregation keeps the last reading rather than summing values. Missing live readings remain absent.
+- Add saved chart workspaces, study templates, comparison symbols with price or percentage scales, and CSV downloads of the displayed bars, studies and comparisons.
+- Share one toolbar across the selected chart and one replay transport across the workspace. Replay can follow the selected chart or all charts on a shared clock; order actions and workspace autosave pause until replay ends.
+- Preserve drawings, study settings, comparison scale preferences and alert lifecycle state when restoring a workspace. Alerts default to completed-bar evaluation and do not fire from restored history; delivery remains the host's responsibility.
+
 ## [2.0.2.5] - 2026-09-14
 
 ### Voice Agent Release

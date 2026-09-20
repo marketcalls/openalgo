@@ -15,6 +15,11 @@ interface Owner {
   setDrawStay: ReturnType<typeof vi.fn>
   setDrawTool: ReturnType<typeof vi.fn>
   openAlerts: ReturnType<typeof vi.fn>
+  addComparison: ReturnType<typeof vi.fn>
+  removeComparison: ReturnType<typeof vi.fn>
+  setComparisonMode: ReturnType<typeof vi.fn>
+  exportDataCsv: ReturnType<typeof vi.fn>
+  startReplay: ReturnType<typeof vi.fn>
 }
 const fake = vi.hoisted(() => ({ owners: [] as Owner[], toast: vi.fn() }))
 vi.mock('@/utils/toast', () => ({
@@ -35,6 +40,14 @@ vi.mock('@/lib/trading/terminal', () => ({
     setLinkGroup = vi.fn()
     setDrawTool = vi.fn(async () => {})
     openAlerts = vi.fn(async () => true)
+    addComparison = vi.fn(async () => {})
+    removeComparison = vi.fn()
+    setComparisonMode = vi.fn()
+    exportDataCsv = vi.fn(() => 'time,close\n1,10')
+    startReplay = vi.fn()
+    replayPickingBar = () => false
+    replayLoadingBars = () => false
+    search = async () => []
     setMagnet = vi.fn()
     setDrawStay = vi.fn()
     applyTheme = vi.fn()
@@ -86,6 +99,130 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('chart pane preparation ownership', () => {
+  it('disables CSV during replay selection and history loading, then allows the active prefix', async () => {
+    const snapshot = {
+      phase: 'picking' as const,
+      scope: 'all' as const,
+      ownerId: 'saved',
+      state: null,
+    }
+    const view = render(<ChartPane {...props} workspaceReplay={snapshot} />)
+    await act(async () => fake.owners[0].resolve())
+    fireEvent.click(view.getByRole('button', { name: 'Chart snapshot' }))
+    const csv = view.getByRole('button', { name: 'Download CSV' })
+    expect(csv).toBeDisabled()
+    expect(csv).toHaveAttribute(
+      'title',
+      'Finish selecting and loading replay before exporting data'
+    )
+    fireEvent.click(csv)
+    expect(fake.owners[0].exportDataCsv).not.toHaveBeenCalled()
+    view.rerender(<ChartPane {...props} workspaceReplay={{ ...snapshot, phase: 'loading' }} />)
+    expect(csv).toBeDisabled()
+    view.rerender(<ChartPane {...props} workspaceReplay={{ ...snapshot, phase: 'active' }} />)
+    expect(csv).toBeEnabled()
+  })
+
+  it('exports only the selected chart CSV and releases the download URL', async () => {
+    const create = vi.fn(() => 'blob:chart-csv'),
+      revoke = vi.fn()
+    vi.stubGlobal(
+      'URL',
+      class extends URL {
+        static createObjectURL = create
+        static revokeObjectURL = revoke
+      }
+    )
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      const host = render(<div data-testid="csv-toolbar" />).getByTestId('csv-toolbar')
+      const panes = (focused: string) => (
+        <>
+          <ChartPane {...props} paneId="left" toolbarHost={host} focused={focused === 'left'} />
+          <ChartPane {...props} paneId="right" toolbarHost={host} focused={focused === 'right'} />
+        </>
+      )
+      const view = render(panes('left'))
+      await act(async () => fake.owners.forEach((owner) => owner.resolve()))
+      view.rerender(panes('right'))
+      fireEvent.click(within(host).getByRole('button', { name: 'Chart snapshot' }))
+      fireEvent.click(view.getByRole('button', { name: 'Download CSV' }))
+      expect(fake.owners[0].exportDataCsv).not.toHaveBeenCalled()
+      expect(fake.owners[1].exportDataCsv).toHaveBeenCalledOnce()
+      expect(create).toHaveBeenCalledWith(expect.any(Blob))
+      expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:chart-csv')
+      expect(click).toHaveBeenCalledOnce()
+      expect(document.querySelector('a[download]')).toBeNull()
+    } finally {
+      click.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps comparisons on the selected toolbar and updates the selected terminal mode', async () => {
+    const host = render(<div data-testid="compare-toolbar" />).getByTestId('compare-toolbar')
+    const panes = (focused: string) => (
+      <>
+        <ChartPane {...props} paneId="left" toolbarHost={host} focused={focused === 'left'} />
+        <ChartPane {...props} paneId="right" toolbarHost={host} focused={focused === 'right'} />
+      </>
+    )
+    const view = render(panes('left'))
+    await act(async () => fake.owners.forEach((owner) => owner.resolve()))
+    act(() =>
+      fake.owners[1].options.callbacks.onComparisonsChange?.({
+        mode: 'price',
+        items: [
+          {
+            id: 'right-comparison',
+            symbol: 'INFY',
+            exchange: 'NSE',
+            label: 'NSE:INFY',
+            color: '#4488ff',
+            status: 'ready',
+          },
+        ],
+      })
+    )
+    view.rerender(panes('right'))
+    expect(view.getAllByRole('button', { name: 'Comparisons' })).toHaveLength(1)
+    fireEvent.click(within(host).getByRole('button', { name: 'Comparisons' }))
+    fireEvent.change(view.getByLabelText('Comparison scale'), { target: { value: 'percentage' } })
+    fireEvent.click(view.getByRole('button', { name: 'Remove NSE:INFY' }))
+    expect(fake.owners[1].setComparisonMode).toHaveBeenCalledExactlyOnceWith('percentage')
+    expect(fake.owners[1].removeComparison).toHaveBeenCalledExactlyOnceWith('right-comparison')
+    expect(fake.owners[0].setComparisonMode).not.toHaveBeenCalled()
+  })
+
+  it('delegates replay to the workspace owner and suppresses duplicate local transports', async () => {
+    const start = vi.fn()
+    const view = render(
+      <ChartPane
+        {...props}
+        onReplayStart={start}
+        workspaceReplay={{ phase: 'loading', scope: 'all', ownerId: 'saved', state: null }}
+      />
+    )
+    await act(async () => fake.owners[0].resolve())
+    act(() =>
+      fake.owners[0].options.callbacks.onReplayChange?.({
+        playing: false,
+        speed: 1,
+        index: 0,
+        total: 2,
+        subIndex: 0,
+        subSteps: 1,
+        bar: null,
+      })
+    )
+    fireEvent.click(view.getByRole('button', { name: 'Replay', exact: true }))
+    expect(start).toHaveBeenCalledExactlyOnceWith('saved')
+    expect(fake.owners[0].startReplay).not.toHaveBeenCalled()
+    expect(view.queryByRole('button', { name: 'Play' })).toBeNull()
+    expect(view.queryByText('Loading replay history')).toBeNull()
+    expect(view.getByRole('button', { name: 'Comparisons' })).toBeDisabled()
+  })
+
   it('shares one toolbar and routes actions without recreating either terminal', async () => {
     const host = render(<div data-testid="shared-toolbar" />).getByTestId('shared-toolbar')
     const panes = (active: string) => (

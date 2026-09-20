@@ -46,13 +46,23 @@ describe('prepared workspace configuration', () => {
     expect(() => parseTerminalWorkspacePane({ ...input, chart: { version: 99 } })).toThrow()
   })
 
-  it('rejects comparison definitions until a matching host adapter can restore them', () => {
+  it('detaches valid comparison definitions and seeds their mode without execution data', () => {
+    const input = {
+      ...pane(),
+      comparisons: [{ id: 'c1', symbol: 'OTHER', exchange: 'NSE', visible: true }],
+      comparisonMode: 'percent' as const,
+    }
+    const parsed = parseTerminalWorkspacePane(input)
+    const storage = createWorkspacePanePreferences(input, 'staged-p0')
+    input.comparisons[0].symbol = 'CHANGED'
+    expect(parsed.comparisons[0].symbol).toBe('OTHER')
+    expect(JSON.parse(storage.getItem('staged-p0-comparisons')!)).toEqual({
+      mode: 'percent',
+      items: [{ id: 'c1', symbol: 'OTHER', exchange: 'NSE', visible: true }],
+    })
     expect(() =>
-      parseTerminalWorkspacePane({
-        ...pane(),
-        comparisons: [{ id: 'c1', symbol: 'OTHER', exchange: 'NSE', visible: true }],
-      })
-    ).toThrow(/comparison/i)
+      parseTerminalWorkspacePane({ ...input, comparisons: [{ id: 'c1', visible: true }] })
+    ).toThrow()
   })
 
   it('seeds isolated preferences without execution data or shared browser writes', () => {
