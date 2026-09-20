@@ -44,6 +44,7 @@ import { useWorkspaceAutosave } from '@/hooks/useWorkspaceAutosave'
 import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
+import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
 import { capturePresetWorkspace } from '@/lib/trading/workspaceGrid'
@@ -495,6 +496,19 @@ function TradingWorkspace({ account }: { account: string | null }) {
   }, [])
   const workspace = useWorkspaceGridTransition(account, publishWorkspace, lockWorkspace)
 
+  const bindAlertRuntime = (
+    terminals: Iterable<[string, TradingTerminal | null]>,
+    workspaceId: string | null,
+    mode: 'restore' | 'seed'
+  ) => {
+    for (const [paneId, terminal] of terminals) {
+      terminal?.setAlertRuntimeScope(
+        account && workspaceId ? alertRuntimeKey(account, workspaceId, paneId) : null,
+        mode
+      )
+    }
+  }
+
   const captureWorkspace = () => {
     if (workspacePending.current) throw new Error('Wait for the workspace to finish loading')
     if (visibleGrid.current) return visibleGrid.current.capture(focusedPane, sync)
@@ -534,10 +548,13 @@ function TradingWorkspace({ account }: { account: string | null }) {
   }, [workspace.pending])
   const openWorkspace = async (document: WorkspaceDocument) => {
     const revision = workspaceCatalog.catalog?.revision
-    await workspace.open(document, (signal) =>
-      workspaceCatalog.run((repository) =>
-        repository.openWorkspace(document.id, { signal, expectedRevision: revision })
-      )
+    await workspace.open(
+      document,
+      (signal) =>
+        workspaceCatalog.run((repository) =>
+          repository.openWorkspace(document.id, { signal, expectedRevision: revision })
+        ),
+      (grid) => bindAlertRuntime(grid.terminals, document.id, 'restore')
     )
     setActiveWorkspaceId(document.id)
     setWorkspaceMessage('Saved')
@@ -551,6 +568,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
       return saved
     })
     savedWorkspaceSnapshot.current = payload
+    bindAlertRuntime(Object.entries(terminalsRef.current), document.id, 'seed')
     setActiveWorkspaceId(document.id)
     setWorkspaceMessage('Saved')
     setSaveStamp((value) => value + 1)
@@ -585,13 +603,18 @@ function TradingWorkspace({ account }: { account: string | null }) {
     create: Parameters<typeof workspaceCatalog.run<WorkspaceDocument>>[0]
   ) => {
     let saved: WorkspaceDocument | undefined
-    await workspace.open(payload, (signal) =>
-      workspaceCatalog.run(async (repository) => {
-        signal.throwIfAborted()
-        saved = await create(repository)
-        signal.throwIfAborted()
-        await repository.openWorkspace(saved.id, { signal })
-      })
+    await workspace.open(
+      payload,
+      (signal) =>
+        workspaceCatalog.run(async (repository) => {
+          signal.throwIfAborted()
+          saved = await create(repository)
+          signal.throwIfAborted()
+          await repository.openWorkspace(saved.id, { signal })
+        }),
+      (grid) => {
+        if (saved) bindAlertRuntime(grid.terminals, saved.id, 'seed')
+      }
     )
     if (!saved) throw new Error('Workspace was not saved')
     setActiveWorkspaceId(saved.id)
@@ -601,7 +624,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
   }
   const changeLayout = (id: string) => {
     if (workspacePending.current) return
-    if (!visibleGrid.current) {
+    if (!visibleGrid.current && !activeWorkspaceId) {
       setLayoutId(id)
       setWorkspaceMessage('Unsaved')
       autosave.changed()
@@ -616,7 +639,11 @@ function TradingWorkspace({ account }: { account: string | null }) {
       }))
       const payload = capturePresetWorkspace(next, panes, 'p0', sync)
       void workspace
-        .open(payload, async () => {})
+        .open(
+          payload,
+          async () => {},
+          (grid) => bindAlertRuntime(grid.terminals, activeWorkspaceId, 'seed')
+        )
         .then(() => {
           setLayoutId(id)
           setWorkspaceMessage('Unsaved')
@@ -667,8 +694,16 @@ function TradingWorkspace({ account }: { account: string | null }) {
       }}
       onRemoved={(id) => {
         if (activeWorkspaceId === id) {
+          bindAlertRuntime(Object.entries(terminalsRef.current), null, 'seed')
           setActiveWorkspaceId(null)
           setWorkspaceMessage('Unsaved')
+        }
+        if (account) {
+          try {
+            removeWorkspaceAlertRuntime(localStorage, account, id)
+          } catch {
+            setWorkspaceMessage('Workspace removed, but its alert history could not be cleared')
+          }
         }
       }}
     />

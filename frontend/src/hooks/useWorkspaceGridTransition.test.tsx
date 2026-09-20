@@ -41,6 +41,34 @@ const ready = (grid: PreparedChartGrid) => {
 afterEach(cleanup)
 
 describe('workspace grid transition hook', () => {
+  it('restores runtime state after persistence and before publication unlocks the chart', async () => {
+    const order: string[] = []
+    const { result } = renderHook(() =>
+      useWorkspaceGridTransition('one', () => order.push('publish'), vi.fn())
+    )
+    let operation!: Promise<PreparedChartGrid>
+    let terminal!: TradingTerminal
+    const restore = vi.fn(() => {
+      expect(terminal.setWorkspaceTransitionLocked).toHaveBeenLastCalledWith(true)
+      order.push('runtime')
+    })
+    act(() => {
+      operation = result.current.open(
+        payload(),
+        async () => {
+          order.push('persist')
+        },
+        restore
+      )
+    })
+    await act(async () => {
+      terminal = ready(result.current.grids[0])
+      await operation
+    })
+    expect(order).toEqual(['persist', 'runtime', 'publish'])
+    expect(terminal.setWorkspaceTransitionLocked).toHaveBeenLastCalledWith(false)
+  })
+
   it('releases the previous effect lifetime lock when StrictMode starts a fresh owner', () => {
     const lock = vi.fn()
     const { result } = renderHook(() => useWorkspaceGridTransition('one', vi.fn(), lock), {

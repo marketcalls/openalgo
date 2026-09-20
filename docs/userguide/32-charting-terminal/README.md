@@ -418,6 +418,11 @@ a particular study and plot, a drawing level, or a named candle condition.
 The list supports editing, enabling, disabling and deleting alerts and shows
 triggered and expired records. Each pane owns its alerts.
 
+You can also right-click a price, a study plot or a supported drawing and choose
+its create-alert action. A study plot keeps the exact study instance and plot
+you clicked; a drawing action uses the clicked drawing even if another drawing
+is selected.
+
 **Bar close** is the default. It evaluates the confirmed candle when the next
 candle arrives. **Intrabar touch** can fire on a wick or study reading that is
 absent from the final candle. Missing readings remain unavailable, including
@@ -429,6 +434,14 @@ send external notifications. History loading, replay selection, replay history
 loading and playback suppress evaluation. Leaving replay reseeds observations
 without delivering historical matches. Named workspace configuration follows
 the workspace's Save and Autosave controls.
+
+For an alert already saved in a named workspace, its fired or expired state is
+stored separately from chart configuration. A fired once-only alert remains
+fired after reload even with Autosave off. New alerts and edited conditions
+still require Save or Autosave. Runtime history is isolated by account,
+workspace and pane; it applies only when the saved alert condition still
+matches. Save as creates independent history, and deleting a workspace removes
+its history. Browser storage failures produce an error notice.
 
 ## Market Replay
 

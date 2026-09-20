@@ -24,11 +24,13 @@ import {
   CandleBuilder,
   ChartObjects,
   type ChartTheme,
+  type ContextMenuEvent,
   compactVolume,
   createChart,
   DataLoadingController,
   type DataLoadingSnapshot,
   type IPrimitive,
+  getIndicator,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
@@ -68,6 +70,7 @@ import {
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
+import { mergeAlertRuntime } from './alertRuntime'
 import {
   type IndicatorTemplateMode,
   planIndicatorTemplate,
@@ -164,7 +167,7 @@ import {
   lotInfoText,
 } from './legend'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
-import { ProfileLayer } from './profileLayer'
+import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
 import {
   isProfileKind,
   type ProfileKind,
@@ -295,6 +298,7 @@ export interface TerminalCallbacks {
   onWorkspaceChange?(): void
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
   onIntervalChange?(interval: string): void
+  onContextMenu?(menu: TerminalContextMenu): void
   onToast(msg: string, kind: ToastKind): void
   onWsState(state: string): void
   onSymbolLoaded(view: SymbolView): void
@@ -526,6 +530,14 @@ export interface TerminalOptions {
   callbacks: TerminalCallbacks
 }
 
+export interface TerminalContextMenu {
+  x: number
+  y: number
+  items: CtxItem[]
+  profile: ProfileMenuAction | null
+  alert?: { label: string; source: AlertSource; disabled?: boolean; reason?: string }
+}
+
 // CRYPTO is the broker-agnostic exchange for crypto derivatives (utils/constants.py); a
 // contract there is NRML or MIS in lots, and CNC does not exist for it.
 const DERIVATIVE_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 'NCDEX', 'CRYPTO'])
@@ -680,6 +692,8 @@ export class TradingTerminal {
   private alertJson: AlertsDocument = { version: 1, alerts: [] }
   private offAlerts: (() => void)[] = []
   private alertSaveFailed = false
+  private alertRuntimeScope: string | null = null
+  private restoringAlertRuntime = false
   private chartToolsReady: Promise<void> = Promise.resolve()
   private historyPending = false
   private historyFailed = false
@@ -860,6 +874,7 @@ export class TradingTerminal {
   private replaySub: { interval: string; symbol: string; exchange: string; bars: Bar[] } | null =
     null
   private replayLoadTicket = 0
+  private replayHistoryAbort: AbortController | null = null
   /** The price axis's autoscale state before replay forced it on. */
   private replayAutoScale = true
   private shownCount = 0
@@ -1980,6 +1995,9 @@ export class TradingTerminal {
           .catch((e) => this.toast(this.cleanError(e), 'err'))
       }
     })
+    if (this.cb.onContextMenu) {
+      this.chart.on('contextmenu', (payload) => this.showContextMenu(payload as ContextMenuEvent))
+    }
 
     this.orderLines.clear()
     this.posLine = null
@@ -2835,13 +2853,44 @@ export class TradingTerminal {
     if (!this.alerts) return
     try {
       this.alertJson = this.alerts.toJSON()
-      this.lsSet('alerts', JSON.stringify(this.alertJson))
+      const serialized = JSON.stringify(this.alertJson)
+      this.lsSet('alerts', serialized)
+      if (
+        this.alertRuntimeScope &&
+        !this.destroyed &&
+        !this.preparingWorkspace &&
+        !this.workspaceTransitionLocked &&
+        !this.restoringAlertRuntime
+      ) {
+        globalThis.localStorage.setItem(this.alertRuntimeScope, serialized)
+      }
       this.alertSaveFailed = false
     } catch {
       if (!this.alertSaveFailed)
-        this.toast('Alerts could not be saved. Check their payloads.', 'err')
+        this.toast('Alert state could not be saved. Check browser storage and payloads.', 'err')
       this.alertSaveFailed = true
     }
+  }
+
+  /** Bind only after a workspace is prepared, before its evaluator is unlocked. */
+  setAlertRuntimeScope(scope: string | null, mode: 'restore' | 'seed'): void {
+    this.alertRuntimeScope = scope
+    if (!scope || !this.alerts || this.destroyed) return
+    if (mode === 'restore') {
+      this.restoringAlertRuntime = true
+      try {
+        const runtime = globalThis.localStorage.getItem(scope)
+        if (runtime) this.alerts.fromJSON(mergeAlertRuntime(this.alerts.toJSON(), runtime))
+      } catch {
+        this.toast(
+          'Alert runtime could not be restored. The saved workspace definition is retained.',
+          'err'
+        )
+      } finally {
+        this.restoringAlertRuntime = false
+      }
+    }
+    this.saveAlerts()
   }
 
   private detachAlerts(): void {
@@ -3595,6 +3644,7 @@ export class TradingTerminal {
   setWorkspaceTransitionLocked(locked: boolean): void {
     this.workspaceTransitionLocked = locked
     this.syncAlertPause()
+    if (!locked) this.saveAlerts()
   }
 
   private tradingLockMessage(): string {
@@ -3834,6 +3884,9 @@ export class TradingTerminal {
       this.replaySub.exchange === sym.exchange
     )
       return this.replaySub.bars
+    const request = new AbortController()
+    this.replayHistoryAbort?.abort()
+    this.replayHistoryAbort = request
     try {
       const to = this.gridNow()
       const bars = await rest.getBars({
@@ -3842,13 +3895,22 @@ export class TradingTerminal {
         interval: finer,
         from: to - lookbackDays(interval) * 86400,
         to,
+        signal: request.signal,
       })
-      if (!bars.length || this.destroyed || this.sym !== sym || this.interval !== interval)
+      if (
+        request.signal.aborted ||
+        !bars.length ||
+        this.destroyed ||
+        this.sym !== sym ||
+        this.interval !== interval
+      )
         return null
       this.replaySub = { interval, symbol: sym.symbol, exchange: sym.exchange, bars }
       return bars
     } catch {
       return null
+    } finally {
+      if (this.replayHistoryAbort === request) this.replayHistoryAbort = null
     }
   }
 
@@ -3888,6 +3950,8 @@ export class TradingTerminal {
   /** Leave replay and put the live chart back exactly where the user left it. */
   stopReplay(): void {
     this.replayLoadTicket++
+    this.replayHistoryAbort?.abort()
+    this.replayHistoryAbort = null
     const wasLoading = this.replayLoading
     this.replayLoading = false
     this.cancelReplayPick()
@@ -4880,6 +4944,63 @@ export class TradingTerminal {
 
   /* ── right-click order menu ───────────────────────────────────────────── */
   private ctxPrice = 0
+
+  private showContextMenu(event: ContextMenuEvent): void {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    event.preventDefault()
+    const { target } = event
+    let alert: TerminalContextMenu['alert']
+    if (target.kind === 'drawing' && target.id?.startsWith('draw:')) {
+      const drawingId = target.id.slice(5).split('#')[0]
+      if (this.draw?.get(drawingId)) {
+        const info = this.draw.alertInfo(drawingId)
+        alert = {
+          label: 'Create drawing alert',
+          source: { kind: 'drawing', drawingId },
+          disabled: !info.available,
+          reason: info.reason,
+        }
+      }
+    } else if (target.kind === 'indicator' && target.instanceId) {
+      const instance = chart.indicators().find((study) => study.id === target.instanceId)
+      const plot =
+        instance &&
+        getIndicator(instance.indicatorId).plots.find(
+          (candidate) =>
+            (candidate.overlay ? 0 : instance.paneIndex) === event.paneIndex &&
+            (target.plotKey === undefined || candidate.key === target.plotKey)
+        )
+      if (instance && plot) {
+        const value = instance.values()[plot.key]?.[event.index ?? chart.primaryBars().length - 1]
+        alert = {
+          label: 'Create study alert',
+          source: {
+            kind: 'indicator',
+            instanceId: instance.id,
+            plotKey: plot.key,
+            value: value ?? NaN,
+          },
+        }
+      }
+    } else if (event.paneIndex === 0 && event.price !== null && Number.isFinite(event.price)) {
+      alert = {
+        label: `Create price alert at ${this.fmt(event.price)}`,
+        source: { kind: 'price', price: event.price },
+      }
+    }
+    const box = this.container.getBoundingClientRect()
+    this.cb.onContextMenu?.({
+      x: box.left + event.point.x,
+      y: box.top + event.point.y,
+      items:
+        event.paneIndex === 0 && event.price !== null
+          ? (this.contextMenuAt(event.point.y)?.items ?? [])
+          : [],
+      profile: this.profileContextMenuAt(event.point.x, event.point.y),
+      alert,
+    })
+  }
   /** Per-session profile actions are available for quote-only instruments too. */
   profileContextMenuAt(localX: number, localY: number) {
     const chart = this.chart

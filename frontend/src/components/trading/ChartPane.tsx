@@ -19,12 +19,10 @@ import { Input } from '@/components/ui/input'
 import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
-import type { ProfileMenuAction } from '@/lib/trading/profileLayer'
 import { isProfileKind } from '@/lib/trading/profileSettings'
 import {
   type BrandingLink,
   type ChartSettingsRequest,
-  type CtxItem,
   type DrawSelection,
   type DrawStats,
   type IndicatorSettingsRequest,
@@ -32,6 +30,7 @@ import {
   type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
+  type TerminalContextMenu,
   TradingTerminal,
 } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
@@ -371,12 +370,7 @@ export function ChartPane({
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
-  const [ctx, setCtx] = useState<{
-    x: number
-    y: number
-    items: CtxItem[]
-    profile: ProfileMenuAction | null
-  } | null>(null)
+  const [ctx, setCtx] = useState<TerminalContextMenu | null>(null)
   /**
    * The order ticket, while One-Click is off. The terminal validates the
    * click and hands over what it would have sent; the same dialog the option
@@ -401,6 +395,15 @@ export function ChartPane({
     let terminal: TradingTerminal | null = null
 
     const callbacks: TerminalCallbacks = {
+      onContextMenu: (menu) => {
+        if (!current) return
+        setGridSub(false)
+        setCtx({
+          ...menu,
+          x: Math.max(0, Math.min(menu.x, window.innerWidth - 240)),
+          y: Math.max(0, Math.min(menu.y, window.innerHeight - (menu.profile ? 490 : 430))),
+        })
+      },
       onWorkspaceChange: () => {
         if (current && preparedRef.current) workspaceCbRef.current?.()
       },
@@ -562,24 +565,6 @@ export function ChartPane({
   }
 
   /* ── right-click order menu ───────────────────────────────────────────── */
-  const onContextMenu = (e: React.MouseEvent) => {
-    const t = terminalRef.current
-    if (!t || !chartRef.current) return
-    const rect = chartRef.current.getBoundingClientRect()
-    // Order rows need a tradeable instrument; the view actions below them do
-    // not, so a quote-only index still gets the menu, just without them.
-    const res = t.contextMenuAt(e.clientY - rect.top)
-    const profile = t.profileContextMenuAt(e.clientX - rect.left, e.clientY - rect.top)
-    // Capture prevents the engine's native-menu snapshot from freezing overlays.
-    e.preventDefault()
-    setGridSub(false)
-    setCtx({
-      x: Math.min(e.clientX, window.innerWidth - 240),
-      y: Math.max(0, Math.min(e.clientY, window.innerHeight - (profile ? 425 : 360))),
-      items: res ? res.items : [],
-      profile,
-    })
-  }
   useEffect(() => {
     if (!ctx) return
     const close = () => {
@@ -1043,7 +1028,7 @@ export function ChartPane({
             <span className="text-[10px] text-muted-foreground">{lotInfoText(sym, qty)}</span>
           )}
         </div>
-        <div ref={chartRef} className="absolute inset-0" onContextMenuCapture={onContextMenu} />
+        <div ref={chartRef} className="absolute inset-0" />
 
         {!ready && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
@@ -1203,6 +1188,30 @@ export function ChartPane({
                 <div className="my-1 h-px bg-border" />
               </>
             )}
+            {ctx.alert && (
+              <button
+                type="button"
+                className={cn(ctxRow, ctx.alert.disabled && 'cursor-not-allowed opacity-40')}
+                disabled={ctx.alert.disabled}
+                title={ctx.alert.reason}
+                onClick={() => {
+                  void terminalRef.current?.openAlerts(ctx.alert!.source)
+                  setCtx(null)
+                }}
+              >
+                {ctx.alert.label}
+              </button>
+            )}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() => {
+                void terminalRef.current?.openAlerts()
+                setCtx(null)
+              }}
+            >
+              Alerts
+            </button>
             {ctx.items.map((it) => (
               <button
                 type="button"

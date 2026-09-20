@@ -51,15 +51,24 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function mount() {
+async function mount(preferences?: null) {
   const onToast = vi.fn()
+  const onContextMenu = vi.fn()
   const terminal = new TradingTerminal({
     apiKey: 'test',
     wsUrl: 'ws://test.invalid',
+    preferences,
     container: document.createElement('div'),
     legendEl: document.createElement('div'),
     getTheme: () => ({ mode: 'dark', appMode: 'live' }),
-    callbacks: { onReady() {}, onToast, onWsState() {}, onSymbolLoaded() {}, onLtp() {} },
+    callbacks: {
+      onReady() {},
+      onToast,
+      onContextMenu,
+      onWsState() {},
+      onSymbolLoaded() {},
+      onLtp() {},
+    },
   })
   terminals.push(terminal)
   const state = terminal as unknown as State
@@ -81,10 +90,206 @@ async function mount() {
   state.rawBars = [bar(60, 100), bar(120, 100), bar(180, 100), bar(240, 100)]
   state.buildChart()
   await state.chartToolsReady
-  return { terminal, state, onToast }
+  return { terminal, state, onToast, onContextMenu }
 }
 
 describe('terminal alert integration', () => {
+  it('uses the exact plot identity from a study context target', async () => {
+    const { state, onContextMenu } = await mount()
+    const study = state.chart.addIndicator('macd')
+    state.chart.emit('contextmenu', {
+      paneIndex: study.paneIndex,
+      point: { x: 150, y: 300 },
+      price: 2,
+      time: 180,
+      index: 2,
+      target: {
+        kind: 'indicator',
+        id: `indicator:${study.id}`,
+        instanceId: study.id,
+        plotKey: 'signal',
+      },
+      preventDefault() {},
+    })
+    expect(onContextMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        alert: expect.objectContaining({
+          source: expect.objectContaining({
+            kind: 'indicator',
+            instanceId: study.id,
+            plotKey: 'signal',
+          }),
+        }),
+      })
+    )
+  })
+
+  it('restores fired state before publishing a workspace with configuration autosave off', async () => {
+    const a = await mount(null)
+    a.terminal.setAlertRuntimeScope('runtime:account:workspace:p0', 'seed')
+    a.state.alerts.add({ id: 'once', source: { kind: 'price', price: 105 }, policy: 'onTouch' })
+    const workspaceDefinition = a.state.alerts.toJSON()
+    a.state.price.update(bar(240, 106))
+    expect(a.state.alerts.list()[0].state).toBe('triggered')
+    a.terminal.destroy()
+    const b = await mount(null)
+    b.terminal.setWorkspaceTransitionLocked(true)
+    b.state.alerts.fromJSON(workspaceDefinition)
+    const before = localStorage.getItem('runtime:account:workspace:p0')
+    b.terminal.setAlertRuntimeScope('runtime:account:workspace:p0', 'restore')
+    expect(b.state.alerts.list()[0].state).toBe('triggered')
+    expect(localStorage.getItem('runtime:account:workspace:p0')).toBe(before)
+    expect(b.onToast).not.toHaveBeenCalled()
+    b.terminal.setWorkspaceTransitionLocked(false)
+    b.state.price.update(bar(300, 110))
+    expect(b.onToast).not.toHaveBeenCalled()
+    expect(workspaceDefinition.alerts[0].state).toBe('armed')
+  })
+
+  it('keeps cancelled staged changes out of the runtime snapshot and seeds copies independently', async () => {
+    const a = await mount(null)
+    a.state.alerts.add({ id: 'once', source: { kind: 'price', price: 105 }, policy: 'onTouch' })
+    const definition = a.state.alerts.toJSON()
+    a.terminal.setAlertRuntimeScope('runtime:original', 'seed')
+    const original = localStorage.getItem('runtime:original')
+    a.terminal.setWorkspaceTransitionLocked(true)
+    a.state.alerts.disable('once')
+    a.terminal.destroy()
+    expect(localStorage.getItem('runtime:original')).toBe(original)
+    const b = await mount(null)
+    b.state.alerts.fromJSON(definition)
+    b.terminal.setAlertRuntimeScope('runtime:copy', 'seed')
+    b.state.price.update(bar(240, 106))
+    expect(JSON.parse(localStorage.getItem('runtime:copy')!).alerts[0].state).toBe('triggered')
+    expect(localStorage.getItem('runtime:original')).toBe(original)
+  })
+
+  it('reports corrupt runtime storage and write refusal without losing the chart or blocking teardown', async () => {
+    const { terminal, state, onToast } = await mount(null)
+    state.alerts.add({ id: 'once', source: { kind: 'price', price: 105 }, policy: 'onTouch' })
+    localStorage.setItem('runtime:broken', '{broken')
+    expect(() => terminal.setAlertRuntimeScope('runtime:broken', 'restore')).not.toThrow()
+    expect(state.alerts.list()[0].state).toBe('armed')
+    expect(onToast).toHaveBeenCalledWith(expect.stringMatching(/runtime.*restored/i), 'err')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Full', 'QuotaExceededError')
+    })
+    terminal.setAlertRuntimeScope('runtime:full', 'seed')
+    state.price.update(bar(240, 106))
+    expect(state.alerts.list()[0].state).toBe('triggered')
+    expect(onToast).toHaveBeenCalledWith(expect.stringMatching(/alert.*saved/i), 'err')
+    expect(() => terminal.destroy()).not.toThrow()
+  })
+
+  it('uses the engine context target for price, drawing and study alert drafts', async () => {
+    const { terminal, state, onContextMenu } = await mount()
+    state.sym.quoteOnly = true
+    const event = {
+      paneIndex: 0,
+      point: { x: 200, y: 150 },
+      price: 105,
+      time: 240,
+      index: 3,
+      target: { kind: 'empty', id: null },
+      preventDefault: vi.fn(),
+    }
+    state.chart.emit('contextmenu', event)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(onContextMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: [],
+        alert: expect.objectContaining({ source: { kind: 'price', price: 105 } }),
+      })
+    )
+    await terminal.setDrawTool(null)
+    state.draw.add({
+      id: 'clicked',
+      tool: 'horizontal-line',
+      paneIndex: 0,
+      points: [{ time: 240, price: 105 }],
+      style: {},
+    })
+    state.draw.add({
+      id: 'selected',
+      tool: 'horizontal-line',
+      paneIndex: 0,
+      points: [{ time: 240, price: 110 }],
+      style: {},
+    })
+    state.draw.select('selected')
+    state.chart.emit('contextmenu', { ...event, target: { kind: 'drawing', id: 'draw:clicked#0' } })
+    expect(onContextMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        alert: expect.objectContaining({ source: { kind: 'drawing', drawingId: 'clicked' } }),
+      })
+    )
+    const study = state.chart.addIndicator('ema', { length: 1 })
+    state.chart.emit('contextmenu', {
+      ...event,
+      target: { kind: 'indicator', id: `indicator:${study.id}::legend`, instanceId: study.id },
+    })
+    expect(onContextMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        alert: expect.objectContaining({
+          source: { kind: 'indicator', instanceId: study.id, plotKey: 'ma', value: 100 },
+        }),
+      })
+    )
+    state.chart.emit('contextmenu', { ...event, paneIndex: 1, target: { kind: 'empty', id: null } })
+    expect(onContextMenu.mock.lastCall![0].alert).toBeUndefined()
+    expect(onContextMenu.mock.lastCall![0].items).toEqual([])
+  })
+
+  it('aborts the pending replay history request when replay is cancelled', async () => {
+    const { terminal, state } = await mount()
+    let signal: AbortSignal | undefined
+    Object.assign(state, {
+      interval: '5m',
+      rest: {
+        getBars: (request: { signal?: AbortSignal }) => {
+          signal = request.signal
+          return new Promise((_resolve, reject) => {
+            request.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Cancelled', 'AbortError')),
+              { once: true }
+            )
+          })
+        },
+      },
+    })
+    const loading = state.beginReplayAt(0)
+    expect(signal).toBeDefined()
+    expect(signal!.aborted).toBe(false)
+    terminal.cancelReplayPick()
+    expect(signal!.aborted).toBe(true)
+    await loading
+    expect(terminal.replayActive()).toBe(false)
+    expect(terminal.replayLoadingBars()).toBe(false)
+  })
+
+  it('does not cache a cancelled history response from a feed that ignores abort', async () => {
+    const { terminal, state } = await mount()
+    let resolve!: (bars: Bar[]) => void
+    const history = vi.fn(
+      () =>
+        new Promise<Bar[]>((done) => {
+          resolve = done
+        })
+    )
+    Object.assign(state, { interval: '5m', rest: { getBars: history } })
+    const loading = state.beginReplayAt(0)
+    terminal.stopReplay()
+    resolve([bar(60, 101), bar(120, 102)])
+    await loading
+    const next = state.beginReplayAt(0)
+    expect(history).toHaveBeenCalledTimes(2)
+    terminal.destroy()
+    resolve([])
+    await next
+    expect(terminal.replayActive()).toBe(false)
+  })
+
   it('pauses alerts and order routes from symbol lookup through failed history', async () => {
     const { terminal, state, onToast } = await mount()
     state.alerts.add({

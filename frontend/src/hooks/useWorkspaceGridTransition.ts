@@ -75,7 +75,11 @@ export function useWorkspaceGridTransition(
   }, [account])
 
   const open = useCallback(
-    async (payload: WorkspacePayload, persist: (signal: AbortSignal) => Promise<unknown>) => {
+    async (
+      payload: WorkspacePayload,
+      persist: (signal: AbortSignal) => Promise<unknown>,
+      beforePublish?: (grid: PreparedChartGrid) => void
+    ) => {
       const owner = ownerRef.current
       if (!owner?.live || owner.account !== account) throw new Error('Workspace account changed')
       const operation = ++owner.operation
@@ -93,6 +97,7 @@ export function useWorkspaceGridTransition(
           },
           persist,
           (grid) => {
+            beforePublish?.(grid)
             grid.activate(grid.payload.sync)
             callbacks.current.publish(grid)
             owner.current = grid

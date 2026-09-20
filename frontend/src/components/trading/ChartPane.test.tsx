@@ -86,6 +86,24 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('chart pane preparation ownership', () => {
+  it('opens the alert source supplied by the chart context event', async () => {
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    const source = { kind: 'price' as const, price: 105 }
+    act(() =>
+      owner.options.callbacks.onContextMenu?.({
+        x: 100,
+        y: 100,
+        items: [],
+        profile: null,
+        alert: { label: 'Create price alert', source },
+      })
+    )
+    fireEvent.click(view.getByRole('button', { name: 'Create price alert', exact: true }))
+    expect(owner.openAlerts).toHaveBeenCalledWith(source)
+  })
+
   it('opens alerts from the pane toolbar', async () => {
     const view = render(<ChartPane {...props} />)
     await act(async () => fake.owners[0].resolve())

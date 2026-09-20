@@ -144,6 +144,14 @@ An indicator template deliberately drops this identity when creating a new
 instance. Custom hosts must restore drawings before their alerts and retain
 unrelated alert/drawing documents when applying a partial chart restore.
 
+The context-menu target identifies a clicked study plot with `instanceId` and
+`plotKey`. Legend targets omit `plotKey`. Use the clicked logical index to seed
+its reading, and keep absent readings unavailable rather than substituting zero.
+Named workspace alert lifecycle snapshots are isolated by account and pane and
+merged only onto matching saved definitions before evaluation resumes. This
+preserves a fired once-only record when workspace autosave is off; it does not
+implicitly save new alert definitions or changed conditions.
+
 ## Bars
 
 ```js
