@@ -905,8 +905,6 @@ export function ChartPane({
             Alerts
           </Button>
 
-          {/* Workspace controls share the selected chart's row. */}
-          {!fullscreen && layoutPicker}
           <ComparisonMenu
             state={comparisons}
             disabled={
@@ -965,6 +963,15 @@ export function ChartPane({
             <ReplayIcon className="h-4 w-4" />
             <span className="hidden sm:inline">Replay</span>
           </Button>
+
+          {/* Workspace controls share the selected chart's row, but they are not
+            about this chart: they are the grid, its templates and whether a
+            click anywhere in it sends an order. They sat between Alerts and
+            Compare, which put two scopes in one run of buttons and left Compare
+            stranded on the far side of the One-Click badge from the two
+            controls it belongs with. Their own group, after everything that
+            acts on this chart, with the divider saying so. */}
+          {!fullscreen && layoutPicker}
 
           {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
             here as well: the rail can be hidden, and these two are reached far

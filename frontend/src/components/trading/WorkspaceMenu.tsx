@@ -106,9 +106,9 @@ export function WorkspaceMenu({
       <DialogTrigger asChild>
         <Button
           data-workspace-control
-          variant="ghost"
+          variant="outline"
           size="sm"
-          className="h-7 px-2 text-xs"
+          className="h-8 shrink-0 px-2.5 text-xs"
           title={active ? `Workspace: ${active.name}` : 'Save or open a complete chart grid'}
         >
           Workspaces

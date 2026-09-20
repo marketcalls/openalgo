@@ -32,7 +32,6 @@ import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
 import { WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -961,15 +960,43 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * fires twice.
    */
   const armedControl = (
-    <label className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 pl-1">
-      <Switch checked={armed} onCheckedChange={setArmed} aria-label="One-Click" />
-      {/* The word goes below lg, as Indicators and Replay drop their labels:
-          with it the single-pane toolbar at 1024px pushed the LED and the
-          camera into hidden horizontal scroll. The switch keeps its name. */}
-      <Badge variant={armed ? 'destructive' : 'secondary'}>
-        <span className="hidden lg:inline">One-Click&nbsp;</span>
+    <label
+      className={cn(
+        'flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md border px-2 text-xs font-medium transition-colors',
+        armed
+          ? 'border-destructive/60 bg-destructive/10 text-destructive'
+          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+      )}
+      title={
+        armed
+          ? 'One-Click is armed: a click on the chart sends a live order'
+          : 'One-Click is off: a click on the chart opens the order ticket'
+      }
+    >
+      <Switch
+        checked={armed}
+        onCheckedChange={setArmed}
+        aria-label="One-Click"
+        // Armed, the track carries the same red as the border and the word.
+        // Left on the app's accent it was a pale switch inside a red control
+        // saying two different things about one state, and the accent is what
+        // every harmless toggle on the page is already wearing.
+        className={cn(armed && 'data-[state=checked]:bg-destructive')}
+      />
+      {/* One control, not two. The switch and a badge beside it were the same
+          state said twice, and the badge said it in the loudest colour in the
+          row while sitting at a different height from every button around it.
+          The border makes it one control at the row's own height; the switch
+          is still what you press and the words are still the scalping
+          terminal's, so ARMED keeps its capitals. It is the one state here
+          where a click sends a live order. */}
+      <span className="whitespace-nowrap">
+        {/* The name goes below lg, as Indicators and Replay drop their labels:
+            with it the single-pane toolbar at 1024px pushed the LED and the
+            camera into hidden horizontal scroll. */}
+        <span className="hidden lg:inline">One-Click </span>
         {armed ? 'ARMED' : 'off'}
-      </Badge>
+      </span>
     </label>
   )
 
@@ -1005,6 +1032,12 @@ function TradingWorkspace({ account }: { account: string | null }) {
   )
   const workspaceControls = (
     <>
+      {/* These four are the workspace, not this chart: the grid, what syncs
+          across it, the saved layouts and whether a click sends an order. The
+          rule they broke was having no rule -- two of them were text at one
+          height beside bordered controls at another, so they read as labels
+          somebody had left in the toolbar rather than things you press. */}
+      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
       {layoutPicker}
       {syncPicker}
       {workspaceMenu}
