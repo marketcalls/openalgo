@@ -21,6 +21,7 @@ import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import { isProfileKind } from '@/lib/trading/profileSettings'
 import {
+  type AlertsHandle,
   type BrandingLink,
   type ChartSettingsRequest,
   type DrawSelection,
@@ -38,6 +39,7 @@ import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { AlertsDialog } from './AlertsDialog'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { ChartToolbar } from './ChartToolbar'
 import { ComparisonMenu } from './ComparisonMenu'
@@ -394,6 +396,8 @@ export function ChartPane({
   }, [])
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  /** The alert dialog's handle, or null when it is shut. */
+  const [alertsHandle, setAlertsHandle] = useState<AlertsHandle | null>(null)
   // Read from the chart each time the gear is clicked rather than held: the
   // schema depends on the live series type, theme and timezone.
   const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
@@ -468,6 +472,9 @@ export function ChartPane({
       onIndicatorsChange: (list) => current && setIndicators(list),
       onComparisonsChange: (state) => current && setComparisons(state),
       onIndicatorSettings: (req) => current && setIndSettings(req),
+      // Null is the terminal saying the chart this dialog belonged to has gone,
+      // which shuts it rather than leaving it writing into a dead controller.
+      onAlerts: (handle) => current && setAlertsHandle(handle),
       onChartSettings: (req) => current && setChartSettings(req),
       onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
       onOpenScriptSource: (file) => current && scriptSourceCbRef.current?.(file),
@@ -706,6 +713,7 @@ export function ChartPane({
     pickerOpen ||
     chartSettings !== null ||
     indSettings !== null ||
+    alertsHandle !== null ||
     textReq !== null ||
     ticket !== null ||
     confirmLeave
@@ -1151,6 +1159,7 @@ export function ChartPane({
           }}
           onClose={() => setChartSettings(null)}
         />
+        <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
         <IndicatorSettingsDialog
           req={indSettings}
           onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}

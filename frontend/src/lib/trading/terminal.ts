@@ -144,6 +144,7 @@ export interface DrawStats {
 
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
+import type { AlertChart, AlertDrawings } from './alertsModel'
 import {
   applyChartCommands,
   applyIndicatorCommands,
@@ -336,6 +337,14 @@ export interface TerminalCallbacks {
    * and the chart draws no button for one.
    */
   onOpenScriptSource?(file: string): void
+  /**
+   * Alerts were asked for. The host renders the dialog and drives the handle.
+   *
+   * Null means the chart this dialog belonged to has gone, which is the
+   * terminal telling an open dialog to close rather than keep writing into a
+   * controller nothing is evaluating any more.
+   */
+  onAlerts?(handle: AlertsHandle | null): void
   /** The current chart generation's shared object inventory. */
   onObjectsChange?(objects: ChartObjects | null): void
   /** Opens this pane's existing chart settings dialog. */
@@ -434,6 +443,32 @@ function drawingTextContrast(background: string): string {
 const DRAWING_TEXT_PX = 12
 
 /** Everything needed to generate an indicator settings form. */
+/**
+ * Everything the alert dialog acts on, in one handle.
+ *
+ * The engine ships an alert controller and, separately, an alert UI. The
+ * controller is the part worth having and this page renders its own dialog, the
+ * way it already renders its own indicator settings: the engine is canvas-only
+ * and its dialog is a settings table, which is the wrong shape for an alert.
+ *
+ * Handed over as a snapshot taken when the dialog opens. A rebuild replaces the
+ * chart and its controller, so a dialog holding an old one would write alerts
+ * into a chart nobody is looking at; `onAlertsClosed` is how the terminal tells
+ * it to stop.
+ */
+export interface AlertsHandle {
+  /** The engine's controller: add, update, remove, list, availability. */
+  alerts: AlertController
+  /** The chart, for enumerating studies, bars and the timezone. */
+  chart: AlertChart
+  /** The drawing tier, once it is attached. Null while it is still loading. */
+  drawings: AlertDrawings | null
+  /** What this chart is showing, for naming an alert after it. */
+  symbol: string
+  /** A source to open the editor on, from a legend or a right-click. */
+  source?: AlertSource
+}
+
 export interface IndicatorSettingsRequest {
   instanceId: string
   name: string
@@ -3033,15 +3068,45 @@ export class TradingTerminal {
     for (const dispose of this.offAlerts.splice(0)) dispose()
     this.alerts?.destroy()
     this.alerts = null
+    // The dialog is holding the controller that has just been destroyed. Left
+    // open it would write alerts nothing evaluates, into a chart that is gone.
+    this.cb.onAlerts?.(null)
   }
 
   alertDialogOpen(): boolean {
     return this.alertUi?.isOpen() ?? false
   }
 
+  /**
+   * Open the alert dialog, on a source when one was clicked.
+   *
+   * The drawing tier is attached first because an alert can be set on a
+   * drawing's level, and a dialog that offered the option and then found no
+   * drawings would be telling the trader they have none.
+   */
   async openAlerts(source?: AlertSource): Promise<boolean> {
     const chart = this.chart
     if (!chart || this.destroyed || this.preparingWorkspace) return false
+    if (this.cb.onAlerts) {
+      try {
+        await this.chartToolsReady
+        if (this.destroyed || this.chart !== chart || !this.alerts) return false
+        await this.attachDrawing()
+        if (this.destroyed || this.chart !== chart || !this.alerts) return false
+        this.cb.onAlerts({
+          alerts: this.alerts,
+          chart: chart as unknown as AlertChart,
+          drawings: (this.draw ?? null) as AlertDrawings | null,
+          symbol: this.sym?.symbol ?? '',
+          ...(source ? { source } : {}),
+        })
+        return true
+      } catch (error) {
+        if (!this.destroyed && this.chart === chart)
+          this.toast(`Alerts could not be opened: ${this.cleanError(error)}`, 'err')
+        return false
+      }
+    }
     try {
       await this.chartToolsReady
       if (this.destroyed || this.chart !== chart || !this.alerts) return false
