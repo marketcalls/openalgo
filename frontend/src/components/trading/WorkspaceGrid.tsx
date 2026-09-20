@@ -16,10 +16,16 @@ interface Props
   > {
   owner: PreparedChartGrid
   active: boolean
+  focusedPaneId?: string
 }
 
 /** Hidden panes retain their measured dimensions and identity during publication. */
-export function WorkspaceGrid({ owner, active, ...props }: Props) {
+export function WorkspaceGrid({
+  owner,
+  active,
+  focusedPaneId = owner.payload.activePaneId,
+  ...props
+}: Props) {
   const latest = useRef({ active, props })
   latest.current = { active, props }
   const visible = () => latest.current.active && !owner.disposed
@@ -66,7 +72,11 @@ export function WorkspaceGrid({ owner, active, ...props }: Props) {
           transitionLocked={locked}
           armed={props.armed && !locked}
           linkGroup={owner.linkGroup}
-          layoutPicker={index === 0 ? props.layoutPicker : undefined}
+          paneLabel={`Chart ${index + 1}`}
+          focused={active && id === focusedPaneId}
+          layoutPicker={
+            props.toolbarHost !== undefined || index === 0 ? props.layoutPicker : undefined
+          }
           onWorkspaceChange={() => {
             if (visible() && !locked) latest.current.props.onWorkspaceChange?.()
           }}

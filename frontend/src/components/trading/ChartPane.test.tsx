@@ -1,7 +1,7 @@
 import type { WorkspacePane } from 'openalgo-charts/workspace'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SymbolView, TerminalOptions } from '@/lib/trading/terminal'
-import { act, cleanup, fireEvent, render } from '@/test/test-utils'
+import { act, cleanup, fireEvent, render, within } from '@/test/test-utils'
 import { ChartPane } from './ChartPane'
 
 interface Owner {
@@ -86,6 +86,69 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('chart pane preparation ownership', () => {
+  it('shares one toolbar and routes actions without recreating either terminal', async () => {
+    const host = render(<div data-testid="shared-toolbar" />).getByTestId('shared-toolbar')
+    const panes = (active: string) => (
+      <>
+        <ChartPane {...props} paneId="left" toolbarHost={host} focused={active === 'left'} />
+        <ChartPane {...props} paneId="right" toolbarHost={host} focused={active === 'right'} />
+      </>
+    )
+    const view = render(panes('left'))
+    await act(async () => fake.owners.forEach((owner) => owner.resolve()))
+    expect(view.getAllByRole('toolbar', { name: 'Chart controls' })).toHaveLength(1)
+    fireEvent.click(within(host).getByRole('button', { name: 'Alerts', exact: true }))
+    expect(fake.owners[0].openAlerts).toHaveBeenCalledOnce()
+    expect(fake.owners[1].openAlerts).not.toHaveBeenCalled()
+    view.rerender(panes('right'))
+    fireEvent.click(within(host).getByRole('button', { name: 'Alerts', exact: true }))
+    expect(fake.owners[1].openAlerts).toHaveBeenCalledOnce()
+    expect(fake.owners).toHaveLength(2)
+    expect(fake.owners.every((owner) => owner.destroy.mock.calls.length === 0)).toBe(true)
+  })
+
+  it('keeps controls absent until their shared host is available', () => {
+    const view = render(<ChartPane {...props} toolbarHost={null} focused />)
+    expect(view.queryByRole('button', { name: 'Alerts', exact: true })).toBeNull()
+  })
+
+  it('selects the pane through keyboard focus and exposes the selected pane', async () => {
+    const focus = vi.fn()
+    const view = render(<ChartPane {...props} paneLabel="Chart 2" focused onFocusPane={focus} />)
+    await act(async () => fake.owners[0].resolve())
+    const chart = view.getByRole('region', { name: 'Chart 2', exact: true })
+    expect(chart).toHaveAttribute('tabindex', '0')
+    expect(chart).toHaveAttribute('data-chart-focused', 'true')
+    fireEvent.focus(chart)
+    expect(focus).toHaveBeenLastCalledWith(fake.owners[0], 'saved')
+  })
+
+  it('moves the controls inside their fullscreen chart and returns them on exit', async () => {
+    const host = render(<div data-testid="shared-toolbar" />).getByTestId('shared-toolbar')
+    const view = render(<ChartPane {...props} toolbarHost={host} focused paneLabel="Chart 1" />)
+    await act(async () => fake.owners[0].resolve())
+    const chart = view.getByRole('region', { name: 'Chart 1', exact: true })
+    expect(within(host).getByRole('button', { name: 'Alerts', exact: true })).toBeVisible()
+    try {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: chart })
+      fireEvent(document, new Event('fullscreenchange'))
+      expect(host).toBeEmptyDOMElement()
+      fireEvent.click(within(chart).getByRole('button', { name: 'Alerts', exact: true }))
+      expect(fake.owners[0].openAlerts).toHaveBeenCalledOnce()
+    } finally {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+      fireEvent(document, new Event('fullscreenchange'))
+    }
+    expect(within(host).getByRole('button', { name: 'Alerts', exact: true })).toBeVisible()
+    expect(fake.owners).toHaveLength(1)
+  })
+
+  it('keeps the external toolbar inert while its workspace is locked', () => {
+    const host = render(<div data-testid="shared-toolbar" />).getByTestId('shared-toolbar')
+    render(<ChartPane {...props} toolbarHost={host} focused transitionLocked />)
+    expect(within(host).getByRole('toolbar', { name: 'Chart controls' })).toHaveAttribute('inert')
+  })
+
   it('opens the alert source supplied by the chart context event', async () => {
     const view = render(<ChartPane {...props} />)
     const owner = fake.owners[0]

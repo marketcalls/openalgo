@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
+import { ChartToolbar } from './ChartToolbar'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorPickerDialog } from './IndicatorPickerDialog'
@@ -180,6 +181,11 @@ function ledClass(state: string): string {
 }
 
 interface Props {
+  /** Undefined keeps the local toolbar; null waits for the shared host. */
+  toolbarHost?: HTMLElement | null
+  focused?: boolean
+  paneLabel?: string
+  chartSelector?: React.ReactNode
   /** Stable pane id — namespaces the pane's persisted symbol/interval/type. */
   paneId: string
   apiKey: string
@@ -231,21 +237,19 @@ interface Props {
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
-  /**
-   * The grid layout picker, rendered next to this pane's Indicators button.
-   * It used to own a full-width row of its own that carried 134px of content
-   * across 1536px and cost 45px of chart height. It belongs to the page rather
-   * than to a pane, so the page passes it in, and passes it to one pane only.
-   */
+  /** Workspace controls displayed beside the selected chart's controls. */
   layoutPicker?: React.ReactNode
 }
 
 /**
- * One independent charting terminal in the grid: its own toolbar (symbol search,
- * timeframe, chart type, product, qty), its own openalgo-charts instance + feeds
- * (via `TradingTerminal`), and its own on-chart order/position lines.
+ * One independent terminal, retaining its controls, feeds and overlays when
+ * the selected chart's toolbar is displayed in the shared workspace row.
  */
 export function ChartPane({
+  toolbarHost,
+  focused = true,
+  paneLabel,
+  chartSelector,
   paneId,
   apiKey,
   wsUrl,
@@ -351,6 +355,9 @@ export function ChartPane({
    * scrolling strip can hang below it.
    */
   const [snapOpen, setSnapOpen] = useState(false)
+  useEffect(() => {
+    if (!focused) setSnapOpen(false)
+  }, [focused])
   const [snapAt, setSnapAt] = useState<{ top: number; right: number } | null>(null)
   const snapBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -658,9 +665,22 @@ export function ChartPane({
   return (
     <section
       ref={paneRef}
+      aria-label={paneLabel ?? `Chart ${paneId}`}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: Focusing this canvas region selects the chart for toolbar and keyboard actions.
+      tabIndex={0}
+      data-chart-pane={paneId}
+      data-chart-focused={focused}
       data-trading-dialog-open={paneDialogOpen ? 'true' : undefined}
       style={style}
-      className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+      className={cn(
+        'relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        toolbarHost !== undefined && focused && 'border-primary'
+      )}
+      onFocusCapture={(event) => {
+        if (transitionLocked || (event.target as Element).closest('[data-workspace-control]'))
+          return
+        onFocusPane?.(terminalRef.current, paneId)
+      }}
       onPointerUpCapture={() => {
         if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
       }}
@@ -672,316 +692,327 @@ export function ChartPane({
       }}
       onPointerDownCapture={(event) => {
         // Workspace controls keep the chart selected before the control opened.
-        if ((event.target as Element).closest('[data-workspace-control]')) return
+        if (transitionLocked || (event.target as Element).closest('[data-workspace-control]'))
+          return
         onFocusPane?.(terminalRef.current, paneId)
       }}
     >
-      {/* Per-pane control row. One line: the row scrolls rather than wrapping,
-          so the view actions stay beside the instrument controls instead of
-          dropping to a second row and eating chart height. */}
-      <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
-        {/* Symbol pill — opens the search modal for this pane */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0 gap-2 font-medium"
-          onClick={() => setSearchOpen(true)}
-          title="Search symbol"
+      <ChartToolbar host={toolbarHost} active={focused} fullscreen={fullscreen}>
+        <div
+          role="toolbar"
+          aria-label="Chart controls"
+          data-toolbar-pane={paneId}
+          inert={transitionLocked ? true : undefined}
+          className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5"
         >
-          <Search className="h-3.5 w-3.5 opacity-60" />
-          <span className="max-w-[10rem] truncate">{sym?.symbol ?? 'Search symbol'}</span>
-          {sym && (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {sym.exchange}
-            </span>
+          {!fullscreen && chartSelector && (
+            <div className="sticky left-0 z-10 shrink-0 bg-background pr-1">{chartSelector}</div>
           )}
-        </Button>
+          {/* Symbol pill — opens the search modal for this pane */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 gap-2 font-medium"
+            onClick={() => setSearchOpen(true)}
+            title="Search symbol"
+          >
+            <Search className="h-3.5 w-3.5 opacity-60" />
+            <span className="max-w-[10rem] truncate">{sym?.symbol ?? 'Search symbol'}</span>
+            {sym && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {sym.exchange}
+              </span>
+            )}
+          </Button>
 
-        {/* Timeframe */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 min-w-12 shrink-0 gap-1 font-medium">
-              {interval || '—'}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="w-64">
-            {intervalGroups.map((g) => (
-              <div key={g.label} className="px-1 pb-1">
-                <div className="px-1 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {g.label}
+          {/* Timeframe */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 min-w-12 shrink-0 gap-1 font-medium"
+              >
+                {interval || '—'}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent container={menuHost} align="start" className="w-64">
+              {intervalGroups.map((g) => (
+                <div key={g.label} className="px-1 pb-1">
+                  <div className="px-1 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    {g.label}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {g.items.map((iv) => (
+                      <DropdownMenuItem
+                        key={iv}
+                        onSelect={() => changeInterval(iv)}
+                        className={cn(
+                          'justify-center rounded border text-xs',
+                          iv === interval && 'border-primary bg-primary/10 text-primary'
+                        )}
+                      >
+                        {iv}
+                      </DropdownMenuItem>
+                    ))}
+                  </div>
                 </div>
-                <div className="grid grid-cols-4 gap-1">
-                  {g.items.map((iv) => (
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Chart type */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 gap-1"
+                title={chartTypeDef.label}
+              >
+                <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent container={menuHost} align="start" className="w-60">
+              {CHART_TYPE_GROUPS.map((group, gi) => (
+                <div key={group[0].value}>
+                  {gi > 0 && <DropdownMenuSeparator />}
+                  {group.map((d) => (
                     <DropdownMenuItem
-                      key={iv}
-                      onSelect={() => changeInterval(iv)}
-                      className={cn(
-                        'justify-center rounded border text-xs',
-                        iv === interval && 'border-primary bg-primary/10 text-primary'
-                      )}
+                      key={d.value}
+                      onSelect={() => changeChartType(d.value)}
+                      className={cn('gap-2 text-sm', d.value === chartType && 'text-primary')}
                     >
-                      {iv}
+                      <span className="h-4 w-4">{chartTypeIcon(d.iconKey)}</span>
+                      {d.label}
                     </DropdownMenuItem>
                   ))}
                 </div>
-              </div>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-        {/* Chart type */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0 gap-1"
-              title={chartTypeDef.label}
-            >
-              <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="w-60">
-            {CHART_TYPE_GROUPS.map((group, gi) => (
-              <div key={group[0].value}>
-                {gi > 0 && <DropdownMenuSeparator />}
-                {group.map((d) => (
-                  <DropdownMenuItem
-                    key={d.value}
-                    onSelect={() => changeChartType(d.value)}
-                    className={cn('gap-2 text-sm', d.value === chartType && 'text-primary')}
-                  >
-                    <span className="h-4 w-4">{chartTypeIcon(d.iconKey)}</span>
-                    {d.label}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Product. Always exactly two options (MIS|CNC for equity, MIS|NRML
+          {/* Product. Always exactly two options (MIS|CNC for equity, MIS|NRML
             for derivatives), so a segmented control spends double the width to
             show one you are not using — this toggles and names the other. */}
-        {sym && !sym.quoteOnly && sym.productOptions.length > 0 && (
-          <button
-            type="button"
-            onClick={() => changeProduct(nextProduct)}
-            title={`Product ${sym.product} — click for ${nextProduct}`}
-            aria-label={`Product ${sym.product}, click for ${nextProduct}`}
-            className="h-8 shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
-          >
-            {sym.product}
-          </button>
-        )}
+          {sym && !sym.quoteOnly && sym.productOptions.length > 0 && (
+            <button
+              type="button"
+              onClick={() => changeProduct(nextProduct)}
+              title={`Product ${sym.product} — click for ${nextProduct}`}
+              aria-label={`Product ${sym.product}, click for ${nextProduct}`}
+              className="h-8 shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              {sym.product}
+            </button>
+          )}
 
-        {/* Quantity */}
-        <div className="flex shrink-0 items-center gap-1">
-          <label
-            className="whitespace-nowrap text-[11px] text-muted-foreground"
-            htmlFor={`qty-${paneId}`}
-          >
-            {sym?.lots ? 'Lots' : 'Qty'}
-          </label>
-          <Input
-            id={`qty-${paneId}`}
-            type="number"
-            min={1}
-            value={qty}
-            onChange={(e) => changeQty(Number(e.target.value))}
-            className="h-8 w-16 text-sm"
-          />
-        </div>
+          {/* Quantity */}
+          <div className="flex shrink-0 items-center gap-1">
+            <label
+              className="whitespace-nowrap text-[11px] text-muted-foreground"
+              htmlFor={`qty-${paneId}`}
+            >
+              {sym?.lots ? 'Lots' : 'Qty'}
+            </label>
+            <Input
+              id={`qty-${paneId}`}
+              type="number"
+              min={1}
+              value={qty}
+              onChange={(e) => changeQty(Number(e.target.value))}
+              className="h-8 w-16 text-sm"
+            />
+          </div>
 
-        {/* Indicators. A dialog rather than a dropdown: 88 built-ins in a
+          {/* Indicators. A dialog rather than a dropdown: 88 built-ins in a
             264px column was a scroll race, with no way to jump to a category
             and no memory of what you reach for daily. */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0 gap-1"
-          title="Indicators"
-          onClick={() => {
-            setPickerOpen(true)
-            void openIndicators()
-          }}
-        >
-          <IndicatorIcon className="h-4 w-4" />
-          <span className="hidden sm:inline">Indicators</span>
-          {indicators.length > 0 && (
-            <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-              {indicators.length}
-            </span>
-          )}
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 gap-1"
+            title="Indicators"
+            onClick={() => {
+              setPickerOpen(true)
+              void openIndicators()
+            }}
+          >
+            <IndicatorIcon className="h-4 w-4" />
+            <span className="hidden sm:inline">Indicators</span>
+            {indicators.length > 0 && (
+              <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+                {indicators.length}
+              </span>
+            )}
+          </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0"
-          title="Alerts"
-          onClick={() => void terminalRef.current?.openAlerts()}
-        >
-          Alerts
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            title="Alerts"
+            onClick={() => void terminalRef.current?.openAlerts()}
+          >
+            Alerts
+          </Button>
 
-        {/* The layout picker sits here, immediately after Indicators, because
-            that is where a chart terminal puts it. It is page-level, so only
-            the first pane is given one. */}
-        {layoutPicker}
+          {/* Workspace controls share the selected chart's row. */}
+          {!fullscreen && layoutPicker}
 
-        {/* Replay. A toolbar action rather than a context-menu entry: it changes
+          {/* Replay. A toolbar action rather than a context-menu entry: it changes
             what the whole chart is showing, and the transport bar it opens has
             to be discoverable without a right-click. */}
-        <Button
-          variant="outline"
-          size="sm"
-          className={cn(
-            'h-8 shrink-0 gap-1',
-            (replay || picking || replayLoading) && 'border-primary text-primary'
-          )}
-          onClick={() => {
-            if (replay) setConfirmLeave(true)
-            else if (replayLoading) terminalRef.current?.stopReplay()
-            else if (picking) terminalRef.current?.cancelReplayPick()
-            else terminalRef.current?.startReplay()
-          }}
-          title={
-            replay
-              ? 'Leave replay'
-              : replayLoading
-                ? 'Cancel replay loading'
-                : picking
-                  ? 'Cancel bar selection'
-                  : 'Replay this session from a bar you pick'
-          }
-        >
-          <ReplayIcon className="h-4 w-4" />
-          <span className="hidden sm:inline">Replay</span>
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(
+              'h-8 shrink-0 gap-1',
+              (replay || picking || replayLoading) && 'border-primary text-primary'
+            )}
+            onClick={() => {
+              if (replay) setConfirmLeave(true)
+              else if (replayLoading) terminalRef.current?.stopReplay()
+              else if (picking) terminalRef.current?.cancelReplayPick()
+              else terminalRef.current?.startReplay()
+            }}
+            title={
+              replay
+                ? 'Leave replay'
+                : replayLoading
+                  ? 'Cancel replay loading'
+                  : picking
+                    ? 'Cancel bar selection'
+                    : 'Replay this session from a bar you pick'
+            }
+          >
+            <ReplayIcon className="h-4 w-4" />
+            <span className="hidden sm:inline">Replay</span>
+          </Button>
 
-        {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
+          {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
             here as well: the rail can be hidden, and these two are reached far
             more often than the tool that made the shape. Both stay mounted and
             go disabled rather than disappearing, so the toolbar does not reflow
             as you draw. The engine's history is drawing-only, so the labels say
             so -- a bare "Undo" next to a Replay button would imply it could
             take back an order. */}
-        <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={() => terminalRef.current?.undoDraw()}
-          disabled={!history.canUndo}
-          title="Undo drawing (Ctrl + Z)"
-          aria-label="Undo drawing"
-        >
-          <UndoIcon className="h-[17px] w-[17px]" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={() => terminalRef.current?.redoDraw()}
-          disabled={!history.canRedo}
-          title="Redo drawing (Ctrl + Shift + Z)"
-          aria-label="Redo drawing"
-        >
-          <UndoIcon className="h-[17px] w-[17px]" flip />
-        </Button>
-
-        {/* Right side: connection LED + actions */}
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {branding && (
-            <a
-              href={branding.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={branding.label}
-              className="inline-flex min-h-11 items-center whitespace-nowrap px-2 text-[11px] text-muted-foreground hover:text-foreground hover:underline sm:min-h-0 sm:px-0"
-            >
-              {branding.label}
-            </a>
-          )}
-          <span
-            className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
-            title={`WebSocket ${wsState}`}
-          />
-          {/* Full screen chart (additive) */}
+          <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
           <Button
             variant="ghost"
             size="icon"
-            className={cn('h-8 w-8', fullscreen && 'text-primary')}
-            onClick={toggleFullscreen}
-            title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen chart'}
-            aria-label="Toggle full screen chart"
+            className="h-8 w-8 shrink-0"
+            onClick={() => terminalRef.current?.undoDraw()}
+            disabled={!history.canUndo}
+            title="Undo drawing (Ctrl + Z)"
+            aria-label="Undo drawing"
           >
-            <FullscreenIcon className="h-[17px] w-[17px]" />
+            <UndoIcon className="h-[17px] w-[17px]" />
           </Button>
-          {/* Positioned, so the menu below anchors to the camera and not to
-              whatever ancestor happens to be relative. */}
-          <div className="relative">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={() => terminalRef.current?.redoDraw()}
+            disabled={!history.canRedo}
+            title="Redo drawing (Ctrl + Shift + Z)"
+            aria-label="Redo drawing"
+          >
+            <UndoIcon className="h-[17px] w-[17px]" flip />
+          </Button>
+
+          {/* Right side: connection LED + actions */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {branding && (
+              <a
+                href={branding.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={branding.label}
+                className="inline-flex min-h-11 items-center whitespace-nowrap px-2 text-[11px] text-muted-foreground hover:text-foreground hover:underline sm:min-h-0 sm:px-0"
+              >
+                {branding.label}
+              </a>
+            )}
+            <span
+              className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
+              title={`WebSocket ${wsState}`}
+            />
+            {/* Full screen chart (additive) */}
             <Button
               variant="ghost"
               size="icon"
-              className={cn('h-8 w-8', snapOpen && 'text-primary')}
-              ref={snapBtnRef}
-              onClick={(e) => {
-                // Shift skips the menu and saves, for anyone who only ever saves.
-                if (e.shiftKey) {
-                  void terminalRef.current?.screenshot()
-                  return
-                }
-                if (snapOpen) setSnapOpen(false)
-                else openSnapMenu()
-              }}
-              title="Chart snapshot"
-              aria-label="Chart snapshot"
+              className={cn('h-8 w-8', fullscreen && 'text-primary')}
+              onClick={toggleFullscreen}
+              title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen chart'}
+              aria-label="Toggle full screen chart"
             >
-              <CameraIcon className="h-[17px] w-[17px]" />
+              <FullscreenIcon className="h-[17px] w-[17px]" />
             </Button>
-            {snapOpen && (
-              <>
-                {/* Catches the click that dismisses, so the menu closes on any
+            {/* Positioned, so the menu below anchors to the camera and not to
+              whatever ancestor happens to be relative. */}
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn('h-8 w-8', snapOpen && 'text-primary')}
+                ref={snapBtnRef}
+                onClick={(e) => {
+                  // Shift skips the menu and saves, for anyone who only ever saves.
+                  if (e.shiftKey) {
+                    void terminalRef.current?.screenshot()
+                    return
+                  }
+                  if (snapOpen) setSnapOpen(false)
+                  else openSnapMenu()
+                }}
+                title="Chart snapshot"
+                aria-label="Chart snapshot"
+              >
+                <CameraIcon className="h-[17px] w-[17px]" />
+              </Button>
+              {snapOpen && (
+                <>
+                  {/* Catches the click that dismisses, so the menu closes on any
                   outside press without a document listener that would also
                   swallow the press that opened it. */}
-                <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
-                <div
-                  className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
-                  style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
-                >
-                  <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Chart snapshot
+                  <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
+                  <div
+                    className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
+                    style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
+                  >
+                    <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Chart snapshot
+                    </div>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                      onClick={() => {
+                        setSnapOpen(false)
+                        void terminalRef.current?.screenshot()
+                      }}
+                    >
+                      <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
+                      Download image
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                      onClick={() => {
+                        setSnapOpen(false)
+                        void terminalRef.current?.copyScreenshot()
+                      }}
+                    >
+                      <CopyIcon className="h-3.5 w-3.5 opacity-70" />
+                      Copy image
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                    onClick={() => {
-                      setSnapOpen(false)
-                      void terminalRef.current?.screenshot()
-                    }}
-                  >
-                    <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
-                    Download image
-                  </button>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                    onClick={() => {
-                      setSnapOpen(false)
-                      void terminalRef.current?.copyScreenshot()
-                    }}
-                  >
-                    <CopyIcon className="h-3.5 w-3.5 opacity-70" />
-                    Copy image
-                  </button>
-                </div>
-              </>
-            )}
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      </ChartToolbar>
 
       {/* Chart area */}
       <div className="relative min-h-0 flex-1 bg-card">

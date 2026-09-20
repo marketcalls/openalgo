@@ -184,6 +184,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * the panel does something sensible before any pane has been focused.
    */
   const [focusedPane, setFocusedPane] = useState('p0')
+  const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
   const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
   /**
@@ -199,7 +200,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const noteTerminal = useCallback((paneId: string, terminal: TradingTerminal | null) => {
     if (visibleGrid.current) return
     if (terminal) terminalsRef.current[paneId] = terminal
-    else delete terminalsRef.current[paneId]
+    else {
+      if (activeRef.current === terminalsRef.current[paneId]) activeRef.current = null
+      delete terminalsRef.current[paneId]
+    }
   }, [])
 
   const noteObjects = useCallback((paneId: string, objects: ChartObjects | null) => {
@@ -624,20 +628,26 @@ function TradingWorkspace({ account }: { account: string | null }) {
   }
   const changeLayout = (id: string) => {
     if (workspacePending.current) return
+    const next = LAYOUTS.find((item) => item.id === id)
+    if (!next) return
     if (!visibleGrid.current && !activeWorkspaceId) {
+      if (!next.cells.some((_, index) => `p${index}` === focusedPane)) {
+        focusPane(terminalsRef.current.p0 ?? null, 'p0')
+      }
       setLayoutId(id)
       setWorkspaceMessage('Unsaved')
       autosave.changed()
       return
     }
     try {
-      const next = LAYOUTS.find((item) => item.id === id)!
       const current = captureWorkspace()
       const panes = next.cells.map((_, index) => ({
         ...(current.panes[index] ?? current.panes[0]),
         id: `p${index}`,
       }))
-      const payload = capturePresetWorkspace(next, panes, 'p0', sync)
+      const focusedIndex = current.panes.findIndex((pane) => pane.id === focusedPane)
+      const nextFocus = focusedIndex >= 0 && focusedIndex < panes.length ? `p${focusedIndex}` : 'p0'
+      const payload = capturePresetWorkspace(next, panes, nextFocus, sync)
       void workspace
         .open(
           payload,
@@ -712,18 +722,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const activeLayoutId = workspace.current?.payload.layout.preset ?? layoutId
   const activeLayoutLabel = LAYOUTS.find((item) => item.id === activeLayoutId)?.label ?? 'Custom'
 
-  /**
-   * The layout picker, rendered beside the first pane's Indicators button.
-   *
-   * It used to sit in a full-width row of its own carrying 134px of content
-   * across 1536px, so 91 per cent of that row was empty and it cost 45px of
-   * chart height plus a border. It is a page-level control, so only the first
-   * pane gets it: repeating it per pane would say the layout is per-pane.
-   *
-   * Icon-only, and with no label naming the current preset. The preset is
-   * already legible from the grid itself, and the panes on screen say it
-   * louder than the word "Single" ever did.
-   */
+  /** Workspace controls share one row with the selected chart's controls. */
   const layoutPicker = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -855,6 +854,46 @@ function TradingWorkspace({ account }: { account: string | null }) {
     </label>
   )
 
+  const chartIds =
+    workspace.current?.geometry.panes.map((pane) => pane.id) ??
+    layout.cells.map((_, index) => `p${index}`)
+  const chartSelector = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0"
+          data-workspace-control
+          aria-label={`Selected chart: ${chartIds.indexOf(focusedPane) + 1}`}
+        >
+          Chart {chartIds.indexOf(focusedPane) + 1}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" data-workspace-control>
+        {chartIds.map((id, index) => (
+          <DropdownMenuItem
+            key={id}
+            onSelect={() => focusPane(terminalsRef.current[id] ?? null, id)}
+            className={cn(id === focusedPane && 'bg-primary/10 text-primary')}
+          >
+            Chart {index + 1}
+            {paneSymbols[id] ? `: ${paneSymbols[id]}` : ''}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+  const workspaceControls = (
+    <>
+      {layoutPicker}
+      {syncPicker}
+      {workspaceMenu}
+      <IndicatorTemplates key={account} {...workspaceCatalog} target={panelTarget} />
+      {armedControl}
+    </>
+  )
+
   return (
     <>
       {/* Full-bleed page: the nav must match the chart width, not
@@ -887,6 +926,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
             </p>
           )}
         </div>
+        <div ref={setToolbarHost} className="min-w-0 shrink-0" data-workspace-toolbar />
         <main className="flex min-h-0 flex-1" inert={workspace.pending ? true : undefined}>
           {showRail && apiKey && wsUrl && (
             <DrawingRail
@@ -934,6 +974,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       <ChartPane
                         key={`p${i}`}
                         paneId={`p${i}`}
+                        paneLabel={`Chart ${i + 1}`}
+                        toolbarHost={toolbarHost}
+                        focused={focusedPane === `p${i}`}
+                        chartSelector={chartSelector}
                         apiKey={apiKey}
                         wsUrl={wsUrl}
                         style={{ gridArea: cell }}
@@ -957,21 +1001,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         linkGroup={linkGroup}
                         armed={armed}
                         transitionLocked={workspace.pending}
-                        layoutPicker={
-                          i === 0 ? (
-                            <>
-                              {layoutPicker}
-                              {syncPicker}
-                              {workspaceMenu}
-                              <IndicatorTemplates
-                                key={account}
-                                {...workspaceCatalog}
-                                target={panelTarget}
-                              />
-                              {armedControl}
-                            </>
-                          ) : undefined
-                        }
+                        layoutPicker={workspaceControls}
                       />
                     ))}
                   </div>
@@ -981,6 +1011,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     key={owner.key}
                     owner={owner}
                     active={workspace.current === owner}
+                    toolbarHost={toolbarHost}
+                    focusedPaneId={focusedPane}
+                    chartSelector={chartSelector}
                     apiKey={apiKey}
                     wsUrl={wsUrl}
                     sharedTool={tool}
@@ -998,19 +1031,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       if (terminal) terminalsRef.current[id] = terminal
                       else delete terminalsRef.current[id]
                     }}
-                    layoutPicker={
-                      <>
-                        {layoutPicker}
-                        {syncPicker}
-                        {workspaceMenu}
-                        <IndicatorTemplates
-                          key={account}
-                          {...workspaceCatalog}
-                          target={panelTarget}
-                        />
-                        {armedControl}
-                      </>
-                    }
+                    layoutPicker={workspaceControls}
                   />
                 ))}
               </div>

@@ -34,6 +34,19 @@ says so and links to `/apikey`.
 The chart grid takes whatever the rails and panels leave. Only the right panel
 and the dock can be resized; the panes follow the layout preset you pick.
 
+One toolbar serves the whole grid. Click a chart, move keyboard focus to its
+chart region, or use the **Chart 1 / Chart 2** selector to choose the chart that
+the toolbar controls. The selected chart has a highlighted border. Its symbol,
+interval, chart type, studies, alerts, quantity and replay state remain
+independent when you select another chart. Enabled sync options still apply.
+
+Adding panes does not repeat the toolbar. Removing the selected pane selects a
+surviving chart, and a saved workspace restores its selected chart. In full
+screen, the selected chart's controls move inside that chart; grid controls
+return when you leave full screen. On narrow screens, scroll the toolbar
+horizontally to reach its remaining controls. The selected-chart selector stays
+visible as the controls scroll.
+
 ## Interval Sync and Volume
 
 In a multi-chart layout, open **Chart sync** and enable **Interval** to follow

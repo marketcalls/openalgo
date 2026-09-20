@@ -52,6 +52,23 @@ afterEach(() => {
 })
 
 describe('staged workspace grid', () => {
+  it('publishes controls only for the selected pane in the active grid', () => {
+    const owner = grid()
+    const host = document.createElement('div')
+    const props = { owner, apiKey: 'fixture', wsUrl: 'ws://fixture.invalid', toolbarHost: host }
+    const view = render(<WorkspaceGrid {...props} active={false} focusedPaneId="right" />)
+    expect(fake.props.get('right')).toMatchObject({ focused: false, toolbarHost: host })
+    expect(fake.props.get('left')).toMatchObject({ focused: false, toolbarHost: host })
+    view.rerender(<WorkspaceGrid {...props} active focusedPaneId="right" />)
+    expect(fake.props.get('right')).toMatchObject({ focused: true, paneLabel: 'Chart 2' })
+    expect(fake.props.get('left')).toMatchObject({ focused: false })
+    view.rerender(<WorkspaceGrid {...props} active focusedPaneId="left" />)
+    expect(fake.props.get('right')).toMatchObject({ focused: false })
+    expect(fake.props.get('left')).toMatchObject({ focused: true })
+    expect(fake.mounts).toHaveBeenCalledTimes(2)
+    owner.destroy()
+  })
+
   it('keeps staging measurable and inert, then publishes the same pane instances', () => {
     const owner = grid()
     const { container, rerender } = render(
