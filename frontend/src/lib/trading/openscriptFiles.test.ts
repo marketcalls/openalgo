@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { compileSource, kindOf, starterFor } from './openscriptFiles'
+import { compileSource, fileForScriptId, idForScript, kindOf, starterFor } from './openscriptFiles'
 
 const CLEAN = 'version 1\nstudy("Probe", overlay = true)\nplot(close, "C", aqua)\n'
 // `Close` is not a name this language defines: the spelling is `close`. The
@@ -154,5 +154,43 @@ describe('telling a study from a strategy', () => {
   it('the compile result carries the kind too', async () => {
     const result = await compileSource('s.oscript', starterFor('flip', 'strategy'))
     expect(result.kind).toBe('strategy')
+  })
+})
+
+describe('an indicator id and the script behind it', () => {
+  it('round-trips every name the panel will accept', () => {
+    // The pair is only useful if it is exact. A file the chart can name but
+    // cannot be turned back into is a braces button that opens nothing, and
+    // nothing anywhere would say why.
+    for (const stem of ['supertrend', 'my-study', 'my_study', 'v2.1', 'A1', '9lives']) {
+      const file = `${stem}.oscript`
+      expect(fileForScriptId(idForScript(file))).toBe(file)
+    }
+  })
+
+  it('has no answer for a built-in study', () => {
+    // The honest answer, and the one that makes the caller do nothing rather
+    // than reach for `supertrend.oscript` because a built-in happens to share
+    // the name.
+    expect(fileForScriptId('supertrend')).toBeNull()
+    expect(fileForScriptId('rsi')).toBeNull()
+    expect(fileForScriptId('')).toBeNull()
+    // A built-in whose id is longer than the prefix, which is the one that
+    // catches a reading that slices the prefix off without checking it was
+    // there: eleven characters in, `bollinger-bands` becomes a perfectly valid
+    // file name, and the panel would go looking for `ands.oscript`.
+    expect(fileForScriptId('bollinger-bands')).toBeNull()
+    expect(fileForScriptId('volume-profile')).toBeNull()
+  })
+
+  it('refuses an id whose name the panel would not accept', () => {
+    // The id arrives from the chart, which got it from a descriptor, which a
+    // host could have registered with anything at all. It reaches a URL, so a
+    // name the panel would reject is a name this must reject too rather than
+    // hand on and hope the server minds.
+    expect(fileForScriptId('openscript:../../etc/passwd')).toBeNull()
+    expect(fileForScriptId('openscript:a/b')).toBeNull()
+    expect(fileForScriptId('openscript:')).toBeNull()
+    expect(fileForScriptId('openscript:-leading-dash')).toBeNull()
   })
 })

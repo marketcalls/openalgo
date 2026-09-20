@@ -171,6 +171,7 @@ import {
   legendToneStyle,
   lotInfoText,
 } from './legend'
+import { fileForScriptId } from './openscriptFiles'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
 import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
 import {
@@ -320,6 +321,14 @@ export interface TerminalCallbacks {
    * canvas-only and ships no DOM, so the form is ours to render.
    */
   onIndicatorSettings?(req: IndicatorSettingsRequest): void
+  /**
+   * The braces button on an OpenScript study's legend row was clicked: show
+   * this file's source.
+   *
+   * Only fires for a study the trader wrote. A built-in has no file behind it,
+   * and the chart draws no button for one.
+   */
+  onOpenScriptSource?(file: string): void
   /** The current chart generation's shared object inventory. */
   onObjectsChange?(objects: ChartObjects | null): void
   /** Opens this pane's existing chart settings dialog. */
@@ -2106,6 +2115,14 @@ export class TradingTerminal {
     // ships no DOM, so it emits and the host renders the form.
     this.chart.on('indicatorSettings', (p) => {
       void this.emitIndicatorSettings((p as { instanceId: string }).instanceId)
+    })
+    // The braces beside the gear. The chart holds no code and no DOM, so it
+    // names the indicator and we turn that back into the file it was compiled
+    // from. An id that is not one of ours resolves to null and nothing opens,
+    // which is what a built-in study should do if a button ever reaches here.
+    this.chart.on('indicatorSource', (p) => {
+      const file = fileForScriptId(String((p as { indicatorId?: unknown }).indicatorId ?? ''))
+      if (file !== null) this.cb.onOpenScriptSource?.(file)
     })
     // The on-chart legend's x removes an indicator without going through this
     // class. Without this the toolbar list went stale, and worse, the tracked

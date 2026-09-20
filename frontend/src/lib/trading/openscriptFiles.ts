@@ -241,6 +241,9 @@ export async function compileSource(file: string, source: string): Promise<Compi
   }
 }
 
+/** The prefix that marks a chart indicator as one of the trader's own scripts. */
+const ID_PREFIX = 'openscript:'
+
 /**
  * The id a study is registered and saved under.
  *
@@ -252,7 +255,25 @@ export async function compileSource(file: string, source: string): Promise<Compi
  * collide with one of the chart's built-in ids.
  */
 export function idForScript(file: string): string {
-  return `openscript:${file.replace(/\.oscript$/, '')}`
+  return `${ID_PREFIX}${file.replace(/\.oscript$/, '')}`
+}
+
+/**
+ * The script an indicator id names, or null when the id is not one of ours.
+ *
+ * The exact inverse of `idForScript`, and it lives beside it so the pair cannot
+ * drift: the chart hands back an indicator id when somebody asks to see the
+ * code behind a study, and a second place that took the prefix apart by hand
+ * would keep working right up to the day the prefix changed.
+ *
+ * Null for a built-in study, which is the honest answer: the chart ships a
+ * hundred of them and none was written in a file anybody can open.
+ */
+export function fileForScriptId(indicatorId: string): string | null {
+  if (!indicatorId.startsWith(ID_PREFIX)) return null
+  const stem = indicatorId.slice(ID_PREFIX.length)
+  if (!NAME_PATTERN.test(stem)) return null
+  return `${stem}.oscript`
 }
 
 /**

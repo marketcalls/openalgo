@@ -230,6 +230,12 @@ interface Props {
   onTerminalChange?(paneId: string, terminal: TradingTerminal | null): void
   /** Reports the current chart generation's object inventory. */
   onObjectsChange?(paneId: string, objects: ChartObjects | null): void
+  /**
+   * The braces button on an OpenScript study's legend row was pressed: open
+   * this file's source. The page owns the panel that shows it, so the pane
+   * passes it straight up rather than rendering anything itself.
+   */
+  onOpenScriptSource?(file: string): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
@@ -276,6 +282,7 @@ export function ChartPane({
   onSymbolChange,
   onTerminalChange,
   onObjectsChange,
+  onOpenScriptSource,
   onDrawStats,
   linkGroup,
   armed = false,
@@ -312,6 +319,8 @@ export function ChartPane({
   terminalCbRef.current = onTerminalChange
   const objectsCbRef = useRef(onObjectsChange)
   objectsCbRef.current = onObjectsChange
+  const scriptSourceCbRef = useRef(onOpenScriptSource)
+  scriptSourceCbRef.current = onOpenScriptSource
   // The flag as it stands when the terminal boots; the effect below tracks it
   // from then on. Read through a ref so the boot effect does not re-run and
   // rebuild the terminal on every toggle.
@@ -461,6 +470,7 @@ export function ChartPane({
       onIndicatorSettings: (req) => current && setIndSettings(req),
       onChartSettings: (req) => current && setChartSettings(req),
       onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
+      onOpenScriptSource: (file) => current && scriptSourceCbRef.current?.(file),
       onDrawSelect: (sel) => current && setDrawSel(sel),
       // The legend readout is a second switch for the same thing as the context
       // menu row, so the menu label has to follow it.

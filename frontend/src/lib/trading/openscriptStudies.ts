@@ -133,7 +133,13 @@ export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
         id: idForScript(script.file),
         category: 'OpenScript',
       })
-      charts.registerIndicator(descriptor as never)
+      // `hasSource` puts a braces button on this study's legend row, which the
+      // chart turns into an `indicatorSource` event and the terminal turns back
+      // into this file. Set here rather than by the language's adapter: the
+      // adapter compiles a program and has no opinion about whether the host
+      // can show anybody a file, and this host can, because it is the one
+      // serving them.
+      charts.registerIndicator({ ...(descriptor as object), hasSource: true } as never)
       result.loaded.push(script.file)
     } catch (error) {
       // Forget the key so the next call tries again. A compile that failed

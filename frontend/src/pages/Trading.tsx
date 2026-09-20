@@ -179,6 +179,19 @@ function TradingWorkspace({ account }: { account: string | null }) {
     return isPanelId(saved) ? saved : null
   })
   /**
+   * A script the chart has asked to show the source of, or null.
+   *
+   * Set by the braces button on a study's legend row, cleared by the panel the
+   * moment it opens the file. It lives here rather than in the panel because
+   * the panel is unmounted while another one is up: the request has to survive
+   * long enough to bring the panel back.
+   */
+  const [scriptSource, setScriptSource] = useState<string | null>(null)
+  const showScriptSource = useCallback((file: string) => {
+    setScriptSource(file)
+    setPanel('scripts')
+  }, [])
+  /**
    * The bottom dock: which book is open under the grid, or null for the
    * collapsed strip. Page-level like the side panels, and for the same
    * reason: the books span every symbol, so they belong to no one pane.
@@ -1102,6 +1115,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         onObjectsChange={(id, objects) => {
                           if (!visibleGrid.current) noteObjects(id, objects)
                         }}
+                        onOpenScriptSource={showScriptSource}
                         onDrawStats={(value) => {
                           if (!visibleGrid.current) setStats(value)
                         }}
@@ -1137,6 +1151,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
                     onObjectsChange={noteObjects}
+                    onOpenScriptSource={showScriptSource}
                     onDrawStats={setStats}
                     onTerminalChange={(id, terminal) => {
                       if (visibleGrid.current !== owner) return
@@ -1219,6 +1234,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
                 void target.addIndicatorById(indicatorId)
                 return true
               }}
+              openFile={scriptSource}
+              onOpened={() => setScriptSource(null)}
             />
           )}
 

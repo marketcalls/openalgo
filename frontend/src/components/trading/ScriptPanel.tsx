@@ -119,9 +119,21 @@ interface Props {
    * nothing is the failure this panel keeps being caught by.
    */
   onAddToChart: (indicatorId: string) => boolean
+  /**
+   * A script to open as soon as the panel is up, from the braces button on a
+   * study's legend row.
+   *
+   * A request rather than a setting: the panel opens it once and calls
+   * `onOpened`, and from then on the trader is driving. Left as state the page
+   * held, clicking away to another script and back to this panel would drag you
+   * to the one the chart asked for weeks ago.
+   */
+  openFile?: string | null
+  /** Called once `openFile` has been acted on, so the page can clear it. */
+  onOpened?: () => void
 }
 
-export function ScriptPanel({ onAddToChart }: Props) {
+export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) {
   const [scripts, setScripts] = useState<StoredScript[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
@@ -247,6 +259,24 @@ export function ScriptPanel({ onAddToChart }: Props) {
       setBusy(false)
     }
   }, [])
+
+  /**
+   * Honour a script the chart asked for.
+   *
+   * Once per request, and it clears the request whether the read worked or
+   * not: `openScript` puts its own failure in the console, and leaving the
+   * request standing would retry it on every render of a panel that is already
+   * showing why it could not.
+   */
+  useEffect(() => {
+    if (openFile === null || openFile === undefined) return
+    // Not if it is already the one on screen. Re-reading would replace what
+    // the trader has typed with the last saved text, and losing an edit to a
+    // button that was supposed to show you the file is the worst way to find
+    // out this runs twice.
+    if (openFile !== open) void openScript(openFile)
+    onOpened?.()
+  }, [openFile, open, openScript, onOpened])
 
   const store = useCallback(async () => {
     if (open === null || busy) return
