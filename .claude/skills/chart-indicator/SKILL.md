@@ -59,6 +59,20 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.4.8: grab to pan, and a README rewritten.** Nothing an indicator
+  declares changed and no export was added or removed: the index below counts
+  the same 387 names it counted on 2.4.7. Pressing and holding the plot now
+  shows a grabbing hand and pans both axes, and mouse and pen panning stop the
+  moment the pointer is released, while touch keeps its flick. The default
+  covers both axes; a chart with a saved horizontal-only preference keeps it
+  until somebody changes it in the chart navigation settings.
+
+  The one thing worth knowing for a descriptor: **a clickable legend action
+  keeps its pointer cursor and stays usable across a repaint**, which is the
+  behaviour a `hasSource` braces button and a gear depend on. If a legend
+  action of yours stopped responding after a redraw on an older build, that is
+  what was fixed.
+
 - **2.4.7: an alert's line can be dragged.** Nothing an indicator declares
   changed. A price or study-threshold alert line is draggable by the trader, and
   a study threshold drags on its own plot's scale rather than the instrument's,
