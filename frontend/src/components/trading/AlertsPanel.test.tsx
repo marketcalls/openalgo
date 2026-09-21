@@ -18,12 +18,16 @@ const alert = (patch: Partial<Alert> = {}): Alert =>
     ...patch,
   }) as Alert
 
-function viewOf(alerts: Alert[]) {
+function viewOf(
+  alerts: Alert[],
+  availability: Record<string, { available: boolean; reason?: string }> = {}
+) {
   const controller = {
     list: vi.fn(() => alerts.map((one) => ({ ...one }))),
     remove: vi.fn(),
     enable: vi.fn(),
     disable: vi.fn(),
+    availability: vi.fn((id: string) => availability[id] ?? { available: true }),
   }
   return {
     view: {
@@ -168,7 +172,9 @@ describe('the alert list on the rail', () => {
     // in, so it names the gesture rather than describing what an alert is.
     const { view } = viewOf([])
     render(<AlertsPanel {...props} view={view} />)
-    expect(screen.getByText(/Right-click the chart at a price to set one there and then/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Right-click the chart at a price to set one there and then/)
+    ).toBeInTheDocument()
   })
 
   it('waits rather than claiming there are no alerts before a chart is ready', () => {
@@ -191,6 +197,49 @@ describe('the log of what has fired', () => {
     render(<AlertsPanel {...props} view={view} log={[fire(), fire({ key: 'a1-2' })]} />)
     const tab = screen.getByRole('tab', { name: /^Log/ })
     expect(within(tab).getByText('2')).toBeInTheDocument()
+  })
+
+  it('says why an alert that reads Active is not watching right now', async () => {
+    // Since charts 2.5.0 an alert stays visible on other timeframes but is
+    // evaluated only on the one it was made on. Without the reason the row
+    // reads Active on a chart where nothing can fire, which looks like a bug in
+    // the alert rather than a fact about the chart.
+    const { view } = viewOf([alert()], {
+      a1: { available: false, reason: 'Paused: created on 5m' },
+    })
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.getByText('Paused: created on 5m')).toBeInTheDocument()
+  })
+
+  it('says nothing extra about an alert that is watching', async () => {
+    // With a reason attached, because the engine may describe an alert it is
+    // still evaluating. `available` is the field that decides whether the
+    // trader needs telling; printing any reason it finds would put a warning
+    // on a row where nothing is wrong.
+    const { view } = viewOf([alert()], {
+      a1: { available: true, reason: 'Evaluating on 5m' },
+    })
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.queryByText('Evaluating on 5m')).not.toBeInTheDocument()
+  })
+
+  it('does not repeat itself on an alert that is already stopped', async () => {
+    // A stopped alert says so in its own state. A second line saying it is not
+    // watching reads as two different problems.
+    const { view } = viewOf([alert({ state: 'disabled' })], {
+      a1: { available: false, reason: 'Paused: created on 5m' },
+    })
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.queryByText('Paused: created on 5m')).not.toBeInTheDocument()
+  })
+
+  it('renders the list when the engine cannot answer about availability', async () => {
+    const { view } = viewOf([alert()])
+    ;(view.alerts as unknown as { availability: () => never }).availability = () => {
+      throw new Error('mid-teardown')
+    }
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.getByText('RELIANCE crossing up 1243.4')).toBeInTheDocument()
   })
 
   it('shows the newest firing first', async () => {

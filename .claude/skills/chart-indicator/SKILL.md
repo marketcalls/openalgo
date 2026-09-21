@@ -59,6 +59,22 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.5.0: tables that fit their text.** Nothing an indicator declares
+  changed and no export was added or removed: the index below counts the same
+  387 names it counted on 2.4.8.
+
+  The one thing worth knowing for a descriptor: **`ChartTableOptions.cellWidth`
+  accepts `'auto'`.** A column then measures itself from its widest cell, using
+  the font actually drawn, so a per-cell font override or a bold heading is
+  accounted for rather than guessed at. An empty automatic column keeps a 28 px
+  minimum, and percentage widths keep their measured proportions. Every cell
+  also clips its text now, so a long reading can no longer spill over the
+  column beside it, which is what made a wide value in one row look like a
+  value in the next.
+
+  `AlertController.hovered()` and `Chart.snapPrice(paneIndex, price)` also
+  arrived. Both are host APIs: an indicator never calls either.
+
 - **2.4.8: grab to pan, and a README rewritten.** Nothing an indicator
   declares changed and no export was added or removed: the index below counts
   the same 387 names it counted on 2.4.7. Pressing and holding the plot now

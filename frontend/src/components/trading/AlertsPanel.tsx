@@ -16,16 +16,7 @@
  * it to a server would promise a history the engine cannot keep.
  */
 
-import {
-  Bell,
-  Eraser,
-  Loader2,
-  MoreHorizontal,
-  Pause,
-  Play,
-  Settings2,
-  Trash2,
-} from 'lucide-react'
+import { Bell, Eraser, Loader2, MoreHorizontal, Pause, Play, Settings2, Trash2 } from 'lucide-react'
 import type { Alert } from 'openalgo-charts'
 import { useMemo, useState } from 'react'
 import {
@@ -230,6 +221,33 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
   // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   const alerts = useMemo(() => (view ? view.alerts.list() : []), [view, revision])
 
+  /**
+   * Why each alert that cannot fire right now cannot fire, keyed by id.
+   *
+   * The engine owns this judgement and the panel only reports it. Asked per
+   * alert rather than derived here, because the reasons are the engine's to
+   * know: a study that has not loaded, a drawing that was deleted, a timeframe
+   * that is not the one the alert was made on.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `revision`, as above
+  const paused = useMemo(() => {
+    const reasons: Record<string, string> = {}
+    if (!view) return reasons
+    for (const alert of alerts) {
+      // Only an alert that believes it is watching. A stopped or expired one
+      // already says why in its own state, and saying it twice reads as two
+      // different problems.
+      if (alert.state !== 'armed') continue
+      try {
+        const how = view.alerts.availability(alert.id)
+        if (!how.available && how.reason) reasons[alert.id] = how.reason
+      } catch {
+        // A controller mid-teardown is not a paused alert.
+      }
+    }
+    return reasons
+  }, [view, alerts, revision])
+
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const matched = needle
@@ -431,6 +449,19 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
                       {STATE_LABEL[alert.state]}
                     </span>
                   </div>
+                  {/*
+                    Why an alert that says Active is not watching right now.
+                    Since charts 2.5.0 an alert stays visible on other
+                    timeframes but is evaluated only on the one it was made on,
+                    so a row can read Active on a chart where nothing will fire.
+                    Without this the alert looks broken; with it, it says which
+                    timeframe to go back to.
+                  */}
+                  {paused[alert.id] && (
+                    <p className="mt-1 text-[10px] leading-4 text-amber-600 dark:text-amber-500">
+                      {paused[alert.id]}
+                    </p>
+                  )}
                 </div>
                 <RowAction
                   label={

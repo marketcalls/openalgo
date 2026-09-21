@@ -21,6 +21,8 @@ fix, live in [docs/releases](releases/).
 - Find an instrument whose name contains an operator character. The symbol search split its box on `-` to look up the second leg of an expression, so `BAJAJ-AUTO` searched for `AUTO` and typing the hyphen emptied the list. Both the whole box and the leg are searched now.
 - Round a dragged alert to the instrument's tick, and rename it after the price its line landed on when the name was one we wrote. An alert dropped where the axis read 1,260.55 used to store 1260.5486842105263.
 - Say "on" rather than "armed" on the One-Click toggle and the alert form.
+- Upgrade `/trading` to openalgo-charts 2.5.0. An alert set on one timeframe is now visible on the others for the same instrument, labelled with the interval it was made on, and evaluated only there; the rail says why a visible alert is not watching rather than leaving it reading Active on a chart where nothing will fire. A dragged alert snaps to the source scale's own tick, including a left or independent scale. Chart tables measure each column from its widest cell, and every cell clips its text, so a long reading no longer covers the column beside it.
+- Point at a drawing or an alert and press Delete or Backspace to remove it. The key removes one thing in a fixed order: a placement in progress is cancelled, then selected drawings, then the drawing under the pointer, and an alert last, because an alert's line spans the pane and would otherwise be deleted while you meant to delete a shape. A field or a dialog always keeps the key.
 
 ## [2.0.2.5] - 2026-09-14
 
