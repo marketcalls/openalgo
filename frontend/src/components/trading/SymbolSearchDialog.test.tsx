@@ -349,6 +349,95 @@ describe('an instrument whose name contains an operator character', () => {
     expect(picked[0]?.expression).not.toBe(true)
   })
 
+  it('loads it when the box carries its exchange too', async () => {
+    // The form this dialog writes back into the box itself, and the one the
+    // reported failure was in: a whole-box check that compared the bare name
+    // only, so `NSE:BAJAJ-AUTO` fell through and the click spliced again,
+    // leaving `BAJAJ-NSE:BAJAJ-AUTO` in the box with no way back.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'NSE:BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+    const row = [...document.querySelectorAll('[data-idx]')].find((n) =>
+      n.textContent?.includes('BAJAJ-AUTO')
+    )
+    await user.click(row as HTMLElement)
+    expect(picked.map((one) => one.symbol)).toEqual(['BAJAJ-AUTO'])
+  })
+
+  it('never appends to a box that already names an instrument', async () => {
+    // The state the report showed was unrecoverable: once anything had been
+    // spliced on, every later click spliced again. Clicking any row while the
+    // box names an instrument loads that row instead.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    const box = await focusedBox()
+    await user.type(box, 'BAJAJ-AUTO')
+    await waitForRow('AUTOAXLES')
+    const other = [...document.querySelectorAll('[data-idx]')].find((n) =>
+      n.textContent?.includes('AUTOAXLES')
+    )
+    await user.click(other as HTMLElement)
+    expect(picked.map((one) => one.symbol)).toEqual(['AUTOAXLES'])
+    expect(box.value).not.toContain('BAJAJ-NSE:')
+  })
+
+  it('quotes a hyphenated symbol spliced into a real expression', async () => {
+    // Unquoted, the chart's grammar reads `NSE:BAJAJ-AUTO` inside an expression
+    // as `NSE:BAJAJ` minus `AUTO`: two instruments that do not exist. Quoting
+    // is the grammar's own escape and keeps the exchange prefix, so
+    // `'NSE:BAJAJ-AUTO'/...` resolves exactly as written.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    render(
+      <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
+    )
+    const box = await focusedBox()
+    await user.type(box, 'BAJAJHLDNG/BAJAJ')
+    await waitForRow('BAJAJ-AUTO')
+    const row = [...document.querySelectorAll('[data-idx]')].find((n) =>
+      n.textContent?.includes('BAJAJ-AUTO')
+    )
+    await user.click(row as HTMLElement)
+    expect(box.value).toBe("BAJAJHLDNG/'NSE:BAJAJ-AUTO'")
+  })
+
+  it('leaves a symbol without a hyphen unquoted', async () => {
+    // Quoting everything would work and leave a trader reading
+    // `'NSE:AUTOAXLES'` and wondering whether they have to type the quotes.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    render(
+      <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
+    )
+    const box = await focusedBox()
+    await user.type(box, 'BAJAJHLDNG/AUTOA')
+    await waitForRow('AUTOAXLES')
+    const row = [...document.querySelectorAll('[data-idx]')].find((n) =>
+      n.textContent?.includes('AUTOAXLES')
+    )
+    await user.click(row as HTMLElement)
+    expect(box.value).toBe('BAJAJHLDNG/NSE:AUTOAXLES')
+  })
+
   it('still builds an expression when the box is not an instrument', async () => {
     // The capability the splitter exists for, and the one this fix must not
     // take away: a real expression still charts as a computed chart.
