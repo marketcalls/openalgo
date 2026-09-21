@@ -1,5 +1,6 @@
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
+import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
 
@@ -11,6 +12,7 @@ const AgentPanel = lazy(() =>
   import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
 )
 
+import { AlertsPanel } from '@/components/trading/AlertsPanel'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
@@ -21,12 +23,16 @@ import {
   writeDockTab,
 } from '@/components/trading/dock/dockState'
 import { TradingDock } from '@/components/trading/dock/TradingDock'
+import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
+import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
-import { Badge } from '@/components/ui/badge'
+import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
+import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
+import { WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -35,10 +41,29 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
+import { useChartWorkspaceCatalog } from '@/hooks/useChartWorkspaceCatalog'
+import { useWorkspaceAutosave } from '@/hooks/useWorkspaceAutosave'
+import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
-import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
+import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
+import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
+import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
+import type {
+  AlertFire,
+  AlertsView,
+  DrawStats,
+  SearchRow,
+  TradingTerminal,
+} from '@/lib/trading/terminal'
+import { capturePresetWorkspace } from '@/lib/trading/workspaceGrid'
+import {
+  WorkspaceReplayCoordinator,
+  type WorkspaceReplaySnapshot,
+} from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 const NO_DRAW: DrawStats = {
   count: 0,
@@ -60,6 +85,36 @@ const PANEL_KEY = 'oa-trading-panel'
  * Buy button live because storage was cleared or blocked.
  */
 const ARMED_KEY = 'oa-trading-armed'
+/**
+ * How many firings the session log keeps.
+ *
+ * A repeating alert on a one-minute chart left running through a session fires
+ * hundreds of times, and past the first screenful nobody is reading them: the
+ * cost is memory that is never given back. The oldest go first, because the
+ * question the log answers is what just happened.
+ */
+const ALERT_LOG_LIMIT = 200
+
+/**
+ * A stored firing as the panel renders one.
+ *
+ * Keyed on the row id rather than on the alert's, because one alert fires many
+ * times and each firing is its own row. The `log-` prefix keeps a stored row
+ * from ever colliding with a live one, which is keyed by alert and sequence.
+ */
+function loggedToFire(row: LoggedFire): AlertFire {
+  return {
+    key: `log-${row.id}`,
+    alertId: row.alertId,
+    title: row.title,
+    message: row.message,
+    symbol: row.symbol,
+    exchange: row.exchange,
+    ...(typeof row.price === 'number' ? { price: row.price } : {}),
+    firedAt: row.firedAt ?? 0,
+    delivered: row.delivered,
+  }
+}
 
 function readArmed(): boolean {
   try {
@@ -85,8 +140,9 @@ interface SyncState {
   crosshair: boolean
   viewport: boolean
   symbol: boolean
+  interval: boolean
 }
-const SYNC_DEFAULT: SyncState = { crosshair: true, viewport: true, symbol: false }
+const SYNC_DEFAULT: SyncState = { crosshair: true, viewport: true, symbol: false, interval: false }
 
 function readSync(): SyncState {
   try {
@@ -97,6 +153,7 @@ function readSync(): SyncState {
       crosshair: p.crosshair ?? SYNC_DEFAULT.crosshair,
       viewport: p.viewport ?? SYNC_DEFAULT.viewport,
       symbol: p.symbol ?? SYNC_DEFAULT.symbol,
+      interval: p.interval ?? SYNC_DEFAULT.interval,
     }
   } catch {
     return SYNC_DEFAULT
@@ -104,6 +161,21 @@ function readSync(): SyncState {
 }
 
 export default function Trading() {
+  const account = useAuthStore((state) =>
+    state.isAuthenticated ? (state.user?.username ?? null) : null
+  )
+  return <TradingWorkspace key={account ?? 'signed-out'} account={account} />
+}
+
+function TradingWorkspace({ account }: { account: string | null }) {
+  const workspaceCatalog = useChartWorkspaceCatalog(account)
+  const workspacePending = useRef(false)
+  const visibleGrid = useRef<PreparedChartGrid | null>(null)
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const savedWorkspaceSnapshot = useRef<WorkspacePayload | undefined>(undefined)
+  const [workspaceMessage, setWorkspaceMessage] = useState('Unsaved')
+  const [saveStamp, setSaveStamp] = useState(0)
+  const restoreAttempted = useRef(false)
   const [layoutId, setLayoutId] = useState(() => {
     const saved = localStorage.getItem(LAYOUT_KEY)
     return LAYOUTS.some((l) => l.id === saved) ? (saved as string) : 'single'
@@ -121,8 +193,7 @@ export default function Trading() {
    * rebuild, so changing a layout, theme or chart type does not quietly drop a
    * pane out of the group it still thinks it belongs to.
    */
-  const linkRef = useRef<LinkGroup | null>(null)
-  if (linkRef.current === null) linkRef.current = createLinkGroup(sync)
+  const [linkGroup, setLinkGroup] = useState<LinkGroup | null>(null)
 
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [wsUrl, setWsUrl] = useState<string | null>(null)
@@ -146,6 +217,19 @@ export default function Trading() {
     return isPanelId(saved) ? saved : null
   })
   /**
+   * A script the chart has asked to show the source of, or null.
+   *
+   * Set by the braces button on a study's legend row, cleared by the panel the
+   * moment it opens the file. It lives here rather than in the panel because
+   * the panel is unmounted while another one is up: the request has to survive
+   * long enough to bring the panel back.
+   */
+  const [scriptSource, setScriptSource] = useState<string | null>(null)
+  const showScriptSource = useCallback((file: string) => {
+    setScriptSource(file)
+    setPanel('scripts')
+  }, [])
+  /**
    * The bottom dock: which book is open under the grid, or null for the
    * collapsed strip. Page-level like the side panels, and for the same
    * reason: the books span every symbol, so they belong to no one pane.
@@ -157,8 +241,29 @@ export default function Trading() {
    * the panel does something sensible before any pane has been focused.
    */
   const [focusedPane, setFocusedPane] = useState('p0')
+  const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
   const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
+  const [paneAlerts, setPaneAlerts] = useState<Record<string, AlertsView>>({})
+  /**
+   * Every alert that has fired, oldest first.
+   *
+   * Read back from the server on load and added to as firings happen. Alerts
+   * are still evaluated by the chart that is open, so nothing fires because of
+   * this list; what the server keeps is the history, which is the part a closed
+   * tab used to take with it. Capped in the page as well as on the server,
+   * because a repeating alert on a one-minute chart left running all day is a
+   * list nobody reads and memory nobody gets back.
+   */
+  const [alertLog, setAlertLog] = useState<AlertFire[]>([])
+  /**
+   * Bumped whenever an alert changes.
+   *
+   * The controller is mutable and its `list()` hands back a copy, so nothing in
+   * React knows that a drag, a Delete key or a firing has made the rendered
+   * list stale. This is what says so.
+   */
+  const [alertRevision, setAlertRevision] = useState(0)
   /**
    * Every live pane's terminal, keyed by pane id.
    *
@@ -168,10 +273,149 @@ export default function Trading() {
    * builds, so the panels work from the first paint.
    */
   const terminalsRef = useRef<Record<string, TradingTerminal | null>>({})
+  const layoutIdRef = useRef(layoutId)
+  layoutIdRef.current = layoutId
+  const replayCoordinator = useRef<WorkspaceReplayCoordinator | null>(null)
+  const [replaySnapshot, setReplaySnapshot] = useState<WorkspaceReplaySnapshot>({
+    phase: 'idle',
+    scope: 'focused',
+    ownerId: null,
+    state: null,
+  })
+  const replaySnapshotRef = useRef(replaySnapshot)
+  const [replayError, setReplayError] = useState<string | null>(null)
+  const [confirmReplayExit, setConfirmReplayExit] = useState(false)
+  const replayPaneIds = useCallback(
+    () =>
+      visibleGrid.current
+        ? visibleGrid.current.payload.panes.map((pane) => pane.id)
+        : (LAYOUTS.find((item) => item.id === layoutIdRef.current) ?? LAYOUTS[0]).cells.map(
+            (_, index) => `p${index}`
+          ),
+    []
+  )
+  const updateReplayMembers = useCallback(() => {
+    replayCoordinator.current?.setMembers(
+      replayPaneIds().flatMap((id) => {
+        const terminal = terminalsRef.current[id]
+        return terminal ? [{ id, terminal }] : []
+      })
+    )
+  }, [replayPaneIds])
+  useEffect(() => {
+    let current = true
+    const coordinator = new WorkspaceReplayCoordinator({
+      onChange: (snapshot) => {
+        replaySnapshotRef.current = snapshot
+        if (current) {
+          setReplaySnapshot(snapshot)
+          if (snapshot.phase !== 'active') setConfirmReplayExit(false)
+        }
+      },
+      onError: (error) => {
+        if (current)
+          setReplayError(error instanceof Error ? error.message : 'Unable to replay this workspace')
+      },
+    })
+    replayCoordinator.current = coordinator
+    updateReplayMembers()
+    return () => {
+      current = false
+      coordinator.destroy()
+      if (replayCoordinator.current === coordinator) replayCoordinator.current = null
+    }
+  }, [updateReplayMembers])
+  const stopWorkspaceReplay = useCallback(() => {
+    setConfirmReplayExit(false)
+    replayCoordinator.current?.stop()
+  }, [])
+  const requestReplayExit = useCallback(() => {
+    if (replaySnapshotRef.current.phase === 'active') setConfirmReplayExit(true)
+    else stopWorkspaceReplay()
+  }, [stopWorkspaceReplay])
+  const startWorkspaceReplay = useCallback(
+    (paneId: string) => {
+      if (workspacePending.current) return
+      setReplayError(null)
+      const coordinator = replayCoordinator.current
+      if (!coordinator) return
+      if (coordinator.state().phase !== 'idle') requestReplayExit()
+      else {
+        if (replayPaneIds().some((id) => !terminalsRef.current[id])) {
+          setReplayError('Every visible chart must be ready before replay')
+          return
+        }
+        updateReplayMembers()
+        coordinator.start(paneId)
+      }
+    },
+    [replayPaneIds, requestReplayExit, updateReplayMembers]
+  )
 
-  const noteTerminal = useCallback((paneId: string, terminal: TradingTerminal | null) => {
-    if (terminal) terminalsRef.current[paneId] = terminal
-    else delete terminalsRef.current[paneId]
+  const noteTerminal = useCallback(
+    (paneId: string, terminal: TradingTerminal | null) => {
+      if (visibleGrid.current) return
+      if (terminal) terminalsRef.current[paneId] = terminal
+      else {
+        if (activeRef.current === terminalsRef.current[paneId]) activeRef.current = null
+        delete terminalsRef.current[paneId]
+      }
+      updateReplayMembers()
+    },
+    [updateReplayMembers]
+  )
+
+  const noteAlerts = useCallback((paneId: string, view: AlertsView | null) => {
+    setPaneAlerts((previous) => {
+      if (view) {
+        if (previous[paneId] === view) return previous
+        return { ...previous, [paneId]: view }
+      }
+      if (!(paneId in previous)) return previous
+      const next = { ...previous }
+      delete next[paneId]
+      return next
+    })
+    setAlertRevision((n) => n + 1)
+  }, [])
+
+  const noteAlertFired = useCallback((fire: AlertFire) => {
+    setAlertLog((previous) =>
+      previous.length < ALERT_LOG_LIMIT
+        ? [...previous, fire]
+        : [...previous.slice(previous.length - ALERT_LOG_LIMIT + 1), fire]
+    )
+  }, [])
+
+  /**
+   * The history from before this tab was opened.
+   *
+   * Once, on load. Not on every panel open: the rows a trader is watching for
+   * arrive live through `noteAlertFired`, so refetching would only replace a
+   * list that is already correct, and it would do it while they are reading it.
+   */
+  useEffect(() => {
+    let cancelled = false
+    void fetchLog().then((fires) => {
+      if (cancelled) return
+      // The server answers newest first and this list is oldest first, which is
+      // what the panel reverses for display.
+      setAlertLog((live) => [...fires.map(loggedToFire).reverse(), ...live])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const clearAlertLog = useCallback(() => {
+    // Emptied here first: the button has to answer immediately, and the rows
+    // are a log rather than anything a decision rests on.
+    setAlertLog([])
+    void clearLog().then((cleared) => {
+      if (!cleared) {
+        showToast.error('The log could not be cleared. It will be back on the next reload.')
+      }
+    })
   }, [])
 
   const noteObjects = useCallback((paneId: string, objects: ChartObjects | null) => {
@@ -190,15 +434,22 @@ export default function Trading() {
   /** The pane a panel acts on: the focused one, else any pane that is up. */
   const panelTarget = useCallback(
     () =>
-      terminalsRef.current[focusedPane] ??
-      activeRef.current ??
-      Object.values(terminalsRef.current)[0] ??
-      null,
+      workspacePending.current
+        ? null
+        : (terminalsRef.current[focusedPane] ??
+          activeRef.current ??
+          Object.values(terminalsRef.current)[0] ??
+          null),
     [focusedPane]
   )
 
   const focusPane = useCallback((t: TradingTerminal | null, paneId?: string) => {
+    if (workspacePending.current) return
     activeRef.current = t
+    if (visibleGrid.current && t) {
+      setMagnet(t.drawStats().magnet)
+      setStay(t.drawStats().stay)
+    }
     if (paneId) setFocusedPane(paneId)
     if (t) setStats(t.drawStats())
   }, [])
@@ -216,9 +467,10 @@ export default function Trading() {
    */
   const sendToFocusedPane = useCallback(
     (row: SearchRow) => {
+      stopWorkspaceReplay()
       void panelTarget()?.loadSymbol(row)
     },
-    [panelTarget]
+    [panelTarget, stopWorkspaceReplay]
   )
 
   /**
@@ -231,8 +483,16 @@ export default function Trading() {
    */
   const tradingLocked = useCallback(
     () =>
+      workspacePending.current ||
+      replaySnapshotRef.current.phase !== 'idle' ||
       Object.values(terminalsRef.current).some(
-        (t) => t !== null && (t.replayActive() || t.replayPickingBar())
+        (t) =>
+          t !== null &&
+          (t.replayActive() ||
+            t.replayPickingBar() ||
+            t.replayLoadingBars() ||
+            t.dataUnavailable() ||
+            t.alertDialogOpen())
       ),
     []
   )
@@ -257,9 +517,10 @@ export default function Trading() {
 
   const applyChartCommands = useCallback(
     (commands: AgentChartCommand[]) => {
+      stopWorkspaceReplay()
       void panelTarget()?.applyChartCommands(commands)
     },
-    [panelTarget]
+    [panelTarget, stopWorkspaceReplay]
   )
 
   /**
@@ -273,10 +534,40 @@ export default function Trading() {
     () => panelTarget()?.snapshotPng() ?? Promise.resolve(null),
     [panelTarget]
   )
+  // The same rule the objects panel follows: the focused pane when it has
+  // alerts, else whichever pane does, so the panel is useful before the trader
+  // has clicked into a chart.
+  const alertsPaneId = paneAlerts[focusedPane]
+    ? focusedPane
+    : (Object.keys(paneAlerts)[0] ?? focusedPane)
+  const alertsPaneNumber = visibleGrid.current
+    ? visibleGrid.current.payload.panes.findIndex((pane) => pane.id === alertsPaneId) + 1
+    : Number(alertsPaneId.slice(1)) + 1
+  const alertsPaneLabel = `Pane ${alertsPaneNumber}${
+    paneSymbols[alertsPaneId] ? ` · ${paneSymbols[alertsPaneId]}` : ''
+  }`
+  /**
+   * Open the alert editor, on a new alert or on one already in the list.
+   *
+   * The editor is a dialog the pane owns, because it needs the instrument's
+   * tick and the drawing tier as they are at the moment it opens. The page asks
+   * for it rather than rendering it, which is why this goes through the
+   * terminal instead of setting state here.
+   */
+  const openAlertEditor = useCallback(
+    (alertId?: string) => {
+      void panelTarget()?.openAlerts(undefined, alertId)
+    },
+    [panelTarget]
+  )
+
   const objectsPaneId = paneObjects[focusedPane]
     ? focusedPane
     : (Object.keys(paneObjects)[0] ?? focusedPane)
-  const objectsPaneLabel = `Pane ${Number(objectsPaneId.slice(1)) + 1}${
+  const objectsPaneNumber = visibleGrid.current
+    ? visibleGrid.current.payload.panes.findIndex((pane) => pane.id === objectsPaneId) + 1
+    : Number(objectsPaneId.slice(1)) + 1
+  const objectsPaneLabel = `Pane ${objectsPaneNumber}${
     paneSymbols[objectsPaneId] ? ` · ${paneSymbols[objectsPaneId]}` : ''
   }`
   const railStats: DrawStats = { ...stats, tool, magnet, stay }
@@ -287,6 +578,7 @@ export default function Trading() {
    * tier, so the terminal -- not this page and not the rail -- can answer.
    */
   const onDrawKey = useCallback((e: KeyboardEvent) => {
+    if (workspacePending.current) return false
     const t = activeRef.current
     if (!t || !t.handleDrawKey(e)) return false
     setTool(t.drawStats().tool)
@@ -295,6 +587,7 @@ export default function Trading() {
   }, [])
 
   const act = (fn: (t: TradingTerminal) => void) => {
+    if (workspacePending.current) return
     const t = activeRef.current
     if (!t) return
     fn(t)
@@ -386,12 +679,15 @@ export default function Trading() {
     // setOptions, not a rebuild: the engine clears the linked crosshairs when
     // that switch goes off and converges the group on its agreed symbol when
     // the symbol switch comes on, neither of which a fresh group would do.
-    linkRef.current?.setOptions(sync)
-  }, [sync])
+    linkGroup?.setOptions(sync)
+    visibleGrid.current?.linkGroup.setOptions(sync)
+  }, [sync, linkGroup])
 
   useEffect(() => {
-    const group = linkRef.current
-    return () => group?.destroy()
+    // Setup owns the group so an effect restart cannot reuse a destroyed one.
+    const group = createLinkGroup()
+    setLinkGroup(group)
+    return () => group.destroy()
   }, [])
 
   // Fetch the API key + WS URL once; every pane shares them.
@@ -421,18 +717,268 @@ export default function Trading() {
 
   const layout = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0]
 
-  /**
-   * The layout picker, rendered beside the first pane's Indicators button.
-   *
-   * It used to sit in a full-width row of its own carrying 134px of content
-   * across 1536px, so 91 per cent of that row was empty and it cost 45px of
-   * chart height plus a border. It is a page-level control, so only the first
-   * pane gets it: repeating it per pane would say the layout is per-pane.
-   *
-   * Icon-only, and with no label naming the current preset. The preset is
-   * already legible from the grid itself, and the panes on screen say it
-   * louder than the word "Single" ever did.
-   */
+  const lockWorkspace = useCallback(
+    (pending: boolean) => {
+      if (pending) stopWorkspaceReplay()
+      workspacePending.current = pending
+      for (const terminal of Object.values(terminalsRef.current)) {
+        terminal?.setWorkspaceTransitionLocked(pending)
+        if (pending) terminal?.setArmed(false)
+      }
+    },
+    [stopWorkspaceReplay]
+  )
+  const publishWorkspace = useCallback(
+    (grid: PreparedChartGrid) => {
+      visibleGrid.current = grid
+      terminalsRef.current = Object.fromEntries(grid.terminals)
+      updateReplayMembers()
+      setPaneSymbols(Object.fromEntries(grid.symbols))
+      setPaneObjects(Object.fromEntries(grid.objects))
+      const focused = grid.terminals.get(grid.payload.activePaneId) ?? null
+      activeRef.current = focused
+      setFocusedPane(grid.payload.activePaneId)
+      setSync(grid.payload.sync)
+      setArmed(false)
+      setTool(null)
+      const draw = focused?.drawStats() ?? NO_DRAW
+      setStats(draw)
+      setMagnet(draw.magnet)
+      setStay(draw.stay)
+    },
+    [updateReplayMembers]
+  )
+  const workspace = useWorkspaceGridTransition(account, publishWorkspace, lockWorkspace)
+
+  const bindAlertRuntime = (
+    terminals: Iterable<[string, TradingTerminal | null]>,
+    workspaceId: string | null,
+    mode: 'restore' | 'seed'
+  ) => {
+    for (const [paneId, terminal] of terminals) {
+      terminal?.setAlertRuntimeScope(
+        account && workspaceId ? alertRuntimeKey(account, workspaceId, paneId) : null,
+        mode
+      )
+    }
+  }
+
+  const captureWorkspace = () => {
+    if (workspacePending.current) throw new Error('Wait for the workspace to finish loading')
+    if (replaySnapshotRef.current.phase !== 'idle')
+      throw new Error('Stop replay before saving the workspace')
+    if (visibleGrid.current) return visibleGrid.current.capture(focusedPane, sync)
+    const panes = layout.cells.map((_, index) => {
+      const id = `p${index}`,
+        terminal = terminalsRef.current[id]
+      if (!terminal) throw new Error('Every chart must be ready before saving')
+      return terminal.captureWorkspacePane(id)
+    })
+    return capturePresetWorkspace(
+      layout,
+      panes,
+      panes.some((pane) => pane.id === focusedPane) ? focusedPane : panes[0].id,
+      sync
+    )
+  }
+  const autosave = useWorkspaceAutosave({
+    identity: activeWorkspaceId ? `${account}:${activeWorkspaceId}` : null,
+    enabled: workspaceCatalog.catalog?.autosave === true,
+    paused: workspace.pending || replaySnapshot.phase !== 'idle',
+    isPaused: () => workspacePending.current || replaySnapshotRef.current.phase !== 'idle',
+    capture: captureWorkspace,
+    save: async (payload) => {
+      if (!activeWorkspaceId) throw new Error('Save this workspace with a name first')
+      await workspaceCatalog.run((repository) =>
+        repository.saveWorkspace(activeWorkspaceId, payload)
+      )
+    },
+  })
+  useEffect(() => {
+    if (activeWorkspaceId && saveStamp > 0) {
+      autosave.markSaved(savedWorkspaceSnapshot.current)
+      savedWorkspaceSnapshot.current = undefined
+    }
+  }, [activeWorkspaceId, saveStamp, autosave.markSaved])
+  useEffect(() => {
+    if (workspace.pending) setArmed(false)
+  }, [workspace.pending])
+  const openWorkspace = async (document: WorkspaceDocument) => {
+    const revision = workspaceCatalog.catalog?.revision
+    await workspace.open(
+      document,
+      (signal) =>
+        workspaceCatalog.run((repository) =>
+          repository.openWorkspace(document.id, { signal, expectedRevision: revision })
+        ),
+      (grid) => bindAlertRuntime(grid.terminals, document.id, 'restore')
+    )
+    setActiveWorkspaceId(document.id)
+    setWorkspaceMessage('Saved')
+    setSaveStamp((value) => value + 1)
+  }
+  const saveWorkspaceAs = async (name: string) => {
+    const payload = captureWorkspace()
+    const document = await workspaceCatalog.run(async (repository) => {
+      const saved = await repository.createWorkspace(name, payload)
+      await repository.openWorkspace(saved.id)
+      return saved
+    })
+    savedWorkspaceSnapshot.current = payload
+    bindAlertRuntime(Object.entries(terminalsRef.current), document.id, 'seed')
+    setActiveWorkspaceId(document.id)
+    setWorkspaceMessage('Saved')
+    setSaveStamp((value) => value + 1)
+    return document
+  }
+  const createWorkspace = async (name: string) => {
+    const payload = capturePresetWorkspace(
+      LAYOUTS[0],
+      [
+        {
+          id: 'p0',
+          symbol: 'BHEL',
+          exchange: 'NSE',
+          interval: '5m',
+          chartType: 'candlestick',
+          chart: { version: 1 },
+          settings: {},
+          volume: true,
+          magnet: 'off',
+          stay: false,
+          comparisons: [],
+          comparisonMode: 'price',
+        },
+      ],
+      'p0',
+      SYNC_DEFAULT
+    )
+    return prepareNewWorkspace(payload, (repository) => repository.createWorkspace(name, payload))
+  }
+  const prepareNewWorkspace = async (
+    payload: WorkspacePayload,
+    create: Parameters<typeof workspaceCatalog.run<WorkspaceDocument>>[0]
+  ) => {
+    let saved: WorkspaceDocument | undefined
+    await workspace.open(
+      payload,
+      (signal) =>
+        workspaceCatalog.run(async (repository) => {
+          signal.throwIfAborted()
+          saved = await create(repository)
+          signal.throwIfAborted()
+          await repository.openWorkspace(saved.id, { signal })
+        }),
+      (grid) => {
+        if (saved) bindAlertRuntime(grid.terminals, saved.id, 'seed')
+      }
+    )
+    if (!saved) throw new Error('Workspace was not saved')
+    setActiveWorkspaceId(saved.id)
+    setWorkspaceMessage('Saved')
+    setSaveStamp((value) => value + 1)
+    return saved
+  }
+  const changeLayout = (id: string) => {
+    if (workspacePending.current) return
+    const next = LAYOUTS.find((item) => item.id === id)
+    if (!next) return
+    stopWorkspaceReplay()
+    if (!visibleGrid.current && !activeWorkspaceId) {
+      if (!next.cells.some((_, index) => `p${index}` === focusedPane)) {
+        focusPane(terminalsRef.current.p0 ?? null, 'p0')
+      }
+      setLayoutId(id)
+      setWorkspaceMessage('Unsaved')
+      autosave.changed()
+      return
+    }
+    try {
+      const current = captureWorkspace()
+      const panes = next.cells.map((_, index) => ({
+        ...(current.panes[index] ?? current.panes[0]),
+        id: `p${index}`,
+      }))
+      const focusedIndex = current.panes.findIndex((pane) => pane.id === focusedPane)
+      const nextFocus = focusedIndex >= 0 && focusedIndex < panes.length ? `p${focusedIndex}` : 'p0'
+      const payload = capturePresetWorkspace(next, panes, nextFocus, sync)
+      void workspace
+        .open(
+          payload,
+          async () => {},
+          (grid) => bindAlertRuntime(grid.terminals, activeWorkspaceId, 'seed')
+        )
+        .then(() => {
+          setLayoutId(id)
+          setWorkspaceMessage('Unsaved')
+          autosave.changed()
+        })
+        .catch(() => {})
+    } catch (error) {
+      setWorkspaceMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+  useEffect(() => {
+    if (
+      restoreAttempted.current ||
+      workspaceCatalog.loading ||
+      !workspaceCatalog.catalog ||
+      !apiKey ||
+      !wsUrl
+    )
+      return
+    restoreAttempted.current = true
+    const document = workspaceCatalog.catalog.workspaces.find(
+      (item) => item.id === workspaceCatalog.catalog?.activeWorkspaceId
+    )
+    if (document) void openWorkspace(document).catch(() => {})
+  })
+  const workspaceMenu = (
+    <WorkspaceMenu
+      {...workspaceCatalog}
+      activeId={activeWorkspaceId}
+      transitionPending={workspace.pending}
+      cancelOpening={workspace.cancel}
+      status={autosave.status}
+      error={autosave.error || workspaceCatalog.error}
+      saveAs={saveWorkspaceAs}
+      create={createWorkspace}
+      openWorkspace={openWorkspace}
+      importWorkspace={(document) =>
+        prepareNewWorkspace(document, async (repository) => {
+          const saved = await repository.importDocument(document)
+          if (saved.kind !== 'workspace') throw new Error('Expected a chart workspace')
+          return saved
+        })
+      }
+      save={async () => {
+        if (!activeWorkspaceId) throw new Error('Save this workspace with a name first')
+        if (replaySnapshotRef.current.phase !== 'idle')
+          throw new Error('Stop replay before saving the workspace')
+        autosave.changed()
+        await autosave.flush()
+      }}
+      onRemoved={(id) => {
+        if (activeWorkspaceId === id) {
+          bindAlertRuntime(Object.entries(terminalsRef.current), null, 'seed')
+          setActiveWorkspaceId(null)
+          setWorkspaceMessage('Unsaved')
+        }
+        if (account) {
+          try {
+            removeWorkspaceAlertRuntime(localStorage, account, id)
+          } catch {
+            setWorkspaceMessage('Workspace removed, but its alert history could not be cleared')
+          }
+        }
+      }}
+    />
+  )
+  const paneCount = workspace.current?.payload.panes.length ?? layout.cells.length
+  const activeLayoutId = workspace.current?.payload.layout.preset ?? layoutId
+  const activeLayoutLabel = LAYOUTS.find((item) => item.id === activeLayoutId)?.label ?? 'Custom'
+
+  /** Workspace controls share one row with the selected chart's controls. */
   const layoutPicker = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -440,8 +986,8 @@ export default function Trading() {
           variant="outline"
           size="icon"
           className="h-8 w-8 shrink-0"
-          title={`Layout: ${layout.label}`}
-          aria-label={`Chart layout: ${layout.label}`}
+          title={`Layout: ${activeLayoutLabel}`}
+          aria-label={`Chart layout: ${activeLayoutLabel}`}
         >
           <LayoutGrid className="h-4 w-4" />
         </Button>
@@ -451,7 +997,7 @@ export default function Trading() {
           {LAYOUTS.map((l) => (
             <DropdownMenuItem
               key={l.id}
-              onSelect={() => setLayoutId(l.id)}
+              onSelect={() => changeLayout(l.id)}
               title={l.label}
               className={cn(
                 'flex aspect-square flex-col items-center justify-center gap-1 rounded border',
@@ -479,17 +1025,17 @@ export default function Trading() {
    * sync with, so an inviting control there would promise something it cannot
    * do; disabled with its state still readable is the honest version.
    */
-  const syncOn = sync.crosshair || sync.viewport || sync.symbol
+  const syncOn = sync.crosshair || sync.viewport || sync.symbol || sync.interval
   const syncPicker = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
           size="icon"
-          disabled={layout.cells.length < 2}
-          className={cn('h-8 w-8 shrink-0', syncOn && layout.cells.length > 1 && 'text-primary')}
+          disabled={paneCount < 2}
+          className={cn('h-8 w-8 shrink-0', syncOn && paneCount > 1 && 'text-primary')}
           title={
-            layout.cells.length < 2
+            paneCount < 2
               ? 'Chart sync needs more than one pane'
               : syncOn
                 ? 'Chart sync is on'
@@ -509,6 +1055,7 @@ export default function Trading() {
             ['crosshair', 'Crosshair', 'Mirror the hovered bar'],
             ['viewport', 'Time range', 'Mirror pan and zoom'],
             ['symbol', 'Symbol', 'Load the same instrument everywhere'],
+            ['interval', 'Interval', 'Use the same interval where supported'],
           ] as const
         ).map(([key, label, hint]) => (
           // A label, not a button, and the row carries no click handler of its
@@ -518,15 +1065,18 @@ export default function Trading() {
           // do nothing at all. The label forwards a click on the text to the
           // input, so every part of the row toggles it exactly once.
           //
-          // Not a DropdownMenuItem either: these are three independent
-          // switches and the menu has to stay open while all three are set.
+          // Independent switches keep the menu open while they are set.
           <label
             key={key}
             className="flex w-full cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent"
           >
             <TickBox
               checked={sync[key]}
-              onChange={(next) => setSync((p) => ({ ...p, [key]: next }))}
+              onChange={(next) => {
+                if (key === 'symbol' || key === 'interval') stopWorkspaceReplay()
+                setSync((p) => ({ ...p, [key]: next }))
+                autosave.changed()
+              }}
               label={label}
               className="mt-0.5"
             />
@@ -543,22 +1093,100 @@ export default function Trading() {
   /**
    * One-Click, beside the layout and sync pickers because, like them, it is a
    * property of the workspace and not of one pane. The switch is the control
-   * and the badge is its label, so the badge reads the state in the scalping
-   * terminal's words and clicking either toggles it once. A label, not a
-   * button, for the reason the sync rows give: a button wrapping a switch
-   * fires twice.
+   * and the badge is its label, so clicking either toggles it once. A label,
+   * not a button, for the reason the sync rows give: a button wrapping a
+   * switch fires twice.
    */
   const armedControl = (
-    <label className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 pl-1">
-      <Switch checked={armed} onCheckedChange={setArmed} aria-label="One-Click" />
-      {/* The word goes below lg, as Indicators and Replay drop their labels:
-          with it the single-pane toolbar at 1024px pushed the LED and the
-          camera into hidden horizontal scroll. The switch keeps its name. */}
-      <Badge variant={armed ? 'destructive' : 'secondary'}>
-        <span className="hidden lg:inline">One-Click&nbsp;</span>
-        {armed ? 'ARMED' : 'off'}
-      </Badge>
+    <label
+      className={cn(
+        'flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md border px-2 text-xs font-medium transition-colors',
+        armed
+          ? 'border-destructive/60 bg-destructive/10 text-destructive'
+          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+      )}
+      title={
+        armed
+          ? 'One-Click is on: a click on the chart sends a live order'
+          : 'One-Click is off: a click on the chart opens the order ticket'
+      }
+    >
+      <Switch
+        checked={armed}
+        onCheckedChange={setArmed}
+        aria-label="One-Click"
+        // Switched on, the track carries the same red as the border and the
+        // word.
+        // Left on the app's accent it was a pale switch inside a red control
+        // saying two different things about one state, and the accent is what
+        // every harmless toggle on the page is already wearing.
+        className={cn(armed && 'data-[state=checked]:bg-destructive')}
+      />
+      {/* One control, not two. The switch and a badge beside it were the same
+          state said twice, and the badge said it in the loudest colour in the
+          row while sitting at a different height from every button around it.
+          The border makes it one control at the row's own height and the
+          switch is still what you press.
+
+          ON, not ARMED. The state is worth shouting about, because it is the
+          one where a click on the chart sends a live order, and the capitals
+          and the red are what do the shouting. The word itself only has to
+          say which way the switch is thrown, and a trader should not have to
+          learn a second vocabulary to read a toggle. */}
+      <span className="whitespace-nowrap">
+        {/* The name goes below lg, as Indicators and Replay drop their labels:
+            with it the single-pane toolbar at 1024px pushed the LED and the
+            camera into hidden horizontal scroll. */}
+        <span className="hidden lg:inline">One-Click </span>
+        {armed ? 'ON' : 'off'}
+      </span>
     </label>
+  )
+
+  const chartIds =
+    workspace.current?.geometry.panes.map((pane) => pane.id) ??
+    layout.cells.map((_, index) => `p${index}`)
+  const chartSelector = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0"
+          data-workspace-control
+          aria-label={`Selected chart: ${chartIds.indexOf(focusedPane) + 1}`}
+        >
+          Chart {chartIds.indexOf(focusedPane) + 1}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" data-workspace-control>
+        {chartIds.map((id, index) => (
+          <DropdownMenuItem
+            key={id}
+            onSelect={() => focusPane(terminalsRef.current[id] ?? null, id)}
+            className={cn(id === focusedPane && 'bg-primary/10 text-primary')}
+          >
+            Chart {index + 1}
+            {paneSymbols[id] ? `: ${paneSymbols[id]}` : ''}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+  const workspaceControls = (
+    <>
+      {/* These four are the workspace, not this chart: the grid, what syncs
+          across it, the saved layouts and whether a click sends an order. The
+          rule they broke was having no rule -- two of them were text at one
+          height beside bordered controls at another, so they read as labels
+          somebody had left in the toolbar rather than things you press. */}
+      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+      {layoutPicker}
+      {syncPicker}
+      {workspaceMenu}
+      <IndicatorTemplates key={account} {...workspaceCatalog} target={panelTarget} />
+      {armedControl}
+    </>
   )
 
   return (
@@ -568,7 +1196,33 @@ export default function Trading() {
       <Navbar fluid />
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Rail + grid */}
-        <main className="flex min-h-0 flex-1">
+        <div aria-live="polite">
+          {autosave.error && (
+            <p role="alert" className="px-3 py-1 text-sm text-destructive">
+              Workspace not saved: {autosave.error}
+            </p>
+          )}
+          {workspaceMessage !== 'Saved' && workspaceMessage !== 'Unsaved' && (
+            <p role="alert" className="px-3 py-1 text-sm text-destructive">
+              {workspaceMessage}
+            </p>
+          )}
+          {workspace.pending && (
+            <output className="flex items-center gap-3 px-3 py-1 text-sm">
+              Loading workspace...
+              <Button variant="ghost" size="sm" onClick={workspace.cancel}>
+                Cancel
+              </Button>
+            </output>
+          )}
+          {workspace.error && (
+            <p role="alert" className="px-3 py-1 text-sm text-destructive">
+              {workspace.error}
+            </p>
+          )}
+        </div>
+        <div ref={setToolbarHost} className="min-w-0 shrink-0" data-workspace-toolbar />
+        <main className="flex min-h-0 flex-1" inert={workspace.pending ? true : undefined}>
           {showRail && apiKey && wsUrl && (
             <DrawingRail
               stats={railStats}
@@ -576,12 +1230,22 @@ export default function Trading() {
               onUndo={() => act((t) => t.undoDraw())}
               onRedo={() => act((t) => t.redoDraw())}
               onRemove={(all) => act((t) => t.removeDrawings(all))}
-              onMagnet={(v) => setMagnet(v)}
-              onStay={(v) => setStay(v)}
+              onMagnet={(v) => {
+                setMagnet(v)
+                if (visibleGrid.current)
+                  for (const terminal of visibleGrid.current.terminals.values())
+                    terminal.setMagnet(v)
+              }}
+              onStay={(v) => {
+                setStay(v)
+                if (visibleGrid.current)
+                  for (const terminal of visibleGrid.current.terminals.values())
+                    terminal.setDrawStay(v)
+              }}
               onShortcut={onDrawKey}
             />
           )}
-          <div className="min-h-0 min-w-0 flex-1">
+          <div className="relative min-h-0 min-w-0 flex-1">
             {noApiKey ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                 <p className="text-sm text-muted-foreground">No API key found for charting.</p>
@@ -589,45 +1253,118 @@ export default function Trading() {
                   Generate an API key
                 </a>
               </div>
-            ) : apiKey && wsUrl ? (
-              <div
-                className="grid h-full min-h-0 gap-2 p-2"
-                style={{
-                  gridTemplateColumns: layout.cols,
-                  gridTemplateRows: layout.rows,
-                  gridTemplateAreas: layout.areas,
-                }}
-              >
-                {layout.cells.map((cell, i) => (
-                  <ChartPane
-                    key={`p${i}`}
-                    paneId={`p${i}`}
+            ) : apiKey && wsUrl && linkGroup ? (
+              <div className="relative h-full">
+                {!workspace.current && (
+                  <div
+                    key="unnamed"
+                    className="grid h-full min-h-0 gap-2 p-2"
+                    style={{
+                      gridTemplateColumns: layout.cols,
+                      gridTemplateRows: layout.rows,
+                      gridTemplateAreas: layout.areas,
+                    }}
+                  >
+                    {layout.cells.map((cell, i) => (
+                      <ChartPane
+                        key={`p${i}`}
+                        paneId={`p${i}`}
+                        paneLabel={`Chart ${i + 1}`}
+                        toolbarHost={toolbarHost}
+                        focused={focusedPane === `p${i}`}
+                        chartSelector={chartSelector}
+                        apiKey={apiKey}
+                        wsUrl={wsUrl}
+                        style={{ gridArea: cell }}
+                        sharedTool={tool}
+                        sharedMagnet={magnet}
+                        sharedStay={stay}
+                        onWorkspaceChange={autosave.changed}
+                        onReplayStart={startWorkspaceReplay}
+                        workspaceReplay={replaySnapshot}
+                        onBeforeSourceChange={stopWorkspaceReplay}
+                        onFocusPane={focusPane}
+                        onSymbolChange={(id, key) => {
+                          if (!visibleGrid.current) noteSymbol(id, key)
+                        }}
+                        onTerminalChange={noteTerminal}
+                        onObjectsChange={(id, objects) => {
+                          if (!visibleGrid.current) noteObjects(id, objects)
+                        }}
+                        onOpenScriptSource={showScriptSource}
+                        onAlertsReady={(id, view) => {
+                          if (!visibleGrid.current) noteAlerts(id, view)
+                        }}
+                        onAlertFired={noteAlertFired}
+                        onAlertsChanged={() => setAlertRevision((n) => n + 1)}
+                        onDrawStats={(value) => {
+                          if (!visibleGrid.current) setStats(value)
+                        }}
+                        onToggleRail={() => setShowRail((v) => !v)}
+                        railVisible={showRail}
+                        linkGroup={linkGroup}
+                        armed={armed}
+                        transitionLocked={workspace.pending}
+                        layoutPicker={workspaceControls}
+                      />
+                    ))}
+                  </div>
+                )}
+                {workspace.grids.map((owner) => (
+                  <WorkspaceGrid
+                    key={owner.key}
+                    owner={owner}
+                    active={workspace.current === owner}
+                    toolbarHost={toolbarHost}
+                    focusedPaneId={focusedPane}
+                    chartSelector={chartSelector}
                     apiKey={apiKey}
                     wsUrl={wsUrl}
-                    style={{ gridArea: cell }}
                     sharedTool={tool}
-                    sharedMagnet={magnet}
-                    sharedStay={stay}
+                    transitionLocked={workspace.pending}
+                    armed={armed}
+                    railVisible={showRail}
+                    onToggleRail={() => setShowRail((value) => !value)}
+                    onWorkspaceChange={autosave.changed}
+                    onReplayStart={startWorkspaceReplay}
+                    workspaceReplay={replaySnapshot}
+                    onBeforeSourceChange={stopWorkspaceReplay}
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
-                    onTerminalChange={noteTerminal}
                     onObjectsChange={noteObjects}
+                    onOpenScriptSource={showScriptSource}
+                    onAlertsReady={noteAlerts}
+                    onAlertFired={noteAlertFired}
+                    onAlertsChanged={() => setAlertRevision((n) => n + 1)}
                     onDrawStats={setStats}
-                    onToggleRail={() => setShowRail((v) => !v)}
-                    railVisible={showRail}
-                    linkGroup={linkRef.current}
-                    armed={armed}
-                    layoutPicker={
-                      i === 0 ? (
-                        <>
-                          {layoutPicker}
-                          {syncPicker}
-                          {armedControl}
-                        </>
-                      ) : undefined
-                    }
+                    onTerminalChange={(id, terminal) => {
+                      if (visibleGrid.current !== owner) return
+                      if (terminal) terminalsRef.current[id] = terminal
+                      else delete terminalsRef.current[id]
+                      updateReplayMembers()
+                    }}
+                    layoutPicker={workspaceControls}
                   />
                 ))}
+                <WorkspaceReplayBar
+                  snapshot={replaySnapshot}
+                  error={replayError}
+                  ownerLabel={
+                    replaySnapshot.ownerId
+                      ? (paneSymbols[replaySnapshot.ownerId] ?? replaySnapshot.ownerId)
+                      : undefined
+                  }
+                  onScopeChange={(scope) => replayCoordinator.current?.setScope(scope)}
+                  onPlay={(speed) => replayCoordinator.current?.play(speed)}
+                  onPause={() => replayCoordinator.current?.pause()}
+                  onStep={() => replayCoordinator.current?.step()}
+                  onStepBack={() => replayCoordinator.current?.stepBack()}
+                  onSeek={(index) => replayCoordinator.current?.seek(index)}
+                  onStop={requestReplayExit}
+                  confirmExit={confirmReplayExit}
+                  onCancelExit={() => setConfirmReplayExit(false)}
+                  onConfirmExit={stopWorkspaceReplay}
+                />
               </div>
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -663,8 +1400,37 @@ export default function Trading() {
               />
             </Suspense>
           )}
+          {apiKey && wsUrl && panel === 'alerts' && (
+            <AlertsPanel
+              view={paneAlerts[alertsPaneId] ?? null}
+              log={alertLog}
+              paneLabel={alertsPaneLabel}
+              onEdit={openAlertEditor}
+              onClearLog={clearAlertLog}
+              revision={alertRevision}
+            />
+          )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
+          )}
+          {apiKey && wsUrl && panel === 'scripts' && (
+            <ScriptPanel
+              // `panelTarget`, not `act`. Both reach a chart, but `act` wants
+              // the pane a toolbar button was pressed over and answers null
+              // until one has been focused, so adding a study did nothing at
+              // all until the trader happened to click the chart first. This is
+              // the helper written for a panel: the focused pane, else any pane
+              // that is up. It is the same one the watchlist and the assistant
+              // use for the same reason.
+              onAddToChart={(indicatorId) => {
+                const target = panelTarget()
+                if (!target) return false
+                void target.addIndicatorById(indicatorId)
+                return true
+              }}
+              openFile={scriptSource}
+              onOpened={() => setScriptSource(null)}
+            />
           )}
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}

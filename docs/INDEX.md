@@ -24,6 +24,7 @@ need → drill into the specific file. Don't load everything at once.
 | Technical indicators (`ta` library) | [<prompt/indicators/openalgo indicators - introduction.md>](<prompt/indicators/openalgo indicators - introduction.md>) |
 | The charting terminal at `/trading`, its order dock and its shortcuts | [userguide/32-charting-terminal](userguide/32-charting-terminal/README.md) |
 | Writing your own chart indicators for `/trading` | [custom-indicators.md](custom-indicators.md) |
+| Writing studies in OpenScript for `/trading` | [openscript.md](openscript.md) |
 | Step-by-step user guide (setup → first order → integrations) | [userguide/README.md](userguide/README.md) |
 | MCP tool reference (Claude Desktop / Cursor / Windsurf) | [mcp-tool-reference.md](mcp-tool-reference.md) |
 

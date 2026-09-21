@@ -372,7 +372,7 @@ def create_subprocess_args():
 #   - 2GB container (5 strategies): STRATEGY_MEMORY_LIMIT_MB=256
 #   - 4GB container (3 strategies): STRATEGY_MEMORY_LIMIT_MB=512
 #   - 8GB+ container: STRATEGY_MEMORY_LIMIT_MB=1024 (default)
-STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
+STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get("STRATEGY_MEMORY_LIMIT_MB", "1024"))
 STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
 
 
@@ -520,12 +520,11 @@ def start_strategy_process(strategy_id):
             strategy_env = os.environ.copy()
             strategy_env["STRATEGY_ID"] = strategy_id
             strategy_env["STRATEGY_NAME"] = config.get("name", strategy_id)
-            strategy_env["OPENALGO_STRATEGY_EXCHANGE"] = normalize_exchange(
-                config.get("exchange")
-            )
+            strategy_env["OPENALGO_STRATEGY_EXCHANGE"] = normalize_exchange(config.get("exchange"))
             strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
             try:
                 from database.auth_db import get_api_key_for_tradingview
+
                 user_id = config.get("user_id")
                 if user_id:
                     _api_key = get_api_key_for_tradingview(user_id)
@@ -1272,9 +1271,7 @@ def scheduled_start_strategy(strategy_id: str):
     today_day = day_names[now.weekday()]
 
     if config.get("manually_stopped"):
-        logger.info(
-            f"Strategy {strategy_id} manually stopped - skipping scheduled auto-start"
-        )
+        logger.info(f"Strategy {strategy_id} manually stopped - skipping scheduled auto-start")
         return
 
     schedule_days = [d.lower() for d in config.get("schedule_days", [])]
@@ -1292,9 +1289,7 @@ def scheduled_start_strategy(strategy_id: str):
         if not status.get("is_trading"):
             reason = status.get("reason") or "holiday"
             message = status.get("message", f"{exch} closed today")
-            logger.warning(
-                f"Strategy {strategy_id} ({exch}) scheduled start BLOCKED - {message}"
-            )
+            logger.warning(f"Strategy {strategy_id} ({exch}) scheduled start BLOCKED - {message}")
             STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
             STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
             save_configs()
@@ -1304,9 +1299,7 @@ def scheduled_start_strategy(strategy_id: str):
     STRATEGY_CONFIGS[strategy_id].pop("paused_reason", None)
     STRATEGY_CONFIGS[strategy_id].pop("paused_message", None)
 
-    logger.info(
-        f"Strategy {strategy_id} ({exch}) - all checks passed, starting"
-    )
+    logger.info(f"Strategy {strategy_id} ({exch}) - all checks passed, starting")
     start_strategy_process(strategy_id)
 
 
@@ -1367,9 +1360,7 @@ def daily_trading_day_check():
 
             reason = status.get("reason") or "holiday"
             message = status.get("message", f"{exch} closed today")
-            logger.info(
-                f"Daily check: stopping {strategy_id} ({exch}) - {message}"
-            )
+            logger.info(f"Daily check: stopping {strategy_id} ({exch}) - {message}")
             stop_strategy_process(strategy_id)
             STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
             STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
@@ -1408,9 +1399,7 @@ def is_within_schedule_time(strategy_id: str) -> bool:
         now_ms = int(now.timestamp() * 1000)
 
         # Resolve the user's window for today (epoch-ms)
-        midnight_ist = IST.localize(
-            datetime.combine(now.date(), datetime.min.time())
-        )
+        midnight_ist = IST.localize(datetime.combine(now.date(), datetime.min.time()))
         midnight_ms = int(midnight_ist.timestamp() * 1000)
 
         if schedule_start:
@@ -1490,7 +1479,12 @@ def market_hours_enforcer():
 
             if status.get("is_trading"):
                 # Exchange tradeable today — clear any stale pause reason
-                if config.get("paused_reason") in ("weekend", "holiday", "before_market", "after_market"):
+                if config.get("paused_reason") in (
+                    "weekend",
+                    "holiday",
+                    "before_market",
+                    "after_market",
+                ):
                     paused_reason = config.get("paused_reason")
                     is_running = _is_strategy_running(strategy_id, config)
                     if (
@@ -1523,9 +1517,7 @@ def market_hours_enforcer():
 
             reason = status.get("reason") or "holiday"
             message = status.get("message", f"{exch} closed today")
-            logger.info(
-                f"Enforcer: stopping {strategy_id} ({exch}) - {message}"
-            )
+            logger.info(f"Enforcer: stopping {strategy_id} ({exch}) - {message}")
             stop_strategy_process(strategy_id)
             STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
             STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
@@ -1843,9 +1835,7 @@ def new_strategy():
 
             schedule_start = request.form.get("schedule_start") or default_start
             schedule_stop = request.form.get("schedule_stop") or default_stop
-            schedule_days_json = request.form.get(
-                "schedule_days", json.dumps(default_days)
-            )
+            schedule_days_json = request.form.get("schedule_days", json.dumps(default_days))
 
             # Parse schedule days from JSON
             try:
@@ -1993,7 +1983,7 @@ def start_strategy(strategy_id):
         return jsonify(
             {
                 "status": "success",
-                "message": f"Strategy armed for scheduled start. {reason}. Will start {next_start}.",
+                "message": f"Strategy scheduled to start. {reason}. Will start {next_start}.",
                 "data": {"armed": True, "reason": reason, "next_start": next_start},
             }
         )
@@ -2368,18 +2358,22 @@ def check_contracts():
     """Check master contracts and start pending strategies"""
     try:
         success, started_count, message = check_and_start_pending_strategies()
-        return jsonify({
-            "status": "success" if success else "error",
-            "message": message,
-            "data": {"started": started_count}
-        })
+        return jsonify(
+            {
+                "status": "success" if success else "error",
+                "message": message,
+                "data": {"started": started_count},
+            }
+        )
     except Exception as e:
         logger.exception(f"Error checking contracts: {e}")
-        return jsonify({
-            "status": "error",
-            "message": f"Error checking contracts: {str(e)}",
-            "data": {"started": 0}
-        }), 500
+        return jsonify(
+            {
+                "status": "error",
+                "message": f"Error checking contracts: {str(e)}",
+                "data": {"started": 0},
+            }
+        ), 500
 
 
 # =============================================================================

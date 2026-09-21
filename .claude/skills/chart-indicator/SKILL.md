@@ -59,6 +59,77 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.5.0: tables that fit their text.** Nothing an indicator declares
+  changed and no export was added or removed: the index below counts the same
+  387 names it counted on 2.4.8.
+
+  The one thing worth knowing for a descriptor: **`ChartTableOptions.cellWidth`
+  accepts `'auto'`.** A column then measures itself from its widest cell, using
+  the font actually drawn, so a per-cell font override or a bold heading is
+  accounted for rather than guessed at. An empty automatic column keeps a 28 px
+  minimum, and percentage widths keep their measured proportions. Every cell
+  also clips its text now, so a long reading can no longer spill over the
+  column beside it, which is what made a wide value in one row look like a
+  value in the next.
+
+  `AlertController.hovered()` and `Chart.snapPrice(paneIndex, price)` also
+  arrived. Both are host APIs: an indicator never calls either.
+
+- **2.4.8: grab to pan, and a README rewritten.** Nothing an indicator
+  declares changed and no export was added or removed: the index below counts
+  the same 387 names it counted on 2.4.7. Pressing and holding the plot now
+  shows a grabbing hand and pans both axes, and mouse and pen panning stop the
+  moment the pointer is released, while touch keeps its flick. The default
+  covers both axes; a chart with a saved horizontal-only preference keeps it
+  until somebody changes it in the chart navigation settings.
+
+  The one thing worth knowing for a descriptor: **a clickable legend action
+  keeps its pointer cursor and stays usable across a repaint**, which is the
+  behaviour a `hasSource` braces button and a gear depend on. If a legend
+  action of yours stopped responding after a redraw on an older build, that is
+  what was fixed.
+
+- **2.4.7: an alert's line can be dragged.** Nothing an indicator declares
+  changed. A price or study-threshold alert line is draggable by the trader, and
+  a study threshold drags on its own plot's scale rather than the instrument's,
+  including an independent or left scale. Worth knowing for a descriptor whose
+  plot owns a scale: the preview does not enlarge autoscale and never shows
+  study units on the price axis. The on-chart badge for an armed alert reads
+  "Alert"; the serialized lifecycle values are unchanged, so anything reading
+  `alert.state` is unaffected.
+
+- **2.4.6: source access, marker anchoring and a legend that reads.** Three
+  optional descriptor fields, all of which an existing indicator can ignore.
+  `hasSource: true` puts a braces button on the legend row beside the gear and
+  emits `indicatorSource` with `{ instanceId, indicatorId, paneIndex }`; the
+  host owns the code and decides what the button opens, so set it only for a
+  descriptor whose source a host can actually show. `markerAnchor: 'price'`
+  measures a marker's `aboveBar` and `belowBar` against the instrument's
+  candles rather than the descriptor's own first plot, which is what a buy or
+  sell signal on an overlay means: below is below the low. The default stays
+  `'plot'`, so a mark that belongs to a line keeps sitting on the line, and the
+  field is ignored on a study that owns a pane. Legend readings now skip a plot
+  drawn in a fully transparent colour, which matters if you declare an
+  invisible column to anchor markers or fills to: it no longer reserves the
+  width of a price in the row. Legend glyphs also scale with their button
+  rather than the row's text, and `ChartOptions.legendIconSize` sets that
+  button across the chart.
+
+- **2.4.5: optional open interest and host contracts.** The published build has
+  105 built-ins, including `open-interest`, `open-interest-change` and
+  `open-interest-buildup`. `Bar.oi` is an optional reading: preserve zero, keep
+  missing readings as gaps, and never sum OI when folding bars. `securitySeries`
+  exposes a nullable `oi` column. Capability comes from host instrument metadata,
+  not from whether one bar has a reading. See `reference/api.md` for an example.
+  Host trader alerts can target a study's stable instance id and plot key; keep
+  those plot keys stable and distinguish these alerts from descriptor `alerts`.
+  The host owns delivery and pauses trader evaluation during loading and replay.
+  `Instrument`, `ReplayGroup`, `exportChartDataCsv` and trading capability helpers
+  are host APIs, not a reason for a study to mutate the chart, control replay or
+  submit orders. Workspace/template APIs live in `openalgo-charts/workspace`,
+  outside the core-plus-indicators object handed to a custom module. Existing
+  descriptor fields remain compatible. Calculate from the supplied bars so a
+  replayed study cannot reveal later history.
 - **2.4.0: the constructs a ported study most often could not express.** Every
   item is optional and needs openalgo-charts 2.4.0 or later installed; the
   validator checks against the installed build, so read
@@ -184,7 +255,7 @@ changed, newest first:
    resets per day or per session.
 2. **Before writing a formula, check `reference/cookbook.md`.** Every
    author-facing call is demonstrated there, and the first section is the one
-   that saves the most work: the 102 built-ins are descriptors, so
+   that saves the most work: the 105 built-ins are descriptors, so
    `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
    rather than a reimplementation that can drift from the chart's.
 3. **Load the context you need.** `reference/contract.md` for the descriptor

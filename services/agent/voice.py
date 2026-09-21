@@ -536,11 +536,18 @@ def note_pause(run_id: Any) -> None:
 def forget_pause(run_id: Any) -> None:
     """Close a run's approval window.
 
-    Called once a run has been approved, rejected or abandoned, so the same
-    utterance cannot approve it twice.
+    Called once a run has been decided or abandoned: :func:`stream_continue`
+    resumes it with the operator's decision, or the run is cancelled. A run
+    decided on screen must stop being approvable by voice, or a "yes" said to
+    something else a moment later lands on an order already dealt with.
+
+    :func:`judge_approval` does **not** call this. It consumes the window with
+    its own atomic pop, because there the read and the consume have to be one
+    step.
 
     Args:
-        run_id: The run to forget.
+        run_id: The run to forget. Unknown ids are ignored, so a caller need
+            not know whether the run ever paused.
     """
     _PAUSED_AT.pop(str(run_id or "").strip(), None)
 
@@ -593,9 +600,18 @@ def judge_approval(
 
     if not voice_confirm.is_spoken_confirmation(transcript):
         # Not an error and not logged as one: a trader talking near a pending
-        # order says plenty of things that are not an answer to it.
+        # order says plenty of things that are not an answer to it. The window
+        # stays open deliberately: the trader is still deciding about an order
+        # they have just heard, and the next word may be the answer to it.
         return ApprovalVerdict(False, "That was not a confirmation.")
 
-    forget_pause(key)
+    # The claim, and the only thing that consumes the window. `pop` decides it,
+    # not the `get` above, which is a pre-check two utterances arriving together
+    # would both pass. Whoever pops the timestamp owns the approval and the
+    # loser is told the window has passed, because for it it has. Checking one
+    # way and consuming another is how one order becomes two.
+    if _PAUSED_AT.pop(key, None) is None:
+        return ApprovalVerdict(False, "The time to approve that by voice has passed.")
+
     logger.info("Voice approval accepted for run %s", key)
     return ApprovalVerdict(True)

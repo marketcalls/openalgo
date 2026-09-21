@@ -24,7 +24,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
 export const DRAW_TOOL_ICON_ATTRS = ${JSON.stringify(ICON_ATTRS, null, 2)} as const
 `
 if (process.argv.includes('--check')) {
-  assert.equal(readFileSync(output, 'utf8'), content, 'Regenerate drawing metadata for the pinned package')
+  assert.equal(readFileSync(output, 'utf8').replace(/\r\n/g, '\n'), content, 'Regenerate drawing metadata for the pinned package')
 } else {
   writeFileSync(output, content)
 }
