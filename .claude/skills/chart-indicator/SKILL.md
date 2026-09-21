@@ -59,6 +59,15 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.4.7: an alert's line can be dragged.** Nothing an indicator declares
+  changed. A price or study-threshold alert line is draggable by the trader, and
+  a study threshold drags on its own plot's scale rather than the instrument's,
+  including an independent or left scale. Worth knowing for a descriptor whose
+  plot owns a scale: the preview does not enlarge autoscale and never shows
+  study units on the price axis. The on-chart badge for an armed alert reads
+  "Alert"; the serialized lifecycle values are unchanged, so anything reading
+  `alert.state` is unaffected.
+
 - **2.4.6: source access, marker anchoring and a legend that reads.** Three
   optional descriptor fields, all of which an existing indicator can ignore.
   `hasSource: true` puts a braces button on the legend row beside the gear and
