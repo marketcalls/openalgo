@@ -1376,18 +1376,12 @@ export function ChartPane({
                 {ctx.alert.label}
               </button>
             )}
-            <button
-              type="button"
-              className={ctxRow}
-              onClick={() => {
-                // The long way round, for the alert that needs a condition, a
-                // trigger or an expiry the defaults do not give it.
-                void terminalRef.current?.openAlerts()
-                setCtx(null)
-              }}
-            >
-              Create alert...
-            </button>
+            {/* No entry for the form. The menu's job here is the alert at the
+                price under the pointer, which the entry above makes; a second
+                entry one line below it, spelled almost the same and doing
+                something else, is a choice nobody wants to make mid-gesture.
+                The form is on the toolbar, where somebody who wants it is
+                already looking. */}
             {ctx.items.map((it) => (
               <button
                 type="button"

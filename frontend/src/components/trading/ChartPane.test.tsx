@@ -315,16 +315,24 @@ describe('chart pane preparation ownership', () => {
     expect(owner.openAlerts).not.toHaveBeenCalled()
   })
 
-  it('still opens the form from the context menu entry that says it will', async () => {
+  it('offers no second alert entry in the menu', async () => {
+    // One gesture, one meaning. A second entry a line below the first, spelled
+    // almost the same and doing something else, is a choice nobody wants to
+    // make mid-gesture. The form is on the toolbar.
     const view = render(<ChartPane {...props} />)
     const owner = fake.owners[0]
     await act(async () => owner.resolve())
     act(() =>
-      owner.options.callbacks.onContextMenu?.({ x: 100, y: 100, items: [], profile: null })
+      owner.options.callbacks.onContextMenu?.({
+        x: 100,
+        y: 100,
+        items: [],
+        profile: null,
+        alert: { label: 'Create price alert', source: { kind: 'price' as const, price: 105 } },
+      })
     )
-    fireEvent.click(view.getByRole('button', { name: 'Create alert...', exact: true }))
-    expect(owner.openAlerts).toHaveBeenCalledOnce()
-    expect(owner.createAlertAt).not.toHaveBeenCalled()
+    expect(view.getByRole('button', { name: 'Create price alert', exact: true })).toBeVisible()
+    expect(view.queryByRole('button', { name: /^Create alert/ })).not.toBeInTheDocument()
   })
 
   it('opens alerts from the pane toolbar', async () => {
