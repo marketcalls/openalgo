@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_DELIVERY, deliveryOf } from './alertDelivery'
 import {
   type AlertChart,
   type AlertDraft,
@@ -311,9 +312,10 @@ describe('the draft as the engine takes it', () => {
 
   it('leaves a name the trader typed unmarked, so nothing rewrites it', () => {
     // Their words, and a drag moving the price is no reason to take them away.
+    // The payload itself is not empty: it carries how they asked to be told.
     const typed = toAlertInput(draft({ title: 'Cover the short' }), chart(), drawings, 'R')
-    expect(typed?.payload).toBeUndefined()
     expect(hasAutoTitle({ ...typed, payload: typed?.payload } as never)).toBe(false)
+    expect(deliveryOf(typed?.payload)).toEqual(DEFAULT_DELIVERY)
   })
 
   it('sends no message at all rather than an empty one', () => {

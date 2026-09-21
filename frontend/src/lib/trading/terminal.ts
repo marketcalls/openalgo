@@ -72,6 +72,9 @@ import {
   type WorkspaceComparison,
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
+import { deliverAlert, deliveryOf } from './alertDelivery'
+import type { AlertFacts } from './alertMessage'
+import { fillAlertMessage } from './alertMessage'
 import { mergeAlertRuntime } from './alertRuntime'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
@@ -649,6 +652,14 @@ export interface DrawTextStyle {
 
 export interface TerminalOptions {
   apiKey: string
+  /**
+   * Who is signed in. Optional, and empty is a working terminal.
+   *
+   * Only the messaging APIs need it: Telegram and WhatsApp address a user by
+   * name, and an alert asking for either without one is refused by the server
+   * rather than delivered to somebody else.
+   */
+  username?: string
   wsUrl: string
   container: HTMLElement
   legendEl: HTMLElement
@@ -1038,6 +1049,14 @@ export class TradingTerminal {
   private readonly orderLines = new Map<string, OrderLineRec>()
 
   private interval = '5m'
+  /**
+   * Who is signed in, for the messaging APIs that address a user by name.
+   *
+   * Empty until the host says. Telegram and WhatsApp both refuse a send with no
+   * user, which is the right answer: a message with nobody to deliver it to is
+   * not something to guess at.
+   */
+  private username = ''
   private ctype = 'candlestick'
   private product = 'MIS'
   private qty = 1
@@ -1067,9 +1086,70 @@ export class TradingTerminal {
     mode: 'percent',
   }
 
+  /**
+   * Whether this chart is watching a price for somebody.
+   *
+   * An armed alert is the one thing on a chart that has to keep working when
+   * nobody is looking at it. Everything else a hidden tab does is a saving:
+   * nothing repaints, so fetching bars nobody can see is wasted.
+   */
+  /**
+   * What the chart knew when an alert fired, for the message's placeholders.
+   *
+   * Read from the bar the engine names rather than from the newest one: an
+   * alert evaluated on a confirmed bar close is about that bar, and filling its
+   * message from whatever has arrived since would print numbers the condition
+   * was never measured against.
+   */
+  private alertFacts(event: { time?: number; index?: number; price?: number }): AlertFacts {
+    const bars = this.shownBars
+    const at =
+      typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
+        ? bars[event.index]
+        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)
+    return {
+      ticker: this.sym?.symbol ?? '',
+      exchange: this.sym?.exchange ?? '',
+      interval: this.interval,
+      open: at?.open ?? null,
+      high: at?.high ?? null,
+      low: at?.low ?? null,
+      close: at?.close ?? null,
+      volume: at?.volume ?? null,
+      price: typeof event.price === 'number' ? event.price : (at?.close ?? null),
+      time: typeof event.time === 'number' ? event.time : null,
+      digits: this.dp(),
+    }
+  }
+
+  private alertsArmed(): boolean {
+    try {
+      return this.alerts?.list().some((alert) => alert.state === 'armed') ?? false
+    } catch {
+      // A destroyed controller is not an armed alert.
+      return false
+    }
+  }
+
+  /**
+   * A hidden tab stops fetching, unless an alert is waiting on the answer.
+   *
+   * Hiding used to stop the poll and the bar-close repair unconditionally. The
+   * stream keeps running either way, so an alert still evaluated on the ticks
+   * that arrived, but the two refreshes that correct a bar were gone: a closed
+   * bar was never re-fetched, and the default alert policy is exactly the one
+   * that waits for a bar to close. An alert set and then left in a background
+   * tab is the ordinary way to use an alert, and it was the case that worked
+   * least well.
+   *
+   * So the saving is kept for a chart with nothing armed on it, and a chart
+   * with an armed alert stays awake. Comparisons follow the tab either way:
+   * they are drawn, not watched, and nothing fires from them.
+   */
   private readonly onVisibilityChange = () => {
-    this.data?.setVisible(document.visibilityState !== 'hidden')
-    this.comparisons?.setVisibleHost(document.visibilityState !== 'hidden')
+    const visible = document.visibilityState !== 'hidden'
+    this.data?.setVisible(visible || this.alertsArmed())
+    this.comparisons?.setVisibleHost(visible)
   }
 
   constructor(opts: TerminalOptions) {
@@ -1081,6 +1161,7 @@ export class TradingTerminal {
     this.initialWorkspacePane = initial
     this.preparingWorkspace = initial !== null
     this.apiKey = opts.apiKey
+    this.username = opts.username ?? ''
     this.wsUrl = opts.wsUrl
     this.container = opts.container
     this.legendEl = opts.legendEl
@@ -3048,6 +3129,10 @@ export class TradingTerminal {
     const save = () => {
       this.saveAlerts()
       this.cb.onAlertsChanged?.()
+      // Arming the first alert on a tab that is already hidden has to wake the
+      // feed, and removing the last one has to let it sleep again. Neither is a
+      // visibility change, so nothing else would ask.
+      this.onVisibilityChange()
     }
     for (const event of [
       'alert:created',
@@ -3064,7 +3149,30 @@ export class TradingTerminal {
     const deliver = (payload: unknown) => {
       const event = payload as AlertEventPayload & { price?: number }
       if (this.alertEvaluationPaused()) return
-      this.toast(event.message ?? event.title, 'ok')
+      const id = String(event.alertId ?? '')
+      const alert = this.alerts?.list().find((one) => one.id === id)
+      const fired = String(event.title ?? alert?.title ?? 'Alert')
+      // The message is filled in against the bar that fired it, so a
+      // notification on a locked phone carries the number rather than sending
+      // the trader back to the chart to look it up.
+      const said = fillAlertMessage(String(event.message ?? ''), this.alertFacts(event)) || fired
+      this.toast(said, 'ok')
+      void deliverAlert(
+        deliveryOf(alert?.payload),
+        {
+          title: this.sym?.symbol ? `${this.sym.symbol}: ${fired}` : fired,
+          body: said,
+          tag: `openalgo-alert-${id || fired}`,
+        },
+        {
+          apiKey: this.apiKey,
+          username: this.username,
+          // Named once per failure and never retried. These run on a price
+          // being reached, and a retry behind a fired alert is a queue that
+          // grows while the market moves.
+          onProblem: (message) => this.toast(message, 'err'),
+        }
+      )
       // Numbered as well as timed. The time on the event is the source bar's,
       // so two alerts firing on the same bar carry the same one, and a list
       // keyed by time alone would show one of them.

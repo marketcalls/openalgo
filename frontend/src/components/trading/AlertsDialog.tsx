@@ -40,6 +40,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { type AlertDelivery, deliveryOf, readySound } from '@/lib/trading/alertDelivery'
+import { ALERT_PLACEHOLDERS } from '@/lib/trading/alertMessage'
+import { askToNotify } from '@/lib/trading/alertNotify'
 import {
   ALERT_CONDITIONS,
   ALERT_KINDS,
@@ -107,6 +110,18 @@ function Choice({
   )
 }
 
+/** The four ways to be told, in the order the dialog draws them. */
+const DELIVERY_CHOICES: readonly {
+  readonly key: keyof AlertDelivery
+  readonly label: string
+  readonly means: string
+}[] = [
+  { key: 'sound', label: 'Sound', means: 'A short tone from this tab' },
+  { key: 'notify', label: 'Desktop notification', means: 'Shown only while this tab is hidden' },
+  { key: 'telegram', label: 'Telegram', means: 'Needs the bot running and your account linked' },
+  { key: 'whatsapp', label: 'WhatsApp', means: 'Needs a paired device' },
+]
+
 interface Props {
   handle: AlertsHandle | null
   onClose: () => void
@@ -173,6 +188,9 @@ export function AlertsDialog({ handle, onClose }: Props) {
         title: existing && !hasAutoTitle(existing) ? existing.title : '',
         message: existing?.message ?? '',
         enabled: existing ? existing.state !== 'disabled' : true,
+        // An alert stored before delivery was a choice reads as the default,
+        // which is the behaviour it already had plus the sound.
+        deliver: deliveryOf(existing?.payload),
       }
     },
     [handle, zone]
@@ -206,6 +224,16 @@ export function AlertsDialog({ handle, onClose }: Props) {
     try {
       if (editing) handle.alerts.update(editing, input)
       else handle.alerts.add(input)
+      // Asked here and nowhere else. This is a click the trader has just made
+      // for the express purpose of being told about a price, which is the one
+      // moment a request to notify them explains itself; on page load it is a
+      // prompt people dismiss without reading, and a dismissed prompt is the
+      // permanent answer. Nothing waits on it: a refusal costs the desktop
+      // notification and the alert still fires and still toasts.
+      // Asked from the click that armed it, which is the only gesture a
+      // browser lets either of these start from.
+      if (draft.enabled && draft.deliver.notify) void askToNotify()
+      if (draft.enabled && draft.deliver.sound) readySound()
       setProblem(null)
       onClose()
     } catch (error) {
@@ -425,6 +453,25 @@ export function AlertsDialog({ handle, onClose }: Props) {
                 aria-label="Message"
                 className="h-9 text-sm"
               />
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                A message can carry values filled in when it fires:{' '}
+                {ALERT_PLACEHOLDERS.slice(0, 5).map((one, index) => (
+                  <span key={one.name}>
+                    {index > 0 && ', '}
+                    <button
+                      type="button"
+                      title={one.means}
+                      onClick={() => patch({ message: `${draft.message}{{${one.name}}}` })}
+                      className="rounded bg-muted px-1 font-mono text-[10px] hover:bg-accent hover:text-foreground"
+                    >
+                      {`{{${one.name}}}`}
+                    </button>
+                  </span>
+                ))}
+                {' and '}
+                {ALERT_PLACEHOLDERS.length - 5} more. One spelled wrong is left as you typed it
+                rather than blanked.
+              </p>
               <div className="flex items-center gap-2 pt-1">
                 <Checkbox
                   id="alert-enabled"
@@ -435,6 +482,37 @@ export function AlertsDialog({ handle, onClose }: Props) {
                   Active as soon as it is saved
                 </Label>
               </div>
+            </div>
+
+            {/* How to be told. Last, because every one of them has an answer
+                already and none of them stops anyone saving. */}
+            <div className="space-y-2">
+              <Section>When it fires</Section>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                {DELIVERY_CHOICES.map((choice) => (
+                  <div key={choice.key} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`alert-deliver-${choice.key}`}
+                      checked={draft.deliver[choice.key]}
+                      onCheckedChange={(checked) =>
+                        patch({ deliver: { ...draft.deliver, [choice.key]: checked === true } })
+                      }
+                    />
+                    <Label
+                      htmlFor={`alert-deliver-${choice.key}`}
+                      className="text-xs font-normal"
+                      title={choice.means}
+                    >
+                      {choice.label}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Sound and the desktop notification reach you with the tab behind another window and
+                never leave this machine. Telegram and WhatsApp send the message out, and each needs
+                to be set up on its own page first.
+              </p>
             </div>
 
             {problem !== null && (

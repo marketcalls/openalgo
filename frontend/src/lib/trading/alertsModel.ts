@@ -24,6 +24,7 @@ import {
   utcSecondsToZonedParts,
   zonedWallClockToUtcSeconds,
 } from 'openalgo-charts'
+import { type AlertDelivery, DEFAULT_DELIVERY } from './alertDelivery'
 import { snapTick } from './format'
 
 /**
@@ -114,6 +115,14 @@ export interface AlertDraft {
   title: string
   message: string
   enabled: boolean
+  /**
+   * How the trader asked to be told when it fires.
+   *
+   * Part of the draft rather than a terminal-wide setting, because a price
+   * somebody is waiting on all week and a level they are watching for the next
+   * ten minutes do not deserve the same interruption.
+   */
+  deliver: AlertDelivery
 }
 
 /**
@@ -412,6 +421,20 @@ export function alertTitleFor(
 }
 
 /**
+ * Everything this host keeps on an alert, in the engine's opaque field.
+ *
+ * `payload` is the engine's own place for host data it never interprets, and it
+ * is written whole rather than merged, so both members are stated together:
+ * writing one and leaving the other to a later patch is how a delivery choice
+ * disappears the first time a name is regenerated.
+ */
+export interface AlertPayload {
+  /** A name we wrote and may rewrite when the price moves under a drag. */
+  readonly autoTitle?: true
+  readonly deliver?: AlertDelivery
+}
+
+/**
  * The mark that says a name was written by us and may be rewritten.
  *
  * `payload` is the engine's own field for host data it never interprets, and
@@ -469,7 +492,15 @@ export function toAlertInput(
     title: draft.title.trim() || titleFor(draft, chart, symbol, at),
     // Marked when we named it, so a drag can rename it and a name the trader
     // typed is left exactly as they typed it.
-    ...(draft.title.trim() === '' ? { payload: AUTO_TITLE_PAYLOAD } : {}),
+    payload: {
+      // Marked when we named it, so a drag can rename it and a name the trader
+      // typed is left exactly as they typed it.
+      ...(draft.title.trim() === '' ? AUTO_TITLE_PAYLOAD : {}),
+      // Defaulted rather than written through. The engine validates a payload
+      // as JSON, and a member holding undefined is not JSON: a draft built
+      // before this field existed would write one and be refused at `add`.
+      deliver: draft.deliver ?? DEFAULT_DELIVERY,
+    } satisfies AlertPayload,
     message: draft.message.trim() || undefined,
     cooldownSeconds:
       draft.cooldownSeconds.trim() === '' || !Number.isFinite(cooldown) ? 0 : cooldown,

@@ -39,6 +39,7 @@ import {
 } from '@/lib/trading/terminal'
 import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { AlertsDialog } from './AlertsDialog'
@@ -534,6 +535,9 @@ export function ChartPane({
       try {
         const owner = new TradingTerminal({
           apiKey,
+          // Only the messaging channels of an alert need it, and an empty name
+          // is a terminal that works with those two refused by the server.
+          username: useAuthStore.getState().user?.username ?? '',
           wsUrl,
           container: chartRef.current,
           legendEl: legendRef.current,
@@ -573,6 +577,9 @@ export function ChartPane({
     return () => {
       if (current) release()
     }
+    // `username` is read at build time rather than subscribed: a terminal is
+    // rebuilt on a sign-in change anyway, and re-creating the chart because a
+    // display name moved would throw away every drawing on it.
   }, [paneId, apiKey, wsUrl, noteHistory, linkGroup, initialWorkspacePane])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
