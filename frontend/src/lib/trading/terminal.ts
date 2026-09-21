@@ -73,6 +73,7 @@ import {
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
 import { deliverAlert, deliveryOf, readySound } from './alertDelivery'
+import { reportFire } from './alertLog'
 import type { AlertFacts } from './alertMessage'
 import { fillAlertMessage } from './alertMessage'
 import { askToNotify } from './alertNotify'
@@ -535,6 +536,13 @@ export interface AlertFire {
   price?: number
   /** The source bar's UTC seconds, not the browser's wall clock. */
   firedAt: number
+  /**
+   * The channels that accepted the message, on a row read back from the log.
+   *
+   * Absent on a firing as it happens, because the sends have not finished yet
+   * and the row is shown the moment the alert fires rather than a second later.
+   */
+  delivered?: readonly string[]
 }
 
 export interface IndicatorSettingsRequest {
@@ -3274,6 +3282,7 @@ export class TradingTerminal {
       // the trader back to the chart to look it up.
       const said = fillAlertMessage(String(event.message ?? ''), this.alertFacts(event)) || fired
       this.toast(said, 'ok')
+      const facts = this.alertFacts(event)
       void deliverAlert(
         deliveryOf(alert?.payload),
         {
@@ -3289,7 +3298,26 @@ export class TradingTerminal {
           // grows while the market moves.
           onProblem: (message) => this.toast(message, 'err'),
         }
-      )
+      ).then((delivered) => {
+        // Written down after the send, so the row can say what actually went
+        // out rather than what was asked for. The log is the only record that
+        // outlives the tab, and the only thing that answers "the message never
+        // arrived, did it even fire" the next morning.
+        void reportFire({
+          alertId: id,
+          title: String(event.title ?? 'Alert'),
+          kind: String(alert?.source?.kind ?? 'price'),
+          condition: String(alert?.condition ?? ''),
+          symbol: this.sym?.symbol ?? '',
+          exchange: this.sym?.exchange ?? '',
+          interval: this.interval,
+          ...(typeof facts.price === 'number' ? { price: facts.price } : {}),
+          // The filled message, not the template: a log row reading
+          // "crossed {{price}}" is a row nobody can read back.
+          message: said,
+          delivered,
+        })
+      })
       // Numbered as well as timed. The time on the event is the source bar's,
       // so two alerts firing on the same bar carry the same one, and a list
       // keyed by time alone would show one of them.

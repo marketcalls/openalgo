@@ -475,9 +475,20 @@ trigger, an expiry or a message the defaults do not give it. **Create alert...**
 in the right-click menu opens the same form.
 
 **Alerts** on the right rail lists what is already watching, with a **Log** tab
-of what has fired this session. Rows carry the name, the level read from the
-alert itself, the instrument and the state, and hover actions to stop, edit or
-delete one. The overflow menu starts, stops or removes them all at once.
+of what has fired. Rows carry the name, the level read from the alert itself,
+the instrument and the state, and hover actions to stop, edit or delete one. The
+overflow menu starts, stops or removes them all at once.
+
+**The log outlives the tab.** A firing is written to the database as it happens
+and read back the next time `/trading` opens, so closing the browser at four
+o'clock no longer takes the afternoon with it, and an alert that fired while you
+were on another screen still leaves a row. Each row also names the channels that
+accepted the message, so a firing that reached nobody can be told apart from one
+that never happened. **Clear** on the Log tab empties it for good.
+
+This is a record, not a scheduler. Alerts are still evaluated by the chart that
+is open, so an alert still only fires while `/trading` is running; what changed
+is what is left behind afterwards. Firings are kept for 90 days.
 
 **Bar close** is the default. It evaluates the confirmed candle when the next
 candle arrives. **Intrabar touch** can fire on a wick or study reading that is

@@ -11,9 +11,13 @@
  * is what is watching now: a row per alert, its state, and what it is waiting
  * for. **Log** is what has happened: a row per firing, newest first, which is
  * what a trader reads when a toast went past while they were looking elsewhere.
- * The log is this session's, held in the page. Alerts are evaluated by the chart
- * that is open, so a firing only exists while somebody is watching, and writing
- * it to a server would promise a history the engine cannot keep.
+ * The log outlives the tab. Alerts are still evaluated by the chart that is
+ * open, so a firing only *happens* while somebody is watching, but what the
+ * browser could not keep is the record of it: a tab closed at four o'clock took
+ * the afternoon's firings with it, and an alert that fired while the trader was
+ * on another screen left nothing at all. Each row also says which channels
+ * accepted the message, because a firing that reached nobody and a firing that
+ * never happened are different things and the panel has to tell them apart.
  */
 
 import { Bell, Eraser, Loader2, MoreHorizontal, Pause, Play, Settings2, Trash2 } from 'lucide-react'
@@ -497,7 +501,7 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
             <Bell className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
             <p className="max-w-[17rem] text-xs leading-relaxed text-muted-foreground">
               {log.length === 0
-                ? 'Nothing has fired yet. Alerts are evaluated by the chart that is open, so this log covers the current session.'
+                ? 'Nothing has fired yet. Alerts are evaluated by the chart that is open, so one only fires while /trading is running. What fires is kept here afterwards.'
                 : 'No firing matches that search.'}
             </p>
           </div>
@@ -526,6 +530,20 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
                     at {fire.price}
                   </span>
                 )}
+                {/*
+                  Where it went, on the rows read back from the log. A firing
+                  that reached nobody shows nothing rather than a "none" badge:
+                  the absence is the answer, and the row above already says the
+                  alert fired.
+                */}
+                {fire.delivered?.map((channel) => (
+                  <span
+                    key={channel}
+                    className="shrink-0 rounded bg-muted px-1 text-[10px] leading-4 text-muted-foreground"
+                  >
+                    {channel}
+                  </span>
+                ))}
               </div>
             </div>
           ))
