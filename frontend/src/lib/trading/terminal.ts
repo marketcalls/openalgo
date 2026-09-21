@@ -3247,7 +3247,24 @@ export class TradingTerminal {
 
   private attachAlerts(chart: ChartInstance): void {
     if (this.alerts || this.destroyed || this.chart !== chart) return
-    this.alerts = new AlertController(chart, { drawings: this.objectDrawings })
+    // An alert that has fired or expired keeps its record and loses its line.
+    //
+    // The line is what a trader asked the engine to draw until something
+    // happened; once it has, the line is a level nothing is watching, and a
+    // chart carrying a week of them is a chart somebody stops reading. The
+    // record stays, which is the part that matters: a once-only alert that has
+    // fired must be restored as fired, or it re-arms on the next reload and
+    // fires again on a price it already reported.
+    //
+    // Deleting the alert to be rid of the line is the mistake this replaces.
+    // This terminal restores an alert's definition and its runtime state from
+    // separate places, so a removed record lets the definition come back armed;
+    // `terminalAlerts.test.ts` holds that. `spentLines` is the engine's own
+    // answer, opt-in per host, and it changes nothing about evaluation.
+    this.alerts = new AlertController(chart, {
+      drawings: this.objectDrawings,
+      spentLines: 'hide',
+    })
     this.syncAlertPause()
     // Persist, and tell the page. A list built from the controller is a copy
     // taken at render time, and nothing else would tell it that it is stale.

@@ -180,6 +180,7 @@ are identified separately so a custom module can use the right surface.
 | **2.0.0** | The render backend port (`createRenderBackend`, `registerRenderBackend`, `Canvas2dBackend`, `resolveRenderBackend`, `backendDegradation`) plus SVG export and watermark helpers. All chart infrastructure: an indicator never touches a backend, and the WebGL2 path renders the same plots. |
 | **2.1.2** | A Tier-2 study's history requests and live callbacks are isolated by data key, so a response for a setting you have left cannot land on the current one. |
 | **2.1.5** | Drawing previews survive past the newest candle. No indicator surface changed. |
+| **2.5.1** | No descriptor surface changed, and no export added or removed: the index above counts the same 387 names it counted on 2.5.0. `AlertControllerOptions.spentLines` accepts `'hide'`, and a triggered or expired alert then keeps its record, its scope, its checkpoints and its saved runtime while its line is not drawn. Opt-in per controller, not serialised into an alert document and no change to the saved-state format; the default stays `'show'`, including in the packaged widget. An alert anchored to a drawing leaves that drawing alone when its own line goes. Host API, not descriptor surface: an indicator declares nothing about it. |
 | **2.5.0** | No descriptor surface changed, and no export added or removed: the index above counts the same 387 names it counted on 2.4.8. `ChartTableOptions.cellWidth` accepts `'auto'`, which measures each column from its widest cell including padding, bold text and per-cell font overrides; an empty automatic column keeps a 28 px minimum and percentage widths preserve their measured proportions. Automatic font sizing measures against an 11 px baseline, and every cell now clips its text, so a long reading can no longer cover the column beside it. A table an indicator draws is the surface this reaches. Host APIs, not descriptor surface: `AlertController.hovered()` and `Chart.snapPrice(paneIndex, price)`. |
 | **2.4.8** | No descriptor surface changed, and no export added or removed: the index above counts the same 387 names it counted on 2.4.7. Press and hold the plot to pan, on both axes by default, and mouse and pen panning stops on release while touch keeps its flick; a chart with a saved horizontal-only preference keeps it until it is changed in the chart navigation settings. The one thing that touches a descriptor indirectly: a clickable legend action keeps its pointer cursor and stays usable across a repaint, which is what a `hasSource` braces button and a gear rely on. |
 | **2.4.7** | No descriptor surface changed. An alert's line is draggable, and a study threshold drags on its own plot's scale, including an independent or left scale; the preview does not enlarge autoscale. Additive `drag:start` and `drag:cancel` events, and `PrimitiveHit.cancelOnEscape` as an opt-in for raw custom primitives, so an existing drag consumer is unaffected. |
@@ -203,7 +204,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 387 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.5.0 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.5.1 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (14)

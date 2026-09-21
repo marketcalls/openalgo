@@ -59,6 +59,19 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.5.1: a finished alert can stop drawing its line.** Nothing an indicator
+  declares changed and no export was added or removed: the index below counts
+  the same 387 names it counted on 2.5.0.
+
+  `AlertControllerOptions.spentLines: 'hide'` makes a triggered or expired alert
+  keep everything except its line: the record, the scope, the checkpoints and
+  the saved runtime all stay, which is what keeps a once-only alert from
+  re-arming on the next reload. It is opt-in per controller, it is not written
+  into an alert document, and the default is still `'show'`.
+
+  A host API, like `hovered()` and `snapPrice()` before it. An indicator never
+  reads it and never declares anything about it.
+
 - **2.5.0: tables that fit their text.** Nothing an indicator declares
   changed and no export was added or removed: the index below counts the same
   387 names it counted on 2.4.8.
