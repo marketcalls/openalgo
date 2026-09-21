@@ -479,6 +479,15 @@ of what has fired. Rows carry the name, the level read from the alert itself,
 the instrument and the state, and hover actions to stop, edit or delete one. The
 overflow menu starts, stops or removes them all at once.
 
+**An alert that has fired or expired stops drawing its line.** Its row stays in
+the list, with its state, and its record is kept: a once-only alert that has
+fired is still fired after a reload, which is what stops it firing again on a
+price it already reported. What goes is the line on the chart, because a level
+nothing is watching is a level in the way, and a chart carrying a week of them
+is one you stop reading. An alert anchored to a drawing leaves that drawing
+alone. Start a finished alert again from the rail, and if its expiry has passed,
+give it a new one first.
+
 **The log outlives the tab.** A firing is written to the database as it happens
 and read back the next time `/trading` opens, so closing the browser at four
 o'clock no longer takes the afternoon with it, and an alert that fired while you
