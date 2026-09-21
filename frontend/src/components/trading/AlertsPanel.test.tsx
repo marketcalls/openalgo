@@ -207,6 +207,34 @@ describe('the log of what has fired', () => {
     expect(screen.getByText('at 1243.45')).toBeInTheDocument()
   })
 
+  it('clears the log from the tab that shows it', async () => {
+    const user = userEvent.setup()
+    const onClearLog = vi.fn()
+    const { view } = viewOf([alert()])
+    render(<AlertsPanel {...props} view={view} log={[fire()]} onClearLog={onClearLog} />)
+    await user.click(screen.getByRole('tab', { name: /^Log/ }))
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(onClearLog).toHaveBeenCalled()
+  })
+
+  it('offers nothing to clear on the tab that is not the log', async () => {
+    // It empties the list on screen, so on the alerts tab it would be an
+    // action pointing at something the trader is not looking at.
+    const { view } = viewOf([alert()])
+    render(<AlertsPanel {...props} view={view} log={[fire()]} />)
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument()
+  })
+
+  it('shows Clear greyed rather than absent when nothing has fired', async () => {
+    // Hidden until there is something to clear, a trader looking for it finds
+    // an empty panel and no sign the action exists at all.
+    const user = userEvent.setup()
+    const { view } = viewOf([alert()])
+    render(<AlertsPanel {...props} view={view} />)
+    await user.click(screen.getByRole('tab', { name: /^Log/ }))
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
+  })
+
   it('says the log is the session’s rather than implying one was lost', async () => {
     const user = userEvent.setup()
     const { view } = viewOf([alert()])

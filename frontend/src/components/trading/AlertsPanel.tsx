@@ -16,7 +16,17 @@
  * it to a server would promise a history the engine cannot keep.
  */
 
-import { Bell, Loader2, MoreHorizontal, Pause, Play, Plus, Settings2, Trash2 } from 'lucide-react'
+import {
+  Bell,
+  Eraser,
+  Loader2,
+  MoreHorizontal,
+  Pause,
+  Play,
+  Plus,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
 import type { Alert } from 'openalgo-charts'
 import { useMemo, useState } from 'react'
 import {
@@ -301,9 +311,6 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
               Stop all
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={log.length === 0} onSelect={onClearLog}>
-              Clear log
-            </DropdownMenuItem>
             <DropdownMenuItem
               variant="destructive"
               disabled={!view || alerts.length === 0}
@@ -354,6 +361,20 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
               </option>
             ))}
           </select>
+        )}
+        {tab === 'log' && (
+          // On the tab it acts on, rather than in the menu beside "Stop all".
+          // The list it empties is the one on screen, and an action that only
+          // makes sense here should not be found on the tab where it does not.
+          <button
+            type="button"
+            onClick={onClearLog}
+            disabled={log.length === 0}
+            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-input px-2 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Eraser className="h-3 w-3" strokeWidth={1.5} />
+            Clear
+          </button>
         )}
       </div>
 
