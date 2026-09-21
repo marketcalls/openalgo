@@ -466,7 +466,7 @@ that instead, keeping the exact study instance and plot you clicked, or the
 clicked drawing even if another one is selected. A notice names the alert it
 made, and the alert is editable from the rail the moment it exists.
 
-It is armed to fire once, on a confirmed bar, expiring in two months, with a
+It is armed to fire once, the moment the price is reached, expiring in two months, with a
 sound and a desktop notification. Those are the same defaults the form opens
 with, so a right-click produces exactly the alert the form would have proposed.
 
@@ -490,9 +490,16 @@ This is a record, not a scheduler. Alerts are still evaluated by the chart that
 is open, so an alert still only fires while `/trading` is running; what changed
 is what is left behind afterwards. Firings are kept for 90 days.
 
-**Bar close** is the default. It evaluates the confirmed candle when the next
-candle arrives. **Intrabar touch** can fire on a wick or study reading that is
-absent from the final candle. Missing readings remain unavailable, including
+**Intrabar touch** is the default. It fires the moment the price is reached,
+which is what an alert on a level is for: waiting for the candle to close would
+report a level touched at 13:15 on an hourly chart at 14:15, and on a daily
+chart the next session. The cost is that it fires on a wick the finished candle
+does not keep, so a level brushed once and rejected still sends the message.
+
+**Bar close** is the other choice, one field away on the form. It evaluates the
+confirmed candle when the next candle arrives, which is what you want when the
+level only counts if it held. Intrabar touch can fire on a wick or study reading
+that is absent from the final candle. Missing readings remain unavailable, including
 open interest missing from the live quote stream. Alerts retain the symbol,
 exchange and interval where they were created.
 
