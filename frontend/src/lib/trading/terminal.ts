@@ -805,11 +805,6 @@ export function buildOrderTicket(input: {
 const VISIBLE_BARS = 120
 /** Empty bars kept between the newest candle and the price axis. */
 const RIGHT_PAD_BARS = 4
-/** What a chart opens with the very first time this browser has no saved layout, matching TradingView's own default. */
-const DEFAULT_INDICATORS: { indicatorId: string; settings: Record<string, unknown> }[] = [
-  { indicatorId: 'volume', settings: {} },
-]
-
 /**
  * Where the exported PNG paints the OHLC readout, in CSS px. These mirror the
  * DOM overlay's own placement in `ChartPane` (`left-3 top-1.5`, a 12px line and
@@ -2544,14 +2539,7 @@ export class TradingTerminal {
     }
     try {
       const raw = this.lsGet('indicators')
-      // `raw === null` means this browser has never saved a layout at all --
-      // distinct from an explicit clear, which persists '[]'. Only the former
-      // gets TradingView's default: Volume on, so a user who deliberately
-      // removed every indicator does not have it reappear on the next load.
-      // The value still goes through readStoredIndicators, so a v1 layout is
-      // migrated and de-duplicated exactly as it is for everyone else.
-      const parsed = raw != null ? readStoredIndicators(JSON.parse(raw)) : DEFAULT_INDICATORS
-      if (Array.isArray(parsed)) this.activeIndicators = parsed
+      this.activeIndicators = readStoredIndicators(raw ? JSON.parse(raw) : [])
     } catch {
       /* ignore */
     }
