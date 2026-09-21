@@ -9,21 +9,22 @@ moment, so the backend knew.
 The cause is not the inverted control flow the report suspected. The alert
 services are handed the broker response and run after it, and there is already
 a dedicated `order.no_action` event that both channels subscribe to. The cause
-is that a smart order has *two* do-nothing outcomes and only one was ever
-recognised. Every broker adapter returns, with no API call made:
+is that the service recognised a do-nothing outcome by one wording, "No action
+needed", and the adapters do not share a wording. The standard ones return
+"No OpenPosition Found. Not placing Exit order." for the quantity == 0 case in
+the report; definedge says "No position to square off", groww "No order action
+needed", upstox lower-cases it, and tradejini sends no message at all. Every
+unmatched wording fell through: to `OrderPlacedEvent` in analyze mode (the
+false alert), and to `OrderFailedEvent` with HTTP 500 in live mode (a benign
+no-op reported as a failure).
 
-    "No action needed. Position size matches current position"   (quantity != 0)
-    "No OpenPosition Found. Not placing Exit order."             (quantity == 0)
+The fix reads the shape instead. An adapter that placed nothing made no API
+call, so it returns `res` None and no order id; one that placed an order
+returns the response object and the id. The sandbox is the same: a placed
+sandbox order carries `orderid`, a no-action result does not.
 
-`services/sandbox_service.py` produces the same pair, and
-`frontend/src/hooks/useSocket.ts` already treats both as informational. Only
-the first was matched in `place_smart_order_service`, so the second fell
-through: to `OrderPlacedEvent` in analyze mode (the false alert), and to
-`OrderFailedEvent` with HTTP 500 in live mode (a benign no-op reported as a
-failure).
-
-These are static and pure-function checks. They do not need a broker session, a
-running server or market hours.
+The service is driven end to end with a stub adapter module and a fake event
+bus, so nothing here needs a broker session, a running server or market hours.
 """
 
 import ast
@@ -33,12 +34,64 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-SERVICE_PATH = REPO / "services" / "place_smart_order_service.py"
 SANDBOX_PATH = REPO / "services" / "sandbox_service.py"
 USESOCKET_PATH = REPO / "frontend" / "src" / "hooks" / "useSocket.ts"
 
 NO_POSITION = "No OpenPosition Found. Not placing Exit order."
-ALREADY_MATCHED = "No action needed. Position size matches current position"
+SANDBOX_MATCHED = "Positions Already Matched. No Action needed."
+
+
+# ---------------------------------------------------------------------------
+# Every do-nothing shape a shipped adapter returns
+# ---------------------------------------------------------------------------
+
+
+class _Response:
+    """What an adapter hands back after a real API call: an object with a status."""
+
+    def __init__(self, status: int = 200):
+        self.status = status
+
+
+def _no_action(message):
+    """(res, response, orderid) as returned when no API call was made."""
+    return None, {"status": "success", "message": message}, None
+
+
+#: Every distinct (res, response, orderid) triple a shipped adapter returns
+#: from place_smartorder_api with no order placed, collected by walking every
+#: smart-order function under broker/ (test_every_success_wording_in_the_tree_
+#: is_listed keeps this current). None of them is matched by wording, so the
+#: list is here to prove the shape rule holds for each real one, message or
+#: not.
+ADAPTER_NO_ACTION_RETURNS = {
+    "standard_matched": _no_action("No action needed. Position size matches current position"),
+    "standard_no_position": _no_action(NO_POSITION),
+    "upstox_matched": _no_action("No action needed. Position size matches current position."),
+    "upstox_no_position": _no_action("No open position found. Not placing exit order."),
+    "zerodha_hdfcsky_arrow": _no_action("No action needed. Position already matched."),
+    "iiflcapital": _no_action("No action needed. Position already aligned"),
+    "deltaexchange_indmoney": _no_action("No action needed"),
+    "ibulls_matched": _no_action("Position already matches target size of 100"),
+    "definedge_fallback": _no_action("No action required"),
+    "definedge_no_position": _no_action("No position to square off"),
+    "definedge_matched": _no_action("Position already at target size"),
+    "groww": _no_action("No order action needed. Position size matches current position"),
+    # tradejini: no message at all, and an empty string where the id would be.
+    "tradejini": (None, {"status": "success", "orderid": ""}, ""),
+}
+
+PLACED_ORDER_RETURN = (
+    _Response(200),
+    {"status": "success", "orderid": "251114000123"},
+    "251114000123",
+)
+
+#: An order that went in, whose id the adapter failed to parse. It has a
+#: response object, so it is not a no-action, whatever else it lacks.
+LOST_ID_RETURN = (_Response(200), {"status": "success"}, None)
+
+REJECTED_RETURN = (None, {"status": "error", "message": "Insufficient funds"}, None)
 
 
 # ---------------------------------------------------------------------------
@@ -53,36 +106,18 @@ def is_no_action():
     return is_no_action_response
 
 
-#: Every wording a shipped adapter or the sandbox actually returns with
-#: status success and no order placed. Collected by grepping broker/ and
-#: services/ rather than written from the one adapter the report came from:
-#: the wording is not uniform, and a marker set fitted to a single broker puts
-#: the others back on the defect.
-DO_NOTHING_MESSAGES = [
-    "No action needed. Position size matches current position",
-    "No action needed. Position size matches current position.",
-    "No action needed. Position already matched.",  # zerodha, hdfcsky, arrow
-    "No action needed. Position already aligned",  # iiflcapital
-    "No action needed",  # deltaexchange, ibulls, indmoney
-    "No action required",  # definedge
-    "No OpenPosition Found. Not placing Exit order.",
-    "Positions Already Matched. No Action needed.",  # sandbox, live rewrite
-]
-
-
-@pytest.mark.parametrize("message", DO_NOTHING_MESSAGES)
-def test_every_do_nothing_message_is_recognised(is_no_action, message):
-    """THE DEFECT: only "No action" counted, and only in analyze mode.
-
-    "No action required" is definedge's wording and matches none of the
-    "needed" variants, so a marker set built from the others alone would leave
-    that broker announcing a placed order for an order it never sent.
-    """
-    assert is_no_action({"status": "success", "message": message}) is True
+@pytest.mark.parametrize("name", sorted(ADAPTER_NO_ACTION_RETURNS))
+def test_every_adapter_do_nothing_shape_is_recognised(is_no_action, name):
+    """THE DEFECT: one wording was matched, and the adapters do not share one."""
+    _res, response, orderid = ADAPTER_NO_ACTION_RETURNS[name]
+    assert is_no_action(response, orderid) is True
 
 
 def test_a_placed_order_is_not_no_action(is_no_action):
-    assert is_no_action({"status": "success", "orderid": "251114000123"}) is False
+    _res, response, orderid = PLACED_ORDER_RETURN
+    assert is_no_action(response, orderid) is False
+    # The id beside the response counts even when the response omits it.
+    assert is_no_action({"status": "success"}, "251114000123") is False
 
 
 def test_a_failure_is_not_no_action(is_no_action):
@@ -98,9 +133,154 @@ def test_a_failure_is_not_no_action(is_no_action):
 
 def test_malformed_responses_do_not_raise(is_no_action):
     assert is_no_action({}) is False
-    assert is_no_action({"status": "success"}) is False
-    assert is_no_action({"status": "success", "message": None}) is False
     assert is_no_action(None) is False
+    assert is_no_action("success") is False
+
+
+# ---------------------------------------------------------------------------
+# The service, end to end, with a stub adapter and a fake bus
+# ---------------------------------------------------------------------------
+
+
+class _FakeBus:
+    def __init__(self):
+        self.events = []
+
+    def publish(self, event):
+        self.events.append(event)
+
+    def topics(self):
+        return [event.topic for event in self.events]
+
+
+SMART_ORDER = {
+    "apikey": "k",
+    "symbol": "NIFTY25SEP2625000CE",
+    "exchange": "NFO",
+    "action": "SELL",
+    "quantity": "0",
+    "position_size": "0",
+    "pricetype": "MARKET",
+    "product": "MIS",
+    "strategy": "test",
+}
+
+
+@pytest.fixture
+def service(monkeypatch):
+    """place_smart_order_with_auth with the broker, the bus and the mode stubbed.
+
+    Returns a runner: give it the triple the adapter should return (or, in
+    analyze mode, what the sandbox should return) and get back the service's
+    (success, response, status) result and the bus that collected the events.
+    """
+    import types
+
+    from services import place_smart_order_service as module
+
+    def run(adapter_return, analyze=False, sandbox_return=None):
+        bus = _FakeBus()
+        monkeypatch.setattr(module, "bus", bus)
+        monkeypatch.setattr(module, "get_analyze_mode", lambda: analyze)
+
+        stub = types.SimpleNamespace(place_smartorder_api=lambda data, auth: adapter_return)
+        monkeypatch.setattr(module, "import_broker_module", lambda name: stub)
+
+        if analyze:
+            import services.sandbox_service as sandbox
+
+            monkeypatch.setattr(
+                sandbox, "sandbox_place_smart_order", lambda data, key, original: sandbox_return
+            )
+
+        result = module.place_smart_order_with_auth(
+            dict(SMART_ORDER), "token", "stub", dict(SMART_ORDER)
+        )
+        return result, bus
+
+    return run
+
+
+@pytest.mark.parametrize("name", sorted(ADAPTER_NO_ACTION_RETURNS))
+def test_live_no_action_is_a_success_not_a_failure(service, name):
+    """THE DEFECT in live mode: order.failed and HTTP 500 for a benign no-op."""
+    (ok, response, status), bus = service(ADAPTER_NO_ACTION_RETURNS[name])
+
+    assert (ok, status) == (True, 200)
+    assert response["status"] == "success"
+    assert "orderid" not in response
+    assert bus.topics() == ["order.no_action"]
+
+    event = bus.events[0]
+    assert event.mode == "live"
+    assert event.symbol == SMART_ORDER["symbol"]
+    assert event.message == response["message"]
+    assert event.response_data == response
+
+
+def test_live_no_action_keeps_the_adapter_wording(service):
+    """The adapter is the only party that knows why nothing was sent."""
+    (_ok, response, _status), _bus = service(ADAPTER_NO_ACTION_RETURNS["definedge_no_position"])
+
+    assert response["message"] == "No position to square off"
+
+
+def test_live_no_action_without_a_message_still_says_why(service):
+    """tradejini sends no message; the alerts and the toast need one."""
+    (_ok, response, _status), bus = service(ADAPTER_NO_ACTION_RETURNS["tradejini"])
+
+    assert response["message"]
+    assert "No action needed" in response["message"]
+    assert bus.events[0].message == response["message"]
+
+
+def test_live_placed_order_is_still_a_placed_order(service):
+    (ok, response, status), bus = service(PLACED_ORDER_RETURN)
+
+    assert (ok, status) == (True, 200)
+    assert response == {"status": "success", "orderid": "251114000123"}
+    assert bus.topics() == ["order.placed"]
+    assert bus.events[0].orderid == "251114000123"
+
+
+def test_live_lost_order_id_is_not_called_a_no_action(service):
+    """A response object with no id is an order that went in, not a no-op.
+
+    Announcing "no order was placed" for it would be a false statement about
+    a live order, so the shape rule needs res to be None as well.
+    """
+    _result, bus = service(LOST_ID_RETURN)
+
+    assert bus.topics() == ["order.placed"]
+
+
+def test_live_rejection_is_still_a_failure(service):
+    (ok, response, status), bus = service(REJECTED_RETURN)
+
+    assert (ok, status) == (False, 500)
+    assert response == {"status": "error", "message": "Insufficient funds"}
+    assert bus.topics() == ["order.failed"]
+
+
+@pytest.mark.parametrize("message", [NO_POSITION, SANDBOX_MATCHED])
+def test_analyze_no_action_is_not_announced_as_placed(service, message):
+    """THE DEFECT in analyze mode: OrderPlacedEvent, and "Order ID: N/A" on the phone."""
+    sandbox = (True, {"status": "success", "message": message, "mode": "analyze"}, 200)
+    (ok, response, status), bus = service(None, analyze=True, sandbox_return=sandbox)
+
+    assert (ok, status) == (True, 200)
+    assert response["message"] == message
+    assert bus.topics() == ["order.no_action"]
+    assert bus.events[0].mode == "analyze"
+    assert bus.events[0].message == message
+
+
+def test_analyze_placed_order_is_still_a_placed_order(service):
+    sandbox = (True, {"status": "success", "orderid": "SB0001", "mode": "analyze"}, 200)
+    _result, bus = service(None, analyze=True, sandbox_return=sandbox)
+
+    assert bus.topics() == ["order.placed"]
+    assert bus.events[0].orderid == "SB0001"
 
 
 # ---------------------------------------------------------------------------
@@ -212,80 +392,84 @@ def test_a_lost_order_id_is_not_called_a_no_action(alert_service):
 # ---------------------------------------------------------------------------
 
 
-def test_the_service_no_longer_matches_one_message_inline():
-    """Pins the shape of the fix: one predicate, not a literal per branch.
+def _smart_order_success_messages():
+    """Every message literal returned beside a success status by a smart-order
+    function in any adapter, keyed by adapter name.
 
-    The two call sites drifted apart precisely because each spelled the check
-    out itself. If a third do-nothing message ever appears, it must be added to
-    NO_ACTION_MARKERS and be picked up by both paths at once.
+    Walks the AST of every smart-order function (place_smartorder_api and the
+    _place_smartorder_locked* helpers) with no keyword filter, so a wording
+    that no assumption anticipated is reported rather than skipped. An
+    f-string contributes its literal parts.
     """
-    source = SERVICE_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(SERVICE_PATH))
+    found = {}
+    for path in sorted((REPO / "broker").glob("*/api/order_api.py")):
+        broker = path.parent.parent.name
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+        functions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and "smartorder" in node.name.lower()
+        ]
+        for function in functions:
+            for node in ast.walk(function):
+                if not isinstance(node, ast.Dict):
+                    continue
+                keys = [key.value if isinstance(key, ast.Constant) else None for key in node.keys]
+                if "status" not in keys or "message" not in keys:
+                    continue
+                status = node.values[keys.index("status")]
+                if not (isinstance(status, ast.Constant) and status.value == "success"):
+                    continue
+                message = node.values[keys.index("message")]
+                if isinstance(message, ast.Constant):
+                    found.setdefault(broker, set()).add(message.value)
+                elif isinstance(message, ast.JoinedStr):
+                    prefix = "".join(
+                        part.value for part in message.values if isinstance(part, ast.Constant)
+                    )
+                    found.setdefault(broker, set()).add(prefix)
+    return found
 
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+
+def test_every_success_wording_in_the_tree_is_listed():
+    """Keeps ADAPTER_NO_ACTION_RETURNS honest.
+
+    A new adapter wording that the fixture above does not exercise fails
+    here, at the point it is added, so the shape rule is proven against every
+    real return and not against the ones someone remembered. Messages built
+    from variables (iiflcapital, deltaexchange, upstox, ibulls' default) are
+    listed by hand from the source.
+    """
+    listed = {
+        response["message"]
+        for _res, response, _orderid in ADAPTER_NO_ACTION_RETURNS.values()
+        if "message" in response
     }
-    assert "is_no_action_response" in called
+    found = _smart_order_success_messages()
+    assert len(found) >= 20, "smart-order success messages went missing under broker/"
 
-    body = source.split("def place_smart_order_with_auth", 1)[-1]
-    assert body.count("is_no_action_response(") >= 2, (
-        "both the analyze path and the live path must use the shared predicate"
+    unlisted = sorted(
+        f"{broker}: {message}"
+        for broker, messages in found.items()
+        for message in messages
+        if not any(message == item or item.startswith(message) for item in listed)
     )
+    assert not unlisted, "adapter wordings the fixture does not exercise: " + "; ".join(unlisted)
 
 
-def test_markers_cover_every_message_the_adapters_emit():
-    """The sandbox is the reference implementation every broker adapter mirrors."""
-    from services.place_smart_order_service import NO_ACTION_MARKERS
+def test_frontend_and_sandbox_agree_on_what_no_action_looks_like():
+    """The analyzer toast reads the sandbox wording, and only that wording.
 
+    In analyze mode the event carries the sandbox's message, and the hook
+    decides from that text whether to show an info toast or announce an order
+    placed. Both ends are in this repo, so pin them to each other. Only the
+    placesmartorder branch is read: scanning every `message.includes` in the
+    hook would make an unrelated toast fail this test.
+    """
     sandbox = SANDBOX_PATH.read_text(encoding="utf-8")
-    assert NO_POSITION in sandbox
-
-    for message in DO_NOTHING_MESSAGES:
-        assert any(marker in message.lower() for marker in NO_ACTION_MARKERS), message
-
-
-def test_no_success_no_action_message_in_the_tree_is_missed():
-    """Sweeps the adapters so a new wording cannot quietly slip past.
-
-    Reads the literal returned beside a success status in every
-    place_smartorder_api, rather than trusting the list above to have stayed
-    current. A new adapter wording that no marker covers fails here, at the
-    point it is added, instead of on a trader's phone.
-    """
-    from services.place_smart_order_service import NO_ACTION_MARKERS
-
-    # Only success responses are swept. "No action required or invalid
-    # parameters" carries status error in several adapters and stays a
-    # rejection, not a no-op; test_a_failure_is_not_no_action pins that.
-    missed = []
-    for path in (REPO / "broker").rglob("order_api.py"):
-        source = path.read_text(encoding="utf-8", errors="ignore")
-        for match in re.finditer(
-            r'"status":\s*"success",\s*"message":\s*"([^"]+)"', source
-        ):
-            message = match.group(1)
-            if "no action" not in message.lower() and "openposition" not in message.lower():
-                continue
-            if not any(marker in message.lower() for marker in NO_ACTION_MARKERS):
-                missed.append(f"{path.name}: {message}")
-
-    assert not missed, "adapter wordings no marker covers: " + "; ".join(sorted(set(missed)))
-
-
-def test_frontend_and_backend_agree_on_what_no_action_looks_like():
-    """The toast already treated both messages as info while the backend did not.
-
-    That mismatch is what made the live case surface as "Error: No OpenPosition
-    Found" rather than the informational toast the hook was written to show.
-
-    Only the placesmartorder branch is read, and only for the two markers this
-    module knows about. Scanning every `message.includes` in the hook would
-    make an unrelated toast elsewhere in the file fail this test and point the
-    blame at the backend.
-    """
-    from services.place_smart_order_service import NO_ACTION_MARKERS
+    sandbox_messages = {NO_POSITION, SANDBOX_MATCHED}
+    for message in sandbox_messages:
+        assert message in sandbox, f"the sandbox no longer returns {message!r}"
 
     hook = USESOCKET_PATH.read_text(encoding="utf-8")
     branch = hook.split("apiType === 'placesmartorder'", 1)
@@ -295,30 +479,11 @@ def test_frontend_and_backend_agree_on_what_no_action_looks_like():
     frontend_markers = set(re.findall(r"message\.includes\('([^']+)'\)", branch))
     assert frontend_markers, "the placesmartorder branch matches no message"
 
-    # The backend markers are lower-cased, since adapter wording varies in case.
     for marker in frontend_markers:
-        lowered = marker.lower()
-        assert any(
-            lowered in backend or backend in lowered for backend in NO_ACTION_MARKERS
-        ), f"the toast treats {marker!r} as no-action but the backend does not"
-    assert "No OpenPosition Found" in frontend_markers
-
-
-def test_live_path_returns_success_not_a_failure():
-    """A benign no-op must not reach the user as an error with HTTP 500.
-
-    Before the fix "No OpenPosition Found" missed the guard, fell past the
-    `res.status == 200` check with res None, and landed in the else branch that
-    publishes OrderFailedEvent and returns 500.
-    """
-    source = SERVICE_PATH.read_text(encoding="utf-8")
-    live = source.split("# Live Mode", 1)[-1]
-
-    guard = "if res is None and is_no_action_response(response_data):"
-    assert guard in live
-
-    # Everything the guard covers, up to the return that closes it.
-    block, _, _ = live.split(guard, 1)[-1].partition("return True, order_response_data, 200")
-    assert block, "the no-action guard must return success"
-    assert "SmartOrderNoActionEvent" in block
-    assert "OrderFailedEvent" not in block
+        assert any(marker in message for message in sandbox_messages), (
+            f"the toast matches {marker!r} but the sandbox never sends it"
+        )
+    for message in sandbox_messages:
+        assert any(marker in message for marker in frontend_markers), (
+            f"the sandbox sends {message!r} but the toast would announce an order placed"
+        )
