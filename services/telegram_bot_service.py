@@ -5,7 +5,17 @@ import concurrent.futures
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    # Annotation-only. telegram and the openalgo SDK are imported lazily inside
+    # the methods that use them -- the bot runs on a real OS thread and the
+    # package may not be installed -- so at module scope these names exist for
+    # the type checker alone. `from __future__ import annotations` above keeps
+    # every annotation a string, so nothing here is evaluated at runtime.
+    from openalgo import api as openalgo_api
+    from telegram import Update
+    from telegram.ext import ContextTypes
 
 # Import the original threading module to run the bot in a real OS thread,
 # bypassing eventlet's monkey-patching which causes event loop conflicts.
@@ -136,7 +146,7 @@ class TelegramBotService:
         """
         import queue as _queue
 
-        result_q: "_queue.Queue[tuple[str, object]]" = _queue.Queue()
+        result_q: _queue.Queue[tuple[str, object]] = _queue.Queue()
 
         def _worker() -> None:
             try:
@@ -262,7 +272,7 @@ class TelegramBotService:
 
             # Add volume bar chart
             colors = [
-                "red" if close < open else "green" for close, open in zip(df["close"], df["open"])
+                "red" if close < open else "green" for close, open in zip(df["close"], df["open"], strict=False)
             ]
 
             fig.add_trace(
@@ -438,7 +448,7 @@ class TelegramBotService:
 
             # Add volume bar chart
             colors = [
-                "red" if close < open else "green" for close, open in zip(df["close"], df["open"])
+                "red" if close < open else "green" for close, open in zip(df["close"], df["open"], strict=False)
             ]
 
             fig.add_trace(

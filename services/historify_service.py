@@ -11,7 +11,7 @@ Business logic for historical market data management:
 
 import os
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -30,14 +30,14 @@ from database.historify_db import (
 )
 from database.historify_db import add_to_watchlist as db_add_to_watchlist
 from database.historify_db import bulk_add_to_watchlist as db_bulk_add_to_watchlist
+from database.historify_db import bulk_delete_market_data as db_bulk_delete_market_data
+from database.historify_db import bulk_remove_from_watchlist as db_bulk_remove_from_watchlist
 from database.historify_db import export_to_csv as db_export_to_csv
 from database.historify_db import get_data_catalog as db_get_data_catalog
 from database.historify_db import get_watchlist as db_get_watchlist
 from database.historify_db import import_from_csv as db_import_from_csv
 from database.historify_db import import_from_parquet as db_import_from_parquet
 from database.historify_db import remove_from_watchlist as db_remove_from_watchlist
-from database.historify_db import bulk_remove_from_watchlist as db_bulk_remove_from_watchlist
-from database.historify_db import bulk_delete_market_data as db_bulk_delete_market_data
 from database.token_db_enhanced import get_symbol_info
 from services.history_service import get_history
 from services.intervals_service import get_intervals
@@ -1483,7 +1483,7 @@ def _find_middle_gaps(
     Returns a list of (start_date, end_date) tuples for consecutive gap ranges.
     Uses the market calendar to exclude weekends and holidays.
     """
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     existing_dates = get_existing_dates_fn(symbol, exchange, interval, first_ts, last_ts)
     if not existing_dates:
@@ -2320,7 +2320,7 @@ def get_catalog_grouped_service(group_by: str = "underlying") -> tuple[bool, dic
         grouped = get_catalog_grouped(group_by)
 
         # Convert timestamps to dates in each group
-        for key, items in grouped.items():
+        for _key, items in grouped.items():
             for item in items:
                 if item.get("first_timestamp"):
                     item["first_date"] = datetime.fromtimestamp(item["first_timestamp"]).strftime(

@@ -1,5 +1,5 @@
 import importlib
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from database.auth_db import get_auth_token_broker
 from utils.constants import SUPPORTED_INTERVALS

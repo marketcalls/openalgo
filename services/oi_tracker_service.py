@@ -55,7 +55,7 @@ def _get_nearest_futures_price(
             # CRYPTO: bypass validate_symbol_exchange (in-memory cache miss → 400)
             auth_token, broker = get_auth_token_broker(api_key)
             if auth_token is None:
-                logger.warning(f"Could not retrieve auth token for CRYPTO futures quote")
+                logger.warning("Could not retrieve auth token for CRYPTO futures quote")
                 return None
             logger.info(f"Fetching perpetual futures price for {fut_symbol} on {fut_exchange} via broker={broker}")
             broker_module = import_broker_module(broker)

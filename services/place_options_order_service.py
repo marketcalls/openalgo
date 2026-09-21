@@ -12,7 +12,7 @@ Supports both live trading and sandbox (analyze) mode, just like place_order_ser
 import copy
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode

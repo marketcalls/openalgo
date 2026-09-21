@@ -1,5 +1,5 @@
 import copy
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from database.analyzer_db import AnalyzerLog, db_session
 from database.apilog_db import async_log_order

@@ -1,6 +1,6 @@
 import csv
 from io import StringIO
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from database.auth_db import verify_api_key
 from database.symbol import SymToken, db_session

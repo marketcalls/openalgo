@@ -70,13 +70,13 @@ def _compute_first_candle_range_pct(
     if _row_date(first) != today_str:
         return None
     try:
-        o, h, l = float(first["open"]), float(first["high"]), float(first["low"])
+        o, h, low = float(first["open"]), float(first["high"]), float(first["low"])
     except (KeyError, TypeError, ValueError):
         return None
     if not o:
         return None
 
-    return (h - l) / o * 100
+    return (h - low) / o * 100
 
 
 def _background_fill(symbols: list[str], exchange: str, auth_token: str, broker: str) -> None:

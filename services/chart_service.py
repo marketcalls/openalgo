@@ -1,7 +1,7 @@
 # Chart Preferences Service
 # Business logic for chart preferences API
 
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from database.auth_db import verify_api_key
 from database.chart_prefs_db import get_chart_prefs, update_chart_prefs

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import requests
 
@@ -45,7 +45,7 @@ _TIMEOUT = 15
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 _lock = threading.Lock()
-_cache: Dict[str, Any] = {"date": None, "events": {}}
+_cache: dict[str, Any] = {"date": None, "events": {}}
 
 
 def _today_ist() -> str:
@@ -61,7 +61,7 @@ def _new_session() -> requests.Session:
     return session
 
 
-def _parse_date(value: str) -> Optional[str]:
+def _parse_date(value: str) -> str | None:
     """NSE mixes formats across endpoints. Returns ISO date, or None if the
     field is unparseable — an event with no usable date is dropped rather than
     guessed, since a wrong date on a trading flag is worse than no flag."""
@@ -75,14 +75,14 @@ def _parse_date(value: str) -> Optional[str]:
     return None
 
 
-def _collect(session: requests.Session, kind: str, path: str) -> List[Dict[str, str]]:
+def _collect(session: requests.Session, kind: str, path: str) -> list[dict[str, str]]:
     resp = session.get(f"{NSE_BASE}{path}", timeout=_TIMEOUT)
     resp.raise_for_status()
     rows = resp.json()
     if isinstance(rows, dict):  # some endpoints wrap the list
         rows = rows.get("data") or []
 
-    out: List[Dict[str, str]] = []
+    out: list[dict[str, str]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -107,7 +107,7 @@ def _collect(session: requests.Session, kind: str, path: str) -> List[Dict[str, 
     return out
 
 
-def fetch_events(force: bool = False) -> Dict[str, List[Dict[str, str]]]:
+def fetch_events(force: bool = False) -> dict[str, list[dict[str, str]]]:
     """symbol -> list of upcoming events, cached for the IST day.
 
     Returns whatever it managed to collect: NSE frequently serves one endpoint
@@ -120,7 +120,7 @@ def fetch_events(force: bool = False) -> Dict[str, List[Dict[str, str]]]:
         if not force and _cache["date"] == today and _cache["events"]:
             return _cache["events"]
 
-    events: Dict[str, List[Dict[str, str]]] = {}
+    events: dict[str, list[dict[str, str]]] = {}
     try:
         session = _new_session()
         for kind, path in _ENDPOINTS.items():
@@ -141,7 +141,7 @@ def fetch_events(force: bool = False) -> Dict[str, List[Dict[str, str]]]:
     return events
 
 
-def events_for(symbols: List[str], within_days: int = 2) -> Dict[str, Dict[str, str]]:
+def events_for(symbols: list[str], within_days: int = 2) -> dict[str, dict[str, str]]:
     """The single most relevant event per symbol inside the window.
 
     One event per symbol, soonest first: the caller is drawing a badge, not a
@@ -155,7 +155,7 @@ def events_for(symbols: List[str], within_days: int = 2) -> Dict[str, Dict[str, 
     horizon = today + timedelta(days=within_days)
     wanted = {s.strip().upper() for s in symbols}
 
-    out: Dict[str, Dict[str, str]] = {}
+    out: dict[str, dict[str, str]] = {}
     for symbol in wanted:
         upcoming = []
         for ev in all_events.get(symbol, []):

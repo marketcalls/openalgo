@@ -12,6 +12,7 @@ echo '<token>' > strategies/tf_jwt.txt
 """
 
 from __future__ import annotations
+
 import base64
 import hashlib
 import hmac
@@ -134,7 +135,7 @@ def _on_auth_failure() -> None:
         logger.exception("Failed to trigger immediate TF JWT refresh after auth failure")
 
 
-def fetch_market_pulse() -> Optional[dict[str, list[dict]]]:
+def fetch_market_pulse() -> dict[str, list[dict]] | None:
     """Fetch all three TradeFinder ranked lists in one call. Returns None on
     ANY failure (empty/expired JWT, network error, TF error payload) so the
     caller can skip this tick instead of writing partial/garbage data."""
@@ -167,7 +168,7 @@ def fetch_market_pulse() -> Optional[dict[str, list[dict]]]:
     return result
 
 
-def fetch_sector_scope() -> Optional[dict]:
+def fetch_sector_scope() -> dict | None:
     """Fetch TradeFinder's sector rfactor index + per-sector stock breakdown.
 
     TF used to serve this as two separate calls (/data/order/daily-index +

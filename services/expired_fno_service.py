@@ -574,8 +574,8 @@ def _run_dhan_harvest_job(
 ) -> None:
     """Background worker: sweep date chunks × flags × codes × strikes × CE/PE,
     storing rolling bars in relative coordinates."""
-    from extensions import socketio
     from database.historify_db import upsert_rolling_options
+    from extensions import socketio
 
     NUM_WORKERS = 4
     update_expired_fno_job(job_id, {"status": "running", "started_at": _now_iso()})
@@ -696,7 +696,7 @@ def get_expired_fno_capability(api_key: str) -> tuple[bool, dict[str, Any], int]
     """
     try:
         result = get_auth_token_broker(api_key)
-        auth_token, broker = result[0], result[1]
+        broker = result[1]
 
         supported = broker in EXPIRED_FNO_CAPABLE_BROKERS if broker else False
         note = None
@@ -895,8 +895,6 @@ def fetch_contracts_for_expiry(
         if isinstance(expiry_dates, str):
             expiry_dates = [expiry_dates]
         expiry_dates = [d.split("T")[0] for d in expiry_dates]
-        # Keep compat: first expiry_date for legacy single-expiry callers
-        expiry_date = expiry_dates[0]
 
         result = get_auth_token_broker(api_key)
         auth_token, broker = result[0], result[1]

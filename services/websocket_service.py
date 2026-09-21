@@ -5,7 +5,7 @@ without dealing with authentication or connection management.
 """
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from database.auth_db import get_auth_token, get_broker_name, verify_api_key
 from utils.logging import get_logger
