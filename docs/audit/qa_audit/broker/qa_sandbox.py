@@ -1556,14 +1556,19 @@ def sec_options(run: Runner) -> None:
         "malformed expiry"), endpoint="optionsymbol", expected="clean 400 on a bad expiry")
 
     def chain(with_greeks=False):
+        """`chain` sits at the TOP level of the response, not under `data`."""
         kw = {"underlying": "NIFTY", "exchange": "NSE_INDEX",
               "expiry_date": EXP, "strike_count": 10}
         if with_greeks:
             kw["with_greeks"] = True
         r = run.ok(run.client.optionchain(**kw), "optionchain")
-        data = r.get("data") or {}
-        rows = data.get("chain") or data.get("options") or (data if isinstance(data, list) else [])
-        need(rows, f"empty chain (response keys: {list(data)[:8]})")
+        rows = r.get("chain") or (r.get("data") or {}).get("chain") or []
+        need(rows, f"empty chain (response keys: {sorted(r)[:10]})")
+        for row in rows[:5]:
+            need_keys(row, ["strike", "ce", "pe"], "chain row")
+            for side in ("ce", "pe"):
+                need_keys(row[side], ["symbol", "ltp", "bid", "ask", "oi",
+                                      "lotsize", "tick_size"], f"chain {side}")
         run.note_limit("optionchain legs returned", len(rows))
         return rows, r
 
@@ -1593,6 +1598,11 @@ def sec_options(run: Runner) -> None:
               expected="realistic multi-leg load")
 
     def greeks(offset, ot):
+        """An IV of 0 has two very different causes, and the option's own
+        price is what separates them: an untraded leg gives the solver no
+        input (a market condition), whereas a priced leg that still yields
+        IV 0 is a solver failure (a real defect). Capture the price so the
+        report attributes it instead of leaving it ambiguous."""
         sym = osym(offset, ot)["symbol"]
         r = run.ok(run.client.optiongreeks(symbol=sym, exchange="NFO",
                                            underlying_symbol="NIFTY",
@@ -1601,7 +1611,25 @@ def sec_options(run: Runner) -> None:
         g = r.get("greeks") or {}
         need_keys(g, ["delta", "gamma", "theta", "vega", "rho"], "greeks")
         iv = as_num(r.get("implied_volatility"), "implied_volatility")
-        need(0 < iv < 500, f"implausible IV {iv}")
+        px = as_num(r.get("option_price", 0), "option_price")
+        spot = as_num(r.get("spot_price", 0), "spot_price")
+        strike = as_num(r.get("strike", 0), "strike")
+        intrinsic = max(0.0, (spot - strike) if ot == "CE" else (strike - spot))
+        if iv <= 0:
+            detail = (f"{sym}: IV={iv}, option_price={px}, spot={spot}, "
+                      f"strike={strike}, intrinsic={intrinsic:.2f}")
+            run.note_quirk(f"IV solver returned {iv} at {offset}", detail)
+            if px <= 0:
+                raise Skip(f"{offset} {ot} is untraded (option_price={px}) - the solver "
+                           f"has no input, so IV 0 is a market condition, not a defect")
+            if px <= intrinsic + 0.05:
+                raise Warn(f"{offset} {ot} priced at or below intrinsic ({px} vs "
+                           f"{intrinsic:.2f}) - IV is mathematically undefined there, "
+                           f"not a solver bug. {detail}")
+            raise AssertionError(
+                f"IV solver returned {iv} on a priced option - genuine solver failure. "
+                f"{detail}")
+        need(iv < 500, f"{sym}: implausible IV {iv}")
         d = as_num(g["delta"], "delta")
         need(abs(d) <= 1.001, f"delta out of range {d}")
         need(as_num(g["gamma"], "gamma") >= 0, "gamma negative")
@@ -1633,30 +1661,49 @@ def sec_options(run: Runner) -> None:
     run.check("OS-14", put_signs, endpoint="optiongreeks", expected="PE delta negative")
 
     def multigreeks():
-        syms = [osym(o, "CE")["symbol"] for o in ("ATM", "OTM3", "ITM3")]
+        """Each `symbols` item is an object with symbol AND exchange - a bare
+        string list is rejected with 'Validation failed'."""
+        syms = [{"symbol": osym(o, "CE")["symbol"], "exchange": "NFO"}
+                for o in ("ATM", "OTM3", "ITM3")]
         r = post("multioptiongreeks", {"symbols": syms})
         run.ok(r, "multioptiongreeks")
-        rows = r.get("data") or r.get("results") or []
-        need(rows, "no per-symbol results")
+        rows = r.get("data") or []
+        need(rows, f"no per-symbol results (keys: {sorted(r)[:8]})")
         need(len(rows) == len(syms), f"{len(syms)} requested, {len(rows)} returned")
+        for row in rows:
+            need_keys(row, ["status", "symbol", "exchange"], "multigreeks row")
 
     run.check("OS-15", multigreeks, endpoint="multioptiongreeks", expected="per-symbol batch")
 
     def multigreeks_invalid():
-        """OS-16 companion - a bad leg must not sink the valid ones."""
+        """A bad leg must not sink the valid ones - per-row status, not a
+        whole-request rejection."""
         good = osym("ATM", "CE")["symbol"]
-        r = post("multioptiongreeks", {"symbols": [good, "ZZNOTREAL99"]})
+        r = post("multioptiongreeks", {"symbols": [
+            {"symbol": good, "exchange": "NFO"},
+            {"symbol": "ZZNOTREAL99", "exchange": "NFO"}]})
         need(r.get("status") == "success",
              f"batch failed entirely on one bad symbol: {r.get('message')}")
+        rows = r.get("data") or []
+        need(len(rows) == 2, f"expected 2 result rows, got {len(rows)}")
+        by = {x.get("symbol"): x for x in rows}
+        need(by.get(good, {}).get("status") == "success", "valid leg did not resolve")
+        bad = by.get("ZZNOTREAL99", {})
+        need(bad.get("status") != "success", "invalid leg reported success")
+        need(str(bad.get("message", "")), "failing leg carries no message")
 
     run.check("OS-15b", multigreeks_invalid, endpoint="multioptiongreeks",
-              expected="invalid leg isolated")
+              expected="invalid leg isolated to its own row")
 
     def synth(u="NIFTY", idx_ex="NSE_INDEX", exp=None):
+        """The documented key is `synthetic_future_price`, at the top level."""
         r = run.ok(run.client.syntheticfuture(underlying=u, exchange=idx_ex,
                                               expiry_date=exp or EXP), "syntheticfuture")
-        d = r.get("data") or r
-        fp = as_num(d.get("synthetic_future") or d.get("forward_price"), "forward price")
+        d = r if "synthetic_future_price" in r else (r.get("data") or r)
+        need("synthetic_future_price" in d,
+             f"response omits synthetic_future_price (keys: {sorted(d)[:10]})")
+        need_keys(d, ["underlying", "underlying_ltp", "expiry", "atm_strike"], "syntheticfuture")
+        fp = as_num(d["synthetic_future_price"], "synthetic_future_price")
         spot = as_num(run.ok(run.client.quotes(symbol=u, exchange=idx_ex),
                              "spot")["data"]["ltp"], "spot")
         need(abs(fp - spot) / spot < 0.10, f"{u}: synthetic {fp} vs spot {spot} implausible")
