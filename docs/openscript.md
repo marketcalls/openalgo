@@ -213,7 +213,10 @@ more of it than it promises.
   are consistent, whether it is the canonical encoding: all of that is the
   engine's work, done at load.
 - **It does not run anything.** Saving a script starts nothing, schedules
-  nothing and places no order. Storage is storage.
+  nothing and places no order. Storage is storage. Running a saved script is a
+  separate act on a separate surface, and
+  [Running one as a strategy](#running-one-as-a-strategy) is where it is
+  described.
 
 ### Sizes
 
@@ -224,7 +227,7 @@ scripts, a 3 kB source compiles to 8 kB and a 5.4 kB one to 14 kB. The two
 travel in one request, and the pair is sized to fit under the request limit the
 smallest deployment leaves at its default.
 
-## The routes
+## The routes that store a script
 
 All five require a logged-in session. They are under the path the web server
 already proxies, so a hosted install needs no configuration change.
@@ -249,6 +252,128 @@ the browser editor is the only copy. The compiled program gets no backup: it is
 not a copy of anything anybody wrote, it is derived from the source, and the
 source is what is kept. The write is atomic: a save that is interrupted leaves
 the previous script whole rather than half of the new one.
+
+## Running one as a strategy
+
+Saving a script starts nothing. A script that has compiled is also something the
+server can run on its own, in a process of its own, against a live feed, placing
+orders the way every hosted strategy places them. That is the runner, and it is
+under `/openscript/runner`.
+
+A run is one script, one instrument, one process. It writes a log, it can be
+stopped, and it can be given times to start and stop by itself. It outlives the
+request that started it, which is the fact the rest of this section follows
+from.
+
+### Before it can start: what it runs on
+
+A start carries nothing. What a script runs on is saved against that script, and
+the run reads it when it begins:
+
+| Field | Means |
+| --- | --- |
+| `symbol` | The instrument, in the platform's own symbol format |
+| `exchange` | The exchange that instrument trades on |
+| `interval` | The bar interval, for example `5m` |
+| `product` | Optional. `CNC`, `NRML` or `MIS`. Left empty, the script's own declaration decides |
+
+Saved settings live in `strategies/openscript_run_configs.json`, beside the
+Python strategy host's own configuration file and inside the same folder a
+container install keeps on a named volume, so what you set survives a rebuild
+and an upgrade leaves it alone. The write goes through a temporary file and a
+rename, so an interrupted save leaves the previous settings whole.
+
+**A script with nothing saved against it is refused by name.** The refusal names
+the script and says which of the instrument, the exchange and the interval is
+missing, and nothing is started. This is deliberate and it is the reason the
+start route takes no body at all: if a start could carry the instrument, a run
+started from a page and a run started by a schedule could differ by one typed
+character, and the difference would first be visible as an order on something
+nobody meant to trade. A body carrying anything is refused rather than ignored,
+because a caller that believes it asked for something and was silently not given
+it is worse off than one that was told no.
+
+### Starting answers with an identifier, never an outcome
+
+A start replies at once with the identity of the run: its id, the file, the
+instrument, the exchange, the interval, the product, the process id, the time it
+started and the log it is writing to. Nothing in that reply says what the
+strategy did, because at the moment it is written the strategy has not done
+anything yet.
+
+That is a property of the deployment rather than a preference. A request has a
+few minutes before the web server gives up on it and the response is buffered on
+the way back, so a route that waited for a run to finish would time out with the
+strategy still on the market and the operator told nothing about it. The two
+things to do next are both on this page: read the status route, and read the
+log.
+
+### The runner routes
+
+All of them need a logged-in session, and all of them name a script the way the
+source routes name one.
+
+| Method and path | Does |
+| --- | --- |
+| `POST /openscript/runner/start/<name>.oscript` | Starts it and answers with the identity of the run. Refused when there is no such script, no compiled program beside it, no run settings saved, or it is already running |
+| `POST /openscript/runner/stop/<name>.oscript` | Stops the run and reaps its process. A script that is not running is told so and is never told it was stopped |
+| `GET /openscript/runner/status` | Everything running, everything scheduled, what every script is run on, and the folder logs are written to |
+| `GET /openscript/runner/status/<name>.oscript` | The same for one script, plus the names of the recent logs it has written |
+| `GET /openscript/runner/config` | What every script with settings saved is run on, and the products this platform sends |
+| `GET /openscript/runner/config/<name>.oscript` | What one script is run on |
+| `POST /openscript/runner/config/<name>.oscript` | Saves that, from a body carrying `symbol`, `exchange`, `interval` and optionally `product` |
+| `DELETE /openscript/runner/config/<name>.oscript` | Forgets it. A run already started is not touched, since that run is the one on the market |
+| `POST /openscript/runner/schedule/<name>.oscript` | Sets the times it starts and stops, from a body carrying `start_time`, optionally `stop_time`, and optionally `days` |
+| `DELETE /openscript/runner/schedule/<name>.oscript` | Removes the schedule. Nothing running is touched |
+
+The settings body refuses a field it does not know, by name, rather than
+dropping it. Schedule times are 24 hour `HH:MM` in IST and days are the three
+letter names; with no days given a schedule runs Monday to Friday. A schedule
+carries no exchange of its own: the calendar it checks is the one the script's
+own run settings name, so a venue is typed in one place and not two that can
+disagree.
+
+### Where the logs go
+
+`log/strategies/`, the same folder every hosted strategy writes into. There is
+one file per run, named `openscript_<name>_<date>_<time>_IST.log`, where
+`<name>` is the script without its extension. Everything the run prints, on both
+of its output streams, goes there; the first line records when it started. On a
+container install `log/` is a named volume, so the logs of a run survive a
+rebuild.
+
+The status route names the folder and the recent log files for a script, and the
+strategy log viewer reads them, because the runner deliberately writes where the
+Python strategy host already writes rather than inventing a second place an
+operator has to know about.
+
+### Where the orders go, and the one thing this surface does not offer
+
+A run places orders through this platform's own order API with the platform's
+own key, exactly as a hosted Python strategy does. That path reads the
+platform-wide analyzer setting before anything else, so **sandbox mode and
+analyzer mode are honoured by the same code that honours them everywhere else**.
+An engine reports what a script asked for; it never reaches a broker itself.
+
+There is no route, field or flag anywhere on this surface that chooses a
+destination, and a settings body that invents one is refused by name. Where an
+order goes is one question with one answer, decided in the platform's own
+setting, and a second switch here would be a second answer to it.
+
+### What actually runs
+
+`openscript_host/openscript_runner.py`, a program that ships with the platform.
+It is deliberately not under `strategies/`: that folder is a named volume on a
+container install, a named volume is seeded from the image only while it is
+empty, and a platform file put there would reach a brand new install and no
+existing one. An install that still has it in the old place keeps working and
+says so in the log on every start.
+
+Schedules go on the one scheduler this platform runs, the Python strategy host's
+own, with job identifiers prefixed so they cannot collide with a strategy that
+happens to share a name. They are stored in
+`strategies/openscript_runner_schedules.json` and put back on the scheduler at
+startup.
 
 ## The language itself
 

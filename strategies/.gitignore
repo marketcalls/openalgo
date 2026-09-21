@@ -1,6 +1,19 @@
 # Strategy configuration file (contains user-specific data)
 strategy_configs.json
 
+# What each OpenScript strategy is run on, and when it starts and stops.
+# Both are the trader's own choices, written by the server beside the file
+# above and kept on the same named volume, so neither belongs in the
+# repository. Without these lines a saved instrument shows up as an
+# untracked file and can be committed by accident.
+openscript_run_configs.json
+openscript_runner_schedules.json
+
+# What an interrupted atomic write leaves beside them. The settings file is
+# written through a .tmp and the schedules through a .partial.
+*.tmp
+*.partial
+
 # Environment variables (contains sensitive data)
 strategy_env.json
 .secure_env

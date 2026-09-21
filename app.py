@@ -82,6 +82,7 @@ from blueprints.master_contract_status import (
 from blueprints.oiprofile import oiprofile_bp  # Import the OI Profile blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.openscript import openscript_bp  # Trader authored OpenScript sources
+from blueprints.openscript_runner import openscript_runner_bp  # Runs one saved strategy
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
@@ -319,6 +320,7 @@ def create_app():
     app.register_blueprint(chart_test_bp)  # Register standalone chart test page (dev/testing only)
     app.register_blueprint(custom_indicators_bp)  # Register user chart indicators blueprint
     app.register_blueprint(openscript_bp)  # Register trader authored OpenScript sources
+    app.register_blueprint(openscript_runner_bp)  # Register the OpenScript strategy runner
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint

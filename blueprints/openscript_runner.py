@@ -1,8 +1,20 @@
 """OpenScript Runner Blueprint.
 
 Routes: ``/openscript/runner``. Starts one saved OpenScript strategy, stops it,
-reports which are running with their state and log location, and holds the
-schedule that starts and stops one on its own.
+reports which are running with their state and log location, holds what each
+script is run on, and holds the schedule that starts and stops one on its own.
+
+**Every name this file calls is imported by name.** An earlier version of this
+module reached the service through lists of plausible spellings and
+``getattr``, on the theory that the two halves were being written in parallel
+and the names would settle later. They did not settle: the list for reading
+state matched nothing the service defines, so status and stop answered "this
+server cannot run OpenScript strategies yet" forever and a running strategy
+could not be stopped from the page that started it. The tests did not catch it
+because they ran against a stand in whose method names matched the guesses
+rather than the service. So the imports below are ordinary imports, and a name
+that is not there is an error at startup, in the one place where it is cheap to
+notice, rather than a route that is quietly dead.
 
 **Starting answers with an identifier, never with a result.** The deployment
 puts a five minute ceiling on a request and buffers the response on the main
@@ -13,23 +25,36 @@ caller learns what happened by reading the status route and the log. This is a
 property of the deployment, not a preference, and it is the one thing in this
 file that must not be quietly relaxed.
 
+**A start carries nothing.** What a script runs on is saved against that script
+in ``services/openscript_run_config.py`` and read by the service when the run
+begins. A start that carried the instrument would let a run started from a page
+and a run started by a schedule differ by one typed character, and the
+difference would first be visible as an order on something nobody meant to
+trade. So the start route takes no body at all, and a body that carries one is
+refused rather than ignored: a client that believes it asked for something and
+was silently not given it is worse than a client that was told no. A script
+with nothing saved against it is refused by name, in the sentence the settings
+module writes, saying which of the instrument, the exchange and the interval is
+missing.
+
 **Nothing here decides where an order goes, and there is no switch to live.** A
 strategy places orders the way every hosted strategy does: through the local
 order API with the platform's own key, which reads the platform-wide analyzer
 setting before anything else. That is the single place the destination is
 decided, and a second switch here would be a second answer to a question that
-must only have one. So the start route takes no options at all: a body that
-carries one is refused rather than ignored, because a client that believes it
-asked for something and was silently not given it is worse than a client that
-was told no. Switching a strategy to live is a deliberate act by the operator
-against the platform's own setting, and it stays there.
+must only have one. The settings route refuses a field it does not know, so a
+caller that invents one is told, and there is deliberately no field anywhere
+below that a caller could set to reach a live destination.
 
 **One scheduler, and it is the one the strategy host already runs.** The
 schedule below is registered on the scheduler ``blueprints.python_strategy``
 starts, with that module's own trigger class and its own timezone object, taken
-by attribute at call time rather than imported again here. A second scheduler in
-the same worker would mean two objects firing jobs nobody can see together, and
-the job identifiers are prefixed so the two sets can never collide.
+by attribute at call time rather than imported again here. That module is
+imported inside the function rather than at the top of this file for one
+reason: importing it starts the scheduler, and a module that is only sometimes
+scheduled against should not pay for that on import. A second scheduler in the
+same worker would mean two objects firing jobs nobody can see together, and the
+job identifiers are prefixed so the two sets can never collide.
 
 **What this module never does.** It does not open a process, hold a lock over
 one, or keep a registry of runs: ``services.openscript_runner_service`` owns all
@@ -46,7 +71,6 @@ server can run it. That is refused here with a sentence a trader can act on,
 rather than handed to the service to fail on later.
 """
 
-import importlib
 import json
 import os
 import re
@@ -57,9 +81,26 @@ from functools import partial
 from pathlib import Path
 
 import pytz
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 import blueprints.openscript as openscript_sources
+from services.openscript_run_config import (
+    PRODUCTS,
+    all_run_configs,
+    delete_run_config,
+    read_run_config,
+    require_run_config,
+    write_run_config,
+)
+from services.openscript_runner_service import (
+    is_running,
+    logs_for,
+    run_id_for,
+    running_runs,
+    start_run,
+    status_of,
+    stop_run,
+)
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -69,8 +110,8 @@ openscript_runner_bp = Blueprint("openscript_runner_bp", __name__, url_prefix="/
 
 # The same zone object the strategy host schedules against: the zone table hands
 # back a cached instance per name, so this is that instance and not a copy of
-# it. Used for the timestamps this module writes; the schedule itself is given
-# the host's own attribute, so there is no way for the two to drift.
+# it. The schedule itself is given the host's own attribute, so there is no way
+# for the two to drift.
 IST = pytz.timezone("Asia/Kolkata")
 
 # The days a schedule may name. Any day is allowed rather than weekdays only,
@@ -86,6 +127,16 @@ _TIME = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 # becomes a name that route will not store, so there is deliberately only one,
 # and it lives with the files.
 SAFE_NAME = openscript_sources._SAFE_NAME
+
+# What a settings body may carry, and nothing else. The list is short on
+# purpose: every field a run needs is here, and a field a caller invents is
+# refused by name rather than dropped, which is what keeps an imagined switch to
+# live from looking like it worked.
+SETTINGS_FIELDS = ("symbol", "exchange", "interval", "product")
+
+# The most logs one answer names. A script run every day for a year has that
+# many files, and a status page needs the recent ones rather than all of them.
+MAX_LOGS_REPORTED = 20
 
 # Where a schedule survives a restart. Beside the strategy host's own
 # configuration file and inside the folder the deployment keeps on a named
@@ -106,154 +157,82 @@ _SCHEDULES_LOCK = threading.RLock()
 # does.
 _RESTORED = False
 
-# The service that owns processes, and the names this module will call it by.
-#
-# It is written in parallel with this file, so each call is resolved by name at
-# call time against a short list of the obvious spellings. This is a seam and
-# not a design: once the names are settled, the lists collapse to one entry each
-# and nothing else here changes.
-_SERVICE_MODULE = "services.openscript_runner_service"
-_START_NAMES = ("start", "start_strategy", "start_script", "start_run")
-_STOP_NAMES = ("stop", "stop_strategy", "stop_script", "stop_run")
-_STATUS_NAMES = ("status", "get_status", "running", "list_running")
 
-
-class RunnerUnavailable(RuntimeError):
-    """The runner service is absent, or answers to none of the names used here."""
+class SchedulerUnavailable(RuntimeError):
+    """The platform scheduler is not running, so nothing can be scheduled on it."""
 
 
 # ---------------------------------------------------------------------------
-# The service, and the shapes it may answer in
+# The shapes this module answers in
 # ---------------------------------------------------------------------------
-
-
-def _service():
-    """The module that owns running processes, or None if it is not installed."""
-    try:
-        return importlib.import_module(_SERVICE_MODULE)
-    except ImportError:
-        return None
-
-
-def _invoke(names, *args, **kwargs):
-    """Call the first of ``names`` the service defines."""
-    module = _service()
-    if module is None:
-        raise RunnerUnavailable("the runner service is not installed")
-    for name in names:
-        function = getattr(module, name, None)
-        if callable(function):
-            return function(*args, **kwargs)
-    raise RunnerUnavailable(f"the runner service defines none of {names}")
-
-
-def _answer(result):
-    """Read what a service call came back with as ``(ok, detail)``.
-
-    Three shapes are accepted because three are plausible and only one of them
-    can be right: the ``(ok, message)`` pair the strategy host uses throughout,
-    a dictionary, and a bare identifier. Anything else is read as success with
-    no detail, which is the reading that does not invent a failure.
-    """
-    if isinstance(result, tuple) and len(result) == 2:
-        ok, detail = result
-        if isinstance(detail, dict):
-            return bool(ok), detail
-        return bool(ok), ({"message": str(detail)} if detail is not None else {})
-    if isinstance(result, dict):
-        marker = result.get("ok")
-        if isinstance(marker, bool):
-            return marker, result
-        state = result.get("status")
-        if isinstance(state, str):
-            return state.strip().lower() not in ("error", "failed", "failure"), result
-        return True, result
-    if isinstance(result, str) and result:
-        return True, {"id": result}
-    if isinstance(result, bool):
-        return result, {}
-    return True, {}
-
-
-def _identifier(detail, filename):
-    """The identity of one run.
-
-    The service's own identifier when it mints one. Otherwise the file name,
-    which is a true identity here because a script has at most one run: the
-    registry is keyed by script, so a second start is refused rather than
-    producing a second run to tell apart.
-    """
-    for key in ("run_id", "id", "identifier", "run"):
-        value = detail.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return filename
-
-
-def _log_of(detail):
-    """Where this run is writing, if the service said."""
-    for key in ("log", "log_file", "logfile", "log_path"):
-        value = detail.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
 
 
 def _when(value):
-    """A time as text, whatever the service keeps it as."""
-    if isinstance(value, str) and value:
-        return value
-    if hasattr(value, "isoformat"):
+    """A moment as text, or nothing.
+
+    The service keeps a started time as a datetime in IST. It is written out
+    here rather than handed to the encoder, which would turn it into the format
+    an HTTP header uses and lose the zone a trader reads it in.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, datetime):
         return value.isoformat()
     return None
 
 
-def _message(detail, fallback):
-    """The service's own sentence, or ours."""
-    value = detail.get("message")
-    return value if isinstance(value, str) and value else fallback
+def _run_answer(info: dict) -> dict:
+    """One run, as this route reports it.
 
-
-def _entry(name, info):
-    """One running script, in the shape this route answers in."""
+    ``state`` is always running. The service drops a run whose process has gone
+    before it copies anything out, so a finished run is absent from its answers
+    entirely rather than present and marked finished, and reporting the state it
+    carries would be reporting a constant. It is here because the page that
+    reads this shows a state beside every strategy.
+    """
     return {
-        "file": name,
-        "id": _identifier(info, name),
-        "state": str(info.get("state") or info.get("status") or "running"),
-        "started_at": _when(info.get("started_at") or info.get("started")),
-        "log": _log_of(info),
+        "id": info.get("run"),
+        "file": info.get("script"),
+        "state": "running",
+        "symbol": info.get("symbol"),
+        "exchange": info.get("exchange"),
+        "interval": info.get("interval"),
+        "product": info.get("product") or "",
+        "pid": info.get("pid"),
+        "started_at": _when(info.get("started_at")),
+        "log": info.get("log_file"),
     }
 
 
-def _entries(result):
-    """Normalise whatever the service reports into a list of running entries."""
-    if isinstance(result, tuple) and len(result) == 2:
-        result = result[1]
-    if isinstance(result, dict):
-        inner = result.get("running")
-        if isinstance(inner, (list, dict)):
-            result = inner
+def _settings_answer(filename: str, entry: dict) -> dict:
+    """One script's run settings, as this route reports them.
 
-    entries = []
-    if isinstance(result, dict):
-        for name, info in result.items():
-            if isinstance(name, str):
-                entries.append(_entry(name, info if isinstance(info, dict) else {}))
-    elif isinstance(result, list):
-        for info in result:
-            if not isinstance(info, dict):
-                continue
-            name = (
-                info.get("file") or info.get("filename") or info.get("script") or info.get("name")
-            )
-            if isinstance(name, str):
-                entries.append(_entry(name, info))
-    return sorted(entries, key=lambda item: item["file"])
+    The owning user is not among them. It is stored so that a run started by a
+    schedule, with nobody watching, can find the key it authenticates with, and
+    it is not something the page that sets an instrument needs back.
+    """
+    return {
+        "file": filename,
+        "symbol": entry.get("symbol", ""),
+        "exchange": entry.get("exchange", ""),
+        "interval": entry.get("interval", ""),
+        "product": entry.get("product", ""),
+        "updated_at": entry.get("updated_at"),
+    }
 
 
-def _running():
-    """Every run the service is holding right now."""
-    return _entries(_invoke(_STATUS_NAMES))
+def _log_names(run_id: str) -> list[str]:
+    """The names of the recent logs one run has written, newest first."""
+    try:
+        return [one.name for one in logs_for(run_id)[:MAX_LOGS_REPORTED]]
+    except Exception:
+        # Broad on purpose. This is a convenience beside the answer, and a status
+        # page that fails outright because a directory could not be listed tells
+        # an operator nothing about the strategy they came to look at.
+        logger.exception("Could not list the logs for the OpenScript run %s", run_id)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +240,7 @@ def _running():
 # ---------------------------------------------------------------------------
 
 
-def _script_dir():
+def _script_dir() -> Path:
     """The directory the source route stores scripts in, read at call time.
 
     Taken from that module rather than spelled again, so a directory moved there
@@ -290,6 +269,11 @@ def _why_not_runnable(filename):
     with no compiled program beside it is saved, editable and openable, and
     nothing on this server will run it, which is a fact about the script rather
     than a fault in the request.
+
+    What it is run on is deliberately not checked here. The service reads the
+    saved settings itself and refuses by name when they are missing, and asking
+    the same question twice in two places is how the two answers end up
+    disagreeing about which one a trader has to fix.
     """
     directory = _script_dir()
     if not (directory / filename).is_file():
@@ -380,7 +364,9 @@ def _strategy_host():
     read off it by attribute, so the trigger class and the timezone are the
     host's own and cannot become a second copy.
     """
-    return importlib.import_module("blueprints.python_strategy")
+    import blueprints.python_strategy as strategy_host
+
+    return strategy_host
 
 
 def _scheduler(host):
@@ -388,7 +374,7 @@ def _scheduler(host):
     host.init_scheduler()
     scheduler = host.SCHEDULER
     if scheduler is None:
-        raise RunnerUnavailable("the platform scheduler is not running")
+        raise SchedulerUnavailable("the platform scheduler is not running")
     return scheduler
 
 
@@ -457,19 +443,28 @@ def _register_jobs(filename, entry):
         scheduler.remove_job(stop_job)
 
 
-def _is_trading_day(exchange):
+def _is_trading_day(filename):
     """Whether the exchange this script trades is open today.
 
-    The strategy host already answers this, holidays, weekends and the
-    occasional special session included, so it is asked rather than answered
-    again. If it cannot be asked the schedule is honoured: a start on a closed
-    day costs a strategy that finds no market, where refusing to start on a day
-    that was open costs the session.
+    The exchange comes from the script's own run settings rather than from the
+    schedule. It is already saved there, it is the one the orders will be sent
+    to, and a second copy typed into a schedule is a second thing to keep in
+    step: a trader moving a script from one venue to another would otherwise
+    leave a schedule checking the calendar of a venue the script no longer
+    touches.
+
+    The strategy host already answers the calendar question, holidays, weekends
+    and the occasional special session included, so it is asked rather than
+    answered again. If it cannot be asked the schedule is honoured: a start on a
+    closed day costs a strategy that finds no market, where refusing to start on
+    a day that was open costs the session.
     """
+    exchange = (read_run_config(filename) or {}).get("exchange") or ""
     try:
-        return _strategy_host().is_trading_day(exchange=exchange)
+        host = _strategy_host()
+        return host.is_trading_day(exchange=exchange) if exchange else host.is_trading_day()
     except Exception:
-        logger.exception("Could not check the trading calendar for %s", exchange)
+        logger.exception("Could not check the trading calendar for %s", filename)
         return True
 
 
@@ -482,12 +477,11 @@ def _scheduled_start(filename):
     again tomorrow.
     """
     try:
-        entry = _load_schedules().get(filename)
-        if entry is None:
+        if _load_schedules().get(filename) is None:
             logger.info("No schedule left for %s, so it was not started", filename)
             return
 
-        if not _is_trading_day(entry.get("exchange")):
+        if not _is_trading_day(filename):
             logger.info("%s was not started: the market is closed today", filename)
             return
 
@@ -496,15 +490,11 @@ def _scheduled_start(filename):
             logger.warning("%s was not started: %s", filename, reason[1])
             return
 
-        ok, detail = _answer(_invoke(_START_NAMES, filename))
+        ok, message = start_run(filename)
         if ok:
-            logger.info("Started %s on schedule, run %s", filename, _identifier(detail, filename))
+            logger.info("Started %s on schedule: %s", filename, message)
         else:
-            logger.warning(
-                "%s did not start on schedule: %s",
-                filename,
-                _message(detail, "the runner refused it"),
-            )
+            logger.warning("%s did not start on schedule: %s", filename, message)
     except Exception:
         logger.exception("The scheduled start of %s failed", filename)
 
@@ -517,15 +507,11 @@ def _scheduled_stop(filename):
     watching it, and stopping something that is already stopped costs nothing.
     """
     try:
-        ok, detail = _answer(_invoke(_STOP_NAMES, filename))
+        ok, message = stop_run(filename)
         if ok:
-            logger.info("Stopped %s on schedule", filename)
+            logger.info("Stopped %s on schedule: %s", filename, message)
         else:
-            logger.info(
-                "%s was not stopped on schedule: %s",
-                filename,
-                _message(detail, "it was not running"),
-            )
+            logger.info("%s was not stopped on schedule: %s", filename, message)
     except Exception:
         logger.exception("The scheduled stop of %s failed", filename)
 
@@ -555,21 +541,8 @@ def restore_schedules():
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Starting and stopping
 # ---------------------------------------------------------------------------
-
-
-def _unavailable(error):
-    """The answer when the part that owns processes is not there."""
-    logger.warning("The OpenScript runner is unavailable: %s", error)
-    return jsonify(
-        {
-            "status": "error",
-            "message": (
-                "This server cannot run OpenScript strategies yet. Nothing was started or stopped."
-            ),
-        }
-    ), 503
 
 
 @openscript_runner_bp.route("/start/<path:filename>", methods=["POST"])
@@ -585,9 +558,10 @@ def start(filename):
 
     **The route takes no options.** A body carrying anything at all is refused,
     which is the boundary this file draws around live trading written as code
-    rather than as a comment. Where an order goes is the platform's own setting,
-    read on the order path itself; a field here that appeared to choose it would
-    be a second answer to that question, and a client that believed it had
+    rather than as a comment. What the script runs on is saved against it and
+    read by the service; where its orders go is the platform's own setting, read
+    on the order path itself. A field here that appeared to choose either would
+    be a second answer to a settled question, and a client that believed it had
     chosen and was ignored is the worst of the three outcomes.
     """
     if not SAFE_NAME.match(filename):
@@ -599,8 +573,8 @@ def start(filename):
             {
                 "status": "error",
                 "message": (
-                    "Starting a script takes no options. Where its orders go is the "
-                    "platform's own setting and is not chosen here."
+                    "Starting a script takes no options. What it runs on is saved in its "
+                    "run settings, and where its orders go is the platform's own setting."
                 ),
             }
         ), 400
@@ -610,30 +584,38 @@ def start(filename):
         code, sentence = reason
         return jsonify({"status": "error", "message": sentence}), code
 
-    try:
-        ok, detail = _answer(_invoke(_START_NAMES, filename))
-    except RunnerUnavailable as error:
-        return _unavailable(error)
-
+    ok, message = start_run(filename)
     if not ok:
+        return jsonify({"status": "error", "message": message}), 409
+
+    run_id = run_id_for(filename)
+    info = status_of(filename)
+    if info is None:
+        # It started and has already ended, which a script whose engine is
+        # missing or whose program will not load does within the second. The
+        # identity still comes back, because the caller's next move is the one
+        # it would have been anyway: read the log.
+        logger.info("The OpenScript strategy %s started and ended at once", filename)
         return jsonify(
             {
-                "status": "error",
-                "message": _message(detail, f"{filename} could not be started."),
+                "status": "success",
+                "run": {
+                    "id": run_id,
+                    "file": filename,
+                    "state": "finished",
+                    "started_at": None,
+                    "log": None,
+                },
+                "logs": _log_names(run_id),
+                "message": f"{filename} started and has already ended. Its log says why.",
             }
-        ), 409
+        ), 202
 
-    run = {
-        "id": _identifier(detail, filename),
-        "file": filename,
-        "started_at": _when(detail.get("started_at")) or datetime.now(IST).isoformat(),
-        "log": _log_of(detail),
-    }
-    logger.info("Starting OpenScript strategy %s as run %s", filename, run["id"])
+    logger.info("Starting OpenScript strategy %s as run %s", filename, run_id)
     return jsonify(
         {
             "status": "success",
-            "run": run,
+            "run": _run_answer(info),
             "message": f"{filename} is starting. Its log shows what it does next.",
         }
     ), 202
@@ -654,37 +636,22 @@ def stop(filename):
     if not SAFE_NAME.match(filename):
         return _refusal(filename)
 
-    try:
-        if filename not in {entry["file"] for entry in _running()}:
-            return jsonify({"status": "error", "message": f"{filename} is not running."}), 404
+    if not is_running(filename):
+        return jsonify({"status": "error", "message": f"{filename} is not running."}), 404
 
-        ok, detail = _answer(_invoke(_STOP_NAMES, filename))
-    except RunnerUnavailable as error:
-        return _unavailable(error)
-
+    ok, message = stop_run(filename)
     if not ok:
-        return jsonify(
-            {
-                "status": "error",
-                "message": _message(detail, f"{filename} could not be stopped."),
-            }
-        ), 409
+        return jsonify({"status": "error", "message": message}), 409
 
     logger.info("Stopped OpenScript strategy %s", filename)
-    return jsonify(
-        {
-            "status": "success",
-            "file": filename,
-            "message": _message(detail, f"{filename} has been stopped."),
-        }
-    )
+    return jsonify({"status": "success", "file": filename, "message": message})
 
 
 @openscript_runner_bp.route("/status", methods=["GET"], defaults={"filename": None})
 @openscript_runner_bp.route("/status/<path:filename>", methods=["GET"])
 @check_session_validity
 def status(filename):
-    """What is running, where it is writing, and what is scheduled.
+    """What is running, what it is running on, where it is writing, what is scheduled.
 
     This is the route the caller of ``start`` comes back to. With no name it
     answers for every run; with one it answers for that script, and says so
@@ -696,26 +663,30 @@ def status(filename):
     if filename is not None and not SAFE_NAME.match(filename):
         return _refusal(filename)
 
-    try:
-        running = _running()
-    except RunnerUnavailable as error:
-        return _unavailable(error)
-
+    running = sorted(
+        (_run_answer(info) for info in running_runs()),
+        key=lambda item: item["file"] or "",
+    )
     schedules = _load_schedules()
     logs = _logs_dir()
 
     if filename is None:
+        settings = all_run_configs()
         return jsonify(
             {
                 "status": "success",
                 "running": running,
                 "scheduled": [dict(entry, file=name) for name, entry in sorted(schedules.items())],
+                "settings": [
+                    _settings_answer(name, entry) for name, entry in sorted(settings.items())
+                ],
                 "log_dir": logs,
             }
         )
 
     entry = next((item for item in running if item["file"] == filename), None)
     schedule = schedules.get(filename)
+    saved = read_run_config(filename)
     return jsonify(
         {
             "status": "success",
@@ -723,9 +694,159 @@ def status(filename):
             "run": entry,
             "running": entry is not None,
             "schedule": dict(schedule, file=filename) if schedule else None,
+            "settings": _settings_answer(filename, saved) if saved else None,
+            "logs": _log_names(run_id_for(filename)),
             "log_dir": logs,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# What a script is run on
+# ---------------------------------------------------------------------------
+
+
+@openscript_runner_bp.route("/config", methods=["GET"])
+@check_session_validity
+def list_settings():
+    """What every script with settings saved is run on."""
+    stored = all_run_configs()
+    return jsonify(
+        {
+            "status": "success",
+            "settings": [_settings_answer(name, entry) for name, entry in sorted(stored.items())],
+            "products": list(PRODUCTS),
+        }
+    )
+
+
+@openscript_runner_bp.route("/config/<path:filename>", methods=["GET"])
+@check_session_validity
+def get_settings(filename):
+    """What one script is run on.
+
+    A script with nothing saved answers with the sentence a start would refuse
+    it with, so the page asking the question and the run that would have failed
+    say the same thing.
+    """
+    if not SAFE_NAME.match(filename):
+        return _refusal(filename)
+
+    saved = read_run_config(filename)
+    if saved is None:
+        _, why = require_run_config(filename)
+        return jsonify({"status": "error", "message": why}), 404
+
+    return jsonify(
+        {
+            "status": "success",
+            "settings": _settings_answer(filename, saved),
+            "products": list(PRODUCTS),
+        }
+    )
+
+
+@openscript_runner_bp.route("/config/<path:filename>", methods=["POST"])
+@check_session_validity
+def set_settings(filename):
+    """Save what one script is run on.
+
+    The body carries the instrument, the exchange and the interval, and
+    optionally the product. A field this route does not know is refused rather
+    than ignored, which is the rule that matters most here: this is the body a
+    caller would invent a destination in, and being told no is the only answer
+    that leaves them knowing where the destination is actually decided.
+
+    The owning user is taken from the session and never from the body. It is
+    stored so a run started by a schedule can find the key it authenticates
+    with, and a body that could name somebody else would be a way to run a
+    strategy as a user who did not ask for it.
+    """
+    if not SAFE_NAME.match(filename):
+        return _refusal(filename)
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Send the instrument, the exchange and the interval to run this on.",
+            }
+        ), 400
+
+    unknown = sorted(set(body) - set(SETTINGS_FIELDS))
+    if unknown:
+        return jsonify(
+            {
+                "status": "error",
+                "message": (
+                    "Run settings are the instrument, the exchange, the interval and the "
+                    f"product. This one also carried {', '.join(unknown)}. Where a strategy's "
+                    "orders go is the platform's own setting and is not chosen here."
+                ),
+            }
+        ), 400
+
+    for field in SETTINGS_FIELDS:
+        value = body.get(field)
+        if value is not None and not isinstance(value, str):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": f"Give the {field} as text, or leave it out.",
+                }
+            ), 400
+
+    ok, message = write_run_config(
+        filename,
+        symbol=body.get("symbol") or "",
+        exchange=body.get("exchange") or "",
+        interval=body.get("interval") or "",
+        product=body.get("product") or "",
+        user_id=session.get("user"),
+    )
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 400
+
+    saved = read_run_config(filename) or {}
+    logger.info("Saved the run settings for %s", filename)
+    return jsonify(
+        {
+            "status": "success",
+            "settings": _settings_answer(filename, saved),
+            "message": message,
+        }
+    )
+
+
+@openscript_runner_bp.route("/config/<path:filename>", methods=["DELETE"])
+@check_session_validity
+def clear_settings(filename):
+    """Forget what one script is run on.
+
+    Nothing running is touched. A run already started keeps the instrument it
+    was started on, because that is the run that is on the market; this stops
+    the script being started again without somebody saying what it runs on.
+    """
+    if not SAFE_NAME.match(filename):
+        return _refusal(filename)
+
+    if read_run_config(filename) is None:
+        return jsonify(
+            {"status": "error", "message": f"{filename} has no run settings saved."}
+        ), 404
+
+    ok, message = delete_run_config(filename)
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 500
+
+    logger.info("Removed the run settings for %s", filename)
+    return jsonify({"status": "success", "file": filename, "message": message})
+
+
+# ---------------------------------------------------------------------------
+# The schedule
+# ---------------------------------------------------------------------------
 
 
 @openscript_runner_bp.route("/schedule/<path:filename>", methods=["POST"])
@@ -733,10 +854,10 @@ def status(filename):
 def set_schedule(filename):
     """Set the times one script starts and stops, in IST.
 
-    The body carries ``start_time`` and optionally ``stop_time``, ``days`` and
-    ``exchange``. A field this route does not know is refused rather than
-    ignored, for the reason the start route takes no body at all: a caller that
-    thinks it configured something it did not is the failure worth preventing.
+    The body carries ``start_time`` and optionally ``stop_time`` and ``days``.
+    It does not carry an exchange: the calendar the schedule checks is the one
+    the script's own run settings name, so there is one place a venue is typed
+    and not two that can disagree.
 
     The jobs go on before the schedule is stored, and the schedule is stored
     before the answer, so the two cannot disagree. If storing fails the jobs come
@@ -754,15 +875,16 @@ def set_schedule(filename):
             {"status": "error", "message": "Send a start time, as 24 hour HH:MM in IST."}
         ), 400
 
-    allowed = {"start_time", "stop_time", "days", "exchange"}
+    allowed = {"start_time", "stop_time", "days"}
     unknown = sorted(set(body) - allowed)
     if unknown:
         return jsonify(
             {
                 "status": "error",
                 "message": (
-                    "A schedule has a start time, a stop time, days and an exchange. "
-                    f"This one also carried {', '.join(unknown)}."
+                    "A schedule has a start time, a stop time and days. This one also "
+                    f"carried {', '.join(unknown)}. The exchange comes from the script's "
+                    "own run settings."
                 ),
             }
         ), 400
@@ -808,22 +930,7 @@ def set_schedule(filename):
         ), 400
     days = [day for day in DAYS if day in days]
 
-    exchange = body.get("exchange")
-    try:
-        exchange = _strategy_host().normalize_exchange(exchange)
-    except Exception:
-        # Left as it came, or left unset. The default belongs to the host and
-        # is not spelled a second time here: a schedule carrying no exchange is
-        # normalised by the host on the day it fires.
-        logger.exception("Could not read the exchange list")
-        exchange = str(exchange).strip().upper() if exchange else None
-
-    entry = {
-        "start_time": start_time,
-        "stop_time": stop_time,
-        "days": days,
-        "exchange": exchange,
-    }
+    entry = {"start_time": start_time, "stop_time": stop_time, "days": days}
 
     try:
         _register_jobs(filename, entry)

@@ -28,6 +28,7 @@ repository today: there is no Python engine in it yet.
 
 import ast
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -41,11 +42,23 @@ from pathlib import Path
 import psutil
 import pytest
 
+import services.openscript_run_config as run_config
 import services.openscript_runner_service as service
 
 REPOSITORY = Path(__file__).resolve().parents[1]
-RUNNER_PATH = REPOSITORY / "strategies" / "scripts" / "openscript_runner.py"
+
+#: Where the program that runs a script belongs, and where it used to be.
+#:
+#: It is moving out of ``strategies`` because that folder is a mounted volume on
+#: a container install, and a volume is seeded from the image only while it is
+#: empty, so a platform file put there is absent on every install that already
+#: has one. The move is one change and this file is loaded from wherever it has
+#: got to, so the tests below neither hold it up nor go green on its absence.
+RUNNER_HOME = REPOSITORY / "openscript_host" / "openscript_runner.py"
+RUNNER_WAS = REPOSITORY / "strategies" / "scripts" / "openscript_runner.py"
+RUNNER_PATH = RUNNER_HOME if RUNNER_HOME.is_file() else RUNNER_WAS
 SERVICE_PATH = REPOSITORY / "services" / "openscript_runner_service.py"
+RUN_CONFIG_PATH = REPOSITORY / "services" / "openscript_run_config.py"
 
 
 def _syntax_of(path: Path):
@@ -93,10 +106,9 @@ def _attributes_of(tree, module: str) -> set[str]:
 def _load_runner():
     """The runner module, loaded from its path.
 
-    It lives under ``strategies/scripts`` with the trader's own scripts rather
-    than in a package, because that is the folder this platform runs a strategy
-    out of and the folder a deployment keeps a trader's own files in. So it is
-    loaded the way anything else would load a file.
+    It is a program rather than a module in a package: the web worker spawns it
+    and never imports it, and the process it runs in has nothing patched in it.
+    So it is loaded here the way anything else would load a file.
     """
     spec = importlib.util.spec_from_file_location("openscript_runner_under_test", RUNNER_PATH)
     module = importlib.util.module_from_spec(spec)
@@ -857,8 +869,22 @@ def _order_shapes(sent):
 
 
 @pytest.fixture
-def quiet_service(tmp_path, monkeypatch):
-    """The service, with its log folder and its registry belonging to this test."""
+def settings(tmp_path, monkeypatch):
+    """The run settings file, belonging to this test and not to the operator.
+
+    Pointed somewhere else before anything can read it. The real one holds what a
+    trader saved on this machine, and a suite that read it would pass or fail on
+    whatever happens to be in it, while a suite that wrote it would start
+    somebody's script on an instrument they never chose.
+    """
+    path = tmp_path / "strategies" / "openscript_run_configs.json"
+    monkeypatch.setattr(run_config, "CONFIG_FILE", path)
+    return path
+
+
+@pytest.fixture
+def quiet_service(tmp_path, monkeypatch, settings):
+    """The service, with its log folder, its registry and its settings for this test."""
     logs = tmp_path / "log" / "strategies"
     monkeypatch.setattr(service, "LOGS_DIR", logs)
     monkeypatch.setattr(service, "RUNNING_RUNS", {})
@@ -1138,21 +1164,38 @@ def test_a_name_that_is_not_a_script_never_reaches_a_command_line(quiet_service)
     assert not ok
 
 
-def test_the_registry_lock_is_a_real_one_and_not_the_hub_s(quiet_service):
-    """A green lock shared with a real thread deadlocks under the production server.
+def test_the_registry_lock_is_the_hub_s_own_because_only_greenlets_take_it(quiet_service):
+    """Nothing on any path into this service is a real OS thread, so the lock is the ordinary one.
 
-    This registry is read while a process is being reaped, so the lock has to be
-    the unpatched one. Asserted against the import rather than the object, because
-    under the dev server, where nothing is patched, the two are the same object and
-    a test of the object would pass either way.
+    This replaces a test that pinned the opposite, and what it pinned was not
+    true: the module claimed a real lock was needed because "this dictionary is
+    read while a process is being reaped", and the reaping is done by the same
+    request greenlet or scheduled job as everything else. A request handler is a
+    greenlet, a scheduler's worker is an ordinary thread and the production
+    server patches it, and so is the main thread that runs the exit handler.
+
+    A lock from ``utils/real_threading`` would be the wrong one twice over. A
+    greenlet that blocks on a real lock stops the single production worker for
+    every user, not just itself. And a greenlet that yields while holding one can
+    never be resumed to release it, which the sweep now done under this lock puts
+    within reach of any change that adds a yield to it.
+
+    The wrong implementation this catches is the one that takes the lock from
+    ``utils/real_threading`` again, and the one that leaves the justification for
+    it in place. Asserted against the imports rather than the object, because on
+    the dev server, where nothing is patched, the two are the same object and an
+    assertion about the object would pass either way.
     """
-    tree = _syntax_of(SERVICE_PATH)
+    for path in (SERVICE_PATH, RUN_CONFIG_PATH):
+        tree = _syntax_of(path)
+        brought_in = _named_imports(tree)
 
-    assert "RLock" in _named_imports(tree).get("utils.real_threading", set())
-    assert "threading" not in _plain_imports(tree)
-    assert "queue" not in _plain_imports(tree)
-    assert _attributes_of(tree, "threading") == set()
-    assert _attributes_of(tree, "queue") == set()
+        assert brought_in.get("threading", set()), f"{path.name} takes no lock from threading"
+        assert "utils.real_threading" not in brought_in, (
+            f"{path.name} takes a real lock, and there is no real thread here to justify one"
+        )
+        assert "queue" not in _plain_imports(tree)
+        assert _attributes_of(tree, "queue") == set()
 
 
 def test_the_service_starts_no_second_scheduler():
@@ -1163,3 +1206,576 @@ def test_the_service_starts_no_second_scheduler():
     assert "BackgroundScheduler" not in {
         node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
     }
+
+
+# ---------------------------------------------------------------------------
+# What a script is run on: the settings, and starting from the name alone
+# ---------------------------------------------------------------------------
+
+
+class StandInProcess:
+    """A process object that is alive until it is told it is not.
+
+    A test that needs a run in the registry without spawning anything, so it can
+    say what the registry does about a process whose state it chooses. The test
+    below asserts that every method this service calls on a process takes what
+    the real one takes: a stand-in whose shape has drifted from the class it
+    stands in for is exactly how a service passes its whole suite while calling
+    something that is not there.
+    """
+
+    def __init__(self, pid=424242, code=None):
+        self.pid = pid
+        self._code = code
+        self.terminated = False
+
+    def poll(self):
+        return self._code
+
+    def wait(self, timeout=None):
+        return self._code
+
+    def terminate(self):
+        self.terminated = True
+        self._code = -15
+
+    def kill(self):
+        self.terminated = True
+        self._code = -9
+
+
+def test_a_stand_in_for_a_process_is_shaped_like_the_real_one():
+    """Every method the service calls on a process, against the real class.
+
+    The wrong implementation this catches is not in the service: it is in this
+    file. A suite whose stand-ins have drifted from the real thing is a suite
+    that proves nothing about the real thing, which is how a whole seam went
+    unnoticed once already.
+    """
+    for name in ("poll", "wait", "terminate", "kill"):
+        mine = inspect.signature(getattr(StandInProcess, name))
+        real = inspect.signature(getattr(subprocess.Popen, name))
+        assert mine == real, f"the stand-in's {name} is {mine}, the real one is {real}"
+
+
+@pytest.fixture
+def recording_runner(tmp_path, monkeypatch, quiet_service):
+    """A stand-in runner that writes its own command line out and then stays alive.
+
+    The log a run writes is the child's own standard output, so a child that
+    prints its arguments lets a test read exactly what reached the command line
+    rather than what the service meant to put there.
+    """
+    script = tmp_path / "recording_runner.py"
+    script.write_text(
+        "import sys, time\n"
+        "sys.stdout.write(' '.join(sys.argv[1:]) + chr(10))\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "RUNNER_SCRIPT", script)
+
+    yield script
+
+    for one in psutil.Process().children(recursive=True):
+        try:
+            if str(script) in " ".join(one.cmdline()):
+                one.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+
+def _command_line_of(run_id, within=30.0):
+    """What the child was actually started with, read out of its own log."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        for one in service.logs_for(run_id):
+            for line in one.read_text(encoding="utf-8").splitlines():
+                if line.startswith("--script"):
+                    return line
+        time.sleep(0.1)
+    raise AssertionError("the run never wrote its command line")
+
+
+def test_a_run_starts_from_the_script_name_alone(recording_runner):
+    """The route hands over a name and nothing else, so the service reads the rest.
+
+    This is the call the start route makes. The wrong implementation this catches
+    is the one that needs the instrument passed in: broken that way, a start from
+    the page fails on a missing argument, which is what the route worked around
+    last time by inventing one.
+    """
+    saved, said = run_config.write_run_config("turn.oscript", "SYM1", "exch1", "5m", "nrml")
+    assert saved, said
+
+    ok, message = service.start_run("turn.oscript")
+
+    assert ok, message
+    assert "turn.oscript" in message
+    try:
+        written = _command_line_of(service.run_id_for("turn.oscript"))
+        assert "--symbol SYM1" in written
+        assert "--exchange EXCH1" in written
+        assert "--interval 5m" in written
+        assert "--product NRML" in written
+    finally:
+        service.stop_run("turn.oscript")
+
+
+def test_what_the_caller_holds_wins_over_what_was_saved(recording_runner):
+    """The explicit arguments stay, for a caller that already has them.
+
+    The wrong implementation this catches is the one that reads the settings over
+    the top of what it was passed, which would send a run to an instrument the
+    caller did not ask for.
+    """
+    saved, said = run_config.write_run_config("turn.oscript", "SYM1", "EXCH1", "5m")
+    assert saved, said
+
+    ok, message = service.start_run("turn.oscript", symbol="SYM2", interval="1m")
+
+    assert ok, message
+    try:
+        written = _command_line_of(service.run_id_for("turn.oscript"))
+        assert "--symbol SYM2" in written
+        assert "--interval 1m" in written
+        # and what it did not hold still comes from the settings
+        assert "--exchange EXCH1" in written
+    finally:
+        service.stop_run("turn.oscript")
+
+
+def test_a_script_with_no_run_settings_is_refused_by_name(quiet_service, slow_runner):
+    """Nothing is started on a guess, and the refusal is addressed to the trader.
+
+    The wrong implementation this catches is the one that starts anyway on a
+    default instrument, which is a run placing orders on something nobody chose.
+    The message has to name the script, because a trader with several will
+    otherwise not know which one to go and fix.
+    """
+    ok, why = service.start_run("turn.oscript")
+
+    assert not ok
+    assert "turn.oscript" in why
+    for word in ("instrument", "exchange", "interval"):
+        assert word in why
+    assert service.RUNNING_RUNS == {}
+
+
+def test_settings_missing_one_field_say_which_one(quiet_service, settings, slow_runner):
+    """Named one by one, so the trader fixes the thing that is actually absent."""
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps({"turn.oscript": {"symbol": "SYM1", "exchange": "", "interval": ""}}),
+        encoding="utf-8",
+    )
+
+    ok, why = service.start_run("turn.oscript")
+
+    assert not ok
+    assert "turn.oscript" in why
+    assert "the exchange and the interval" in why
+    assert service.RUNNING_RUNS == {}
+
+
+def test_a_product_that_is_not_one_this_platform_sends_never_reaches_a_command_line(
+    quiet_service, slow_runner
+):
+    """The fourth thing that reaches the command line is checked like the other three.
+
+    It was the one that was not. The wrong implementation this catches is the one
+    that passes a product straight through, where the run then fails a minute
+    later inside its own log, and where a value with a space or a dash in it is
+    an argument to the program rather than a product.
+    """
+    for refused in ("EQUITY", "NRML MIS", "--product", "nrml"):
+        ok, why = service.start_run("turn.oscript", "SYM1", "EXCH1", "1m", product=refused)
+        assert not ok, f"{refused!r} was accepted as a product"
+        assert "CNC" in why and "NRML" in why and "MIS" in why
+        assert service.RUNNING_RUNS == {}
+
+    ok, said = service.start_run("turn.oscript", "SYM1", "EXCH1", "1m", product="NRML")
+    assert ok, said
+    service.stop_run("turn.oscript")
+
+
+def test_a_product_that_is_not_one_this_platform_sends_is_refused_when_it_is_saved(settings):
+    """Refused while the trader is looking at it, not a minute later in a log."""
+    ok, why = run_config.write_run_config("turn.oscript", "SYM1", "EXCH1", "1m", product="EQUITY")
+
+    assert not ok
+    assert "CNC" in why and "NRML" in why and "MIS" in why
+    assert run_config.read_run_config("turn.oscript") is None
+
+
+def test_the_settings_saved_are_the_settings_read_back(settings):
+    """What goes in comes out, with the two closed vocabularies in one case.
+
+    The exchange and the product are upper cased because this platform states
+    both in one case. The instrument and the interval are left exactly as typed:
+    a symbol is the one string a broker mapping matches on, and changing it
+    quietly is how a run ends up on a different instrument from the one asked for.
+    """
+    ok, said = run_config.write_run_config("turn.oscript", "SYM1", "exch1", "5m", "mis", "trader")
+    assert ok, said
+
+    found = run_config.read_run_config("turn.oscript")
+    assert found["symbol"] == "SYM1"
+    assert found["exchange"] == "EXCH1"
+    assert found["interval"] == "5m"
+    assert found["product"] == "MIS"
+    assert found["user_id"] == "trader"
+
+    usable, why = run_config.require_run_config("turn.oscript")
+    assert usable is not None, why
+    assert usable["symbol"] == "SYM1"
+
+
+def test_saving_one_script_s_settings_leaves_every_other_script_alone(settings):
+    """A write is a read, a change and a rename, not a file with one script in it.
+
+    The wrong implementation this catches is the one that writes only the script
+    it was handed, which silently deletes the settings of every other script the
+    trader has, and is only noticed when the next run refuses to start.
+    """
+    assert run_config.write_run_config("one.oscript", "SYM1", "EXCH1", "1m")[0]
+    assert run_config.write_run_config("two.oscript", "SYM2", "EXCH2", "5m")[0]
+
+    assert set(run_config.all_run_configs()) == {"one.oscript", "two.oscript"}
+    assert run_config.read_run_config("one.oscript")["symbol"] == "SYM1"
+    assert run_config.read_run_config("two.oscript")["symbol"] == "SYM2"
+
+
+def test_settings_that_could_never_start_a_run_are_refused_when_they_are_saved(settings):
+    """Every value here reaches a command line when the run starts.
+
+    The wrong implementation this catches is the one that stores whatever it is
+    given and leaves the checking to the start, which is a setting a trader can
+    save, look at, and never be able to run.
+    """
+    for bad in ("../../etc/passwd", "turn.oscript; rm -rf /", "-rf", "turn.py", ""):
+        ok, why = run_config.write_run_config(bad, "SYM1", "EXCH1", "1m")
+        assert not ok, f"{bad!r} was accepted as a script name"
+        assert why
+
+    for symbol in ("SYM1 && echo", "-SYM1", ""):
+        ok, why = run_config.write_run_config("turn.oscript", symbol, "EXCH1", "1m")
+        assert not ok, f"{symbol!r} was accepted as an instrument"
+
+    ok, why = run_config.write_run_config("turn.oscript", "SYM1", "EXCH1", "1m; echo")
+    assert not ok
+
+    assert run_config.all_run_configs() == {}
+
+
+def test_removing_the_settings_removes_the_run(settings, quiet_service, slow_runner):
+    """A script a trader has finished with stops being one command away from running."""
+    assert run_config.write_run_config("turn.oscript", "SYM1", "EXCH1", "1m")[0]
+
+    gone, said = run_config.delete_run_config("turn.oscript")
+    assert gone, said
+
+    assert run_config.read_run_config("turn.oscript") is None
+    ok, why = service.start_run("turn.oscript")
+    assert not ok
+    assert "turn.oscript" in why
+
+    again, why = run_config.delete_run_config("turn.oscript")
+    assert not again
+    assert "turn.oscript" in why
+
+
+def test_settings_that_cannot_be_written_leave_the_last_good_ones_alone(settings):
+    """Through a temporary file and a rename, so an interrupted write loses nothing.
+
+    The wrong implementation this catches is the one that opens the settings file
+    and writes into it: a failure part way through leaves a file that is neither
+    the old settings nor the new ones, and every script in it is then a script
+    that cannot be started.
+    """
+    assert run_config.write_run_config("turn.oscript", "SYM1", "EXCH1", "1m")[0]
+
+    def refuse(*arguments, **named):
+        raise OSError("the disk said no")
+
+    # In a context of its own, so putting the writer back does not also put back
+    # the settings file this test was given, which is what a shared undo does.
+    with pytest.MonkeyPatch.context() as broken:
+        broken.setattr(run_config.json, "dump", refuse)
+        ok, why = run_config.write_run_config("turn.oscript", "SYM2", "EXCH2", "5m")
+
+    assert not ok
+    assert why
+
+    kept = run_config.read_run_config("turn.oscript")
+    assert kept["symbol"] == "SYM1", "a failed write replaced the settings that were there"
+    assert not list(settings.parent.glob("*.tmp")), "a half written file was left behind"
+
+
+def test_the_settings_sit_where_this_platform_already_keeps_a_strategy_s_settings():
+    """One folder, so an upgrade keeps them and an operator has one place to look.
+
+    Said against the module rather than a fixture, since every fixture here
+    replaces it. The strategy host keeps ``strategies/strategy_configs.json`` and
+    a container keeps that folder on a named volume, which is what makes a
+    trader's settings survive a rebuild.
+    """
+    fresh = importlib.util.spec_from_file_location(
+        "openscript_run_config_default", RUN_CONFIG_PATH
+    )
+    module = importlib.util.module_from_spec(fresh)
+    fresh.loader.exec_module(module)
+
+    assert module.CONFIG_FILE.parent == Path("strategies")
+    assert module.CONFIG_FILE.suffix == ".json"
+
+
+# ---------------------------------------------------------------------------
+# A registry that heals itself
+# ---------------------------------------------------------------------------
+
+
+def test_a_run_that_ended_by_itself_is_gone_without_anybody_sweeping(
+    quiet_service, tmp_path, monkeypatch
+):
+    """Nothing external has to remember, because nothing external ever did.
+
+    A run ends by itself far more often than it is stopped, and the registry is
+    not told. The wrong implementation this catches is the one that waits to be
+    swept: with it in place this script stays running after its process has gone,
+    and it cannot be started again for the life of the worker. Reaping is
+    deliberately not called anywhere in this test.
+    """
+    script = tmp_path / "brief_runner.py"
+    script.write_text("import sys\nsys.stdout.write('done')\n", encoding="utf-8")
+    monkeypatch.setattr(service, "RUNNER_SCRIPT", script)
+
+    ok, said = service.start_run("turn.oscript", "SYM1", "EXCH1", "1m")
+    assert ok, said
+    run_id = service.run_id_for("turn.oscript")
+
+    # Read straight out of the dictionary, so waiting for the child does not
+    # itself go through the sweep this test is about.
+    process = service.RUNNING_RUNS[run_id]["process"]
+    deadline = time.monotonic() + 30
+    while process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert process.poll() is not None, "the stand-in runner never finished"
+
+    assert not service.is_running("turn.oscript")
+    assert service.status_of("turn.oscript") is None
+    assert service.running_runs() == []
+    assert run_id not in service.RUNNING_RUNS
+
+    again, message = service.start_run("turn.oscript", "SYM1", "EXCH1", "1m")
+    assert again, message
+
+
+def test_a_run_is_never_dropped_because_its_process_id_could_not_be_read(
+    quiet_service, monkeypatch
+):
+    """Only the run's own process may say it has gone.
+
+    The wrong implementation this catches is the one that drops an entry because
+    a lookup by process id said the process was not there. That answer is wrong
+    in two directions: an id may have been reused by then, and where reading
+    another process needs permission a live run looks exactly like a dead one.
+    Dropping a live run leaves a strategy placing orders with nothing left that
+    can stop it, which is worse than keeping a finished one a moment longer.
+    """
+    monkeypatch.setattr(service, "_process_is_alive", lambda pid: False)
+    run_id = service.run_id_for("turn.oscript")
+    service.RUNNING_RUNS[run_id] = {
+        "process": StandInProcess(pid=4242),
+        "pid": 4242,
+        "script": "turn.oscript",
+        "started_at": datetime.now(),
+        "log_file": "",
+    }
+
+    assert service.is_running("turn.oscript")
+    assert service.status_of("turn.oscript") is not None
+    assert [one["run"] for one in service.running_runs()] == [run_id]
+    assert service.reap_finished_runs() == []
+
+
+def test_a_process_that_cannot_answer_keeps_its_place_in_the_registry(quiet_service):
+    """A question that raises is not an answer of gone.
+
+    Same reason as above, one step further: an implementation that treats any
+    failure as a finished run loses the record of a strategy that is still out
+    there.
+    """
+
+    class WillNotSay(StandInProcess):
+        def poll(self):
+            raise OSError("not today")
+
+    run_id = service.run_id_for("turn.oscript")
+    service.RUNNING_RUNS[run_id] = {
+        "process": WillNotSay(),
+        "pid": 4242,
+        "script": "turn.oscript",
+        "started_at": datetime.now(),
+        "log_file": "",
+    }
+
+    assert service.reap_finished_runs() == []
+    assert run_id in service.RUNNING_RUNS
+
+
+def test_reaping_is_the_same_sweep_the_rest_of_the_service_does(quiet_service):
+    """One sweep, so a scheduled call and a page load can never disagree.
+
+    It is kept because a worker with no page open and no run being started still
+    has children to reap. The wrong implementation this catches is a second copy
+    of the rule, which is how two answers about one run start being possible.
+    """
+    run_id = service.run_id_for("turn.oscript")
+    service.RUNNING_RUNS[run_id] = {
+        "process": StandInProcess(code=0),
+        "pid": 4242,
+        "script": "turn.oscript",
+        "started_at": datetime.now(),
+        "log_file": "",
+    }
+
+    assert service.reap_finished_runs() == [run_id]
+    assert service.RUNNING_RUNS == {}
+    assert service.reap_finished_runs() == []
+
+
+# ---------------------------------------------------------------------------
+# The program that runs a script, and the contract two other callers import
+# ---------------------------------------------------------------------------
+
+
+def test_the_program_that_runs_a_script_is_not_kept_in_a_mounted_folder():
+    """A file the platform owns cannot live where a container keeps a volume.
+
+    The deployment keeps ``strategies`` on a named volume, and a named volume is
+    seeded from the image only while it is empty, so a platform file put there is
+    absent on every install that already has that volume. The wrong
+    implementation this catches is the one that leaves the runner under
+    ``strategies``, where it is delivered to a new install and to nobody else,
+    and where the folder's own rules keep every ``.py`` out of the repository.
+    """
+    fresh = importlib.util.spec_from_file_location(
+        "openscript_runner_service_default", SERVICE_PATH
+    )
+    module = importlib.util.module_from_spec(fresh)
+    fresh.loader.exec_module(module)
+
+    assert module.RUNNER_SCRIPT.parts[0] != "strategies"
+    assert module.RUNNER_SCRIPT.name.endswith(".py")
+
+
+def test_the_runner_is_looked_for_where_it_belongs_before_where_it_used_to_be(
+    quiet_service, tmp_path, monkeypatch
+):
+    """Two places, both written down, and the old one says so in the log.
+
+    The wrong implementation this catches is the one that looks in the old place
+    first, which would go on using a file the next container rebuild deletes even
+    on an installation that has taken the move.
+    """
+    home = tmp_path / "openscript_host" / "openscript_runner.py"
+    home.parent.mkdir(parents=True, exist_ok=True)
+    home.write_text("", encoding="utf-8")
+    was = tmp_path / "strategies" / "scripts" / "openscript_runner.py"
+    was.parent.mkdir(parents=True, exist_ok=True)
+    was.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(service, "RUNNER_SCRIPT", home)
+    monkeypatch.setattr(service, "LEGACY_RUNNER_SCRIPT", was)
+    assert service.runner_program_path() == home.resolve()
+
+    home.unlink()
+    assert service.runner_program_path() == was.resolve()
+
+    was.unlink()
+    assert service.runner_program_path() is None
+
+    ok, why = service.start_run("turn.oscript", "SYM1", "EXCH1", "1m")
+    assert not ok
+    assert why
+    assert service.RUNNING_RUNS == {}
+
+
+def test_the_signatures_two_other_callers_import_are_these():
+    """The contract, spelled out, because a route and a page are written against it.
+
+    A signature changed by hand here is a change somebody else's code finds at
+    runtime. The wrong implementation this catches is any silent widening or
+    reordering of these, including a start that stops accepting the script name
+    on its own, which is the one call the start route makes.
+    """
+    contract = {
+        service.start_run: (
+            "(script: str, symbol: str = '', exchange: str = '', interval: str = '', "
+            "user_id: str | None = None, product: str = '', history_days: int = 5, "
+            "poll_seconds: float = 15.0) -> tuple[bool, str]"
+        ),
+        service.stop_run: "(script_or_run_id: str) -> tuple[bool, str]",
+        service.is_running: "(script_or_run_id: str) -> bool",
+        service.status_of: "(script_or_run_id: str) -> dict | None",
+        service.running_runs: "() -> list[dict]",
+        service.reap_finished_runs: "() -> list[str]",
+        service.stop_every_run: "() -> list[str]",
+        service.run_id_for: "(script: str) -> str",
+        service.logs_for: "(run_id: str) -> list[pathlib.Path]",
+        service.log_file_for: (
+            "(run_id: str, started: datetime.datetime | None = None) -> pathlib.Path"
+        ),
+        service.runner_program_path: "() -> pathlib.Path | None",
+        run_config.read_run_config: "(script: str) -> dict | None",
+        run_config.require_run_config: "(script: str) -> tuple[dict | None, str]",
+        run_config.write_run_config: (
+            "(script: str, symbol: str, exchange: str, interval: str, product: str = '', "
+            "user_id: str | None = None) -> tuple[bool, str]"
+        ),
+        run_config.delete_run_config: "(script: str) -> tuple[bool, str]",
+        run_config.all_run_configs: "() -> dict[str, dict]",
+        run_config.is_script_name: "(name: str) -> bool",
+        run_config.is_run_field: "(value: str) -> bool",
+        run_config.is_product: "(value: str) -> bool",
+    }
+    for function, written in contract.items():
+        assert str(inspect.signature(function)) == written, function.__name__
+
+
+def test_one_start_reaches_the_real_service_and_the_real_settings(tmp_path, monkeypatch, settings):
+    """No stand-in stands between this test and the two modules it is about.
+
+    Every name below is imported from the module that defines it, and the start
+    goes all the way to a child process. A stand-in with the wrong method names
+    is what let a whole seam pass its tests once already, so at least one test
+    here has to be answerable only by the real thing.
+    """
+    from services.openscript_run_config import require_run_config, write_run_config
+    from services.openscript_runner_service import run_id_for, start_run, stop_run
+
+    monkeypatch.setattr(service, "LOGS_DIR", tmp_path / "log" / "strategies")
+    monkeypatch.setattr(service, "RUNNING_RUNS", {})
+    monkeypatch.setattr(service, "STOPPING_RUNS", set())
+    child = tmp_path / "quiet_child.py"
+    child.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    monkeypatch.setattr(service, "RUNNER_SCRIPT", child)
+
+    nothing, why = require_run_config("turn.oscript")
+    assert nothing is None
+    assert "turn.oscript" in why
+
+    saved, said = write_run_config("turn.oscript", "SYM1", "EXCH1", "1m")
+    assert saved, said
+
+    ok, message = start_run("turn.oscript")
+    try:
+        assert ok, message
+        held = service.RUNNING_RUNS[run_id_for("turn.oscript")]
+        assert held["symbol"] == "SYM1"
+        assert psutil.pid_exists(held["pid"])
+    finally:
+        stopped, why = stop_run("turn.oscript")
+        assert stopped, why

@@ -7,6 +7,26 @@ Everything here is an ordinary blocking process. Nothing has monkey-patched the
 standard library, so a plain sleep, a plain socket and a plain loop are all
 correct, and none of the rules that govern the worker apply.
 
+WHERE THIS FILE LIVES, AND WHY IT IS NOT UNDER ``strategies``
+--------------------------------------------------------------
+
+This is the platform's own program and not a trader's script, so it belongs where
+the platform's own files are: in the image, outside every mounted folder, and
+tracked in the repository.
+
+``strategies`` is none of the three. A container install keeps that folder on a
+named volume, and a named volume is seeded from the image only while it is empty,
+so a file the platform put there is delivered to a brand new install and to no
+existing one: every install that had already started once would upgrade and find
+this program gone. The folder also ignores every ``.py`` inside it, in two
+separate rules, which is right for a trader's uploaded scripts and kept this file
+out of the repository entirely.
+
+So it lives here, and ``services/openscript_runner_service.py`` names this path
+first. That service still looks in the old place afterwards, as a migration shim
+for an install that has not taken the move yet, and says so in the log every time
+it has to.
+
 **It is handed a compiled program and never source.** There is no compiler on
 this server and none is planned. The browser compiled the script when the trader
 saved it and the program was stored beside the source. If no program is stored,
@@ -100,7 +120,7 @@ invented fill is the one thing a ledger must never hold.
 
 USAGE
 
-    python -u strategies/scripts/openscript_runner.py \\
+    python -u openscript_host/openscript_runner.py \\
         --script <name>.oscript --symbol <SYMBOL> --exchange <EXCHANGE> \\
         --interval <INTERVAL>
 
@@ -248,6 +268,7 @@ class Engine:
             from openscript.adapter.serving import Serving
             from openscript.adapter.sessions import SESSION_FACTS
             from openscript.contracts import Bar, BarState
+            from openscript.dates import NAMES as CALENDAR_READS
             from openscript.inputs import utc_time
             from openscript.run import load_text
             from openscript.strategy import (
@@ -279,6 +300,12 @@ class Engine:
         self.utc_time = utc_time
         self.session_facts = tuple(SESSION_FACTS)
         self.readable_zone = READABLE
+        #: Every library call that reads a calendar, asked of the engine rather
+        #: than listed here. The engine keeps this set precisely so that a caller
+        #: whose instrument is in another zone can ask "does this program read a
+        #: calendar at all" instead of keeping its own copy of the list, which
+        #: would go stale the first time the language gained a call.
+        self.calendar_reads = frozenset(CALENDAR_READS)
 
 
 def program_text(script: str, directory: Path | None = None) -> str:
@@ -478,6 +505,11 @@ class Session:
         self._moving_at: int | None = None
         self._moving_time: int | None = None
         self._moving_mark = None
+        #: How many times the bar at ``_moving_at`` has been handed to the engine.
+        #: ``host-interface.md`` section 6.4 counts hand-overs, so it starts at one
+        #: on the first execution of a bar and rises by one on every later one,
+        #: including the execution that confirms it.
+        self._moving_updates = 0
         #: True once the replay over history has finished. Nothing is sent before
         #: it is: see THE HISTORY PASS at the top of this file.
         self._sending = False
@@ -547,6 +579,20 @@ class Session:
         derives none: it states no ``isSessionFirst`` fact, and a script reading
         one would be answered absence on every bar, which is a silent wrong answer
         rather than a loud one.
+
+        **A calendar read in a zone the engine cannot read is refused for exactly
+        the same reason, and it was the one this file used to miss.** The engine
+        holds offsets for one zone and answers absence for every other, without
+        raising: a script asking what hour a bar opened at, what day of the week
+        it is, or whether the bar sits inside a written window, was handed
+        absence on every bar of every run. A condition built on absence is never
+        true, so the strategy never traded and nothing anywhere said why. That is
+        the single outcome worse than refusing to start, because the trader sees a
+        run that is going, a log with no complaint in it, and no orders.
+
+        The reads are not listed here. They are asked of the engine, which keeps
+        the set, so a call added to the language cannot quietly fall outside a
+        copy kept in this file.
         """
         called = {one["name"] for one in raw["lib"]["functions"]}
         wanted = called.intersection(self.engine.session_facts)
@@ -565,6 +611,15 @@ class Session:
                 "it, so it will not start this script."
             )
         if self.options.timezone != self.engine.readable_zone:
+            reads = sorted(called.intersection(self.engine.calendar_reads))
+            if reads:
+                raise Refusal(
+                    f"{self.options.script} reads the clock, with {', '.join(reads)}, and this "
+                    f"instrument's calendar is {self.options.timezone}. This runner can only read "
+                    f"a clock as {self.engine.readable_zone}, so every one of those calls would "
+                    "come back with no answer and the script would never act on one. It will not "
+                    "be started on a clock it cannot read."
+                )
             if any(one["kind"] == "time" for one in raw["inputs"]):
                 raise Refusal(
                     f"{self.options.script} takes a written time, and this runner can only read a "
@@ -668,10 +723,44 @@ class Session:
 
         confirmed, moving = fresh[:-1], fresh[-1]
 
+        # How many bars this run has supplied, counted in the same space the bar
+        # indices are counted in. It is NOT the length of the window that came
+        # back.
+        #
+        # The engine reads ``bar.isLast`` as ``index == supplied - 1``, and this
+        # driver's indices are anchored to bar open times: they start at zero and
+        # grow by one per confirmed bar, for the whole life of the run. The
+        # history window does not. A run polling a five day window loses its
+        # oldest bar every day, so after the window has turned over once, the
+        # length of the window is permanently smaller than the index of the
+        # newest bar, ``index == len(candles) - 1`` is never true again, and
+        # ``bar.isLast`` is false on every bar for the rest of the run. A
+        # strategy written to act on the final bar simply stops firing, with
+        # nothing in the log to say why. That was the defect.
+        #
+        # The greatest index this poll will hand over is the moving bar's, which
+        # is ``len(self._times) + len(fresh) - 1``, so one more than that is the
+        # count that makes the newest bar the last one. It is worked out once,
+        # before any bar of this batch is executed, because every bar of one
+        # hand-over is measured against the same greatest index: the bars ahead
+        # of the newest one in a catch-up batch are then not last, which is what
+        # they are, and the newest one is.
+        supplied = len(self._times) + len(fresh)
+
         for candle in confirmed:
-            stopped = self._execute(candle, len(candles), confirmed_bar=True)
+            stopped = self._execute(candle, supplied, confirmed_bar=True)
             if stopped is not None:
                 return stopped
+            if self.stopping:
+                # Something inside that bar asked this run to stop, and the bars
+                # behind it in the same catch-up batch are not executed. A run
+                # that stopped because its position is half moved would otherwise
+                # go straight on and send the next bar's orders on top of it,
+                # which is the one thing a stopped run must not do.
+                return None
+
+        if self.stopping:
+            return None
 
         if self._moving_at is None and not self._sending:
             # Everything before the newest bar has now been replayed, so the
@@ -680,7 +769,7 @@ class Session:
             # should read that at the moment it happens rather than find it later.
             self._hand_over()
 
-        return self._execute(moving, len(candles), confirmed_bar=False)
+        return self._execute(moving, supplied, confirmed_bar=False)
 
     def _hand_over(self) -> None:
         self._sending = True
@@ -754,6 +843,10 @@ class Session:
         there for as long as that bar keeps moving, which is what lets the engine
         recognise a re-execution and put its state back. It becomes a confirmed
         bar's index at the moment the bar's open instant is appended.
+
+        ``supplied`` is the count ``cycle`` worked out for this whole hand-over,
+        which is the greatest index in it plus one. It is not the length of the
+        history window: see the note there.
         """
         index = len(self._times)
         moving_again = self._moving_at == index and self._moving_time == candle.time
@@ -769,6 +862,26 @@ class Session:
             self._moving_at = index
             self._moving_time = candle.time
             self._moving_mark = self.run.checkpoint(index)
+            self._moving_updates = 0
+
+        # ``host-interface.md`` section 6.4: the count of hand-overs and the count
+        # of executions are one number, incremented once per hand-over of the same
+        # bar. Its worked case for a bar that is still forming is 1, 2, 3 and on,
+        # and the confirming execution of that bar is the next hand-over of it
+        # rather than a fresh one, so the count carries on through it.
+        #
+        # A bar this run never saw moving is handed over once, which is the other
+        # worked case in that table: a history load states one update per bar.
+        #
+        # It was 1.0 on every execution before, so a script reading ``bar.updates``
+        # could not tell a first intrabar execution from a tenth, and anything
+        # written to act on a settled price rather than on the first tick of a bar
+        # had no fact to read.
+        if moving_again or not confirmed_bar:
+            self._moving_updates += 1
+            updates = self._moving_updates
+        else:
+            updates = 1
 
         if self.trading and self._sending:
             # The fold is before the execution, never after it: a driver that
@@ -802,7 +915,7 @@ class Session:
                 is_new=not moving_again,
                 is_confirmed=confirmed_bar,
                 is_realtime=self._sending,
-                updates=1.0,
+                updates=float(updates),
             ),
             supplied=supplied,
             instrument=self.instrument,
@@ -834,6 +947,7 @@ class Session:
                 self._moving_at = None
                 self._moving_time = None
                 self._moving_mark = None
+                self._moving_updates = 0
             if self.trading and self._sending and result.applied:
                 if self._place(result.applied, index, candle.time) is not None:
                     return EXIT_DIAGNOSTIC
@@ -844,10 +958,18 @@ class Session:
     def _place(self, effects, index: int, when: int) -> object | None:
         """The order calls a confirmed bar made, mapped and then routed.
 
-        Every call is mapped before any of them is routed, and a refusal anywhere
-        takes the whole bar back, because a call that sends two orders sends both
-        or neither. That is the ledger's rule and not this driver's; what is here
-        is the order the two steps happen in.
+        Every call is mapped before any of them is routed, and a refusal in the
+        MAPPING takes the whole bar back: nothing has left, so the bar sends both
+        or neither. That is the ledger's rule and not this driver's, and it is the
+        only part of a bar this file can promise both or neither for.
+
+        **What happens once an order has actually gone out is a different thing,
+        and it is written down in ``_send`` rather than promised here.** One call
+        can be two orders: a reversal is a close and an open, and the platform has
+        no call that sends a pair atomically. An order that has reached the order
+        path cannot be taken back, so a refusal after one has gone is not a bar
+        that sent nothing, it is a position that is half moved. This file does not
+        pretend otherwise and does not send a compensating order to tidy it up.
         """
         bar = self.engine.IntentBar(index=index, time=float(when))
         appended = len(self.ledger.rows())
@@ -881,12 +1003,95 @@ class Session:
             self.stop()
             return None
 
-        for intent in sending:
-            self._route(intent)
+        return self._send(sending, index)
+
+    def _send(self, sending, index: int) -> object | None:
+        """One bar's intents, routed in order, and what is done when one is not.
+
+        THE DECISION, AND WHY IT IS THIS ONE
+        ------------------------------------
+
+        A bar can produce more than one order. ``order.reverse`` is a close and an
+        open, and the two are only correct together: closing without opening
+        leaves the strategy flat when it meant to be the other way round, and
+        opening without closing doubles the position instead of turning it.
+
+        There is no atomic way to send them. This platform sends one order per
+        call, and an order that has reached the order path has been decided on and
+        may already have filled. So "both or neither" cannot be kept once the
+        first one has gone, and there are exactly two honest things to do about
+        it:
+
+        1. Send a compensating order to undo the one that went out. This is not
+           chosen. The compensating order can be refused in its turn, it fills at
+           a different price, and it is this program deciding by itself to trade
+           in a direction no script asked for. A runner that quietly trades to fix
+           its own bookkeeping is worse than one that stops.
+
+        2. Stop, and say so loudly enough that a person goes and looks. This is
+           what happens below. The run sends nothing further, the log names the
+           bar and what did go out, and the position is left exactly as the
+           platform has it rather than being described as something else.
+
+        A refusal before anything has gone out is not that case: nothing moved, so
+        the rest of the bar is held back, every held order is recorded in the
+        ledger as not sent, and the run carries on. That is the "neither" half,
+        and it is kept wherever it can still be kept.
+
+        A cancellation is not counted as a move. It withdraws an order that has
+        not filled, so a run whose only completed send was a cancellation has not
+        moved a position and is not half moved.
+        """
+        moved = 0
+        for at, intent in enumerate(sending):
+            if self._route(intent):
+                if intent.kind != "cancel":
+                    moved += 1
+                continue
+
+            # Nothing after the refused order goes out. The ledger is told about
+            # each of them, or it would go on holding rows for orders that are not
+            # with the platform and this run would never replace them.
+            for later in sending[at + 1 :]:
+                if later.kind == "cancel":
+                    say(
+                        "A cancellation was not asked for, because an order earlier on this bar "
+                        "was not sent."
+                    )
+                    continue
+                self._reject(
+                    later, "an order earlier on this bar was not sent, so this one was held back"
+                )
+
+            if moved == 0:
+                say(
+                    f"{self.options.script} had an order refused on bar {index}. Nothing that "
+                    "moves a position went out for that bar, so the position has not moved, and "
+                    "the orders behind the refused one were held back."
+                )
+                return None
+
+            say(
+                f"THIS RUN IS STOPPING AND ITS POSITION IS HALF MOVED. On bar {index} this script "
+                f"asked for {len(sending)} orders. {moved} of them reached the platform and moved "
+                "a position, the next one did not, and an order that has gone out cannot be taken "
+                "back. Nothing further "
+                "will be sent for this script. Check what this strategy is holding against what "
+                f"you meant it to hold, under the name {self.options.strategy_name}, and square "
+                "the difference yourself."
+            )
+            self.stop()
+            return None
         return None
 
-    def _route(self, intent) -> None:
-        """One intent, as the platform's own order call.
+    def _route(self, intent) -> bool:
+        """One intent, as the platform's own order call. True when it reached it.
+
+        The answer is what ``_send`` measures a half moved bar with, so it is
+        about the platform having accepted the order and nothing more: it is not a
+        fill, and it is not a promise the order will fill. A cancellation answers
+        true, because it is re-read on the next poll and withdrawing an unfilled
+        order moves no position.
 
         Nothing here passes ``force_live`` and there is no way to make it. The
         order path reads the platform's analyzer toggle before anything else, so
@@ -894,22 +1099,22 @@ class Session:
         """
         if intent.kind == "cancel":
             self._cancel(intent)
-            return
+            return True
 
         price_type = PRICE_TYPES.get(intent.placement.order_type or "market")
         if price_type is None:
             self._reject(intent, f"the order type {intent.placement.order_type} is not sent here")
-            return
+            return False
 
         quantity = intent.qty
         if quantity is None or quantity <= 0:
             self._reject(intent, "the order had no quantity to send")
-            return
+            return False
         if float(quantity) != int(quantity):
             # Rounding a quantity down is this runner choosing how much to trade,
             # and rounding it up is worse. Neither is a decision to take quietly.
             self._reject(intent, f"a quantity of {quantity} cannot be sent as a whole number")
-            return
+            return False
 
         extra = {}
         if intent.placement.limit is not None:
@@ -930,14 +1135,14 @@ class Session:
             )
         except Exception as unreachable:  # noqa: BLE001 - recorded as a rejection
             self._reject(intent, str(unreachable))
-            return
+            return False
 
         if not isinstance(answered, dict) or answered.get("status") != "success":
             reason = "no reason was given"
             if isinstance(answered, dict):
                 reason = str(answered.get("message", reason))
             self._reject(intent, reason)
-            return
+            return False
 
         order_id = str(answered.get("orderid", ""))
         self._orders[intent.intent_id] = order_id
@@ -946,6 +1151,7 @@ class Session:
             f"Sent {intent.side} {int(quantity)} {self.options.symbol} as {price_type} "
             f"{self.product}. Order {order_id}."
         )
+        return True
 
     def _cancel(self, intent) -> None:
         """Cancel every order of this run that still carries the tag named.
@@ -1113,7 +1319,9 @@ def build_client(options):
     try:
         from openalgo import api
     except ImportError as missing:
-        raise Refusal(f"The platform client is not installed on this server. ({missing})") from missing
+        raise Refusal(
+            f"The platform client is not installed on this server. ({missing})"
+        ) from missing
 
     host = os.getenv("OPENALGO_HOST") or os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
     return api(api_key=api_key, host=host)

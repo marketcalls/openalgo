@@ -3,8 +3,17 @@
 This is the half that runs INSIDE the web worker. Production is one
 cooperatively scheduled worker, so everything here has to hand the worker back
 immediately: starting a run means spawning a process and returning, and it never
-waits for a result. The work itself is ``strategies/scripts/openscript_runner.py``,
+waits for a result. The work itself is ``openscript_host/openscript_runner.py``,
 which is an ordinary process with nothing patched in it.
+
+**A start names the script and nothing else.** What the run is on comes from the
+settings saved against that script, in ``services/openscript_run_config.py``. A
+start that carried the instrument would let a scheduled run and a run started by
+hand differ by one typed character, and the difference would first be visible as
+an order on something nobody meant to trade. A script with no settings saved is
+refused by name, saying what is missing, rather than started on a guess. The
+explicit arguments are still here for a caller that already holds them, and
+anything it does not pass is read from those settings.
 
 **Why a child process and not a thread.** A compiled program is walked by an
 engine, bar by bar, and a strategy polls the platform between bars. Neither is
@@ -24,13 +33,20 @@ deliberately NOT copied is the scheduler: there is exactly one in this
 application, ``init_scheduler`` in that blueprint, and a second would be a second
 set of jobs nobody is looking at.
 
-Three things in here are the reason it reads the way it does:
+Four things in here are the reason it reads the way it does:
 
-- **The registry lock is a real one.** Under the production server a plain
-  ``threading.RLock`` is green: it belongs to the hub and can only pass a waiter
-  from one greenlet to another. This dictionary is read while a process is being
-  reaped, so the lock is taken from ``utils/real_threading`` and the section it
-  guards is in-memory bookkeeping and nothing else.
+- **The registry lock is the ordinary one, and that is the point.** Every path
+  into this module is a request greenlet or a scheduled job, and under the
+  production server both of those are green: the scheduler's workers are
+  ordinary threads, which that server patches, and so is the main thread that
+  runs the exit handler at the bottom of this file. There is no real OS thread
+  here to share anything with. A lock from ``utils/real_threading`` would
+  therefore be the wrong one twice over: a greenlet blocking on a real lock
+  stops the single worker for every user, and a greenlet that yields while
+  holding one can never be resumed to release it. ``threading.RLock`` belongs to the hub, which is the
+  only world these callers live in. **If a real thread is ever given a reason to
+  read this registry, it must not take this lock**: it hands the work to a
+  greenlet, or the lock moves and this note moves with it.
 - **No wait here is served by C.** ``Popen.wait(timeout=...)`` blocks inside
   ``waitpid`` or its equivalent, which is not a yield point, so on the production
   server it would stop every request for the length of the timeout rather than
@@ -39,6 +55,13 @@ Three things in here are the reason it reads the way it does:
 - **The wait happens outside the lock.** A strategy takes as long to stop as it
   takes to notice it was asked, and holding a process-wide lock across that would
   stall every other start, stop and status read.
+- **The registry heals itself.** A run ends by itself far more often than it is
+  stopped, and nothing tells this module when that happens. So every function
+  that reads or writes the registry first drops the entries whose process has
+  gone. Nothing outside has to remember to ask, because the version that relied
+  on being asked was never asked: a run that ended by itself stayed in the
+  registry, and that script could not be started again for the life of the
+  worker.
 
 **Nothing here places an order and nothing here decides where one goes.** The
 child reaches the platform's own order path, which reads the analyzer toggle
@@ -50,19 +73,26 @@ deliberately nothing it could pass.
 import atexit
 import os
 import platform
-import re
 import signal
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 from time import monotonic, sleep
 
 import psutil
 import pytz
 
+from services.openscript_run_config import (
+    PRODUCTS,
+    is_product,
+    is_run_field,
+    is_script_name,
+    read_run_config,
+    require_run_config,
+)
 from utils.logging import get_logger
-from utils.real_threading import RLock
 
 logger = get_logger(__name__)
 
@@ -75,8 +105,25 @@ IST = pytz.timezone("Asia/Kolkata")
 # routes that list and read a strategy's logs already look here.
 LOGS_DIR = Path("log") / "strategies"
 
-# The program that runs inside the child.
-RUNNER_SCRIPT = Path("strategies") / "scripts" / "openscript_runner.py"
+#: The program that runs inside the child.
+#:
+#: It belongs to the platform, not to the trader, so it lives where the platform's
+#: own files live and ships in the image. It cannot live under ``strategies``:
+#: that path is a named volume on a container install, and a volume is seeded
+#: from the image only while it is empty, so a file the platform put there would
+#: be absent on every install that already has one after an upgrade. The folder
+#: it used to be in also ignores every ``.py`` in it, which would have kept it
+#: out of the repository as well.
+RUNNER_SCRIPT = Path("openscript_host") / "openscript_runner.py"
+
+#: Where it used to be, read only while an installation still has it there.
+#:
+#: This is a migration shim and nothing more. It exists so that an install which
+#: has not yet taken the move keeps working rather than answering every start
+#: with a missing program, and it says so in the log each time it is used.
+#: Delete it, and the branch in ``runner_program_path``, once no supported
+#: install has a runner under ``strategies``.
+LEGACY_RUNNER_SCRIPT = Path("strategies") / "scripts" / "openscript_runner.py"
 
 # What a run is called. Namespaced so a run can never collide with a strategy the
 # Python host is running: both write into one log folder and both keep a registry
@@ -84,15 +131,11 @@ RUNNER_SCRIPT = Path("strategies") / "scripts" / "openscript_runner.py"
 # reaches the wrong process.
 ID_PREFIX = "openscript"
 
-# A script name this service will start. The same shape the route that stores
-# them accepts, restated because this module builds a command line out of it: a
-# name with a separator, a dot segment or a dash at the front would be an
-# argument rather than a file.
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.oscript$")
-
-# The same, for the instrument and interval a run is started on. They reach a
-# command line too.
-_SAFE_FIELD = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+# What a script name, an instrument, an exchange, an interval and a product may
+# look like is decided in one place, ``services/openscript_run_config.py``, and
+# imported from there. Every one of them reaches the command line built below,
+# and a value the settings accepted but this refused would be a run that could be
+# saved and never started.
 
 #: What is running now: ``{run_id: {"process", "pid", "started_at", "log_file", ...}}``.
 RUNNING_RUNS: dict[str, dict] = {}
@@ -104,7 +147,23 @@ RUNNING_RUNS: dict[str, dict] = {}
 #: still alive, and one of the two would then be running with nothing tracking it.
 STOPPING_RUNS: set[str] = set()
 
-#: Guards the two above and nothing else. Real, not green: see the module note.
+#: Run ids claimed by a start that has not finished spawning yet.
+#:
+#: CLAUDE.md's order path invariant is 'claim under the same lock that checks',
+#: and it is here for the same reason it is there. Starting a child is slow:
+#: an API key is read, a folder is made, a log is opened and a process is
+#: spawned. Doing that between the check and the write leaves a window where
+#: every concurrent start sees an empty registry and every one of them spawns.
+#: Measured before this existed: eight simultaneous starts of one script gave
+#: eight children, all trading the same strategy on the same account.
+#:
+#: A claim is not a run, so it is kept here rather than as a placeholder in
+#: RUNNING_RUNS: the sweep drops any entry with no process, and a claim has
+#: none yet, so a placeholder would be swept the moment it was made.
+STARTING_RUNS: set[str] = set()
+
+#: Guards the two above and nothing else. The hub's own lock, not a real one:
+#: see the module note for why that is the right one here.
 PROCESS_LOCK = RLock()
 
 OS_TYPE = platform.system().lower()
@@ -157,6 +216,32 @@ def logs_for(run_id: str) -> list[Path]:
         return []
     found = [one for one in LOGS_DIR.glob(f"{run_id}_*.log") if one.is_file()]
     return sorted(found, key=lambda one: one.name, reverse=True)
+
+
+def runner_program_path() -> Path | None:
+    """Where the program that runs a script is, or nothing if this install has none.
+
+    Two places are looked at and only two, both of them written down above. The
+    first is where the program belongs. The second is where it used to be, and
+    finding it there is reported every time, because an install left on the old
+    path loses the program the next time its container is rebuilt.
+    """
+    canonical = RUNNER_SCRIPT.resolve()
+    if canonical.is_file():
+        return canonical
+
+    legacy = LEGACY_RUNNER_SCRIPT.resolve()
+    if legacy.is_file():
+        logger.warning(
+            "The OpenScript runner is still at %s. It belongs at %s, which ships with the "
+            "platform: the folder it is in now is a mounted volume on a container install, so "
+            "an upgrade does not deliver a file there.",
+            legacy,
+            canonical,
+        )
+        return legacy
+
+    return None
 
 
 def _wait_for_exit(process: subprocess.Popen, timeout: float) -> bool:
@@ -221,7 +306,16 @@ def _terminate(process: subprocess.Popen, pid: int, gentle: float = 5.0, forced:
 
 
 def _process_is_alive(pid: int | None) -> bool:
-    """Whether a process id still names something running."""
+    """Whether a process id still names something running.
+
+    **Deliberately not what decides that a run has finished.** An id can be
+    reused, and where reading another process needs permission a live one is
+    indistinguishable from a dead one, so an answer of False here is not evidence
+    that a run has gone. Only the run's own process object may say that. This
+    stays because confirming a process by id after a stop is a different question
+    from deciding to forget one, and it is the question a caller checking up on a
+    termination is asking.
+    """
     if not pid:
         return False
     try:
@@ -231,6 +325,76 @@ def _process_is_alive(pid: int | None) -> bool:
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
     return False
+
+
+def _forget_finished_locked() -> list[str]:
+    """Drop every run whose process has gone, and say which. The caller holds the lock.
+
+    This is what makes the registry self-healing, and every function that reads
+    or writes the registry calls it first. A run ends by itself more often than
+    it is stopped: it refuses to start because nothing was compiled, or the
+    script raised a diagnostic and stopped itself. Nothing tells this module that
+    happened, so a registry that waited to be swept would go on reporting a run
+    that ended hours ago, and would refuse to start that script again for the
+    life of the worker. Waiting to be swept is exactly what the previous version
+    did, and nothing ever swept it.
+
+    ``poll()`` is both the question and the answer: it reads the exit status
+    without waiting, and it is also what reaps the child, so a child nobody polls
+    stays a zombie holding a process slot.
+
+    **A run is only dropped when its own process says it has gone.** Liveness by
+    process id is deliberately not consulted: the id may have been reused by then,
+    and on the platform where reading another process needs permission the answer
+    for a live run is indistinguishable from the answer for a dead one. Dropping a
+    live run would leave a strategy placing orders with nothing left that could
+    stop it, which is the worst shape this can fail in and far worse than keeping
+    a finished one a moment longer. For the same reason a ``poll()`` that raises
+    keeps the entry.
+    """
+    finished = []
+    for run_id, held in list(RUNNING_RUNS.items()):
+        process = held.get("process")
+        try:
+            over = process is None or process.poll() is not None
+        except Exception:
+            logger.exception("Could not tell whether the OpenScript run %s is still there", run_id)
+            over = False
+        if over:
+            del RUNNING_RUNS[run_id]
+            finished.append(run_id)
+
+    for run_id in finished:
+        logger.info("The OpenScript run %s has finished", run_id)
+    return finished
+
+
+def _status_locked(run_id: str, held: dict) -> dict:
+    """One registry entry as a caller may hold it. The caller holds the lock.
+
+    A copy, and never the entry itself: it carries the process object, which a
+    caller outside this module has no business holding.
+
+    ``running`` and ``exit_code`` are here for a caller that reads the dictionary
+    without knowing the rule above it. Since a finished run is dropped before
+    anything is copied, the first is always true and the second always nothing: a
+    run that has ended is not in the answer at all.
+    """
+    process = held.get("process")
+    over = None if process is None else process.poll()
+    return {
+        "run": run_id,
+        "script": held.get("script"),
+        "symbol": held.get("symbol"),
+        "exchange": held.get("exchange"),
+        "interval": held.get("interval"),
+        "product": held.get("product", ""),
+        "pid": held.get("pid"),
+        "started_at": held.get("started_at"),
+        "log_file": held.get("log_file"),
+        "running": over is None,
+        "exit_code": over,
+    }
 
 
 def _api_key_for(user_id: str | None) -> str | None:
@@ -254,15 +418,21 @@ def _api_key_for(user_id: str | None) -> str | None:
 
 def start_run(
     script: str,
-    symbol: str,
-    exchange: str,
-    interval: str,
+    symbol: str = "",
+    exchange: str = "",
+    interval: str = "",
     user_id: str | None = None,
     product: str = "",
     history_days: int = 5,
     poll_seconds: float = 15.0,
 ) -> tuple[bool, str]:
     """Start one script in a process of its own and return at once.
+
+    **The script name alone is enough**, and that is how a run is started: the
+    instrument, the exchange, the interval, the product and the owning user come
+    from the settings saved against that script. Anything passed here wins over
+    what is saved, for a caller that already holds it, and a script with neither
+    is refused by name saying which of the three is missing.
 
     It does not wait for the run to load its program, reach the platform or place
     anything. There is nothing to wait for that would be worth stopping every
@@ -271,26 +441,88 @@ def start_run(
     installed and whether the instrument answers are all the child's to find out,
     and each of them is a sentence in that log naming the script.
     """
-    if not _SAFE_NAME.match(script or ""):
+    if not is_script_name(script):
         return False, (
             f"{script!r} is not a script name. A name is letters, digits, dot, dash or "
             "underscore, and ends in .oscript"
         )
+
+    saved = read_run_config(script) or {}
+    symbol = symbol or saved.get("symbol") or ""
+    exchange = exchange or saved.get("exchange") or ""
+    interval = interval or saved.get("interval") or ""
+    product = product or saved.get("product") or ""
+    user_id = user_id or saved.get("user_id") or None
+
+    if not (symbol and exchange and interval):
+        # Said by the settings rather than here, so a trader reads one sentence
+        # about a missing setting wherever they meet it.
+        _, why = require_run_config(script)
+        return False, why or (
+            f"{script} has no instrument, exchange and interval to run on. Save its run "
+            "settings, then start it again."
+        )
+
     for name, value in (("instrument", symbol), ("exchange", exchange), ("interval", interval)):
-        if not _SAFE_FIELD.match(value or ""):
+        if not is_run_field(value):
             return False, f"{value!r} is not {'an' if name == 'exchange' else 'a'} {name} this can start a run on"
+
+    # A product reaches the same command line as the three above, so it is
+    # checked the same way and against the list the run itself checks it against.
+    # An empty one is allowed and means the script says what it needs: one that
+    # closes its position by the end of the session needs no product, and one
+    # that carries a position overnight is refused inside its own run, where its
+    # own declaration is known.
+    if product and not is_product(product):
+        return False, (
+            f"{product!r} is not a product this platform sends. Use one of {', '.join(PRODUCTS)}."
+        )
 
     run_id = run_id_for(script)
 
     with PROCESS_LOCK:
+        _forget_finished_locked()
         if run_id in RUNNING_RUNS:
             return False, f"{script} is already running"
         if run_id in STOPPING_RUNS:
             return False, f"{script} is still stopping, try again in a moment"
+        if run_id in STARTING_RUNS:
+            return False, f"{script} is already starting"
+        # Claimed in the hold that checked, and released in the finally below
+        # whatever happens after it.
+        STARTING_RUNS.add(run_id)
 
-    runner = RUNNER_SCRIPT.resolve()
-    if not runner.is_file():
-        logger.error("The OpenScript runner is missing at %s", runner)
+    try:
+        return _spawn_claimed(
+            script, run_id, symbol, exchange, interval, product,
+            user_id, history_days, poll_seconds,
+        )
+    finally:
+        with PROCESS_LOCK:
+            STARTING_RUNS.discard(run_id)
+
+
+def _spawn_claimed(
+    script: str,
+    run_id: str,
+    symbol: str,
+    exchange: str,
+    interval: str,
+    product: str,
+    user_id: str | None,
+    history_days: int,
+    poll_seconds: float,
+) -> tuple[bool, str]:
+    """The slow half of a start, run with this script's id already claimed.
+
+    Split out of ``start_run`` so the claim can be released in one ``finally``
+    rather than on each of the seven paths that can fail between opening a log
+    and registering a child. A path that forgot would leave a script that can
+    never be started again for the life of the worker.
+    """
+    runner = runner_program_path()
+    if runner is None:
+        logger.error("The OpenScript runner is missing. It belongs at %s", RUNNER_SCRIPT.resolve())
         return False, "The program that runs a script is missing from this installation"
 
     # Everything that can fail slowly happens before the lock is taken again.
@@ -363,6 +595,7 @@ def start_run(
             logger.debug("The parent side of the log for %s did not close cleanly", run_id)
 
     with PROCESS_LOCK:
+        _forget_finished_locked()
         RUNNING_RUNS[run_id] = {
             "process": process,
             "pid": process.pid,
@@ -372,6 +605,7 @@ def start_run(
             "symbol": symbol,
             "exchange": exchange,
             "interval": interval,
+            "product": product,
         }
 
     logger.info("Started the OpenScript run %s as process %s", run_id, process.pid)
@@ -393,6 +627,7 @@ def stop_run(script_or_run_id: str) -> tuple[bool, str]:
     run_id = _as_run_id(script_or_run_id)
 
     with PROCESS_LOCK:
+        _forget_finished_locked()
         if run_id in STOPPING_RUNS:
             return False, "That run is already stopping"
         held = RUNNING_RUNS.pop(run_id, None)
@@ -419,7 +654,19 @@ def stop_run(script_or_run_id: str) -> tuple[bool, str]:
 
 
 def _as_run_id(given: str) -> str:
-    """A caller may name the script or the run. Both reach the same id."""
+    """A caller may name the script or the run. Both reach the same id.
+
+    The two are told apart by the extension and not by the prefix. Every script
+    name ends ``.oscript`` (``is_script_name`` requires it) and no run id does,
+    because ``run_id_for`` strips it. Testing the prefix instead read a script
+    genuinely named ``openscript_something.oscript`` as though it were already a
+    run id: ``start_run`` registered it under ``openscript_openscript_something``
+    while ``stop_run`` and ``status_of`` looked for ``openscript_something.oscript``,
+    so the run started, answered "not running" ever after, and could not be
+    stopped through any route.
+    """
+    if given.endswith(".oscript"):
+        return run_id_for(given)
     return given if given.startswith(f"{ID_PREFIX}_") else run_id_for(given)
 
 
@@ -427,70 +674,50 @@ def is_running(script_or_run_id: str) -> bool:
     """Whether this run is tracked and its process is still there."""
     run_id = _as_run_id(script_or_run_id)
     with PROCESS_LOCK:
-        held = RUNNING_RUNS.get(run_id)
-        process = held["process"] if held else None
-    return process is not None and process.poll() is None
+        _forget_finished_locked()
+        return run_id in RUNNING_RUNS
 
 
 def status_of(script_or_run_id: str) -> dict | None:
     """What is known about one run, or nothing when it is not running.
 
-    A copy, and never the registry's own entry: it carries the process object,
-    which a caller outside this module has no business holding.
+    A copy, and never the registry's own entry. A run whose process has ended is
+    not running, so it answers nothing here and its log is where the rest of its
+    story is.
     """
     run_id = _as_run_id(script_or_run_id)
     with PROCESS_LOCK:
+        _forget_finished_locked()
         held = RUNNING_RUNS.get(run_id)
         if held is None:
             return None
-        process = held["process"]
-        return {
-            "run": run_id,
-            "script": held.get("script"),
-            "symbol": held.get("symbol"),
-            "exchange": held.get("exchange"),
-            "interval": held.get("interval"),
-            "pid": held.get("pid"),
-            "started_at": held.get("started_at"),
-            "log_file": held.get("log_file"),
-            "running": process.poll() is None,
-            "exit_code": process.poll(),
-        }
+        return _status_locked(run_id, held)
 
 
 def running_runs() -> list[dict]:
-    """Every run this worker is tracking, as copies."""
+    """Every run this worker is tracking, as copies.
+
+    Built in one hold rather than by asking after each id in turn, so the list is
+    one answer about one moment instead of several answers about several.
+    """
     with PROCESS_LOCK:
-        ids = list(RUNNING_RUNS)
-    found = [status_of(one) for one in ids]
-    return [one for one in found if one is not None]
+        _forget_finished_locked()
+        return [_status_locked(run_id, held) for run_id, held in RUNNING_RUNS.items()]
 
 
 def reap_finished_runs() -> list[str]:
     """Drop every run whose process has finished, and say which.
 
-    A run ends by itself more often than it is stopped: it refuses to start
-    because nothing compiled, or the script raised a diagnostic and stopped
-    itself. Nothing notices that on its own, so without this the registry would go
-    on reporting a run that ended hours ago and would refuse to start it again.
-
-    ``poll()`` is what reaps the child, so calling it here is not only the
-    question but also the answer: a child nobody polls stays a zombie.
+    The registry drops a finished run on its own, on every read and every write,
+    so nothing depends on this being called. It stays because a sweep is also
+    worth doing when nobody is looking: a worker where no page is open and no run
+    is started still has children to reap, and a scheduled job calling this keeps
+    a finished run from holding its process slot until the next request happens
+    to arrive. It is the same sweep, so it can never drift from the one the rest
+    of this module does.
     """
-    finished = []
     with PROCESS_LOCK:
-        for run_id, held in list(RUNNING_RUNS.items()):
-            process = held["process"]
-            over = process.poll() is not None
-            if not over and not _process_is_alive(held.get("pid")):
-                over = True
-            if over:
-                finished.append(run_id)
-                del RUNNING_RUNS[run_id]
-
-    for run_id in finished:
-        logger.info("The OpenScript run %s has finished", run_id)
-    return finished
+        return _forget_finished_locked()
 
 
 def stop_every_run() -> list[str]:
@@ -511,6 +738,7 @@ def stop_every_run() -> list[str]:
     this change.
     """
     with PROCESS_LOCK:
+        _forget_finished_locked()
         ids = list(RUNNING_RUNS)
     if ids:
         logger.info("Stopping %d OpenScript run(s) before this worker exits", len(ids))
