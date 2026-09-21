@@ -84,6 +84,7 @@ jobs:
             test/test_migrate_sandbox_charges.py \
             test/test_sandbox_charges_api.py \
             test/test_charges_api.py \
+            test/test_auth_negative_cache.py \
             -v --timeout=60
 
   # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
