@@ -40,7 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { type AlertDelivery, deliveryOf, readySound } from '@/lib/trading/alertDelivery'
+import { type AlertDelivery, readySound } from '@/lib/trading/alertDelivery'
 import { ALERT_PLACEHOLDERS } from '@/lib/trading/alertMessage'
 import { askToNotify } from '@/lib/trading/alertNotify'
 import {
@@ -50,10 +50,9 @@ import {
   type AlertDraft,
   type AlertKind,
   defaultExpiry,
+  draftFor,
   draftProblem,
   drawingChoices,
-  expiryText,
-  hasAutoTitle,
   isRangeCondition,
   lastClose,
   levelChoices,
@@ -136,62 +135,27 @@ export function AlertsDialog({ handle, onClose }: Props) {
   const editing = handle?.editAlertId
 
   /** A draft seeded from what the chart is showing, or from an existing alert. */
+  /** The draft the form opens with, seeded exactly as a right-click seeds one. */
   const seed = useCallback(
     (alertId?: string): AlertDraft => {
       const existing = alertId ? handle?.alerts.list().find((one) => one.id === alertId) : undefined
-      const source = existing?.source ?? handle?.source
-      const kind = (source?.kind ?? 'price') as AlertKind
-      const studies = handle ? studyChoices(handle.chart) : []
-      const instanceId =
-        source?.kind === 'indicator' ? source.instanceId : (studies[0]?.value ?? '')
-      const plots = handle ? plotChoices(handle.chart, instanceId) : []
-      const plotKey = source?.kind === 'indicator' ? source.plotKey : (plots[0]?.value ?? '')
-      const drawings = drawingChoices(handle?.drawings ?? null)
-      const drawingId = source?.kind === 'drawing' ? source.drawingId : (drawings[0]?.value ?? '')
-      const levels = levelChoices(handle?.drawings ?? null, drawingId)
-      const seeded =
-        source?.kind === 'price'
-          ? source.price
-          : source?.kind === 'indicator'
-            ? source.value
-            : kind === 'indicator' && handle
-              ? plotValueAt(handle.chart, instanceId, plotKey)
-              : handle
-                ? lastClose(handle.chart)
-                : null
-      // Seeded on the tick. The value may have come from a pixel, and a pixel
-      // maps to a price with fifteen decimals behind it.
-      const onTick = (n: number): number => (kind === 'price' ? snapPrice(n, handle?.at) : n)
-      return {
-        kind,
-        condition: (existing?.condition ?? 'crossing') as AlertConditionId,
-        value: seeded === null || seeded === undefined ? '' : String(onTick(seeded)),
-        upperValue:
-          source?.kind === 'price' && source.upperPrice !== undefined
-            ? String(onTick(source.upperPrice))
-            : source?.kind === 'indicator' && source.upperValue !== undefined
-              ? String(source.upperValue)
-              : '',
-        instanceId,
-        plotKey,
-        drawingId,
-        level: source?.kind === 'drawing' ? (source.level ?? '') : (levels[0]?.value ?? ''),
-        barConditionId: source?.kind === 'barCondition' ? (source.id ?? '') : '',
-        policy: existing?.policy ?? 'onBarClose',
-        repeat: existing?.repeat ?? 'once',
-        cooldownSeconds: String(existing?.cooldownSeconds ?? 0),
-        expiresAt: existing ? expiryText(existing.expiresAt, zone) : defaultExpiry(zone),
-        // Blank when we named it, so the field keeps showing the generated
-        // name as its placeholder and the alert keeps the mark that lets a drag
-        // rewrite it. Opening the editor and pressing Save should not be what
-        // quietly freezes a name to a price the line has since left.
-        title: existing && !hasAutoTitle(existing) ? existing.title : '',
-        message: existing?.message ?? '',
-        enabled: existing ? existing.state !== 'disabled' : true,
-        // An alert stored before delivery was a choice reads as the default,
-        // which is the behaviour it already had plus the sound.
-        deliver: deliveryOf(existing?.payload),
+      if (!handle) {
+        // No chart yet. The effect below only runs with a handle, so this is
+        // unreachable in practice and typed rather than asserted.
+        return draftFor({
+          chart: { indicators: () => [], primaryBars: () => [], timezone: () => zone },
+          drawings: null,
+          zone,
+        })
       }
+      return draftFor({
+        chart: handle.chart,
+        drawings: handle.drawings,
+        zone,
+        ...(handle.source ? { source: handle.source } : {}),
+        ...(existing ? { existing } : {}),
+        ...(handle.at ? { at: handle.at } : {}),
+      })
     },
     [handle, zone]
   )

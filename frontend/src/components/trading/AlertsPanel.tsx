@@ -389,7 +389,7 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
               <Bell className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
               <p className="max-w-[17rem] text-xs leading-relaxed text-muted-foreground">
                 {alerts.length === 0
-                  ? 'No alerts on this chart yet. Right-click the chart at a price to set one there, or right-click a study plot or a drawing to watch that instead.'
+                  ? 'No alerts on this chart yet. Right-click the chart at a price to set one there and then, or use Alerts on the toolbar for one that needs a condition the defaults do not give it.'
                   : 'No alert matches that search.'}
               </p>
             </div>

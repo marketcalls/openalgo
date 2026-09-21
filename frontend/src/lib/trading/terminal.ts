@@ -72,7 +72,8 @@ import {
   type WorkspaceComparison,
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
-import { deliverAlert, deliveryOf } from './alertDelivery'
+import { deliverAlert, deliveryOf, readySound } from './alertDelivery'
+import { askToNotify } from './alertNotify'
 import type { AlertFacts } from './alertMessage'
 import { fillAlertMessage } from './alertMessage'
 import { mergeAlertRuntime } from './alertRuntime'
@@ -153,8 +154,11 @@ import {
   type AlertDrawings,
   type AlertTick,
   alertTitleFor,
+  draftFor,
+  draftProblem,
   hasAutoTitle,
   snapPrice,
+  toAlertInput,
 } from './alertsModel'
 import {
   applyChartCommands,
@@ -3351,6 +3355,67 @@ export class TradingTerminal {
 
   alertDialogOpen(): boolean {
     return this.alertUi?.isOpen() ?? false
+  }
+
+  /**
+   * Make the alert the trader just pointed at, with no form in between.
+   *
+   * **Right-clicking a price is already the whole instruction.** The price is
+   * the one thing a form would ask for, and it has just been given by pointing
+   * at it; everything else has a default that is right almost every time. A
+   * dialog here is a confirmation step on a decision already made, and it costs
+   * the gesture its speed, which is the only reason to use it.
+   *
+   * The form is still there for the alert that needs it, on the toolbar's
+   * Alerts button, and the created alert is editable from the rail the moment
+   * it exists. So nothing is lost by making it now: what a right-click produces
+   * is exactly the alert the form would have proposed, because both seed from
+   * `draftFor`.
+   */
+  async createAlertAt(source: AlertSource): Promise<boolean> {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.preparingWorkspace) return false
+    try {
+      await this.chartToolsReady
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+      await this.attachDrawing()
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+
+      const at: AlertTick = { tick: this.sym?.tick, refPrice: this.refPrice() }
+      const draft = draftFor({
+        chart: chart as unknown as AlertChart,
+        drawings: (this.draw ?? null) as AlertDrawings | null,
+        zone: chart.timezone(),
+        source,
+        at,
+      })
+      const problem = draftProblem(draft, chart as unknown as AlertChart, (this.draw ?? null) as AlertDrawings | null)
+      if (problem !== null) {
+        this.toast(problem, 'err')
+        return false
+      }
+      const input = toAlertInput(
+        draft,
+        chart as unknown as AlertChart,
+        (this.draw ?? null) as AlertDrawings | null,
+        this.sym?.symbol ?? '',
+        at
+      )
+      if (input === null) return false
+      const made = this.alerts.add(input)
+      // Borrowed from the click that made it: a browser starts an audio context
+      // suspended and only asks about notifications inside a gesture, and this
+      // is the gesture. Without it the first alert to fire hours later is silent
+      // and the trader believes it never fired.
+      readySound()
+      if (deliveryOf(made.payload).notify) void askToNotify()
+      this.toast(`Alert set: ${made.title}`, 'ok')
+      return true
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart)
+        this.toast(`The alert could not be set: ${this.cleanError(error)}`, 'err')
+      return false
+    }
   }
 
   /**

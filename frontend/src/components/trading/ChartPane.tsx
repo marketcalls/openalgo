@@ -1366,7 +1366,10 @@ export function ChartPane({
                 disabled={ctx.alert.disabled}
                 title={ctx.alert.reason}
                 onClick={() => {
-                  void terminalRef.current?.openAlerts(ctx.alert!.source)
+                  // Made there and then. The price is the one thing a form
+                  // would ask for and it has just been given by pointing at it;
+                  // the alert is editable from the rail the moment it exists.
+                  void terminalRef.current?.createAlertAt(ctx.alert!.source)
                   setCtx(null)
                 }}
               >
@@ -1377,11 +1380,13 @@ export function ChartPane({
               type="button"
               className={ctxRow}
               onClick={() => {
+                // The long way round, for the alert that needs a condition, a
+                // trigger or an expiry the defaults do not give it.
                 void terminalRef.current?.openAlerts()
                 setCtx(null)
               }}
             >
-              Alerts
+              Create alert...
             </button>
             {ctx.items.map((it) => (
               <button

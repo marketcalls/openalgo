@@ -168,7 +168,7 @@ describe('the alert list on the rail', () => {
     // in, so it names the gesture rather than describing what an alert is.
     const { view } = viewOf([])
     render(<AlertsPanel {...props} view={view} />)
-    expect(screen.getByText(/Right-click the chart at a price/)).toBeInTheDocument()
+    expect(screen.getByText(/Right-click the chart at a price to set one there and then/)).toBeInTheDocument()
   })
 
   it('waits rather than claiming there are no alerts before a chart is ready', () => {

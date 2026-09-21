@@ -24,6 +24,7 @@ import {
   alertTitleFor,
   DEFAULT_EXPIRY_MONTHS,
   defaultExpiry,
+  draftFor,
   draftProblem,
   expirySeconds,
   expiryText,
@@ -424,5 +425,105 @@ describe('a stored price sits on the instrument tick', () => {
     // one snapped to a tick invented for the occasion.
     expect(snapPrice(1293.6305656934308, undefined)).toBe(1293.6305656934308)
     expect(snapPrice(Number.NaN, at)).toBeNaN()
+  })
+})
+
+/**
+ * A right-click makes the alert; the toolbar opens the form.
+ *
+ * Both seed from `draftFor`, and that is the point of it existing. Right-clicking
+ * a price creates an alert there and then, with no form in between, so if the
+ * gesture seeded separately from the form the two would drift, and the drift
+ * would show as a right-click quietly producing a different alert from the one
+ * the form said it would propose.
+ */
+describe('the draft a right-click and the form both start from', () => {
+  const zone = 'Asia/Kolkata'
+  const at = { tick: 0.05, refPrice: 1293 }
+
+  it('takes its price from what was clicked, on the tick', () => {
+    // The reported case: a pixel maps to a price with a dozen decimals behind
+    // it, and an alert made by pointing must still be tradeable.
+    const made = draftFor({
+      chart: chart(),
+      drawings,
+      zone,
+      at,
+      source: { kind: 'price', price: 1293.6305656934308 } as never,
+    })
+    expect(made.kind).toBe('price')
+    expect(made.value).toBe('1293.65')
+  })
+
+  it('leaves the name blank so the generated one follows the price', () => {
+    const made = draftFor({ chart: chart(), drawings, zone, at })
+    expect(made.title).toBe('')
+  })
+
+  it('fires on a confirmed bar, once, unless told otherwise', () => {
+    // The defaults a right-click commits to without asking. A gesture that
+    // silently armed an intrabar repeating alert would be a different thing
+    // from the one the form proposes.
+    const made = draftFor({ chart: chart(), drawings, zone, at })
+    expect(made.policy).toBe('onBarClose')
+    expect(made.repeat).toBe('once')
+    expect(made.enabled).toBe(true)
+  })
+
+  it('makes a sound and a notification, and sends nothing outward', () => {
+    expect(draftFor({ chart: chart(), drawings, zone, at }).deliver).toEqual(DEFAULT_DELIVERY)
+  })
+
+  it('seeds an existing alert from itself rather than from the click', () => {
+    // The editor path. An alert being edited must not be re-seeded from
+    // whatever the pointer was last over.
+    const existing = {
+      source: { kind: 'price', price: 1300 },
+      condition: 'lessThan',
+      policy: 'intrabar',
+      repeat: 'always',
+      state: 'disabled',
+      title: 'Cover the short',
+      cooldownSeconds: 30,
+    } as never
+    // Handed a competing click as well, because that is the case the
+    // precedence exists for: opening the editor on an alert must not re-seed it
+    // from wherever the pointer happened to be last.
+    const made = draftFor({
+      chart: chart(),
+      drawings,
+      zone,
+      at,
+      existing,
+      source: { kind: 'price', price: 999.95 } as never,
+    })
+    expect(made.value).toBe('1300')
+    expect(made.condition).toBe('lessThan')
+    expect(made.policy).toBe('intrabar')
+    expect(made.enabled).toBe(false)
+    expect(made.title).toBe('Cover the short')
+  })
+
+  it('is the same draft whether a form or a gesture asks for it', () => {
+    // Two calls with the same click produce the same alert, which is the whole
+    // reason the two paths share this.
+    const source = { kind: 'price', price: 1293.6305656934308 } as never
+    const one = draftFor({ chart: chart(), drawings, zone, at, source })
+    const other = draftFor({ chart: chart(), drawings, zone, at, source })
+    expect(one).toEqual(other)
+  })
+
+  it('produces an alert the engine takes', () => {
+    const made = draftFor({
+      chart: chart(),
+      drawings,
+      zone,
+      at,
+      source: { kind: 'price', price: 1293.6305656934308 } as never,
+    })
+    const input = toAlertInput(made, chart(), drawings, 'RELIANCE', at)
+    expect(input).not.toBeNull()
+    expect(input?.source).toMatchObject({ kind: 'price', price: 1293.65 })
+    expect(input?.title).toBe('RELIANCE crossing 1293.65')
   })
 })

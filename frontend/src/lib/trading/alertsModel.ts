@@ -24,7 +24,7 @@ import {
   utcSecondsToZonedParts,
   zonedWallClockToUtcSeconds,
 } from 'openalgo-charts'
-import { type AlertDelivery, DEFAULT_DELIVERY } from './alertDelivery'
+import { type AlertDelivery, DEFAULT_DELIVERY, deliveryOf } from './alertDelivery'
 import { snapTick } from './format'
 
 /**
@@ -447,6 +447,81 @@ export const AUTO_TITLE_PAYLOAD = { autoTitle: true } as const
 /** Whether this alert's name is ours to rewrite. */
 export function hasAutoTitle(alert: Alert): boolean {
   return (alert.payload as { autoTitle?: unknown } | undefined)?.autoTitle === true
+}
+
+/**
+ * The draft an editor opens with, and the alert a right-click makes.
+ *
+ * **One function, because the two have to agree.** Right-clicking a price
+ * creates an alert there and then, with no form in between; the toolbar opens
+ * the form on the same thing. If the alert the gesture makes were seeded
+ * separately from the alert the form proposes, the two would drift, and the
+ * drift would show up as a right-click quietly producing a different alert from
+ * the one the form said it would.
+ *
+ * `existing` is an alert being edited. Without it this is a new one, seeded from
+ * whatever was clicked: a price from the pointer, a study's own reading at that
+ * plot, a drawing's level, or the last close when nothing was clicked at all.
+ */
+export function draftFor(options: {
+  readonly chart: AlertChart
+  readonly drawings: AlertDrawings | null
+  readonly zone: string
+  readonly source?: AlertSource
+  readonly existing?: Alert
+  readonly at?: AlertTick
+}): AlertDraft {
+  const { chart, drawings: tier, zone, existing, at } = options
+  const source = existing?.source ?? options.source
+  const kind = (source?.kind ?? 'price') as AlertKind
+  const studies = studyChoices(chart)
+  const instanceId = source?.kind === 'indicator' ? source.instanceId : (studies[0]?.value ?? '')
+  const plots = plotChoices(chart, instanceId)
+  const plotKey = source?.kind === 'indicator' ? source.plotKey : (plots[0]?.value ?? '')
+  const drawings = drawingChoices(tier)
+  const drawingId = source?.kind === 'drawing' ? source.drawingId : (drawings[0]?.value ?? '')
+  const levels = levelChoices(tier, drawingId)
+  const seeded =
+    source?.kind === 'price'
+      ? source.price
+      : source?.kind === 'indicator'
+        ? source.value
+        : kind === 'indicator'
+          ? plotValueAt(chart, instanceId, plotKey)
+          : lastClose(chart)
+  // Seeded on the tick. The value may have come from a pixel, and a pixel maps
+  // to a price with fifteen decimals behind it.
+  const onTick = (n: number): number => (kind === 'price' ? snapPrice(n, at) : n)
+  return {
+    kind,
+    condition: (existing?.condition ?? 'crossing') as AlertConditionId,
+    value: seeded === null || seeded === undefined ? '' : String(onTick(seeded)),
+    upperValue:
+      source?.kind === 'price' && source.upperPrice !== undefined
+        ? String(onTick(source.upperPrice))
+        : source?.kind === 'indicator' && source.upperValue !== undefined
+          ? String(source.upperValue)
+          : '',
+    instanceId,
+    plotKey,
+    drawingId,
+    level: source?.kind === 'drawing' ? (source.level ?? '') : (levels[0]?.value ?? ''),
+    barConditionId: source?.kind === 'barCondition' ? (source.id ?? '') : '',
+    policy: existing?.policy ?? 'onBarClose',
+    repeat: existing?.repeat ?? 'once',
+    cooldownSeconds: String(existing?.cooldownSeconds ?? 0),
+    expiresAt: existing ? expiryText(existing.expiresAt, zone) : defaultExpiry(zone),
+    // Blank when we named it, so the field keeps showing the generated name as
+    // its placeholder and the alert keeps the mark that lets a drag rewrite it.
+    // Opening the editor and pressing Save should not be what quietly freezes a
+    // name to a price the line has since left.
+    title: existing && !hasAutoTitle(existing) ? existing.title : '',
+    message: existing?.message ?? '',
+    enabled: existing ? existing.state !== 'disabled' : true,
+    // An alert stored before delivery was a choice reads as the default, which
+    // is the behaviour it already had plus the sound.
+    deliver: deliveryOf(existing?.payload),
+  }
 }
 
 /**

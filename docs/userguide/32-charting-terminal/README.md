@@ -459,13 +459,20 @@ order surface is the [Scalping Terminal](../../scalping).
 
 ## Chart Alerts
 
-**An alert is made on the chart.** Right-click at the price you want watched
-and choose its create-alert action, or right-click a study plot or a supported
-drawing to watch that instead. A study plot keeps the exact study instance and
-plot you clicked; a drawing action uses the clicked drawing even if another
-drawing is selected. Starting from the chart is what gives the alert its price:
-a form opened from anywhere else begins at the last close and asks you to type a
-number you could have pointed at.
+**Right-click the chart at a price and the alert is made there and then.** No
+form: the price is the one thing a form would ask for, and pointing at it has
+already given it. The same action on a study plot or a supported drawing watches
+that instead, keeping the exact study instance and plot you clicked, or the
+clicked drawing even if another one is selected. A notice names the alert it
+made, and the alert is editable from the rail the moment it exists.
+
+It is armed to fire once, on a confirmed bar, expiring in two months, with a
+sound and a desktop notification. Those are the same defaults the form opens
+with, so a right-click produces exactly the alert the form would have proposed.
+
+**Alerts** on the toolbar opens that form, for an alert needing a condition, a
+trigger, an expiry or a message the defaults do not give it. **Create alert...**
+in the right-click menu opens the same form.
 
 **Alerts** on the right rail lists what is already watching, with a **Log** tab
 of what has fired this session. Rows carry the name, the level read from the
