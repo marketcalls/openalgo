@@ -460,14 +460,36 @@ describe('the draft a right-click and the form both start from', () => {
     expect(made.title).toBe('')
   })
 
-  it('fires on a confirmed bar, once, unless told otherwise', () => {
-    // The defaults a right-click commits to without asking. A gesture that
-    // silently armed an intrabar repeating alert would be a different thing
-    // from the one the form proposes.
+  it('fires the moment the price is reached, once, unless told otherwise', () => {
+    // The defaults a right-click commits to without asking.
+    //
+    // Intrabar, because an alert is about a price being reached and that is
+    // when it is reached. Waiting for the candle to close reports a level
+    // touched at 13:15 on an hourly chart at 14:15, and on a daily chart the
+    // next session; it was reported as an alert that simply does not fire.
+    // Once, and enabled, because a gesture with no form must not silently arm
+    // something that repeats.
     const made = draftFor({ chart: chart(), drawings, zone, at })
-    expect(made.policy).toBe('onBarClose')
+    expect(made.policy).toBe('onTouch')
     expect(made.repeat).toBe('once')
     expect(made.enabled).toBe(true)
+  })
+
+  it('leaves an alert being edited on the policy it already had', () => {
+    // Changing the default must not rewrite alerts somebody already made and
+    // is only opening to rename.
+    const existing = {
+      id: 'a1',
+      source: { kind: 'price', price: 1243.4, paneIndex: 0 },
+      condition: 'crossing',
+      policy: 'onBarClose',
+      repeat: 'once',
+      state: 'armed',
+      title: 'RELIANCE crossing 1243.4',
+      cooldownSeconds: 0,
+      scope: { symbol: 'RELIANCE', exchange: 'NSE', interval: '5m' },
+    } as unknown as Parameters<typeof draftFor>[0]['existing']
+    expect(draftFor({ chart: chart(), drawings, zone, at, existing }).policy).toBe('onBarClose')
   })
 
   it('makes a sound and a notification, and sends nothing outward', () => {

@@ -507,7 +507,19 @@ export function draftFor(options: {
     drawingId,
     level: source?.kind === 'drawing' ? (source.level ?? '') : (levels[0]?.value ?? ''),
     barConditionId: source?.kind === 'barCondition' ? (source.id ?? '') : '',
-    policy: existing?.policy ?? 'onBarClose',
+    // Intrabar, because an alert is about a price being reached and that is
+    // the moment it is reached. Waiting for the candle to close means a level
+    // touched at 13:15 on an hourly chart is reported at 14:15, by which time
+    // the trader has either seen it themselves or missed the move; on a daily
+    // chart it is the next session. It reads as an alert that does not work,
+    // and it was reported as one.
+    //
+    // The cost is real and is the reason the other policy exists: intrabar
+    // fires on a wick that the finished candle does not keep, so a level
+    // brushed once and rejected still sends the message. That is the right
+    // trade for a price a trader is watching for, and Bar close is one field
+    // away in the form for anybody who wants the confirmation instead.
+    policy: existing?.policy ?? 'onTouch',
     repeat: existing?.repeat ?? 'once',
     cooldownSeconds: String(existing?.cooldownSeconds ?? 0),
     expiresAt: existing ? expiryText(existing.expiresAt, zone) : defaultExpiry(zone),
