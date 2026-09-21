@@ -459,15 +459,25 @@ order surface is the [Scalping Terminal](../../scalping).
 
 ## Chart Alerts
 
-Open **Alerts** in a chart's toolbar, then **Create alert**. Choose a price,
-a particular study and plot, a drawing level, or a named candle condition.
-The list supports editing, enabling, disabling and deleting alerts and shows
-triggered and expired records. Each pane owns its alerts.
+**Right-click the chart at a price and the alert is made there and then.** No
+form: the price is the one thing a form would ask for, and pointing at it has
+already given it. The same action on a study plot or a supported drawing watches
+that instead, keeping the exact study instance and plot you clicked, or the
+clicked drawing even if another one is selected. A notice names the alert it
+made, and the alert is editable from the rail the moment it exists.
 
-You can also right-click a price, a study plot or a supported drawing and choose
-its create-alert action. A study plot keeps the exact study instance and plot
-you clicked; a drawing action uses the clicked drawing even if another drawing
-is selected.
+It is armed to fire once, on a confirmed bar, expiring in two months, with a
+sound and a desktop notification. Those are the same defaults the form opens
+with, so a right-click produces exactly the alert the form would have proposed.
+
+**Alerts** on the toolbar opens that form, for an alert needing a condition, a
+trigger, an expiry or a message the defaults do not give it. **Create alert...**
+in the right-click menu opens the same form.
+
+**Alerts** on the right rail lists what is already watching, with a **Log** tab
+of what has fired this session. Rows carry the name, the level read from the
+alert itself, the instrument and the state, and hover actions to stop, edit or
+delete one. The overflow menu starts, stops or removes them all at once.
 
 **Bar close** is the default. It evaluates the confirmed candle when the next
 candle arrives. **Intrabar touch** can fire on a wick or study reading that is
@@ -475,8 +485,55 @@ absent from the final candle. Missing readings remain unavailable, including
 open interest missing from the live quote stream. Alerts retain the symbol,
 exchange and interval where they were created.
 
-Delivery is a local notice in the open terminal. Alerts do not place orders or
-send external notifications. History loading, replay selection, replay history
+### Being told when one fires
+
+**When it fires** on the create form is how you are told, chosen per alert. A
+price you are waiting on all week and a level you are watching for the next ten
+minutes do not deserve the same interruption.
+
+| | Default | Reaches you |
+|---|---|---|
+| **Sound** | on | A short tone from the tab, including behind another window |
+| **Desktop notification** | on | Your operating system's own notification, shown only while the tab is hidden |
+| **Telegram** | off | A message through the Telegram bot, which must be running with your account linked |
+| **WhatsApp** | off | A message through the paired WhatsApp device |
+
+Sound and the desktop notification never leave the machine. The two messaging
+channels send the alert out through the same services order notifications use,
+which is why neither is on unless you ask: see
+[23 - Telegram Bot](../23-telegram-bot/README.md) and the WhatsApp page for
+setting each up. A channel that refuses says so by name and the others still
+go; nothing is retried, because a queue growing behind a fired alert is worth
+less than the next alert arriving on time.
+
+The browser asks permission for notifications at the moment you save an alert
+with that box ticked, which is the only point at which it can. Refusing costs
+the desktop notification and nothing else.
+
+**A chart with an armed alert keeps working when its tab is hidden.** A chart
+with nothing armed stops fetching while you are elsewhere, which is the saving a
+background tab is for; an armed alert switches that off for as long as it is
+armed. Chrome minimized or the tab behind another window makes no difference.
+Closing the tab does: these are evaluated by the chart that is open.
+
+### Putting values in the message
+
+A message may carry placeholders, filled in from the bar that fired the alert:
+
+```
+{{ticker}} crossed {{price}}, close {{close}} on {{interval}}
+```
+
+`{{ticker}}`, `{{exchange}}`, `{{interval}}`, `{{price}}`, `{{close}}`,
+`{{open}}`, `{{high}}`, `{{low}}`, `{{volume}}`, `{{time}}` and `{{timenow}}`
+are available, and the create form lists them with a click to insert one.
+`{{price}}` is the value that met the condition, which is not always the close.
+Prices print at the instrument's own precision. A placeholder spelled wrong, or
+one the chart has no value for, is left exactly as you typed it rather than
+blanked: a sentence with a hole in it reads as a broken alert, and this reads as
+the typo it is.
+
+Alerts do not place orders. History loading, replay selection, replay history
 loading and playback suppress evaluation. Leaving replay reseeds observations
 without delivering historical matches. Named workspace configuration follows
 the workspace's Save and Autosave controls.

@@ -58,13 +58,23 @@ export function ComparisonMenu({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
-            className="h-8 px-2 text-xs"
+            className="h-8 shrink-0 gap-1 px-2.5 text-xs"
             disabled={disabled}
             aria-label="Comparisons"
+            title="Overlay another instrument on this chart"
           >
-            Compare{state.items.length > 0 ? ` (${state.items.length})` : ''}
+            Compare
+            {/* The same count chip Indicators wears, because it says the same
+                thing. `Compare (2)` beside `Indicators 2` was two spellings of
+                one idea in one row, and the parenthesised one reads as part of
+                the word rather than as a tally. */}
+            {state.items.length > 0 && (
+              <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+                {state.items.length}
+              </span>
+            )}
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" container={container} className="w-80 space-y-3 p-3">

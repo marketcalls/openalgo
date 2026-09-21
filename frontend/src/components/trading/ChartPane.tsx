@@ -21,6 +21,9 @@ import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import { isProfileKind } from '@/lib/trading/profileSettings'
 import {
+  type AlertFire,
+  type AlertsHandle,
+  type AlertsView,
   type BrandingLink,
   type ChartSettingsRequest,
   type DrawSelection,
@@ -36,8 +39,10 @@ import {
 } from '@/lib/trading/terminal'
 import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { AlertsDialog } from './AlertsDialog'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { ChartToolbar } from './ChartToolbar'
 import { ComparisonMenu } from './ComparisonMenu'
@@ -230,6 +235,18 @@ interface Props {
   onTerminalChange?(paneId: string, terminal: TradingTerminal | null): void
   /** Reports the current chart generation's object inventory. */
   onObjectsChange?(paneId: string, objects: ChartObjects | null): void
+  /**
+   * The braces button on an OpenScript study's legend row was pressed: open
+   * this file's source. The page owns the panel that shows it, so the pane
+   * passes it straight up rather than rendering anything itself.
+   */
+  onOpenScriptSource?(file: string): void
+  /** This pane's alert controller, or null once its chart has gone. */
+  onAlertsReady?(paneId: string, view: AlertsView | null): void
+  /** An alert fired on this pane. */
+  onAlertFired?(fire: AlertFire): void
+  /** This pane's set of alerts changed. */
+  onAlertsChanged?(): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
@@ -276,6 +293,10 @@ export function ChartPane({
   onSymbolChange,
   onTerminalChange,
   onObjectsChange,
+  onOpenScriptSource,
+  onAlertsReady,
+  onAlertFired,
+  onAlertsChanged,
   onDrawStats,
   linkGroup,
   armed = false,
@@ -312,6 +333,10 @@ export function ChartPane({
   terminalCbRef.current = onTerminalChange
   const objectsCbRef = useRef(onObjectsChange)
   objectsCbRef.current = onObjectsChange
+  const scriptSourceCbRef = useRef(onOpenScriptSource)
+  scriptSourceCbRef.current = onOpenScriptSource
+  const alertsCbRef = useRef({ onAlertsReady, onAlertFired, onAlertsChanged })
+  alertsCbRef.current = { onAlertsReady, onAlertFired, onAlertsChanged }
   // The flag as it stands when the terminal boots; the effect below tracks it
   // from then on. Read through a ref so the boot effect does not re-run and
   // rebuild the terminal on every toggle.
@@ -385,6 +410,8 @@ export function ChartPane({
   }, [])
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  /** The alert dialog's handle, or null when it is shut. */
+  const [alertsHandle, setAlertsHandle] = useState<AlertsHandle | null>(null)
   // Read from the chart each time the gear is clicked rather than held: the
   // schema depends on the live series type, theme and timezone.
   const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
@@ -459,8 +486,15 @@ export function ChartPane({
       onIndicatorsChange: (list) => current && setIndicators(list),
       onComparisonsChange: (state) => current && setComparisons(state),
       onIndicatorSettings: (req) => current && setIndSettings(req),
+      // Null is the terminal saying the chart this dialog belonged to has gone,
+      // which shuts it rather than leaving it writing into a dead controller.
+      onAlerts: (handle) => current && setAlertsHandle(handle),
+      onAlertsReady: (view) => current && alertsCbRef.current.onAlertsReady?.(paneId, view),
+      onAlertFired: (fire) => current && alertsCbRef.current.onAlertFired?.(fire),
+      onAlertsChanged: () => current && alertsCbRef.current.onAlertsChanged?.(),
       onChartSettings: (req) => current && setChartSettings(req),
       onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
+      onOpenScriptSource: (file) => current && scriptSourceCbRef.current?.(file),
       onDrawSelect: (sel) => current && setDrawSel(sel),
       // The legend readout is a second switch for the same thing as the context
       // menu row, so the menu label has to follow it.
@@ -501,6 +535,9 @@ export function ChartPane({
       try {
         const owner = new TradingTerminal({
           apiKey,
+          // Only the messaging channels of an alert need it, and an empty name
+          // is a terminal that works with those two refused by the server.
+          username: useAuthStore.getState().user?.username ?? '',
           wsUrl,
           container: chartRef.current,
           legendEl: legendRef.current,
@@ -540,6 +577,9 @@ export function ChartPane({
     return () => {
       if (current) release()
     }
+    // `username` is read at build time rather than subscribed: a terminal is
+    // rebuilt on a sign-in change anyway, and re-creating the chart because a
+    // display name moved would throw away every drawing on it.
   }, [paneId, apiKey, wsUrl, noteHistory, linkGroup, initialWorkspacePane])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
@@ -696,6 +736,7 @@ export function ChartPane({
     pickerOpen ||
     chartSettings !== null ||
     indSettings !== null ||
+    alertsHandle !== null ||
     textReq !== null ||
     ticket !== null ||
     confirmLeave
@@ -895,8 +936,6 @@ export function ChartPane({
             Alerts
           </Button>
 
-          {/* Workspace controls share the selected chart's row. */}
-          {!fullscreen && layoutPicker}
           <ComparisonMenu
             state={comparisons}
             disabled={
@@ -955,6 +994,15 @@ export function ChartPane({
             <ReplayIcon className="h-4 w-4" />
             <span className="hidden sm:inline">Replay</span>
           </Button>
+
+          {/* Workspace controls share the selected chart's row, but they are not
+            about this chart: they are the grid, its templates and whether a
+            click anywhere in it sends an order. They sat between Alerts and
+            Compare, which put two scopes in one run of buttons and left Compare
+            stranded on the far side of the One-Click badge from the two
+            controls it belongs with. Their own group, after everything that
+            acts on this chart, with the divider saying so. */}
+          {!fullscreen && layoutPicker}
 
           {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
             here as well: the rail can be hidden, and these two are reached far
@@ -1134,6 +1182,7 @@ export function ChartPane({
           }}
           onClose={() => setChartSettings(null)}
         />
+        <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
         <IndicatorSettingsDialog
           req={indSettings}
           onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
@@ -1317,23 +1366,22 @@ export function ChartPane({
                 disabled={ctx.alert.disabled}
                 title={ctx.alert.reason}
                 onClick={() => {
-                  void terminalRef.current?.openAlerts(ctx.alert!.source)
+                  // Made there and then. The price is the one thing a form
+                  // would ask for and it has just been given by pointing at it;
+                  // the alert is editable from the rail the moment it exists.
+                  void terminalRef.current?.createAlertAt(ctx.alert!.source)
                   setCtx(null)
                 }}
               >
                 {ctx.alert.label}
               </button>
             )}
-            <button
-              type="button"
-              className={ctxRow}
-              onClick={() => {
-                void terminalRef.current?.openAlerts()
-                setCtx(null)
-              }}
-            >
-              Alerts
-            </button>
+            {/* No entry for the form. The menu's job here is the alert at the
+                price under the pointer, which the entry above makes; a second
+                entry one line below it, spelled almost the same and doing
+                something else, is a choice nobody wants to make mid-gesture.
+                The form is on the toolbar, where somebody who wants it is
+                already looking. */}
             {ctx.items.map((it) => (
               <button
                 type="button"

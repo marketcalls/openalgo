@@ -17,6 +17,7 @@ import type { ChartObjectSnapshot, IndicatorState, LinkGroup } from 'openalgo-ch
 import {
   AlertController,
   type AlertEventPayload,
+  type AlertPatch,
   type AlertSource,
   type AlertsDocument,
   type Bar,
@@ -71,6 +72,10 @@ import {
   type WorkspaceComparison,
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
+import { deliverAlert, deliveryOf, readySound } from './alertDelivery'
+import { askToNotify } from './alertNotify'
+import type { AlertFacts } from './alertMessage'
+import { fillAlertMessage } from './alertMessage'
 import { mergeAlertRuntime } from './alertRuntime'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
@@ -145,6 +150,17 @@ export interface DrawStats {
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
 import {
+  type AlertChart,
+  type AlertDrawings,
+  type AlertTick,
+  alertTitleFor,
+  draftFor,
+  draftProblem,
+  hasAutoTitle,
+  snapPrice,
+  toAlertInput,
+} from './alertsModel'
+import {
   applyChartCommands,
   applyIndicatorCommands,
   type ChartContext,
@@ -152,8 +168,15 @@ import {
   isAgentDrawingId,
 } from './chartContract'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
-import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
+import {
+  applyChartDialogMetrics,
+  buildChartTheme,
+  mutedTradeColors,
+  resolveCssColor,
+  volumeColor,
+} from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
+import { COMPARISON_PALETTE } from './comparisonColors'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
@@ -171,6 +194,7 @@ import {
   legendToneStyle,
   lotInfoText,
 } from './legend'
+import { fileForScriptId } from './openscriptFiles'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
 import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
 import {
@@ -320,6 +344,43 @@ export interface TerminalCallbacks {
    * canvas-only and ships no DOM, so the form is ours to render.
    */
   onIndicatorSettings?(req: IndicatorSettingsRequest): void
+  /**
+   * The braces button on an OpenScript study's legend row was clicked: show
+   * this file's source.
+   *
+   * Only fires for a study the trader wrote. A built-in has no file behind it,
+   * and the chart draws no button for one.
+   */
+  onOpenScriptSource?(file: string): void
+  /**
+   * Alerts were asked for. The host renders the dialog and drives the handle.
+   *
+   * Null means the chart this dialog belonged to has gone, which is the
+   * terminal telling an open dialog to close rather than keep writing into a
+   * controller nothing is evaluating any more.
+   */
+  onAlerts?(handle: AlertsHandle | null): void
+  /**
+   * An alert fired. Carries what fired rather than a handle, because this is a
+   * record of a moment: the alert behind it may be edited, or gone, by the time
+   * anybody reads the entry back.
+   */
+  /**
+   * This chart has an alert controller now, or has lost the one it had.
+   *
+   * Separate from `onAlerts`, which means "open the editor" and carries a
+   * handle built for that moment. A list is on screen the whole time and needs
+   * the controller from the moment there is one, so it gets its own signal and
+   * the narrower view that goes with it.
+   */
+  onAlertsReady?(view: AlertsView | null): void
+  onAlertFired?(fire: AlertFire): void
+  /**
+   * The set of alerts changed: one was created, edited, removed, expired, or
+   * dragged to a new price. The controller is mutable and `list()` hands back a
+   * copy, so nothing else tells a list built from it that it is now stale.
+   */
+  onAlertsChanged?(): void
   /** The current chart generation's shared object inventory. */
   onObjectsChange?(objects: ChartObjects | null): void
   /** Opens this pane's existing chart settings dialog. */
@@ -418,6 +479,64 @@ function drawingTextContrast(background: string): string {
 const DRAWING_TEXT_PX = 12
 
 /** Everything needed to generate an indicator settings form. */
+/**
+ * Everything the alert dialog acts on, in one handle.
+ *
+ * The engine ships an alert controller and, separately, an alert UI. The
+ * controller is the part worth having and this page renders its own dialog, the
+ * way it already renders its own indicator settings: the engine is canvas-only
+ * and its dialog is a settings table, which is the wrong shape for an alert.
+ *
+ * Handed over as a snapshot taken when the dialog opens. A rebuild replaces the
+ * chart and its controller, so a dialog holding an old one would write alerts
+ * into a chart nobody is looking at; `onAlertsClosed` is how the terminal tells
+ * it to stop.
+ */
+export interface AlertsHandle {
+  /** The engine's controller: add, update, remove, list, availability. */
+  alerts: AlertController
+  /** The chart, for enumerating studies, bars and the timezone. */
+  chart: AlertChart
+  /** The drawing tier, once it is attached. Null while it is still loading. */
+  drawings: AlertDrawings | null
+  /** What this chart is showing, for naming an alert after it. */
+  symbol: string
+  /** The instrument's tick, so every stored price sits on one. */
+  at: AlertTick
+  /** A source to open the editor on, from a legend or a right-click. */
+  source?: AlertSource
+  /** An existing alert to edit, from a row in the list. */
+  editAlertId?: string
+}
+
+/**
+ * What a list of alerts needs, and nothing else.
+ *
+ * Narrower than `AlertsHandle` on purpose. The editor needs the instrument's
+ * tick and the drawing tier as they are at the instant it opens, which is why
+ * that handle is built per opening; a list needs the controller and the chart's
+ * clock, and both last as long as the chart does.
+ */
+export interface AlertsView {
+  alerts: AlertController
+  chart: AlertChart
+}
+
+/** One alert firing, as the chart reported it. */
+export interface AlertFire {
+  /** Unique per firing. One alert fires many times and each is its own row. */
+  key: string
+  alertId: string
+  title: string
+  message: string
+  symbol: string
+  exchange: string
+  /** The value that met the condition, when the event carried one. */
+  price?: number
+  /** The source bar's UTC seconds, not the browser's wall clock. */
+  firedAt: number
+}
+
 export interface IndicatorSettingsRequest {
   instanceId: string
   name: string
@@ -537,6 +656,14 @@ export interface DrawTextStyle {
 
 export interface TerminalOptions {
   apiKey: string
+  /**
+   * Who is signed in. Optional, and empty is a working terminal.
+   *
+   * Only the messaging APIs need it: Telegram and WhatsApp address a user by
+   * name, and an alert asking for either without one is refused by the server
+   * rather than delivered to somebody else.
+   */
+  username?: string
   wsUrl: string
   container: HTMLElement
   legendEl: HTMLElement
@@ -926,6 +1053,14 @@ export class TradingTerminal {
   private readonly orderLines = new Map<string, OrderLineRec>()
 
   private interval = '5m'
+  /**
+   * Who is signed in, for the messaging APIs that address a user by name.
+   *
+   * Empty until the host says. Telegram and WhatsApp both refuse a send with no
+   * user, which is the right answer: a message with nobody to deliver it to is
+   * not something to guess at.
+   */
+  private username = ''
   private ctype = 'candlestick'
   private product = 'MIS'
   private qty = 1
@@ -955,9 +1090,70 @@ export class TradingTerminal {
     mode: 'percent',
   }
 
+  /**
+   * Whether this chart is watching a price for somebody.
+   *
+   * An armed alert is the one thing on a chart that has to keep working when
+   * nobody is looking at it. Everything else a hidden tab does is a saving:
+   * nothing repaints, so fetching bars nobody can see is wasted.
+   */
+  /**
+   * What the chart knew when an alert fired, for the message's placeholders.
+   *
+   * Read from the bar the engine names rather than from the newest one: an
+   * alert evaluated on a confirmed bar close is about that bar, and filling its
+   * message from whatever has arrived since would print numbers the condition
+   * was never measured against.
+   */
+  private alertFacts(event: { time?: number; index?: number; price?: number }): AlertFacts {
+    const bars = this.shownBars
+    const at =
+      typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
+        ? bars[event.index]
+        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)
+    return {
+      ticker: this.sym?.symbol ?? '',
+      exchange: this.sym?.exchange ?? '',
+      interval: this.interval,
+      open: at?.open ?? null,
+      high: at?.high ?? null,
+      low: at?.low ?? null,
+      close: at?.close ?? null,
+      volume: at?.volume ?? null,
+      price: typeof event.price === 'number' ? event.price : (at?.close ?? null),
+      time: typeof event.time === 'number' ? event.time : null,
+      digits: this.dp(),
+    }
+  }
+
+  private alertsArmed(): boolean {
+    try {
+      return this.alerts?.list().some((alert) => alert.state === 'armed') ?? false
+    } catch {
+      // A destroyed controller is not an armed alert.
+      return false
+    }
+  }
+
+  /**
+   * A hidden tab stops fetching, unless an alert is waiting on the answer.
+   *
+   * Hiding used to stop the poll and the bar-close repair unconditionally. The
+   * stream keeps running either way, so an alert still evaluated on the ticks
+   * that arrived, but the two refreshes that correct a bar were gone: a closed
+   * bar was never re-fetched, and the default alert policy is exactly the one
+   * that waits for a bar to close. An alert set and then left in a background
+   * tab is the ordinary way to use an alert, and it was the case that worked
+   * least well.
+   *
+   * So the saving is kept for a chart with nothing armed on it, and a chart
+   * with an armed alert stays awake. Comparisons follow the tab either way:
+   * they are drawn, not watched, and nothing fires from them.
+   */
   private readonly onVisibilityChange = () => {
-    this.data?.setVisible(document.visibilityState !== 'hidden')
-    this.comparisons?.setVisibleHost(document.visibilityState !== 'hidden')
+    const visible = document.visibilityState !== 'hidden'
+    this.data?.setVisible(visible || this.alertsArmed())
+    this.comparisons?.setVisibleHost(visible)
   }
 
   constructor(opts: TerminalOptions) {
@@ -969,6 +1165,7 @@ export class TradingTerminal {
     this.initialWorkspacePane = initial
     this.preparingWorkspace = initial !== null
     this.apiKey = opts.apiKey
+    this.username = opts.username ?? ''
     this.wsUrl = opts.wsUrl
     this.container = opts.container
     this.legendEl = opts.legendEl
@@ -1854,7 +2051,18 @@ export class TradingTerminal {
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme,
-      navigation: { mousePan: 'horizontal' },
+      // No `navigation` override. The engine's default is `mousePan: 'both'`,
+      // and this used to pin it to `'horizontal'`, so dragging the plot moved
+      // through time and never through price. It was set with the 2.4.5
+      // integration and carried no reason beside it, which is how it survived
+      // three upgrades: nothing reads as wrong about a line that states a
+      // default, and this one stated the opposite of it.
+      //
+      // The setting is the trader's either way. The engine exposes it in chart
+      // settings as "Mouse drag" under Navigation, and `restoreChartSettings`
+      // reapplies whatever they chose after every rebuild. Forcing it here also
+      // made their choice the one thing a Reset would not return to, because
+      // `chartDefaults` is read off the chart just after it is built.
       // Corner clock and bar countdown. Both are off by default in the engine,
       // deliberately: a countdown repaints every second, and on the historical
       // range a chart usually opens on it counts against a bar that closed months
@@ -2106,6 +2314,14 @@ export class TradingTerminal {
     // ships no DOM, so it emits and the host renders the form.
     this.chart.on('indicatorSettings', (p) => {
       void this.emitIndicatorSettings((p as { instanceId: string }).instanceId)
+    })
+    // The braces beside the gear. The chart holds no code and no DOM, so it
+    // names the indicator and we turn that back into the file it was compiled
+    // from. An id that is not one of ours resolves to null and nothing opens,
+    // which is what a built-in study should do if a button ever reaches here.
+    this.chart.on('indicatorSource', (p) => {
+      const file = fileForScriptId(String((p as { indicatorId?: unknown }).indicatorId ?? ''))
+      if (file !== null) this.cb.onOpenScriptSource?.(file)
     })
     // The on-chart legend's x removes an indicator without going through this
     // class. Without this the toolbar list went stale, and worse, the tracked
@@ -2883,6 +3099,19 @@ export class TradingTerminal {
     // fail silently either: without this the indicator is simply absent and
     // there is nothing anywhere to say why.
     for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    // The trader's OpenScript sources, compiled here and registered the same
+    // way. After the custom modules so that neither tier can be shadowed by a
+    // half-loaded one above it, and on every call for the same reason the
+    // custom loader runs on every call: a script saved from the panel appears
+    // on the next picker open rather than after a reload. A script already
+    // compiled at its current modification time costs nothing.
+    const { loadOpenScriptStudies } = await import('./openscriptStudies')
+    const studies = await loadOpenScriptStudies()
+    // A script that will not compile is the one thing a trader cannot discover
+    // any other way: there is no build step between saving and running, so this
+    // toast is the compiler's only route to the person who wrote the mistake.
+    for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
   }
 
   /** Restore sources before the evaluator validates their saved identities. */
@@ -2899,7 +3128,16 @@ export class TradingTerminal {
     if (this.alerts || this.destroyed || this.chart !== chart) return
     this.alerts = new AlertController(chart, { drawings: this.objectDrawings })
     this.syncAlertPause()
-    const save = () => this.saveAlerts()
+    // Persist, and tell the page. A list built from the controller is a copy
+    // taken at render time, and nothing else would tell it that it is stale.
+    const save = () => {
+      this.saveAlerts()
+      this.cb.onAlertsChanged?.()
+      // Arming the first alert on a tab that is already hidden has to wake the
+      // feed, and removing the last one has to let it sleep again. Neither is a
+      // visibility change, so nothing else would ask.
+      this.onVisibilityChange()
+    }
     for (const event of [
       'alert:created',
       'alert:updated',
@@ -2911,9 +3149,48 @@ export class TradingTerminal {
     ]) {
       this.offAlerts.push(chart.on(event, save))
     }
+    let fireSequence = 0
     const deliver = (payload: unknown) => {
-      const event = payload as AlertEventPayload
-      if (!this.alertEvaluationPaused()) this.toast(event.message ?? event.title, 'ok')
+      const event = payload as AlertEventPayload & { price?: number }
+      if (this.alertEvaluationPaused()) return
+      const id = String(event.alertId ?? '')
+      const alert = this.alerts?.list().find((one) => one.id === id)
+      const fired = String(event.title ?? alert?.title ?? 'Alert')
+      // The message is filled in against the bar that fired it, so a
+      // notification on a locked phone carries the number rather than sending
+      // the trader back to the chart to look it up.
+      const said = fillAlertMessage(String(event.message ?? ''), this.alertFacts(event)) || fired
+      this.toast(said, 'ok')
+      void deliverAlert(
+        deliveryOf(alert?.payload),
+        {
+          title: this.sym?.symbol ? `${this.sym.symbol}: ${fired}` : fired,
+          body: said,
+          tag: `openalgo-alert-${id || fired}`,
+        },
+        {
+          apiKey: this.apiKey,
+          username: this.username,
+          // Named once per failure and never retried. These run on a price
+          // being reached, and a retry behind a fired alert is a queue that
+          // grows while the market moves.
+          onProblem: (message) => this.toast(message, 'err'),
+        }
+      )
+      // Numbered as well as timed. The time on the event is the source bar's,
+      // so two alerts firing on the same bar carry the same one, and a list
+      // keyed by time alone would show one of them.
+      fireSequence += 1
+      this.cb.onAlertFired?.({
+        key: `${event.alertId ?? 'alert'}-${fireSequence}`,
+        alertId: String(event.alertId ?? ''),
+        title: String(event.title ?? 'Alert'),
+        message: String(event.message ?? ''),
+        symbol: this.sym?.symbol ?? '',
+        exchange: this.sym?.exchange ?? '',
+        ...(typeof event.price === 'number' ? { price: event.price } : {}),
+        firedAt: typeof event.time === 'number' ? event.time : Math.floor(Date.now() / 1000),
+      })
     }
     this.offAlerts.push(chart.on('alert:triggered', deliver))
     this.offAlerts.push(chart.on('indicator:alert', deliver))
@@ -2922,7 +3199,21 @@ export class TradingTerminal {
         this.toast('An alert condition could not be evaluated. Review its source.', 'err')
       })
     )
+    // A dragged line is the one place an alert changes without a form. The
+    // engine commits the price under the pointer and leaves the name alone, so
+    // this is where both are put right. Bound to the drag's own event rather
+    // than to `alert:updated`, so it cannot answer the update it makes itself.
+    this.offAlerts.push(
+      chart.on('alerts:changed', (payload: unknown) => {
+        const id = (payload as { id?: unknown } | undefined)?.id
+        if (typeof id === 'string') this.settleDraggedAlert(id)
+      })
+    )
     this.saveAlerts()
+    // The list on the rail can be drawn from here on. The editor's handle is
+    // still built per opening, because its tick and drawing tier are read at
+    // the moment it opens and this one has to last as long as the chart.
+    this.cb.onAlertsReady?.({ alerts: this.alerts, chart: chart as unknown as AlertChart })
   }
 
   private alertEvaluationPaused(): boolean {
@@ -2987,6 +3278,66 @@ export class TradingTerminal {
     this.saveAlerts()
   }
 
+  /**
+   * Put a dragged alert back on the tick, and rename it if we named it.
+   *
+   * Two corrections, both of a price that came from a pointer. A pixel maps to
+   * a price with a dozen decimals behind it, so a line dropped where the axis
+   * reads 1,260.55 was stored at 1260.5486842105263: a price the instrument
+   * cannot trade at and a number nothing in the interface could show. And a
+   * name generated from the old price goes on advertising it, so the row says
+   * one number while the line sits at another.
+   *
+   * Both are no-ops when there is nothing to correct, which is what will happen
+   * to the first of them once the engine rounds the drag itself.
+   */
+  private settleDraggedAlert(id: string): void {
+    const controller = this.alerts
+    const chart = this.chart
+    if (!controller || !chart || this.destroyed) return
+    const alert = controller.list().find((one) => one.id === id)
+    if (!alert) return
+    const at: AlertTick = { tick: this.sym?.tick, refPrice: this.refPrice() }
+    const patch: AlertPatch = {}
+
+    // Only a price is snapped. A study threshold is in the plot's own units,
+    // and an oscillator running nought to a hundred has nothing to do with the
+    // instrument's tick.
+    if (alert.source.kind === 'price') {
+      const price = snapPrice(alert.source.price, at)
+      const upper =
+        alert.source.upperPrice === undefined ? undefined : snapPrice(alert.source.upperPrice, at)
+      if (price !== alert.source.price || upper !== alert.source.upperPrice) {
+        patch.source = {
+          ...alert.source,
+          price,
+          ...(upper === undefined ? {} : { upperPrice: upper }),
+        }
+      }
+    }
+
+    if (hasAutoTitle(alert)) {
+      // Named from the snapped source, not the one that was dropped, or the
+      // name would carry the decimals the price has just lost.
+      const settled = { ...alert, source: patch.source ?? alert.source }
+      const title = alertTitleFor(
+        settled,
+        chart as unknown as AlertChart,
+        this.sym?.symbol ?? '',
+        at
+      )
+      if (title !== alert.title) patch.title = title
+    }
+
+    if (patch.source === undefined && patch.title === undefined) return
+    try {
+      controller.update(id, patch)
+    } catch {
+      // The engine refused the corrected alert. The dragged one is still
+      // armed and still evaluated; leaving it be is better than removing it.
+    }
+  }
+
   private detachAlerts(): void {
     this.offAlertFullscreen?.()
     this.offAlertFullscreen = null
@@ -2996,15 +3347,109 @@ export class TradingTerminal {
     for (const dispose of this.offAlerts.splice(0)) dispose()
     this.alerts?.destroy()
     this.alerts = null
+    // The dialog is holding the controller that has just been destroyed. Left
+    // open it would write alerts nothing evaluates, into a chart that is gone.
+    this.cb.onAlerts?.(null)
+    this.cb.onAlertsReady?.(null)
   }
 
   alertDialogOpen(): boolean {
     return this.alertUi?.isOpen() ?? false
   }
 
-  async openAlerts(source?: AlertSource): Promise<boolean> {
+  /**
+   * Make the alert the trader just pointed at, with no form in between.
+   *
+   * **Right-clicking a price is already the whole instruction.** The price is
+   * the one thing a form would ask for, and it has just been given by pointing
+   * at it; everything else has a default that is right almost every time. A
+   * dialog here is a confirmation step on a decision already made, and it costs
+   * the gesture its speed, which is the only reason to use it.
+   *
+   * The form is still there for the alert that needs it, on the toolbar's
+   * Alerts button, and the created alert is editable from the rail the moment
+   * it exists. So nothing is lost by making it now: what a right-click produces
+   * is exactly the alert the form would have proposed, because both seed from
+   * `draftFor`.
+   */
+  async createAlertAt(source: AlertSource): Promise<boolean> {
     const chart = this.chart
     if (!chart || this.destroyed || this.preparingWorkspace) return false
+    try {
+      await this.chartToolsReady
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+      await this.attachDrawing()
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+
+      const at: AlertTick = { tick: this.sym?.tick, refPrice: this.refPrice() }
+      const draft = draftFor({
+        chart: chart as unknown as AlertChart,
+        drawings: (this.draw ?? null) as AlertDrawings | null,
+        zone: chart.timezone(),
+        source,
+        at,
+      })
+      const problem = draftProblem(draft, chart as unknown as AlertChart, (this.draw ?? null) as AlertDrawings | null)
+      if (problem !== null) {
+        this.toast(problem, 'err')
+        return false
+      }
+      const input = toAlertInput(
+        draft,
+        chart as unknown as AlertChart,
+        (this.draw ?? null) as AlertDrawings | null,
+        this.sym?.symbol ?? '',
+        at
+      )
+      if (input === null) return false
+      const made = this.alerts.add(input)
+      // Borrowed from the click that made it: a browser starts an audio context
+      // suspended and only asks about notifications inside a gesture, and this
+      // is the gesture. Without it the first alert to fire hours later is silent
+      // and the trader believes it never fired.
+      readySound()
+      if (deliveryOf(made.payload).notify) void askToNotify()
+      this.toast(`Alert set: ${made.title}`, 'ok')
+      return true
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart)
+        this.toast(`The alert could not be set: ${this.cleanError(error)}`, 'err')
+      return false
+    }
+  }
+
+  /**
+   * Open the alert dialog, on a source when one was clicked.
+   *
+   * The drawing tier is attached first because an alert can be set on a
+   * drawing's level, and a dialog that offered the option and then found no
+   * drawings would be telling the trader they have none.
+   */
+  async openAlerts(source?: AlertSource, editAlertId?: string): Promise<boolean> {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.preparingWorkspace) return false
+    if (this.cb.onAlerts) {
+      try {
+        await this.chartToolsReady
+        if (this.destroyed || this.chart !== chart || !this.alerts) return false
+        await this.attachDrawing()
+        if (this.destroyed || this.chart !== chart || !this.alerts) return false
+        this.cb.onAlerts({
+          alerts: this.alerts,
+          chart: chart as unknown as AlertChart,
+          drawings: (this.draw ?? null) as AlertDrawings | null,
+          symbol: this.sym?.symbol ?? '',
+          at: { tick: this.sym?.tick, refPrice: this.refPrice() },
+          ...(source ? { source } : {}),
+          ...(editAlertId ? { editAlertId } : {}),
+        })
+        return true
+      } catch (error) {
+        if (!this.destroyed && this.chart === chart)
+          this.toast(`Alerts could not be opened: ${this.cleanError(error)}`, 'err')
+        return false
+      }
+    }
     try {
       await this.chartToolsReady
       if (this.destroyed || this.chart !== chart || !this.alerts) return false
@@ -3028,6 +3473,10 @@ export class TradingTerminal {
         // A split pane must not clip source controls or shrink a phone dialog.
         ui.root.style.position = 'fixed'
         ui.root.style.zIndex = '100'
+        // The engine's dialogs are a step smaller than this app's controls in
+        // every dimension. Applied after `createAlertUi`, which writes the
+        // engine's own token set as it builds the root.
+        applyChartDialogMetrics(ui.root)
         const fullscreen = () => {
           ui.close()
           mount().appendChild(ui.root)
@@ -3487,7 +3936,10 @@ export class TradingTerminal {
         symbol: row.symbol,
         exchange: row.exchange,
         label: `${row.exchange}:${row.symbol}`,
-        color: row.color ?? '#4f8cff',
+        // Always set by the time a row exists; the palette entry keeps a
+        // swatch from being blank if that ever stops being true, and keeps it
+        // from being the one colour a comparison is not allowed to be.
+        color: row.color ?? COMPARISON_PALETTE[0],
         status:
           row.status === 'ready'
             ? 'ready'
@@ -3569,13 +4021,17 @@ export class TradingTerminal {
       throw new Error('The chart changed while comparison history was loading')
     if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
       throw new Error('Leave replay before adding a comparison')
-    const palette = ['#4f8cff', '#f5a623', '#a78bfa', '#10b981', '#f472b6', '#22d3ee']
+    // No colour: `TerminalComparisons` assigns one, because it is the only
+    // place that sees every colour already on this chart. Choosing here by
+    // counting what exists handed the third comparison the second's colour as
+    // soon as the first was removed, and its first entry was the engine's own
+    // default line blue, so comparison one looked like a line the chart had
+    // drawn by accident.
     await this.comparisons.add({
       id: crypto.randomUUID(),
       symbol,
       exchange,
       visible: true,
-      color: palette[this.comparisons.specs().length % palette.length],
     })
   }
 
@@ -3685,7 +4141,8 @@ export class TradingTerminal {
       ) &&
       !this.rawBars.some((bar) => Number.isFinite(bar.oi))
     ) {
-      const supported = this.sym?.hasOpenInterest ?? openInterestCapability(this.sym?.exchange ?? '')
+      const supported =
+        this.sym?.hasOpenInterest ?? openInterestCapability(this.sym?.exchange ?? '')
       this.toast(
         supported === false
           ? 'Open interest is not available for this instrument.'
@@ -5524,9 +5981,15 @@ export class TradingTerminal {
         }
       }
     } else if (event.paneIndex === 0 && event.price !== null && Number.isFinite(event.price)) {
+      // Snapped to the instrument's tick, not the raw price under the pointer.
+      // A pixel maps to a price with fifteen decimals behind it, so the menu
+      // offered "Create price alert at 1,293.63" and the dialog it opened put
+      // 1293.6305656934308 in the box: the label and the field disagreed, and
+      // the alert was armed at a price the instrument cannot trade at.
+      const price = this.snap(event.price)
       alert = {
-        label: `Create price alert at ${this.fmt(event.price)}`,
-        source: { kind: 'price', price: event.price },
+        label: `Create price alert at ${this.fmt(price)}`,
+        source: { kind: 'price', price },
       }
     }
     const box = this.container.getBoundingClientRect()

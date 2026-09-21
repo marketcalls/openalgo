@@ -15,6 +15,7 @@ interface Owner {
   setDrawStay: ReturnType<typeof vi.fn>
   setDrawTool: ReturnType<typeof vi.fn>
   openAlerts: ReturnType<typeof vi.fn>
+  createAlertAt: ReturnType<typeof vi.fn>
   addComparison: ReturnType<typeof vi.fn>
   removeComparison: ReturnType<typeof vi.fn>
   setComparisonMode: ReturnType<typeof vi.fn>
@@ -40,6 +41,7 @@ vi.mock('@/lib/trading/terminal', () => ({
     setLinkGroup = vi.fn()
     setDrawTool = vi.fn(async () => {})
     openAlerts = vi.fn(async () => true)
+    createAlertAt = vi.fn(async () => true)
     addComparison = vi.fn(async () => {})
     removeComparison = vi.fn()
     setComparisonMode = vi.fn()
@@ -286,7 +288,15 @@ describe('chart pane preparation ownership', () => {
     expect(within(host).getByRole('toolbar', { name: 'Chart controls' })).toHaveAttribute('inert')
   })
 
-  it('opens the alert source supplied by the chart context event', async () => {
+  /**
+   * The gesture makes the alert; it does not open a form about it.
+   *
+   * The price is the one thing a form would ask for and pointing at it has
+   * already given it, so a dialog here is a confirmation step on a decision
+   * already made and it costs the gesture the only thing it is for. The form
+   * stays on the toolbar for an alert that needs more than the defaults.
+   */
+  it('makes the alert the chart context event named, without opening a form', async () => {
     const view = render(<ChartPane {...props} />)
     const owner = fake.owners[0]
     await act(async () => owner.resolve())
@@ -301,7 +311,28 @@ describe('chart pane preparation ownership', () => {
       })
     )
     fireEvent.click(view.getByRole('button', { name: 'Create price alert', exact: true }))
-    expect(owner.openAlerts).toHaveBeenCalledWith(source)
+    expect(owner.createAlertAt).toHaveBeenCalledWith(source)
+    expect(owner.openAlerts).not.toHaveBeenCalled()
+  })
+
+  it('offers no second alert entry in the menu', async () => {
+    // One gesture, one meaning. A second entry a line below the first, spelled
+    // almost the same and doing something else, is a choice nobody wants to
+    // make mid-gesture. The form is on the toolbar.
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    act(() =>
+      owner.options.callbacks.onContextMenu?.({
+        x: 100,
+        y: 100,
+        items: [],
+        profile: null,
+        alert: { label: 'Create price alert', source: { kind: 'price' as const, price: 105 } },
+      })
+    )
+    expect(view.getByRole('button', { name: 'Create price alert', exact: true })).toBeVisible()
+    expect(view.queryByRole('button', { name: /^Create alert/ })).not.toBeInTheDocument()
   })
 
   it('opens alerts from the pane toolbar', async () => {

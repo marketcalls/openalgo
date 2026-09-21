@@ -12,6 +12,7 @@ const AgentPanel = lazy(() =>
   import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
 )
 
+import { AlertsPanel } from '@/components/trading/AlertsPanel'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
@@ -26,12 +27,12 @@ import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
+import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
 import { WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -47,7 +48,13 @@ import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
-import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
+import type {
+  AlertFire,
+  AlertsView,
+  DrawStats,
+  SearchRow,
+  TradingTerminal,
+} from '@/lib/trading/terminal'
 import { capturePresetWorkspace } from '@/lib/trading/workspaceGrid'
 import {
   WorkspaceReplayCoordinator,
@@ -76,6 +83,15 @@ const PANEL_KEY = 'oa-trading-panel'
  * Buy button live because storage was cleared or blocked.
  */
 const ARMED_KEY = 'oa-trading-armed'
+/**
+ * How many firings the session log keeps.
+ *
+ * A repeating alert on a one-minute chart left running through a session fires
+ * hundreds of times, and past the first screenful nobody is reading them: the
+ * cost is memory that is never given back. The oldest go first, because the
+ * question the log answers is what just happened.
+ */
+const ALERT_LOG_LIMIT = 200
 
 function readArmed(): boolean {
   try {
@@ -178,6 +194,19 @@ function TradingWorkspace({ account }: { account: string | null }) {
     return isPanelId(saved) ? saved : null
   })
   /**
+   * A script the chart has asked to show the source of, or null.
+   *
+   * Set by the braces button on a study's legend row, cleared by the panel the
+   * moment it opens the file. It lives here rather than in the panel because
+   * the panel is unmounted while another one is up: the request has to survive
+   * long enough to bring the panel back.
+   */
+  const [scriptSource, setScriptSource] = useState<string | null>(null)
+  const showScriptSource = useCallback((file: string) => {
+    setScriptSource(file)
+    setPanel('scripts')
+  }, [])
+  /**
    * The bottom dock: which book is open under the grid, or null for the
    * collapsed strip. Page-level like the side panels, and for the same
    * reason: the books span every symbol, so they belong to no one pane.
@@ -192,6 +221,25 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
   const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
+  const [paneAlerts, setPaneAlerts] = useState<Record<string, AlertsView>>({})
+  /**
+   * Every alert that has fired this session, oldest first.
+   *
+   * Held on the page and nowhere else. Alerts are evaluated by the chart that
+   * is open, so a firing only happens while somebody is watching; writing it to
+   * a server would promise a history the engine does not keep. Capped, because
+   * a repeating alert on a one-minute chart left running all day is a list
+   * nobody reads and memory nobody gets back.
+   */
+  const [alertLog, setAlertLog] = useState<AlertFire[]>([])
+  /**
+   * Bumped whenever an alert changes.
+   *
+   * The controller is mutable and its `list()` hands back a copy, so nothing in
+   * React knows that a drag, a Delete key or a firing has made the rendered
+   * list stale. This is what says so.
+   */
+  const [alertRevision, setAlertRevision] = useState(0)
   /**
    * Every live pane's terminal, keyed by pane id.
    *
@@ -292,6 +340,28 @@ function TradingWorkspace({ account }: { account: string | null }) {
     },
     [updateReplayMembers]
   )
+
+  const noteAlerts = useCallback((paneId: string, view: AlertsView | null) => {
+    setPaneAlerts((previous) => {
+      if (view) {
+        if (previous[paneId] === view) return previous
+        return { ...previous, [paneId]: view }
+      }
+      if (!(paneId in previous)) return previous
+      const next = { ...previous }
+      delete next[paneId]
+      return next
+    })
+    setAlertRevision((n) => n + 1)
+  }, [])
+
+  const noteAlertFired = useCallback((fire: AlertFire) => {
+    setAlertLog((previous) =>
+      previous.length < ALERT_LOG_LIMIT
+        ? [...previous, fire]
+        : [...previous.slice(previous.length - ALERT_LOG_LIMIT + 1), fire]
+    )
+  }, [])
 
   const noteObjects = useCallback((paneId: string, objects: ChartObjects | null) => {
     setPaneObjects((previous) => {
@@ -409,6 +479,33 @@ function TradingWorkspace({ account }: { account: string | null }) {
     () => panelTarget()?.snapshotPng() ?? Promise.resolve(null),
     [panelTarget]
   )
+  // The same rule the objects panel follows: the focused pane when it has
+  // alerts, else whichever pane does, so the panel is useful before the trader
+  // has clicked into a chart.
+  const alertsPaneId = paneAlerts[focusedPane]
+    ? focusedPane
+    : (Object.keys(paneAlerts)[0] ?? focusedPane)
+  const alertsPaneNumber = visibleGrid.current
+    ? visibleGrid.current.payload.panes.findIndex((pane) => pane.id === alertsPaneId) + 1
+    : Number(alertsPaneId.slice(1)) + 1
+  const alertsPaneLabel = `Pane ${alertsPaneNumber}${
+    paneSymbols[alertsPaneId] ? ` · ${paneSymbols[alertsPaneId]}` : ''
+  }`
+  /**
+   * Open the alert editor, on a new alert or on one already in the list.
+   *
+   * The editor is a dialog the pane owns, because it needs the instrument's
+   * tick and the drawing tier as they are at the moment it opens. The page asks
+   * for it rather than rendering it, which is why this goes through the
+   * terminal instead of setting state here.
+   */
+  const openAlertEditor = useCallback(
+    (alertId?: string) => {
+      void panelTarget()?.openAlerts(undefined, alertId)
+    },
+    [panelTarget]
+  )
+
   const objectsPaneId = paneObjects[focusedPane]
     ? focusedPane
     : (Object.keys(paneObjects)[0] ?? focusedPane)
@@ -941,21 +1038,53 @@ function TradingWorkspace({ account }: { account: string | null }) {
   /**
    * One-Click, beside the layout and sync pickers because, like them, it is a
    * property of the workspace and not of one pane. The switch is the control
-   * and the badge is its label, so the badge reads the state in the scalping
-   * terminal's words and clicking either toggles it once. A label, not a
-   * button, for the reason the sync rows give: a button wrapping a switch
-   * fires twice.
+   * and the badge is its label, so clicking either toggles it once. A label,
+   * not a button, for the reason the sync rows give: a button wrapping a
+   * switch fires twice.
    */
   const armedControl = (
-    <label className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 pl-1">
-      <Switch checked={armed} onCheckedChange={setArmed} aria-label="One-Click" />
-      {/* The word goes below lg, as Indicators and Replay drop their labels:
-          with it the single-pane toolbar at 1024px pushed the LED and the
-          camera into hidden horizontal scroll. The switch keeps its name. */}
-      <Badge variant={armed ? 'destructive' : 'secondary'}>
-        <span className="hidden lg:inline">One-Click&nbsp;</span>
-        {armed ? 'ARMED' : 'off'}
-      </Badge>
+    <label
+      className={cn(
+        'flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md border px-2 text-xs font-medium transition-colors',
+        armed
+          ? 'border-destructive/60 bg-destructive/10 text-destructive'
+          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+      )}
+      title={
+        armed
+          ? 'One-Click is on: a click on the chart sends a live order'
+          : 'One-Click is off: a click on the chart opens the order ticket'
+      }
+    >
+      <Switch
+        checked={armed}
+        onCheckedChange={setArmed}
+        aria-label="One-Click"
+        // Switched on, the track carries the same red as the border and the
+        // word.
+        // Left on the app's accent it was a pale switch inside a red control
+        // saying two different things about one state, and the accent is what
+        // every harmless toggle on the page is already wearing.
+        className={cn(armed && 'data-[state=checked]:bg-destructive')}
+      />
+      {/* One control, not two. The switch and a badge beside it were the same
+          state said twice, and the badge said it in the loudest colour in the
+          row while sitting at a different height from every button around it.
+          The border makes it one control at the row's own height and the
+          switch is still what you press.
+
+          ON, not ARMED. The state is worth shouting about, because it is the
+          one where a click on the chart sends a live order, and the capitals
+          and the red are what do the shouting. The word itself only has to
+          say which way the switch is thrown, and a trader should not have to
+          learn a second vocabulary to read a toggle. */}
+      <span className="whitespace-nowrap">
+        {/* The name goes below lg, as Indicators and Replay drop their labels:
+            with it the single-pane toolbar at 1024px pushed the LED and the
+            camera into hidden horizontal scroll. */}
+        <span className="hidden lg:inline">One-Click </span>
+        {armed ? 'ON' : 'off'}
+      </span>
     </label>
   )
 
@@ -991,6 +1120,12 @@ function TradingWorkspace({ account }: { account: string | null }) {
   )
   const workspaceControls = (
     <>
+      {/* These four are the workspace, not this chart: the grid, what syncs
+          across it, the saved layouts and whether a click sends an order. The
+          rule they broke was having no rule -- two of them were text at one
+          height beside bordered controls at another, so they read as labels
+          somebody had left in the toolbar rather than things you press. */}
+      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
       {layoutPicker}
       {syncPicker}
       {workspaceMenu}
@@ -1101,6 +1236,12 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         onObjectsChange={(id, objects) => {
                           if (!visibleGrid.current) noteObjects(id, objects)
                         }}
+                        onOpenScriptSource={showScriptSource}
+                        onAlertsReady={(id, view) => {
+                          if (!visibleGrid.current) noteAlerts(id, view)
+                        }}
+                        onAlertFired={noteAlertFired}
+                        onAlertsChanged={() => setAlertRevision((n) => n + 1)}
                         onDrawStats={(value) => {
                           if (!visibleGrid.current) setStats(value)
                         }}
@@ -1136,6 +1277,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
                     onObjectsChange={noteObjects}
+                    onOpenScriptSource={showScriptSource}
+                    onAlertsReady={noteAlerts}
+                    onAlertFired={noteAlertFired}
+                    onAlertsChanged={() => setAlertRevision((n) => n + 1)}
                     onDrawStats={setStats}
                     onTerminalChange={(id, terminal) => {
                       if (visibleGrid.current !== owner) return
@@ -1200,8 +1345,37 @@ function TradingWorkspace({ account }: { account: string | null }) {
               />
             </Suspense>
           )}
+          {apiKey && wsUrl && panel === 'alerts' && (
+            <AlertsPanel
+              view={paneAlerts[alertsPaneId] ?? null}
+              log={alertLog}
+              paneLabel={alertsPaneLabel}
+              onEdit={openAlertEditor}
+              onClearLog={() => setAlertLog([])}
+              revision={alertRevision}
+            />
+          )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
+          )}
+          {apiKey && wsUrl && panel === 'scripts' && (
+            <ScriptPanel
+              // `panelTarget`, not `act`. Both reach a chart, but `act` wants
+              // the pane a toolbar button was pressed over and answers null
+              // until one has been focused, so adding a study did nothing at
+              // all until the trader happened to click the chart first. This is
+              // the helper written for a panel: the focused pane, else any pane
+              // that is up. It is the same one the watchlist and the assistant
+              // use for the same reason.
+              onAddToChart={(indicatorId) => {
+                const target = panelTarget()
+                if (!target) return false
+                void target.addIndicatorById(indicatorId)
+                return true
+              }}
+              openFile={scriptSource}
+              onOpened={() => setScriptSource(null)}
+            />
           )}
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}

@@ -162,8 +162,15 @@ describe('SymbolSearchDialog', () => {
    * operator was typed the query stopped matching any instrument, the list
    * emptied, and there was no way to look up the second leg. You had to already
    * know its exact name, which defeats a search box.
+   *
+   * It used to assert the whole box was never searched as well, which was one
+   * assertion too many: the requirement is that the leg IS searched, not that
+   * nothing else is. The whole box is searched beside it now, because a hyphen
+   * is an operator and a character instruments are named with, and splitting on
+   * it made `BAJAJ-AUTO` unfindable. Searching both costs one request and is
+   * the only thing that serves both.
    */
-  it('searches the leg being typed, not the whole expression', async () => {
+  it('searches the leg being typed, so the second leg can be looked up', async () => {
     const queries: string[] = []
     render(
       <SymbolSearchDialog
@@ -181,9 +188,9 @@ describe('SymbolSearchDialog', () => {
     await userEvent.type(box, 'NIFTY100EW+NIFTY1')
     await waitFor(() => expect(screen.getByText('NIFTY100EW')).toBeInTheDocument())
 
-    // The last search asked for the leg after the operator, never the whole box.
-    expect(queries.at(-1)).toBe('NIFTY1')
-    expect(queries).not.toContain('NIFTY100EW+NIFTY1')
+    // The leg after the operator was asked for. Without it, a second leg could
+    // only be reached by already knowing its exact name.
+    expect(queries).toContain('NIFTY1')
   })
 
   it('completing a leg keeps the dialog open and writes the exchange in', async () => {
@@ -199,5 +206,177 @@ describe('SymbolSearchDialog', () => {
     // loaded: the user is still building.
     expect(box.value).toBe('NIFTY100EW+NSE_INDEX:NIFTY100QUALTY30')
     expect(picked).toHaveLength(0)
+  })
+})
+
+/**
+ * A hyphen is both an operator and a character instruments are named with.
+ *
+ * The box splits on operators so that a half-typed expression can still look up
+ * its second leg: `NIFTY/` has to search on the empty leg after the slash
+ * rather than on `NIFTY/`, which matches nothing. Splitting on `-` as well is
+ * what made an instrument with a hyphen in its name unsearchable: typing
+ * `BAJAJ-` split the box into `BAJAJ` and an empty leg, the caret sat in the
+ * empty one, and the list went blank on the keystroke.
+ *
+ * The engine's own grammar has the same shape. `SYM_BODY` admits `&` and not
+ * `-`, which is exactly why `M&M` is one symbol and `BAJAJ-AUTO` is a
+ * subtraction, and why one loads and the other does not.
+ */
+describe('an instrument whose name contains an operator character', () => {
+  const HYPHENATED: SearchRow[] = [
+    { symbol: 'BAJAJ-AUTO', exchange: 'NSE', name: 'BAJAJ AUTO LIMITED' },
+    { symbol: 'AUTOAXLES', exchange: 'NSE', name: 'AUTOMOTIVE AXLES' },
+    { symbol: 'BAJAJHLDNG', exchange: 'NSE', name: 'BAJAJ HOLDINGS' },
+  ]
+
+  /**
+   * Wait for a result ROW, not for the text anywhere on screen.
+   *
+   * The footer prints the query back ("Press Enter to chart BAJAJ-AUTO"), so a
+   * plain text query is satisfied by the box's own echo before a single row has
+   * arrived. A test written that way passes whether or not the instrument was
+   * ever found, which is the one thing these are here to prove.
+   */
+  async function waitForRow(symbol: string) {
+    await waitFor(() => {
+      const rows = [...document.querySelectorAll('[data-idx]')].map((n) => n.textContent ?? '')
+      expect(rows.some((text) => text.includes(symbol))).toBe(true)
+    })
+  }
+
+  function searchSpy() {
+    const asked: string[] = []
+    return {
+      asked,
+      search: async (q: string) => {
+        asked.push(q)
+        const up = q.toUpperCase()
+        return HYPHENATED.filter(
+          (r) => r.symbol.includes(up) || String(r.name).toUpperCase().includes(up)
+        )
+      },
+    }
+  }
+
+  it('searches the whole box as well as the leg the caret is in', async () => {
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    render(
+      <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    // The leg alone would only ever ask for AUTO, and the instrument typed
+    // would never be among the answers.
+    await waitFor(() => expect(spy.asked).toContain('BAJAJ-AUTO'))
+  })
+
+  it('finds the instrument rather than emptying the list on the hyphen', async () => {
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    render(
+      <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+  })
+
+  it('puts the instrument that was typed above other matches on its leg', async () => {
+    // Ranked on the leg, `AUTO` floats AUTOAXLES over the name actually typed.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    render(
+      <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+    // Read the rendered row order rather than a text query: the rows are
+    // buttons carrying data-idx, and that is the order a trader sees and the
+    // order Enter picks from.
+    await waitFor(() => {
+      const first = document.querySelector('[data-idx="0"]')
+      expect(first?.textContent).toContain('BAJAJ-AUTO')
+    })
+    // AUTOAXLES scores better than BAJAJ-AUTO on a leg of AUTO, because it
+    // starts with it. That is what makes this pair worth asserting on.
+    expect(document.querySelector('[data-idx="1"]')?.textContent).toContain('AUTOAXLES')
+  })
+
+  it('loads the instrument when its row is clicked, rather than splicing it', async () => {
+    // Found and not choosable is worse than not found: the instrument is on
+    // screen and clicking it does something else. `BAJAJ-AUTO` has a prefix of
+    // `BAJAJ-` to the splitter, so the pick used to append `NSE:BAJAJ-AUTO`
+    // onto the box and leave the chart where it was.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+    const row = [...document.querySelectorAll('[data-idx]')].find((n) =>
+      n.textContent?.includes('BAJAJ-AUTO')
+    )
+    await user.click(row as HTMLElement)
+    expect(picked.map((row) => row.symbol)).toEqual(['BAJAJ-AUTO'])
+  })
+
+  it('loads it on Enter rather than charting the subtraction', async () => {
+    // The grammar reads the name as arithmetic. Everybody typing it means the
+    // instrument, and charting a subtraction is not what they asked for.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+    await user.keyboard('{Enter}')
+    expect(picked).toHaveLength(1)
+    expect(picked[0]?.symbol).toBe('BAJAJ-AUTO')
+    expect(picked[0]?.expression).not.toBe(true)
+  })
+
+  it('still builds an expression when the box is not an instrument', async () => {
+    // The capability the splitter exists for, and the one this fix must not
+    // take away: a real expression still charts as a computed chart.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJHLDNG/AUTOAXLES')
+    await user.keyboard('{Enter}')
+    expect(picked[0]?.expression).toBe(true)
+    expect(picked[0]?.symbol).toBe('BAJAJHLDNG/AUTOAXLES')
+  })
+
+  it('still searches the leg, so a half-typed expression can look one up', async () => {
+    // The capability the split exists for, and the one a naive fix removes.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    render(
+      <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
+    )
+    await user.type(await focusedBox(), 'BAJAJHLDNG/BAJAJ')
+    await waitFor(() => expect(spy.asked).toContain('BAJAJ'))
   })
 })
