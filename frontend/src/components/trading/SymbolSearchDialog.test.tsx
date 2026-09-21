@@ -302,6 +302,33 @@ describe('an instrument whose name contains an operator character', () => {
     expect(document.querySelector('[data-idx="1"]')?.textContent).toContain('AUTOAXLES')
   })
 
+  it('puts an exact match above an index that merely contains the word', async () => {
+    // Category outranks match quality, and indices outrank cash, so typing
+    // BAJAJ-AUTO listed NIFTY EV, NIFTYAUTO and BSEAUTO first and the
+    // instrument that was named fourth. Enter takes the highlighted row, so it
+    // charted an index nobody asked for.
+    const user = userEvent.setup()
+    const ROWS_WITH_INDICES: SearchRow[] = [
+      { symbol: 'NIFTYAUTO', exchange: 'NSE_INDEX', name: 'NIFTY AUTO' },
+      { symbol: 'BSEAUTO', exchange: 'BSE_INDEX', name: 'BSE INDEX AUTO' },
+      { symbol: 'BAJAJ-AUTO', exchange: 'NSE', name: 'BAJAJ AUTO LIMITED' },
+    ]
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async () => ROWS_WITH_INDICES}
+        onPick={() => {}}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-idx="0"]')?.textContent).toContain('BAJAJ-AUTO')
+    })
+  })
+
   it('loads the instrument when its row is clicked, rather than splicing it', async () => {
     // Found and not choosable is worse than not found: the instrument is on
     // screen and clicking it does something else. `BAJAJ-AUTO` has a prefix of

@@ -161,6 +161,17 @@ function matchScore(symbol: string, q: string): number {
 
 /** Rank rows so Index surfaces above Cash, which surfaces above F&O/Currency/Commodity. */
 function compareRows(a: SearchRow, b: SearchRow, q: string): number {
+  // A row whose name is exactly what was typed comes first, ahead of category.
+  //
+  // Category is the right tie-break between near matches, and the wrong one
+  // between a near match and the answer: typing `BAJAJ-AUTO` listed NIFTY EV,
+  // NIFTYAUTO and BSEAUTO above it, because indices outrank cash and all three
+  // contain AUTO. The instrument that was named sat fourth, so pressing Enter
+  // charted an index nobody asked for.
+  const exact = (row: SearchRow) => (String(row.symbol).toUpperCase() === q ? 0 : 1)
+  const exactDiff = exact(a) - exact(b)
+  if (exactDiff) return exactDiff
+
   const exA = String(a.exchange)
   const exB = String(b.exchange)
   const catDiff = CATEGORY_RANK[categoryOf(exA)] - CATEGORY_RANK[categoryOf(exB)]

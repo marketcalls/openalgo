@@ -5672,7 +5672,20 @@ export class TradingTerminal {
     // An expression is not an instrument: there is no master record to look up,
     // no lot size, no tick and nothing to subscribe to. It takes its own path
     // and never reaches the order machinery below.
-    if (pick.expression === true || isChartExpression(pick.symbol)) {
+    //
+    // **An exchange is what says this is an instrument.** Reading the symbol
+    // alone cannot tell `BAJAJ-AUTO` from a subtraction, because to the chart's
+    // grammar that is exactly what it is: `isPlainSymbol` returns false and
+    // `parseExpression` succeeds, so a name with a hyphen in it was sent down
+    // the expression path and fetched as `BAJAJ` minus `AUTO`, two instruments
+    // that do not exist. The symbol search picked the instrument correctly and
+    // this threw the choice away, which is why the chart reported a 400 for a
+    // symbol the platform resolves perfectly well.
+    //
+    // A computed chart carries no exchange and never can: it is several
+    // instruments, possibly on different ones. So the exchange is the thing
+    // that settles it, and it does not require guessing at the name.
+    if (pick.expression === true || (!pick.exchange && isChartExpression(pick.symbol))) {
       return await this.loadExpression(pick.symbol, ticket, opts)
     }
     // authoritative metadata (lotsize / tick_size / freeze_qty)
