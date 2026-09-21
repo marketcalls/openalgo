@@ -766,3 +766,93 @@ describe('placeTicket keeps the mode assertion', () => {
     expect(pane).not.toContain('tradingApi.placeOrder')
   })
 })
+
+/**
+ * The chart's own navigation defaults are the chart's.
+ *
+ * `buildChart` used to pass `navigation: { mousePan: 'horizontal' }`, so
+ * dragging the plot moved through time and never through price. The engine's
+ * default is `both`, and the option is a trader's own: the engine offers it in
+ * chart settings as "Mouse drag" under Navigation in the Axes tab, and
+ * `restoreChartSettings` reapplies whatever they chose after every rebuild.
+ *
+ * Pinning it at build time did two things, and the second is the worse one. It
+ * turned vertical panning off for everybody who had never opened the dialog,
+ * and it made "Reset to defaults" return to horizontal rather than to the
+ * engine's default, because `chartDefaults` is read off the chart just after it
+ * is built.
+ *
+ * It survived three chart upgrades because nothing reads as wrong about a line
+ * that appears to state a default. This is what says it is not one.
+ */
+describe('the chart is built without overriding its navigation defaults', () => {
+  const source = readFileSync(join(process.cwd(), 'src/lib/trading/terminal.ts'), 'utf8')
+
+  it('pins no mouse-drag axis at build time', () => {
+    const pinned = source
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+      .filter((line) => /mousePan\s*:/.test(line))
+    expect(pinned, `mousePan is set in terminal.ts:\n${pinned.join('\n')}`).toEqual([])
+  })
+
+  it('and passes no navigation options at all', () => {
+    // Narrower than the rule and deliberately so: the two fields on
+    // ChartNavigationOptions are both the trader's, and a host that wanted one
+    // of them would be making the same mistake about the other.
+    const pinned = source
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+      .filter((line) => /^\s*navigation\s*:/.test(line))
+    expect(pinned, `navigation is passed in terminal.ts:\n${pinned.join('\n')}`).toEqual([])
+  })
+})
+
+/**
+ * A hidden tab keeps fetching when an alert is waiting on the answer.
+ *
+ * Hiding the tab used to stop the poll and the bar-close repair unconditionally.
+ * The stream keeps running either way, so an alert still evaluated on whatever
+ * ticks arrived, but the two refreshes that correct a bar were gone, and the
+ * default alert policy is precisely the one that waits for a bar to close. An
+ * alert set and then left in a background tab is the ordinary way to use an
+ * alert, and it was the case that worked least well.
+ *
+ * Asserted against the source rather than a live terminal: building one needs a
+ * broker session, a socket and a canvas. What can be pinned here is that the
+ * decision is made from the armed alerts and not from the tab alone, and that
+ * the saving is still taken when there is nothing armed.
+ */
+describe('a chart with an armed alert stays awake when the tab is hidden', () => {
+  const source = readFileSync(join(process.cwd(), 'src/lib/trading/terminal.ts'), 'utf8')
+
+  it('does not decide visibility from the tab alone', () => {
+    // The shape this replaces, which ignored every alert on the chart.
+    expect(source).not.toContain(
+      "this.data?.setVisible(document.visibilityState !== 'hidden')"
+    )
+  })
+
+  it('keeps the feed live while an alert is armed', () => {
+    expect(source).toContain('this.data?.setVisible(visible || this.alertsArmed())')
+  })
+
+  it('reads armed from the controller rather than counting alerts', () => {
+    // A disabled, expired or already-triggered alert is not waiting for
+    // anything, and keeping a feed awake for one is a cost with no answer.
+    expect(source).toMatch(/alertsArmed\(\)[\s\S]{0,400}state === 'armed'/)
+  })
+
+  it('re-decides when the set of alerts changes', () => {
+    // Arming the first alert on a tab that is already hidden has to wake the
+    // feed, and removing the last one has to let it sleep. Neither is a
+    // visibility change, so nothing else would ask.
+    expect(source).toMatch(/const save = \(\) => \{[\s\S]{0,400}this\.onVisibilityChange\(\)/)
+  })
+
+  it('still lets comparisons follow the tab', () => {
+    // They are drawn, not watched. Nothing fires from a comparison, so keeping
+    // one awake buys nothing.
+    expect(source).toContain('this.comparisons?.setVisibleHost(visible)')
+  })
+})

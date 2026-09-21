@@ -110,6 +110,16 @@ export function WorkspaceGrid({
             else owner.objects.delete(paneId)
             if (visible()) latest.current.props.onObjectsChange?.(paneId, objects)
           }}
+          onAlertsReady={(paneId, alerts) => {
+            if (owner.disposed) return
+            if (visible()) latest.current.props.onAlertsReady?.(paneId, alerts)
+          }}
+          onAlertFired={(fire) => {
+            if (visible()) latest.current.props.onAlertFired?.(fire)
+          }}
+          onAlertsChanged={() => {
+            if (visible()) latest.current.props.onAlertsChanged?.()
+          }}
           onFocusPane={(terminal, paneId) => {
             if (visible()) latest.current.props.onFocusPane?.(terminal, paneId)
           }}

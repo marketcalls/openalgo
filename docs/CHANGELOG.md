@@ -12,6 +12,15 @@ fix, live in [docs/releases](releases/).
 - Add saved chart workspaces, study templates, comparison symbols with price or percentage scales, and CSV downloads of the displayed bars, studies and comparisons.
 - Share one toolbar across the selected chart and one replay transport across the workspace. Replay can follow the selected chart or all charts on a shared clock; order actions and workspace autosave pause until replay ends.
 - Preserve drawings, study settings, comparison scale preferences and alert lifecycle state when restoring a workspace. Alerts default to completed-bar evaluation and do not fire from restored history; delivery remains the host's responsibility.
+- Move the alert list out of its modal and onto the right rail, with a Log tab of what has fired this session.
+- Make an alert by right-clicking the chart at the price to be watched: it is created there and then, with no form, armed to fire once on a confirmed bar. The toolbar's Alerts button opens the form for one that needs a condition, a trigger or an expiry the defaults do not give it. Both seed from the same place, so the gesture produces exactly the alert the form would have proposed.
+- Choose per alert how to be told when it fires: a sound and a desktop notification, both on by default and neither leaving the machine, and Telegram or WhatsApp through the services order notifications already use, both off unless asked for. A channel that refuses names itself and the others still go.
+- A chart with an armed alert keeps fetching while its tab is hidden. A chart with nothing armed still stops, which is the saving a background tab is for.
+- Fill values into an alert's message from the bar that fired it: `{{ticker}}`, `{{price}}`, `{{close}}`, `{{interval}}` and seven more. A placeholder spelled wrong is left as typed rather than blanked.
+- Upgrade `/trading` to openalgo-charts 2.4.8: press and hold the plot to pan, on both axes. The chart no longer pins mouse panning to the time axis, so dragging moves through price as well, and the choice is the trader's under Mouse drag in the Axes tab.
+- Find an instrument whose name contains an operator character. The symbol search split its box on `-` to look up the second leg of an expression, so `BAJAJ-AUTO` searched for `AUTO` and typing the hyphen emptied the list. Both the whole box and the leg are searched now.
+- Round a dragged alert to the instrument's tick, and rename it after the price its line landed on when the name was one we wrote. An alert dropped where the axis read 1,260.55 used to store 1260.5486842105263.
+- Say "on" rather than "armed" on the One-Click toggle and the alert form.
 
 ## [2.0.2.5] - 2026-09-14
 

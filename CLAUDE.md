@@ -459,6 +459,24 @@ component files, TanStack Query for server state.
 
 **Commits.** Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`.
 
+**Nothing is published without a changelog entry, and the entry is part of the
+publish rather than a follow-up.** Whatever is going out (a platform release, a
+version bump, a package pushed to a registry) carries its own stanza in
+`docs/CHANGELOG.md` before it leaves, written for somebody deciding whether to
+upgrade rather than for whoever wrote it. The **`version-bump`** skill owns the
+procedure and the exact paths.
+
+A consumer reads the changelog at the one moment it matters to them, and they
+read it once. "Various fixes" answers nothing, and a version with no entry tells
+them to diff two tags, which they will not do: they will simply not upgrade. An
+entry written after the publish is an entry written for nobody, because the
+people who needed it have already decided.
+
+Say what a reader has to act on: what changed, what it breaks, what is now
+refused that used to be accepted, and what is still not modelled. A limitation
+somebody finds inside a report they had already believed cost more than it would
+have cost to write it down.
+
 **No icons or emojis anywhere** — source, comments, log messages, commit
 messages, PR descriptions, changelogs, release notes, or any generated text
 including drafts for Discord or Telegram. Use plain text labels.

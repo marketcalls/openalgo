@@ -244,10 +244,16 @@ export function SymbolSearchDialog({
   )
 
   const filtered = useMemo(() => {
-    const q = leg.trim().toUpperCase()
+    // Ranked against the whole box when the whole box names something, and
+    // against the leg otherwise. `BAJAJ-AUTO` splits into a leg of `AUTO`, and
+    // ranking on that buries the instrument actually typed under every other
+    // name containing AUTO.
+    const whole = query.trim().toUpperCase()
+    const named = whole !== '' && rows.some((r) => String(r.symbol).toUpperCase().startsWith(whole))
+    const q = named ? whole : leg.trim().toUpperCase()
     const base = chip === 'ALL' ? rows : rows.filter((r) => categoryOf(String(r.exchange)) === chip)
     return [...base].sort((a, b) => compareRows(a, b, q)).slice(0, MAX_ROWS)
-  }, [rows, chip, leg])
+  }, [rows, chip, leg, query])
 
   // On open: seed query with the current symbol, select it, focus, reset chip.
   useEffect(() => {
@@ -265,11 +271,23 @@ export function SymbolSearchDialog({
   // Debounced search; a request id guards against out-of-order responses.
   useEffect(() => {
     if (!open) return
-    // The leg being typed, not the whole box: mid-expression the box is not a
-    // symbol and would match nothing.
-    const q = leg.trim()
+    // Two searches, merged, because a hyphen is both an operator and a
+    // character real instruments are named with.
+    //
+    // The leg is what a half-typed expression needs: mid-expression the whole
+    // box is not a symbol and matches nothing, so `NIFTY/` has to search on the
+    // empty second leg rather than on `NIFTY/`. But splitting on `-` is what
+    // made `BAJAJ-AUTO` unsearchable: the box split into `BAJAJ` and `AUTO`,
+    // the caret sat in the second, and typing the hyphen emptied the list.
+    //
+    // So the whole box is searched too, and the results are merged. Neither
+    // query can be dropped: the leg is the only one that works mid-expression,
+    // and the whole box is the only one that finds a name with an operator
+    // character inside it.
+    const whole = query.trim()
+    const queries = [...new Set([leg.trim(), whole].filter((one) => one.length > 0))]
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (q.length < 1) {
+    if (queries.length === 0) {
       setRows([])
       setLoading(false)
       return
@@ -279,16 +297,27 @@ export function SymbolSearchDialog({
     debounceRef.current = setTimeout(async () => {
       // Fetch the full match set (the backend caps at 500) so Cash/index rows are
       // present before client-side ranking floats them to the top.
-      const res = await search(q, undefined, 500)
+      const answers = await Promise.all(queries.map((one) => search(one, undefined, 500)))
       if (id !== reqIdRef.current) return // a newer keystroke won
-      setRows(res)
+      // Whole-box matches first, because a trader who typed a name containing a
+      // hyphen meant the name. Deduped on symbol and exchange together: one
+      // symbol legitimately exists on several.
+      const seen = new Set<string>()
+      const merged: SearchRow[] = []
+      for (const row of [...(answers[queries.indexOf(whole)] ?? []), ...answers.flat()]) {
+        const key = JSON.stringify([row.symbol, row.exchange])
+        if (seen.has(key)) continue
+        seen.add(key)
+        merged.push(row)
+      }
+      setRows(merged)
       setSel(0)
       setLoading(false)
     }, 180)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [leg, open, search])
+  }, [leg, query, open, search])
 
   useLayoutEffect(() => {
     if (caretRef.current === null) return
@@ -323,8 +352,20 @@ export function SymbolSearchDialog({
    * in so a leg is never ambiguous: `NFO:NIFTY...CE` and `NSE:RELIANCE` resolve
    * without inheriting whatever the pane happens to be showing.
    */
+  /**
+   * A row the whole box already names is the instrument, not a leg.
+   *
+   * `splitLeg` treats `-` as an operator so a half-typed expression can look up
+   * its second leg, which means `BAJAJ-AUTO` has a prefix of `BAJAJ-` and picking
+   * its row spliced `NSE:BAJAJ-AUTO` onto the end instead of loading it. The
+   * row was found and could not be chosen, which is worse than not finding it:
+   * the instrument is on screen and clicking it does something else.
+   */
+  const namesWholeBox = (row: SearchRow): boolean =>
+    String(row.symbol).toUpperCase() === query.trim().toUpperCase()
+
   const chooseRow = (row: SearchRow) => {
-    if (prefix === '') {
+    if (prefix === '' || namesWholeBox(row)) {
       pick(row)
       return
     }
@@ -345,11 +386,15 @@ export function SymbolSearchDialog({
       // Arithmetic wins over the result list: the rows below are matches for
       // the last leg the user typed, and loading one of those would silently
       // discard the expression they built.
-      if (expression) {
+      const row = filtered[sel]
+      // An instrument whose own name parses as arithmetic beats the arithmetic
+      // reading of it. `BAJAJ-AUTO` is a subtraction to the grammar and an
+      // instrument to everybody else, and charting the subtraction is not a
+      // thing anybody typing it wanted.
+      if (expression && !(row && namesWholeBox(row))) {
         pick({ symbol: query.trim(), exchange: '', name: 'Computed chart', expression: true })
         return
       }
-      const row = filtered[sel]
       if (row) chooseRow(row)
     }
   }
