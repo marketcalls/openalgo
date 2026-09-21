@@ -485,6 +485,20 @@ absent from the final candle. Missing readings remain unavailable, including
 open interest missing from the live quote stream. Alerts retain the symbol,
 exchange and interval where they were created.
 
+**Point at a line and press Delete or Backspace to remove it.** The key removes
+one thing, and it looks for it in a fixed order: a drawing being placed is
+cancelled first, then selected drawings, then the drawing under the pointer,
+and only then an alert. An alert's line runs the width of the pane, so it sits
+under the pointer far more often than a shape does; taking it last is what
+stops Delete removing an alert while you meant to remove a drawing. A field or
+a dialog always keeps the key, so erasing a character never erases a drawing.
+
+**An alert stays visible on other timeframes, and is evaluated only on the one
+it was made on.** A 5m alert can be seen from the 1h chart, with its own
+interval on the label, but it is not watching there. The rail says so under the
+row rather than leaving it reading Active on a chart where nothing will fire.
+Go back to the interval it was made on to arm it again.
+
 ### Being told when one fires
 
 **When it fires** on the create form is how you are told, chosen per alert. A
