@@ -35,14 +35,33 @@ HISTORY_CHUNK_DAYS = {
 # A Neo candle is a positional row already in the OpenAlgo column order.
 HISTORY_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "oi"]
 
-# Measured, not published. Neo documents no historical rate limit, but the
-# endpoint starts returning HTTP 429 after roughly five requests in one second:
-# probed 2026-09-06, 12 back-to-back requests got 5 successes then 429s, while a
-# 0.5s gap sustained 10/10. Paced just under the observed ceiling for headroom.
-# Two years of 1 minute data is ~25 sequential chunks, so this is the knob that
-# decides whether a long pull completes or dies half way.
-HISTORY_RATE_LIMIT_PER_SEC = 4
+# Measured, not published, and re-measured because it moved. Neo documents no
+# historical rate limit. Probed 2026-09-06 it absorbed roughly five requests a
+# second and sustained a 0.5s gap 10/10, which is what the 4/sec below was set
+# against. Re-probed 2026-09-21 that no longer holds: a 0.25s gap got 5/10, a
+# 0.5s gap 6/10, a 0.75s gap 11/12, and only a 1.0s gap ran clean, 20/20 over
+# 23s. A single request after an idle still passes, and a quotes call right
+# before one does not disturb it, so this is the historical endpoint's own
+# sustained ceiling rather than a burst or a shared budget.
+#
+# Pacing at the measured ceiling costs no wall clock. At 4/sec roughly half the
+# requests came back 429 and each cost a 1s backoff plus a wasted round trip, so
+# a chunk averaged about a second either way -- the difference was a log full of
+# warnings and retry budget burnt before a long pull finished. Two years of 1
+# minute data is ~25 sequential chunks, so this is the knob that decides whether
+# such a pull completes or dies half way.
+HISTORY_RATE_LIMIT_PER_SEC = 1
 HISTORY_MIN_INTERVAL = 1.0 / HISTORY_RATE_LIMIT_PER_SEC
+
+# Neo refuses a fromdate five years or older with a 400 that fails the whole
+# pull. Probed 2026-09-21: today-1825d (2021-09-22) was served, today-1826d
+# (2021-09-21, five years to the day) was refused, so the earliest accepted
+# fromdate is five years back plus one day. The chart's weekly lookback asks
+# for exactly 1825 days, which lands on that last allowed date, so an IST/UTC
+# rounding difference or a clock crossing midnight mid-request is enough to
+# push it over. Clamped rather than forwarded, so a wide request returns the
+# history that does exist.
+HISTORY_MAX_LOOKBACK_YEARS = 5
 
 # Neo sends no Retry-After, so a 429 backs off exponentially: 1s, 2s, 4s, 8s.
 HISTORY_MAX_RETRIES = 4
@@ -89,6 +108,17 @@ def _is_no_data_fault(message: str) -> bool:
     """True when Neo is saying the range is empty, not that the request is bad."""
     lowered = (message or "").lower()
     return any(marker in lowered for marker in _NO_DATA_MARKERS)
+
+
+def _history_earliest_start() -> pd.Timestamp:
+    """Earliest fromdate Neo will accept, as a naive IST-dated timestamp.
+
+    Anchored on the IST date because that is the clock Neo measures its own
+    five years against; anchoring on UTC would read a day early for the five
+    and a half hours after IST midnight.
+    """
+    today = pd.Timestamp.now(tz="Asia/Kolkata").normalize().tz_localize(None)
+    return today - pd.DateOffset(years=HISTORY_MAX_LOOKBACK_YEARS) + timedelta(days=1)
 
 
 def _history_retry_delay(headers, attempt: int) -> float:
@@ -879,6 +909,67 @@ class BrokerData:
         return (payload.get("data") or {}).get("candles") or []
 
     @staticmethod
+    def _repair_candles(df: pd.DataFrame, exchange: str, symbol: str, interval: str) -> pd.DataFrame:
+        """Make every candle satisfy low <= open, close <= high with volume >= 0.
+
+        Neo breaks that invariant on some opening candles: it aggregates the
+        high and the low from the continuous session while taking the open from
+        the pre-open auction print, so a gap-up open lands outside its own bar
+        (observed on NSE RELIANCE 2026-09-04 09:15, o=1304.1 with l=1306.3, and
+        2026-09-10 09:15, o=1278.5 with l=1278.7). Chart clients validate the
+        invariant and reject the whole series over one such bar, which is what
+        made Kotak intraday charts fail to load while daily ones worked.
+
+        The same clients reject a negative volume, and Neo produces those too:
+        on 2026-08-03 the closing candle came back at -2,800,171 for NSE TCS and
+        -7,799,031 for NSE INFY, the same minute market-wide, against a day that
+        really traded 3,036,839 shares of TCS. Since the longer intervals look
+        further back, that one minute is what still broke 10m through 1h after
+        the wick repair while 1m through 5m, whose lookback stops short of it,
+        had started working.
+
+        The open and the close are prices that actually traded, so the wick is
+        widened to cover them rather than the open being edited to fit, and a
+        volume that cannot be true is zeroed rather than costing the bar its
+        prices. Rows still missing an OHLC value after coercion are dropped: a
+        NaN reaches the client as an invalid candle too, and there is no honest
+        repair.
+        """
+        ohlc = ["open", "high", "low", "close"]
+
+        usable = df[ohlc].notna().all(axis=1)
+        if not usable.all():
+            logger.warning(
+                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing "
+                f"OHLC for {exchange}:{symbol} {interval}"
+            )
+            df = df[usable].reset_index(drop=True)
+            if df.empty:
+                return df
+
+        high = df[ohlc].max(axis=1)
+        low = df[ohlc].min(axis=1)
+        broken = (high != df["high"]) | (low != df["low"])
+        if broken.any():
+            logger.info(
+                f"HISTORY API - Widened {int(broken.sum())} candle(s) whose high/low "
+                f"excluded their own open/close for {exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df["high"] = high
+            df["low"] = low
+
+        negative = df["volume"] < 0
+        if negative.any():
+            logger.warning(
+                f"HISTORY API - Zeroing {int(negative.sum())} negative volume(s) for "
+                f"{exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df.loc[negative, "volume"] = 0
+        return df
+
+    @staticmethod
     def _normalize_candles(candles: list) -> list:
         """Pad each positional row out to the full seven column contract.
 
@@ -925,6 +1016,20 @@ class BrokerData:
             end = pd.to_datetime(end_date)
             if start > end:
                 raise Exception(f"start_date {start_date} is after end_date {end_date}")
+
+            earliest = _history_earliest_start()
+            if end < earliest:
+                logger.info(
+                    f"HISTORY API - {exchange}:{symbol} {interval} requested entirely before "
+                    f"Neo's {HISTORY_MAX_LOOKBACK_YEARS} year horizon ({earliest.date()})"
+                )
+                return pd.DataFrame(columns=HISTORY_COLUMNS)
+            if start < earliest:
+                logger.info(
+                    f"HISTORY API - Clamping start for {exchange}:{symbol} {interval} from "
+                    f"{start.date()} to Neo's earliest served date {earliest.date()}"
+                )
+                start = earliest
 
             chunk_days = HISTORY_CHUNK_DAYS[resolution]
             resolved = None
@@ -981,7 +1086,14 @@ class BrokerData:
                 final_df["timestamp"], format="ISO8601", utc=True
             )
             if resolution in ("D", "W"):
-                final_df["timestamp"] = final_df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+                # Floored, not merely shifted. A settled daily candle arrives on
+                # 00:00 IST and the shift alone lands it right, but the candle
+                # for a session still in progress is stamped with the session
+                # open (09:15 IST), which would place today's bar a third of a
+                # day past every other one and read as a separate, later day.
+                final_df["timestamp"] = (
+                    final_df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+                ).dt.floor("D")
             final_df["timestamp"] = final_df["timestamp"].astype("int64") // 10**9
 
             for column in ("open", "high", "low", "close"):
@@ -991,6 +1103,8 @@ class BrokerData:
                 final_df[column] = (
                     pd.to_numeric(final_df[column], errors="coerce").fillna(0).astype("int64")
                 )
+
+            final_df = self._repair_candles(final_df, exchange, symbol, interval)
 
             # Chunks can overlap at the seams and can arrive out of order.
             final_df = (
