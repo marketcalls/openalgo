@@ -23,7 +23,6 @@ import {
   MoreHorizontal,
   Pause,
   Play,
-  Plus,
   Settings2,
   Trash2,
 } from 'lucide-react'
@@ -47,8 +46,13 @@ interface Props {
   log: readonly AlertFire[]
   /** Which pane and instrument the list belongs to, for the subtitle. */
   paneLabel: string
-  /** Open the editor: on a new alert, or on one of these. */
-  onEdit(alertId?: string): void
+  /**
+   * Open the editor on one of these alerts.
+   *
+   * Always on an existing one: an alert is created by right-clicking the chart
+   * at the price it should watch, never from this panel.
+   */
+  onEdit(alertId: string): void
   /** Forget every logged firing. */
   onClearLog(): void
   /**
@@ -273,15 +277,11 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
           <div className="truncate text-[13px] font-medium">Alerts</div>
           <div className="truncate text-[10px] text-muted-foreground">{paneLabel}</div>
         </div>
-        <button
-          type="button"
-          onClick={() => onEdit()}
-          disabled={view === null}
-          className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
-        >
-          <Plus className="h-3 w-3" strokeWidth={1.5} />
-          New
-        </button>
+        {/* No New button. An alert is made where the price is, by
+            right-clicking the chart at it, and a button here would be a second
+            way in that starts from no price at all: the form would open on the
+            last close and the trader would type the number they could have
+            pointed at. This panel is for what is already watching. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -389,7 +389,7 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
               <Bell className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
               <p className="max-w-[17rem] text-xs leading-relaxed text-muted-foreground">
                 {alerts.length === 0
-                  ? 'No alerts on this chart yet. One watches a price, a study plot, a drawing level or a candle pattern, and fires once the condition is met.'
+                  ? 'No alerts on this chart yet. Right-click the chart at a price to set one there, or right-click a study plot or a drawing to watch that instead.'
                   : 'No alert matches that search.'}
               </p>
             </div>

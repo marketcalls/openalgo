@@ -153,13 +153,22 @@ describe('the alert list on the rail', () => {
     expect(onEdit).toHaveBeenCalledWith('pick-me')
   })
 
-  it('opens the editor on nothing in particular from New', async () => {
-    const user = userEvent.setup()
-    const onEdit = vi.fn()
+  it('offers no way to create an alert, because the chart is where that happens', async () => {
+    // An alert is made where the price is, by right-clicking the chart at it. A
+    // button here would open the form on the last close and ask the trader to
+    // type a number they could have pointed at.
+    const { view } = viewOf([alert()])
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.queryByRole('button', { name: 'New' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /create/i })).not.toBeInTheDocument()
+  })
+
+  it('says where an alert comes from when there are none', async () => {
+    // The empty state is the one place a trader is actually looking for the way
+    // in, so it names the gesture rather than describing what an alert is.
     const { view } = viewOf([])
-    render(<AlertsPanel {...props} view={view} onEdit={onEdit} />)
-    await user.click(screen.getByRole('button', { name: 'New' }))
-    expect(onEdit).toHaveBeenCalledWith()
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.getByText(/Right-click the chart at a price/)).toBeInTheDocument()
   })
 
   it('waits rather than claiming there are no alerts before a chart is ready', () => {
