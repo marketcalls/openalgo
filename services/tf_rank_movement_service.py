@@ -388,6 +388,29 @@ RUN_ADVERSE_FLOOR = 0.15  # a move that never pulled back still divides by this
 #
 # Set to 0 to restore the old hard cutoff, which is what the A/B replay uses.
 RUN_SUSTAIN_MIN = 5.0
+
+# How decisively the opposing move must beat the current one before the run
+# changes direction.
+#
+# Direction was decided afresh on every call by a bare `abs(up) >= abs(down)`,
+# with no memory. Sitting between the day's high and its low the two are nearly
+# equal, so a few paise flipped the label -- and because an up run is anchored
+# to the LOW and a down run to the HIGH, the flip relocated the run's start to a
+# different minute. The panel's "since HH:MM" and the chart's shading then
+# disagreed while both faithfully reported what the engine said. Measured on
+# PATANJALI, 21-Sep-2026: DOWN anchored 09:23:30, UP anchored 09:24:30, and back
+# to DOWN, inside three minutes; 70 such flips across 16-21 Sep.
+#
+# A ratio guard was tried first and rejected: it cannot tell "undecided" from
+# "legitimately mid-range", and it shredded BLUESTARCO -- genuinely falling from
+# its high while up on the day -- into seven episodes. Hysteresis asks the right
+# question instead. Direction is carried forward and only reverses when the
+# opposing move exceeds the current one by this factor, so noise cannot turn it
+# over but a real reversal still can.
+#
+# 1.0 or less restores the old memoryless comparison exactly, which is what the
+# A/B replay uses as its baseline.
+RUN_FLIP_FACTOR = 1.5
 # A clean run only counts as an event for a symbol the list already rates: a
 # leader, or one that has climbed its way up today.
 RUN_LEADER_RANK = 20
@@ -440,6 +463,36 @@ class RunState:
     sustained: bool = False
 
 
+def _walk_direction(values: list[float], flip_factor: float) -> tuple[str | None, int, int]:
+    """Pure: direction carried forward, reversing only on decisive evidence.
+
+    Returns (direction, low_index, high_index). Walking forward is what gives
+    the result a memory: the extremes are the day's so far at each step, and the
+    direction chosen at one step is the one the next step has to overturn. The
+    returned indices are the final global extremes either way, so the anchor is
+    picked from them exactly as before -- the low for an up run, the high for a
+    down one. Only WHICH of the two is chosen becomes stable.
+    """
+    direction: str | None = None
+    low_i = high_i = 0
+    for i, v in enumerate(values):
+        if v < values[low_i]:
+            low_i = i
+        if v > values[high_i]:
+            high_i = i
+        up, down = v - values[low_i], v - values[high_i]
+        if up == 0 and down == 0:
+            continue
+        if direction is None:
+            direction = "up" if abs(up) >= abs(down) else "down"
+        elif direction == "up":
+            if abs(down) > abs(up) * flip_factor:
+                direction = "down"
+        elif abs(up) > abs(down) * flip_factor:
+            direction = "up"
+    return direction, low_i, high_i
+
+
 def compute_run(
     changes: list[list[float]],
     min_obs: int = RUN_MIN_OBS,
@@ -447,6 +500,7 @@ def compute_run(
     min_efficiency: float = RUN_MIN_EFFICIENCY,
     settle_min: int = RUN_SETTLE_MIN,
     sustain_min: float = RUN_SUSTAIN_MIN,
+    flip_factor: float = RUN_FLIP_FACTOR,
 ) -> RunState | None:
     """Pure: fold [[minute, change_pct], ...] into the shape of the current move.
 
@@ -473,15 +527,21 @@ def compute_run(
         return None
     values = [v for _, v in clean]
     now = values[-1]
-    low_i, high_i = values.index(min(values)), values.index(max(values))
-    up_move, down_move = now - values[low_i], now - values[high_i]
 
-    if up_move == 0 and down_move == 0:
-        direction, anchor, move = None, len(values) - 1, 0.0
-    elif abs(up_move) >= abs(down_move):
-        direction, anchor, move = "up", low_i, up_move
+    if flip_factor > 1.0:
+        direction, low_i, high_i = _walk_direction(values, flip_factor)
     else:
-        direction, anchor, move = "down", high_i, down_move
+        # Memoryless baseline: decided afresh from the final state alone.
+        low_i, high_i = values.index(min(values)), values.index(max(values))
+        up, down = now - values[low_i], now - values[high_i]
+        direction = None if (up == 0 and down == 0) else ("up" if abs(up) >= abs(down) else "down")
+
+    if direction == "up":
+        anchor, move = low_i, now - values[low_i]
+    elif direction == "down":
+        anchor, move = high_i, now - values[high_i]
+    else:
+        anchor, move = len(values) - 1, 0.0
 
     adverse = 0.0
     last_clean_min: float | None = None
@@ -671,6 +731,7 @@ def compute_symbol_movement(
     latest_minute: int | None = None,
     changes: list[list[float]] | None = None,
     sustain_min: float = RUN_SUSTAIN_MIN,
+    flip_factor: float = RUN_FLIP_FACTOR,
 ) -> dict | None:
     """Pure: the full current-day picture for one symbol as a flat dict — the
     RankUIModel the API and frontend consume (plan §49/§92). None if unusable.
@@ -687,7 +748,9 @@ def compute_symbol_movement(
         return None
     zones, transitions = compute_topn(symbol, observations)
     sustained = compute_sustained(symbol, observations)
-    run = compute_run(changes, sustain_min=sustain_min) if changes else None
+    run = (
+        compute_run(changes, sustain_min=sustain_min, flip_factor=flip_factor) if changes else None
+    )
     event, priority = classify_event(state, zones, transitions, sustained, run)
     stale_by = 0 if latest_minute is None else max(0, latest_minute - state.last_seen_min)
     present = stale_by <= PRESENCE_TOLERANCE_MIN
@@ -916,7 +979,11 @@ class RunEpisode:
 
 
 def run_episodes(
-    symbol: str, ranks: list, changes: list, sustain_min: float = RUN_SUSTAIN_MIN
+    symbol: str,
+    ranks: list,
+    changes: list,
+    sustain_min: float = RUN_SUSTAIN_MIN,
+    flip_factor: float = RUN_FLIP_FACTOR,
 ) -> list[RunEpisode]:
     """Pure: replay a symbol's day and return every stretch it carried a badge.
 
@@ -930,7 +997,12 @@ def run_episodes(
     for i in range(RUN_MIN_OBS, len(changes)):
         upto = changes[i][0]
         row = compute_symbol_movement(
-            symbol, [p for p in ranks if p[0] <= upto], upto, changes[: i + 1], sustain_min
+            symbol,
+            [p for p in ranks if p[0] <= upto],
+            upto,
+            changes[: i + 1],
+            sustain_min,
+            flip_factor,
         )
         badged = bool(row and row["event"].startswith("CLEAN_RUN"))
         if badged:

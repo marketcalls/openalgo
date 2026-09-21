@@ -696,3 +696,58 @@ def test_sustain_never_invents_a_badge_for_a_run_that_was_never_clean():
     changes = [[600 + i * 0.5, v] for i, v in enumerate(values)]
     assert compute_run(changes, sustain_min=60) is not None
     assert compute_run(changes, sustain_min=60).is_clean is False
+
+
+# --- direction stability: the anchor must not move on noise ------------------
+
+
+def _chop_then_rise():
+    """Opens, spikes, drops, chops between the two, then rises decisively.
+
+    The spike is the day's high and the drop the day's low, so while price sits
+    between them the two candidate moves are close and the memoryless rule
+    flips on a few paise -- which is what relocates the anchor.
+    """
+    values = [3.05, 3.05, 3.46, 3.46, 3.84, 3.84, 2.57, 2.57, 2.59, 2.59, 3.31, 3.31, 3.11, 3.11]
+    return [[600 + i * 0.5, v] for i, v in enumerate(values)]
+
+
+def test_noise_between_the_high_and_low_does_not_move_the_anchor():
+    # PORTED DEFECT: direction was decided afresh every call by a bare
+    # abs(up) >= abs(down). An up run anchors to the LOW and a down run to the
+    # HIGH, so a flip did not merely relabel the run -- it relocated its start,
+    # and the panel's "since HH:MM" then disagreed with the chart's shading
+    # while both reported the engine faithfully. PATANJALI, 21-Sep-2026: DOWN
+    # at 09:23:30, UP at 09:24:30, DOWN again, inside three minutes.
+    changes = _chop_then_rise()
+    memoryless = [compute_run(changes[: i + 1], flip_factor=1.0) for i in range(10, len(changes))]
+    held = [compute_run(changes[: i + 1]) for i in range(10, len(changes))]
+    anchors_before = {r.from_min for r in memoryless if r}
+    anchors_after = {r.from_min for r in held if r}
+    assert len(anchors_before) > 1, "fixture must reproduce the flip"
+    assert len(anchors_after) == 1, f"anchor still moves on noise: {anchors_after}"
+
+
+def test_a_decisive_reversal_still_turns_the_run_around():
+    # Hysteresis must not weld the direction shut: a real reversal has to win,
+    # or a stock that genuinely turns keeps reporting the move it has left.
+    rise = [0.0, 0.4, 0.8, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 3.6, 4.0]
+    collapse = [3.0, 2.0, 1.0, 0.0, -1.0, -2.0]
+    changes = [[600 + i * 0.5, v] for i, v in enumerate(rise + collapse)]
+    early = compute_run(changes[:11])
+    late = compute_run(changes)
+    assert early is not None and early.direction == "up"
+    assert late is not None and late.direction == "down", "a real reversal must still flip"
+
+
+def test_flip_factor_of_one_restores_the_memoryless_rule():
+    # The A/B replay leans on this: the baseline arm must be the OLD behaviour
+    # exactly, or every comparison against it is measuring the wrong thing.
+    changes = _chop_then_rise()
+    for i in range(10, len(changes)):
+        window = changes[: i + 1]
+        values = [v for _, v in window]
+        now = values[-1]
+        up, down = now - min(values), now - max(values)
+        expected = None if (up == 0 and down == 0) else ("up" if abs(up) >= abs(down) else "down")
+        assert compute_run(window, flip_factor=1.0).direction == expected
