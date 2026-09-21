@@ -2097,7 +2097,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
                 events.append(
                     (
                         "leg_trail_armed",
-                        f"Trailing stop armed on leg {leg['leg_id']} at {decision.stop_price}",
+                        f"Trailing stop now trailing on leg {leg['leg_id']} at {decision.stop_price}",
                         {"leg_id": leg["leg_id"]},
                     )
                 )
@@ -2132,7 +2132,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
             events.append(
                 (
                     "lock_profit_armed",
-                    f"Lock profit armed with a floor of {aggregate.lock_floor}",
+                    f"Lock profit now active with a floor of {aggregate.lock_floor}",
                     {},
                 )
             )
