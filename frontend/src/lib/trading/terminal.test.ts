@@ -766,3 +766,44 @@ describe('placeTicket keeps the mode assertion', () => {
     expect(pane).not.toContain('tradingApi.placeOrder')
   })
 })
+
+/**
+ * The chart's own navigation defaults are the chart's.
+ *
+ * `buildChart` used to pass `navigation: { mousePan: 'horizontal' }`, so
+ * dragging the plot moved through time and never through price. The engine's
+ * default is `both`, and the option is a trader's own: the engine offers it in
+ * chart settings as "Mouse drag" under Navigation in the Axes tab, and
+ * `restoreChartSettings` reapplies whatever they chose after every rebuild.
+ *
+ * Pinning it at build time did two things, and the second is the worse one. It
+ * turned vertical panning off for everybody who had never opened the dialog,
+ * and it made "Reset to defaults" return to horizontal rather than to the
+ * engine's default, because `chartDefaults` is read off the chart just after it
+ * is built.
+ *
+ * It survived three chart upgrades because nothing reads as wrong about a line
+ * that appears to state a default. This is what says it is not one.
+ */
+describe('the chart is built without overriding its navigation defaults', () => {
+  const source = readFileSync(join(process.cwd(), 'src/lib/trading/terminal.ts'), 'utf8')
+
+  it('pins no mouse-drag axis at build time', () => {
+    const pinned = source
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+      .filter((line) => /mousePan\s*:/.test(line))
+    expect(pinned, `mousePan is set in terminal.ts:\n${pinned.join('\n')}`).toEqual([])
+  })
+
+  it('and passes no navigation options at all', () => {
+    // Narrower than the rule and deliberately so: the two fields on
+    // ChartNavigationOptions are both the trader's, and a host that wanted one
+    // of them would be making the same mistake about the other.
+    const pinned = source
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+      .filter((line) => /^\s*navigation\s*:/.test(line))
+    expect(pinned, `navigation is passed in terminal.ts:\n${pinned.join('\n')}`).toEqual([])
+  })
+})

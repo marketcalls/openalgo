@@ -1966,7 +1966,18 @@ export class TradingTerminal {
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme,
-      navigation: { mousePan: 'horizontal' },
+      // No `navigation` override. The engine's default is `mousePan: 'both'`,
+      // and this used to pin it to `'horizontal'`, so dragging the plot moved
+      // through time and never through price. It was set with the 2.4.5
+      // integration and carried no reason beside it, which is how it survived
+      // three upgrades: nothing reads as wrong about a line that states a
+      // default, and this one stated the opposite of it.
+      //
+      // The setting is the trader's either way. The engine exposes it in chart
+      // settings as "Mouse drag" under Navigation, and `restoreChartSettings`
+      // reapplies whatever they chose after every rebuild. Forcing it here also
+      // made their choice the one thing a Reset would not return to, because
+      // `chartDefaults` is read off the chart just after it is built.
       // Corner clock and bar countdown. Both are off by default in the engine,
       // deliberately: a countdown repaints every second, and on the historical
       // range a chart usually opens on it counts against a bar that closed months
