@@ -352,8 +352,20 @@ export function SymbolSearchDialog({
    * in so a leg is never ambiguous: `NFO:NIFTY...CE` and `NSE:RELIANCE` resolve
    * without inheriting whatever the pane happens to be showing.
    */
+  /**
+   * A row the whole box already names is the instrument, not a leg.
+   *
+   * `splitLeg` treats `-` as an operator so a half-typed expression can look up
+   * its second leg, which means `BAJAJ-AUTO` has a prefix of `BAJAJ-` and picking
+   * its row spliced `NSE:BAJAJ-AUTO` onto the end instead of loading it. The
+   * row was found and could not be chosen, which is worse than not finding it:
+   * the instrument is on screen and clicking it does something else.
+   */
+  const namesWholeBox = (row: SearchRow): boolean =>
+    String(row.symbol).toUpperCase() === query.trim().toUpperCase()
+
   const chooseRow = (row: SearchRow) => {
-    if (prefix === '') {
+    if (prefix === '' || namesWholeBox(row)) {
       pick(row)
       return
     }
@@ -374,11 +386,15 @@ export function SymbolSearchDialog({
       // Arithmetic wins over the result list: the rows below are matches for
       // the last leg the user typed, and loading one of those would silently
       // discard the expression they built.
-      if (expression) {
+      const row = filtered[sel]
+      // An instrument whose own name parses as arithmetic beats the arithmetic
+      // reading of it. `BAJAJ-AUTO` is a subtraction to the grammar and an
+      // instrument to everybody else, and charting the subtraction is not a
+      // thing anybody typing it wanted.
+      if (expression && !(row && namesWholeBox(row))) {
         pick({ symbol: query.trim(), exchange: '', name: 'Computed chart', expression: true })
         return
       }
-      const row = filtered[sel]
       if (row) chooseRow(row)
     }
   }

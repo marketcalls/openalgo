@@ -230,6 +230,21 @@ describe('an instrument whose name contains an operator character', () => {
     { symbol: 'BAJAJHLDNG', exchange: 'NSE', name: 'BAJAJ HOLDINGS' },
   ]
 
+  /**
+   * Wait for a result ROW, not for the text anywhere on screen.
+   *
+   * The footer prints the query back ("Press Enter to chart BAJAJ-AUTO"), so a
+   * plain text query is satisfied by the box's own echo before a single row has
+   * arrived. A test written that way passes whether or not the instrument was
+   * ever found, which is the one thing these are here to prove.
+   */
+  async function waitForRow(symbol: string) {
+    await waitFor(() => {
+      const rows = [...document.querySelectorAll('[data-idx]')].map((n) => n.textContent ?? '')
+      expect(rows.some((text) => text.includes(symbol))).toBe(true)
+    })
+  }
+
   function searchSpy() {
     const asked: string[] = []
     return {
@@ -263,7 +278,7 @@ describe('an instrument whose name contains an operator character', () => {
       <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
     )
     await user.type(await focusedBox(), 'BAJAJ-AUTO')
-    await waitFor(() => expect(screen.getByText('BAJAJ-AUTO')).toBeInTheDocument())
+    await waitForRow('BAJAJ-AUTO')
   })
 
   it('puts the instrument that was typed above other matches on its leg', async () => {
@@ -274,7 +289,7 @@ describe('an instrument whose name contains an operator character', () => {
       <SymbolSearchDialog open onOpenChange={() => {}} search={spy.search} onPick={() => {}} />
     )
     await user.type(await focusedBox(), 'BAJAJ-AUTO')
-    await waitFor(() => expect(screen.getByText('BAJAJ-AUTO')).toBeInTheDocument())
+    await waitForRow('BAJAJ-AUTO')
     // Read the rendered row order rather than a text query: the rows are
     // buttons carrying data-idx, and that is the order a trader sees and the
     // order Enter picks from.
@@ -285,6 +300,73 @@ describe('an instrument whose name contains an operator character', () => {
     // AUTOAXLES scores better than BAJAJ-AUTO on a leg of AUTO, because it
     // starts with it. That is what makes this pair worth asserting on.
     expect(document.querySelector('[data-idx="1"]')?.textContent).toContain('AUTOAXLES')
+  })
+
+  it('loads the instrument when its row is clicked, rather than splicing it', async () => {
+    // Found and not choosable is worse than not found: the instrument is on
+    // screen and clicking it does something else. `BAJAJ-AUTO` has a prefix of
+    // `BAJAJ-` to the splitter, so the pick used to append `NSE:BAJAJ-AUTO`
+    // onto the box and leave the chart where it was.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+    const row = [...document.querySelectorAll('[data-idx]')].find((n) =>
+      n.textContent?.includes('BAJAJ-AUTO')
+    )
+    await user.click(row as HTMLElement)
+    expect(picked.map((row) => row.symbol)).toEqual(['BAJAJ-AUTO'])
+  })
+
+  it('loads it on Enter rather than charting the subtraction', async () => {
+    // The grammar reads the name as arithmetic. Everybody typing it means the
+    // instrument, and charting a subtraction is not what they asked for.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJ-AUTO')
+    await waitForRow('BAJAJ-AUTO')
+    await user.keyboard('{Enter}')
+    expect(picked).toHaveLength(1)
+    expect(picked[0]?.symbol).toBe('BAJAJ-AUTO')
+    expect(picked[0]?.expression).not.toBe(true)
+  })
+
+  it('still builds an expression when the box is not an instrument', async () => {
+    // The capability the splitter exists for, and the one this fix must not
+    // take away: a real expression still charts as a computed chart.
+    const user = userEvent.setup()
+    const spy = searchSpy()
+    const picked: SearchRow[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={spy.search}
+        onPick={(row) => picked.push(row)}
+      />
+    )
+    await user.type(await focusedBox(), 'BAJAJHLDNG/AUTOAXLES')
+    await user.keyboard('{Enter}')
+    expect(picked[0]?.expression).toBe(true)
+    expect(picked[0]?.symbol).toBe('BAJAJHLDNG/AUTOAXLES')
   })
 
   it('still searches the leg, so a half-typed expression can look one up', async () => {
