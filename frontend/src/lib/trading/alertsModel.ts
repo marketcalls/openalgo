@@ -18,6 +18,7 @@
  */
 
 import {
+  type Alert,
   type AlertInput,
   type AlertSource,
   utcSecondsToZonedParts,
@@ -322,25 +323,107 @@ export function titleFor(
   symbol: string,
   at?: AlertTick
 ): string {
-  const condition = ALERT_CONDITIONS.find((one) => one.value === draft.condition)?.label ?? ''
+  return nameFrom(
+    {
+      kind: draft.kind,
+      condition: draft.condition,
+      instanceId: draft.instanceId,
+      barConditionId: draft.barConditionId,
+      value: draft.value,
+      upperValue: draft.upperValue,
+    },
+    chart,
+    symbol,
+    at
+  )
+}
+
+/** The parts of an alert a generated name is made of, from either side of it. */
+interface Named {
+  kind: AlertKind
+  condition: AlertConditionId
+  instanceId: string
+  barConditionId: string
+  /** Numbers as text, because a draft holds what was typed and may hold ''. */
+  value: string
+  upperValue: string
+}
+
+function nameFrom(one: Named, chart: AlertChart, symbol: string, at?: AlertTick): string {
+  const condition = ALERT_CONDITIONS.find((choice) => choice.value === one.condition)?.label ?? ''
   const subject =
-    draft.kind === 'indicator'
-      ? (chart.indicators().find((one) => one.id === draft.instanceId)?.name ?? 'Study')
-      : draft.kind === 'drawing'
+    one.kind === 'indicator'
+      ? (chart.indicators().find((study) => study.id === one.instanceId)?.name ?? 'Study')
+      : one.kind === 'drawing'
         ? 'Drawing'
         : symbol
-  if (draft.kind === 'barCondition') return `${symbol} ${draft.barConditionId}`
-  if (!needsThreshold(draft.kind)) return `${subject} ${condition.toLowerCase()}`
+  if (one.kind === 'barCondition') return `${symbol} ${one.barConditionId}`
+  if (!needsThreshold(one.kind)) return `${subject} ${condition.toLowerCase()}`
   // Named after the price it will be armed at, not the one under the pointer.
   const shown = (text: string): string => {
     const n = Number(text)
-    if (draft.kind !== 'price' || !Number.isFinite(n)) return text
+    if (one.kind !== 'price' || !Number.isFinite(n)) return text
     return String(snapPrice(n, at))
   }
-  const bounds = isRangeCondition(draft.condition)
-    ? `${shown(draft.value)} and ${shown(draft.upperValue)}`
-    : shown(draft.value)
+  const bounds = isRangeCondition(one.condition)
+    ? `${shown(one.value)} and ${shown(one.upperValue)}`
+    : shown(one.value)
   return `${subject} ${condition.toLowerCase()} ${bounds}`
+}
+
+/**
+ * What an alert that already exists should be called.
+ *
+ * The same sentence `titleFor` writes, from the stored alert rather than from
+ * the form. Dragging an alert's line moves its price without touching its name,
+ * so a machine-written name would go on advertising the price the alert was
+ * created at while the line sat somewhere else. This is what it is renamed to.
+ */
+export function alertTitleFor(
+  alert: Alert,
+  chart: AlertChart,
+  symbol: string,
+  at?: AlertTick
+): string {
+  const source = alert.source as {
+    kind: AlertKind
+    instanceId?: string
+    id?: string
+    price?: number
+    value?: number
+    upperPrice?: number
+    upperValue?: number
+  }
+  const lower = source.price ?? source.value
+  const upper = source.upperPrice ?? source.upperValue
+  return nameFrom(
+    {
+      kind: source.kind,
+      condition: alert.condition as AlertConditionId,
+      instanceId: source.instanceId ?? '',
+      barConditionId: source.id ?? '',
+      value: lower === undefined ? '' : String(lower),
+      upperValue: upper === undefined ? '' : String(upper),
+    },
+    chart,
+    symbol,
+    at
+  )
+}
+
+/**
+ * The mark that says a name was written by us and may be rewritten.
+ *
+ * `payload` is the engine's own field for host data it never interprets, and
+ * this is the one thing this host keeps there. A name the trader typed is
+ * theirs and is never touched; one generated because they left the field blank
+ * describes the price, so it has to follow the price when the line is dragged.
+ */
+export const AUTO_TITLE_PAYLOAD = { autoTitle: true } as const
+
+/** Whether this alert's name is ours to rewrite. */
+export function hasAutoTitle(alert: Alert): boolean {
+  return (alert.payload as { autoTitle?: unknown } | undefined)?.autoTitle === true
 }
 
 /**
@@ -383,7 +466,10 @@ export function toAlertInput(
     policy: draft.policy,
     repeat: draft.repeat,
     state: draft.enabled ? 'armed' : 'disabled',
-    title: draft.title.trim() || titleFor(draft, chart, symbol),
+    title: draft.title.trim() || titleFor(draft, chart, symbol, at),
+    // Marked when we named it, so a drag can rename it and a name the trader
+    // typed is left exactly as they typed it.
+    ...(draft.title.trim() === '' ? { payload: AUTO_TITLE_PAYLOAD } : {}),
     message: draft.message.trim() || undefined,
     cooldownSeconds:
       draft.cooldownSeconds.trim() === '' || !Number.isFinite(cooldown) ? 0 : cooldown,

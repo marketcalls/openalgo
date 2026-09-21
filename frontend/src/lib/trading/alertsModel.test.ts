@@ -20,11 +20,13 @@ import {
   type AlertChart,
   type AlertDraft,
   type AlertDrawings,
+  alertTitleFor,
   DEFAULT_EXPIRY_MONTHS,
   defaultExpiry,
   draftProblem,
   expirySeconds,
   expiryText,
+  hasAutoTitle,
   isRangeCondition,
   lastClose,
   needsThreshold,
@@ -302,6 +304,18 @@ describe('the draft as the engine takes it', () => {
     expect(toAlertInput(draft({ enabled: false }), chart(), drawings, 'R')?.state).toBe('disabled')
   })
 
+  it('marks a name it wrote itself, so a drag may rewrite it', () => {
+    const generated = toAlertInput(draft({ title: '   ' }), chart(), drawings, 'R')
+    expect(hasAutoTitle({ ...generated, payload: generated?.payload } as never)).toBe(true)
+  })
+
+  it('leaves a name the trader typed unmarked, so nothing rewrites it', () => {
+    // Their words, and a drag moving the price is no reason to take them away.
+    const typed = toAlertInput(draft({ title: 'Cover the short' }), chart(), drawings, 'R')
+    expect(typed?.payload).toBeUndefined()
+    expect(hasAutoTitle({ ...typed, payload: typed?.payload } as never)).toBe(false)
+  })
+
   it('sends no message at all rather than an empty one', () => {
     expect(toAlertInput(draft({ message: '   ' }), chart(), drawings, 'R')?.message).toBeUndefined()
   })
@@ -345,6 +359,42 @@ describe('a stored price sits on the instrument tick', () => {
     // and the difference is a tick nobody can see in either place.
     expect(titleFor(draft({ value: '1293.6305656934308' }), chart(), 'RELIANCE', at)).toBe(
       'RELIANCE crossing 1293.65'
+    )
+  })
+
+  it('gives a generated name the snapped price too', () => {
+    // The name is generated inside toAlertInput when the trader leaves the
+    // field blank, and that call has to pass the tick on. Without it the row
+    // read "crossing 1293.6305656934308" beside a line armed at 1293.65.
+    const input = toAlertInput(
+      draft({ title: '', value: '1293.6305656934308' }),
+      chart(),
+      drawings,
+      'RELIANCE',
+      at
+    )
+    expect(input?.title).toBe('RELIANCE crossing 1293.65')
+  })
+
+  it('renames a dragged alert after the price its line now sits at', () => {
+    // The engine moves the source on a drag and leaves the name alone, so a
+    // generated name went on advertising the price the alert was made at.
+    const alert = {
+      source: { kind: 'price', price: 1260.5486842105263 },
+      condition: 'crossing',
+      title: 'RELIANCE crossing 1226.4',
+    } as unknown as Parameters<typeof alertTitleFor>[0]
+    expect(alertTitleFor(alert, chart(), 'RELIANCE', at)).toBe('RELIANCE crossing 1260.55')
+  })
+
+  it('names a dragged channel after both of its bounds', () => {
+    const alert = {
+      source: { kind: 'price', price: 1293.6305, upperPrice: 1301.2207 },
+      condition: 'enteringRange',
+      title: 'old',
+    } as unknown as Parameters<typeof alertTitleFor>[0]
+    expect(alertTitleFor(alert, chart(), 'RELIANCE', at)).toBe(
+      'RELIANCE entering channel 1293.65 and 1301.2'
     )
   })
 

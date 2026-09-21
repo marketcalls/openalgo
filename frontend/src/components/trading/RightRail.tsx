@@ -8,7 +8,7 @@
  * closes it.
  */
 
-import { Bot, FileCode2, List, Shapes, Table2 } from 'lucide-react'
+import { Bell, Bot, FileCode2, List, Shapes, Table2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
@@ -26,6 +26,9 @@ const PANELS = [
   { id: 'watchlist', label: 'Watchlist', icon: List },
   { id: 'options', label: 'Option chain', icon: Table2 },
   { id: 'objects', label: 'Objects', icon: Shapes },
+  // Beside the objects panel, because both answer "what is on this chart" and
+  // an alert line is one of the things drawn on it.
+  { id: 'alerts', label: 'Alerts', icon: Bell },
   { id: 'scripts', label: 'Scripts', icon: FileCode2 },
   { id: 'agent', label: 'Assistant', icon: Bot },
 ] as const

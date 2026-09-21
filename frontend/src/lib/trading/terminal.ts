@@ -17,6 +17,7 @@ import type { ChartObjectSnapshot, IndicatorState, LinkGroup } from 'openalgo-ch
 import {
   AlertController,
   type AlertEventPayload,
+  type AlertPatch,
   type AlertSource,
   type AlertsDocument,
   type Bar,
@@ -144,7 +145,14 @@ export interface DrawStats {
 
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
-import type { AlertChart, AlertDrawings, AlertTick } from './alertsModel'
+import {
+  type AlertChart,
+  type AlertDrawings,
+  type AlertTick,
+  alertTitleFor,
+  hasAutoTitle,
+  snapPrice,
+} from './alertsModel'
 import {
   applyChartCommands,
   applyIndicatorCommands,
@@ -345,6 +353,27 @@ export interface TerminalCallbacks {
    * controller nothing is evaluating any more.
    */
   onAlerts?(handle: AlertsHandle | null): void
+  /**
+   * An alert fired. Carries what fired rather than a handle, because this is a
+   * record of a moment: the alert behind it may be edited, or gone, by the time
+   * anybody reads the entry back.
+   */
+  /**
+   * This chart has an alert controller now, or has lost the one it had.
+   *
+   * Separate from `onAlerts`, which means "open the editor" and carries a
+   * handle built for that moment. A list is on screen the whole time and needs
+   * the controller from the moment there is one, so it gets its own signal and
+   * the narrower view that goes with it.
+   */
+  onAlertsReady?(view: AlertsView | null): void
+  onAlertFired?(fire: AlertFire): void
+  /**
+   * The set of alerts changed: one was created, edited, removed, expired, or
+   * dragged to a new price. The controller is mutable and `list()` hands back a
+   * copy, so nothing else tells a list built from it that it is now stale.
+   */
+  onAlertsChanged?(): void
   /** The current chart generation's shared object inventory. */
   onObjectsChange?(objects: ChartObjects | null): void
   /** Opens this pane's existing chart settings dialog. */
@@ -469,6 +498,36 @@ export interface AlertsHandle {
   at: AlertTick
   /** A source to open the editor on, from a legend or a right-click. */
   source?: AlertSource
+  /** An existing alert to edit, from a row in the list. */
+  editAlertId?: string
+}
+
+/**
+ * What a list of alerts needs, and nothing else.
+ *
+ * Narrower than `AlertsHandle` on purpose. The editor needs the instrument's
+ * tick and the drawing tier as they are at the instant it opens, which is why
+ * that handle is built per opening; a list needs the controller and the chart's
+ * clock, and both last as long as the chart does.
+ */
+export interface AlertsView {
+  alerts: AlertController
+  chart: AlertChart
+}
+
+/** One alert firing, as the chart reported it. */
+export interface AlertFire {
+  /** Unique per firing. One alert fires many times and each is its own row. */
+  key: string
+  alertId: string
+  title: string
+  message: string
+  symbol: string
+  exchange: string
+  /** The value that met the condition, when the event carried one. */
+  price?: number
+  /** The source bar's UTC seconds, not the browser's wall clock. */
+  firedAt: number
 }
 
 export interface IndicatorSettingsRequest {
@@ -2973,7 +3032,12 @@ export class TradingTerminal {
     if (this.alerts || this.destroyed || this.chart !== chart) return
     this.alerts = new AlertController(chart, { drawings: this.objectDrawings })
     this.syncAlertPause()
-    const save = () => this.saveAlerts()
+    // Persist, and tell the page. A list built from the controller is a copy
+    // taken at render time, and nothing else would tell it that it is stale.
+    const save = () => {
+      this.saveAlerts()
+      this.cb.onAlertsChanged?.()
+    }
     for (const event of [
       'alert:created',
       'alert:updated',
@@ -2985,9 +3049,25 @@ export class TradingTerminal {
     ]) {
       this.offAlerts.push(chart.on(event, save))
     }
+    let fireSequence = 0
     const deliver = (payload: unknown) => {
-      const event = payload as AlertEventPayload
-      if (!this.alertEvaluationPaused()) this.toast(event.message ?? event.title, 'ok')
+      const event = payload as AlertEventPayload & { price?: number }
+      if (this.alertEvaluationPaused()) return
+      this.toast(event.message ?? event.title, 'ok')
+      // Numbered as well as timed. The time on the event is the source bar's,
+      // so two alerts firing on the same bar carry the same one, and a list
+      // keyed by time alone would show one of them.
+      fireSequence += 1
+      this.cb.onAlertFired?.({
+        key: `${event.alertId ?? 'alert'}-${fireSequence}`,
+        alertId: String(event.alertId ?? ''),
+        title: String(event.title ?? 'Alert'),
+        message: String(event.message ?? ''),
+        symbol: this.sym?.symbol ?? '',
+        exchange: this.sym?.exchange ?? '',
+        ...(typeof event.price === 'number' ? { price: event.price } : {}),
+        firedAt: typeof event.time === 'number' ? event.time : Math.floor(Date.now() / 1000),
+      })
     }
     this.offAlerts.push(chart.on('alert:triggered', deliver))
     this.offAlerts.push(chart.on('indicator:alert', deliver))
@@ -2996,7 +3076,21 @@ export class TradingTerminal {
         this.toast('An alert condition could not be evaluated. Review its source.', 'err')
       })
     )
+    // A dragged line is the one place an alert changes without a form. The
+    // engine commits the price under the pointer and leaves the name alone, so
+    // this is where both are put right. Bound to the drag's own event rather
+    // than to `alert:updated`, so it cannot answer the update it makes itself.
+    this.offAlerts.push(
+      chart.on('alerts:changed', (payload: unknown) => {
+        const id = (payload as { id?: unknown } | undefined)?.id
+        if (typeof id === 'string') this.settleDraggedAlert(id)
+      })
+    )
     this.saveAlerts()
+    // The list on the rail can be drawn from here on. The editor's handle is
+    // still built per opening, because its tick and drawing tier are read at
+    // the moment it opens and this one has to last as long as the chart.
+    this.cb.onAlertsReady?.({ alerts: this.alerts, chart: chart as unknown as AlertChart })
   }
 
   private alertEvaluationPaused(): boolean {
@@ -3061,6 +3155,66 @@ export class TradingTerminal {
     this.saveAlerts()
   }
 
+  /**
+   * Put a dragged alert back on the tick, and rename it if we named it.
+   *
+   * Two corrections, both of a price that came from a pointer. A pixel maps to
+   * a price with a dozen decimals behind it, so a line dropped where the axis
+   * reads 1,260.55 was stored at 1260.5486842105263: a price the instrument
+   * cannot trade at and a number nothing in the interface could show. And a
+   * name generated from the old price goes on advertising it, so the row says
+   * one number while the line sits at another.
+   *
+   * Both are no-ops when there is nothing to correct, which is what will happen
+   * to the first of them once the engine rounds the drag itself.
+   */
+  private settleDraggedAlert(id: string): void {
+    const controller = this.alerts
+    const chart = this.chart
+    if (!controller || !chart || this.destroyed) return
+    const alert = controller.list().find((one) => one.id === id)
+    if (!alert) return
+    const at: AlertTick = { tick: this.sym?.tick, refPrice: this.refPrice() }
+    const patch: AlertPatch = {}
+
+    // Only a price is snapped. A study threshold is in the plot's own units,
+    // and an oscillator running nought to a hundred has nothing to do with the
+    // instrument's tick.
+    if (alert.source.kind === 'price') {
+      const price = snapPrice(alert.source.price, at)
+      const upper =
+        alert.source.upperPrice === undefined ? undefined : snapPrice(alert.source.upperPrice, at)
+      if (price !== alert.source.price || upper !== alert.source.upperPrice) {
+        patch.source = {
+          ...alert.source,
+          price,
+          ...(upper === undefined ? {} : { upperPrice: upper }),
+        }
+      }
+    }
+
+    if (hasAutoTitle(alert)) {
+      // Named from the snapped source, not the one that was dropped, or the
+      // name would carry the decimals the price has just lost.
+      const settled = { ...alert, source: patch.source ?? alert.source }
+      const title = alertTitleFor(
+        settled,
+        chart as unknown as AlertChart,
+        this.sym?.symbol ?? '',
+        at
+      )
+      if (title !== alert.title) patch.title = title
+    }
+
+    if (patch.source === undefined && patch.title === undefined) return
+    try {
+      controller.update(id, patch)
+    } catch {
+      // The engine refused the corrected alert. The dragged one is still
+      // armed and still evaluated; leaving it be is better than removing it.
+    }
+  }
+
   private detachAlerts(): void {
     this.offAlertFullscreen?.()
     this.offAlertFullscreen = null
@@ -3073,6 +3227,7 @@ export class TradingTerminal {
     // The dialog is holding the controller that has just been destroyed. Left
     // open it would write alerts nothing evaluates, into a chart that is gone.
     this.cb.onAlerts?.(null)
+    this.cb.onAlertsReady?.(null)
   }
 
   alertDialogOpen(): boolean {
@@ -3086,7 +3241,7 @@ export class TradingTerminal {
    * drawing's level, and a dialog that offered the option and then found no
    * drawings would be telling the trader they have none.
    */
-  async openAlerts(source?: AlertSource): Promise<boolean> {
+  async openAlerts(source?: AlertSource, editAlertId?: string): Promise<boolean> {
     const chart = this.chart
     if (!chart || this.destroyed || this.preparingWorkspace) return false
     if (this.cb.onAlerts) {
@@ -3102,6 +3257,7 @@ export class TradingTerminal {
           symbol: this.sym?.symbol ?? '',
           at: { tick: this.sym?.tick, refPrice: this.refPrice() },
           ...(source ? { source } : {}),
+          ...(editAlertId ? { editAlertId } : {}),
         })
         return true
       } catch (error) {

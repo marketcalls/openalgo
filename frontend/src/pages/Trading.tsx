@@ -22,6 +22,7 @@ import {
   writeDockTab,
 } from '@/components/trading/dock/dockState'
 import { TradingDock } from '@/components/trading/dock/TradingDock'
+import { AlertsPanel } from '@/components/trading/AlertsPanel'
 import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
@@ -47,7 +48,13 @@ import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
-import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
+import type {
+  AlertFire,
+  AlertsView,
+  DrawStats,
+  SearchRow,
+  TradingTerminal,
+} from '@/lib/trading/terminal'
 import { capturePresetWorkspace } from '@/lib/trading/workspaceGrid'
 import {
   WorkspaceReplayCoordinator,
@@ -76,6 +83,15 @@ const PANEL_KEY = 'oa-trading-panel'
  * Buy button live because storage was cleared or blocked.
  */
 const ARMED_KEY = 'oa-trading-armed'
+/**
+ * How many firings the session log keeps.
+ *
+ * A repeating alert on a one-minute chart left running through a session fires
+ * hundreds of times, and past the first screenful nobody is reading them: the
+ * cost is memory that is never given back. The oldest go first, because the
+ * question the log answers is what just happened.
+ */
+const ALERT_LOG_LIMIT = 200
 
 function readArmed(): boolean {
   try {
@@ -205,6 +221,25 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
   const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
+  const [paneAlerts, setPaneAlerts] = useState<Record<string, AlertsView>>({})
+  /**
+   * Every alert that has fired this session, oldest first.
+   *
+   * Held on the page and nowhere else. Alerts are evaluated by the chart that
+   * is open, so a firing only happens while somebody is watching; writing it to
+   * a server would promise a history the engine does not keep. Capped, because
+   * a repeating alert on a one-minute chart left running all day is a list
+   * nobody reads and memory nobody gets back.
+   */
+  const [alertLog, setAlertLog] = useState<AlertFire[]>([])
+  /**
+   * Bumped whenever an alert changes.
+   *
+   * The controller is mutable and its `list()` hands back a copy, so nothing in
+   * React knows that a drag, a Delete key or a firing has made the rendered
+   * list stale. This is what says so.
+   */
+  const [alertRevision, setAlertRevision] = useState(0)
   /**
    * Every live pane's terminal, keyed by pane id.
    *
@@ -305,6 +340,28 @@ function TradingWorkspace({ account }: { account: string | null }) {
     },
     [updateReplayMembers]
   )
+
+  const noteAlerts = useCallback((paneId: string, view: AlertsView | null) => {
+    setPaneAlerts((previous) => {
+      if (view) {
+        if (previous[paneId] === view) return previous
+        return { ...previous, [paneId]: view }
+      }
+      if (!(paneId in previous)) return previous
+      const next = { ...previous }
+      delete next[paneId]
+      return next
+    })
+    setAlertRevision((n) => n + 1)
+  }, [])
+
+  const noteAlertFired = useCallback((fire: AlertFire) => {
+    setAlertLog((previous) =>
+      previous.length < ALERT_LOG_LIMIT
+        ? [...previous, fire]
+        : [...previous.slice(previous.length - ALERT_LOG_LIMIT + 1), fire]
+    )
+  }, [])
 
   const noteObjects = useCallback((paneId: string, objects: ChartObjects | null) => {
     setPaneObjects((previous) => {
@@ -422,6 +479,33 @@ function TradingWorkspace({ account }: { account: string | null }) {
     () => panelTarget()?.snapshotPng() ?? Promise.resolve(null),
     [panelTarget]
   )
+  // The same rule the objects panel follows: the focused pane when it has
+  // alerts, else whichever pane does, so the panel is useful before the trader
+  // has clicked into a chart.
+  const alertsPaneId = paneAlerts[focusedPane]
+    ? focusedPane
+    : (Object.keys(paneAlerts)[0] ?? focusedPane)
+  const alertsPaneNumber = visibleGrid.current
+    ? visibleGrid.current.payload.panes.findIndex((pane) => pane.id === alertsPaneId) + 1
+    : Number(alertsPaneId.slice(1)) + 1
+  const alertsPaneLabel = `Pane ${alertsPaneNumber}${
+    paneSymbols[alertsPaneId] ? ` · ${paneSymbols[alertsPaneId]}` : ''
+  }`
+  /**
+   * Open the alert editor, on a new alert or on one already in the list.
+   *
+   * The editor is a dialog the pane owns, because it needs the instrument's
+   * tick and the drawing tier as they are at the moment it opens. The page asks
+   * for it rather than rendering it, which is why this goes through the
+   * terminal instead of setting state here.
+   */
+  const openAlertEditor = useCallback(
+    (alertId?: string) => {
+      void panelTarget()?.openAlerts(undefined, alertId)
+    },
+    [panelTarget]
+  )
+
   const objectsPaneId = paneObjects[focusedPane]
     ? focusedPane
     : (Object.keys(paneObjects)[0] ?? focusedPane)
@@ -1149,6 +1233,11 @@ function TradingWorkspace({ account }: { account: string | null }) {
                           if (!visibleGrid.current) noteObjects(id, objects)
                         }}
                         onOpenScriptSource={showScriptSource}
+                        onAlertsReady={(id, view) => {
+                          if (!visibleGrid.current) noteAlerts(id, view)
+                        }}
+                        onAlertFired={noteAlertFired}
+                        onAlertsChanged={() => setAlertRevision((n) => n + 1)}
                         onDrawStats={(value) => {
                           if (!visibleGrid.current) setStats(value)
                         }}
@@ -1185,6 +1274,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     onSymbolChange={noteSymbol}
                     onObjectsChange={noteObjects}
                     onOpenScriptSource={showScriptSource}
+                    onAlertsReady={noteAlerts}
+                    onAlertFired={noteAlertFired}
+                    onAlertsChanged={() => setAlertRevision((n) => n + 1)}
                     onDrawStats={setStats}
                     onTerminalChange={(id, terminal) => {
                       if (visibleGrid.current !== owner) return
@@ -1248,6 +1340,16 @@ function TradingWorkspace({ account }: { account: string | null }) {
                 onCaptureChart={captureChart}
               />
             </Suspense>
+          )}
+          {apiKey && wsUrl && panel === 'alerts' && (
+            <AlertsPanel
+              view={paneAlerts[alertsPaneId] ?? null}
+              log={alertLog}
+              paneLabel={alertsPaneLabel}
+              onEdit={openAlertEditor}
+              onClearLog={() => setAlertLog([])}
+              revision={alertRevision}
+            />
           )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />

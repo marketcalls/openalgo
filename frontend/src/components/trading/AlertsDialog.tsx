@@ -11,10 +11,16 @@
  * So the shape here is sections rather than rows: what to watch, when to fire,
  * when to stop, and what to call it. The engine is still the one that decides
  * whether a condition has been met; everything below is how it is asked.
+ *
+ * **This is the editor and nothing else.** The list of alerts lives on the rail
+ * in `AlertsPanel`, because a list is something you keep open beside the chart
+ * rather than something that covers it. A modal is good at one job, which is
+ * filling in a form, and this is that form however it was opened: from the
+ * toolbar, from a right-click on the chart, or from a row in that list.
  */
 
-import { Bell, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -44,6 +50,7 @@ import {
   draftProblem,
   drawingChoices,
   expiryText,
+  hasAutoTitle,
   isRangeCondition,
   lastClose,
   levelChoices,
@@ -105,23 +112,13 @@ interface Props {
   onClose: () => void
 }
 
-type View = { kind: 'list' } | { kind: 'edit'; alertId?: string }
-
 export function AlertsDialog({ handle, onClose }: Props) {
-  const [view, setView] = useState<View>({ kind: 'list' })
   const [draft, setDraft] = useState<AlertDraft | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
-  /** Bumped after every write, so the list re-reads the controller. */
-  const [revision, setRevision] = useState(0)
 
   const zone = handle?.chart.timezone() ?? 'UTC'
-  const alerts = useMemo(
-    // `revision` is the dependency that matters: the controller is mutable and
-    // `list()` returns a fresh copy, so nothing else tells React it changed.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: see above
-    () => (handle ? handle.alerts.list() : []),
-    [handle, revision]
-  )
+  /** The alert being edited, or undefined when this is a new one. */
+  const editing = handle?.editAlertId
 
   /** A draft seeded from what the chart is showing, or from an existing alert. */
   const seed = useCallback(
@@ -169,7 +166,11 @@ export function AlertsDialog({ handle, onClose }: Props) {
         repeat: existing?.repeat ?? 'once',
         cooldownSeconds: String(existing?.cooldownSeconds ?? 0),
         expiresAt: existing ? expiryText(existing.expiresAt, zone) : defaultExpiry(zone),
-        title: existing?.title ?? '',
+        // Blank when we named it, so the field keeps showing the generated
+        // name as its placeholder and the alert keeps the mark that lets a drag
+        // rewrite it. Opening the editor and pressing Save should not be what
+        // quietly freezes a name to a price the line has since left.
+        title: existing && !hasAutoTitle(existing) ? existing.title : '',
         message: existing?.message ?? '',
         enabled: existing ? existing.state !== 'disabled' : true,
       }
@@ -178,19 +179,15 @@ export function AlertsDialog({ handle, onClose }: Props) {
   )
 
   /**
-   * Open on the editor when the chart asked about a particular source.
+   * Seed the form each time the dialog is opened.
    *
-   * Clicking a study's plot or a drawing's level means "alert on this", so
-   * landing on a list of unrelated alerts would be an extra step every time.
+   * A new handle is a new opening, whether it came from the toolbar, from a
+   * right-click on a study's plot, or from a row in the rail's list. The three
+   * differ only in what the draft starts as, which `seed` already knows.
    */
   useEffect(() => {
     if (!handle) return
-    if (handle.source) {
-      setDraft(seed())
-      setView({ kind: 'edit' })
-    } else {
-      setView({ kind: 'list' })
-    }
+    setDraft(seed(handle.editAlertId))
     setProblem(null)
   }, [handle, seed])
 
@@ -207,11 +204,10 @@ export function AlertsDialog({ handle, onClose }: Props) {
     const input = toAlertInput(draft, handle.chart, handle.drawings, handle.symbol, handle.at)
     if (input === null) return
     try {
-      if (view.kind === 'edit' && view.alertId) handle.alerts.update(view.alertId, input)
+      if (editing) handle.alerts.update(editing, input)
       else handle.alerts.add(input)
-      setRevision((n) => n + 1)
-      setView({ kind: 'list' })
       setProblem(null)
+      onClose()
     } catch (error) {
       // The engine refuses in its own terms. Shown as-is rather than swallowed:
       // a Save that does nothing and says nothing is the worse failure.
@@ -228,91 +224,13 @@ export function AlertsDialog({ handle, onClose }: Props) {
     <Dialog open={handle !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[88dvh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-base">
-            {view.kind === 'list' ? 'Alerts' : view.alertId ? 'Edit alert' : 'Create alert'}
-          </DialogTitle>
+          <DialogTitle className="text-base">{editing ? 'Edit alert' : 'Create alert'}</DialogTitle>
           <DialogDescription className="text-xs">
             {handle?.symbol ? `${handle.symbol} on this chart` : 'This chart'}
           </DialogDescription>
         </DialogHeader>
 
-        {view.kind === 'list' ? (
-          <div className="space-y-2">
-            {alerts.length === 0 && (
-              <div className="flex flex-col items-center gap-3 py-8 text-center">
-                <Bell className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-                <p className="max-w-[18rem] text-xs leading-relaxed text-muted-foreground">
-                  No alerts on this chart yet. One watches a price, a study plot, a drawing's level
-                  or a candle pattern, and fires once the condition is met.
-                </p>
-              </div>
-            )}
-            {alerts.map((alert) => (
-              <div
-                key={alert.id}
-                className="flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs"
-              >
-                <span
-                  className={cn(
-                    'mt-1 h-2 w-2 shrink-0 rounded-full',
-                    alert.state === 'armed' ? 'bg-emerald-500' : 'bg-muted-foreground/40'
-                  )}
-                  aria-hidden="true"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="break-words font-medium">{alert.title}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {alert.state === 'armed' ? 'Armed' : 'Off'}
-                    {alert.expiresAt === undefined
-                      ? ''
-                      : ` · until ${expiryText(alert.expiresAt, zone).replace('T', ' ')}`}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  aria-label={`Edit ${alert.title}`}
-                  onClick={() => {
-                    setDraft(seed(alert.id))
-                    setView({ kind: 'edit', alertId: alert.id })
-                    setProblem(null)
-                  }}
-                  className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  <Pencil className="h-3.5 w-3.5" strokeWidth={1.5} />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Delete ${alert.title}`}
-                  onClick={() => {
-                    handle?.alerts.remove(alert.id)
-                    setRevision((n) => n + 1)
-                  }}
-                  className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
-                >
-                  <Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-                </button>
-              </div>
-            ))}
-            {problem !== null && (
-              <p role="alert" className="text-xs text-destructive">
-                {problem}
-              </p>
-            )}
-            <DialogFooter className="pt-2">
-              <Button
-                size="sm"
-                onClick={() => {
-                  setDraft(seed())
-                  setView({ kind: 'edit' })
-                  setProblem(null)
-                }}
-              >
-                <Plus className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
-                Create alert
-              </Button>
-            </DialogFooter>
-          </div>
-        ) : draft === null ? (
+        {draft === null ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} />
           </div>
@@ -526,11 +444,11 @@ export function AlertsDialog({ handle, onClose }: Props) {
             )}
 
             <DialogFooter className="gap-2 pt-1">
-              <Button variant="outline" size="sm" onClick={() => setView({ kind: 'list' })}>
+              <Button variant="outline" size="sm" onClick={onClose}>
                 Cancel
               </Button>
               <Button size="sm" onClick={save}>
-                {view.alertId ? 'Save' : 'Create'}
+                {editing ? 'Save' : 'Create'}
               </Button>
             </DialogFooter>
           </div>

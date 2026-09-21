@@ -21,7 +21,9 @@ import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import { isProfileKind } from '@/lib/trading/profileSettings'
 import {
+  type AlertFire,
   type AlertsHandle,
+  type AlertsView,
   type BrandingLink,
   type ChartSettingsRequest,
   type DrawSelection,
@@ -238,6 +240,12 @@ interface Props {
    * passes it straight up rather than rendering anything itself.
    */
   onOpenScriptSource?(file: string): void
+  /** This pane's alert controller, or null once its chart has gone. */
+  onAlertsReady?(paneId: string, view: AlertsView | null): void
+  /** An alert fired on this pane. */
+  onAlertFired?(fire: AlertFire): void
+  /** This pane's set of alerts changed. */
+  onAlertsChanged?(): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
@@ -285,6 +293,9 @@ export function ChartPane({
   onTerminalChange,
   onObjectsChange,
   onOpenScriptSource,
+  onAlertsReady,
+  onAlertFired,
+  onAlertsChanged,
   onDrawStats,
   linkGroup,
   armed = false,
@@ -323,6 +334,8 @@ export function ChartPane({
   objectsCbRef.current = onObjectsChange
   const scriptSourceCbRef = useRef(onOpenScriptSource)
   scriptSourceCbRef.current = onOpenScriptSource
+  const alertsCbRef = useRef({ onAlertsReady, onAlertFired, onAlertsChanged })
+  alertsCbRef.current = { onAlertsReady, onAlertFired, onAlertsChanged }
   // The flag as it stands when the terminal boots; the effect below tracks it
   // from then on. Read through a ref so the boot effect does not re-run and
   // rebuild the terminal on every toggle.
@@ -475,6 +488,9 @@ export function ChartPane({
       // Null is the terminal saying the chart this dialog belonged to has gone,
       // which shuts it rather than leaving it writing into a dead controller.
       onAlerts: (handle) => current && setAlertsHandle(handle),
+      onAlertsReady: (view) => current && alertsCbRef.current.onAlertsReady?.(paneId, view),
+      onAlertFired: (fire) => current && alertsCbRef.current.onAlertFired?.(fire),
+      onAlertsChanged: () => current && alertsCbRef.current.onAlertsChanged?.(),
       onChartSettings: (req) => current && setChartSettings(req),
       onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
       onOpenScriptSource: (file) => current && scriptSourceCbRef.current?.(file),
