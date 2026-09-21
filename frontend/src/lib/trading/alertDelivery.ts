@@ -169,9 +169,15 @@ export async function deliverAlert(
   delivery: AlertDelivery,
   notice: { title: string; body: string; tag: string },
   context: DeliveryContext
-): Promise<void> {
-  if (delivery.sound) playAlertSound()
-  if (delivery.notify) notifyIfHidden(notice)
+): Promise<string[]> {
+  // Named one by one rather than counted, because this is what the log stores
+  // and "2 channels" answers nothing six hours later. A channel that refused
+  // is simply absent: the row then says the alert fired and reached nobody,
+  // which is a different thing from the alert not firing.
+  const accepted: string[] = []
+
+  if (delivery.sound && playAlertSound()) accepted.push('sound')
+  if (delivery.notify && notifyIfHidden(notice)) accepted.push('notification')
 
   const message =
     notice.body && notice.body !== notice.title ? `${notice.title}\n${notice.body}` : notice.title
@@ -183,7 +189,8 @@ export async function deliverAlert(
         username: context.username,
         message,
       })
-      if (!sent) {
+      if (sent) accepted.push('telegram')
+      else {
         context.onProblem(
           'The alert fired, but Telegram did not take the message. Check that the bot is running and your account is linked under Telegram.'
         )
@@ -200,7 +207,8 @@ export async function deliverAlert(
         username: context.username,
         message,
       })
-      if (!sent) {
+      if (sent) accepted.push('whatsapp')
+      else {
         context.onProblem(
           'The alert fired, but WhatsApp did not take the message. Check that a device is paired under WhatsApp.'
         )
@@ -209,4 +217,6 @@ export async function deliverAlert(
       context.onProblem('The alert fired, but WhatsApp could not be reached.')
     }
   }
+
+  return accepted
 }

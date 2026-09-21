@@ -293,11 +293,74 @@ describe('the log of what has fired', () => {
     expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
   })
 
-  it('says the log is the session’s rather than implying one was lost', async () => {
+  it('says an alert only fires while the chart is open, and that firings are kept', async () => {
+    // Both halves matter and they are easy to confuse. The limit is on when an
+    // alert can fire, not on how long the record of it survives, and an empty
+    // Log tab that implies the second would have a trader believe the platform
+    // threw their history away.
     const user = userEvent.setup()
     const { view } = viewOf([alert()])
     render(<AlertsPanel {...props} view={view} />)
     await user.click(screen.getByRole('tab', { name: /^Log/ }))
-    expect(screen.getByText(/covers the current session/)).toBeInTheDocument()
+
+    const empty = screen.getByText(/Nothing has fired yet/)
+    expect(empty).toHaveTextContent(/only fires while/i)
+    expect(empty).toHaveTextContent(/kept here afterwards/i)
+  })
+
+  it('shows which channels took a firing', async () => {
+    const user = userEvent.setup()
+    const { view } = viewOf([alert()])
+    render(
+      <AlertsPanel
+        {...props}
+        view={view}
+        log={[
+          {
+            key: 'log-1',
+            alertId: 'a1',
+            title: 'RELIANCE crossing 1264.7',
+            message: 'crossed 1264.70',
+            symbol: 'RELIANCE',
+            exchange: 'NSE',
+            firedAt: 1_758_441_600,
+            delivered: ['sound', 'telegram'],
+          },
+        ]}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: /^Log/ }))
+
+    expect(screen.getByText('sound')).toBeInTheDocument()
+    expect(screen.getByText('telegram')).toBeInTheDocument()
+  })
+
+  it('shows no channel at all for a firing that reached nobody', async () => {
+    // The absence is the answer. A "none" badge reads like a delivery failure
+    // on an alert the trader deliberately left silent.
+    const user = userEvent.setup()
+    const { view } = viewOf([alert()])
+    render(
+      <AlertsPanel
+        {...props}
+        view={view}
+        log={[
+          {
+            key: 'log-1',
+            alertId: 'a1',
+            title: 'RELIANCE crossing 1264.7',
+            message: '',
+            symbol: 'RELIANCE',
+            exchange: 'NSE',
+            firedAt: 1_758_441_600,
+            delivered: [],
+          },
+        ]}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: /^Log/ }))
+
+    expect(screen.getByText('RELIANCE crossing 1264.7')).toBeInTheDocument()
+    expect(screen.queryByText(/none/i)).not.toBeInTheDocument()
   })
 })

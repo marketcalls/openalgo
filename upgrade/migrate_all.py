@@ -90,6 +90,7 @@ MIGRATIONS = [
     ("migrate_agent.py", "Agent Module (LLM chat and chart surfaces)"),
     ("migrate_agent_voice.py", "Agent Voice Surface Settings"),
     ("migrate_agent_voice_phrase_removal.py", "Agent Voice Approval Phrase Removal"),
+    ("migrate_alert_log.py", "Chart Alert Log (/trading alerts history)"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,
