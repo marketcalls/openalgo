@@ -18,12 +18,16 @@ const alert = (patch: Partial<Alert> = {}): Alert =>
     ...patch,
   }) as Alert
 
-function viewOf(alerts: Alert[]) {
+function viewOf(
+  alerts: Alert[],
+  availability: Record<string, { available: boolean; reason?: string }> = {}
+) {
   const controller = {
     list: vi.fn(() => alerts.map((one) => ({ ...one }))),
     remove: vi.fn(),
     enable: vi.fn(),
     disable: vi.fn(),
+    availability: vi.fn((id: string) => availability[id] ?? { available: true }),
   }
   return {
     view: {
@@ -168,7 +172,9 @@ describe('the alert list on the rail', () => {
     // in, so it names the gesture rather than describing what an alert is.
     const { view } = viewOf([])
     render(<AlertsPanel {...props} view={view} />)
-    expect(screen.getByText(/Right-click the chart at a price to set one there and then/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Right-click the chart at a price to set one there and then/)
+    ).toBeInTheDocument()
   })
 
   it('waits rather than claiming there are no alerts before a chart is ready', () => {
@@ -191,6 +197,49 @@ describe('the log of what has fired', () => {
     render(<AlertsPanel {...props} view={view} log={[fire(), fire({ key: 'a1-2' })]} />)
     const tab = screen.getByRole('tab', { name: /^Log/ })
     expect(within(tab).getByText('2')).toBeInTheDocument()
+  })
+
+  it('says why an alert that reads Active is not watching right now', async () => {
+    // Since charts 2.5.0 an alert stays visible on other timeframes but is
+    // evaluated only on the one it was made on. Without the reason the row
+    // reads Active on a chart where nothing can fire, which looks like a bug in
+    // the alert rather than a fact about the chart.
+    const { view } = viewOf([alert()], {
+      a1: { available: false, reason: 'Paused: created on 5m' },
+    })
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.getByText('Paused: created on 5m')).toBeInTheDocument()
+  })
+
+  it('says nothing extra about an alert that is watching', async () => {
+    // With a reason attached, because the engine may describe an alert it is
+    // still evaluating. `available` is the field that decides whether the
+    // trader needs telling; printing any reason it finds would put a warning
+    // on a row where nothing is wrong.
+    const { view } = viewOf([alert()], {
+      a1: { available: true, reason: 'Evaluating on 5m' },
+    })
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.queryByText('Evaluating on 5m')).not.toBeInTheDocument()
+  })
+
+  it('does not repeat itself on an alert that is already stopped', async () => {
+    // A stopped alert says so in its own state. A second line saying it is not
+    // watching reads as two different problems.
+    const { view } = viewOf([alert({ state: 'disabled' })], {
+      a1: { available: false, reason: 'Paused: created on 5m' },
+    })
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.queryByText('Paused: created on 5m')).not.toBeInTheDocument()
+  })
+
+  it('renders the list when the engine cannot answer about availability', async () => {
+    const { view } = viewOf([alert()])
+    ;(view.alerts as unknown as { availability: () => never }).availability = () => {
+      throw new Error('mid-teardown')
+    }
+    render(<AlertsPanel {...props} view={view} />)
+    expect(screen.getByText('RELIANCE crossing up 1243.4')).toBeInTheDocument()
   })
 
   it('shows the newest firing first', async () => {
@@ -244,11 +293,74 @@ describe('the log of what has fired', () => {
     expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
   })
 
-  it('says the log is the session’s rather than implying one was lost', async () => {
+  it('says an alert only fires while the chart is open, and that firings are kept', async () => {
+    // Both halves matter and they are easy to confuse. The limit is on when an
+    // alert can fire, not on how long the record of it survives, and an empty
+    // Log tab that implies the second would have a trader believe the platform
+    // threw their history away.
     const user = userEvent.setup()
     const { view } = viewOf([alert()])
     render(<AlertsPanel {...props} view={view} />)
     await user.click(screen.getByRole('tab', { name: /^Log/ }))
-    expect(screen.getByText(/covers the current session/)).toBeInTheDocument()
+
+    const empty = screen.getByText(/Nothing has fired yet/)
+    expect(empty).toHaveTextContent(/only fires while/i)
+    expect(empty).toHaveTextContent(/kept here afterwards/i)
+  })
+
+  it('shows which channels took a firing', async () => {
+    const user = userEvent.setup()
+    const { view } = viewOf([alert()])
+    render(
+      <AlertsPanel
+        {...props}
+        view={view}
+        log={[
+          {
+            key: 'log-1',
+            alertId: 'a1',
+            title: 'RELIANCE crossing 1264.7',
+            message: 'crossed 1264.70',
+            symbol: 'RELIANCE',
+            exchange: 'NSE',
+            firedAt: 1_758_441_600,
+            delivered: ['sound', 'telegram'],
+          },
+        ]}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: /^Log/ }))
+
+    expect(screen.getByText('sound')).toBeInTheDocument()
+    expect(screen.getByText('telegram')).toBeInTheDocument()
+  })
+
+  it('shows no channel at all for a firing that reached nobody', async () => {
+    // The absence is the answer. A "none" badge reads like a delivery failure
+    // on an alert the trader deliberately left silent.
+    const user = userEvent.setup()
+    const { view } = viewOf([alert()])
+    render(
+      <AlertsPanel
+        {...props}
+        view={view}
+        log={[
+          {
+            key: 'log-1',
+            alertId: 'a1',
+            title: 'RELIANCE crossing 1264.7',
+            message: '',
+            symbol: 'RELIANCE',
+            exchange: 'NSE',
+            firedAt: 1_758_441_600,
+            delivered: [],
+          },
+        ]}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: /^Log/ }))
+
+    expect(screen.getByText('RELIANCE crossing 1264.7')).toBeInTheDocument()
+    expect(screen.queryByText(/none/i)).not.toBeInTheDocument()
   })
 })

@@ -117,10 +117,7 @@ describe('sending the message outward', () => {
     const calls = fetchWith({ '/api/v1/telegram/notify': { ok: false } })
     const onProblem = vi.fn()
     await deliverAlert({ ...OFF, telegram: true, whatsapp: true }, NOTICE, context(onProblem))
-    expect(calls.map((c) => c.url)).toEqual([
-      '/api/v1/telegram/notify',
-      '/api/v1/whatsapp/notify',
-    ])
+    expect(calls.map((c) => c.url)).toEqual(['/api/v1/telegram/notify', '/api/v1/whatsapp/notify'])
     expect(onProblem).toHaveBeenCalledTimes(1)
   })
 
@@ -153,7 +150,39 @@ describe('sending the message outward', () => {
     )
     await expect(
       deliverAlert({ ...OFF, telegram: true }, NOTICE, context(onProblem))
-    ).resolves.toBeUndefined()
+    ).resolves.toEqual([])
     expect(onProblem).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('what it reports back for the log', () => {
+  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+
+  it('names the channels that accepted the message', async () => {
+    fetchWith({})
+    const accepted = await deliverAlert(
+      { ...OFF, telegram: true, whatsapp: true },
+      NOTICE,
+      context()
+    )
+    expect(accepted).toEqual(['telegram', 'whatsapp'])
+  })
+
+  it('leaves out a channel that refused, rather than reporting it sent', async () => {
+    // This is the field the log stores. A row claiming Telegram took a message
+    // it refused is worse than a row saying nothing went out: it is the exact
+    // question somebody opens the log to answer.
+    fetchWith({ '/api/v1/telegram/notify': { ok: false } })
+    const accepted = await deliverAlert(
+      { ...OFF, telegram: true, whatsapp: true },
+      NOTICE,
+      context()
+    )
+    expect(accepted).toEqual(['whatsapp'])
+  })
+
+  it('names nothing when nothing was asked for', async () => {
+    fetchWith({})
+    expect(await deliverAlert(OFF, NOTICE, context())).toEqual([])
   })
 })

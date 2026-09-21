@@ -466,7 +466,7 @@ that instead, keeping the exact study instance and plot you clicked, or the
 clicked drawing even if another one is selected. A notice names the alert it
 made, and the alert is editable from the rail the moment it exists.
 
-It is armed to fire once, on a confirmed bar, expiring in two months, with a
+It is armed to fire once, the moment the price is reached, expiring in two months, with a
 sound and a desktop notification. Those are the same defaults the form opens
 with, so a right-click produces exactly the alert the form would have proposed.
 
@@ -475,15 +475,47 @@ trigger, an expiry or a message the defaults do not give it. **Create alert...**
 in the right-click menu opens the same form.
 
 **Alerts** on the right rail lists what is already watching, with a **Log** tab
-of what has fired this session. Rows carry the name, the level read from the
-alert itself, the instrument and the state, and hover actions to stop, edit or
-delete one. The overflow menu starts, stops or removes them all at once.
+of what has fired. Rows carry the name, the level read from the alert itself,
+the instrument and the state, and hover actions to stop, edit or delete one. The
+overflow menu starts, stops or removes them all at once.
 
-**Bar close** is the default. It evaluates the confirmed candle when the next
-candle arrives. **Intrabar touch** can fire on a wick or study reading that is
-absent from the final candle. Missing readings remain unavailable, including
+**The log outlives the tab.** A firing is written to the database as it happens
+and read back the next time `/trading` opens, so closing the browser at four
+o'clock no longer takes the afternoon with it, and an alert that fired while you
+were on another screen still leaves a row. Each row also names the channels that
+accepted the message, so a firing that reached nobody can be told apart from one
+that never happened. **Clear** on the Log tab empties it for good.
+
+This is a record, not a scheduler. Alerts are still evaluated by the chart that
+is open, so an alert still only fires while `/trading` is running; what changed
+is what is left behind afterwards. Firings are kept for 90 days.
+
+**Intrabar touch** is the default. It fires the moment the price is reached,
+which is what an alert on a level is for: waiting for the candle to close would
+report a level touched at 13:15 on an hourly chart at 14:15, and on a daily
+chart the next session. The cost is that it fires on a wick the finished candle
+does not keep, so a level brushed once and rejected still sends the message.
+
+**Bar close** is the other choice, one field away on the form. It evaluates the
+confirmed candle when the next candle arrives, which is what you want when the
+level only counts if it held. Intrabar touch can fire on a wick or study reading
+that is absent from the final candle. Missing readings remain unavailable, including
 open interest missing from the live quote stream. Alerts retain the symbol,
 exchange and interval where they were created.
+
+**Point at a line and press Delete or Backspace to remove it.** The key removes
+one thing, and it looks for it in a fixed order: a drawing being placed is
+cancelled first, then selected drawings, then the drawing under the pointer,
+and only then an alert. An alert's line runs the width of the pane, so it sits
+under the pointer far more often than a shape does; taking it last is what
+stops Delete removing an alert while you meant to remove a drawing. A field or
+a dialog always keeps the key, so erasing a character never erases a drawing.
+
+**An alert stays visible on other timeframes, and is evaluated only on the one
+it was made on.** A 5m alert can be seen from the 1h chart, with its own
+interval on the label, but it is not watching there. The rail says so under the
+row rather than leaving it reading Active on a chart where nothing will fire.
+Go back to the interval it was made on to arm it again.
 
 ### Being told when one fires
 

@@ -30,7 +30,8 @@ describe('ExpressionFeed', () => {
     })
     const expression = new ExpressionFeed(feed, () => 'NFO')
     for (const symbol of ['CE+PE', 'CE-PE', '2*CE+PE', 'CE+CE+PE']) {
-      const bars = await expression.getBars({ symbol, exchange: 'NFO', interval: '1m' })
+      // No exchange: a computed chart is several instruments and has none.
+      const bars = await expression.getBars({ symbol, exchange: '', interval: '1m' })
       expect(bars[0].volume).toBe(50)
     }
   })
@@ -78,6 +79,48 @@ describe('ExpressionFeed', () => {
         interval: '1m',
       })
     ).rejects.toThrow('no bars for PE')
+  })
+
+  it('passes a hyphenated instrument through instead of folding it', async () => {
+    // The reported failure, one layer below where it looked like it was. Every
+    // load goes through this feed, and `BAJAJ-AUTO` is a subtraction to the
+    // grammar, so the chart asked the history API for `BAJAJ` and `AUTO`:
+    // two instruments that do not exist, and a 400 for a symbol the platform
+    // resolves perfectly well.
+    const { feed, requests } = inner({ 'NSE:BAJAJ-AUTO': [bar(60, 11577)] })
+    const expression = new ExpressionFeed(feed, () => 'NSE')
+
+    const bars = await expression.getBars({
+      symbol: 'BAJAJ-AUTO',
+      exchange: 'NSE',
+      interval: '1h',
+    })
+
+    expect(bars).toHaveLength(1)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ symbol: 'BAJAJ-AUTO', exchange: 'NSE' })
+  })
+
+  it('keeps a hyphenated instrument out of the fold on the cache peek too', async () => {
+    const { feed } = inner({ 'NSE:BAJAJ-AUTO': [bar(60, 11577)] })
+    const expression = new ExpressionFeed(feed, () => 'NSE')
+
+    await expression.getCachedBars({ symbol: 'BAJAJ-AUTO', exchange: 'NSE', interval: '1h' })
+
+    expect(feed.getCachedBars).toHaveBeenCalledTimes(1)
+  })
+
+  it('still folds a computed chart, which carries no exchange of its own', async () => {
+    // The capability this feed exists for, and the one the fix must not cost.
+    const { feed } = inner({
+      'NFO:CE': [{ ...bar(60, 100), volume: 20 }],
+      'NFO:PE': [{ ...bar(60, 200), volume: 30 }],
+    })
+    const expression = new ExpressionFeed(feed, () => 'NFO')
+
+    const bars = await expression.getBars({ symbol: 'CE-PE', exchange: '', interval: '1m' })
+
+    expect(bars[0].close).toBe(-100)
   })
 
   it('passes a plain symbol straight through, cache peek included', async () => {

@@ -73,9 +73,10 @@ import {
   type WorkspacePane,
 } from 'openalgo-charts/workspace'
 import { deliverAlert, deliveryOf, readySound } from './alertDelivery'
-import { askToNotify } from './alertNotify'
+import { reportFire } from './alertLog'
 import type { AlertFacts } from './alertMessage'
 import { fillAlertMessage } from './alertMessage'
+import { askToNotify } from './alertNotify'
 import { mergeAlertRuntime } from './alertRuntime'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
@@ -535,6 +536,13 @@ export interface AlertFire {
   price?: number
   /** The source bar's UTC seconds, not the browser's wall clock. */
   firedAt: number
+  /**
+   * The channels that accepted the message, on a row read back from the log.
+   *
+   * Absent on a firing as it happens, because the sends have not finished yet
+   * and the row is shown the moment the alert fires rather than a second later.
+   */
+  delivered?: readonly string[]
 }
 
 export interface IndicatorSettingsRequest {
@@ -839,6 +847,7 @@ export class TradingTerminal {
   private offAlertFullscreen: (() => void) | null = null
   private alertJson: AlertsDocument = { version: 1, alerts: [] }
   private offAlerts: (() => void)[] = []
+  private offDeleteKey: (() => void) | null = null
   private alertSaveFailed = false
   private alertRuntimeScope: string | null = null
   private restoringAlertRuntime = false
@@ -1126,6 +1135,117 @@ export class TradingTerminal {
     }
   }
 
+  /**
+   * Delete or Backspace over the chart: remove the one thing under the pointer.
+   *
+   * The order matters more than the feature does, because every one of these
+   * can be true at the same moment and deleting the wrong one is not
+   * recoverable by pressing the key again.
+   *
+   * 1. **A field or a dialog wins outright.** Backspace in a text box is a
+   *    character, and a terminal that ate it while somebody renamed a drawing
+   *    would be unusable. This is why the handler is on the container and
+   *    checks the target rather than sitting on the window.
+   * 2. **A placement in progress is cancelled**, not committed and not deleted.
+   *    Half a trend line is the thing the key is being pressed about.
+   * 3. **Selected drawings go next**, because a selection is something the
+   *    trader made deliberately and can see.
+   * 4. **Then the hovered drawing**, which is the same gesture without the
+   *    click.
+   * 5. **An alert last**, and only when nothing above claimed the key. An
+   *    alert's line sits across the whole pane, so it is under the pointer far
+   *    more often than a drawing is, and letting it win would delete alerts
+   *    while people meant to delete shapes.
+   */
+  private deleteAtPointer(): boolean {
+    // A drawing being placed is a gesture, not an object: end the gesture.
+    if (this.draw?.activeTool() && this.draw.cancel()) {
+      this.afterDrawChange()
+      return true
+    }
+    const selected = this.draw?.selection() ?? []
+    if (selected.length) {
+      this.draw?.removeMany(selected)
+      this.afterDrawChange()
+      return true
+    }
+    const overDrawing = this.draw?.hovered()
+    if (overDrawing) {
+      this.draw?.removeMany([overDrawing])
+      this.afterDrawChange()
+      return true
+    }
+    // `hovered()` is offered precisely so a host can bind a key to it: the
+    // controller binds none itself, because a chart without the widget shell
+    // has its own idea of what a keystroke means.
+    const overAlert = this.alerts?.hovered()
+    if (overAlert) {
+      this.alerts?.remove(overAlert)
+      // Nothing else to do: persistence is subscribed to `alert:removed`.
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Wire Delete and Backspace over the plot.
+   *
+   * **Bound to the pointer, not to focus.** The gesture is to point at the
+   * thing and press Delete, and a canvas cannot take focus, so waiting for a
+   * focused element would mean the key only worked after a click that also
+   * selects or deselects whatever it lands on. So the listener is on the
+   * document and each terminal answers only while the pointer is inside its own
+   * container, which is what makes the right pane respond in a four-pane
+   * workspace.
+   */
+  private bindDeleteKey(): void {
+    let over = false
+    const enter = () => {
+      over = true
+    }
+    const leave = () => {
+      over = false
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (!over) return
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+      // A modifier means something else is being asked for, and on a Mac
+      // Cmd+Backspace is a text gesture rather than a chart one.
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      // Anything that takes typing owns its own Backspace, wherever the pointer
+      // happens to be resting: a trader renaming a drawing in a dialog that
+      // overlaps the chart must not delete the chart's contents by erasing a
+      // character.
+      //
+      // `closest` is called defensively. A keystroke with nothing focused is
+      // delivered to the document rather than to an element, and a handler that
+      // assumed an element would throw on the one press it most needs to
+      // handle: the one made without clicking anything first.
+      const target = event.target as Element | null
+      if (
+        target?.closest?.(
+          'input, textarea, select, [contenteditable="true"], [role="dialog"], [role="textbox"]'
+        )
+      ) {
+        return
+      }
+      if (this.deleteAtPointer()) {
+        // Only once something was actually removed: a Backspace that deleted
+        // nothing is still the browser's to interpret.
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    this.container.addEventListener('pointerenter', enter)
+    this.container.addEventListener('pointerleave', leave)
+    document.addEventListener('keydown', onKey)
+    this.offDeleteKey = () => {
+      this.container.removeEventListener('pointerenter', enter)
+      this.container.removeEventListener('pointerleave', leave)
+      document.removeEventListener('keydown', onKey)
+    }
+  }
+
   private alertsArmed(): boolean {
     try {
       return this.alerts?.list().some((alert) => alert.state === 'armed') ?? false
@@ -1168,6 +1288,7 @@ export class TradingTerminal {
     this.username = opts.username ?? ''
     this.wsUrl = opts.wsUrl
     this.container = opts.container
+    this.bindDeleteKey()
     this.legendEl = opts.legendEl
     this.wireLegendActions()
     this.getTheme = opts.getTheme
@@ -3161,6 +3282,7 @@ export class TradingTerminal {
       // the trader back to the chart to look it up.
       const said = fillAlertMessage(String(event.message ?? ''), this.alertFacts(event)) || fired
       this.toast(said, 'ok')
+      const facts = this.alertFacts(event)
       void deliverAlert(
         deliveryOf(alert?.payload),
         {
@@ -3176,7 +3298,26 @@ export class TradingTerminal {
           // grows while the market moves.
           onProblem: (message) => this.toast(message, 'err'),
         }
-      )
+      ).then((delivered) => {
+        // Written down after the send, so the row can say what actually went
+        // out rather than what was asked for. The log is the only record that
+        // outlives the tab, and the only thing that answers "the message never
+        // arrived, did it even fire" the next morning.
+        void reportFire({
+          alertId: id,
+          title: String(event.title ?? 'Alert'),
+          kind: String(alert?.source?.kind ?? 'price'),
+          condition: String(alert?.condition ?? ''),
+          symbol: this.sym?.symbol ?? '',
+          exchange: this.sym?.exchange ?? '',
+          interval: this.interval,
+          ...(typeof facts.price === 'number' ? { price: facts.price } : {}),
+          // The filled message, not the template: a log row reading
+          // "crossed {{price}}" is a row nobody can read back.
+          message: said,
+          delivered,
+        })
+      })
       // Numbered as well as timed. The time on the event is the source bar's,
       // so two alerts firing on the same bar carry the same one, and a list
       // keyed by time alone would show one of them.
@@ -3389,7 +3530,11 @@ export class TradingTerminal {
         source,
         at,
       })
-      const problem = draftProblem(draft, chart as unknown as AlertChart, (this.draw ?? null) as AlertDrawings | null)
+      const problem = draftProblem(
+        draft,
+        chart as unknown as AlertChart,
+        (this.draw ?? null) as AlertDrawings | null
+      )
       if (problem !== null) {
         this.toast(problem, 'err')
         return false
@@ -5527,7 +5672,20 @@ export class TradingTerminal {
     // An expression is not an instrument: there is no master record to look up,
     // no lot size, no tick and nothing to subscribe to. It takes its own path
     // and never reaches the order machinery below.
-    if (pick.expression === true || isChartExpression(pick.symbol)) {
+    //
+    // **An exchange is what says this is an instrument.** Reading the symbol
+    // alone cannot tell `BAJAJ-AUTO` from a subtraction, because to the chart's
+    // grammar that is exactly what it is: `isPlainSymbol` returns false and
+    // `parseExpression` succeeds, so a name with a hyphen in it was sent down
+    // the expression path and fetched as `BAJAJ` minus `AUTO`, two instruments
+    // that do not exist. The symbol search picked the instrument correctly and
+    // this threw the choice away, which is why the chart reported a 400 for a
+    // symbol the platform resolves perfectly well.
+    //
+    // A computed chart carries no exchange and never can: it is several
+    // instruments, possibly on different ones. So the exchange is the thing
+    // that settles it, and it does not require guessing at the name.
+    if (pick.expression === true || (!pick.exchange && isChartExpression(pick.symbol))) {
       return await this.loadExpression(pick.symbol, ticket, opts)
     }
     // authoritative metadata (lotsize / tick_size / freeze_qty)
@@ -6345,6 +6503,8 @@ export class TradingTerminal {
       comparisonError = error
     }
     this.comparisons = null
+    this.offDeleteKey?.()
+    this.offDeleteKey = null
     this.offBranding?.()
     this.offBranding = null
     this.cb.onBrandingChange?.(null)

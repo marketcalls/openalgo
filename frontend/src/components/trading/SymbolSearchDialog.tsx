@@ -30,6 +30,23 @@ const OPERATORS = [
 const OPERATOR = /[+\-*/^(),÷×−]/
 
 /**
+ * How a symbol is written inside an expression.
+ *
+ * A hyphen is subtraction to the chart's grammar, so `NSE:BAJAJ-AUTO` in an
+ * expression reads as `NSE:BAJAJ` minus `AUTO`: two instruments that do not
+ * exist. The grammar's own escape for this is quoting, and a quoted name keeps
+ * its exchange prefix, so `'NSE:BAJAJ-AUTO'/NIFTY` resolves exactly as written.
+ *
+ * Only hyphenated names are quoted. Quoting everything would work equally well
+ * and leave a trader looking at `'NSE:RELIANCE'/'NSE:NIFTY'`, wondering what
+ * the quotes mean and whether they have to type them.
+ */
+function legText(row: { symbol: unknown; exchange: unknown }): string {
+  const name = `${row.exchange}:${row.symbol}`
+  return name.includes('-') ? `'${name}'` : name
+}
+
+/**
  * The leg the caret is in, and everything before it.
  *
  * The result list has to search THIS, not the whole box. Searching the whole
@@ -144,6 +161,17 @@ function matchScore(symbol: string, q: string): number {
 
 /** Rank rows so Index surfaces above Cash, which surfaces above F&O/Currency/Commodity. */
 function compareRows(a: SearchRow, b: SearchRow, q: string): number {
+  // A row whose name is exactly what was typed comes first, ahead of category.
+  //
+  // Category is the right tie-break between near matches, and the wrong one
+  // between a near match and the answer: typing `BAJAJ-AUTO` listed NIFTY EV,
+  // NIFTYAUTO and BSEAUTO above it, because indices outrank cash and all three
+  // contain AUTO. The instrument that was named sat fourth, so pressing Enter
+  // charted an index nobody asked for.
+  const exact = (row: SearchRow) => (String(row.symbol).toUpperCase() === q ? 0 : 1)
+  const exactDiff = exact(a) - exact(b)
+  if (exactDiff) return exactDiff
+
   const exA = String(a.exchange)
   const exB = String(b.exchange)
   const catDiff = CATEGORY_RANK[categoryOf(exA)] - CATEGORY_RANK[categoryOf(exB)]
@@ -237,7 +265,39 @@ export function SymbolSearchDialog({
     return ['ALL', ...CHIP_ORDER.filter((c) => present.has(c))]
   }, [allExchanges])
 
-  const expression = useMemo(() => mode === 'symbol' && isExpression(query), [query, mode])
+  /**
+   * A row that is what the whole box says, rather than a match for part of it.
+   *
+   * Accepts the bare name and the exchange-qualified one, because both are
+   * things a trader types and `NSE:BAJAJ-AUTO` is what this dialog itself
+   * writes back into the box.
+   */
+  const namesWholeBox = (row: SearchRow): boolean => {
+    const typed = query.trim().toUpperCase()
+    const symbol = String(row.symbol).toUpperCase()
+    return typed === symbol || typed === `${String(row.exchange).toUpperCase()}:${symbol}`
+  }
+
+  /**
+   * Whether the box is arithmetic or an instrument whose name contains a `-`.
+   *
+   * **Decided from the search results, not from the grammar.** `BAJAJ-AUTO` is
+   * a subtraction to any parser and an instrument to everybody else, and no
+   * amount of reading the string settles which: `NIFTY-BANKNIFTY` is a spread
+   * somebody means and is the same shape exactly. The one thing that does
+   * settle it is whether an instrument of that name exists, which the search
+   * has already answered by the time anybody can click.
+   *
+   * So a box that names a real instrument is not an expression, whatever the
+   * hyphen looks like. That is what stops a click splicing `NSE:BAJAJ-AUTO`
+   * onto the end of `BAJAJ-` and leaving a box that can never recover, which is
+   * the state this was reported in.
+   */
+  const expression = useMemo(
+    () => mode === 'symbol' && isExpression(query) && !rows.some(namesWholeBox),
+    // biome-ignore lint/correctness/useExhaustiveDependencies: namesWholeBox reads `query`
+    [query, mode, rows]
+  )
   const { prefix, leg } = useMemo(
     () => (mode === 'comparison' ? { prefix: '', leg: query } : splitLeg(query)),
     [query, mode]
@@ -352,24 +412,13 @@ export function SymbolSearchDialog({
    * in so a leg is never ambiguous: `NFO:NIFTY...CE` and `NSE:RELIANCE` resolve
    * without inheriting whatever the pane happens to be showing.
    */
-  /**
-   * A row the whole box already names is the instrument, not a leg.
-   *
-   * `splitLeg` treats `-` as an operator so a half-typed expression can look up
-   * its second leg, which means `BAJAJ-AUTO` has a prefix of `BAJAJ-` and picking
-   * its row spliced `NSE:BAJAJ-AUTO` onto the end instead of loading it. The
-   * row was found and could not be chosen, which is worse than not finding it:
-   * the instrument is on screen and clicking it does something else.
-   */
-  const namesWholeBox = (row: SearchRow): boolean =>
-    String(row.symbol).toUpperCase() === query.trim().toUpperCase()
-
   const chooseRow = (row: SearchRow) => {
-    if (prefix === '' || namesWholeBox(row)) {
+    // Not an expression, so there is no leg to complete: load what was clicked.
+    if (prefix === '' || !expression) {
       pick(row)
       return
     }
-    const next = `${prefix}${row.exchange}:${row.symbol}`
+    const next = `${prefix}${legText(row)}`
     setQuery(next)
     caretRef.current = next.length
   }
@@ -385,16 +434,18 @@ export function SymbolSearchDialog({
       e.preventDefault()
       // Arithmetic wins over the result list: the rows below are matches for
       // the last leg the user typed, and loading one of those would silently
-      // discard the expression they built.
-      const row = filtered[sel]
-      // An instrument whose own name parses as arithmetic beats the arithmetic
-      // reading of it. `BAJAJ-AUTO` is a subtraction to the grammar and an
-      // instrument to everybody else, and charting the subtraction is not a
-      // thing anybody typing it wanted.
-      if (expression && !(row && namesWholeBox(row))) {
+      // discard the expression they built. `expression` is already false when
+      // the box names a real instrument, so a hyphenated name lands below and
+      // is charted as itself.
+      if (expression) {
         pick({ symbol: query.trim(), exchange: '', name: 'Computed chart', expression: true })
         return
       }
+      // The selected row, which the ranking has already put the whole-box match
+      // at the top of. Deliberately not "find the row the box names": a trader
+      // who typed BAJAJ-AUTO and then arrowed down to something else meant the
+      // something else.
+      const row = filtered[sel]
       if (row) chooseRow(row)
     }
   }

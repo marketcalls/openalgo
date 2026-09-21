@@ -46,6 +46,7 @@ import { useWorkspaceAutosave } from '@/hooks/useWorkspaceAutosave'
 import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
+import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type {
@@ -62,6 +63,7 @@ import {
 } from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 const NO_DRAW: DrawStats = {
   count: 0,
@@ -92,6 +94,27 @@ const ARMED_KEY = 'oa-trading-armed'
  * question the log answers is what just happened.
  */
 const ALERT_LOG_LIMIT = 200
+
+/**
+ * A stored firing as the panel renders one.
+ *
+ * Keyed on the row id rather than on the alert's, because one alert fires many
+ * times and each firing is its own row. The `log-` prefix keeps a stored row
+ * from ever colliding with a live one, which is keyed by alert and sequence.
+ */
+function loggedToFire(row: LoggedFire): AlertFire {
+  return {
+    key: `log-${row.id}`,
+    alertId: row.alertId,
+    title: row.title,
+    message: row.message,
+    symbol: row.symbol,
+    exchange: row.exchange,
+    ...(typeof row.price === 'number' ? { price: row.price } : {}),
+    firedAt: row.firedAt ?? 0,
+    delivered: row.delivered,
+  }
+}
 
 function readArmed(): boolean {
   try {
@@ -223,13 +246,14 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
   const [paneAlerts, setPaneAlerts] = useState<Record<string, AlertsView>>({})
   /**
-   * Every alert that has fired this session, oldest first.
+   * Every alert that has fired, oldest first.
    *
-   * Held on the page and nowhere else. Alerts are evaluated by the chart that
-   * is open, so a firing only happens while somebody is watching; writing it to
-   * a server would promise a history the engine does not keep. Capped, because
-   * a repeating alert on a one-minute chart left running all day is a list
-   * nobody reads and memory nobody gets back.
+   * Read back from the server on load and added to as firings happen. Alerts
+   * are still evaluated by the chart that is open, so nothing fires because of
+   * this list; what the server keeps is the history, which is the part a closed
+   * tab used to take with it. Capped in the page as well as on the server,
+   * because a repeating alert on a one-minute chart left running all day is a
+   * list nobody reads and memory nobody gets back.
    */
   const [alertLog, setAlertLog] = useState<AlertFire[]>([])
   /**
@@ -361,6 +385,37 @@ function TradingWorkspace({ account }: { account: string | null }) {
         ? [...previous, fire]
         : [...previous.slice(previous.length - ALERT_LOG_LIMIT + 1), fire]
     )
+  }, [])
+
+  /**
+   * The history from before this tab was opened.
+   *
+   * Once, on load. Not on every panel open: the rows a trader is watching for
+   * arrive live through `noteAlertFired`, so refetching would only replace a
+   * list that is already correct, and it would do it while they are reading it.
+   */
+  useEffect(() => {
+    let cancelled = false
+    void fetchLog().then((fires) => {
+      if (cancelled) return
+      // The server answers newest first and this list is oldest first, which is
+      // what the panel reverses for display.
+      setAlertLog((live) => [...fires.map(loggedToFire).reverse(), ...live])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const clearAlertLog = useCallback(() => {
+    // Emptied here first: the button has to answer immediately, and the rows
+    // are a log rather than anything a decision rests on.
+    setAlertLog([])
+    void clearLog().then((cleared) => {
+      if (!cleared) {
+        showToast.error('The log could not be cleared. It will be back on the next reload.')
+      }
+    })
   }, [])
 
   const noteObjects = useCallback((paneId: string, objects: ChartObjects | null) => {
@@ -1351,7 +1406,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
               log={alertLog}
               paneLabel={alertsPaneLabel}
               onEdit={openAlertEditor}
-              onClearLog={() => setAlertLog([])}
+              onClearLog={clearAlertLog}
               revision={alertRevision}
             />
           )}

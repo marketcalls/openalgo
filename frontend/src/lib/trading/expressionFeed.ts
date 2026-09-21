@@ -34,6 +34,27 @@ export function resolveLeg(
 }
 
 /**
+ * Is this request for a computed chart, rather than for one instrument?
+ *
+ * **An exchange is what settles it, not the name.** Reading the symbol alone
+ * cannot tell `BAJAJ-AUTO` from a subtraction, because to the grammar that is
+ * exactly what it is: `isPlainSymbol` says no and `parseExpression` succeeds.
+ * Every load goes through this feed, so a name with a hyphen in it was folded
+ * as `BAJAJ` minus `AUTO` and fetched as two instruments that do not exist.
+ * The symbol search resolved the instrument correctly, the terminal passed it
+ * down correctly, and it was taken apart here, one layer below both.
+ *
+ * A computed chart carries no exchange and never can: it is several
+ * instruments, possibly on different venues, which is why its legs resolve
+ * against a default. One instrument always carries its own. So the request
+ * already knows the answer, and nothing has to guess at the name.
+ */
+function isComputed(req: BarsRequest): boolean {
+  if (req.exchange) return false
+  return isChartExpression(req.symbol)
+}
+
+/**
  * A history feed that also answers for an expression symbol.
  *
  * `NIFTY22SEP2623200CE+NIFTY22SEP2623200PE` is not an instrument the history
@@ -56,9 +77,11 @@ export class ExpressionFeed implements DataFeed {
   }
 
   async getBars(req: BarsRequest): Promise<Bar[]> {
-    if (!isChartExpression(req.symbol)) return this.inner.getBars(req)
+    if (!isComputed(req)) return this.inner.getBars(req)
     const expr = parseExpression(req.symbol)
-    const fallback = req.exchange || this.defaultExchange()
+    // The pane's exchange. A folded request carries none of its own, by the
+    // rule above, so this is the only source for a leg written without one.
+    const fallback = this.defaultExchange()
     // The first failure wins: a combination missing a leg is not a chart with
     // a gap, it is no chart at all.
     const loaded = await Promise.all(
@@ -77,8 +100,7 @@ export class ExpressionFeed implements DataFeed {
 
   /** A warm snapshot exists only for instruments; a combination is always folded fresh. */
   getCachedBars(req: BarsRequest): Promise<Bar[] | undefined> {
-    if (isChartExpression(req.symbol) || !this.inner.getCachedBars)
-      return Promise.resolve(undefined)
+    if (isComputed(req) || !this.inner.getCachedBars) return Promise.resolve(undefined)
     return this.inner.getCachedBars(req)
   }
 }
