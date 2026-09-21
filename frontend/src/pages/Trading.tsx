@@ -12,6 +12,7 @@ const AgentPanel = lazy(() =>
   import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
 )
 
+import { AlertsPanel } from '@/components/trading/AlertsPanel'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
@@ -22,7 +23,6 @@ import {
   writeDockTab,
 } from '@/components/trading/dock/dockState'
 import { TradingDock } from '@/components/trading/dock/TradingDock'
-import { AlertsPanel } from '@/components/trading/AlertsPanel'
 import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
@@ -1038,10 +1038,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
   /**
    * One-Click, beside the layout and sync pickers because, like them, it is a
    * property of the workspace and not of one pane. The switch is the control
-   * and the badge is its label, so the badge reads the state in the scalping
-   * terminal's words and clicking either toggles it once. A label, not a
-   * button, for the reason the sync rows give: a button wrapping a switch
-   * fires twice.
+   * and the badge is its label, so clicking either toggles it once. A label,
+   * not a button, for the reason the sync rows give: a button wrapping a
+   * switch fires twice.
    */
   const armedControl = (
     <label
@@ -1053,7 +1052,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
       )}
       title={
         armed
-          ? 'One-Click is armed: a click on the chart sends a live order'
+          ? 'One-Click is on: a click on the chart sends a live order'
           : 'One-Click is off: a click on the chart opens the order ticket'
       }
     >
@@ -1061,7 +1060,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
         checked={armed}
         onCheckedChange={setArmed}
         aria-label="One-Click"
-        // Armed, the track carries the same red as the border and the word.
+        // Switched on, the track carries the same red as the border and the
+        // word.
         // Left on the app's accent it was a pale switch inside a red control
         // saying two different things about one state, and the accent is what
         // every harmless toggle on the page is already wearing.
@@ -1070,16 +1070,20 @@ function TradingWorkspace({ account }: { account: string | null }) {
       {/* One control, not two. The switch and a badge beside it were the same
           state said twice, and the badge said it in the loudest colour in the
           row while sitting at a different height from every button around it.
-          The border makes it one control at the row's own height; the switch
-          is still what you press and the words are still the scalping
-          terminal's, so ARMED keeps its capitals. It is the one state here
-          where a click sends a live order. */}
+          The border makes it one control at the row's own height and the
+          switch is still what you press.
+
+          ON, not ARMED. The state is worth shouting about, because it is the
+          one where a click on the chart sends a live order, and the capitals
+          and the red are what do the shouting. The word itself only has to
+          say which way the switch is thrown, and a trader should not have to
+          learn a second vocabulary to read a toggle. */}
       <span className="whitespace-nowrap">
         {/* The name goes below lg, as Indicators and Replay drop their labels:
             with it the single-pane toolbar at 1024px pushed the LED and the
             camera into hidden horizontal scroll. */}
         <span className="hidden lg:inline">One-Click </span>
-        {armed ? 'ARMED' : 'off'}
+        {armed ? 'ON' : 'off'}
       </span>
     </label>
   )

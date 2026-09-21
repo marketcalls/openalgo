@@ -432,7 +432,7 @@ export function AlertsDialog({ handle, onClose }: Props) {
                   onCheckedChange={(checked) => patch({ enabled: checked === true })}
                 />
                 <Label htmlFor="alert-enabled" className="text-xs font-normal">
-                  Armed as soon as it is saved
+                  Active as soon as it is saved
                 </Label>
               </div>
             </div>

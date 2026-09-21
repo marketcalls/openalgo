@@ -241,14 +241,14 @@ export function DrawingRail({
       <div className="group relative">
         <button
           type="button"
-          aria-label="Keep tool armed"
+          aria-label="Keep tool selected"
           aria-pressed={stats.stay}
           onClick={() => onStay(!stats.stay)}
           className={cn(btn, stats.stay && on)}
         >
           <span className="h-[18px] w-[18px]">{drawToolIcon('lock')}</span>
         </button>
-        <RailTip text="Keep the tool armed after drawing" />
+        <RailTip text="Keep the tool selected after drawing" />
       </div>
       <div className="group relative">
         <button
