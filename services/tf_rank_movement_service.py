@@ -373,6 +373,21 @@ RUN_MIN_OBS = 10  # observations before the shape means anything
 RUN_MIN_MOVE_PCT = 0.6
 RUN_MIN_EFFICIENCY = 3.0  # move divided by give-back
 RUN_ADVERSE_FLOOR = 0.15  # a move that never pulled back still divides by this
+
+# How long a run stays badged after it stops passing the clean test.
+#
+# Efficiency is a ratio that wobbles across the 3.0 cutoff while the move itself
+# is still intact, and a hard cutoff turns one run into a strobe. Measured over
+# 21-Sep-2026: 50 real runs were drawn as 93 badge episodes, half of all runs
+# fragmenting -- PATANJALI's single run from 09:24 appeared as NINE badges over
+# 66 minutes, dark for a third of its own life. The cost is not cosmetic: the
+# chart draws stripes instead of a run, every per-badge statistic double-counts,
+# and a trader exiting when the badge drops is shaken out mid-move. LICHSGFIN
+# badged at 10:00:30, went dark 90 seconds later, and re-badged at 10:16:30 --
+# before the best part of a 2.09-point move.
+#
+# Set to 0 to restore the old hard cutoff, which is what the A/B replay uses.
+RUN_SUSTAIN_MIN = 5.0
 # A clean run only counts as an event for a symbol the list already rates: a
 # leader, or one that has climbed its way up today.
 RUN_LEADER_RANK = 20
@@ -418,7 +433,11 @@ class RunState:
     efficiency: float  # abs(move) / max(adverse, RUN_ADVERSE_FLOOR)
     from_min: int  # minute-of-day the run started
     run_minutes: int  # how long it has been running
-    is_clean: bool  # moved enough, and kept most of it
+    is_clean: bool  # moved enough, and kept most of it -- or did recently
+    # True when is_clean is being held up by RUN_SUSTAIN_MIN rather than by the
+    # current reading. The run is intact but no longer passing on its own, which
+    # is the honest thing to tell a consumer that wants to tighten a stop.
+    sustained: bool = False
 
 
 def compute_run(
@@ -427,6 +446,7 @@ def compute_run(
     min_move: float = RUN_MIN_MOVE_PCT,
     min_efficiency: float = RUN_MIN_EFFICIENCY,
     settle_min: int = RUN_SETTLE_MIN,
+    sustain_min: float = RUN_SUSTAIN_MIN,
 ) -> RunState | None:
     """Pure: fold [[minute, change_pct], ...] into the shape of the current move.
 
@@ -440,6 +460,13 @@ def compute_run(
 
     Direction is whichever end of the day is further from here, so a stock that
     turned down in the afternoon reports the decline it is in now.
+
+    `sustain_min` holds `is_clean` up for that many minutes after the run stops
+    passing on its own, which stops one run strobing into many badges. The
+    look-back rides the same pass that computes `adverse`, so it costs nothing,
+    and it is measured from the CURRENT anchor: the question asked is "measured
+    from where this move turned, was it clean recently", not "did some earlier
+    shape pass". Pass 0 for the old hard cutoff.
     """
     clean = [p for p in _clean_observations(changes, cast=float) if p[0] >= settle_min]
     if len(clean) < min_obs:
@@ -457,14 +484,29 @@ def compute_run(
         direction, anchor, move = "down", high_i, down_move
 
     adverse = 0.0
+    last_clean_min: float | None = None
     if direction is not None:
         extreme = values[anchor]
-        for value in values[anchor:]:
+        base = values[anchor]
+        for idx in range(anchor, len(values)):
+            value = values[idx]
             extreme = max(extreme, value) if direction == "up" else min(extreme, value)
             give_back = (extreme - value) if direction == "up" else (value - extreme)
             adverse = max(adverse, give_back)
+            # The same test applied at this step, so the final iteration
+            # reproduces the live reading exactly and the two cannot disagree.
+            step_move = value - base
+            step_eff = abs(step_move) / max(adverse, RUN_ADVERSE_FLOOR)
+            if abs(step_move) >= min_move and step_eff >= min_efficiency:
+                last_clean_min = clean[idx][0]
 
     efficiency = abs(move) / max(adverse, RUN_ADVERSE_FLOOR)
+    clean_now = direction is not None and abs(move) >= min_move and efficiency >= min_efficiency
+    sustained = (
+        not clean_now
+        and last_clean_min is not None
+        and (clean[-1][0] - last_clean_min) <= sustain_min
+    )
     return RunState(
         observations=len(clean),
         direction=direction,
@@ -473,7 +515,8 @@ def compute_run(
         efficiency=round(efficiency, 2),
         from_min=clean[anchor][0],
         run_minutes=clean[-1][0] - clean[anchor][0],
-        is_clean=(direction is not None and abs(move) >= min_move and efficiency >= min_efficiency),
+        is_clean=clean_now or sustained,
+        sustained=sustained,
     )
 
 
@@ -490,10 +533,15 @@ FAST_CLIMB_MIN_VELOCITY = 5.0
 _EVENT_PRIORITY: dict[str, int] = {
     # A symbol not on the current list has no current event -- see ABSENT below.
     "EXTREME_JUMP": 100,
-    # A clean directional run outranks a fast climb: it is the state a trader is
-    # actually looking for, and it has held all day rather than for one step.
-    "CLEAN_RUN_UP": 85,
-    "CLEAN_RUN_DOWN": 84,
+    # A clean directional run outranks every single-step label: it is the state
+    # a trader is actually looking for, and it has held all day rather than for
+    # one step. That argument applies hardest to LARGE_JUMP, which is one step's
+    # rank delta -- yet 85/84 sat BELOW its 90, the only break in this table's
+    # descending order, so a jump silently hid the run it was placed above.
+    # Measured 21-Sep-2026: 19 samples mislabelled, and it cut a badge that was
+    # already showing on HCLTECH (10:01) and SONACOMS (10:04) mid-run.
+    "CLEAN_RUN_UP": 95,
+    "CLEAN_RUN_DOWN": 94,
     "LARGE_JUMP": 90,
     "FAST_CLIMB": 80,
     "TOP5_ENTRY": 75,
@@ -622,6 +670,7 @@ def compute_symbol_movement(
     observations: list[list[int]],
     latest_minute: int | None = None,
     changes: list[list[float]] | None = None,
+    sustain_min: float = RUN_SUSTAIN_MIN,
 ) -> dict | None:
     """Pure: the full current-day picture for one symbol as a flat dict — the
     RankUIModel the API and frontend consume (plan §49/§92). None if unusable.
@@ -638,7 +687,7 @@ def compute_symbol_movement(
         return None
     zones, transitions = compute_topn(symbol, observations)
     sustained = compute_sustained(symbol, observations)
-    run = compute_run(changes) if changes else None
+    run = compute_run(changes, sustain_min=sustain_min) if changes else None
     event, priority = classify_event(state, zones, transitions, sustained, run)
     stale_by = 0 if latest_minute is None else max(0, latest_minute - state.last_seen_min)
     present = stale_by <= PRESENCE_TOLERANCE_MIN
@@ -673,6 +722,8 @@ def compute_symbol_movement(
             "run_minutes": run.run_minutes if run else None,
             "run_from_min": run.from_min if run else None,
             "run_clean": bool(run and run.is_clean),
+            # Badged, but on the sustain grace rather than on its own reading.
+            "run_sustained": bool(run and run.sustained),
             # The stock's actual move against yesterday's close. Carried beside
             # the run so the two can never be confused: a run of 10 points from
             # a high is not a 10% fall.
@@ -864,7 +915,9 @@ class RunEpisode:
     ongoing: bool
 
 
-def run_episodes(symbol: str, ranks: list, changes: list) -> list[RunEpisode]:
+def run_episodes(
+    symbol: str, ranks: list, changes: list, sustain_min: float = RUN_SUSTAIN_MIN
+) -> list[RunEpisode]:
     """Pure: replay a symbol's day and return every stretch it carried a badge.
 
     Walks the series once, asking the same question the panel asked at each
@@ -877,7 +930,7 @@ def run_episodes(symbol: str, ranks: list, changes: list) -> list[RunEpisode]:
     for i in range(RUN_MIN_OBS, len(changes)):
         upto = changes[i][0]
         row = compute_symbol_movement(
-            symbol, [p for p in ranks if p[0] <= upto], upto, changes[: i + 1]
+            symbol, [p for p in ranks if p[0] <= upto], upto, changes[: i + 1], sustain_min
         )
         badged = bool(row and row["event"].startswith("CLEAN_RUN"))
         if badged:

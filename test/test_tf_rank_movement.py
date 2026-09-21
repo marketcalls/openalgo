@@ -7,6 +7,7 @@ get their own cases then.
 """
 
 from services.tf_rank_movement_service import (
+    _EVENT_PRIORITY,
     TOP_N_THRESHOLDS,
     compute_rank_state,
     compute_rank_states,
@@ -631,3 +632,67 @@ def test_an_ongoing_run_is_marked_ongoing():
     ranks = [[600 + i * 0.5, 5] for i in range(len(changes))]
     episodes = run_episodes("EP3", ranks, changes)
     assert episodes and episodes[-1].ongoing is True
+
+
+# --- badge stability: the two defects found on 21-Sep-2026 -------------------
+
+
+def test_a_clean_run_outranks_a_large_jump():
+    # PORTED DEFECT: _EVENT_PRIORITY listed CLEAN_RUN_UP/DOWN at 85/84 directly
+    # above LARGE_JUMP at 90 -- the only break in an otherwise descending table.
+    # A stock on a clean run that also jumped 15+ ranks in one step was labelled
+    # LARGE_JUMP, which cut the badge mid-run on HCLTECH (10:01) and SONACOMS
+    # (10:04). The run is the durable state and must win.
+    assert _EVENT_PRIORITY["CLEAN_RUN_UP"] > _EVENT_PRIORITY["LARGE_JUMP"]
+    assert _EVENT_PRIORITY["CLEAN_RUN_DOWN"] > _EVENT_PRIORITY["LARGE_JUMP"]
+    # ... and the table must stay sorted, so this cannot silently regress.
+    ordered = list(_EVENT_PRIORITY.values())
+    assert ordered == sorted(ordered, reverse=True), "priority table is out of order"
+
+
+def _dip_series():
+    """A clean climb, one dip that fails the efficiency test, then more climb."""
+    rising = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0]
+    # Give-back of 1.0 against a 2.0 move is efficiency 2.0, under the 3.0 floor,
+    # so these three readings fail the clean test while the run is plainly intact.
+    dip = [2.0, 2.05]
+    resume = [2.9, 3.2, 3.5]
+    values = rising + dip + resume
+    return [[600 + i * 0.5, v] for i, v in enumerate(values)]
+
+
+def test_a_dip_does_not_strobe_the_badge_off_and_on():
+    # PORTED DEFECT: is_clean was a hard cutoff on a ratio that wobbles, so one
+    # run became many badges -- 50 real runs drawn as 93 episodes on 21-Sep-2026,
+    # PATANJALI's single 09:24 run appearing as NINE. A trader exiting when the
+    # badge dropped was shaken out mid-move (LICHSGFIN, badge alive 90 seconds).
+    changes = _dip_series()
+    ranks = [[600 + i * 0.5, 5] for i in range(len(changes))]
+    hard = run_episodes("STROBE", ranks, changes, sustain_min=0)
+    held = run_episodes("STROBE", ranks, changes, sustain_min=5)
+    assert len(hard) > len(held), f"sustain must merge the dip: hard={len(hard)} held={len(held)}"
+    assert len(held) == 1, f"one run should be one badge, got {len(held)}"
+
+
+def test_sustain_reports_itself_and_expires():
+    # The grace must be visible to a consumer, and must not last forever.
+    changes = _dip_series()
+    during = compute_run(changes[:13], sustain_min=5)
+    assert during is not None and during.is_clean and during.sustained, (
+        "a dip inside the window stays badged, and says it is on grace"
+    )
+    assert compute_run(changes[:13], sustain_min=0).is_clean is False, (
+        "with no grace the same dip drops the badge"
+    )
+    # Far enough past the last clean reading, the grace runs out.
+    stale = [[changes[12][0] + 60, 2.35]]
+    assert compute_run(changes[:13] + stale, sustain_min=5).sustained is False
+
+
+def test_sustain_never_invents_a_badge_for_a_run_that_was_never_clean():
+    # Grace extends a real run; it must not manufacture one. A series that never
+    # passes the clean test must stay unbadged at any sustain setting.
+    values = [0.0, 0.1, 0.0, 0.1, 0.0, 0.1, 0.0, 0.1, 0.0, 0.1, 0.0, 0.1]
+    changes = [[600 + i * 0.5, v] for i, v in enumerate(values)]
+    assert compute_run(changes, sustain_min=60) is not None
+    assert compute_run(changes, sustain_min=60).is_clean is False
