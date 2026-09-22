@@ -230,15 +230,34 @@ def process_zerodha_csv(path):
     # See mapping/mcx_contract_size.py for both halves.
     is_mcx = df['exchange'] == 'MCX'
     if is_mcx.any():
-        # na_action skips null names outright. get_contract_size handles
-        # them too, but a blank name is 'unknown underlying', not an input
-        # worth a lookup -- Kite ships thousands of them on other segments.
-        sizes = df.loc[is_mcx, 'name'].map(get_contract_size, na_action='ignore')
+        # Sized per row, not per root. MCX revises contract sizes, and the old
+        # and new sizes trade side by side until the last pre-revision contract
+        # expires -- MCXBULLDEX is 30 for Sep/Oct 2026 and 15 from Nov 2026.
+        # Only the expiry on the row can tell those apart.
+        #
+        # `expiry` is already formatted to '%d-%b-%y' by this point; coerce
+        # parses it back and leaves blanks (all the non-derivative rows) as NaT,
+        # which resolves to the unrevised size.
+        expiries = pd.to_datetime(
+            df.loc[is_mcx, 'expiry'], format='%d-%b-%y', errors='coerce'
+        )
+        sizes = pd.Series(
+            [
+                # A blank name is 'unknown underlying', not an input worth a
+                # lookup -- Kite ships thousands of them on other segments.
+                None if pd.isna(name) else get_contract_size(
+                    name, None if pd.isna(exp) else exp.date()
+                )
+                for name, exp in zip(df.loc[is_mcx, 'name'], expiries, strict=True)
+            ],
+            index=df.index[is_mcx],
+            dtype='float64',
+        )
         # An unmapped underlying keeps Kite's 1, which is what shipped before
         # this table existed: orders still size correctly in contracts, they
         # just do not read like the other brokers. A wrong lot is far worse
         # than an inconsistent one, so it is never guessed -- it is logged.
-        df.loc[is_mcx, 'lotsize'] = sizes.fillna(df.loc[is_mcx, 'lotsize']).astype(int)
+        df.loc[is_mcx, 'lotsize'] = sizes.fillna(df.loc[is_mcx, 'lotsize']).astype('int64')
         unmapped = sorted(df.loc[is_mcx, 'name'][sizes.isna()].dropna().unique())
         logger.info(
             f"MCX lot sizes applied to {int(sizes.notna().sum())} of {int(is_mcx.sum())} rows"

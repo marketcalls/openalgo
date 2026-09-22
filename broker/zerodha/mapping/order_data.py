@@ -1,6 +1,10 @@
 import json
 
-from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity
+from broker.zerodha.mapping.mcx_contract_size import (
+    from_kite_quantity,
+    price_multiplier,
+    units_per_contract,
+)
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
@@ -191,6 +195,18 @@ def map_trade_data(trade_data):
     return map_order_data(trade_data)
 
 
+def _trade_value(trade):
+    """Rupee value of a trade. Identical to quantity * price outside MCX."""
+    symbol = trade.get("symbol") or trade.get("tradingsymbol")
+    exchange = trade.get("exchange", "")
+    quantity = _to_float(trade.get("quantity", 0))
+    price = _to_float(trade.get("average_price", 0.0))
+
+    lot = units_per_contract(symbol, exchange)
+    contracts = quantity / lot if lot else quantity
+    return contracts * price_multiplier(symbol, exchange) * price
+
+
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
@@ -201,7 +217,12 @@ def transform_tradebook_data(tradebook_data):
             "action": trade.get("transaction_type", ""),
             "quantity": trade.get("quantity", 0),
             "average_price": trade.get("average_price", 0.0),
-            "trade_value": trade.get("quantity", 0) * trade.get("average_price", 0.0),
+            # Quantity times price only values a trade where the instrument is
+            # quoted in the unit it trades in. On MCX the gold family and the
+            # base metals are not: GOLDGUINEA is 8 grams quoted per 8 grams, so
+            # its 8 units times its price counts the contract eight times over.
+            # Value the contracts instead, each by its quotation multiplier.
+            "trade_value": _trade_value(trade),
             "orderid": trade.get("order_id", ""),
             # Kite's own docs (kite.trade/docs/connect/v3/orders/) document
             # three separate timestamps on a trade: order_timestamp ("when

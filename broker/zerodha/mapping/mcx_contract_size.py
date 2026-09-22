@@ -58,13 +58,18 @@ verbatim. Cross-checked against Angel One's scrip master, which agrees on 27 of
 the 29 rows; the exceptions are the index derivatives MCXBULLDEX and MCXMETLDEX,
 which Angel reports as 1 and the calculator as 30 and 40.
 
-Known gap: CARDAMOM has live futures on MCX (Angel reports 100 KGS) but is
-absent from the scrape, so it resolves to None here rather than being guessed.
-An unmapped underlying converts by a factor of 1, i.e. it keeps the
+CARDAMOM is absent from that scrape and is sourced from Angel One instead,
+which reports 100 on every live expiry. Every other row was verified against
+Angel's master as well, and after the MCXBULLDEX revision below the two agree
+on all 30.
+
+An underlying in neither source converts by a factor of 1, i.e. it keeps the
 pass-through behaviour that predates this module.
 """
 
 from __future__ import annotations
+
+from datetime import date
 
 #: Underlying root -> units of the commodity in one contract.
 #:
@@ -74,6 +79,12 @@ from __future__ import annotations
 MCX_CONTRACT_SIZES: dict[str, int] = {
     "ALUMINI": 1,
     "ALUMINIUM": 5,
+    # Absent from the Zerodha calculator scrape; taken from Angel One's scrip
+    # master, which carries 100 on all five live expiries. Sourcing it there
+    # rather than leaving it unmapped is the same cross-check the other 29 rows
+    # already passed, and it is what stops one lot of CARDAMOM meaning 100
+    # contracts on Zerodha and one on Angel.
+    "CARDAMOM": 100,
     "COPPER": 2500,
     "COTTON": 25,
     "COTTONOIL": 5,
@@ -103,6 +114,15 @@ MCX_CONTRACT_SIZES: dict[str, int] = {
     "ZINCMINI": 1,
 }
 
+#: Roots whose contract size MCX has revised, as (first expiry on the new size,
+#: new size), ascending. A single number per root is not enough: MCX halved
+#: MCXBULLDEX from the November 2026 contract, so September and October 2026
+#: trade at 30 while November and December trade at 15, all live at once.
+#: Confirmed against Angel One's scrip master, which carries both.
+MCX_SIZE_REVISIONS: dict[str, tuple[tuple[date, int], ...]] = {
+    "MCXBULLDEX": ((date(2026, 11, 1), 15),),
+}
+
 #: Roots longest-first, so prefix matching resolves the specific contract before
 #: the general one. "SILVERMIC26SEPFUT" must not match "SILVER", and
 #: "CRUDEOILM26SEPFUT" must not match "CRUDEOIL" -- their sizes differ 30x and
@@ -112,17 +132,104 @@ _ROOTS_LONGEST_FIRST: tuple[tuple[str, int], ...] = tuple(
 )
 
 
+#: Underlying root -> units of the QUOTATION basis in one contract, where that
+#: differs from the trading unit above. This is the number a price is multiplied
+#: by to value one contract, and it is NOT the contract size:
+#:
+#:     GOLD        traded in 1 kg,   quoted per 10 g   -> 100, lot size 1
+#:     GOLDM       traded in 100 g,  quoted per 10 g   -> 10,  lot size 100
+#:     GOLDGUINEA  traded in 8 g,    quoted per 8 g    -> 1,   lot size 8
+#:     ZINC        traded in 5 MT,   quoted per kg     -> 5000, lot size 5
+#:
+#: A root absent here quotes in the unit it trades in, so its lot size already
+#: is the multiplier -- CRUDEOIL is 100 barrels quoted per barrel, SILVER is
+#: 30 kg quoted per kg. Only the gold family, the base metals and three
+#: agricultural contracts diverge, and only those are listed.
+#:
+#: Every entry is `contract size / quotation unit`, written out so the number
+#: can be checked against an MCX contract specification without deriving it
+#: again. Both halves are stated because the trap here is a comment that
+#: describes a different contract from the one the number came from: a reader
+#: who trusts the prose over the value talks themselves out of a correct
+#: multiplier.
+#:
+#: Used for DISPLAY VALUATION ONLY. It never sizes an order. For live position
+#: P&L, prefer Kite's own `multiplier` field, which is authoritative and arrives
+#: with the positionbook; this table exists for the tradebook, where Kite sends
+#: no multiplier of its own.
+MCX_QUOTATION_MULTIPLIERS: dict[str, int] = {
+    "GOLD": 100,  # 1 kg / 10 g
+    "GOLDM": 10,  # 100 g / 10 g
+    "GOLDGUINEA": 1,  # 8 g / 8 g
+    "GOLDTEN": 1,  # 10 g / 10 g
+    "SILVER100": 10,  # 100 g / 10 g
+    "ZINC": 5000,  # 5 MT / kg
+    "ZINCMINI": 1000,  # 1 MT / kg
+    "LEAD": 5000,  # 5 MT / kg
+    "LEADMINI": 1000,  # 1 MT / kg
+    "ALUMINIUM": 5000,  # 5 MT / kg
+    "ALUMINI": 1000,  # 1 MT / kg
+    "KAPAS": 200,  # 4,000 kg / 20 kg
+    "COTTONOIL": 500,  # 5,000 kg / 10 kg
+}
+
+
+def price_multiplier(symbol: str | None, exchange: str | None) -> int:
+    """What one contract's price must be multiplied by to value it in rupees.
+
+    Returns 1 off MCX, so a non-MCX quantity times its price is unchanged.
+
+    The underlying is resolved in full before the multiplier is looked up. A
+    prefix match against this table alone would read GOLDPETAL as GOLD and
+    value a 1 gram contract as though it were a kilo -- the same collision the
+    lot-size table is ordered longest-first to avoid, which is why both now go
+    through one resolver.
+    """
+    root = _underlying_root(symbol, exchange)
+    if root is None:
+        return 1
+    multiplier = MCX_QUOTATION_MULTIPLIERS.get(root)
+    if multiplier is not None:
+        return multiplier
+    # Quoted in the unit it trades in: the lot size is the multiplier.
+    return units_per_contract(symbol, exchange)
+
+
+def _underlying_root(symbol: str | None, exchange: str | None) -> str | None:
+    """The full MCX underlying a symbol belongs to, or None.
+
+    Resolved against the complete root list longest-first, so GOLDPETAL wins
+    over GOLD and SILVERMIC over SILVER.
+    """
+    if not isinstance(symbol, str) or not symbol:
+        return None
+    if not isinstance(exchange, str) or exchange.strip().upper() != "MCX":
+        return None
+    text = symbol.strip().upper()
+    for root, _size in _ROOTS_LONGEST_FIRST:
+        if text.startswith(root):
+            return root
+    return None
+
+
 class McxQuantityError(ValueError):
     """A quantity cannot be expressed as a whole number of MCX contracts."""
 
 
-def get_contract_size(underlying: str | None) -> int | None:
+def get_contract_size(underlying: str | None, expiry: date | None = None) -> int | None:
     """Units of the commodity in one contract, or None if unknown.
 
     Takes an exact underlying root, as found in the ``name`` column of Kite's
     MCX dump. Unknown is returned rather than a default of 1 on purpose: 1 is a
     real lot size here (GOLD is 1 KG, SILVERMIC is 1 KG), so a caller cannot
     otherwise tell "one unit per contract" from "we have no idea".
+
+    Args:
+        expiry: the contract's expiry. Required to size a root that MCX has
+            revised, since its old and new sizes are both live at once. Without
+            it the pre-revision size is returned, which is right for the near
+            months and wrong for the far ones -- so the master contract, which
+            has the expiry on every row, always passes it.
 
     Anything that is not a string is unknown. The type check is not decoration:
     Kite ships rows with a blank ``name`` (8,000-odd of them on NSE, BSE and
@@ -132,7 +239,48 @@ def get_contract_size(underlying: str | None) -> int | None:
     """
     if not isinstance(underlying, str):
         return None
-    return MCX_CONTRACT_SIZES.get(underlying.strip().upper())
+    root = underlying.strip().upper()
+    size = MCX_CONTRACT_SIZES.get(root)
+    if size is None:
+        return None
+    if expiry is not None:
+        for effective_from, revised in MCX_SIZE_REVISIONS.get(root, ()):
+            if expiry >= effective_from:
+                size = revised
+    return size
+
+
+def _master_contract_lot_size(symbol: str, exchange: str) -> int | None:
+    """The lot size the master contract holds for this exact contract.
+
+    This is the authoritative factor, and not merely a better one. OpenAlgo
+    computes an order as ``lots * symtoken.lotsize`` and this module divides
+    that back down to contracts, so anything other than the same number turns
+    a correct request into a wrong order. Reading the row also makes every
+    expiry right for free, since each contract is its own row -- no symbol
+    parsing, and no second place to update when MCX revises a size.
+
+    Returns None when the lookup cannot be made (no database, no app context,
+    an unseeded table), so the caller falls back to the static table.
+    """
+    try:
+        from database.token_db import get_oa_symbol
+        from database.token_db_enhanced import get_symbol_info
+
+        info = get_symbol_info(symbol, exchange)
+        if info is None:
+            # Inbound call sites hold Kite's tradingsymbol, which is not what
+            # symtoken is keyed on. One translation covers both directions.
+            oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+            if oa_symbol and oa_symbol != symbol:
+                info = get_symbol_info(oa_symbol, exchange)
+        lot_size = getattr(info, "lotsize", None)
+        if lot_size and int(lot_size) > 0:
+            return int(lot_size)
+    except Exception:
+        # Never let a lookup failure break an order path; the table still answers.
+        pass
+    return None
 
 
 def units_per_contract(symbol: str | None, exchange: str | None) -> int:
@@ -152,10 +300,42 @@ def units_per_contract(symbol: str | None, exchange: str | None) -> int:
         return 1
     if not isinstance(exchange, str) or exchange.strip().upper() != "MCX":
         return 1
+
+    # The master contract row wins: it is per contract, so it is already right
+    # for a root whose size differs by expiry, and it is the same number the
+    # quantity was built from.
+    return _resolve_size(symbol, exchange) or 1
+
+
+def _resolve_size(symbol: str | None, exchange: str | None) -> int | None:
+    """The conversion factor, or None when it genuinely cannot be established.
+
+    None is returned only for an underlying whose size MCX has revised, when
+    the master contract row is unavailable. The static table is keyed by root
+    alone, and a root under revision has two live sizes at once -- MCXBULLDEX
+    is 30 into October 2026 and 15 from November -- so the table cannot answer
+    without an expiry, and the symbol does not reliably carry one: Kite writes
+    MCXBULLDEX26NOV30000CE (year, month, strike) where OpenAlgo writes
+    MCXBULLDEX27NOV2630000CE (day, month, year, strike), and the two cannot be
+    told apart by pattern.
+
+    Guessing the pre-revision size sends half the order or twice it, so the
+    callers decide: an outbound conversion refuses, an inbound one passes the
+    quantity through unscaled.
+    """
+    if not isinstance(symbol, str) or not symbol:
+        return 1
+    if not isinstance(exchange, str) or exchange.strip().upper() != "MCX":
+        return 1
+
+    from_master = _master_contract_lot_size(symbol, exchange)
+    if from_master is not None:
+        return from_master
+
     text = symbol.strip().upper()
     for root, size in _ROOTS_LONGEST_FIRST:
         if text.startswith(root):
-            return size
+            return None if root in MCX_SIZE_REVISIONS else size
     return 1
 
 
@@ -176,7 +356,13 @@ def to_kite_quantity(
             contract silently halves the order, and rounding it up doubles it.
     """
     qty = int(quantity)
-    size = units_per_contract(symbol, exchange)
+    size = _resolve_size(symbol, exchange)
+    if size is None:
+        raise McxQuantityError(
+            f"Cannot size {symbol}: MCX has revised its contract size and the "
+            f"master contract has no row for this expiry. Re-download the master "
+            f"contract, then retry."
+        )
     if size == 1:
         return qty
     contracts, remainder = divmod(abs(qty), size)
