@@ -35,8 +35,20 @@ def _create_real_lock(self) -> None:
 
     Patched on the class so it also covers handlers this project does not
     create: gunicorn's, Flask's, and any third-party library's.
+
+    The lock is also registered for re-initialisation after ``fork()``, as
+    CPython's own ``createLock`` does. Without that, a child forked while
+    another thread was mid-emit (``subprocess`` with ``preexec_fn`` forks, and
+    under gthread many threads log at once) inherits the handler lock held by
+    a thread that does not exist in the child, and deadlocks on its first log
+    line. The registration helper is private to ``logging``, so its absence
+    is tolerated.
     """
     self.lock = _real_threading.RLock()
+    try:
+        logging._register_at_fork_reinit_lock(self)
+    except AttributeError:
+        pass
 
 
 logging.Handler.createLock = _create_real_lock
