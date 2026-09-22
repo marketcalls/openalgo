@@ -16,7 +16,9 @@ import pytest
 
 from openscript_host.openscript_runner import (
     CATCHUP_SECONDS,
-    RETRY_SECONDS,
+    RETRY_LATER,
+    RETRY_SOON,
+    RETRY_SOON_WINDOW,
     SETTLE_SECONDS,
     interval_seconds,
     next_wake,
@@ -78,9 +80,11 @@ def test_a_wake_just_before_the_settle_point_waits_for_it():
     lands on a settle point at all: the alignment silently never happens and
     every order is as late as it was before.
     """
-    now = float(1_000_000 * MINUTE + 1)
+    # Just inside the settle offset, whatever that offset happens to be, so the
+    # case is about the rule and not about the number.
+    now = float(1_000_000 * MINUTE) + SETTLE_SECONDS / 2
 
-    assert next_wake(now, MINUTE, POLL, None) == pytest.approx(SETTLE_SECONDS - 1)
+    assert next_wake(now, MINUTE, POLL, None) == pytest.approx(SETTLE_SECONDS / 2)
 
 
 def test_it_never_sleeps_past_the_ordinary_cadence():
@@ -136,14 +140,36 @@ def test_every_bar_gets_a_wake_just_after_it_closes():
 
 
 def test_a_late_feed_is_retried_quickly_rather_than_waited_out():
-    """Catches a whole interval lost to a bar published a second late.
+    """Catches a whole interval lost to a bar published a moment late.
 
     The wake is deliberately soon after the close, so the bar is often not there
     on the first look. Falling back to the ordinary cadence then would give away
-    most of what this change buys.
+    most of what this buys, and every tenth of a second of it is slippage on the
+    order about to go out.
     """
     now = float(1_000_000 * MINUTE) + SETTLE_SECONDS
-    assert next_wake(now, MINUTE, POLL, waiting_since=now) <= RETRY_SECONDS
+    assert next_wake(now, MINUTE, POLL, waiting_since=now) <= RETRY_SOON
+
+
+def test_the_retry_slows_down_once_the_bar_is_properly_late():
+    """A fetch answering with nothing is one this run pays for and learns
+    nothing from, so asking four times a second stops being worth it."""
+    began = float(1_000_000 * MINUTE)
+    later = began + RETRY_SOON_WINDOW + 1
+
+    assert next_wake(later, MINUTE, POLL, waiting_since=began) == pytest.approx(RETRY_LATER)
+
+
+def test_the_first_look_is_soon_enough_to_matter():
+    """A guard on the number itself.
+
+    Two seconds of price movement on a liquid instrument is a real cost against
+    a fill the backtest priced at the bar's open. It cannot be zero either: a
+    poll reads the whole history window and the feed does not publish a closed
+    bar on the instant, so looking at the exact boundary usually costs a full
+    fetch to learn the bar is not there yet.
+    """
+    assert 0 < SETTLE_SECONDS <= 0.5
 
 
 def test_the_quick_retry_gives_up_rather_than_spinning():
@@ -155,7 +181,7 @@ def test_the_quick_retry_gives_up_rather_than_spinning():
     began = float(1_000_000 * MINUTE)
     late = began + CATCHUP_SECONDS + 1
 
-    assert next_wake(late, MINUTE, POLL, waiting_since=began) > RETRY_SECONDS
+    assert next_wake(late, MINUTE, POLL, waiting_since=began) > RETRY_LATER
 
 
 def test_the_retry_still_respects_the_cadence_ceiling():

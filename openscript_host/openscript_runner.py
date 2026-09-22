@@ -391,15 +391,34 @@ class Candle:
 
 #: How long after a bar closes to look for it, and how often to look again.
 #:
-#: A feed does not publish a closed bar the instant it closes, so a poll fired
-#: exactly on the boundary usually finds nothing and the run then waits out the
-#: whole ordinary cadence before looking again. Two seconds is the first look,
-#: and a miss is retried every two seconds for half a minute, which is the
-#: window a minute bar can be late by and still be worth waiting for rather than
-#: acting on the bar after it.
-SETTLE_SECONDS = 2.0
-RETRY_SECONDS = 2.0
-CATCHUP_SECONDS = 30.0
+#: **Every tenth of a second here is slippage**, because the order this run is
+#: about to send was decided at a price that has already moved on. So the first
+#: look is as soon after the close as is worth trying, and a miss is retried
+#: quickly rather than waited out.
+#:
+#: **What it cannot be is zero, and the reason is not the clock.** A poll reads
+#: the whole history window, which is days of bars, and the feed does not
+#: publish a closed bar the instant it closes. Looking at the exact boundary
+#: usually finds the bar still missing and costs a full fetch to learn it. A
+#: quarter of a second is the first look; a miss is retried four times a second
+#: while it is plausibly about to arrive, then more slowly, because a fetch that
+#: is answering with nothing is one this run is paying for and learning nothing
+#: from.
+#:
+#: **The floor under all of this is the fetch itself**, and it is not removed by
+#: looking sooner. A run that needs to act inside that floor wants the tick
+#: stream this platform already carries rather than a history poll, which is a
+#: change to how a run learns a bar has closed and not to when it looks.
+SETTLE_SECONDS = 0.25
+#: How often to look again while a bar that should be there is not, by how long
+#: this run has been waiting for it.
+RETRY_SOON = 0.25
+RETRY_SOON_WINDOW = 3.0
+RETRY_LATER = 1.0
+#: The most this will keep asking for a bar before going back to the ordinary
+#: cadence. A halted instrument must not be asked for four times a second all
+#: day.
+CATCHUP_SECONDS = 20.0
 
 
 def interval_seconds(interval: str) -> int:
@@ -447,8 +466,15 @@ def next_wake(now: float, bar_seconds: int, poll_seconds: float, waiting_since: 
     """
     ordinary = now + poll_seconds
 
-    if bar_seconds > 0 and waiting_since is not None and now - waiting_since < CATCHUP_SECONDS:
-        return min(ordinary, now + RETRY_SECONDS) - now
+    if bar_seconds > 0 and waiting_since is not None:
+        waited = now - waiting_since
+        if waited < CATCHUP_SECONDS:
+            # Quickly while the bar is plausibly about to arrive, then slowly.
+            # A fetch answering with nothing is one this run pays for and learns
+            # nothing from, so the rate falls away as the wait stops being about
+            # a feed that is a moment behind.
+            soon = RETRY_SOON if waited < RETRY_SOON_WINDOW else RETRY_LATER
+            return min(ordinary, now + soon) - now
 
     if bar_seconds <= 0:
         return poll_seconds
@@ -1679,8 +1705,9 @@ def main(argv=None) -> int:
     bar_seconds = interval_seconds(options.interval)
     if bar_seconds > 0:
         say(
-            f"Looking for each closed bar about {int(SETTLE_SECONDS)} seconds after it closes, "
-            f"so an order goes out on the bar it was decided on."
+            f"Looking for each closed bar {SETTLE_SECONDS:g} seconds after it closes, and again "
+            f"every {RETRY_SOON:g} seconds until it is there, so an order goes out on the bar it "
+            "was decided on."
         )
     #: When this run last crossed a bar boundary without the bar behind it being
     #: there yet. None while nothing is being waited for.
@@ -1705,7 +1732,7 @@ def main(argv=None) -> int:
         if len(session._times) > known:
             # The bar this run was waiting for arrived and has been executed.
             waiting_since = None
-        elif bar_seconds > 0 and waiting_since is None and now % bar_seconds < SETTLE_SECONDS * 2:
+        elif bar_seconds > 0 and waiting_since is None and now % bar_seconds < max(1.0, SETTLE_SECONDS * 2):
             # A boundary has just passed and the bar behind it is not here yet.
             waiting_since = now
 
