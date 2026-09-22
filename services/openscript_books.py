@@ -71,16 +71,17 @@ def orderbook(script: str, api_key: str, mode: str) -> dict[str, Any]:
         if not ok:
             return _as_error(response, "Could not read the orderbook")
 
-        payload, data = _envelope(response)
-        orders = _mine(data.get("orders"), script)
-        data["orders"] = orders
-        if "statistics" in data:
+        payload = _envelope(response)
+        data = _data_of(response)
+        found, under = _rows_and_shape(data, "orders")
+        orders = _mine(found, script)
+        _narrowed(payload, data, orders, under)
+        if isinstance(payload.get("data"), dict) and "statistics" in payload["data"]:
             # A global statistic over a filtered list is simply wrong, so what
             # cannot be recounted here is dropped rather than shown as this
             # strategy's. The rows are the answer; a total that counts somebody
             # else's orders is not.
-            data["statistics"] = _statistics(orders)
-        payload["data"] = data
+            payload["data"]["statistics"] = _statistics(orders)
         return payload
     except Exception:
         logger.exception("Could not build the orderbook for %s", script)
@@ -99,9 +100,10 @@ def tradebook(script: str, api_key: str, mode: str) -> dict[str, Any]:
         if not ok:
             return _as_error(response, "Could not read the tradebook")
 
-        payload, data = _envelope(response)
-        data["trades"] = _mine(data.get("trades"), script)
-        payload["data"] = data
+        payload = _envelope(response)
+        data = _data_of(response)
+        found, under = _rows_and_shape(data, "trades")
+        _narrowed(payload, data, _mine(found, script), under)
         return payload
     except Exception:
         logger.exception("Could not build the tradebook for %s", script)
@@ -125,24 +127,25 @@ def positions(script: str, api_key: str, mode: str) -> dict[str, Any]:
         ok, orders = _fetch("orderbook", mode, api_key)
         if not ok:
             return _as_error(orders, "Could not read the positions")
+        placed, _ = _rows_and_shape(_data_of(orders), "orders")
         traded = {
             (_text(row.get("symbol")), _text(row.get("exchange")))
-            for row in _mine(_rows(_data_of(orders).get("orders")), script)
+            for row in _mine(placed, script)
         }
 
         ok, response = _fetch("positions", mode, api_key)
         if not ok:
             return _as_error(response, "Could not read the positions")
 
-        payload, data = _envelope(response)
-        for key in ("positions", "positionbook", "data"):
-            if key in data and isinstance(data.get(key), list):
-                data[key] = [
-                    row
-                    for row in _rows(data.get(key))
-                    if (_text(row.get("symbol")), _text(row.get("exchange"))) in traded
-                ]
-        payload["data"] = data
+        payload = _envelope(response)
+        data = _data_of(response)
+        found, under = _rows_and_shape(data, "positions")
+        kept = [
+            row
+            for row in found
+            if (_text(row.get("symbol")), _text(row.get("exchange"))) in traded
+        ]
+        _narrowed(payload, data, kept, under)
         return payload
     except Exception:
         logger.exception("Could not build the positions for %s", script)
@@ -208,20 +211,66 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _data_of(response: Any) -> dict[str, Any]:
-    data = response.get("data") if isinstance(response, dict) else None
-    return data if isinstance(data, dict) else {}
+def _data_of(response: Any) -> Any:
+    """Whatever the service put under ``data``, whatever shape that is."""
+    return response.get("data") if isinstance(response, dict) else None
 
 
-def _envelope(response: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+#: Where a book's rows sit inside its ``data``, tried in order.
+#:
+#: **The three services do not agree, and this is the whole reason this exists.**
+#: The orderbook answers ``data`` as an object with the rows under ``orders``
+#: beside a ``statistics`` block. The tradebook and the positionbook answer
+#: ``data`` as the list of rows itself. Reading every one of them as an object
+#: is how two of these three books returned nothing at all while reporting
+#: success, which reads on screen as a strategy that has not traded.
+_ROW_KEYS = ("orders", "trades", "positions", "positionbook", "data")
+
+
+def _rows_and_shape(data: Any, key: str) -> tuple[list[dict[str, Any]], str | None]:
+    """The rows a book answered, and the key they were under, or ``None`` for a bare list.
+
+    The second half is what lets the filtered rows be written back the way they
+    arrived. A book whose rows were a bare list has to answer a bare list: the
+    page that renders the global positionbook reads it that way, and handing it
+    an object instead would be this narrowing quietly changing the shape of a
+    book as well as its contents.
+    """
+    if isinstance(data, list):
+        return _rows(data), None
+    if isinstance(data, dict):
+        # The book's own key first, so a response that carries more than one
+        # list is read for the one that was asked for.
+        for name in (key, *_ROW_KEYS):
+            if isinstance(data.get(name), list):
+                return _rows(data[name]), name
+    return [], None
+
+
+def _envelope(response: Any) -> dict[str, Any]:
     """The service's own envelope, copied before anything is written into it.
 
     Copied because the service's dict is not ours: a book service may hold or
     cache what it returned, and narrowing it in place would narrow the global
     orderbook for whoever reads it next.
+
+    A status is always present. Every reader of these answers branches on it
+    first, and an envelope without one is read as neither a success nor a
+    failure: the page shows no rows and no reason for there being none.
     """
-    payload = dict(response) if isinstance(response, dict) else {"status": "success"}
-    return payload, dict(_data_of(response))
+    payload = dict(response) if isinstance(response, dict) else {}
+    payload.setdefault("status", "success")
+    return payload
+
+
+def _narrowed(payload: dict[str, Any], data: Any, rows: list[dict[str, Any]], under: str | None) -> None:
+    """Write the kept rows back into the envelope in the shape they arrived in."""
+    if under is None:
+        payload["data"] = rows
+        return
+    copied = dict(data) if isinstance(data, dict) else {}
+    copied[under] = rows
+    payload["data"] = copied
 
 
 def _statistics(orders: list[dict[str, Any]]) -> dict[str, int]:

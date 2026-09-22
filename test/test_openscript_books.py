@@ -89,15 +89,24 @@ class TestStatistics:
 
 
 class TestTheEnvelope:
-    def test_the_service_own_dict_is_never_narrowed_in_place(self):
+    def test_the_service_own_dict_is_never_narrowed_in_place(self, monkeypatch):
         # Catches the global book being mutated. A book service may hold or
         # cache what it returned, and narrowing it in place would narrow the
         # platform's orderbook for whoever read it next.
+        #
+        # Through the public function rather than the envelope helper. What
+        # matters is that a whole read leaves the service's own answer alone,
+        # and a helper tested on its own cannot say whether the caller then
+        # wrote into the original anyway.
         original = {"status": "success", "data": {"orders": [order("1", MINE), order("2", "other")]}}
-        payload, data = books._envelope(original)
-        data["orders"] = []
+        monkeypatch.setattr(books, "_fetch", lambda *a: (True, original))
+        monkeypatch.setattr(books, "tag_for", lambda script: MINE)
+
+        answered = books.orderbook("probe.oscript", "key", "sandbox")
+
         assert len(original["data"]["orders"]) == 2
-        assert payload is not original
+        assert answered is not original
+        assert answered["data"] is not original["data"]
 
     def test_a_service_refusal_is_passed_through_in_its_own_words(self):
         # Catches a message replaced by a generic one. The book services refuse
