@@ -84,6 +84,12 @@ interface Props {
    * what it did, which is the only thing "apply" can honestly mean for a script
    * that trades. Cleared through `onRan` so the same file can be sent twice.
    */
+  /**
+   * Bumped by the page when what `getChartContext` would answer has changed.
+   *
+   * The chart is not a value this can depend on, so this stands in for one.
+   */
+  chartRevision?: number
   runFile?: string | null
   onRan?(): void
 }
@@ -158,7 +164,14 @@ function Figure({
   )
 }
 
-export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = null, onRan }: Props) {
+export function BacktestPanel({
+  apiKey,
+  getChartContext,
+  onMarkChart,
+  chartRevision = 0,
+  runFile = null,
+  onRan,
+}: Props) {
   const [marked, setMarked] = useState<number | null>(null)
   /** What the trader typed into an input box, by key. Only what they changed. */
   const [edited, setEdited] = useState<Record<string, string>>({})
@@ -221,27 +234,29 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
     }
   }, [])
 
-  // The chart is not ours and does not tell us when it changes, so the header
-  // is refreshed on a timer. One second is below noticing and costs a property
-  // read. The run does not rely on this: it reads its own.
+  // **The chart is not a React value, so the page says when it has changed.**
+  // It is a library holding its own state and there is nothing here to depend
+  // on, which is why this used to be read on a one second timer: a question
+  // asked constantly and answered differently a few times a day.
+  //
+  // `chartRevision` is bumped by the page when the focused pane, its instrument
+  // or its timeframe changes, which is the whole of what this reads. The run
+  // does not rely on any of it: it reads its own, fresh, at the moment it
+  // starts.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the revision is the signal to re-read, not a value read here
   useEffect(() => {
-    const read = () => {
-      const now = getChartContext()
-      setTarget((held) =>
-        now &&
-        (held?.symbol !== now.symbol ||
-          held?.exchange !== now.exchange ||
-          held?.interval !== now.interval)
-          ? { symbol: now.symbol, exchange: now.exchange, interval: now.interval }
-          : now
-            ? held
-            : null
-      )
-    }
-    read()
-    const timer = window.setInterval(read, 1000)
-    return () => window.clearInterval(timer)
-  }, [getChartContext])
+    const now = getChartContext()
+    setTarget((held) =>
+      now &&
+      (held?.symbol !== now.symbol ||
+        held?.exchange !== now.exchange ||
+        held?.interval !== now.interval)
+        ? { symbol: now.symbol, exchange: now.exchange, interval: now.interval }
+        : now
+          ? held
+          : null
+    )
+  }, [getChartContext, chartRevision])
 
   useEffect(() => () => inflight.current?.abort(), [])
 

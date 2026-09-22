@@ -26,6 +26,7 @@ import {
   strategyPositions,
   strategyTradebook,
 } from '@/api/openscriptRunner'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn } from '@/lib/utils'
 
 type Tab = 'orders' | 'trades' | 'positions'
@@ -127,6 +128,32 @@ export function StrategyBooks({ file, revision = 0 }: Props) {
     void load(tab)
     return () => inflight.current?.abort()
   }, [load, tab, revision])
+
+  // **Read again when an order happens, rather than on a timer.** These books
+  // change for exactly one reason, an order moving, and the platform already
+  // says so: every surface that places one broadcasts it. A poll asks a
+  // question nobody has an answer to for minutes at a time and then misses the
+  // moment by up to its own interval, which on a book a trader is watching is
+  // the moment that mattered.
+  //
+  // The small delay is the hook's own and is the right shape: the event is sent
+  // when an order is accepted, and the book that records it is written a beat
+  // later, so reading on the instant of the event reads the book from before.
+  const reload = useCallback(() => {
+    void load(tab)
+  }, [load, tab])
+
+  useOrderEventRefresh(reload, {
+    events: [
+      'order_event',
+      'close_position_event',
+      'cancel_order_event',
+      'modify_order_event',
+      // Where orders go changes what book they are in, so the books are read
+      // again rather than left showing the other destination's.
+      'analyzer_update',
+    ],
+  })
 
   const columns = COLUMNS[tab]
 

@@ -250,6 +250,22 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * the panel does something sensible before any pane has been focused.
    */
   const [focusedPane, setFocusedPane] = useState('p0')
+  /**
+   * Bumped whenever what `readChartContext` would answer has changed.
+   *
+   * A panel acting on the chart needs its instrument and its timeframe, and the
+   * chart is not a React value: it is a library holding its own state, so there
+   * is nothing to depend on. The only way to notice a change was to read it on
+   * a timer, a question asked every second and answered differently a few times
+   * a day.
+   *
+   * Three things change the answer and all three are already known here: the
+   * focused pane, that pane's symbol, and its timeframe. A counter is enough,
+   * because the panels re-read the context themselves and only need telling
+   * that it is worth re-reading.
+   */
+  const [chartRevision, setChartRevision] = useState(0)
+  const noteChartChanged = useCallback(() => setChartRevision((at) => at + 1), [])
   const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
   const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
@@ -459,13 +475,22 @@ function TradingWorkspace({ account }: { account: string | null }) {
       setMagnet(t.drawStats().magnet)
       setStay(t.drawStats().stay)
     }
-    if (paneId) setFocusedPane(paneId)
+    if (paneId) {
+      setFocusedPane(paneId)
+      // The context follows the focused pane, so focusing another one changes
+      // the answer without any chart having changed.
+      noteChartChanged()
+    }
     if (t) setStats(t.drawStats())
-  }, [])
+  }, [noteChartChanged])
 
-  const noteSymbol = useCallback((paneId: string, key: string | null) => {
-    setPaneSymbols((prev) => (prev[paneId] === key ? prev : { ...prev, [paneId]: key }))
-  }, [])
+  const noteSymbol = useCallback(
+    (paneId: string, key: string | null) => {
+      setPaneSymbols((prev) => (prev[paneId] === key ? prev : { ...prev, [paneId]: key }))
+      noteChartChanged()
+    },
+    [noteChartChanged]
+  )
 
   /**
    * Load an instrument chosen in a side panel.
@@ -1296,6 +1321,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         onSymbolChange={(id, key) => {
                           if (!visibleGrid.current) noteSymbol(id, key)
                         }}
+                        onIntervalChange={() => {
+                          if (!visibleGrid.current) noteChartChanged()
+                        }}
                         onTerminalChange={noteTerminal}
                         onObjectsChange={(id, objects) => {
                           if (!visibleGrid.current) noteObjects(id, objects)
@@ -1340,6 +1368,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     onBeforeSourceChange={stopWorkspaceReplay}
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
+                    onIntervalChange={noteChartChanged}
                     onObjectsChange={noteObjects}
                     onOpenScriptSource={showScriptSource}
                     onAlertsReady={noteAlerts}
@@ -1432,6 +1461,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
               // is of the instrument and interval on the chart at the moment
               // Run is pressed, not of whatever this page last rendered with.
               getChartContext={readChartContext}
+              // Bumped when the focused pane, its instrument or its timeframe
+              // changes, so the panel re-reads the chart when there is something
+              // new to read rather than asking it every second.
+              chartRevision={chartRevision}
               // The same pane helper every panel uses: the focused one, else any
               // that is up. A run marks the chart it was a run of.
               onMarkChart={(markers) =>

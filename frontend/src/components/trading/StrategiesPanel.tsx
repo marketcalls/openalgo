@@ -45,6 +45,7 @@ import {
 } from '@/lib/trading/backtestInputs'
 import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
 import { type PositionSummary, summaryOf } from '@/lib/trading/strategyPosition'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useThemeStore } from '@/stores/themeStore'
 import { cn } from '@/lib/utils'
 import { StrategyBooks } from './StrategyBooks'
@@ -59,12 +60,18 @@ interface Props {
 /**
  * How often the list is refreshed.
  *
- * A run is started and stopped from here and by the scheduler, and a child can
- * also stop itself: a diagnostic, a refused order, the destination changing
- * underneath it. Nothing pushes that to the browser, so the panel asks. Four
- * seconds is under the time it takes to wonder and costs one small request.
+ * **It is a safety net and not the mechanism.** What a trader watches, the
+ * position and the books, arrives on the platform's own order events: an order
+ * moving is the only thing that changes either, and every surface that places
+ * one broadcasts it. This sweep exists for the one thing no event covers, a
+ * child that ended on its own, on a diagnostic or a refused order or the
+ * destination changing underneath it. Nothing pushes that to the browser.
+ *
+ * So it is slow on purpose. Fifteen seconds is well inside the time it takes to
+ * wonder whether something is still running, and it costs one small request in
+ * between events that are already doing the work.
  */
-const REFRESH_MS = 4000
+const REFRESH_MS = 15000
 
 const PRODUCTS = ['MIS', 'NRML', 'CNC'] as const
 
@@ -248,6 +255,30 @@ export function StrategiesPanel({ getChartContext }: Props) {
       window.clearInterval(timer)
     }
   }, [refresh])
+
+  // **An order moving is what changes a position, so that is what reads it
+  // again.** The timer above still runs and is deliberately slow: it is not how
+  // a position reaches this panel, it is the only thing that notices a run that
+  // stopped without being asked to. A child can end on its own, on a diagnostic
+  // or a refused order, and nothing tells the browser when it does. Between
+  // those two, everything a trader watches arrives on the event and the sweep
+  // is a safety net rather than the mechanism.
+  useOrderEventRefresh(
+    useCallback(() => {
+      void refresh()
+    }, [refresh]),
+    {
+      events: [
+        'order_event',
+        'close_position_event',
+        'cancel_order_event',
+        'modify_order_event',
+        // Where orders go decides which book a position is read from, so a
+        // change of destination is a change to what this panel is showing.
+        'analyzer_update',
+      ],
+    }
+  )
 
   // Only strategies can be run, so only strategies are listed.
   useEffect(() => {
