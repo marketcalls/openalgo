@@ -66,7 +66,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -76,6 +75,7 @@ import httpx
 
 from utils.logging import get_logger
 from utils.real_threading import Event, Lock, Thread, join
+from utils.runtime import original as _original_module
 
 logger = get_logger(__name__)
 
@@ -191,12 +191,7 @@ _MIN_POLL_SECONDS = 0.01
 # primitives. The poll thread is a real OS thread and has no business waking the
 # hub's timers; under eventlet `time.sleep` is the hub's, and using it here
 # would hand the poll loop's cadence to a scheduler it does not belong to.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _real_sleep = eventlet.patcher.original("time").sleep
-else:
-    _real_sleep = time.sleep
+_real_sleep = _original_module("time").sleep
 
 
 class ChatGptOAuthError(RuntimeError):

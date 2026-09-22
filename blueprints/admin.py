@@ -1264,9 +1264,11 @@ def _runtime_info():
         "process_uptime_seconds": None,
     }
     try:
-        import eventlet.patcher as _patcher
+        # Never imports eventlet: importing it just to ask would put it into
+        # sys.modules on a server that does not use it.
+        from utils.runtime import is_monkey_patched
 
-        info["eventlet_active"] = bool(_patcher.is_monkey_patched("socket"))
+        info["eventlet_active"] = is_monkey_patched("socket")
     except Exception:
         pass
     if info["eventlet_active"]:

@@ -7,28 +7,26 @@ import subprocess
 import sys
 import threading
 
+from utils import runtime as _runtime
 from utils.logging import get_logger, highlight_url
 
 from .server import main as websocket_main
 
-# Import the original threading module to run the asyncio event loop in a real
-# OS thread, bypassing eventlet's monkey-patching which turns threading.Thread
-# into green threads where asyncio.new_event_loop() cannot work.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _original_threading = eventlet.patcher.original("threading")
-else:
-    _original_threading = threading
+# The original threading module, to run the asyncio event loop in a real OS
+# thread, bypassing eventlet's monkey-patching which turns threading.Thread
+# into green threads where asyncio.new_event_loop() cannot work. Chosen by
+# whether eventlet patched this process, never by whether it was imported.
+_original_threading = _runtime.original("threading")
 
 
 def _eventlet_active() -> bool:
-    """True when eventlet has monkey-patched the stdlib (gunicorn worker)."""
-    try:
-        from eventlet.patcher import is_monkey_patched
-        return bool(is_monkey_patched("socket"))
-    except Exception:
-        return False
+    """True when eventlet has monkey-patched the stdlib (gunicorn worker).
+
+    Asks utils.runtime, which never imports eventlet: importing it here merely
+    to ask used to put it into sys.modules under the gthread worker, flipping
+    every later "eventlet in sys.modules" check in the process.
+    """
+    return _runtime.is_monkey_patched("socket")
 
 
 # Set the correct event loop policy for Windows to avoid ZeroMQ warnings

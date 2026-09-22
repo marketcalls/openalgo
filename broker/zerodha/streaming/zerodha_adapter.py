@@ -8,7 +8,6 @@ The key fixes are in the _handle_ticks method for proper topic generation.
 """
 import json
 import os
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -16,17 +15,17 @@ from typing import Any
 
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils import runtime as _runtime
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 # Import the WebSocket client
 from .zerodha_websocket import ZerodhaWebSocket
 
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+_real_threading = _runtime.original("threading")
 
 
 class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):

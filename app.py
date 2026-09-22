@@ -995,13 +995,13 @@ def setup_environment(app):
 
             # Auto-start Telegram bot if it was active (after DB tables exist)
             try:
-                import sys
+                from utils.runtime import is_monkey_patched
 
                 bot_config = get_bot_config()
                 if bot_config.get("is_active") and bot_config.get("bot_token"):
                     logger.debug("Auto-starting Telegram bot (background)...")
 
-                    if "eventlet" in sys.modules:
+                    if is_monkey_patched():
                         success, message = telegram_bot_service.initialize_bot_sync(
                             token=bot_config["bot_token"]
                         )
@@ -1050,6 +1050,14 @@ app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+# Under eventlet, start the green thread that runs calls real OS threads hand
+# to the hub (utils.real_threading.run_on_hub). This runs at import, on the
+# hub's own thread, which is what it must be started from. A no-op under the
+# gthread worker and the dev server, where nothing needs marshalling.
+from utils.real_threading import start_hub_worker
+
+start_hub_worker()
 
 # Restore caches from database in background (not needed until first trade/lookup)
 import threading

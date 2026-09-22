@@ -4,17 +4,15 @@ import asyncio
 import concurrent.futures
 import logging
 import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 
-# Import the original threading module to run the bot in a real OS thread,
-# bypassing eventlet's monkey-patching which causes event loop conflicts.
-if "eventlet" in sys.modules:
-    import eventlet
+from utils.runtime import is_monkey_patched as _is_monkey_patched
+from utils.runtime import original as _original_module
 
-    original_threading = eventlet.patcher.original("threading")
-else:
-    import threading as original_threading
+# The original threading module, to run the bot in a real OS thread, bypassing
+# eventlet's monkey-patching which causes event loop conflicts. Chosen by
+# whether eventlet patched this process, never by whether it was imported.
+original_threading = _original_module("threading")
 
 import base64
 import io
@@ -541,10 +539,8 @@ class TelegramBotService:
 
     def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
         """Synchronous initialization for eventlet environments"""
-        import sys
-
         # Check if we're in eventlet environment
-        if "eventlet" in sys.modules:
+        if _is_monkey_patched():
             logger.info("Using synchronous initialization for eventlet environment")
             # Use synchronous httpx to validate token
             from utils.httpx_client import get_httpx_client
@@ -594,10 +590,8 @@ class TelegramBotService:
 
     def _run_bot_in_thread(self):
         """Run bot in separate thread with its own isolated event loop"""
-        import sys
-
         # Check if eventlet is active
-        if "eventlet" in sys.modules:
+        if _is_monkey_patched():
             logger.info("Eventlet detected - using special handling for asyncio")
             # For eventlet, we need to be very careful with asyncio
             import asyncio

@@ -26,7 +26,6 @@ Protocol specifics vs Zerodha:
 import json
 import ssl
 import struct
-import sys
 import threading
 import time
 from collections import deque
@@ -40,12 +39,13 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
 
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+_real_threading = _runtime.original("threading")
 
 
 class ArrowWebSocket:
