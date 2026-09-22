@@ -3154,7 +3154,7 @@ requires-dist = [
     { name = "numpy", specifier = "==2.4.4" },
     { name = "openalgo", specifier = "==2.0.5" },
     { name = "opengreeks", specifier = ">=0.2.0" },
-    { name = "openscript", specifier = "==0.4.0" },
+    { name = "openscript", specifier = "==0.5.0" },
     { name = "openstatz", specifier = "==0.4.1" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "orjson", specifier = "==3.12.0" },
@@ -3264,11 +3264,11 @@ wheels = [
 
 [[package]]
 name = "openscript"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a9/54/939d2445ac8fba94c76aac625bd5eab916f5c2535ce9b39279e081e2003d/openscript-0.4.0.tar.gz", hash = "sha256:d1f78bfaa1a73093c09cd9d72a5445246f1ca9c03a7979107fe8f4d317cc7cc5", size = 346835, upload-time = "2026-09-22T05:08:46.732Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/68/75/19ecb92adeaf5d1769a023487edbec1920e607a5217283ad00d79af3ffdc/openscript-0.5.0.tar.gz", hash = "sha256:b9f06de8930f9c3da0c7c3caa227e510db2791967aea38815ac07a99d1dc4659", size = 346838, upload-time = "2026-09-22T13:08:21.854Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/5e/f1eeb8d803c2df1803f700af907adb840fe7babdadacb174b3a359799768/openscript-0.4.0-py3-none-any.whl", hash = "sha256:578fe12992e210bfdc9cf174e03556555d880a0638305cd9b4b83bcd7e0f7521", size = 260952, upload-time = "2026-09-22T05:08:45.102Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/11/18a88d57730d02c615b798af129df1c9fd4a835f6fe73fe61db1f522c8ee/openscript-0.5.0-py3-none-any.whl", hash = "sha256:5d9a40f3391a3286b0d88d5f7fbf5788fd63826eea6a1d345f8edc07c8a8bf24", size = 260954, upload-time = "2026-09-22T13:08:20.458Z" },
 ]
 
 [[package]]
