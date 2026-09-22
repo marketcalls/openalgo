@@ -49,14 +49,34 @@ registers its handler later in ``app.py`` and replaced it, so Ctrl+C stopped
 reaching that cleanup and the server stopped exiting at all. Stopping the proxy
 here restores it, at a point where the rest of the teardown still runs.
 
-**Production does not use this.** Under gunicorn the ``__main__`` block never
-runs; gunicorn manages worker lifecycle itself and installs its own handlers.
-This is for the dev server, which is what the issue is about.
+**The signal handlers are for the dev server only.** Under gunicorn the
+``__main__`` block never runs; gunicorn manages worker lifecycle itself and
+installs its own handlers, so :func:`install_signal_handlers` is never called
+there.
+
+**Under gunicorn the entry points are hooks, not signals.** The launcher's
+gunicorn hooks call :func:`begin_drain` when the worker is told to stop (so
+long-lived streams end inside the graceful window) and :func:`shutdown_runtime`
+from ``worker_exit`` and ``worker_int``. ``atexit`` stays registered where it
+was, as a backstop only: the gthread worker never reaches it while a pool
+thread is still streaming.
+
+Other modules add work to the teardown with :func:`register_shutdown_hook`.
+An *early* hook (stopping running strategies, say) runs before the steps
+below; a late one runs after them and before the session sweep. Each hook runs
+within its own time budget, and all of them together within
+``SHUTDOWN_BUDGET_S``, because a stop window has a hard end and a hook that
+hangs must not be the reason the ones after it never ran.
 """
 
 import signal
 import sys
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
+from utils import real_threading, stream_registry
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +86,26 @@ logger = get_logger(__name__)
 #: gone, and a user hammering Ctrl+C would be stalling the exit they are asking
 #: for.
 _shutdown_done = False
+
+#: Guards the check-and-set of ``_shutdown_done`` only, never the steps. Taken
+#: without blocking: a second caller (a gunicorn hook racing a signal, or a
+#: signal landing mid-teardown) returns at once rather than waiting.
+_shutdown_guard = real_threading.Lock()
+
+#: Everything registered hooks may spend together, in seconds.
+SHUTDOWN_BUDGET_S = 25.0
+
+
+@dataclass(frozen=True)
+class _Hook:
+    fn: Callable[[], None]
+    name: str
+    budget_s: float
+    early: bool
+
+
+_hooks: list[_Hook] = []
+_hooks_lock = threading.Lock()
 
 #: Guards against the reloader importing this twice and stacking handlers.
 _handlers_installed = False
@@ -161,6 +201,85 @@ def _stop_websocket_proxy() -> None:
         module.cleanup_websocket_server()
 
 
+def begin_drain() -> None:
+    """Tell long-lived streams to end. Safe to call from a signal handler.
+
+    One assignment: no lock, no I/O, no logging, nothing that can block or
+    raise. Idempotent. The launcher's gunicorn hooks call it when the worker
+    is asked to stop, so streams return inside the graceful window instead of
+    holding their threads until the worker is killed.
+    """
+    stream_registry.request_drain()
+
+
+def register_shutdown_hook(
+    fn: Callable[[], None],
+    *,
+    name: str,
+    budget_s: float = 20.0,
+    early: bool = False,
+) -> None:
+    """Add ``fn`` to what :func:`shutdown_runtime` runs.
+
+    Args:
+        fn: Called with no arguments. It runs on a helper thread and is given
+            up on (left running, daemon) when its budget runs out.
+        name: Shown in the log if the hook fails or overruns.
+        budget_s: Seconds the hook may take.
+        early: Run before the built-in steps (stopping strategies, say)
+            rather than after them.
+    """
+    with _hooks_lock:
+        _hooks.append(_Hook(fn=fn, name=name, budget_s=float(budget_s), early=early))
+
+
+def _registered_hooks(early: bool) -> list[_Hook]:
+    with _hooks_lock:
+        return [hook for hook in _hooks if hook.early is early]
+
+
+def _run_hooks(hooks: list[_Hook], deadline: float) -> None:
+    """Run each hook within its budget and within the overall deadline.
+
+    A hook runs on a plain thread (green under eventlet) and is joined with a
+    timeout, so one that hangs costs its budget and no more. Never raises.
+    """
+    for hook in hooks:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning(f"Shutdown hook {hook.name} skipped: the shutdown time budget is spent")
+            continue
+
+        def _call(hook=hook):
+            try:
+                hook.fn()
+            except Exception:
+                logger.exception(f"Shutdown hook {hook.name} failed; continuing teardown")
+
+        try:
+            worker = threading.Thread(target=_call, name=f"shutdown-{hook.name}", daemon=True)
+            worker.start()
+            worker.join(min(hook.budget_s, remaining))
+            if worker.is_alive():
+                logger.warning(
+                    f"Shutdown hook {hook.name} did not finish within its time "
+                    "budget; continuing teardown without it"
+                )
+        except Exception:
+            logger.exception(f"Shutdown hook {hook.name} could not be run; continuing teardown")
+
+
+def _signal_streams_to_stop() -> None:
+    """Set the stream stop event, so generators end rather than being cut off."""
+    stream_registry.request_drain()
+    stream_registry.STOP.set()
+
+
+def _run_late_hooks(deadline: float) -> None:
+    """Run the hooks registered without ``early``, before the session sweep."""
+    _run_hooks(_registered_hooks(early=False), deadline)
+
+
 def shutdown_runtime() -> None:
     """Stop background writers and release this thread's sessions.
 
@@ -191,18 +310,40 @@ def shutdown_runtime() -> None:
     is supported, and importing the health monitor at module scope would build
     the engine that a disabled monitor never wanted.
 
-    Guarded by a plain flag rather than a lock. The only caller is the signal
-    handler on the main thread and CPython runs those one at a time, so a lock
-    would buy nothing here, and a lock on a signal path is a standing invitation
-    to deadlock the moment someone widens its critical section to cover the
-    steps below. The flag is set before the steps run, so a second Ctrl+C
-    returns immediately instead of waiting on the first.
+    Idempotent and safe from any number of callers: the dev server's signal
+    handler, and under gunicorn the ``worker_exit`` and ``worker_int`` hooks,
+    which can race each other and a signal. The flag is checked and set under
+    a lock taken without blocking, and the lock covers only that, never the
+    steps: a signal handler that can block on a shutdown already in progress
+    is the "it will not stop" symptom issue #2031 reports. The flag is set
+    before the steps run, so a second Ctrl+C returns immediately instead of
+    waiting on the first.
+
+    Registered hooks run too: early ones first, late ones after the built-in
+    steps and before the session sweep, all within ``SHUTDOWN_BUDGET_S``.
     """
     global _shutdown_done
 
-    if _shutdown_done:
+    if not _shutdown_guard.acquire(blocking=False):
         return
-    _shutdown_done = True
+    try:
+        if _shutdown_done:
+            return
+        _shutdown_done = True
+    finally:
+        _shutdown_guard.release()
+
+    deadline = time.monotonic() + SHUTDOWN_BUDGET_S
+
+    try:
+        _signal_streams_to_stop()
+    except Exception:
+        logger.exception("Could not signal streams to stop; continuing teardown")
+
+    _run_hooks(_registered_hooks(early=True), deadline)
+
+    def _late_hooks() -> None:
+        _run_late_hooks(deadline)
 
     for step in (
         _stop_health_collector,
@@ -213,6 +354,7 @@ def shutdown_runtime() -> None:
         _stop_squareoff_scheduler,
         _stop_strategy_module,
         _stop_websocket_proxy,
+        _late_hooks,
         _remove_all_scoped_sessions,
     ):
         try:
