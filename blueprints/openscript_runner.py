@@ -1085,3 +1085,105 @@ try:
     restore_schedules()
 except Exception:
     logger.exception("Could not restore the OpenScript schedules at startup")
+
+
+# ---------------------------------------------------------------------------
+# What one strategy has done
+# ---------------------------------------------------------------------------
+
+
+def _api_key():
+    """The signed-in user's own API key, for the broker calls a book makes."""
+    try:
+        from flask import session
+
+        from database.auth_db import get_api_key_for_tradingview
+
+        user = session.get("user")
+        return get_api_key_for_tradingview(user) if user else None
+    except Exception:
+        logger.exception("Could not read the API key for this session")
+        return None
+
+
+def _mode_for(filename):
+    """Which book to read: the run's own side, never the platform's toggle.
+
+    A run that is up is read from the side it is trading on. One that has
+    stopped is read from the side it last traded on, which the run settings
+    remember, because its orders are still the answer to what it did. With
+    neither, the platform's current setting is all that is left, and a strategy
+    that never ran has an empty book either way.
+    """
+    from services.openscript_run_config import read_run_config
+
+    held = status_of(filename)
+    if held and held.get("mode"):
+        return str(held["mode"])
+
+    saved = read_run_config(filename) or {}
+    if saved.get("mode"):
+        return str(saved["mode"])
+
+    try:
+        from database.settings_db import get_analyze_mode
+
+        return "sandbox" if get_analyze_mode() else "live"
+    except Exception:
+        return "sandbox"
+
+
+def _book(filename, which):
+    """One of a strategy's three books, or the refusal that stopped it.
+
+    The mode is the run's and not the platform's. A run that is up is read from
+    the side it is trading on; one that has stopped is read from the side it
+    last traded on, because its orders are still the answer to what it did. With
+    neither, the platform's own setting is the only thing left to go on, and a
+    strategy that never ran has an empty book either way.
+    """
+    if not SAFE_NAME.match(filename or ""):
+        return _refusal(filename)
+
+    from services import openscript_books
+
+    api_key = _api_key()
+    if not api_key:
+        return jsonify(
+            {"status": "error", "message": "No API key for this session, so no book can be read."}
+        ), 400
+
+    answer = which(filename, api_key, _mode_for(filename))
+    return jsonify(answer), (200 if answer.get("status") == "success" else 502)
+
+
+@openscript_runner_bp.route("/orderbook/<filename>", methods=["GET"])
+@check_session_validity
+def orderbook(filename):
+    """This strategy's orders, in the global orderbook's own envelope."""
+    from services import openscript_books
+
+    return _book(filename, openscript_books.orderbook)
+
+
+@openscript_runner_bp.route("/tradebook/<filename>", methods=["GET"])
+@check_session_validity
+def tradebook(filename):
+    """This strategy's fills."""
+    from services import openscript_books
+
+    return _book(filename, openscript_books.tradebook)
+
+
+@openscript_runner_bp.route("/positions/<filename>", methods=["GET"])
+@check_session_validity
+def positions(filename):
+    """The contracts this strategy traded, which is weaker than the other two.
+
+    A position row is per contract and carries no strategy, so a row here may
+    hold size another strategy or a manual order opened. The service says so in
+    its own words and this route does not pretend otherwise.
+    """
+    from services import openscript_books
+
+    return _book(filename, openscript_books.positions)

@@ -307,6 +307,13 @@ EXPECTED_ROUTES = {
     "/openscript/runner/config": {"GET"},
     "/openscript/runner/config/<path:filename>": {"GET", "POST", "DELETE"},
     "/openscript/runner/schedule/<path:filename>": {"POST", "DELETE"},
+    # What one strategy has done. The converter is the default one and not
+    # `path`, because a script name can never hold a slash and a rule that
+    # claims it can turns a URL naming nothing into a refusal about a bad
+    # script name rather than a plain 404.
+    "/openscript/runner/orderbook/<filename>": {"GET"},
+    "/openscript/runner/tradebook/<filename>": {"GET"},
+    "/openscript/runner/positions/<filename>": {"GET"},
 }
 
 
