@@ -389,6 +389,87 @@ class Candle:
         self.volume = volume
 
 
+#: How long after a bar closes to look for it, and how often to look again.
+#:
+#: A feed does not publish a closed bar the instant it closes, so a poll fired
+#: exactly on the boundary usually finds nothing and the run then waits out the
+#: whole ordinary cadence before looking again. Two seconds is the first look,
+#: and a miss is retried every two seconds for half a minute, which is the
+#: window a minute bar can be late by and still be worth waiting for rather than
+#: acting on the bar after it.
+SETTLE_SECONDS = 2.0
+RETRY_SECONDS = 2.0
+CATCHUP_SECONDS = 30.0
+
+
+def interval_seconds(interval: str) -> int:
+    """How long one bar of this interval lasts, or zero where that is not known.
+
+    Zero is the honest answer for a daily bar and for anything this does not
+    recognise, and it means the caller keeps its ordinary cadence: a run must
+    never sleep towards a boundary it has guessed.
+    """
+    text = (interval or "").strip().lower()
+    if not text:
+        return 0
+    units = {"s": 1, "m": 60, "h": 3600}
+    unit = text[-1]
+    if unit not in units:
+        return 0
+    try:
+        count = int(text[:-1])
+    except ValueError:
+        return 0
+    return count * units[unit] if count > 0 else 0
+
+
+def next_wake(now: float, bar_seconds: int, poll_seconds: float, waiting_since: float | None) -> float:
+    """How long to sleep before looking again.
+
+    **The point of this is that an order goes out on the bar it was decided
+    on.** A run polling on a free running timer finds a closed bar somewhere in
+    the next poll interval, so an order decided at the close of one bar reaches
+    the platform up to a whole interval later, part way through the bar after
+    it. The strategy's own backtest prices that fill at the next bar's open, so
+    every live fill is worse than the report by however far the price moved
+    while the run was asleep. It is not noise: it is the same lateness every
+    time, in the same direction.
+
+    So the next wake is shortly after the next bar closes, or the ordinary
+    cadence, whichever comes first. The cadence is kept as the ceiling because
+    the bar that is still forming has to stay fresh, and because a daily bar's
+    boundary is hours away and a run must not sleep through the afternoon.
+
+    ``waiting_since`` is when this run last crossed a boundary without finding
+    the bar behind it. While that is recent the sleep is short, so a feed that
+    publishes a second or two late costs a second or two rather than a whole
+    interval.
+    """
+    ordinary = now + poll_seconds
+
+    if bar_seconds > 0 and waiting_since is not None and now - waiting_since < CATCHUP_SECONDS:
+        return min(ordinary, now + RETRY_SECONDS) - now
+
+    if bar_seconds <= 0:
+        return poll_seconds
+
+    # The settle point of the bar that has most recently closed, or of the next
+    # one where that moment has already gone by.
+    #
+    # Taking the NEXT boundary unconditionally is the mistake worth naming: a
+    # wake landing one second after a close, before the settle offset, would
+    # then aim a whole interval ahead and jump straight over the bar it was
+    # waiting for. With the cadence as a ceiling it never lands on a settle
+    # point at all, and the alignment this function exists for silently never
+    # happens.
+    closed = (now // bar_seconds) * bar_seconds
+    target = closed + SETTLE_SECONDS
+    if target <= now:
+        target = closed + bar_seconds + SETTLE_SECONDS
+
+    return max(0.0, min(target, ordinary) - now)
+
+
 def _instant_ms(stamp) -> int:
     """A history timestamp as whole milliseconds since the epoch, UTC.
 
@@ -1595,7 +1676,18 @@ def main(argv=None) -> int:
     say(f"{options.script} loaded. Replaying history before anything is sent.")
 
     polls = 0
+    bar_seconds = interval_seconds(options.interval)
+    if bar_seconds > 0:
+        say(
+            f"Looking for each closed bar about {int(SETTLE_SECONDS)} seconds after it closes, "
+            f"so an order goes out on the bar it was decided on."
+        )
+    #: When this run last crossed a bar boundary without the bar behind it being
+    #: there yet. None while nothing is being waited for.
+    waiting_since: float | None = None
+
     while not session.stopping:
+        known = len(session._times)
         try:
             finished = session.cycle()
         except Exception as failed:  # noqa: BLE001 - one strategy, not the platform
@@ -1609,9 +1701,18 @@ def main(argv=None) -> int:
             say("Asked to run a fixed number of polls, and that is done.")
             return EXIT_OK
 
+        now = time.time()
+        if len(session._times) > known:
+            # The bar this run was waiting for arrived and has been executed.
+            waiting_since = None
+        elif bar_seconds > 0 and waiting_since is None and now % bar_seconds < SETTLE_SECONDS * 2:
+            # A boundary has just passed and the bar behind it is not here yet.
+            waiting_since = now
+
         waited = 0.0
-        while waited < options.poll_seconds and not session.stopping:
-            time.sleep(min(0.5, options.poll_seconds - waited))
+        sleeping = next_wake(now, bar_seconds, options.poll_seconds, waiting_since)
+        while waited < sleeping and not session.stopping:
+            time.sleep(min(0.5, sleeping - waited))
             waited += 0.5
 
     say("Stopped.")
