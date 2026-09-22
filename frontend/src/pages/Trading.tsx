@@ -28,6 +28,7 @@ import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
 import { BacktestPanel } from '@/components/trading/BacktestPanel'
+import { StrategiesPanel } from '@/components/trading/StrategiesPanel'
 import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
@@ -1414,6 +1415,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
           )}
+          {apiKey && wsUrl && panel === 'strategies' && (
+            <StrategiesPanel getChartContext={readChartContext} />
+          )}
           {apiKey && wsUrl && panel === 'backtest' && (
             <BacktestPanel
               apiKey={apiKey}
@@ -1421,6 +1425,11 @@ function TradingWorkspace({ account }: { account: string | null }) {
               // is of the instrument and interval on the chart at the moment
               // Run is pressed, not of whatever this page last rendered with.
               getChartContext={readChartContext}
+              // The same pane helper every panel uses: the focused one, else any
+              // that is up. A run marks the chart it was a run of.
+              onMarkChart={(markers) =>
+                panelTarget()?.setBacktestMarkers(markers as never) ?? false
+              }
             />
           )}
           {apiKey && wsUrl && panel === 'scripts' && (

@@ -23,6 +23,7 @@ import {
   MAX_BARS,
   runBacktest,
 } from '@/lib/trading/backtestRun'
+import { chartMarkersFrom } from '@/lib/trading/backtestMarkers'
 import { kindOf, listScripts, readScript, type StoredScript } from '@/lib/trading/openscriptFiles'
 import { BacktestChart } from './BacktestChart'
 import { PANEL_HEADER, PanelShell } from './panelShell'
@@ -46,6 +47,14 @@ interface Props {
    * last happened to pass down.
    */
   getChartContext(): { symbol: string; exchange: string; interval: string } | null
+  /**
+   * Put this run's fills on the price, or clear them with an empty list.
+   *
+   * Answers false when there is no price series to mark, which a pane still
+   * loading its history reaches, so the panel can say the chart was not marked
+   * rather than leaving a reader to wonder where the arrows are.
+   */
+  onMarkChart?(markers: readonly unknown[]): boolean
 }
 
 /** How far back a run reaches when the panel is first opened. */
@@ -105,7 +114,8 @@ function Figure({
   )
 }
 
-export function BacktestPanel({ apiKey, getChartContext }: Props) {
+export function BacktestPanel({ apiKey, getChartContext, onMarkChart }: Props) {
+  const [marked, setMarked] = useState<number | null>(null)
   // Only for the header. The run reads its own, fresh, at the moment it starts.
   const [target, setTarget] = useState<RunTarget | null>(null)
   const [scripts, setScripts] = useState<StoredScript[]>([])
@@ -191,7 +201,16 @@ export function BacktestPanel({ apiKey, getChartContext }: Props) {
         apiKey,
         signal: controller.signal,
       })
-      if (!controller.signal.aborted) setOutcome(result)
+      if (controller.signal.aborted) return
+      setOutcome(result)
+
+      // The fills go on the price as soon as they exist. A previous run's marks
+      // are replaced rather than added to, and a run that produced none clears
+      // them, so what is on the chart is always this run and only this run.
+      if (onMarkChart) {
+        const marks = result.ok ? chartMarkersFrom(result.markers ?? []) : []
+        setMarked(onMarkChart(marks) ? marks.length : null)
+      }
     } catch {
       if (!controller.signal.aborted) {
         setOutcome({ ok: false, problem: 'The script could not be read.' })
@@ -199,7 +218,7 @@ export function BacktestPanel({ apiKey, getChartContext }: Props) {
     } finally {
       if (!controller.signal.aborted) setRunning(false)
     }
-  }, [apiKey, file, from, getChartContext, to])
+  }, [apiKey, file, from, getChartContext, onMarkChart, to])
 
   const summary = outcome?.summary
   const ready = Boolean(file && target) && !running
@@ -314,6 +333,11 @@ export function BacktestPanel({ apiKey, getChartContext }: Props) {
             <BacktestChart points={outcome?.equity ?? []} />
 
             <p className="text-[10px] text-muted-foreground">
+              {marked !== null && marked > 0
+                ? `${marked} fills marked on the chart. `
+                : marked === null && onMarkChart
+                  ? 'The chart has no price series to mark yet. '
+                  : ''}
               {outcome?.barCount?.toLocaleString()} bars, {Math.round(outcome?.ranMs ?? 0)}ms
               {outcome?.contract?.usedFallback
                 ? '. This instrument has no stored tick or lot size, so the run used a tick of ' +
