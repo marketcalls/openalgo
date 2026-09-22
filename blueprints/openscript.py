@@ -67,6 +67,13 @@ from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
+# A script name is matched with the default converter and never with ``path``.
+# ``path`` matches a slash, so ``/<path:filename>`` swallowed every route of
+# every blueprint registered beneath this one: ``/openscript/runner/status``
+# arrived here as the filename "runner/status", failed the name rule and was
+# answered 400, so the whole strategy runner was unreachable while looking
+# registered. A name this blueprint serves can never hold a slash: _SAFE_NAME
+# requires letters, digits, dot, dash or underscore and an .oscript ending.
 openscript_bp = Blueprint("openscript_bp", __name__, url_prefix="/openscript")
 
 SCRIPTS_DIR = Path("strategies") / "openscript"
@@ -239,7 +246,7 @@ def index():
     return jsonify(scripts)
 
 
-@openscript_bp.route("/program/<path:filename>", methods=["GET"])
+@openscript_bp.route("/program/<filename>", methods=["GET"])
 @check_session_validity
 def program(filename: str):
     """Serve the compiled program stored beside one source.
@@ -279,7 +286,7 @@ def program(filename: str):
     )
 
 
-@openscript_bp.route("/<path:filename>", methods=["GET"])
+@openscript_bp.route("/<filename>", methods=["GET"])
 @check_session_validity
 def source(filename: str):
     """Serve one script as plain text.
@@ -298,7 +305,7 @@ def source(filename: str):
     return send_from_directory(directory, filename, mimetype="text/plain; charset=utf-8")
 
 
-@openscript_bp.route("/<path:filename>", methods=["POST"])
+@openscript_bp.route("/<filename>", methods=["POST"])
 @check_session_validity
 def save(filename: str):
     """Create or replace one script, and the compiled program beside it.
@@ -507,7 +514,7 @@ def save(filename: str):
     )
 
 
-@openscript_bp.route("/<path:filename>", methods=["DELETE"])
+@openscript_bp.route("/<filename>", methods=["DELETE"])
 @check_session_validity
 def remove(filename: str):
     """Delete one script, the backup taken of it, and its compiled program.

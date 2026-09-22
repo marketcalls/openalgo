@@ -16,13 +16,19 @@
  * offering a button that can only ever answer with a refusal.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
   type BacktestOutcome,
   MAX_BARS,
   runBacktest,
 } from '@/lib/trading/backtestRun'
+import {
+  declaredOf,
+  defaultValueOf,
+  inputsOf,
+  settingsFromForm,
+} from '@/lib/trading/backtestInputs'
 import { chartMarkersFrom } from '@/lib/trading/backtestMarkers'
 import { kindOf, listScripts, readScript, type StoredScript } from '@/lib/trading/openscriptFiles'
 import { BacktestChart } from './BacktestChart'
@@ -126,6 +132,9 @@ function Figure({
 
 export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = null, onRan }: Props) {
   const [marked, setMarked] = useState<number | null>(null)
+  /** What the trader typed into an input box, by key. Only what they changed. */
+  const [edited, setEdited] = useState<Record<string, string>>({})
+  const [showControls, setShowControls] = useState(false)
   // Only for the header. The run reads its own, fresh, at the moment it starts.
   const [target, setTarget] = useState<RunTarget | null>(null)
   const [scripts, setScripts] = useState<StoredScript[]>([])
@@ -205,6 +214,12 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
     void runNamed(runFile)
   }, [runFile])
 
+  // Read off the last run's program: what this script takes as inputs, and what
+  // it declares about itself. Both are the program's own, so nothing here is a
+  // second opinion about a default or a capital.
+  const declarations = useMemo(() => inputsOf(outcome?.program), [outcome?.program])
+  const declared = useMemo(() => declaredOf(outcome?.program), [outcome?.program])
+
   const runNamed = useCallback(
     async (which: string) => {
     const chart = getChartContext()
@@ -227,6 +242,7 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
         startDate: from,
         endDate: to,
         apiKey,
+        inputs: settingsFromForm(declarations, edited),
         signal: controller.signal,
       })
       if (controller.signal.aborted) return
@@ -247,7 +263,7 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
       if (!controller.signal.aborted) setRunning(false)
     }
     },
-    [apiKey, from, getChartContext, onMarkChart, to]
+    [apiKey, declarations, edited, from, getChartContext, onMarkChart, to]
   )
 
   const run = useCallback(() => runNamed(file), [file, runNamed])
@@ -276,7 +292,12 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
           <select
             className="h-8 rounded border border-border bg-background px-2 text-xs"
             value={file}
-            onChange={(e) => setFile(e.target.value)}
+            onChange={(e) => {
+              setFile(e.target.value)
+              // The boxes belong to the script that declared them. Carrying
+              // them across would set one script's input from another's.
+              setEdited({})
+            }}
             disabled={scripts.length === 0}
           >
             {scripts.length === 0 && <option value="">No strategies saved</option>}
@@ -319,6 +340,118 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
         >
           {running ? 'Running' : 'Run backtest'}
         </button>
+
+        {(declarations.length > 0 || declared) && (
+          <div className="rounded border border-border">
+            <button
+              type="button"
+              className="flex h-7 w-full items-center px-2 text-[10px] uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
+              onClick={() => setShowControls((open) => !open)}
+              aria-expanded={showControls}
+            >
+              Settings
+              <span className="ml-auto">{showControls ? 'hide' : 'show'}</span>
+            </button>
+
+            {showControls && (
+              <div className="flex flex-col gap-2 border-t border-border p-2">
+                {declarations.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Inputs
+                    </span>
+                    {declarations.map((one) => {
+                      const fallback = defaultValueOf(one)
+                      return (
+                        <label key={one.key} className="flex items-center gap-1.5">
+                          <span className="flex-1 truncate text-[11px]" title={one.tooltip ?? one.label}>
+                            {one.label}
+                          </span>
+                          {one.kind === 'bool' ? (
+                            <select
+                              className="h-7 w-28 rounded border border-border bg-background px-1 text-[11px]"
+                              value={edited[one.key] ?? String(fallback ?? 'false')}
+                              onChange={(e) =>
+                                setEdited((held) => ({ ...held, [one.key]: e.target.value }))
+                              }
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          ) : one.options && one.options.length > 0 ? (
+                            <select
+                              className="h-7 w-28 rounded border border-border bg-background px-1 text-[11px]"
+                              value={edited[one.key] ?? String(fallback ?? '')}
+                              onChange={(e) =>
+                                setEdited((held) => ({ ...held, [one.key]: e.target.value }))
+                              }
+                            >
+                              {one.options.map((option) => (
+                                <option key={String(option)} value={String(option)}>
+                                  {String(option)}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type={one.kind === 'number' ? 'number' : 'text'}
+                              className="h-7 w-28 rounded border border-border bg-background px-1.5 text-[11px]"
+                              placeholder={fallback === null ? '' : String(fallback)}
+                              value={edited[one.key] ?? ''}
+                              min={one.min ?? undefined}
+                              max={one.max ?? undefined}
+                              step={one.step ?? undefined}
+                              onChange={(e) =>
+                                setEdited((held) => ({ ...held, [one.key]: e.target.value }))
+                              }
+                            />
+                          )}
+                        </label>
+                      )
+                    })}
+                    <p className="text-[10px] text-muted-foreground">
+                      A box left empty uses the script's own default. Run again to apply a change.
+                    </p>
+                  </div>
+                )}
+
+                {declared && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Declared by the script
+                    </span>
+                    <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
+                      <dt>Capital</dt>
+                      <dd className="text-right">
+                        {declared.capital.toLocaleString()} {declared.currency}
+                      </dd>
+                      <dt>Order size</dt>
+                      <dd className="text-right">
+                        {declared.qty} {declared.qtyType}
+                      </dd>
+                      <dt>Pyramiding</dt>
+                      <dd className="text-right">{declared.pyramiding}</dd>
+                      <dt>Commission</dt>
+                      <dd className="text-right">
+                        {declared.commission} {declared.commissionType}
+                      </dd>
+                      <dt>Slippage</dt>
+                      <dd className="text-right">{declared.slippage} ticks</dd>
+                      <dt>Fills on</dt>
+                      <dd className="text-right">{declared.fillOn}</dd>
+                    </dl>
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      These are the script's own, set in its `strategy()` line, and are shown
+                      rather than offered: a commission supplied here beside a declared one
+                      describes the same money twice and is refused before the first bar. Edit
+                      the script to change them.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {!target && (
           <p className="text-[11px] text-muted-foreground">

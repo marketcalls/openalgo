@@ -79,6 +79,13 @@ const FALLBACK_LOT = 1
 export interface BacktestRequest {
   file: string
   source: string
+  /**
+   * Values for the script's own `input()` declarations, for the run only.
+   *
+   * Only what a trader changed. An input left alone is absent, so the engine
+   * resolves the declaration's own default rather than a copy of it made here.
+   */
+  inputs?: Readonly<Record<string, unknown>>
   symbol: string
   exchange: string
   interval: string
@@ -103,6 +110,13 @@ export interface BacktestOutcome {
   /** How long the engine itself took, which is what the ceiling is about. */
   ranMs?: number
   contract?: Contract
+  /**
+   * The compiled program this run was of.
+   *
+   * Handed back so the panel can show what the script declares and what it
+   * takes as inputs without compiling it a second time.
+   */
+  program?: unknown
 }
 
 function refused(problem: string): BacktestOutcome {
@@ -229,6 +243,7 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
 
   try {
     const engine = await import('openalgo-script')
+    const program = JSON.parse(compiled.program)
     const settings = engine.settingsFor({
       currency: contract.currency,
       symbol: contract.symbol,
@@ -240,7 +255,11 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
     })
 
     const started = performance.now()
-    const out = engine.backtest(JSON.parse(compiled.program), bars, settings, {})
+    // Cast at the one place the two type worlds meet. The panel builds these
+    // through `settingsFromForm`, which tags every value by the kind the
+    // declaration states, so what arrives is already the language's own shape.
+    const inputs = (request.inputs ?? {}) as typeof settings.inputs
+    const out = engine.backtest(program, bars, { ...settings, inputs }, {})
     const ranMs = performance.now() - started
 
     // A run can be refused before its first bar: a cost model stated twice, a
@@ -262,6 +281,7 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
       barCount: bars.length,
       ranMs,
       contract,
+      program,
     }
   } catch (unreachable) {
     return refused(

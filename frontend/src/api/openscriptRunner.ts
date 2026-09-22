@@ -12,9 +12,16 @@
  * names a host.
  */
 
-import { apiClient } from './client'
+import { webClient } from './client'
 
 const BASE = '/openscript/runner'
+
+// `webClient` and not `apiClient`. The runner is a session blueprint registered
+// at /openscript/runner, while apiClient prefixes /api/v1 onto everything it
+// sends: every call reached /api/v1/openscript/runner/... and answered 404, so
+// the panel showed "the runner cannot be reached" and every strategy read as
+// having no instrument set. webClient is the client for exactly this: a
+// session route, with the CSRF token a POST here needs.
 
 /** One process the server is running. `state` is always running: see below. */
 export interface RunningStrategy {
@@ -88,7 +95,7 @@ function problemFrom(error: unknown, fallback: string): RunnerError {
 
 export async function overview(signal?: AbortSignal): Promise<RunnerOverview> {
   try {
-    const res = await apiClient.get<{
+    const res = await webClient.get<{
       status: string
       running?: RunningStrategy[]
       scheduled?: Schedule[]
@@ -115,7 +122,7 @@ export async function overview(signal?: AbortSignal): Promise<RunnerOverview> {
  */
 export async function startStrategy(file: string): Promise<RunningStrategy> {
   try {
-    const res = await apiClient.post<{ status: string; run: RunningStrategy }>(
+    const res = await webClient.post<{ status: string; run: RunningStrategy }>(
       `${BASE}/start/${encodeURIComponent(file)}`
     )
     return res.data.run
@@ -126,7 +133,7 @@ export async function startStrategy(file: string): Promise<RunningStrategy> {
 
 export async function stopStrategy(file: string): Promise<void> {
   try {
-    await apiClient.post(`${BASE}/stop/${encodeURIComponent(file)}`)
+    await webClient.post(`${BASE}/stop/${encodeURIComponent(file)}`)
   } catch (error) {
     throw problemFrom(error, `${file} could not be stopped.`)
   }
@@ -134,7 +141,7 @@ export async function stopStrategy(file: string): Promise<void> {
 
 export async function saveSettings(settings: RunSettings): Promise<void> {
   try {
-    await apiClient.post(`${BASE}/config/${encodeURIComponent(settings.file)}`, {
+    await webClient.post(`${BASE}/config/${encodeURIComponent(settings.file)}`, {
       symbol: settings.symbol,
       exchange: settings.exchange,
       interval: settings.interval,
@@ -147,7 +154,7 @@ export async function saveSettings(settings: RunSettings): Promise<void> {
 
 export async function clearSettings(file: string): Promise<void> {
   try {
-    await apiClient.delete(`${BASE}/config/${encodeURIComponent(file)}`)
+    await webClient.delete(`${BASE}/config/${encodeURIComponent(file)}`)
   } catch (error) {
     throw problemFrom(error, `The settings for ${file} could not be cleared.`)
   }
@@ -155,7 +162,7 @@ export async function clearSettings(file: string): Promise<void> {
 
 export async function saveSchedule(schedule: Schedule): Promise<void> {
   try {
-    await apiClient.post(`${BASE}/schedule/${encodeURIComponent(schedule.file)}`, {
+    await webClient.post(`${BASE}/schedule/${encodeURIComponent(schedule.file)}`, {
       start_time: schedule.start_time,
       stop_time: schedule.stop_time,
       days: schedule.days,
@@ -167,7 +174,7 @@ export async function saveSchedule(schedule: Schedule): Promise<void> {
 
 export async function clearSchedule(file: string): Promise<void> {
   try {
-    await apiClient.delete(`${BASE}/schedule/${encodeURIComponent(file)}`)
+    await webClient.delete(`${BASE}/schedule/${encodeURIComponent(file)}`)
   } catch (error) {
     throw problemFrom(error, `The schedule for ${file} could not be cleared.`)
   }
