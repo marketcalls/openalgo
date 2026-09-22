@@ -107,6 +107,35 @@ jobs:
       - name: drawing menu metadata matches the pinned package
         run: node frontend/scripts/generate-drawing-tools.mjs --check
 
+  # The openscript skill documents the openalgo-script compiler that /trading
+  # actually pins, and the same reasoning applies: a version bump that leaves the
+  # skill behind leaves an author reading a page about a compiler that is no
+  # longer installed.
+  #
+  # The third check is the one specific to this skill. Its pitfalls page teaches
+  # by naming diagnostic codes, and an author trusts a code. Two of the claims on
+  # the first draft were wrong: a stateful call in a branch is a warning rather
+  # than a refusal, so "the compiler will catch it" was false, and the fix the
+  # page offered for a conditional fill used a colour that does not exist. Both
+  # were found by compiling the page's own snippets, which is what runs here.
+  openscript-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: name reference matches the pinned openalgo-script
+        run: node .claude/skills/openscript/generate-reference.mjs --check
+      - name: every name is described, every planned name is marked, every shape is demonstrated
+        run: node .claude/skills/openscript/coverage.mjs
+      - name: every diagnostic code the pitfalls page names behaves as it says
+        run: node .claude/skills/openscript/check-pitfalls.mjs
+
   # Frontend build (includes TypeScript check)
   # Matrixed across the LTS majors declared in frontend/package.json engines.
   frontend-build:

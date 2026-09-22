@@ -1,0 +1,32 @@
+version 1
+
+// SHORT ONLY: short or flat, never long.
+//
+// The mirror of the long only shape, and worth having as its own example
+// because the guards are the part that changes. `sell` opens the short and
+// `close` covers it, and the guards are `pos.isFlat` and `pos.isShort`: using
+// `pos.isLong` here, by copying the long version and changing only the call
+// names, produces a strategy that opens and never covers.
+
+len = input(20, "Length", min = 2, max = 500)
+mult = input(2.0, "Band width", min = 0.1, max = 10)
+lots = input(1, "Quantity", min = 1)
+
+strategy("Short only fade", overlay = true, qty = lots)
+
+mid = sma(close, len)
+width = stdev(close, len) * mult
+upper = mid + width
+
+plot(mid, "Mean", gray)
+plot(upper, "Upper", red, width = 2)
+
+// A short is opened when price closes back below a band it had left, which is
+// a fade rather than a breakout. `crossDown` is false during warmup, because
+// both of its arguments are absent then, so no guard against warmup is needed:
+// absence is not a crossing.
+if crossDown(close, upper) and pos.isFlat
+    sell(qty = lots, tag = "Short")
+
+if crossUp(close, mid) and pos.isShort
+    close(tag = "Short")
