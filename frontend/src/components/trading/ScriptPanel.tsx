@@ -511,6 +511,25 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
    */
   const applyToChart = useCallback(() => {
     if (open === null) return
+
+    // A strategy is not in the chart's indicator list at all, because the chart
+    // tier plots and does not trade: the engine refuses a program that needs
+    // orders with OS6006, which is a sentence about capability tags shown to
+    // somebody who pressed a button. Said here, in the words of what they were
+    // trying to do, and pointing at the panel that does run one.
+    if (kind === 'strategy') {
+      setResult((previous) => ({
+        ok: previous?.ok ?? false,
+        diagnostics: previous?.diagnostics ?? [],
+        problem:
+          'A strategy places orders, and the chart draws rather than trades, so it cannot be ' +
+          'added as an indicator. Open the Backtest panel on the rail to run it over history, ' +
+          'or start it from the runner to trade it in sandbox mode.',
+      }))
+      setConsoleOpen(true)
+      return
+    }
+
     if (onAddToChart(idForScript(open))) return
     setResult((previous) => ({
       ok: previous?.ok ?? false,
@@ -518,7 +537,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       problem: 'There is no chart open to add this study to.',
     }))
     setConsoleOpen(true)
-  }, [open, onAddToChart])
+  }, [kind, open, onAddToChart])
 
   // Ctrl+S is what anyone editing text reaches for, and without it the browser
   // opens its own save dialog over the panel.

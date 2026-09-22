@@ -27,6 +27,7 @@ import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
+import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
@@ -1412,6 +1413,15 @@ function TradingWorkspace({ account }: { account: string | null }) {
           )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
+          )}
+          {apiKey && wsUrl && panel === 'backtest' && (
+            <BacktestPanel
+              apiKey={apiKey}
+              // The same reader the assistant uses, for the same reason: a run
+              // is of the instrument and interval on the chart at the moment
+              // Run is pressed, not of whatever this page last rendered with.
+              getChartContext={readChartContext}
+            />
           )}
           {apiKey && wsUrl && panel === 'scripts' && (
             <ScriptPanel
