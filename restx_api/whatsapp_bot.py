@@ -296,7 +296,25 @@ class WhatsAppNotify(Resource):
                             "data": report,
                         }
                     ),
-                    502,  # the destination refused it, not the caller
+                    # **200, deliberately, and this is the compatibility line.**
+                    #
+                    # The lie worth fixing is the `status` field: a report of
+                    # "Delivered to 0, failed 1" came back as "success", and
+                    # every caller branches on that, including the chart alert
+                    # in /trading which then recorded the channel as accepted.
+                    # That field is now truthful.
+                    #
+                    # The HTTP code is left alone. This endpoint is public and
+                    # has a large installed base of callers nobody here can
+                    # survey, and a code they have never seen from this path is
+                    # a new failure mode for anything that raises on non-2xx or
+                    # retries on 5xx. Those callers were mishandling a wrong
+                    # `status`; they should not also have to handle a new
+                    # transport error to keep working. The request itself was
+                    # accepted and processed, which is what 200 says, and what
+                    # happened to it is in the body, which is where this API
+                    # puts every other outcome.
+                    200,
                 )
             return make_response(
                 jsonify(
