@@ -142,6 +142,17 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+# This file is read two ways: the service starts it as a script, where its own
+# directory is what imports resolve against, and the tests import it as a module
+# of the package, where the repository root is. Putting the root on the path
+# makes the one import below work either way, rather than a fallback branch
+# whose production half no test ever takes.
+if str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from openscript_host.live_bars import SETTLE_SECONDS as LIVE_BAR_SETTLE  # noqa: E402
+from openscript_host.live_bars import LiveBars  # noqa: E402 - after the path above
+
 # Where the platform stores a trader's scripts, and what it calls the compiled
 # program it keeps beside one. Both mirror ``blueprints/openscript.py``, which
 # owns the names. They are repeated rather than imported because importing a
@@ -427,6 +438,24 @@ RETRY_LATER = 1.0
 #: having been written.
 CATCHUP_SHARE = 0.9
 
+#: How many bars closed on the feed to hold for comparison with history, and
+#: how far the two may differ before a run says so.
+#:
+#: A feed and a history endpoint rarely agree to the last tick, because one is
+#: every trade a process saw while subscribed and the other is the exchange's
+#: own bar. A tenth of a percent is wider than that disagreement and far
+#: narrower than one that would change a signal.
+FEED_BARS_COMPARED = 10
+FEED_DISAGREEMENT = 0.001
+
+#: When to wake after a boundary while the tick stream is closing the bars.
+#:
+#: A shade past the builder's own settle offset, so that a run waking at the
+#: boundary finds the bar already closed rather than a tenth of a second short
+#: of it and has to come back. It is not history's lateness and is not learned
+#: from it: the bar was complete in this process as it closed.
+FEED_SETTLE = LIVE_BAR_SETTLE + 0.05
+
 #: How many recent bars' lateness to remember, and the smallest sample worth
 #: acting on. Short, because a feed that changes its behaviour should be
 #: followed within a bar or two rather than averaged with an hour of history.
@@ -539,6 +568,18 @@ def next_wake(
         target = closed + bar_seconds + settle
 
     return max(0.0, min(target, ordinary) - now)
+
+
+def _bar_time_text(time_ms: int) -> str:
+    """A bar's open instant as a clock time, in this server's own zone.
+
+    The same zone `_now_text` writes every other line of this log in, so two
+    lines about the same moment read as the same moment.
+    """
+    try:
+        return datetime.fromtimestamp(time_ms / 1000.0, tz=UTC).astimezone().strftime("%H:%M:%S")
+    except (ValueError, OSError, OverflowError):
+        return str(time_ms)
 
 
 def _instant_ms(stamp) -> int:
@@ -678,6 +719,16 @@ class Session:
         self._destination: str | None = None
         self._open: set[int] = set()
         self._previous_close = None
+        #: The live feed, once `main` has built one, or None for a run driven by
+        #: history alone. See `live_bars`: a feed is optional and a run without
+        #: one behaves exactly as this platform behaved before there was one.
+        self.live = None
+        #: Bars this run closed on the feed rather than on history, by open
+        #: instant, kept until history carries the same bar so the two can be
+        #: compared. Bounded, because a feed that runs ahead of a history
+        #: endpoint that is down must not fill this for the length of a session.
+        self._from_feed: dict[int, Candle] = {}
+        self._said_disagreement = False
 
     # -- what a refusal reads like ------------------------------------------
 
@@ -905,14 +956,37 @@ class Session:
         self.stopping = True
 
     def cycle(self) -> int | None:
-        """One poll: fold what came back, execute what is new, then the moving bar.
+        """One wake: the feed's closed bars if it has any, otherwise history.
 
         Returns an exit code once the run is over and ``None`` while it goes on.
+
+        **The feed is asked first because it is the one that knows.** A bar is
+        complete on the tick stream the instant it closes, and a history
+        endpoint carries it seconds later: on this platform a closed one minute
+        bar was measured about thirty five seconds late. Asking history first
+        would spend that lateness on every order for a fact the process already
+        had.
+
+        **History is not thereby retired.** It is what the run is replayed on
+        before anything is sent, what carries the bars of a gap the feed was
+        disconnected for, what drives a run whose feed never connected, and what
+        the bars this run closed on the feed are compared against. It is polled
+        on every wake the feed had nothing new for, which on a one minute bar at
+        the ordinary cadence is most of them.
         """
+        if self._feed_ready():
+            acted, finished = self._live_cycle()
+            if finished is not None:
+                return finished
+            if acted:
+                return None
+
         candles = self._history()
         if not candles:
             say("History answered with no bars. Waiting.")
             return None
+
+        self._compare_with_feed(candles)
 
         fresh = self._new_bars(candles)
         if fresh is None:
@@ -972,6 +1046,104 @@ class Session:
 
         return self._execute(moving, supplied, confirmed_bar=False)
 
+    def _feed_ready(self) -> bool:
+        """Whether a bar may be closed on the feed rather than on history.
+
+        Not before the history replay has finished. A run is replayed over
+        whatever history holds and only then begins sending, and a bar arriving
+        from the feed in the middle of that would be executed out of order,
+        against a state built from a different series.
+        """
+        return self._sending and self.live is not None and self.live.live
+
+    def _live_cycle(self) -> tuple[bool, int | None]:
+        """Execute what the feed has closed. Answers (did anything, exit code).
+
+        The anchor rules here exactly as it rules in ``_new_bars``: a bar at or
+        before the last confirmed open instant has been executed already and is
+        dropped rather than executed at a second index.
+
+        A bar the feed never built, because nothing traded in that span, leaves
+        a gap in these open instants. It is not bridged and not waited for,
+        which is what history does with the same gap: a span with no trade is a
+        span with no bar, and a run that stalled for one would stall until the
+        instrument traded again.
+        """
+        now_ms = int(time.time() * 1000)
+        anchor = self._times[-1] if self._times else None
+        fresh = [
+            Candle(*bar)
+            for bar in self.live.closed(now_ms)
+            if anchor is None or bar[0] > anchor
+        ]
+        moving_bar = self.live.forming(now_ms)
+        if not fresh and moving_bar is None:
+            return False, None
+
+        # The same count `cycle` works out, and for the same reason: the engine
+        # reads `bar.isLast` as `index == supplied - 1`, so it is the greatest
+        # index this hand-over will reach plus one, settled before any bar of it
+        # is executed.
+        supplied = len(self._times) + len(fresh) + (1 if moving_bar is not None else 0)
+
+        for candle in fresh:
+            # Kept so that history's own version of this bar can be compared
+            # with the one acted on, when it eventually carries it.
+            self._from_feed[candle.time] = candle
+            if len(self._from_feed) > FEED_BARS_COMPARED:
+                del self._from_feed[min(self._from_feed)]
+
+            stopped = self._execute(candle, supplied, confirmed_bar=True)
+            if stopped is not None:
+                return True, stopped
+            if self.stopping:
+                # Something inside that bar asked this run to stop. The bars
+                # behind it are not executed, for the reason `cycle` gives.
+                return True, None
+
+        if moving_bar is not None:
+            stopped = self._execute(Candle(*moving_bar), supplied, confirmed_bar=False)
+            if stopped is not None:
+                return True, stopped
+
+        return bool(fresh) or moving_bar is not None, None
+
+    def _compare_with_feed(self, candles: list[Candle]) -> None:
+        """Say so when history disagrees with a bar this run acted on.
+
+        **This can only report, and that is the honest shape of it.** The order
+        went out when the bar closed; a bar that turns out to have been a paisa
+        different cannot be taken back. What a trader can do with it is decide
+        whether to keep running this way, and they can only do that if it is
+        said out loud the first time it happens rather than discovered in a
+        report months later.
+
+        A feed and a history endpoint rarely agree to the last tick: the feed is
+        every trade this process saw while subscribed and history is the
+        exchange's own bar. The threshold is there so that a run does not narrate
+        the last decimal place of every bar.
+        """
+        if not self._from_feed:
+            return
+        for candle in candles:
+            mine = self._from_feed.pop(candle.time, None)
+            if mine is None or self._said_disagreement:
+                continue
+            for name in ("open", "high", "low", "close"):
+                theirs = getattr(candle, name)
+                ours = getattr(mine, name)
+                if theirs in (None, 0) or ours in (None, 0):
+                    continue
+                if abs(theirs - ours) / abs(theirs) > FEED_DISAGREEMENT:
+                    self._said_disagreement = True
+                    say(
+                        "This run closes a bar on the live feed, which is how it acts at the "
+                        f"close rather than when history catches up. History's {name} for the "
+                        f"bar at {_bar_time_text(candle.time)} is {theirs}, and the run acted on "
+                        f"{ours}. Said once."
+                    )
+                    break
+
     def _hand_over(self) -> None:
         self._sending = True
         say(
@@ -1018,11 +1190,19 @@ class Session:
 
         A window that no longer holds the anchor is a discontinuity this runner
         cannot bridge, so it stops rather than guessing which bars it missed.
+        **A window that is merely behind the anchor is not that.** Since a run
+        closes its bars on the live feed, history is routinely a bar or two
+        behind what has already been executed, and reading that as a gap would
+        stop a run every minute for doing exactly what it is meant to do.
         """
         if not self._times:
             return candles
 
         anchor = self._times[-1]
+        if candles and candles[-1].time < anchor:
+            # Everything here is older than the last bar executed. Nothing is
+            # missing: history has not caught up yet.
+            return []
         for at in range(len(candles) - 1, -1, -1):
             if candles[at].time == anchor:
                 # Everything after the anchor, which is empty when no bar has
@@ -1746,14 +1926,32 @@ def main(argv=None) -> int:
 
     say(f"{options.script} loaded. Replaying history before anything is sent.")
 
-    polls = 0
     bar_seconds = interval_seconds(options.interval)
-    if bar_seconds > 0:
+
+    # The tick stream, which is what closes a bar. History stays underneath it:
+    # see `Session.cycle`. A feed that will not start leaves `session.live` as
+    # None and the run is the history driven run this platform had before.
+    feed = LiveBars(client, options.symbol, options.exchange, bar_seconds, say)
+    if feed.start():
+        session.live = feed
+    elif bar_seconds > 0:
         say(
             f"Looking for each closed bar {SETTLE_SECONDS:g} seconds after it closes, and again "
             f"every {RETRY_SOON:g} seconds until it is there, so an order goes out on the bar it "
             "was decided on."
         )
+    try:
+        return _loop(session, options, feed, bar_seconds)
+    finally:
+        # However this ends, including a fault, the socket goes with it. A run
+        # that left one open would hold a subscription this process no longer
+        # reads for as long as the connection survived it.
+        feed.stop()
+
+
+def _loop(session, options, feed, bar_seconds: int) -> int:
+    """Wake, execute, sleep, until the run is over. Answers its exit code."""
+    polls = 0
     #: When this run last crossed a bar boundary without the bar behind it being
     #: there yet. None while nothing is being waited for.
     waiting_since: float | None = None
@@ -1778,12 +1976,19 @@ def main(argv=None) -> int:
             return EXIT_OK
 
         now = time.time()
+        on_feed = feed.live and session.live is not None
         if len(session._times) > known:
             # The bar this run was waiting for arrived and has been executed.
-            # How late it was is the feed's own answer to the only question this
-            # loop has, so it is kept: the newest bar this run has confirmed
-            # closed one interval after it opened.
-            if bar_seconds > 0 and session._times:
+            # How late it was is the history endpoint's own answer to the only
+            # question this loop has, so it is kept: the newest bar this run has
+            # confirmed closed one interval after it opened.
+            #
+            # **Only a bar history delivered.** A bar closed on the tick stream
+            # arrives at the boundary by construction, and counting that as a
+            # reading would teach this loop that a slow history endpoint is
+            # prompt. The lateness is then wrong in exactly the case it is
+            # needed, which is the feed dropping and the run falling back.
+            if bar_seconds > 0 and session._times and session._times[-1] not in session._from_feed:
                 closed = session._times[-1] / 1000.0 + bar_seconds
                 late = now - closed
                 # A negative reading is a clock that disagrees with the feed's,
@@ -1794,13 +1999,29 @@ def main(argv=None) -> int:
                     lateness.append(late)
                     del lateness[:-LATENESS_REMEMBERED]
             waiting_since = None
-        elif bar_seconds > 0 and waiting_since is None and now % bar_seconds < max(1.0, SETTLE_SECONDS * 2):
+        elif (
+            bar_seconds > 0
+            and not on_feed
+            and waiting_since is None
+            and now % bar_seconds < max(1.0, SETTLE_SECONDS * 2)
+        ):
             # A boundary has just passed and the bar behind it is not here yet.
+            # Not while the feed is closing bars: that whole retry is about a
+            # history endpoint publishing late, and there is nothing to retry
+            # when the bar was complete in this process as it closed.
             waiting_since = now
 
         waited = 0.0
+        # On the feed the run wakes just past the boundary, because that is when
+        # the bar is complete. On history it wakes when this feed has been
+        # measured to publish, which is a different and usually much later
+        # moment. See `next_wake` and `expected_settle`.
         sleeping = next_wake(
-            now, bar_seconds, options.poll_seconds, waiting_since, expected_settle(lateness)
+            now,
+            bar_seconds,
+            options.poll_seconds,
+            None if on_feed else waiting_since,
+            FEED_SETTLE if on_feed else expected_settle(lateness),
         )
         while waited < sleeping and not session.stopping:
             time.sleep(min(0.5, sleeping - waited))
