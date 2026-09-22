@@ -37,6 +37,7 @@ import {
   type ReportTrade,
 } from '@/lib/trading/openPosition'
 import { quantityNote, quantityOf, unitsFor } from '@/lib/trading/strategyQuantity'
+import { backtestLookbackDays } from '@/lib/trading/intervals'
 import {
   compileSource,
   kindOf,
@@ -168,6 +169,14 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   const [file, setFile] = useState<string>('')
   const [from, setFrom] = useState(() => isoDaysAgo(DEFAULT_DAYS))
   const [to, setTo] = useState(() => today())
+  /**
+   * Whether the trader has set the dates themselves.
+   *
+   * Once they have, the range stops following the interval. Somebody who typed
+   * a range meant it, and rewriting it underneath them on the next timeframe
+   * change would be this panel overruling a decision they made on purpose.
+   */
+  const [datesAreTheirs, setDatesAreTheirs] = useState(false)
   const [running, setRunning] = useState(false)
   const [outcome, setOutcome] = useState<BacktestOutcome | null>(null)
   const inflight = useRef<AbortController | null>(null)
@@ -225,6 +234,28 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   }, [getChartContext])
 
   useEffect(() => () => inflight.current?.abort(), [])
+
+  // -- the range follows the timeframe --------------------------------------
+  //
+  // **A range that is right for one interval is wrong for another.** Two months
+  // of one minute bars is forty sessions of trading; two months of daily bars is
+  // forty bars, which answers nothing. So the default reaches back by interval
+  // rather than by a single number: months on an intraday frame, years on a
+  // daily one. `backtestLookbackDays` holds the rule and the bar counts it rests
+  // on.
+  //
+  // It is also what keeps an ordinary run cheap. A run starts on its own
+  // whenever the instrument or the interval changes, so the default range is
+  // paid on every symbol switch: a year of one minute bars would be tens of
+  // megabytes fetched and seconds of folding, each time.
+  //
+  // Only while the dates are still this panel's. See `datesAreTheirs`.
+  const interval = target?.interval ?? ''
+  useEffect(() => {
+    if (!interval || datesAreTheirs) return
+    setFrom(isoDaysAgo(backtestLookbackDays(interval)))
+    setTo(today())
+  }, [interval, datesAreTheirs])
 
   // A file handed over from another panel: select it. The run follows from the
   // selection, below, rather than being started here as well, because two paths
@@ -466,7 +497,10 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
               className="h-8 rounded border border-border bg-background px-2 text-xs"
               value={from}
               max={to}
-              onChange={(e) => setFrom(e.target.value)}
+              onChange={(e) => {
+                setDatesAreTheirs(true)
+                setFrom(e.target.value)
+              }}
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -476,7 +510,10 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
               className="h-8 rounded border border-border bg-background px-2 text-xs"
               value={to}
               min={from}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => {
+                setDatesAreTheirs(true)
+                setTo(e.target.value)
+              }}
             />
           </label>
         </div>

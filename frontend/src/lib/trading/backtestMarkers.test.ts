@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { chartMarkersFrom, labelFor, signedSize } from './backtestMarkers'
+import { chartMarkersFrom, labelFor, natureOf, signedSize } from './backtestMarkers'
 
 const AT = 1_700_000_000_000
 
@@ -41,18 +41,20 @@ describe('the signed size', () => {
 })
 
 describe('the label', () => {
-  it('puts the tag against the arrow and the size on the far side', () => {
-    // Catches the two lines swapped. The tag is what a reader matches against
-    // their own source, so it is the line nearest the thing it marks: above a
+  it('puts what the fill did against the arrow and the size on the far side', () => {
+    // Catches the two lines swapped. What the fill did is the line a reader
+    // matches against the price, so it is nearest the thing it marks: above a
     // bar that is the lower line, below a bar the upper one.
-    expect(labelFor(fill({ side: 'sell' }), true)).toBe('-2\nMomLE')
-    expect(labelFor(fill(), false)).toBe('MomLE\n+2')
+    expect(labelFor(fill({ side: 'sell' }), true)).toBe('-2\nShort')
+    expect(labelFor(fill(), false)).toBe('Long\n+2')
   })
 
-  it('labels an untagged fill by its size alone, with no blank row', () => {
-    // Catches an empty first line, which draws as a gap inside the plate that
-    // a reader tries to read as something.
-    expect(labelFor(fill({ tag: '' }), false)).toBe('+2')
+  it('draws the same label whatever the tag was, including none', () => {
+    // The tag is a position name the language forces a close to repeat from
+    // its entry, so it distinguishes nothing between the two orders of a round
+    // trip and belongs nowhere on the chart.
+    expect(labelFor(fill({ tag: '' }), false)).toBe('Long\n+2')
+    expect(labelFor(fill({ tag: 'anything' }), false)).toBe('Long\n+2')
   })
 })
 
@@ -113,49 +115,60 @@ describe('the marks', () => {
 })
 
 describe('a reversal, which puts two fills on one bar', () => {
-  /** The two markers a stop and reverse strategy emits at one flip. */
+  /** The two fills a stop and reverse strategy emits at one flip. */
   const closingLong = { time: 1, kind: 'exit', side: 'sell', units: 1, tag: 'StUp', price: 100 }
   const openingShort = { time: 1, kind: 'entry', side: 'sell', units: 1, tag: 'StDn', price: 100 }
 
-  it('names an exit as one instead of drawing the tag it closed', () => {
-    // THE DEFECT. `close(tag = "StUp")` names the position to close, not the
-    // fill. Drawn bare it writes "StUp -1" on the bar the strategy goes short
-    // on: the name of a long beside a sell. A trader reads the two halves and
-    // has to pick one to believe.
-    expect(labelFor(closingLong, false)).toBe('Exit StUp\n-1')
-    expect(labelFor(closingLong, true)).toBe('-1\nExit StUp')
+  it('never draws the tag, because it names a position and not an order', () => {
+    // THE DEFECT. `close(tag = "StUp")` means "close whatever StUp is holding",
+    // so a close is required to repeat its entry's tag: the language has no
+    // other way to say which position to flatten. Drawing it put the same word
+    // on both orders of a round trip, where it distinguished nothing, and put
+    // the name of a long beside a sell on every reversal.
+    expect(labelFor(closingLong, false)).not.toContain('StUp')
+    expect(labelFor(openingShort, true)).not.toContain('StDn')
   })
 
-  it('leaves an entry named by its own tag, which is a name', () => {
-    expect(labelFor(openingShort, true)).toBe('-1\nStDn')
+  it('says what each fill did, which is the thing not written anywhere else', () => {
+    expect(labelFor(closingLong, false)).toBe('Exit long\n-1')
+    expect(labelFor(openingShort, true)).toBe('-1\nShort')
+  })
+
+  it('reads kind and side together, because neither alone is the answer', () => {
+    // A sell opens a short and closes a long. Reading only the side would put
+    // the same word on the two opposite ends of a trade.
+    expect(natureOf({ kind: 'entry', side: 'buy' })).toBe('Long')
+    expect(natureOf({ kind: 'entry', side: 'sell' })).toBe('Short')
+    expect(natureOf({ kind: 'exit', side: 'sell' })).toBe('Exit long')
+    expect(natureOf({ kind: 'exit', side: 'buy' })).toBe('Exit short')
   })
 
   it('makes the pair on one bar read as two orders and not a contradiction', () => {
     // Both fills are real and both belong on the chart: a reversal is a close
-    // and an open, and the order book will show two orders. What must not
-    // happen is the two reading as one confused event.
+    // and an open, and the broker will report two orders.
     const marks = chartMarkersFrom([closingLong, openingShort])
 
     expect(marks).toHaveLength(2)
-    expect(marks[0].text).toContain('Exit StUp')
-    expect(marks[1].text).toContain('StDn')
+    expect(marks[0].text).toContain('Exit long')
+    expect(marks[1].text).toContain('Short')
     expect(marks[1].text).not.toContain('Exit')
     // Separated on the price, so the pair does not overprint at one point.
     expect(marks[0].position).not.toBe(marks[1].position)
   })
 
-  it('says a fill is an exit even where the close named nothing', () => {
-    expect(labelFor({ ...closingLong, tag: '' }, false)).toBe('Exit\n-1')
-  })
-
   it('still ids the two fills of one reversal apart', () => {
     // They share a bar, a price and a side. An id that collided would let one
-    // replace the other and the chart would show a reversal as a single order.
+    // replace the other and the chart would draw a reversal as a single order.
     const marks = chartMarkersFrom([
       { ...closingLong, tradeIndex: 1 },
       { ...openingShort, tradeIndex: 2 },
     ])
 
     expect(marks[0].id).not.toBe(marks[1].id)
+  })
+
+  it('needs no tag at all, since it never used one', () => {
+    expect(labelFor({ ...closingLong, tag: '' }, false)).toBe('Exit long\n-1')
+    expect(labelFor({ ...openingShort, tag: undefined }, true)).toBe('-1\nShort')
   })
 })

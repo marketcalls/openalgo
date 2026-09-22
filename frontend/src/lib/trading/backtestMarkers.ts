@@ -83,33 +83,58 @@ export function signedSize(side: unknown, units: unknown): string {
 }
 
 /**
- * One label: the name against the arrow, the signed size on the far side.
+ * One label: what the fill is against the arrow, the signed size on the far side.
  *
- * **An exit says so, and that is not decoration.** On a close the tag is a
- * reference to the position being closed, not a name for the fill:
- * `close(tag = "StUp")` means "close whatever StUp is holding". Drawn as a bare
- * label it puts the name of a long position next to a sell, so a stop and
- * reverse strategy writes `StUp -1` on the bar it goes short on, and a reader
- * has to decide which half of that to believe. It is also the bar carrying the
- * opposite entry, so both names appear together and the pair reads as a
- * contradiction rather than as the two orders of one reversal.
+ * **The tag is deliberately not drawn, because it is a name for a position and
+ * not a caption for an order.** `close(tag = "longEntry")` means "close whatever
+ * longEntry is holding", so the close is *required* to repeat the entry's tag:
+ * the language has no other way to say which position to flatten. Drawing it
+ * put the same word on both orders of a round trip, where it distinguished
+ * nothing, and put the name of a long beside a sell on every reversal.
  *
- * Naming the exit resolves it. `Exit StUp` beside `-1` is one story and the
- * `StDn -1` on the same bar is the other: the long was closed and the short was
- * opened, which is what happened and what the order book will show.
+ * So the label says what a reader actually wants to know and can get nowhere
+ * else on the chart: whether this fill opened or closed, and which way.
  *
- * A fill with no tag is labelled by its size alone rather than by an empty first
- * line, because a blank row in the plate is a gap a reader tries to read. An
- * exit with no tag still says it is one, because that is a fact about the fill
- * rather than about a name it never had.
+ * ```
+ * Long    +1      opened a long
+ * Short   -1      opened a short
+ * Exit long  -1   closed a long
+ * Exit short +1   closed a short
+ * ```
+ *
+ * Read from `kind` and `side` together, because neither alone says it. A sell
+ * is an entry when it opens a short and an exit when it closes a long, and the
+ * two are opposite events drawn at opposite ends of a bar.
+ *
+ * **A caption belongs to the author, and the language has no word for one yet.**
+ * There is no `comment` beside `tag` on an order call, so a trader cannot label
+ * a fill in their own words the way they can in other languages. Until there
+ * is, this describes the fill rather than inventing a name for it. When one
+ * arrives, it belongs here, in front of the description rather than instead of
+ * it: an author's own word for an order is worth more than a derived one, and
+ * the direction is still worth stating beside it.
  */
 export function labelFor(marker: ReportMarker, above: boolean): string {
-  const tag = typeof marker.tag === 'string' ? marker.tag.trim() : ''
-  const leaving = marker.kind === 'exit'
-  const name = leaving ? (tag === '' ? 'Exit' : `Exit ${tag}`) : tag
   const size = signedSize(marker.side, marker.units)
-  const lines = name === '' ? [size] : above ? [size, name] : [name, size]
+  const lines = above ? [size, natureOf(marker)] : [natureOf(marker), size]
   return lines.filter((line) => line !== '').join('\n')
+}
+
+/**
+ * What one fill did, in the words a trader uses for it.
+ *
+ * `kind` and `side` are read together because neither alone is the answer: a
+ * sell opens a short and closes a long, and calling both "sell" would put the
+ * same word on the two opposite ends of a trade.
+ */
+export function natureOf(marker: ReportMarker): string {
+  const selling = marker.side === 'sell'
+  if (marker.kind === 'exit') {
+    // An exit's side is the side of the order, so the position it closed is the
+    // other one: selling closes a long.
+    return selling ? 'Exit long' : 'Exit short'
+  }
+  return selling ? 'Short' : 'Long'
 }
 
 /**
