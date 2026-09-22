@@ -67,24 +67,20 @@ def test_the_username_path_falls_back_to_the_owner_before_refusing():
     )
 
 
-def test_a_self_send_without_the_owner_address_is_refused_not_reported_sent():
-    """PORTED DEFECT: this reported success for a message nobody received.
+def test_the_self_send_uses_the_documented_route_to_owner_form():
+    """The single-arg send is a real path, not a last resort.
 
-    The single-arg form returns without error and delivers nothing, and the
-    loop then recorded the recipient under ``sent``. The media branch beside it
-    already refused for this reason; the text branch did not.
+    A comment here once called it unreliable, against wars 0.1.3. The library
+    installed is 0.1.4, whose ``send`` documents ``wa.send("Hello there")``
+    as "text to owner" and raises ``ValueError`` when no owner is configured,
+    so a failure is loud. Refusing it blocked the only self-send an install
+    has before its first inbound message, because ``own_jid`` is captured
+    from an ``is_from_me`` message and 0.1.4 exposes no attribute to ask for
+    it, so pairing alone never fills it in.
     """
-    send = (
-        _function(SERVICE, "_send_blocking")
-        if _has(SERVICE, "_send_blocking")
-        else _source(SERVICE)
-    )
-    # The single-arg fallback must be gone from the text path.
-    assert 'self._wa.send(text or "")' not in send, (
-        "the single-arg route-to-owner send delivers nothing and must not be attempted"
-    )
-    assert "has not been captured" in send, (
-        "a self send with no owner address must say so in the trader's words"
+    send = _source(SERVICE)
+    assert 'ret = self._wa.send(text or "")' in send, (
+        "the documented route-to-owner send must still be attempted"
     )
 
 
