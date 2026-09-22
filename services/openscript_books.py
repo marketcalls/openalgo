@@ -117,7 +117,7 @@ def tradebook(script: str, api_key: str, mode: str) -> dict[str, Any]:
         return _error("Could not read the tradebook")
 
 
-def positions(script: str, api_key: str, mode: str) -> dict[str, Any]:
+def positions(name: str, api_key: str, mode: str) -> dict[str, Any]:
     """The contracts this strategy traded, in the global positionbook's envelope.
 
     **Weaker than the other two, and it says so.** A position row is per
@@ -126,9 +126,12 @@ def positions(script: str, api_key: str, mode: str) -> dict[str, Any]:
     contracts this strategy actually traded, taken from its own orders, and a
     row it returns may hold size somebody else opened.
 
-    A strategy's profit is read from its own fills, never from these rows. This
-    answers "what am I in because of this strategy", not "what is this strategy
-    worth".
+    **The profit beside the rows is this deployment's, not the account's.** It
+    is read from the platform's own per strategy book, which keeps a leg per
+    order tag with realised profit accumulated across sessions, and marked
+    against the prices in the answer that has just been read. Passed through as
+    it arrives, every deployment on the server reported the account's profit as
+    its own. See `_own_totals`.
     """
     try:
         ok, orders = _fetch("orderbook", mode, api_key)
@@ -137,7 +140,7 @@ def positions(script: str, api_key: str, mode: str) -> dict[str, Any]:
         placed, _ = _rows_and_shape(_data_of(orders), "orders")
         traded = {
             (_text(row.get("symbol")), _text(row.get("exchange")))
-            for row in _mine(placed, script)
+            for row in _mine(placed, name)
         }
 
         ok, response = _fetch("positions", mode, api_key)
@@ -153,9 +156,10 @@ def positions(script: str, api_key: str, mode: str) -> dict[str, Any]:
             if (_text(row.get("symbol")), _text(row.get("exchange"))) in traded
         ]
         _narrowed(payload, data, kept, under)
+        _own_totals(payload, name, api_key, found)
         return payload
     except Exception:
-        logger.exception("Could not build the positions for %s", script)
+        logger.exception("Could not build the positions for %s", name)
         return _error("Could not read the positions")
 
 
@@ -200,6 +204,71 @@ def _fetch(book: str, mode: str, api_key: str) -> tuple[bool, Any]:
 # ---------------------------------------------------------------------------
 # Small shared readers
 # ---------------------------------------------------------------------------
+
+
+#: The figures a positions answer states beside its rows, which are the whole
+#: account's and never one deployment's.
+#:
+#: A page reads these in preference to adding up the rows, and it is right to:
+#: a strategy's realised profit is on trades whose rows the book no longer holds,
+#: so a sum of what came back is the unrealised half only. Left as they arrive,
+#: though, every deployment on the server reports the account's profit as its
+#: own, which is the one number a trader is actually watching.
+ACCOUNT_TOTALS = (
+    "total_pnl",
+    "total_pnl_today",
+    "total_unrealized_pnl",
+    "total_today_realized_pnl",
+    "total_realized_pnl",
+)
+
+
+def _own_totals(
+    payload: dict[str, Any], name: str, api_key: str, positions: list[dict[str, Any]]
+) -> None:
+    """Replace the account's totals with this deployment's, or remove them.
+
+    **The platform already keeps this per strategy.** Every order carries its
+    deployment's tag, and `strategy_book_db` keeps a leg per tag with the
+    realised profit accumulated across sessions. `pnl_from_book` marks the open
+    part of those legs against the position book that has just been read, which
+    is the same prices the rows in this answer carry.
+
+    **What cannot be worked out is removed rather than passed through.** An
+    account total on a filtered list is not this strategy's profit, it is
+    somebody else's added to it, and a trader reading it has no way to tell.
+    Removing it leaves the page adding up the rows, which understates by the
+    realised part and is at least this deployment's own number.
+
+    Nothing raises. A total that could not be worked out is one this answer does
+    not carry; a book that could not be read must not take the rows down with
+    it.
+    """
+    tag = tag_for(name)
+    if not tag:
+        for key in ACCOUNT_TOTALS:
+            payload.pop(key, None)
+        return
+
+    try:
+        from database.auth_db import verify_api_key
+        from database.strategy_book_db import get_strategy_legs
+        from services.strategy_pnl_service import pnl_from_book
+
+        user_id = verify_api_key(api_key)
+        legs = get_strategy_legs(user_id=user_id, strategy=tag)
+        figures = pnl_from_book(legs, positions, strategy=tag)
+    except Exception:
+        logger.exception("Could not read the per strategy profit for %s", tag)
+        for key in ACCOUNT_TOTALS:
+            payload.pop(key, None)
+        return
+
+    payload["total_pnl"] = figures.get("total", 0.0)
+    payload["total_pnl_today"] = figures.get("today_total", 0.0)
+    payload["total_unrealized_pnl"] = figures.get("unrealized", 0.0)
+    payload["total_today_realized_pnl"] = figures.get("today_realized", 0.0)
+    payload["total_realized_pnl"] = figures.get("realized", 0.0)
 
 
 def _mine(rows: Any, name: str) -> list[dict[str, Any]]:

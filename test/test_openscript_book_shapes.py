@@ -136,8 +136,117 @@ def test_the_positionbook_reads_a_bare_list_and_answers_one(monkeypatch):
 
     assert isinstance(out["data"], list)
     assert [row["symbol"] for row in out["data"]] == ["TCS"]
-    # The envelope's own figures are the platform's and are carried through.
-    assert out["total_pnl"] == 0.9
+    # And the account's own figure is not carried through as this strategy's.
+    # See the test below: that is a different and worse defect.
+    assert "total_pnl" not in out
+
+
+def test_the_account_profit_is_never_reported_as_one_deployment_s(monkeypatch):
+    """THE ONE A TRADER WOULD ACT ON.
+
+    A positions answer states its totals beside its rows, and those totals are
+    the whole account's. The rows were narrowed to one deployment and the totals
+    were not, so every deployment on the server reported the account's profit as
+    its own: two brand new deployments, holding nothing and having traded
+    nothing, each showed the same several hundred rupees.
+
+    It is the one number a trader is actually watching, and there is nothing on
+    the screen that would tell them it belongs to something else.
+    """
+
+    def fetch(book, mode, api_key):
+        if book == "orderbook":
+            return True, {"status": "success", "data": {"orders": []}}
+        return True, {
+            "status": "success",
+            "total_pnl": 2113.4,
+            "total_pnl_today": 2113.4,
+            "total_unrealized_pnl": 1100.0,
+            "total_today_realized_pnl": 1013.4,
+            "data": [{"symbol": "RELIANCE", "exchange": "NSE", "quantity": 4, "pnl": 2113.4}],
+        }
+
+    monkeypatch.setattr(books, "_fetch", fetch)
+
+    out = books.positions("openscript_probe_TCS_NSE_1m", "key", "sandbox")
+
+    for key in ("total_pnl", "total_pnl_today", "total_unrealized_pnl"):
+        assert out.get(key) != 2113.4, f"{key} is the account's and was reported as one strategy's"
+
+
+def test_a_deployment_s_own_profit_comes_from_the_platform_s_own_book(monkeypatch):
+    """Catches the totals simply dropped and never replaced.
+
+    Dropping them is honest and loses the realised half, which for a strategy
+    that has been trading all day is most of the number. The platform already
+    keeps a leg per order tag with realised profit accumulated across sessions,
+    so this is read rather than recomputed or given up on.
+    """
+
+    def fetch(book, mode, api_key):
+        if book == "orderbook":
+            return True, {"status": "success", "data": {"orders": [mine(orderid="1")]}}
+        return True, {
+            "status": "success",
+            "total_pnl": 2113.4,
+            "data": [mine(quantity=1, pnl=0.5)],
+        }
+
+    monkeypatch.setattr(books, "_fetch", fetch)
+    monkeypatch.setattr(books, "tag_for", lambda one: TAG)
+
+    def legs(user_id=None, strategy=None):
+        assert strategy == TAG, "the per strategy book was asked about the wrong strategy"
+        return [
+            {
+                "strategy": TAG,
+                "symbol": "TCS",
+                "exchange": "NSE",
+                "product": "MIS",
+                "quantity": 0.0,
+                "average_price": 0.0,
+                "realized_pnl": 17.5,
+                "today_realized_pnl": 17.5,
+            }
+        ]
+
+    import database.strategy_book_db as book_db
+
+    monkeypatch.setattr(book_db, "get_strategy_legs", legs)
+
+    out = books.positions(TAG, "key", "sandbox")
+
+    assert out["total_pnl"] == 17.5
+    assert out["total_today_realized_pnl"] == 17.5
+
+
+def test_a_per_strategy_book_that_cannot_be_read_takes_no_total_with_it(monkeypatch):
+    """A figure that could not be worked out is one this answer does not carry.
+
+    Never the account's, which is the number this whole thing exists to stop
+    being shown, and never zero, which reads as a strategy that is flat and fine.
+    The rows still come back: one unreadable figure must not take a book down.
+    """
+
+    def fetch(book, mode, api_key):
+        if book == "orderbook":
+            return True, {"status": "success", "data": {"orders": [mine(orderid="1")]}}
+        return True, {"status": "success", "total_pnl": 2113.4, "data": [mine(quantity=1)]}
+
+    monkeypatch.setattr(books, "_fetch", fetch)
+    monkeypatch.setattr(books, "tag_for", lambda one: TAG)
+
+    import database.strategy_book_db as book_db
+
+    def boom(user_id=None, strategy=None):
+        raise RuntimeError("the strategy book is not there")
+
+    monkeypatch.setattr(book_db, "get_strategy_legs", boom)
+
+    out = books.positions(TAG, "key", "sandbox")
+
+    assert "total_pnl" not in out
+    assert [row["symbol"] for row in out["data"]] == ["TCS"]
 
 
 def test_a_positionbook_that_names_its_list_is_read_too(monkeypatch):
