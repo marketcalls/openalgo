@@ -224,7 +224,33 @@ def shutdown_runtime() -> None:
 
 
 def _handle_signal(signum, _frame):
-    """Tear down, then exit with the code a shell expects from a signal."""
+    """Tear down, then exit with the code a shell expects from a signal.
+
+    **A second signal is not a second shutdown, and must not raise.** Once the
+    first has run, the interpreter is already on its way out and its ``atexit``
+    callbacks are running: one of them stops the child processes that place
+    orders, and it waits several seconds per child for each to finish the bar it
+    is on. Raising ``SystemExit`` here again lands it inside whichever callback
+    is in flight, and the operator sees it as ``Exception ignored in atexit
+    callback``.
+
+    The keypress that does it is the ordinary one. A shutdown that pauses looks
+    stuck, so somebody presses Ctrl+C again, and the thing that pause is buying
+    is the orderly stop of a live strategy.
+
+    So a later signal says what is already happening and returns. There is
+    deliberately no third-strike force exit: the only way to make this process
+    leave faster than its children is to abandon them, which is the outcome this
+    whole path exists to prevent. An operator who truly wants that can kill the
+    process from outside, which is a decision rather than a repeated keystroke.
+    """
+    if _shutdown_done:
+        logger.info(
+            f"Received signal {signum} while already shutting down; "
+            "waiting for running strategies to stop"
+        )
+        return
+
     logger.info(f"Received signal {signum}, shutting down")
     shutdown_runtime()
     raise SystemExit(128 + int(signum))

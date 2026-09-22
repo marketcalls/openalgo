@@ -1132,7 +1132,19 @@ def test_every_run_is_stopped_before_the_worker_goes(slow_runner):
 
 
 def test_stopping_every_run_is_what_happens_when_the_interpreter_exits():
-    """Registered at import, so nobody has to remember to ask for it."""
+    """Registered at import, so nobody has to remember to ask for it.
+
+    What is registered is the exit wrapper rather than ``stop_every_run``
+    itself. The two differ in one step: the function re-raises an interrupt it
+    caught, because a caller that asked to exit should exit, and the wrapper
+    swallows it, because by the time an ``atexit`` callback runs the exit code is
+    already set and re-raising can only print that the exception was ignored.
+
+    So this asserts both halves. Registering something is not enough, and
+    registering something that does not stop every run is the failure this test
+    exists for: a child outlives its parent, and one left behind keeps placing
+    orders.
+    """
     tree = _syntax_of(SERVICE_PATH)
     registered = [
         node
@@ -1144,11 +1156,29 @@ def test_stopping_every_run_is_what_happens_when_the_interpreter_exits():
         and node.func.value.id == "atexit"
     ]
     assert registered, "nothing is registered to run when this worker exits"
-    assert any(
-        isinstance(one.args[0], ast.Name) and one.args[0].id == "stop_every_run"
-        for one in registered
-        if one.args
-    )
+
+    names = {one.args[0].id for one in registered if one.args and isinstance(one.args[0], ast.Name)}
+    assert names, "what is registered at exit is not a plain function name"
+
+    wanted = {"stop_every_run", "_stop_every_run_at_exit"}
+    chosen = names & wanted
+    assert chosen, f"what runs at exit is {sorted(names)}, none of which stops the runs"
+
+    # Whichever is registered has to actually reach `stop_every_run`.
+    for name in chosen:
+        if name == "stop_every_run":
+            continue
+        wrapper = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        calls = {
+            node.func.id
+            for node in ast.walk(wrapper)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "stop_every_run" in calls, f"{name} does not stop the runs"
 
 
 def test_a_name_that_is_not_a_script_never_reaches_a_command_line(quiet_service):

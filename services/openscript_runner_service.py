@@ -800,18 +800,75 @@ def stop_every_run() -> list[str]:
         logger.info("Stopping %d OpenScript run(s) before this worker exits", len(ids))
 
     stopped = []
+    interrupted: BaseException | None = None
     for run_id in ids:
         try:
             ok, _ = stop_run(run_id)
         except Exception:
             logger.exception("An OpenScript run did not stop cleanly at exit")
             continue
+        except BaseException as leaving:
+            # **Not ``Exception``, and this is the whole point of the loop.**
+            # ``SystemExit`` and ``KeyboardInterrupt`` are not ``Exception``, so
+            # an ``except Exception`` here lets them out of the loop and
+            # abandons every run after this one. That is not a tidiness
+            # question: this function is what stops child processes that place
+            # orders, a child outlives its parent, and the ones left behind keep
+            # trading with nothing able to stop them.
+            #
+            # It arrives by an ordinary route. This is registered with
+            # ``atexit``, so it runs while the interpreter is already leaving
+            # after the first Ctrl+C. A second Ctrl+C while it is waiting for a
+            # child lands the signal handler's ``SystemExit`` inside this loop,
+            # which is exactly the impatient keypress somebody makes when a
+            # shutdown seems slow. The wait it interrupts is the five seconds a
+            # run is given to finish the bar it is on.
+            #
+            # So the signal is recorded and the remaining runs are still
+            # stopped. Stopping them is the safety-critical half and it is
+            # bounded; the exit is honoured immediately afterwards.
+            logger.warning(
+                "Interrupted while stopping OpenScript runs at exit; stopping the rest first"
+            )
+            if interrupted is None:
+                interrupted = leaving
+            continue
         if ok:
             stopped.append(run_id)
+
+    if interrupted is not None:
+        # Re-raised so a direct caller still exits the way it was told to. Under
+        # ``atexit`` the interpreter prints that it ignored this, which is
+        # noise; every child is gone by the time it does, which is the part that
+        # matters.
+        raise interrupted
     return stopped
+
+
+def _stop_every_run_at_exit() -> None:
+    """``stop_every_run`` for the way out of the interpreter.
+
+    The only difference is the last step. ``stop_every_run`` re-raises an
+    interrupt it caught, because a caller that asked to exit should exit and
+    with the code it named. By the time this runs the exit code is already
+    decided: the first signal's ``SystemExit`` set it and the interpreter is
+    running its callbacks on the way out. Re-raising here cannot change it and
+    can only print ``Exception ignored in atexit callback``, which reads like a
+    crash during shutdown and hides the one line that says what happened.
+
+    So the interrupt is logged and swallowed. What it was interrupting has
+    already been finished by the time we get here, which is the part that
+    matters: no child is left placing orders.
+    """
+    try:
+        stop_every_run()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Shutdown was interrupted; every OpenScript run was stopped first")
+    except Exception:
+        logger.exception("Stopping the OpenScript runs at exit did not finish cleanly")
 
 
 # Registered at import, which is what the strategy host does with its own, and
 # for the same reason: the thing that must not be forgotten is the one that has to
 # happen without anybody remembering to ask for it.
-atexit.register(stop_every_run)
+atexit.register(_stop_every_run_at_exit)
