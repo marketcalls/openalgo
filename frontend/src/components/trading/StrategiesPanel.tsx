@@ -39,6 +39,7 @@ import {
 import { kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
 import { useThemeStore } from '@/stores/themeStore'
 import { cn } from '@/lib/utils'
+import { StrategyBooks } from './StrategyBooks'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
 interface Props {
@@ -79,6 +80,11 @@ export function StrategiesPanel({ getChartContext }: Props) {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<RunSettings | null>(null)
   const [unreachable, setUnreachable] = useState(false)
+  /** Which strategy's books are open. One at a time: a panel of open tables is unreadable. */
+  const [opened, setOpened] = useState<string | null>(null)
+  /** Bumped when a run starts or stops, so an open book refetches rather than going stale. */
+  const [revision, setRevision] = useState(0)
+  const [search, setSearch] = useState('')
   const live = useRef(true)
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -133,6 +139,7 @@ export function StrategiesPanel({ getChartContext }: Props) {
       try {
         await what()
         await refresh()
+        setRevision((n) => n + 1)
       } catch (error) {
         setProblem(error instanceof Error ? error.message : String(error))
       } finally {
@@ -206,6 +213,16 @@ export function StrategiesPanel({ getChartContext }: Props) {
           </p>
         )}
 
+        {strategies.length > 6 && (
+          <input
+            type="search"
+            className="h-7 rounded border border-border bg-background px-2 text-[11px]"
+            placeholder={`Search ${strategies.length} strategies`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        )}
+
         {strategies.length === 0 && (
           <p className="text-[11px] text-muted-foreground">
             No strategies saved. A study plots and places no orders, so only a script that
@@ -213,7 +230,10 @@ export function StrategiesPanel({ getChartContext }: Props) {
           </p>
         )}
 
-        {strategies.map((file) => {
+        {strategies
+          .filter((file) => file.toLowerCase().includes(search.trim().toLowerCase()))
+          .sort((a, b) => Number(Boolean(runningFor(b))) - Number(Boolean(runningFor(a))))
+          .map((file) => {
           const run = runningFor(file)
           const held = settings.find((one) => one.file === file) ?? null
           const isEditing = editing === file
@@ -343,7 +363,17 @@ export function StrategiesPanel({ getChartContext }: Props) {
                 >
                   Settings
                 </button>
+                <button
+                  type="button"
+                  className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-expanded={opened === file}
+                  onClick={() => setOpened((held) => (held === file ? null : file))}
+                >
+                  {opened === file ? 'Hide' : 'Activity'}
+                </button>
               </div>
+
+              {opened === file && <StrategyBooks file={file} revision={revision} />}
             </div>
           )
         })}

@@ -179,3 +179,70 @@ export async function clearSchedule(file: string): Promise<void> {
     throw problemFrom(error, `The schedule for ${file} could not be cleared.`)
   }
 }
+
+// ---------------------------------------------------------------------------
+// What one strategy has done
+// ---------------------------------------------------------------------------
+
+/**
+ * A book comes back in the platform's own envelope, rows and all.
+ *
+ * Typed loosely on purpose. These are the global orderbook's own rows, whatever
+ * fields the broker in use puts on them, and narrowing them here would mean
+ * this file deciding which of a broker's columns a trader is allowed to see.
+ */
+export interface StrategyBook {
+  rows: Record<string, unknown>[]
+  statistics: Record<string, unknown> | null
+  problem: string | null
+}
+
+const EMPTY: StrategyBook = { rows: [], statistics: null, problem: null }
+
+/**
+ * The rows out of whichever key this book calls them.
+ *
+ * Three books and three spellings, plus a broker that answers `data` as a bare
+ * list. Read by trying each rather than by assuming, because a book that
+ * answered rows under a name this did not know would render as "no orders",
+ * which reads as a strategy that has done nothing.
+ */
+function rowsOf(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data as Record<string, unknown>[]
+  if (!data || typeof data !== 'object') return []
+  for (const key of ['orders', 'trades', 'positions', 'positionbook', 'data']) {
+    const held = (data as Record<string, unknown>)[key]
+    if (Array.isArray(held)) return held as Record<string, unknown>[]
+  }
+  return []
+}
+
+async function book(kind: string, file: string, signal?: AbortSignal): Promise<StrategyBook> {
+  try {
+    const res = await webClient.get<{ status: string; data?: unknown; message?: string }>(
+      `${BASE}/${kind}/${encodeURIComponent(file)}`,
+      { signal }
+    )
+    if (res.data?.status !== 'success') {
+      return { ...EMPTY, problem: res.data?.message || `The ${kind} could not be read.` }
+    }
+    const data = res.data.data
+    const statistics =
+      data && typeof data === 'object' && 'statistics' in (data as Record<string, unknown>)
+        ? ((data as Record<string, unknown>).statistics as Record<string, unknown>)
+        : null
+    return { rows: rowsOf(data), statistics, problem: null }
+  } catch (error) {
+    // A book that cannot be read is said so in the row rather than thrown: one
+    // failing tab must not take down the panel a trader is using to decide
+    // whether to stop something that is trading.
+    return { ...EMPTY, problem: problemFrom(error, `The ${kind} could not be read.`).message }
+  }
+}
+
+export const strategyOrderbook = (file: string, signal?: AbortSignal) =>
+  book('orderbook', file, signal)
+export const strategyTradebook = (file: string, signal?: AbortSignal) =>
+  book('tradebook', file, signal)
+export const strategyPositions = (file: string, signal?: AbortSignal) =>
+  book('positions', file, signal)
