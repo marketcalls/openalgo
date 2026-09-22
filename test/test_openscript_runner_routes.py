@@ -129,6 +129,9 @@ class Runner:
         self.started: list[tuple[tuple, dict]] = []
         self.stopped: list[str] = []
         self.forgot: list[bool] = []
+        #: Whether each of those was asked to close its position first, which
+        #: is the whole difference between Pause and Stop.
+        self.closed: list[bool] = []
         self.refuse_start = ""
         self.refuse_stop = ""
         self.raise_on_start = None
@@ -172,9 +175,12 @@ class Runner:
             }
             return True, f"{script} started at 09:20:00 IST"
 
-        def stop_run(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]:
+        def stop_run(
+            script_or_run_id: str, forget: bool = True, close: bool = False
+        ) -> tuple[bool, str]:
             self.stopped.append(script_or_run_id)
             self.forgot.append(forget)
+            self.closed.append(close)
             if self.refuse_stop:
                 return False, self.refuse_stop
             if self._held(script_or_run_id) is None:

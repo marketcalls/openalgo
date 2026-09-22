@@ -37,12 +37,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   clearSettings,
+  closeStrategy,
   overview,
+  pauseStrategy,
   type RunningStrategy,
   type RunSettings,
   saveSettings,
   startStrategy,
-  stopStrategy,
   strategyPositions,
 } from '@/api/openscriptRunner'
 import { type PriceableItem, useLivePrice } from '@/hooks/useLivePrice'
@@ -54,6 +55,7 @@ import { type PositionSummary, summaryOf } from '@/lib/trading/strategyPosition'
 import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
+import { ConfirmStop } from './ConfirmStop'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 import { StrategyBooks } from './StrategyBooks'
 import { StrategyInputs } from './StrategyInputs'
@@ -355,6 +357,14 @@ export function StrategiesPanel({ getChartContext }: Props) {
   const [typed, setTyped] = useState<Record<string, string>>({})
   const [sizeNote, setSizeNote] = useState('')
   const [unreachable, setUnreachable] = useState(false)
+  /**
+   * Which deployment has been asked to stop and is waiting to be confirmed.
+   *
+   * Stop closes a position, which spends a spread and cannot be taken back, so
+   * it is never one press. Pause costs nothing and is one press, which is the
+   * right way round: the button that is safe is the quick one.
+   */
+  const [confirming, setConfirming] = useState<string | null>(null)
   /** Which strategy's books are open. One at a time: a panel of open tables is unreadable. */
   const [opened, setOpened] = useState<string | null>(null)
   /** Bumped when a run starts or stops, so an open book refetches rather than going stale. */
@@ -724,6 +734,7 @@ export function StrategiesPanel({ getChartContext }: Props) {
             const file = one.id
             const run = one.run
             const held = one.settings
+            const where = run ?? held
             const holding = holdings[one.id]
             const isEditing = editing === one.id
 
@@ -805,14 +816,26 @@ export function StrategiesPanel({ getChartContext }: Props) {
 
                 <div className="flex gap-1.5">
                   {run ? (
-                    <button
-                      type="button"
-                      className="h-7 flex-1 rounded border border-border text-[11px] hover:border-destructive/50 hover:text-destructive disabled:opacity-50"
-                      disabled={busy === file}
-                      onClick={() => void act(file, () => stopStrategy(file))}
-                    >
-                      {busy === file ? 'Stopping' : 'Stop'}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="h-7 flex-1 rounded border border-border text-[11px] hover:bg-accent disabled:opacity-50"
+                        disabled={busy === file}
+                        title="End this strategy and leave its position exactly where it is"
+                        onClick={() => void act(file, () => pauseStrategy(file))}
+                      >
+                        {busy === file ? 'Working' : 'Pause'}
+                      </button>
+                      <button
+                        type="button"
+                        className="h-7 flex-1 rounded border border-border text-[11px] hover:border-destructive/50 hover:text-destructive disabled:opacity-50"
+                        disabled={busy === file}
+                        title="Close what this strategy is holding, then end it"
+                        onClick={() => setConfirming(one.id)}
+                      >
+                        Stop
+                      </button>
+                    </>
                   ) : (
                     <button
                       type="button"
@@ -841,12 +864,38 @@ export function StrategiesPanel({ getChartContext }: Props) {
                   </button>
                 </div>
 
+                {confirming === one.id && (
+                  <ConfirmStop
+                    file={one.file}
+                    where={[where?.symbol, where?.exchange, where?.interval]
+                      .filter(Boolean)
+                      .join(' ')}
+                    holding={holding}
+                    busy={busy === file}
+                    onCancel={() => setConfirming(null)}
+                    onPause={() =>
+                      void act(file, async () => {
+                        await pauseStrategy(file)
+                        setConfirming(null)
+                      })
+                    }
+                    onStop={() =>
+                      void act(file, async () => {
+                        await closeStrategy(file)
+                        setConfirming(null)
+                      })
+                    }
+                  />
+                )}
+
                 {opened === one.id && <StrategyBooks deployment={one.id} revision={revision} />}
               </div>
             )
           })}
 
         <p className="mt-auto text-[10px] leading-relaxed text-muted-foreground">
+          Pause ends a strategy and leaves its position for you to manage. Stop closes what it is
+          holding first, which spends a spread and cannot be taken back, so it asks before it does.
           A run is a process on the server and outlives this page: closing the browser stops
           nothing. Orders go through this platform's own order path, so a run trades with your
           broker while the platform is in live mode and against the sandbox while it is in analyzer

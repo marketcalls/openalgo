@@ -301,7 +301,12 @@ def test_the_routes_resolve_nothing_by_name():
 #: deliberate change to two files rather than a quiet change to one.
 EXPECTED_ROUTES = {
     "/openscript/runner/start/<path:filename>": {"POST"},
+    # Two ways to end a run, and they are separate routes rather than one with
+    # a flag: a caller that reaches the wrong one by accident should pause,
+    # which costs nothing, rather than close, which cannot be taken back.
     "/openscript/runner/stop/<path:filename>": {"POST"},
+    "/openscript/runner/pause/<path:filename>": {"POST"},
+    "/openscript/runner/close/<path:filename>": {"POST"},
     "/openscript/runner/status": {"GET"},
     "/openscript/runner/status/<path:filename>": {"GET"},
     "/openscript/runner/config": {"GET"},

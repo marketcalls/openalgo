@@ -152,6 +152,7 @@ if str(Path(__file__).resolve().parent.parent) not in sys.path:
 
 from openscript_host.live_bars import SETTLE_SECONDS as LIVE_BAR_SETTLE  # noqa: E402
 from openscript_host.live_bars import LiveBars  # noqa: E402 - after the path above
+from services.openscript_commands import CLOSE  # noqa: E402 - after the path above
 
 # Where the platform stores a trader's scripts, and what it calls the compiled
 # program it keeps beside one. Both mirror ``blueprints/openscript.py``, which
@@ -570,6 +571,37 @@ def next_wake(
     return max(0.0, min(target, ordinary) - now)
 
 
+def _asked_of(run_id: str) -> str:
+    """What the parent has asked of this run, or an empty string.
+
+    Nothing raises and an unreadable file is no instruction. A run that stopped
+    trading because it could not read this would be worse than one that misses
+    an instruction and is asked again a moment later.
+    """
+    try:
+        from services.openscript_commands import command_for
+
+        return command_for(run_id)
+    except Exception:  # noqa: BLE001 - see the note above
+        return ""
+
+
+def _forget_instruction(run_id: str) -> None:
+    """Drop an instruction this run could not carry out, so it is not retried.
+
+    The one case the parent does not clean up: it asked, this run tried, and the
+    position is still open. Left in place it would be attempted on every wake,
+    sending a closing order a minute for a position that is not closing, and the
+    log would say the same thing for the rest of the session.
+    """
+    try:
+        from services.openscript_commands import clear
+
+        clear(run_id)
+    except Exception:  # noqa: BLE001 - the run goes on either way
+        return
+
+
 def _bar_time_text(time_ms: int) -> str:
     """A bar's open instant as a clock time, in this server's own zone.
 
@@ -954,6 +986,114 @@ class Session:
     def stop(self) -> None:
         """Asked to finish. The loop leaves at its next check."""
         self.stopping = True
+
+    def flatten(self, wait_seconds: float = 20.0) -> bool:
+        """Close what this run is holding. True once it is flat, or was already.
+
+        **This is what Stop means and Pause does not.** Pause ends the process
+        and leaves the position, which is a trader taking it back. Stop is a
+        trader finished with the strategy, and a strategy that ended without
+        closing what it opened is a position nothing is watching.
+
+        **The size is this run's own, never the broker's.** Two strategies can
+        hold the same instrument, so squaring the account's net position in it
+        would close somebody else's. One order for exactly what this ledger says
+        it holds, in the opposite direction and tagged with this run, reduces the
+        broker's net by this run's share and no more.
+
+        **It goes out beside the strategy rather than through it.** Closing is a
+        trader's instruction, not a decision the script made, so there is no
+        intent, no bar and no ledger row: the order is sent, watched to a fill by
+        its own id, and this run then ends. The ledger is not told, because
+        nothing reads it again.
+
+        **A close that does not go out leaves the run running.** The position is
+        still there, so something has to be able to stop it: reporting success
+        and exiting is how a position ends up with nothing managing it. That is
+        the platform's own rule for a stop whose exit orders were refused, and it
+        is why this answers False rather than raising.
+        """
+        held = self._position()
+        if not held:
+            say("Nothing is open, so this run has nothing to close.")
+            return True
+
+        side = "SELL" if held > 0 else "BUY"
+        size = int(abs(held))
+        if size <= 0 or float(abs(held)) != size:
+            say(
+                f"This run holds {held}, which cannot be sent as a whole number of units, so it "
+                "has not been closed. The position is still open and this run is still here."
+            )
+            return False
+
+        say(f"Closing what this run holds: {side.lower()} {size} {self.options.symbol}.")
+        try:
+            answered = self.client.placeorder(
+                strategy=self.options.strategy_name,
+                symbol=self.options.symbol,
+                exchange=self.options.exchange,
+                action=side,
+                price_type="MARKET",
+                product=self.product,
+                quantity=size,
+            )
+        except Exception as unreachable:  # noqa: BLE001 - said, not raised
+            say(
+                f"The closing order could not be sent, so the position is still open and this "
+                f"run is still here. ({unreachable})"
+            )
+            return False
+
+        if not isinstance(answered, dict) or answered.get("status") != "success":
+            reason = "no reason was given"
+            if isinstance(answered, dict):
+                reason = str(answered.get("message", reason))
+            say(
+                f"The closing order was not accepted, so the position is still open and this "
+                f"run is still here: {reason}"
+            )
+            return False
+
+        order_id = str(answered.get("orderid", ""))
+        say(f"The closing order is {order_id}. Watching it.")
+
+        # Watched to a fill rather than sent and forgotten. An order accepted
+        # here and rejected at the broker leaves exactly the position this was
+        # pressed to be rid of, and a run that had already exited could not say.
+        until = time.time() + wait_seconds
+        while time.time() < until and not self._order_is_done(order_id):
+            time.sleep(0.5)
+
+        if self._order_is_done(order_id):
+            say("Closed. This run holds nothing.")
+            return True
+
+        say(
+            "The closing order was accepted and has not finished yet. The position may still be "
+            "open, so this run stays here rather than leaving it to nobody. Check the order, "
+            "then stop this run again."
+        )
+        return False
+
+    def _order_is_done(self, order_id: str) -> bool:
+        """Whether this order has filled. Unreadable answers no, deliberately.
+
+        An order this cannot read may still be working, and treating that as
+        done is how a run exits on a position that never closed.
+        """
+        try:
+            answered = self.client.orderstatus(
+                order_id=order_id, strategy=self.options.strategy_name
+            )
+        except Exception:  # noqa: BLE001 - asked again in a moment
+            return False
+        if not isinstance(answered, dict) or answered.get("status") != "success":
+            return False
+        data = answered.get("data")
+        if not isinstance(data, dict):
+            return False
+        return STATUS_WORDS.get(str(data.get("order_status", "")).strip().lower()) == "filled"
 
     def cycle(self) -> int | None:
         """One wake: the feed's closed bars if it has any, otherwise history.
@@ -1602,11 +1742,20 @@ class Session:
         ``services/place_order_service.py``. ``force_live`` is the documented way
         out and this runner deliberately does not take it, so instead the
         destination of the first accepted order is remembered and every later one
-        is checked against it. A run whose destination changes underneath it is
-        stopped, loudly, with the position named: continuing would be sending an
-        exit somewhere the entry never went, which is the one outcome worse than
-        stopping.
+        is checked against it. A run that was **holding** when its destination
+        changed is stopped, loudly, with the position named: continuing would be
+        sending an exit somewhere the entry never went, which is the one outcome
+        worse than stopping. A run that was flat follows the platform instead,
+        because there is nothing open anywhere to be stranded and an operator
+        moving the platform between live and analyzer is an ordinary thing to
+        do several times a day.
         """
+        # Read before the order goes out, because the answer afterwards is about
+        # a position this order has already begun to move. Flat here means
+        # everything this run has open is at whatever destination this order
+        # reaches, which is what makes following the platform safe.
+        held_before = self._position()
+
         if intent.kind == "cancel":
             self._cancel(intent)
             return True
@@ -1659,17 +1808,38 @@ class Session:
             self._destination = went_to
             say(f"Orders from this run are going to the {went_to} destination.")
         elif went_to != self._destination:
-            # Do not try to put it back. The entry is where it is, and this run
-            # can no longer reason about the position it thinks it holds.
-            self.stop()
-            say(
-                f"STOPPING: this order went to the {went_to} destination and every order "
-                f"before it went to the {self._destination} one. The platform's analyzer "
-                "setting changed while this run was holding a position. Whatever is open "
-                "was opened against the earlier destination and must be checked and closed "
-                "by a person: this run will send nothing further."
-            )
-            return False
+            # **What makes a changed destination dangerous is a position, not
+            # the change.** An operator moving the platform between live and
+            # analyzer is an ordinary thing to do, several times a day. A run
+            # that was holding nothing when they did it has nothing open at the
+            # earlier destination, so it simply follows the platform and carries
+            # on, which is what a trader expects of a strategy they left
+            # running: it used to stop, so a toggle flipped and back silently
+            # killed every idle strategy on the server.
+            #
+            # `held_before` is the position this run had before the order that
+            # has just gone out, because that order is already at the new
+            # destination: flat before it means everything now open is there
+            # too, and nothing is stranded.
+            if not held_before:
+                self._destination = went_to
+                say(
+                    f"The platform's analyzer setting changed, so this run now sends to the "
+                    f"{went_to} destination. It was holding nothing when that happened, so "
+                    "nothing is open at the earlier one and this run continues."
+                )
+            else:
+                # Do not try to put it back. The entry is where it is, and this
+                # run can no longer reason about the position it thinks it holds.
+                self.stop()
+                say(
+                    f"STOPPING: this order went to the {went_to} destination and every order "
+                    f"before it went to the {self._destination} one. The platform's analyzer "
+                    "setting changed while this run was holding a position. Whatever is open "
+                    "was opened against the earlier destination and must be checked and closed "
+                    "by a person: this run will send nothing further."
+                )
+                return False
 
         order_id = str(answered.get("orderid", ""))
         for at, one in enumerate(covering or [intent]):
@@ -1694,6 +1864,23 @@ class Session:
                 f"{self.product}. Order {order_id}."
             )
         return True
+
+    def _position(self) -> float:
+        """This run's net position in units, ``0`` while flat.
+
+        The ledger's own answer rather than a second count kept beside it, and
+        zero for a study, which holds no ledger and can hold no position.
+        Nothing raises: this is read on the order path, and a run that refused
+        to send because it could not measure itself would be worse than one that
+        treats an unreadable position as a held one.
+        """
+        if self.ledger is None:
+            return 0.0
+        try:
+            return float(self.ledger.size())
+        except Exception:  # noqa: BLE001 - see the note above
+            say("This run could not read its own position, so it is treated as holding.")
+            return 1.0
 
     def _cancel(self, intent) -> None:
         """Cancel every order of this run that still carries the tag named.
@@ -1911,6 +2098,11 @@ def main(argv=None) -> int:
         say("Asked to stop. Finishing the current bar.")
         session.stop()
 
+    # What this run does on the way out, read from the instruction the parent
+    # left for it rather than from the signal, because the two signals a run
+    # answers both only mean "leave" and Windows has no third one. See
+    # `services/openscript_commands`.
+
     # SIGBREAK is the Windows half: the service sends CTRL_BREAK_EVENT to this
     # process group, and without a handler for it the default action ends the
     # process where it stands rather than at the end of the bar.
@@ -1961,6 +2153,18 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
     lateness: list[float] = []
 
     while not session.stopping:
+        # Read each wake, and before the bar rather than after it: a trader who
+        # has pressed Stop is not waiting on one more bar's decisions.
+        asked = _asked_of(session.options.strategy_name)
+        if asked == CLOSE:
+            if session.flatten():
+                say("Stopped, holding nothing.")
+                return EXIT_OK
+            # Not flat, so this run stays: something has to be able to stop a
+            # position, and a run that exited on a close it did not manage
+            # leaves one with nothing watching it. `flatten` has said why.
+            _forget_instruction(session.options.strategy_name)
+
         known = len(session._times)
         try:
             finished = session.cycle()

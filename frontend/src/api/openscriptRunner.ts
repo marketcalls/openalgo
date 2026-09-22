@@ -169,11 +169,37 @@ export async function startStrategy(file: string): Promise<RunningStrategy> {
   }
 }
 
-export async function stopStrategy(file: string): Promise<void> {
+/**
+ * End a run and leave its position exactly where it is.
+ *
+ * **This is a pause and not a stop**, and the difference is the position. A
+ * trader pauses to change a parameter, to look at what a strategy is doing, or
+ * before restarting the server: the position becomes theirs to manage and the
+ * strategy stops deciding about it. `closeStrategy` is the one that spends
+ * money, and it is a separate call for exactly that reason.
+ */
+export async function pauseStrategy(name: string): Promise<void> {
   try {
-    await webClient.post(`${BASE}/stop/${encodeURIComponent(file)}`)
+    await webClient.post(`${BASE}/pause/${encodeURIComponent(name)}`)
   } catch (error) {
-    throw problemFrom(error, `${file} could not be stopped.`)
+    throw problemFrom(error, `${name} could not be paused.`)
+  }
+}
+
+/**
+ * Close what a run is holding, then end it.
+ *
+ * **This one spends money and cannot be taken back**, so nothing here calls it
+ * without the trader having been asked. A close that did not happen comes back
+ * as a refusal with the reason, and the run is still running and still holding:
+ * the message is passed through rather than replaced, because it says what to
+ * do next.
+ */
+export async function closeStrategy(name: string): Promise<void> {
+  try {
+    await webClient.post(`${BASE}/close/${encodeURIComponent(name)}`)
+  } catch (error) {
+    throw problemFrom(error, `${name} could not be closed and stopped.`)
   }
 }
 

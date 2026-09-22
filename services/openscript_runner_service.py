@@ -85,6 +85,8 @@ from time import monotonic, sleep
 import psutil
 import pytz
 
+from services.openscript_commands import ask as ask_to_close
+from services.openscript_commands import clear as forget_instruction
 from services.openscript_deployment import deployment_id, is_deployment_id
 from services.openscript_run_config import (
     PRODUCTS,
@@ -759,14 +761,37 @@ def _spawn_claimed(
     return True, f"{script} started at {started.strftime('%H:%M:%S IST')}"
 
 
-def stop_run(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]:
-    """Stop one run and reap its process.
+def stop_run(
+    script_or_run_id: str, forget: bool = True, close: bool = False
+) -> tuple[bool, str]:
+    """End one run and reap its process.
 
-    ``forget`` is whether this also means the trader no longer wants the script
-    running. It does when somebody presses Stop, and it does not when the worker
-    is going down: stopping a child on the way out is correct, because a child
-    outlives its parent, but it is not the trader changing their mind. See
-    `openscript_running`.
+    **There are two ways to end a run and they are not the same thing.**
+    ``close`` is which. With it False this is a *pause*: the process ends and
+    whatever the run was holding stays exactly where it is, which is a trader
+    taking the position back. With it True this is a *stop*: the run closes what
+    it holds first and then ends, which is a trader finished with the strategy.
+    A strategy that ended without closing what it opened is a position nothing
+    is watching, and a strategy whose position was closed when the trader only
+    meant to change a parameter is money spent for nothing. Neither can be
+    guessed, so the caller says which.
+
+    **The closing is the run's own, and it has to be.** Two deployments can hold
+    the same instrument, so squaring the account's net position in it would
+    close somebody else's; only the run knows its own size. It is asked through
+    a file rather than a signal, because the two signals a run answers both mean
+    "leave" and Windows has no third one. See `openscript_commands`.
+
+    **A close that did not happen does not end the run.** The position is still
+    there, so something has to be able to stop it: this answers False and leaves
+    the run registered and running, which is the platform's own rule for a stop
+    whose exit orders were refused.
+
+    ``forget`` is whether this also means the trader no longer wants the
+    deployment running. It does when somebody presses Pause or Stop, and it does
+    not when the worker is going down: ending a child on the way out is correct,
+    because a child outlives its parent, but it is not the trader changing their
+    mind. See `openscript_running`.
 
     The claim is taken under the lock and the waiting is done outside it, which is
     the strategy host's shape and is there for the same reason: a run takes as
@@ -779,12 +804,26 @@ def stop_run(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]:
     """
     run_id = _as_run_id(script_or_run_id)
 
+    if close:
+        gone, why = _close_and_wait(run_id)
+        if not gone:
+            return False, why
+
     with PROCESS_LOCK:
         _forget_finished_locked()
         if run_id in STOPPING_RUNS:
             return False, "That run is already stopping"
         held = RUNNING_RUNS.pop(run_id, None)
         if held is None:
+            if close:
+                # It closed its position and ended by itself, which the sweep
+                # above has already noticed. That is the whole of what was
+                # asked for, so it is a success and not a missing run.
+                if forget:
+                    mark_stopped(run_id)
+                forget_instruction(run_id)
+                logger.info("Closed and stopped the OpenScript run %s", run_id)
+                return True, "closed and stopped"
             return False, "That run is not running"
         STOPPING_RUNS.add(run_id)
 
@@ -804,9 +843,56 @@ def stop_run(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]:
 
     if forget:
         mark_stopped(run_id)
+    forget_instruction(run_id)
 
-    logger.info("Stopped the OpenScript run %s", run_id)
-    return True, f"{held.get('script', run_id)} stopped"
+    what = "closed and stopped" if close else "paused"
+    logger.info("The OpenScript run %s was %s", run_id, what)
+    return True, f"{held.get('script', run_id)} {what}"
+
+
+#: How long to give a run to close what it holds and leave, and how often to
+#: look while it does.
+#:
+#: Long enough for a market order to reach a broker and come back, which is
+#: seconds rather than milliseconds, and not so long that a page is left
+#: waiting: the deployment gives a request five minutes, and a caller that has
+#: waited this long is better told what is happening than held further.
+CLOSE_SECONDS = 25.0
+CLOSE_LOOK = 0.5
+
+
+def _close_and_wait(run_id: str) -> tuple[bool, str]:
+    """Ask a run to close what it holds and leave. True once it has gone.
+
+    Answers False with the reason while it is still there, and leaves it
+    running: a run that did not close is a run still holding a position, and
+    something has to be able to stop it.
+    """
+    with PROCESS_LOCK:
+        held = RUNNING_RUNS.get(run_id)
+    if held is None:
+        return False, "That run is not running"
+
+    ask_to_close(run_id)
+
+    process = held.get("process")
+    until = monotonic() + CLOSE_SECONDS
+    while monotonic() < until:
+        try:
+            if process is not None and process.poll() is not None:
+                return True, ""
+        except (OSError, ValueError, AttributeError):
+            # A process this worker can no longer read is one it can no longer
+            # wait for. Treated as still here, which leaves the run registered.
+            break
+        sleep(CLOSE_LOOK)
+
+    forget_instruction(run_id)
+    return False, (
+        "This strategy did not close its position in time, so it is still running and still "
+        "holding it. Its own log says what happened. Deal with the position and stop it again, "
+        "or use Pause to end the strategy and keep the position."
+    )
 
 
 def _as_run_id(given: str) -> str:

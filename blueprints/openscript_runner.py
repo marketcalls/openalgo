@@ -737,17 +737,30 @@ def start(filename):
     ), 202
 
 
+@openscript_runner_bp.route("/pause/<path:filename>", methods=["POST"])
 @openscript_runner_bp.route("/stop/<path:filename>", methods=["POST"])
 @check_session_validity
-def stop(filename):
-    """Stop one running script.
+def pause(filename):
+    """End one run and leave its position exactly where it is.
 
-    **A script that is not running is told so, and never told it was stopped.**
-    An operator pressing stop believes something is running; answering success
-    to that leaves them believing a strategy was taken off the market when
-    nothing was. The check below is for the sentence, and the service's own
-    answer is the truth: if it refuses after the check passed, its refusal is
-    what comes back.
+    **This is a pause and not a stop**, and the difference is the position. A
+    trader pauses a strategy to change a parameter, to look at what it is doing,
+    or before restarting the server: the position becomes theirs to manage and
+    the strategy stops deciding about it. Closing it here would spend money the
+    trader never asked to spend. The route that closes is below.
+
+    ``/stop`` still reaches this, because it is what every caller written before
+    the two were separated means and because that is the safer of the two to
+    answer: a caller that meant to close and paused instead still holds its
+    position, where a caller that meant to pause and closed instead has paid a
+    spread and lost a position it wanted.
+
+    **A run that is not running is told so, and never told it was stopped.** An
+    operator pressing this believes something is running; answering success to
+    that leaves them believing a strategy was taken off the market when nothing
+    was. The check below is for the sentence, and the service's own answer is
+    the truth: if it refuses after the check passed, its refusal is what comes
+    back.
     """
     if not _names_something(filename):
         return _refusal(filename)
@@ -759,7 +772,36 @@ def stop(filename):
     if not ok:
         return jsonify({"status": "error", "message": message}), 409
 
-    logger.info("Stopped OpenScript strategy %s", filename)
+    logger.info("Paused OpenScript strategy %s", filename)
+    return jsonify({"status": "success", "file": filename, "message": message})
+
+
+@openscript_runner_bp.route("/close/<path:filename>", methods=["POST"])
+@check_session_validity
+def close(filename):
+    """Close what one run is holding, then end it.
+
+    **This one spends money**, so it is its own route rather than a flag on the
+    one above: a caller that reaches the wrong route by accident should pause,
+    which costs nothing, rather than close, which cannot be taken back. The page
+    asks the trader before it calls this.
+
+    **A close that did not happen is not reported as one.** The run stays
+    running and holding, and the refusal says so and says what to do, because a
+    trader told their position was closed when it was not will not look at it
+    again.
+    """
+    if not _names_something(filename):
+        return _refusal(filename)
+
+    if not is_running(filename):
+        return jsonify({"status": "error", "message": f"{filename} is not running."}), 404
+
+    ok, message = stop_run(filename, close=True)
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 409
+
+    logger.info("Closed and stopped OpenScript strategy %s", filename)
     return jsonify({"status": "success", "file": filename, "message": message})
 
 
