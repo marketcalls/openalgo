@@ -17,3 +17,7 @@
 # instead of compiling. Committing one would put a build artifact of somebody's
 # private strategy in the repository.
 *.program.json
+
+# A copy somebody kept of a script before replacing it. Same class as the
+# script itself: their work, not the repository's.
+*.keep
