@@ -261,6 +261,68 @@ export async function clearSchedule(file: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// What a trader picks a deployment from, rather than typing
+// ---------------------------------------------------------------------------
+
+/** One instrument, as the platform's own instrument master holds it. */
+export interface Instrument {
+  symbol: string
+  exchange: string
+  name?: string
+  lotsize?: number | string
+}
+
+/**
+ * Instruments matching what is being typed, on one exchange.
+ *
+ * A symbol is the one string a broker mapping matches on, so a character wrong
+ * is a start refused a minute later in a log, or an instrument that exists and
+ * is not the one meant. Nothing is invented here: this is the master the rest of
+ * the platform trades from.
+ *
+ * An empty answer on a failure rather than a thrown error, because this runs on
+ * a keystroke: a form that threw while somebody was still typing would be a form
+ * they could not fill in.
+ */
+export async function instrumentsOn(query: string, exchange: string): Promise<Instrument[]> {
+  if (query.trim().length < 2) return []
+  try {
+    const params = new URLSearchParams({ q: query.trim() })
+    if (exchange) params.set('exchange', exchange)
+    const res = await webClient.get<{ status: string; data?: Instrument[] }>(
+      `${BASE}/instruments?${params.toString()}`
+    )
+    return res.data?.data ?? []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The bars this broker serves, newest first as it lists them.
+ *
+ * The broker's own answer rather than a list kept in the page. Offering a
+ * timeframe the broker does not serve is a deployment that saves, starts, and
+ * fetches no history at all.
+ */
+export async function intervalsAvailable(): Promise<string[]> {
+  try {
+    const res = await webClient.get<{ status: string; data?: Record<string, string[]> }>(
+      `${BASE}/intervals`
+    )
+    const held = res.data?.data
+    if (Array.isArray(held)) return held as string[]
+    if (!held || typeof held !== 'object') return []
+    // The platform answers these grouped by kind: seconds, minutes, hours,
+    // days. A page offering one list flattens them, keeping the order the
+    // broker stated rather than sorting text that is not sorted as text.
+    return Object.values(held).flatMap((one) => (Array.isArray(one) ? one : []))
+  } catch {
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // What one strategy has done
 // ---------------------------------------------------------------------------
 

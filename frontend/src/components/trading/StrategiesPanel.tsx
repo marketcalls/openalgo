@@ -56,6 +56,7 @@ import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { ConfirmStop } from './ConfirmStop'
+import { InstrumentPicker } from './InstrumentPicker'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 import { StrategyBooks } from './StrategyBooks'
 import { StrategyInputs } from './StrategyInputs'
@@ -80,8 +81,6 @@ interface Props {
  * between events that are already doing the work.
  */
 const REFRESH_MS = 15000
-
-const PRODUCTS = ['MIS', 'NRML', 'CNC'] as const
 
 function since(started: string | null): string {
   if (!started) return ''
@@ -248,37 +247,13 @@ function DeploymentForm({
   )
   return (
     <>
-      <div className="grid grid-cols-2 gap-1.5">
-        <input
-          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-          placeholder="Instrument"
-          value={draft.symbol}
-          onChange={(e) => setDraft({ ...draft, symbol: e.target.value })}
-        />
-        <input
-          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-          placeholder="Exchange"
-          value={draft.exchange}
-          onChange={(e) => setDraft({ ...draft, exchange: e.target.value })}
-        />
-        <input
-          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-          placeholder="Interval"
-          value={draft.interval}
-          onChange={(e) => setDraft({ ...draft, interval: e.target.value })}
-        />
-        <select
-          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-          value={draft.product}
-          onChange={(e) => setDraft({ ...draft, product: e.target.value })}
-        >
-          {PRODUCTS.map((one) => (
-            <option key={one} value={one}>
-              {one}
-            </option>
-          ))}
-        </select>
-      </div>
+      <InstrumentPicker
+        symbol={draft.symbol}
+        exchange={draft.exchange}
+        interval={draft.interval}
+        product={draft.product}
+        onChange={(next) => setDraft({ ...draft, ...next })}
+      />
 
       <StrategyInputs
         declarations={declarations}
