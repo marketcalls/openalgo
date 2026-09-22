@@ -1747,7 +1747,7 @@ def test_the_signatures_two_other_callers_import_are_these():
             "user_id: str | None = None, product: str = '', history_days: int = 5, "
             "poll_seconds: float = 15.0) -> tuple[bool, str]"
         ),
-        service.stop_run: "(script_or_run_id: str) -> tuple[bool, str]",
+        service.stop_run: "(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]",
         service.is_running: "(script_or_run_id: str) -> bool",
         service.status_of: "(script_or_run_id: str) -> dict | None",
         service.running_runs: "() -> list[dict]",

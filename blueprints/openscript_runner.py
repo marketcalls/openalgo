@@ -96,6 +96,7 @@ from services.openscript_runner_service import (
     is_running,
     logs_for,
     reap_finished_runs,
+    restore_runs,
     run_id_for,
     running_runs,
     start_run,
@@ -590,6 +591,16 @@ def restore_schedules():
             restored += 1
         except Exception:
             logger.exception("Could not restore the schedule for %s", filename)
+
+    # What a trader had running, put back. After the schedules, because a
+    # strategy that is both scheduled and running should have its jobs in place
+    # before it is started again, and before the flag below, so a failure here
+    # still leaves the next call able to retry the whole restoration.
+    try:
+        # It says for itself what it put back, so nothing is logged twice here.
+        restore_runs()
+    except Exception:
+        logger.exception("Could not put back the OpenScript runs after a restart")
 
     _RESTORED = True
     logger.info(

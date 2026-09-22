@@ -128,6 +128,7 @@ class Runner:
         self.runs: dict[str, dict] = {}
         self.started: list[tuple[tuple, dict]] = []
         self.stopped: list[str] = []
+        self.forgot: list[bool] = []
         self.refuse_start = ""
         self.refuse_stop = ""
         self.raise_on_start = None
@@ -167,8 +168,9 @@ class Runner:
             }
             return True, f"{script} started at 09:20:00 IST"
 
-        def stop_run(script_or_run_id: str) -> tuple[bool, str]:
+        def stop_run(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]:
             self.stopped.append(script_or_run_id)
+            self.forgot.append(forget)
             if self.refuse_stop:
                 return False, self.refuse_stop
             if self._held(script_or_run_id) is None:
@@ -697,6 +699,9 @@ def test_stopping_something_that_is_running_stops_it(client, stub):
     assert answer.get_json()["status"] == "success"
     assert stub.stopped == ["range.oscript"]
     assert client.get("/openscript/runner/status/range.oscript").get_json()["running"] is False
+    # A trader pressing Stop is the one thing that means "and do not put it back
+    # after a restart". The exit sweep stops the same runs and says the opposite.
+    assert stub.forgot == [True]
 
 
 # ---------------------------------------------------------------------------

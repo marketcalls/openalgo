@@ -56,7 +56,7 @@ def test_a_second_ctrl_c_still_stops_every_remaining_run(three_runs, monkeypatch
     """
     asked = []
 
-    def stop_run(run_id):
+    def stop_run(run_id, forget=True):
         asked.append(run_id)
         # The second child is the one being waited on when the impatient
         # keypress arrives, which is how the signal handler's exit gets in here.
@@ -80,7 +80,7 @@ def test_the_exit_is_honoured_once_the_children_are_dealt_with(three_runs, monke
     code it was given.
     """
 
-    def stop_run(run_id):
+    def stop_run(run_id, forget=True):
         raise SystemExit(130)
 
     monkeypatch.setattr(service, "stop_run", stop_run)
@@ -100,7 +100,7 @@ def test_a_keyboard_interrupt_is_handled_the_same_way(three_runs, monkeypatch):
     """
     asked = []
 
-    def stop_run(run_id):
+    def stop_run(run_id, forget=True):
         asked.append(run_id)
         if len(asked) == 1:
             raise KeyboardInterrupt
@@ -121,7 +121,7 @@ def test_an_ordinary_failure_still_only_costs_that_one_run(three_runs, monkeypat
     must not turn an exit into a failure.
     """
 
-    def stop_run(run_id):
+    def stop_run(run_id, forget=True):
         if run_id.endswith("s2"):
             raise OSError("no such process")
         return True, "stopped"
@@ -199,7 +199,7 @@ def test_the_exit_path_prints_nothing_alarming(three_runs, monkeypatch):
     """
     asked = []
 
-    def stop_run(run_id):
+    def stop_run(run_id, forget=True):
         asked.append(run_id)
         if len(asked) == 1:
             raise SystemExit(130)
@@ -214,7 +214,7 @@ def test_the_exit_path_prints_nothing_alarming(three_runs, monkeypatch):
 
 
 def test_the_exit_path_still_swallows_an_ordinary_failure(three_runs, monkeypatch):
-    def stop_run(run_id):
+    def stop_run(run_id, forget=True):
         raise OSError("gone")
 
     monkeypatch.setattr(service, "stop_run", stop_run)
