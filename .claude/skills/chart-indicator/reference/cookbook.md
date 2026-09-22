@@ -272,6 +272,10 @@ inputs: [
     options: [{ label: 'Day', value: 'D' }, { label: 'Week', value: 'W' }, { label: 'Month', value: 'M' }] },
   // A price or a time anchor is a number. Nothing resolves it from a chart click.
   { key: 'anchor', type: 'number', label: 'Anchor Price', default: 0, group: 'Instrument' },
+  // OpenAlgo's own type, not the library's: the settings dialog renders it as a
+  // tick list of the underlying's nearest option expiries and hands back the
+  // picks as a comma-separated string ('22SEP26,29SEP26').
+  { key: 'expiryDate', type: 'expiries', label: 'Expiry Used', default: '', group: 'Instrument' },
 ]
 ```
 

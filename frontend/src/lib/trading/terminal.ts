@@ -345,7 +345,13 @@ export interface TerminalCallbacks {
   /** Drawing toolbar state changed (tool armed, shape added/removed, undo...). */
   onDrawChange?(stats: DrawStats): void
   /** The live indicator list changed. */
-  onIndicatorsChange?(list: { id: string; name: string }[]): void
+  /**
+   * The live indicators. `id` is the instance (what removal and the settings
+   * form take); `indicatorId` is the descriptor, which is what a host button
+   * bound to one particular study has to match on - a name is a label and can
+   * be changed, an id is the contract.
+   */
+  onIndicatorsChange?(list: { id: string; indicatorId: string; name: string }[]): void
   /**
    * The gear on an indicator's on-chart legend was clicked. The engine is
    * canvas-only and ships no DOM, so the form is ours to render.
@@ -748,8 +754,8 @@ export function sameIndicatorRecords(
 }
 
 export function sameIndicatorInstances(
-  left: readonly { id: string; name: string }[],
-  right: readonly { id: string; name: string }[]
+  left: readonly { id: string; indicatorId: string; name: string }[],
+  right: readonly { id: string; indicatorId: string; name: string }[]
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
@@ -805,7 +811,6 @@ export function buildOrderTicket(input: {
 const VISIBLE_BARS = 120
 /** Empty bars kept between the newest candle and the price axis. */
 const RIGHT_PAD_BARS = 4
-
 /**
  * Where the exported PNG paints the OHLC readout, in CSS px. These mirror the
  * DOM overlay's own placement in `ChartPane` (`left-3 top-1.5`, a 12px line and
@@ -908,7 +913,7 @@ export class TradingTerminal {
   /** The generation whose saved instances are still crossing an async tier load. */
   private restoringIndicatorsOn: ChartInstance | null = null
   /** Last live instance identities sent to the pane toolbar. */
-  private announcedIndicators: { id: string; name: string }[] = []
+  private announcedIndicators: { id: string; indicatorId: string; name: string }[] = []
   /** History paging: in-flight guard, and whether the broker ran out. */
   private loadingOlder: { chart: ReturnType<typeof createChart>; ticket: number } | null = null
   private noMoreHistory = false
@@ -4074,7 +4079,11 @@ export class TradingTerminal {
       this.activeIndicators = next
       this.lsSet('indicators', JSON.stringify({ version: 2, indicators: this.activeIndicators }))
     }
-    const announced = this.listIndicators().map(({ id, name }) => ({ id, name }))
+    const announced = this.listIndicators().map(({ id, indicatorId, name }) => ({
+      id,
+      indicatorId,
+      name,
+    }))
     if (!sameIndicatorInstances(this.announcedIndicators, announced)) {
       this.announcedIndicators = announced
       this.cb.onIndicatorsChange?.(announced)
@@ -4330,7 +4339,8 @@ export class TradingTerminal {
     try {
       const inst = this.chart.addIndicator(indicatorId, {})
       this.syncIndicators()
-      this.warnIfStarved(inst)
+      const { getIndicator } = await import('openalgo-charts')
+      this.warnIfStarved(inst, getIndicator(indicatorId))
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
@@ -4348,14 +4358,22 @@ export class TradingTerminal {
    *
    * Reading `values()` is safe here: the engine flushes any pending recompute on
    * that call, so this sees the result of the add rather than the frame before.
+   *
+   * An indicator whose plots are all hidden is the exception, and not a rare
+   * one: anything drawing through `draws()` or its own primitive still has to
+   * declare a plot, so it declares an invisible one and returns a column of
+   * nulls. Empty columns are that indicator's normal, permanent state, and
+   * warning about them sends the user widening a range that was never the
+   * problem.
    */
-  private warnIfStarved(inst: {
-    name: string
-    indicatorId: string
-    values(): Record<string, unknown>
-  }): void {
+  private warnIfStarved(
+    inst: { name: string; indicatorId: string; values(): Record<string, unknown> },
+    descriptor?: { plots?: readonly { style?: { visible?: boolean } }[] }
+  ): void {
     const loaded = this.rawBars.length
     if (!loaded) return
+    const plots = descriptor?.plots
+    if (plots?.length && plots.every((p) => p.style?.visible === false)) return
     const cols = Object.values(inst.values()).filter(Array.isArray) as unknown[][]
     if (cols.length === 0) return
     const anyFinite = cols.some((col) =>

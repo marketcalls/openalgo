@@ -38,6 +38,7 @@ it running against your live broker session.
 - [Knowing what the chart is doing](#knowing-what-the-chart-is-doing)
 - [Tick size and point value](#tick-size-and-point-value)
 - [Indicators that need external data](#indicators-that-need-external-data)
+- [Shipped example: OI Profile](#shipped-example-oi-profile)
 - [Worked example: Open Range Breakout](#worked-example-open-range-breakout)
 - [Porting from other charting scripts](#porting-from-other-charting-scripts)
 - [Troubleshooting](#troubleshooting)
@@ -473,6 +474,76 @@ export default function ({ registerIndicator, createTier2Indicator }) {
 Each bar takes the most recent external point **at or before** its time. Values
 are never interpolated and never forward-looking, and bars before the first point
 are `null`.
+
+`createTier2Indicator` fits a **time series** the chart does not have. It does not
+fit data that is not indexed by time at all - a value per strike, per expiry, per
+depth level. For those, fetch in `attach` and draw with your own primitive, which
+is what the shipped OI Profile does.
+
+---
+
+## Shipped example: OI Profile
+
+`strategies/indicators/oi_profile_live.js` ships with OpenAlgo and is the
+reference for everything a `calc` cannot express. It draws option open interest
+as horizontal bars against the price axis, one row per strike, pinned to the
+right edge of the pane the way Sensibull and Upstox Chart 360 draw theirs.
+
+![OI Profile on the /trading chart](oi-profile-chart.png)
+
+Calls sit above each strike line and puts below it, the solid fill is current
+open interest and the dashed box is what the strike carried into the day.
+
+Read it for four patterns:
+
+**Fetch in `attach`, draw in a primitive.** The data is per strike, not per bar,
+so no plot column can carry it. `attach` polls
+`/oiprofile/api/profile-data` into a closure variable and the primitive's
+`draw()` reads it. The descriptor still needs one plot, so it declares a hidden
+one that returns nulls.
+
+**Device pixels versus CSS pixels.** `rc.priceScale.priceToY()`, `rc.plotWidth`
+and `rc.plotHeight` all answer in CSS pixels, while the canvas handed to `draw`
+is sized in device pixels. Multiply every coordinate by `rc.dpr` at the moment
+you paint. Forget it and the overlay renders at half scale in the corner of a
+retina screen - drawn, but nowhere near the price it belongs to.
+
+**A poll that respects the exchange.** Open interest is republished every few
+minutes, so the beat is three minutes, reschedules itself after each attempt
+rather than on a fixed interval, carries up to ten seconds of random jitter so
+many open charts do not arrive together, and skips entirely while the tab is
+hidden. A closed market stretches the beat to fifteen minutes rather than
+stopping it, because only a fetch can tell the chart that the next session has
+opened - stopping outright leaves a chart left open overnight dead until it is
+reloaded. Only one request is ever in flight, and a
+generation counter means a slow answer for an instrument you have left cannot
+paint over the one you are looking at.
+
+**Two passes, fastest first.** Current open interest answers in under a second;
+the open interest each leg carried into the session costs one broker history
+call per leg the first time it is asked for in a session. So the bars are painted from the fast answer
+immediately and upgraded when the slow one lands, rather than leaving the chart
+empty while it runs.
+
+**A toolbar control of its own.** Because it is a view of the whole option
+chain rather than one more line on the price, `/trading` gives OI Profile a
+toggle and a settings gear directly in the chart toolbar, next to Indicators.
+The button appears only when the indicator file is actually installed, so
+deleting it removes the control with it.
+
+**Hovering a strike names it.** The chart owns hover state - `hitTest` reports
+which strike is under the pointer and hands the winner back on `rc.hoverId` -
+so the tooltip appears and vanishes with the cursor without the indicator
+tracking a single listener. It prints what the bars currently are: totals under
+**Open Interest**, the session's build under **Change in OI**, in lakhs and
+crores the way the numbers are actually read.
+
+Settings worth knowing: **Strikes Around ATM** (5/10/25/50) is the one that
+decides how much work a refresh is; **Previous Session Outline** draws the
+dashed box showing what each strike carried into the day; **Max Pain Marker**
+labels the strike where the most option value expires worthless; **Colours**
+switches between calls-red (Sensibull, Upstox) and calls-green (the OpenAlgo
+`/oiprofile` page).
 
 ---
 

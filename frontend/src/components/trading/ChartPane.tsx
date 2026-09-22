@@ -125,6 +125,12 @@ const glyph = {
  * read against a level. The dashed rule and the dot survive 16px, which a
  * busier picture of a whole sub-pane would not.
  */
+// OI Profile earns a toolbar control of its own rather than living only behind
+// Indicators: it is a whole view of the option chain, toggled far more often
+// than any single study, and every terminal that offers one puts it here.
+const OI_PROFILE_ID = 'oi-profile-live'
+const OI_PROFILE_FILE = 'oi_profile_live.js'
+
 function IndicatorIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
@@ -385,7 +391,16 @@ export function ChartPane({
   const [searchOpen, setSearchOpen] = useState(false)
 
   // drawing + indicator controls (additive; the trading controls are unchanged)
-  const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
+  // `indicatorId` rides along on each row because the OI Profile toggle finds
+  // its instance by WHICH indicator it is, not by the instance id.
+  const [indicators, setIndicators] = useState<{ id: string; indicatorId: string; name: string }[]>(
+    []
+  )
+  // Whether the OI Profile overlay is installed on this server. It is a custom
+  // indicator, shipped as reference material but deletable like any other, so
+  // the toolbar button only exists when the file does - a control that toasts
+  // "not found" is worse than no control.
+  const [oiProfileInstalled, setOiProfileInstalled] = useState(false)
   const [comparisons, setComparisons] = useState<TerminalComparisonState>({
     mode: 'price',
     items: [],
@@ -685,6 +700,32 @@ export function ChartPane({
     }
   }, [ctx])
 
+  useEffect(() => {
+    let alive = true
+    fetch('/custom-indicators/index.json', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((modules: { file?: string }[] | null) => {
+        if (!alive) return
+        setOiProfileInstalled(
+          Array.isArray(modules) && modules.some((m) => m?.file === OI_PROFILE_FILE)
+        )
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  /** The live OI Profile instance, if the overlay is currently on. */
+  const oiProfile = indicators.find((i) => i.indicatorId === OI_PROFILE_ID)
+
+  const toggleOiProfile = async () => {
+    const t = terminalRef.current
+    if (!t) return
+    if (oiProfile) t.removeIndicatorById(oiProfile.id)
+    else await t.addIndicatorById(OI_PROFILE_ID)
+  }
+
   /* ── drawing / indicator / view actions (additive) ────────────────────── */
   const openIndicators = async () => {
     const t = terminalRef.current
@@ -952,6 +993,53 @@ export function ChartPane({
             Alerts
           </Button>
 
+        {/* OI Profile. One click on and off, with its settings a click away,
+            because it is a view of the whole option chain rather than one more
+            line on the price - the same place Sensibull puts it. Hidden unless
+            the indicator is actually installed. */}
+        {oiProfileInstalled && (
+          <div className="flex shrink-0 items-center">
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                'h-8 shrink-0 gap-1',
+                oiProfile && 'border-primary text-primary',
+                oiProfile && 'rounded-r-none border-r-0'
+              )}
+              title={oiProfile ? 'Hide the OI Profile' : 'Show open interest per strike'}
+              onClick={() => void toggleOiProfile()}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border text-[9px] leading-none',
+                  oiProfile ? 'border-primary bg-primary text-primary-foreground' : 'border-current'
+                )}
+              >
+                {oiProfile ? '✓' : ''}
+              </span>
+              <span className="hidden sm:inline">OI Profile</span>
+            </Button>
+            {oiProfile && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 shrink-0 rounded-l-none border-primary p-0 text-primary"
+                title="OI Profile settings"
+                onClick={() => terminalRef.current?.openIndicatorSettings(oiProfile.id)}
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* The layout picker sits here, immediately after Indicators, because
+            that is where a chart terminal puts it. It is page-level, so only
+            the first pane is given one. */}
+        {layoutPicker}
+
           <ComparisonMenu
             state={comparisons}
             disabled={
@@ -1201,6 +1289,7 @@ export function ChartPane({
         <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
         <IndicatorSettingsDialog
           req={indSettings}
+          symbol={sym?.symbol}
           onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
           onDefaults={(id) =>
             terminalRef.current
