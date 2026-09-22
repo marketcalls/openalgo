@@ -19,6 +19,12 @@
  * price being reached, and a retry loop behind a fired alert is a queue that
  * grows while the market moves. The toast has already happened by the time any
  * of this is attempted, so the alert itself is never lost to a failed send.
+ *
+ * **The outward channels are attempted together, not in turn**, and a failure
+ * is reported in the server's own words rather than in a guess made here. Both
+ * of those were wrong: the sends were sequential behind an endpoint that waits
+ * for delivery, and every refusal was rendered as "check that a device is
+ * paired" whatever the server actually said.
  */
 
 import { notifyIfHidden } from './alertNotify'
@@ -144,7 +150,22 @@ export interface DeliveryContext {
   readonly onProblem: (message: string) => void
 }
 
-async function post(path: string, body: Record<string, unknown>): Promise<boolean> {
+/**
+ * What a send came back with: nothing when it worked, a sentence when it did not.
+ *
+ * **The sentence is the server's own**, because the server is the only party
+ * that knows which of several things went wrong, and they send a trader to
+ * different places. `/api/v1/whatsapp/notify` answers 409 "WhatsApp is not
+ * paired or not connected. Pair the device first from the /whatsapp page" and
+ * 404 "Username not found or not linked to WhatsApp", and those are not the
+ * same problem: the first is the device, the second is this account. A caller
+ * that turns both into "check that a device is paired" sends somebody to look
+ * at a device that is already paired, with conviction, which CLAUDE.md names
+ * as worse than saying nothing.
+ */
+type SendFailure = string | null
+
+async function post(path: string, body: Record<string, unknown>): Promise<SendFailure> {
   // A relative URL, because this application is served from a port, a domain, a
   // subdomain and a container, and an absolute one works for whoever wrote it.
   const res = await fetch(path, {
@@ -152,9 +173,15 @@ async function post(path: string, body: Record<string, unknown>): Promise<boolea
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!res.ok) return false
-  const answer = (await res.json().catch(() => null)) as { status?: string } | null
-  return answer?.status !== 'error'
+  const answer = (await res.json().catch(() => null)) as
+    | { status?: string; message?: string }
+    | null
+  const said = typeof answer?.message === 'string' ? answer.message.trim() : ''
+  if (!res.ok) return said || 'The message was not accepted.'
+  // A 200 carrying an error status is still a refusal, and it carries a reason
+  // the same way.
+  if (answer?.status === 'error') return said || 'The message was not accepted.'
+  return null
 }
 
 /**
@@ -182,39 +209,54 @@ export async function deliverAlert(
   const message =
     notice.body && notice.body !== notice.title ? `${notice.title}\n${notice.body}` : notice.title
 
-  if (delivery.telegram) {
+  /**
+   * One outward channel, attempted on its own.
+   *
+   * Returns the channel's name when it was accepted so the caller can record
+   * it, and reports the failure in the trader's words otherwise. Nothing
+   * throws out of here: a channel that cannot be reached is a toast, not a
+   * lost alert, and the alert has already fired by the time any of this runs.
+   */
+  const sendTo = async (channel: 'telegram' | 'whatsapp'): Promise<string | null> => {
     try {
-      const sent = await post('/api/v1/telegram/notify', {
+      const failure = await post(`/api/v1/${channel}/notify`, {
         apikey: context.apiKey,
         username: context.username,
         message,
       })
-      if (sent) accepted.push('telegram')
-      else {
-        context.onProblem(
-          'The alert fired, but Telegram did not take the message. Check that the bot is running and your account is linked under Telegram.'
-        )
-      }
+      if (failure === null) return channel
+      const where = channel === 'telegram' ? 'Telegram' : 'WhatsApp'
+      context.onProblem(`The alert fired, but ${where} did not take it. ${failure}`)
     } catch {
-      context.onProblem('The alert fired, but Telegram could not be reached.')
+      const where = channel === 'telegram' ? 'Telegram' : 'WhatsApp'
+      context.onProblem(`The alert fired, but ${where} could not be reached.`)
     }
+    return null
   }
 
-  if (delivery.whatsapp) {
-    try {
-      const sent = await post('/api/v1/whatsapp/notify', {
-        apikey: context.apiKey,
-        username: context.username,
-        message,
-      })
-      if (sent) accepted.push('whatsapp')
-      else {
-        context.onProblem(
-          'The alert fired, but WhatsApp did not take the message. Check that a device is paired under WhatsApp.'
-        )
-      }
-    } catch {
-      context.onProblem('The alert fired, but WhatsApp could not be reached.')
+  /**
+   * **Both channels go at once, not one after the other.**
+   *
+   * They were sequential, and WhatsApp's own endpoint defaults
+   * `wait_for_delivery` to true, so an alert asking for both waited for the
+   * whole Telegram round trip before WhatsApp was even started. On a price
+   * being reached that delay is the thing the alert exists to beat, and it
+   * grows with every channel added. Nothing here depends on anything else
+   * here: a stopped Telegram bot has no bearing on whether the WhatsApp
+   * device is paired, which is why one refusing never stopped the next.
+   *
+   * `allSettled` rather than `all`: `sendTo` already swallows its own
+   * failures, and a rejection that slipped past it must not drop the channel
+   * beside it.
+   */
+  const outward: ('telegram' | 'whatsapp')[] = []
+  if (delivery.telegram) outward.push('telegram')
+  if (delivery.whatsapp) outward.push('whatsapp')
+
+  if (outward.length > 0) {
+    const settled = await Promise.allSettled(outward.map(sendTo))
+    for (const one of settled) {
+      if (one.status === 'fulfilled' && one.value !== null) accepted.push(one.value)
     }
   }
 
