@@ -1,10 +1,13 @@
 /**
- * Which saved scripts reach the chart's indicator list, and which do not.
+ * Which saved scripts reach the chart's indicator list, and how.
  *
- * The chart tier draws and does not trade. A program that needs `orders` is
- * refused by the engine at load with OS6006, a sentence about capability tags
- * shown to a trader who pressed a button in a list, so such a program must
- * never reach the list in the first place.
+ * **Every saved script reaches it, including a strategy.** A strategy has
+ * plots, a title and settings exactly as a study does, and a trader who saved
+ * one should find it where they look for it. What differs is the destination:
+ * a program needing `orders` is refused by the engine at load with OS6006
+ * unless it is given one, so it is run against the language's own simulated
+ * venue. Nothing here can place an order; the chart has no route to the
+ * platform and is given none.
  *
  * Each test names the wrong implementation it catches.
  */
@@ -61,7 +64,7 @@ describe('what reaches the chart', () => {
     const out = await loadOpenScriptStudies()
 
     expect(out.loaded).toEqual(['a-study.oscript'])
-    expect(out.skipped).toEqual([])
+    expect(out.errors).toEqual([])
     expect(registerIndicator).toHaveBeenCalledTimes(1)
   })
 
@@ -105,7 +108,7 @@ describe('what reaches the chart', () => {
     const out = await loadOpenScriptStudies()
 
     expect(out.errors).toEqual([])
-    expect(out.skipped).toEqual([])
+    expect(out.loaded).toEqual(['a-strategy.oscript'])
   })
 
   it('reads the requirement off the program, not off the word in the source', async () => {
@@ -118,6 +121,8 @@ describe('what reaches the chart', () => {
     const out = await loadOpenScriptStudies()
 
     expect(out.loaded).toHaveLength(1)
-    expect(out.skipped).toEqual([])
+    // The name says strategy and the program places nothing, so no venue is
+    // built for it. A filter written against the text would get this backwards.
+    expect(descriptorFor.mock.calls[0][1].simulateOrders).toBeUndefined()
   })
 })

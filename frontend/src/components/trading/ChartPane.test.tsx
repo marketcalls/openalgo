@@ -21,8 +21,14 @@ interface Owner {
   setComparisonMode: ReturnType<typeof vi.fn>
   exportDataCsv: ReturnType<typeof vi.fn>
   startReplay: ReturnType<typeof vi.fn>
+  indicatorCatalog: ReturnType<typeof vi.fn>
 }
-const fake = vi.hoisted(() => ({ owners: [] as Owner[], toast: vi.fn() }))
+const fake = vi.hoisted(() => ({
+  owners: [] as Owner[],
+  toast: vi.fn(),
+  /** What the terminal is currently offering. A test may grow it mid-run. */
+  catalogue: [] as { id: string; name: string; category: string }[],
+}))
 vi.mock('@/utils/toast', () => ({
   showToast: { success: fake.toast, error: fake.toast, info: fake.toast },
 }))
@@ -47,6 +53,7 @@ vi.mock('@/lib/trading/terminal', () => ({
     setComparisonMode = vi.fn()
     exportDataCsv = vi.fn(() => 'time,close\n1,10')
     startReplay = vi.fn()
+    indicatorCatalog = vi.fn(async () => fake.catalogue)
     replayPickingBar = () => false
     replayLoadingBars = () => false
     search = async () => []
@@ -97,6 +104,7 @@ const props = { paneId: 'saved', apiKey: 'fixture', wsUrl: 'ws://fixture.invalid
 beforeEach(() => {
   fake.owners.length = 0
   fake.toast.mockClear()
+  fake.catalogue = [{ id: 'sma', name: 'Moving average', category: 'Moving Averages' }]
 })
 afterEach(cleanup)
 
@@ -441,5 +449,52 @@ describe('chart pane preparation ownership', () => {
     expect(fake.owners).toHaveLength(1)
     expect(owner.setWorkspaceTransitionLocked).toHaveBeenLastCalledWith(false)
     expect(owner.setArmed).toHaveBeenLastCalledWith(false)
+  })
+})
+
+describe('the indicator catalogue', () => {
+  /**
+   * THE ONE THAT MATTERS, and the regression it pins was shipped.
+   *
+   * `openIndicators` held `if (!t || catalog.length) return`, so the catalogue
+   * was built on the first picker open of a page's life and never again. That
+   * quietly defeated the whole tier beneath it: `indicatorCatalog` calls
+   * `loadIndicators`, which re-reads `strategies/indicators/` and
+   * `strategies/openscript/` precisely so a script saved from the panel appears
+   * on the next picker open rather than after a reload, and both loaders are
+   * keyed on modification time to make the repeat call cheap. None of it ran
+   * twice.
+   *
+   * What a trader saw: they saved a study, opened the indicator list, and it
+   * was not there. Nothing was wrong on the server, nothing was logged, and
+   * reloading the page fixed it, which is the shape of bug nobody reports
+   * accurately.
+   *
+   * So this asserts the second open reaches the terminal AND that what came
+   * back is on screen. Asserting the call count alone would pass against a
+   * version that fetched and threw the answer away.
+   */
+  it('rebuilds on every picker open, so a newly saved script appears', async () => {
+    const view = render(<ChartPane {...props} />)
+    await act(async () => fake.owners[0].resolve())
+    const terminal = fake.owners[0]
+
+    fireEvent.click(view.getByRole('button', { name: 'Indicators' }))
+    await act(async () => {})
+    expect(terminal.indicatorCatalog).toHaveBeenCalledTimes(1)
+
+    // The trader saves a script somewhere else and comes back.
+    fake.catalogue = [
+      ...fake.catalogue,
+      { id: 'openscript:mine.oscript', name: 'My new study', category: 'OpenScript' },
+    ]
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await act(async () => {})
+
+    fireEvent.click(view.getByRole('button', { name: 'Indicators' }))
+    await act(async () => {})
+
+    expect(terminal.indicatorCatalog).toHaveBeenCalledTimes(2)
+    expect(view.getByText('My new study')).toBeInTheDocument()
   })
 })

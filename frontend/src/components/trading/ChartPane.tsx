@@ -686,9 +686,27 @@ export function ChartPane({
   }, [ctx])
 
   /* ── drawing / indicator / view actions (additive) ────────────────────── */
+  /**
+   * Rebuild the catalogue every time the picker opens, not only the first time.
+   *
+   * **A `catalog.length` guard here used to make this run once per page load**,
+   * which quietly defeated the tier below it. `terminal.indicatorCatalog` calls
+   * `loadIndicators`, which re-reads `strategies/indicators/` and
+   * `strategies/openscript/` on purpose and skips what it has already seen, so
+   * that a script saved from the panel appears on the next picker open rather
+   * than after a reload. That is what its comments say it is for, and both
+   * loaders are keyed on modification time to make the repeat call cheap. None
+   * of it ran a second time: a trader who saved a study, or installed one from
+   * the skill, opened the list and could not find it, and nothing said why,
+   * because from the page's point of view nothing had happened.
+   *
+   * The repeat cost is one small JSON fetch per tier plus a map over the
+   * registry. A script already compiled at its current modification time costs
+   * nothing, which is the case on nearly every open.
+   */
   const openIndicators = async () => {
     const t = terminalRef.current
-    if (!t || catalog.length) return
+    if (!t) return
     try {
       setCatalog(await t.indicatorCatalog())
     } catch {

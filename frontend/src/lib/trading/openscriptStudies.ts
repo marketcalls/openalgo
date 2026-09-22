@@ -39,13 +39,6 @@ export interface OpenScriptLoad {
   loaded: string[]
   /** Per-script failures, already written for a trader to read. */
   errors: { file: string; message: string }[]
-  /**
-   * Scripts the chart tier cannot run, with the capability that stopped each.
-   *
-   * Not an error and not a silence: a caller that lists what loaded can say
-   * why a strategy is missing from it rather than leaving the trader to wonder.
-   */
-  skipped: { file: string; needs: string }[]
 }
 
 const INDEX_URL = '/openscript/index.json'
@@ -67,20 +60,21 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * What the chart tier can run, read off the program rather than off the file.
+ * Whether this program places orders, read off the program not off the file.
  *
- * A compiled program declares the capabilities it needs in `requires`, and the
- * chart tier grants the drawing ones and not `orders`: it plots, it does not
- * trade. Registering a program that needs `orders` produced a study a trader
- * could add and the engine then refused at load with OS6006, a message about
- * capability tags shown to somebody who had only pressed a button in a list.
+ * **This used to decide whether to register the script at all, and now decides
+ * how.** A program needing `orders` is registered like any study and run
+ * against the language's own simulated venue, which is what `simulateOrders`
+ * turns on at the call below; without it the engine refuses such a program at
+ * load with OS6006, a message about capability tags shown to somebody who had
+ * only pressed a button in a list.
  *
- * Checked against the program's own declaration and not against whether the
- * source says `study` or `strategy`, because `requires` is the same fact the
- * engine tests. A strategy that placed no orders would be runnable here and a
- * study that somehow needed them would not, and both would be right.
+ * Read from the program's own `requires` rather than from whether the source
+ * says `study` or `strategy`, because `requires` is the same fact the engine
+ * tests. A strategy that placed no orders would need no simulation and a study
+ * that somehow placed them would, and both would be right.
  */
-function needsMoreThanTheChartCanGive(program: unknown): string | null {
+function placesOrders(program: unknown): string | null {
   const requires = (program as { requires?: unknown })?.requires
   if (!Array.isArray(requires)) return null
   const beyond = requires.filter((tag) => tag === 'orders')
@@ -128,7 +122,7 @@ async function programFor(file: string, text: string): Promise<unknown> {
  * fix, which the chart already puts in front of the trader.
  */
 export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
-  const result: OpenScriptLoad = { loaded: [], errors: [], skipped: [] }
+  const result: OpenScriptLoad = { loaded: [], errors: [] }
 
   let stored: StoredScript[]
   try {
@@ -175,7 +169,7 @@ export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
       // **It places nothing.** The venue is a simulation inside the browser;
       // the chart has no route to the platform and is given none. Trading is
       // what the strategies panel is for, and the panel says so on screen.
-      const trades = needsMoreThanTheChartCanGive(program) !== null
+      const trades = placesOrders(program) !== null
 
       const descriptor = descriptorFor(program as never, {
         id: idForScript(script.file),
