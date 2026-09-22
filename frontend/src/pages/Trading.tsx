@@ -27,6 +27,7 @@ import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
+import { idForScript } from '@/lib/trading/openscriptFiles'
 import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import { StrategiesPanel } from '@/components/trading/StrategiesPanel'
 import { ScriptPanel } from '@/components/trading/ScriptPanel'
@@ -1491,11 +1492,28 @@ function TradingWorkspace({ account }: { account: string | null }) {
               }}
               openFile={scriptSource}
               onOpened={() => setScriptSource(null)}
-              // Applying a strategy tests it over this chart's history and marks
-              // what it did. The panel is switched to first, because the run's
-              // report is the other half of the answer and it is drawn there.
+              // **Applying a strategy does both halves, because it is one act.**
+              //
+              // A strategy has two things to show and they used to arrive by
+              // different doors. Adding it from the indicator list drew its
+              // plots and gave it a legend row and a settings dialog, and drew
+              // no trades. Applying it from the editor marked every entry and
+              // exit on the price, and drew no lines and no legend, so there
+              // was nothing on the chart to open settings on or to remove. A
+              // trader wanting both had to do both, and had no way of knowing
+              // that.
+              //
+              // So this adds it to the chart and runs it. The study is what
+              // carries the name, the band and the settings; the run is what
+              // knows the trades, because an order is not a marker the language
+              // declares and only the report has them.
               onBacktest={(file) => {
-                if (!panelTarget()) return false
+                const pane = panelTarget()
+                if (!pane) return false
+                // The plots first, so the legend is there while the run works.
+                // A strategy that will not register is not a reason to refuse
+                // the run: the marks are the half a trader asked for by name.
+                void pane.addIndicatorById(idForScript(file))
                 setBacktestFile(file)
                 setPanel('backtest')
                 return true
