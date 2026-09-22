@@ -26,7 +26,7 @@
  * Rewording them here would lose the part that says what to do.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type RunningStrategy,
   type RunSettings,
@@ -45,6 +45,7 @@ import {
 } from '@/lib/trading/backtestInputs'
 import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
 import { type PositionSummary, summaryOf } from '@/lib/trading/strategyPosition'
+import { type PriceableItem, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useThemeStore } from '@/stores/themeStore'
 import { cn } from '@/lib/utils'
@@ -112,7 +113,16 @@ function money(value: number): string {
  * a number beside no open position at all, and why the note says so rather than
  * leaving a reader to think the two disagree.
  */
-function Holding({ summary }: { summary: PositionSummary | null | undefined }) {
+function Holding({
+  summary,
+  live,
+  isLive,
+}: {
+  summary: PositionSummary | null | undefined
+  /** The live figure per instrument, by `symbol|exchange`. */
+  live: Record<string, { profit: number | null; price: number | null }>
+  isLive: boolean
+}) {
   if (summary === undefined) {
     return <div className="text-[10px] text-muted-foreground">Reading what it holds...</div>
   }
@@ -139,30 +149,48 @@ function Holding({ summary }: { summary: PositionSummary | null | undefined }) {
           )}
         </div>
       ) : (
-        positions.map((one) => (
-          <div
-            key={`${one.symbol}-${one.exchange}`}
-            className="flex items-baseline gap-1.5 font-mono text-[10px] tabular-nums"
-          >
-            <span className={one.side === 'short' ? 'text-destructive' : 'text-emerald-500'}>
-              {one.side === 'short' ? 'SHORT' : 'LONG'} {one.quantity}
-            </span>
-            <span className="truncate text-muted-foreground">{one.symbol}</span>
-            {one.averagePrice !== null && (
-              <span className="text-muted-foreground">@{one.averagePrice.toFixed(2)}</span>
-            )}
-            {one.profit !== null && (
-              <span className={cn('ml-auto', one.profit >= 0 ? 'text-emerald-500' : 'text-destructive')}>
-                {money(one.profit)}
+        positions.map((one) => {
+          // **The live figure where there is one, the platform's otherwise.**
+          // The size and the average came from the server and do not move
+          // between orders; what a position is worth moves on every tick, and
+          // that is the number being watched.
+          const marked = live[`${one.symbol}|${one.exchange}`]
+          const profit = marked?.profit ?? one.profit
+          return (
+            <div
+              key={`${one.symbol}-${one.exchange}`}
+              className="flex items-baseline gap-1.5 font-mono text-[10px] tabular-nums"
+            >
+              <span className={one.side === 'short' ? 'text-destructive' : 'text-emerald-500'}>
+                {one.side === 'short' ? 'SHORT' : 'LONG'} {one.quantity}
               </span>
-            )}
-          </div>
-        ))
+              <span className="truncate text-muted-foreground">{one.symbol}</span>
+              {one.averagePrice !== null && (
+                <span className="text-muted-foreground">@{one.averagePrice.toFixed(2)}</span>
+              )}
+              {profit !== null && (
+                <span className={cn('ml-auto', profit >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+                  {money(profit)}
+                </span>
+              )}
+            </div>
+          )
+        })
       )}
 
       {profitIsPlatforms && positions.length === 0 && profit !== null && profit !== 0 && (
         <span className="text-[9px] leading-tight text-muted-foreground">
           Taken on positions this strategy has already closed today.
+        </span>
+      )}
+
+      {/* **Said when it is not live, not when it is.** A figure that is moving
+          needs no label; one that has stopped looks exactly the same and is the
+          one a trader would act on believing it current. */}
+      {positions.length > 0 && !isLive && (
+        <span className="text-[9px] leading-tight text-muted-foreground">
+          Not marked to a live price just now: this is what the platform last
+          said, and it moves again when prices arrive.
         </span>
       )}
     </div>
@@ -279,6 +307,53 @@ export function StrategiesPanel({ getChartContext }: Props) {
       ],
     }
   )
+
+  // -- marking what is held to the price it is trading at -------------------
+  //
+  // **The size and the average are the server's; the profit moves with the
+  // price.** An order event says when a position changed, and between those
+  // events nothing about the position changes except what it is worth, which
+  // moves on every tick. Refreshing on orders alone leaves a profit figure that
+  // is right at the moment of a fill and stale for every minute after it, which
+  // on the number a trader is watching is the wrong half to be exact about.
+  //
+  // The same hook the positions page and the dock use, so this panel's figure
+  // and theirs are one calculation rather than two that drift. One list across
+  // every strategy, because the subscription is per instrument and two
+  // strategies on one symbol should not be two of them.
+  const watching = useMemo<(PriceableItem & { file: string })[]>(() => {
+    const out: (PriceableItem & { file: string })[] = []
+    for (const [file, summary] of Object.entries(holdings)) {
+      for (const one of summary?.positions ?? []) {
+        out.push({
+          file,
+          symbol: one.symbol,
+          exchange: one.exchange,
+          // Signed, because the hook reads the direction off the sign and a
+          // short handed over positive is marked as though it were long: the
+          // profit then moves the wrong way on every tick.
+          quantity: one.side === 'short' ? -one.quantity : one.quantity,
+          average_price: one.averagePrice ?? 0,
+          pnl: one.profit ?? 0,
+        })
+      }
+    }
+    return out
+  }, [holdings])
+
+  const { data: priced, isLive: pricesAreLive } = useLivePrice(watching, {
+    enabled: watching.length > 0,
+  })
+
+  /** The live figure for one strategy's instrument, by file and instrument. */
+  const marked = useMemo(() => {
+    const out: Record<string, { profit: number | null; price: number | null }> = {}
+    for (const one of priced) {
+      const key = `${(one as { file: string }).file}|${one.symbol}|${one.exchange}`
+      out[key] = { profit: one.pnl ?? null, price: one.ltp ?? null }
+    }
+    return out
+  }, [priced])
 
   // Only strategies can be run, so only strategies are listed.
   useEffect(() => {
@@ -463,7 +538,17 @@ export function StrategiesPanel({ getChartContext }: Props) {
                     : 'No instrument set. Set one before this can start.'}
               </div>
 
-              {run && <Holding summary={holding} />}
+              {run && (
+                <Holding
+                  summary={holding}
+                  live={Object.fromEntries(
+                    Object.entries(marked)
+                      .filter(([key]) => key.startsWith(`${file}|`))
+                      .map(([key, value]) => [key.slice(file.length + 1), value])
+                  )}
+                  isLive={pricesAreLive}
+                />
+              )}
 
               {isEditing && draft && (
                 <div className="flex flex-col gap-1.5 rounded bg-muted/40 p-1.5">
