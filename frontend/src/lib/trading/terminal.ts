@@ -13,7 +13,13 @@
  * cancel, real-time order stream, REST fallback) is unchanged.
  */
 
-import type { ChartObjectSnapshot, IndicatorState, LinkGroup } from 'openalgo-charts'
+import type {
+  ChartObjectSnapshot,
+  IndicatorState,
+  LinkGroup,
+  SeriesMarker,
+  SeriesMarkers,
+} from 'openalgo-charts'
 import {
   AlertController,
   type AlertEventPayload,
@@ -867,6 +873,8 @@ export class TradingTerminal {
   private chart: ChartInstance | null = null
   private offBranding: (() => void) | null = null
   private price: SeriesApi | null = null
+  /** The backtest's marker layer, made once and refilled per run. */
+  private btMarkers: SeriesMarkers | null = null
   private volume: SeriesApi | null = null
   private volumeMA: SeriesApi | null = null
   private displayedVolume: Bar[] = []
@@ -1442,6 +1450,9 @@ export class TradingTerminal {
       .replace(/^\/api\/v1\/[\w/]+\s+failed\s+\(\d+\)(:\s*)?/i, '')
     return m.trim() || 'request failed'
   }
+  /** Strategies already explained as not being indicators, for this page. */
+  private readonly saidSkipped = new Set<string>()
+
   private toast(msg: string, kind: ToastKind = '') {
     this.cb.onToast(msg, kind)
   }
@@ -2251,6 +2262,11 @@ export class TradingTerminal {
     const style: SeriesStyle = cfg.baseline
       ? { baseValue: this.rawBars.reduce((s, b) => s + b.close, 0) / (this.rawBars.length || 1) }
       : {}
+    // The marker layer is bound to the series it was made from, so a rebuilt
+    // series leaves it pointing at one the chart no longer draws: the marks
+    // vanish and nothing can take them down or put them back. Dropped here so
+    // the next run makes a fresh one against the series that now exists.
+    this.btMarkers = null
     this.price = this.chart.addSeries(cfg.series as SeriesType, {
       style,
       priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
@@ -3070,6 +3086,35 @@ export class TradingTerminal {
    *   panel sends no context at all and every reading tool says so plainly,
    *   which is better than a context naming an instrument that is not there.
    */
+  /**
+   * Put a backtest's fills on the price, or take them off.
+   *
+   * The price series and nothing else, because these mark what a run did to
+   * the instrument the chart is showing. An empty list clears them, which is
+   * how a panel takes down the previous run before drawing the next: the
+   * library replaces the whole set, so a second run does not stack on the
+   * first.
+   *
+   * Answers false when there is no price series yet, so a caller can say the
+   * button did nothing rather than appearing to work. A pane that is still
+   * loading its history is the ordinary way to reach that.
+   */
+  setBacktestMarkers(markers: readonly SeriesMarker[]): boolean {
+    if (!this.price) return false
+    // One layer, kept and reused. `createMarkers` builds a primitive and
+    // attaches it, so calling it per run would stack a new layer over the old
+    // one every time and the previous run's marks would stay on the chart with
+    // nothing able to take them down.
+    //
+    // `rawBars` is handed over as the fallback because a mark is positioned by
+    // the bar under it, and the price series has gaps wherever the feed did: a
+    // fill landing in one is dropped without a word, which reads as the
+    // backtest having missed a trade it actually took.
+    if (!this.btMarkers) this.btMarkers = this.price.createMarkers(() => this.rawBars)
+    this.btMarkers.setMarkers(markers)
+    return true
+  }
+
   chartContext(): ChartContext | null {
     const chart = this.chart
     if (!chart || !this.sym) return null
@@ -3233,6 +3278,26 @@ export class TradingTerminal {
     // any other way: there is no build step between saving and running, so this
     // toast is the compiler's only route to the person who wrote the mistake.
     for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    // A strategy is not in the indicator list, and until now nothing said so.
+    //
+    // The chart tier draws and does not trade, so a script that places orders is
+    // skipped when the indicators are registered. That is correct, and it is
+    // also invisible: a trader who saved a strategy opens the picker, cannot
+    // find it, and has nothing to read. "Nothing happens" is what they report,
+    // and they are right, because there is nothing there to press.
+    //
+    // Said once per script for the life of the page. `loadIndicators` runs on
+    // every picker open, every layout restore and every symbol change, so a
+    // toast per call would be the same sentence several times a minute.
+    for (const one of studies.skipped) {
+      if (this.saidSkipped.has(one.file)) continue
+      this.saidSkipped.add(one.file)
+      this.toast(
+        `${one.file} places orders, so it is not an indicator. Use the Backtest panel to see it ` +
+          `on the chart, or Strategies to run it.`
+      )
+    }
   }
 
   /** Restore sources before the evaluator validates their saved identities. */

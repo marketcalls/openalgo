@@ -71,6 +71,7 @@ deliberately nothing it could pass.
 """
 
 import atexit
+import json
 import os
 import platform
 import signal
@@ -84,14 +85,19 @@ from time import monotonic, sleep
 import psutil
 import pytz
 
+from services.openscript_commands import ask as ask_to_close
+from services.openscript_commands import clear as forget_instruction
+from services.openscript_deployment import deployment_id, is_deployment_id
 from services.openscript_run_config import (
     PRODUCTS,
+    deployments_of,
     is_product,
     is_run_field,
     is_script_name,
     read_run_config,
     require_run_config,
 )
+from services.openscript_running import all_running, mark_running, mark_stopped
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -170,9 +176,14 @@ OS_TYPE = platform.system().lower()
 IS_WINDOWS = OS_TYPE == "windows"
 
 
-def run_id_for(script: str) -> str:
-    """The id one script's run is known by, in the registry and in its log name."""
-    return f"{ID_PREFIX}_{script[: -len('.oscript')] if script.endswith('.oscript') else script}"
+def run_id_for(script: str, symbol: str = "", exchange: str = "", interval: str = "") -> str:
+    """The id one deployment is known by: registry key, log name and order tag.
+
+    Minted by `openscript_deployment`, which is the one place that decides what
+    a deployment is called. See it for why the instrument and the interval are
+    part of the identity rather than only the script.
+    """
+    return deployment_id(script, symbol, exchange, interval)
 
 
 def _ist_now() -> datetime:
@@ -265,6 +276,67 @@ def _wait_for_exit(process: subprocess.Popen, timeout: float) -> bool:
         if process.poll() is not None:
             return True
     return process.poll() is not None
+
+
+class Adopted:
+    """A child of a previous worker, wearing the face of the one that started it.
+
+    **Why this exists.** An application killed outright runs no exit handler, so
+    its strategy processes are still there and still placing orders. The next
+    worker must not start a second one for each of them: that doubles every
+    position, silently, and the two runs then fight over the same strategy. So
+    it takes them over instead.
+
+    Everything downstream of the registry expects the object a start produced,
+    which answers ``poll``, ``send_signal``, ``terminate`` and ``kill``. A
+    process this worker did not start has none of that, only an id, so this
+    presents the same four over ``psutil`` and the stopping path does not have to
+    know the difference. A branch there would be a second way to stop a run, and
+    the one used rarely is the one that stops working.
+
+    **Every failure is raised as the failure a ``Popen`` would raise.** The
+    stopping path already handles a signal a platform will not deliver, by
+    falling through to terminating: it catches what a ``Popen`` throws, and
+    ``psutil`` throws its own family instead. Translating here means that path
+    is written once and works for both, which on Windows is the difference
+    between a console break falling back to a terminate and a run that can never
+    be stopped.
+    """
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+    def poll(self) -> int | None:
+        """None while it is still running, as ``Popen.poll`` answers.
+
+        A zero stands in for an exit status this worker cannot know: it did not
+        start the process, so nothing reported one to it. Every caller here
+        tests whether the answer is None and none of them reads the number.
+        """
+        return None if _process_is_alive(self.pid) else 0
+
+    def send_signal(self, number: int) -> None:
+        self._do(lambda one: one.send_signal(number))
+
+    def terminate(self) -> None:
+        self._do(lambda one: one.terminate())
+
+    def kill(self) -> None:
+        self._do(lambda one: one.kill())
+
+    def _do(self, act) -> None:
+        try:
+            act(psutil.Process(self.pid))
+        except psutil.NoSuchProcess:
+            # Already gone, which is what the caller was asking for. A `Popen`
+            # whose child has exited raises nothing here either.
+            return
+        except (psutil.AccessDenied, psutil.Error, ValueError) as refused:
+            # `Popen` reports a signal the platform will not deliver as an
+            # OSError or a ValueError, and the stopping path catches those and
+            # falls through to a harder signal. Anything else raised from here
+            # would escape that and leave the run unstoppable.
+            raise OSError(str(refused)) from refused
 
 
 def _terminate(process: subprocess.Popen, pid: int, gentle: float = 5.0, forced: float = 2.0) -> bool:
@@ -438,7 +510,7 @@ def _api_key_for(user_id: str | None) -> str | None:
 
 
 def start_run(
-    script: str,
+    name: str,
     symbol: str = "",
     exchange: str = "",
     interval: str = "",
@@ -447,13 +519,14 @@ def start_run(
     history_days: int = 5,
     poll_seconds: float = 15.0,
 ) -> tuple[bool, str]:
-    """Start one script in a process of its own and return at once.
+    """Start one deployment in a process of its own and return at once.
 
-    **The script name alone is enough**, and that is how a run is started: the
+    **The name alone is enough**, and that is how a run is started: the
     instrument, the exchange, the interval, the product and the owning user come
-    from the settings saved against that script. Anything passed here wins over
-    what is saved, for a caller that already holds it, and a script with neither
-    is refused by name saying which of the three is missing.
+    from the settings saved against that deployment. ``name`` is a deployment
+    id, or a script name when that script has exactly one deployment. Anything
+    passed here wins over what is saved, for a caller that already holds it, and
+    a deployment with neither is refused saying which of the three is missing.
 
     It does not wait for the run to load its program, reach the platform or place
     anything. There is nothing to wait for that would be worth stopping every
@@ -462,31 +535,48 @@ def start_run(
     installed and whether the instrument answers are all the child's to find out,
     and each of them is a sentence in that log naming the script.
     """
-    if not is_script_name(script):
+    if not is_deployment_id(name) and not is_script_name(name):
         return False, (
-            f"{script!r} is not a script name. A name is letters, digits, dot, dash or "
+            f"{name!r} is not a script name. A name is letters, digits, dot, dash or "
             "underscore, and ends in .oscript"
         )
 
-    saved = read_run_config(script) or {}
+    saved = read_run_config(name) or {}
+    # Which file this deployment runs. Taken from the settings, because a
+    # deployment id is not a file name and cannot be turned back into one: the
+    # long ones end in a digest.
+    script = str(saved.get("script") or "") or (name if is_script_name(name) else "")
+    if not is_script_name(script):
+        _, why = require_run_config(name)
+        return False, why or f"{name} is not a deployment on this server"
+
     symbol = symbol or saved.get("symbol") or ""
     exchange = exchange or saved.get("exchange") or ""
     interval = interval or saved.get("interval") or ""
     product = product or saved.get("product") or ""
     user_id = user_id or saved.get("user_id") or None
+    # The script's own parameters, exactly as they were saved. They are not an
+    # argument to this call: a run started from a page, a run started by a
+    # schedule and a run started again after a restart have to be the same run,
+    # and a caller that could supply its own would be a second place a strategy
+    # could be sized or tuned from.
+    inputs = saved.get("inputs") or {}
 
     if not (symbol and exchange and interval):
         # Said by the settings rather than here, so a trader reads one sentence
         # about a missing setting wherever they meet it.
-        _, why = require_run_config(script)
+        _, why = require_run_config(name)
         return False, why or (
             f"{script} has no instrument, exchange and interval to run on. Save its run "
             "settings, then start it again."
         )
 
-    for name, value in (("instrument", symbol), ("exchange", exchange), ("interval", interval)):
+    for field, value in (("instrument", symbol), ("exchange", exchange), ("interval", interval)):
         if not is_run_field(value):
-            return False, f"{value!r} is not {'an' if name == 'exchange' else 'a'} {name} this can start a run on"
+            return False, (
+                f"{value!r} is not {'an' if field == 'exchange' else 'a'} {field} this can "
+                "start a run on"
+            )
 
     # A product reaches the same command line as the three above, so it is
     # checked the same way and against the list the run itself checks it against.
@@ -499,16 +589,21 @@ def start_run(
             f"{product!r} is not a product this platform sends. Use one of {', '.join(PRODUCTS)}."
         )
 
-    run_id = run_id_for(script)
+    # From the instrument and the interval as resolved above, not from the name
+    # the caller used: two deployments of one script are two runs, and minting
+    # this from the script alone is what made the second one refuse to start and
+    # put its orders in the first one's book.
+    run_id = run_id_for(script, symbol, exchange, interval)
+    where = f"{script} on {symbol} {exchange} at {interval}"
 
     with PROCESS_LOCK:
         _forget_finished_locked()
         if run_id in RUNNING_RUNS:
-            return False, f"{script} is already running"
+            return False, f"{where} is already running"
         if run_id in STOPPING_RUNS:
-            return False, f"{script} is still stopping, try again in a moment"
+            return False, f"{where} is still stopping, try again in a moment"
         if run_id in STARTING_RUNS:
-            return False, f"{script} is already starting"
+            return False, f"{where} is already starting"
         # Claimed in the hold that checked, and released in the finally below
         # whatever happens after it.
         STARTING_RUNS.add(run_id)
@@ -516,11 +611,28 @@ def start_run(
     try:
         return _spawn_claimed(
             script, run_id, symbol, exchange, interval, product,
-            user_id, history_days, poll_seconds,
+            user_id, history_days, poll_seconds, inputs,
         )
     finally:
         with PROCESS_LOCK:
             STARTING_RUNS.discard(run_id)
+
+
+def _inputs_as_text(inputs: dict | None, run_id: str) -> str:
+    """One script's parameters as the child reads them, or an empty set.
+
+    Nothing raises. A run whose parameters could not be encoded starts on the
+    script's own declared defaults, which is the behaviour of a script with no
+    parameters saved and is a run a trader can read, rather than a start that
+    fails over a settings map.
+    """
+    if not inputs:
+        return "{}"
+    try:
+        return json.dumps(inputs, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        logger.exception("The parameters saved for %s could not be carried to its run", run_id)
+        return "{}"
 
 
 def _spawn_claimed(
@@ -533,6 +645,7 @@ def _spawn_claimed(
     user_id: str | None,
     history_days: int,
     poll_seconds: float,
+    inputs: dict | None = None,
 ) -> tuple[bool, str]:
     """The slow half of a start, run with this script's id already claimed.
 
@@ -569,6 +682,16 @@ def _spawn_claimed(
     environment.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
     if api_key:
         environment["OPENALGO_API_KEY"] = api_key
+
+    # The script's parameters go through the environment rather than the command
+    # line, which carries only the fields checked against a pattern above. A
+    # parameter's value is a trader's text and a script's own key, so it belongs
+    # on the channel this already uses for what should not be argv: it has no
+    # length limit worth worrying about and does not appear in a process list
+    # beside every other run. Written even when empty, so a run started after
+    # settings were cleared is not handed the previous ones by an environment
+    # this worker inherited.
+    environment["OPENSCRIPT_INPUTS"] = _inputs_as_text(inputs, run_id)
 
     command = [
         sys.executable,
@@ -629,12 +752,46 @@ def _spawn_claimed(
             "product": product,
         }
 
+    # Recorded after the child exists, so nothing is ever noted as running that
+    # was not. See `openscript_running`: this survives a restart and is what
+    # brings the strategy back, and only a trader pressing Stop clears it.
+    mark_running(run_id, process.pid)
+
     logger.info("Started the OpenScript run %s as process %s", run_id, process.pid)
     return True, f"{script} started at {started.strftime('%H:%M:%S IST')}"
 
 
-def stop_run(script_or_run_id: str) -> tuple[bool, str]:
-    """Stop one run and reap its process.
+def stop_run(
+    script_or_run_id: str, forget: bool = True, close: bool = False
+) -> tuple[bool, str]:
+    """End one run and reap its process.
+
+    **There are two ways to end a run and they are not the same thing.**
+    ``close`` is which. With it False this is a *pause*: the process ends and
+    whatever the run was holding stays exactly where it is, which is a trader
+    taking the position back. With it True this is a *stop*: the run closes what
+    it holds first and then ends, which is a trader finished with the strategy.
+    A strategy that ended without closing what it opened is a position nothing
+    is watching, and a strategy whose position was closed when the trader only
+    meant to change a parameter is money spent for nothing. Neither can be
+    guessed, so the caller says which.
+
+    **The closing is the run's own, and it has to be.** Two deployments can hold
+    the same instrument, so squaring the account's net position in it would
+    close somebody else's; only the run knows its own size. It is asked through
+    a file rather than a signal, because the two signals a run answers both mean
+    "leave" and Windows has no third one. See `openscript_commands`.
+
+    **A close that did not happen does not end the run.** The position is still
+    there, so something has to be able to stop it: this answers False and leaves
+    the run registered and running, which is the platform's own rule for a stop
+    whose exit orders were refused.
+
+    ``forget`` is whether this also means the trader no longer wants the
+    deployment running. It does when somebody presses Pause or Stop, and it does
+    not when the worker is going down: ending a child on the way out is correct,
+    because a child outlives its parent, but it is not the trader changing their
+    mind. See `openscript_running`.
 
     The claim is taken under the lock and the waiting is done outside it, which is
     the strategy host's shape and is there for the same reason: a run takes as
@@ -647,12 +804,26 @@ def stop_run(script_or_run_id: str) -> tuple[bool, str]:
     """
     run_id = _as_run_id(script_or_run_id)
 
+    if close:
+        gone, why = _close_and_wait(run_id)
+        if not gone:
+            return False, why
+
     with PROCESS_LOCK:
         _forget_finished_locked()
         if run_id in STOPPING_RUNS:
             return False, "That run is already stopping"
         held = RUNNING_RUNS.pop(run_id, None)
         if held is None:
+            if close:
+                # It closed its position and ended by itself, which the sweep
+                # above has already noticed. That is the whole of what was
+                # asked for, so it is a success and not a missing run.
+                if forget:
+                    mark_stopped(run_id)
+                forget_instruction(run_id)
+                logger.info("Closed and stopped the OpenScript run %s", run_id)
+                return True, "closed and stopped"
             return False, "That run is not running"
         STOPPING_RUNS.add(run_id)
 
@@ -670,25 +841,105 @@ def stop_run(script_or_run_id: str) -> tuple[bool, str]:
         with PROCESS_LOCK:
             STOPPING_RUNS.discard(run_id)
 
-    logger.info("Stopped the OpenScript run %s", run_id)
-    return True, f"{held.get('script', run_id)} stopped"
+    if forget:
+        mark_stopped(run_id)
+    forget_instruction(run_id)
+
+    what = "closed and stopped" if close else "paused"
+    logger.info("The OpenScript run %s was %s", run_id, what)
+    return True, f"{held.get('script', run_id)} {what}"
+
+
+#: How long to give a run to close what it holds and leave, and how often to
+#: look while it does.
+#:
+#: Long enough for a market order to reach a broker and come back, which is
+#: seconds rather than milliseconds, and not so long that a page is left
+#: waiting: the deployment gives a request five minutes, and a caller that has
+#: waited this long is better told what is happening than held further.
+CLOSE_SECONDS = 25.0
+CLOSE_LOOK = 0.5
+
+
+def _close_and_wait(run_id: str) -> tuple[bool, str]:
+    """Ask a run to close what it holds and leave. True once it has gone.
+
+    Answers False with the reason while it is still there, and leaves it
+    running: a run that did not close is a run still holding a position, and
+    something has to be able to stop it.
+    """
+    with PROCESS_LOCK:
+        held = RUNNING_RUNS.get(run_id)
+    if held is None:
+        return False, "That run is not running"
+
+    ask_to_close(run_id)
+
+    process = held.get("process")
+    until = monotonic() + CLOSE_SECONDS
+    while monotonic() < until:
+        try:
+            if process is not None and process.poll() is not None:
+                return True, ""
+        except (OSError, ValueError, AttributeError):
+            # A process this worker can no longer read is one it can no longer
+            # wait for. Treated as still here, which leaves the run registered.
+            break
+        sleep(CLOSE_LOOK)
+
+    forget_instruction(run_id)
+    return False, (
+        "This strategy did not close its position in time, so it is still running and still "
+        "holding it. Its own log says what happened. Deal with the position and stop it again, "
+        "or use Pause to end the strategy and keep the position."
+    )
 
 
 def _as_run_id(given: str) -> str:
-    """A caller may name the script or the run. Both reach the same id.
+    """A caller may name the deployment or the script. Both reach one id.
 
     The two are told apart by the extension and not by the prefix. Every script
-    name ends ``.oscript`` (``is_script_name`` requires it) and no run id does,
-    because ``run_id_for`` strips it. Testing the prefix instead read a script
-    genuinely named ``openscript_something.oscript`` as though it were already a
-    run id: ``start_run`` registered it under ``openscript_openscript_something``
-    while ``stop_run`` and ``status_of`` looked for ``openscript_something.oscript``,
+    name ends ``.oscript`` (``is_script_name`` requires it) and no deployment id
+    does. Testing the prefix instead read a script genuinely named
+    ``openscript_something.oscript`` as though it were already a run id:
+    ``start_run`` registered it under ``openscript_openscript_something`` while
+    ``stop_run`` and ``status_of`` looked for ``openscript_something.oscript``,
     so the run started, answered "not running" ever after, and could not be
     stopped through any route.
+
+    **A script name is resolved through its runs first and its settings
+    second**, because the id now carries the instrument and the interval and
+    cannot be worked out from the name alone.
+
+    The registry is asked first on purpose. What a caller naming a file means is
+    "the run of this file", and a run started with an instrument passed straight
+    to `start_run` has an id no settings file knows: resolving only through the
+    settings would answer an id matching nothing, and a run that is up could not
+    be stopped or asked about by the only name its caller has.
+
+    A script running twice, or deployed twice and running neither, answers an id
+    that matches no run. That is deliberate: stopping whichever of two
+    deployments happened to be looked at first would stop a position on an
+    instrument the caller never named.
     """
-    if given.endswith(".oscript"):
-        return run_id_for(given)
-    return given if given.startswith(f"{ID_PREFIX}_") else run_id_for(given)
+    if not given.endswith(".oscript") and given.startswith(f"{ID_PREFIX}_"):
+        return given
+
+    script = given if given.endswith(".oscript") else f"{given}.oscript"
+
+    with PROCESS_LOCK:
+        running = [
+            run_id for run_id, held in RUNNING_RUNS.items() if held.get("script") == script
+        ]
+    if len(running) == 1:
+        return running[0]
+    if running:
+        return run_id_for(script)
+
+    theirs = deployments_of(script)
+    if len(theirs) == 1:
+        return next(iter(theirs))
+    return run_id_for(script)
 
 
 def is_running(script_or_run_id: str) -> bool:
@@ -741,6 +992,142 @@ def reap_finished_runs() -> list[str]:
         return _forget_finished_locked()
 
 
+def restore_runs() -> tuple[int, int]:
+    """Put back what a trader had running, and say how much was taken over.
+
+    Answers how many were adopted and how many were started fresh.
+
+    **Adopt first, start second, and the order is the safety.** A worker that
+    went down cleanly stopped its children, so there is nothing alive and each
+    one is started again. A worker that was killed outright did not, so its
+    children are still there and still trading: starting a second run for each
+    would double every position, and neither run would know about the other.
+    So a recorded process that is still alive is taken over rather than
+    replaced, and the one that is gone is started.
+
+    **A strategy that will not come back is left out of the record rather than
+    retried for ever.** It is written to the log with the reason, and a trader
+    presses Start when they have dealt with it.
+
+    Nothing here raises. It runs at startup, and a worker that will not come up
+    because one strategy could not be restored is worse than one that comes up
+    and says so.
+    """
+    adopted = 0
+    started = 0
+    for run_id, held in all_running().items():
+        try:
+            pid = held.get("pid")
+            if _process_is_alive(pid):
+                if _adopt(run_id, int(pid)):
+                    adopted += 1
+                    continue
+                # Alive, and this worker cannot confirm it is the run it was
+                # told about. Starting one beside it is the outcome this whole
+                # function exists to avoid, so nothing is started and a person
+                # is told: two runs of one deployment double every position and
+                # neither knows about the other.
+                logger.error(
+                    "%s is recorded as running under process %s, which is alive but is not that "
+                    "run. Nothing was started for it, because a second run would double its "
+                    "position. Check that process, then start the strategy again.",
+                    run_id, pid,
+                )
+                continue
+
+            ok, why = start_run(run_id)
+            if ok:
+                started += 1
+            else:
+                # Left out of the record: it is not running and nothing here is
+                # going to make it run, so a trader pressing Start is the next
+                # step rather than this trying again on every restart.
+                mark_stopped(run_id)
+                logger.warning("Could not put %s back after a restart: %s", run_id, why)
+        except Exception:
+            logger.exception("Could not restore the OpenScript run for %s", run_id)
+
+    if adopted or started:
+        logger.info(
+            "Put back %d OpenScript run(s): %d already running and taken over, %d started",
+            adopted + started, adopted, started,
+        )
+    return adopted, started
+
+
+def _is_our_run(run_id: str, pid: int) -> bool:
+    """Whether this process really is this deployment's run.
+
+    **An id on its own proves nothing, and acting on one is dangerous.** Process
+    ids are reused on every platform this runs on, and the gap between a worker
+    dying and the next one starting is exactly when the operating system hands
+    the number to somebody else. Adopting it would put an unrelated process into
+    the registry, and the next Stop would terminate whatever it happened to be.
+
+    So the command line is read and has to name both this runner and this
+    deployment. The deployment and not the file, because a run carries its id on
+    its own command line as ``--strategy-name``: matching the file alone would
+    let one deployment of a script adopt another deployment of the same script,
+    and the next Stop would then stop the wrong instrument. That is the same
+    test the strategy host makes of its own children, sharpened by the one thing
+    this has that it does not.
+
+    **Unreadable is not the same as ours.** A process this worker may not
+    inspect, or one whose command line has gone because it is a zombie, answers
+    no: refusing to adopt costs a strategy that does not come back and says so,
+    and adopting wrongly costs somebody else's process being killed.
+    """
+    try:
+        words = psutil.Process(pid).cmdline()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error, OSError):
+        return False
+    except Exception:
+        logger.exception("Could not read the command line of process %s", pid)
+        return False
+
+    if not words:
+        return False
+    written = " ".join(str(one) for one in words)
+    return RUNNER_SCRIPT.name in written and run_id in written
+
+
+def _adopt(run_id: str, pid: int) -> bool:
+    """Take over a live child of a previous worker. True once it is registered.
+
+    The log file is the one that process is already writing to, found rather
+    than guessed: opening a new one would split a run's own account of itself
+    across two files at the moment somebody most wants to read it.
+    """
+    if not _is_our_run(run_id, pid):
+        return False
+
+    saved = read_run_config(run_id) or {}
+    script = str(saved.get("script") or "")
+    logs = logs_for(run_id)
+
+    with PROCESS_LOCK:
+        _forget_finished_locked()
+        if run_id in RUNNING_RUNS:
+            return False
+        RUNNING_RUNS[run_id] = {
+            "process": Adopted(pid),
+            "pid": pid,
+            # The moment this worker took it over, which is not when the run
+            # began. A row saying otherwise would claim a run had just started
+            # every time the application was restarted.
+            "started_at": _ist_now(),
+            "log_file": str(logs[0]) if logs else None,
+            "script": script,
+            "symbol": saved.get("symbol", ""),
+            "exchange": saved.get("exchange", ""),
+            "interval": saved.get("interval", ""),
+            "product": saved.get("product", ""),
+        }
+
+    logger.info("Took over the OpenScript run %s, already running as process %s", run_id, pid)
+    return True
+
+
 def stop_every_run() -> list[str]:
     """Stop every run this worker started, and say which were stopped.
 
@@ -765,18 +1152,77 @@ def stop_every_run() -> list[str]:
         logger.info("Stopping %d OpenScript run(s) before this worker exits", len(ids))
 
     stopped = []
+    interrupted: BaseException | None = None
     for run_id in ids:
         try:
-            ok, _ = stop_run(run_id)
+            # Not forgotten: the worker is going down, which is not the
+            # trader deciding this should stop. The next one puts it back.
+            ok, _ = stop_run(run_id, forget=False)
         except Exception:
             logger.exception("An OpenScript run did not stop cleanly at exit")
             continue
+        except BaseException as leaving:
+            # **Not ``Exception``, and this is the whole point of the loop.**
+            # ``SystemExit`` and ``KeyboardInterrupt`` are not ``Exception``, so
+            # an ``except Exception`` here lets them out of the loop and
+            # abandons every run after this one. That is not a tidiness
+            # question: this function is what stops child processes that place
+            # orders, a child outlives its parent, and the ones left behind keep
+            # trading with nothing able to stop them.
+            #
+            # It arrives by an ordinary route. This is registered with
+            # ``atexit``, so it runs while the interpreter is already leaving
+            # after the first Ctrl+C. A second Ctrl+C while it is waiting for a
+            # child lands the signal handler's ``SystemExit`` inside this loop,
+            # which is exactly the impatient keypress somebody makes when a
+            # shutdown seems slow. The wait it interrupts is the five seconds a
+            # run is given to finish the bar it is on.
+            #
+            # So the signal is recorded and the remaining runs are still
+            # stopped. Stopping them is the safety-critical half and it is
+            # bounded; the exit is honoured immediately afterwards.
+            logger.warning(
+                "Interrupted while stopping OpenScript runs at exit; stopping the rest first"
+            )
+            if interrupted is None:
+                interrupted = leaving
+            continue
         if ok:
             stopped.append(run_id)
+
+    if interrupted is not None:
+        # Re-raised so a direct caller still exits the way it was told to. Under
+        # ``atexit`` the interpreter prints that it ignored this, which is
+        # noise; every child is gone by the time it does, which is the part that
+        # matters.
+        raise interrupted
     return stopped
+
+
+def _stop_every_run_at_exit() -> None:
+    """``stop_every_run`` for the way out of the interpreter.
+
+    The only difference is the last step. ``stop_every_run`` re-raises an
+    interrupt it caught, because a caller that asked to exit should exit and
+    with the code it named. By the time this runs the exit code is already
+    decided: the first signal's ``SystemExit`` set it and the interpreter is
+    running its callbacks on the way out. Re-raising here cannot change it and
+    can only print ``Exception ignored in atexit callback``, which reads like a
+    crash during shutdown and hides the one line that says what happened.
+
+    So the interrupt is logged and swallowed. What it was interrupting has
+    already been finished by the time we get here, which is the part that
+    matters: no child is left placing orders.
+    """
+    try:
+        stop_every_run()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Shutdown was interrupted; every OpenScript run was stopped first")
+    except Exception:
+        logger.exception("Stopping the OpenScript runs at exit did not finish cleanly")
 
 
 # Registered at import, which is what the strategy host does with its own, and
 # for the same reason: the thing that must not be forgotten is the one that has to
 # happen without anybody remembering to ask for it.
-atexit.register(stop_every_run)
+atexit.register(_stop_every_run_at_exit)

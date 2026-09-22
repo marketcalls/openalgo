@@ -563,17 +563,32 @@ def test_the_listing_says_which_scripts_have_a_program(client, scripts):
     ],
 )
 def test_a_name_the_program_route_does_not_own_is_refused(client, name):
-    """A route added later is a name check somebody has to remember to add.
+    """A name this route does not own is not served, whichever way it is refused.
 
-    Refused as a bad name, which is what the status and the sentence pin here
-    rather than merely "the response was not a program". ``send_from_directory``
-    will not climb out of the directory whatever it is handed, so a route
-    written without the check still answers safely, and answers that there is
-    nothing there: a trader reading that goes looking for a missing script when
-    the name was the thing wrong, and a reviewer reading the test sees a guard
-    that was never being exercised.
+    Two shapes reach here and they are refused in two places, which is the point
+    of the pair rather than an inconsistency:
+
+    A name holding a slash never reaches the view at all. The rule takes the
+    default converter, so such a URL matches no route and is a plain 404. It
+    used to take ``path``, which matched the slash, carried the whole thing in
+    as a filename and answered 400 about an invalid script name: a URL naming no
+    script was reported as a script with a bad name, and any blueprint
+    registered beneath this one was swallowed the same way.
+
+    Every other bad name does reach the view, and is refused there by the name
+    check with the sentence a reader can act on. ``send_from_directory`` will not
+    climb out of the directory whatever it is handed, so a route written without
+    that check still answers safely, but it answers that there is nothing there,
+    and a trader reading that goes looking for a missing script when the name
+    was the thing wrong.
     """
     refused = client.get(f"/openscript/program/{name}")
+
+    # An encoded slash is a slash: the server decodes %2F before matching, so
+    # such a name never reaches the view either.
+    if "/" in name or "%2f" in name.lower():
+        assert refused.status_code == 404
+        return
 
     assert refused.status_code == 400
     assert "Invalid script name" in refused.get_json()["message"]

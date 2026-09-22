@@ -158,19 +158,29 @@ export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
 
       const program = await programFor(script.file, text)
 
-      // A strategy belongs in the backtest panel and the runner, not in the
-      // indicator list. Skipped quietly rather than reported as an error,
-      // because nothing went wrong: the trader saved a strategy and this is the
-      // chart asking which of their scripts it can draw.
-      const beyond = needsMoreThanTheChartCanGive(program)
-      if (beyond !== null) {
-        result.skipped.push({ file: script.file, needs: beyond })
-        continue
-      }
+      // **A strategy is registered like a study, and draws like one.** It has
+      // plots, a title and settings exactly as a study does, and until now none
+      // of them reached the chart: a trader who saved a strategy opened the
+      // indicator list and could not find it, so its lines came from a separate
+      // study they had to keep in step by hand.
+      //
+      // `simulateOrders` is what makes that safe. Without it the engine refuses
+      // a program that places orders, and with a destination that answered
+      // nothing it would run while never learning it holds a position: every
+      // close closing nothing, every entry allowed again on the next signal,
+      // and the plots wrong wherever they read the position. The language runs
+      // it against the venue its own backtest uses instead, so what is drawn
+      // here and what a report of the same script says are one answer.
+      //
+      // **It places nothing.** The venue is a simulation inside the browser;
+      // the chart has no route to the platform and is given none. Trading is
+      // what the strategies panel is for, and the panel says so on screen.
+      const trades = needsMoreThanTheChartCanGive(program) !== null
 
       const descriptor = descriptorFor(program as never, {
         id: idForScript(script.file),
         category: 'OpenScript',
+        ...(trades ? { simulateOrders: true } : {}),
       })
       // `hasSource` puts a braces button on this study's legend row, which the
       // chart turns into an `indicatorSource` event and the terminal turns back

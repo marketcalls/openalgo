@@ -8,7 +8,7 @@
  * closes it.
  */
 
-import { Bell, Bot, FileCode2, FlaskConical, List, Shapes, Table2 } from 'lucide-react'
+import { Activity, Bell, Bot, FileCode2, FlaskConical, List, Shapes, Table2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
@@ -34,6 +34,11 @@ const PANELS = [
   // have done are one activity seen twice, and a trader moves between the two
   // constantly while a strategy is taking shape.
   { id: 'backtest', label: 'Backtest', icon: FlaskConical },
+  // After the backtest, because that is the order the work happens in: a
+  // strategy is written, tested over history, and only then run. This is the
+  // one panel whose rows are processes on the server rather than things in
+  // this tab, and they outlive it.
+  { id: 'strategies', label: 'Strategies', icon: Activity },
   { id: 'agent', label: 'Assistant', icon: Bot },
 ] as const
 

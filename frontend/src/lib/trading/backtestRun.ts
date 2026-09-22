@@ -9,27 +9,62 @@
  * The server side of this platform runs a strategy LIVE, which is a different
  * problem with different reasons: a tab that closes must not stop a position.
  *
- * **Why it runs on the UI thread, measured rather than assumed.** The engine
- * costs about 30ms over a thousand bars, 68ms over five thousand and 211ms over
- * twenty thousand, which is under a click's worth of delay. It reaches 1.3
- * seconds at a hundred thousand bars, which is why `MAX_BARS` is where it is: a
- * run past it is refused with the count rather than freezing the workspace. A
- * worker is the way past that ceiling, and it has to be a served file rather
- * than a blob because this application's content security policy allows scripts
- * from its own origin and nothing else.
+ * **What a run costs, measured in a browser on a real strategy.** A supertrend
+ * that trades, which is an ordinary thing for somebody to backtest:
+ *
+ * ```
+ *  20,000 bars    335ms in the engine,   402ms end to end
+ * 100,000 bars  2,333ms in the engine, 2,549ms end to end
+ * ```
+ *
+ * The gap between the two columns is the message crossing threads, which is a
+ * copy of the bars in and a copy of the report back: about a fifth of a second
+ * at the ceiling, against the seconds it is buying.
+ *
+ * **Measure in a browser and on a strategy somebody would actually run.** An
+ * earlier set of figures taken in Node on a two-average script read about three
+ * times faster and made a hundred thousand bars look like a slow button. It is
+ * two and a half seconds. On this page the same thread draws a live chart and a
+ * live price, so that is not a slow button: it is the terminal stopping while
+ * a trader is watching it.
+ *
+ * **Which is why the run does not happen here when a worker can take it.** See
+ * `runBacktestOffThread`: the engine is a pure function over data with no
+ * dependency of its own, so it moves to a worker without changing an answer,
+ * and the terminal keeps drawing while a hundred thousand bars are folded. This
+ * path stays as the fallback for a browser or a test environment with no worker,
+ * where a frozen second is still better than no backtest.
+ *
+ * Re-measure before moving `MAX_BARS` again, in a browser and on a strategy
+ * that trades. The cost is close to linear in the bar count and very much not
+ * constant per bar across strategies, so a number interpolated from readings
+ * taken elsewhere looks convincing and is wrong by a multiple.
  */
 
 import { apiClient } from '@/api/client'
 import { compileSource, type EditorDiagnostic } from './openscriptFiles'
+import { runOnWorker, workersAvailable } from './backtestWorker'
+import type { BacktestMessage, BacktestReply } from './backtestWorkerProtocol'
 
 /**
  * The most bars a run may cover before it is refused.
  *
- * Twenty thousand costs about a fifth of a second, which a trader reads as the
- * button working. A hundred thousand costs over a second with the workspace
- * frozen through it, which they read as the page having broken.
+ * A hundred thousand, which at a minute a bar is about a year of an Indian
+ * session: the longest range somebody testing an intraday strategy asks for
+ * before they are really asking a different question.
+ *
+ * **It is a ceiling and not a default.** The panel reaches back six months, so
+ * an ordinary run is well under half of this and costs a fraction of the time;
+ * the ceiling is headroom for a trader who widens the dates deliberately. That
+ * separation is the point, because a run now also starts on its own when the
+ * instrument or the interval changes, and a default that spent the whole
+ * ceiling would put a second of work behind every symbol change.
+ *
+ * The cost at the ceiling is about two and a half seconds of folding on an
+ * ordinary strategy, which is why a run goes to a worker where there is one and
+ * why the ceiling is not the default. The measurements are in the module note.
  */
-export const MAX_BARS = 20000
+export const MAX_BARS = 100000
 
 /** What the history API answers with, one object per bar. */
 interface HistoryRow {
@@ -79,6 +114,13 @@ const FALLBACK_LOT = 1
 export interface BacktestRequest {
   file: string
   source: string
+  /**
+   * Values for the script's own `input()` declarations, for the run only.
+   *
+   * Only what a trader changed. An input left alone is absent, so the engine
+   * resolves the declaration's own default rather than a copy of it made here.
+   */
+  inputs?: Readonly<Record<string, unknown>>
   symbol: string
   exchange: string
   interval: string
@@ -103,6 +145,13 @@ export interface BacktestOutcome {
   /** How long the engine itself took, which is what the ceiling is about. */
   ranMs?: number
   contract?: Contract
+  /**
+   * The compiled program this run was of.
+   *
+   * Handed back so the panel can show what the script declares and what it
+   * takes as inputs without compiling it a second time.
+   */
+  program?: unknown
 }
 
 function refused(problem: string): BacktestOutcome {
@@ -227,45 +276,130 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
   const bars = barsFromHistory(rows)
   const contract = await contractFor(request.symbol, request.exchange, request.apiKey, request.signal)
 
+  let program: unknown
+  try {
+    program = JSON.parse(compiled.program)
+  } catch {
+    return refused('The compiled strategy could not be read back.')
+  }
+
+  const facts = {
+    currency: contract.currency,
+    symbol: contract.symbol,
+    exchange: contract.exchange,
+    tickSize: contract.tickSize,
+    lotSize: contract.lotSize,
+    pointValue: contract.pointValue,
+    digits: contract.digits,
+  }
+  const inputs = (request.inputs ?? {}) as Record<string, unknown>
+
+  const folded = await fold({ program, bars, contract: facts, inputs }, request.signal)
+  if (folded === null) return refused('This run was stopped.')
+
+  // A run can be refused before its first bar: a cost model stated twice, a
+  // quantity in a unit a backtest cannot size, a schedule it cannot evaluate.
+  // That is a diagnostic about the run rather than about the script's text, so
+  // it is reported as a problem with its code, not as a line to underline.
+  if (!folded.ok) {
+    return refused(folded.code ? `${folded.code}: ${folded.message}` : folded.message)
+  }
+
+  return {
+    ok: true,
+    summary: folded.report.summary,
+    trades: folded.report.trades as Record<string, unknown>[],
+    equity: folded.report.equity as Record<string, unknown>[],
+    markers: folded.report.markers as Record<string, unknown>[],
+    barCount: bars.length,
+    ranMs: folded.ranMs,
+    contract,
+    program,
+  }
+}
+
+/**
+ * Run the engine, on a worker where there is one and on this thread otherwise.
+ *
+ * **The fallback is not a lesser answer, only a slower page.** The engine is a
+ * pure function over data, so both paths compute the same report from the same
+ * inputs; what differs is whether the chart keeps drawing while it happens. So
+ * a browser that will not start a worker, a policy that refuses the file, a
+ * test environment that has none, all still get a backtest.
+ *
+ * **A worker that fails to start is retried inline; a run it refuses is not.**
+ * Those are different things and conflating them is the mistake worth naming: a
+ * refusal is the engine's answer and would be the same answer inline, so
+ * running it again would cost a second full fold to be told what we already
+ * know. Only a worker that never got to run is worth repeating.
+ *
+ * Answers `null` for a run that was abandoned, which is a run nobody is waiting
+ * for rather than a run that failed.
+ */
+async function fold(
+  message: BacktestMessage,
+  signal?: AbortSignal
+): Promise<BacktestReply | null> {
+  if (workersAvailable()) {
+    try {
+      return await runOnWorker(message, signal)
+    } catch (stopped) {
+      if (signal?.aborted) return null
+      // Logged rather than shown. The trader asked for a backtest, not for a
+      // report on how it was scheduled, and the run below answers them.
+      console.warn('The backtest worker could not be used; running on this thread.', stopped)
+    }
+  }
+
+  if (signal?.aborted) return null
+  return runInline(message)
+}
+
+/**
+ * The engine on this thread, which freezes the page for as long as it takes.
+ *
+ * Kept because it is the fallback, and separate because it is the one place
+ * that has to be read with the cost in mind. See the module note for what that
+ * cost is at each size.
+ */
+async function runInline(message: BacktestMessage): Promise<BacktestReply> {
   try {
     const engine = await import('openalgo-script')
-    const settings = engine.settingsFor({
-      currency: contract.currency,
-      symbol: contract.symbol,
-      exchange: contract.exchange,
-      tickSize: contract.tickSize,
-      lotSize: contract.lotSize,
-      pointValue: contract.pointValue,
-      digits: contract.digits,
-    })
+    const settings = engine.settingsFor(message.contract)
+    const inputs = message.inputs as typeof settings.inputs
 
     const started = performance.now()
-    const out = engine.backtest(JSON.parse(compiled.program), bars, settings, {})
+    const out = engine.backtest(
+      message.program as Parameters<typeof engine.backtest>[0],
+      message.bars as Parameters<typeof engine.backtest>[1],
+      { ...settings, inputs },
+      {}
+    )
     const ranMs = performance.now() - started
 
-    // A run can be refused before its first bar: a cost model stated twice, a
-    // quantity in a unit a backtest cannot size, a schedule it cannot evaluate.
-    // That is a diagnostic about the run rather than about the script's text, so
-    // it is reported as a problem with its code, not as a line to underline.
     if (!out.ok) {
-      const refusal = out.diagnostic
-      return refused(`${refusal.code}: ${refusal.message}`)
+      return { ok: false, code: out.diagnostic.code, message: out.diagnostic.message }
     }
 
     const report = out.record.report
     return {
       ok: true,
-      summary: report.summary as unknown as Record<string, unknown>,
-      trades: report.trades as unknown as Record<string, unknown>[],
-      equity: report.equity as unknown as Record<string, unknown>[],
-      markers: report.markers as unknown as Record<string, unknown>[],
-      barCount: bars.length,
       ranMs,
-      contract,
+      report: {
+        summary: report.summary as unknown as Record<string, unknown>,
+        trades: report.trades as unknown as Record<string, unknown>[],
+        equity: report.equity as unknown as Record<string, unknown>[],
+        markers: report.markers as unknown as Record<string, unknown>[],
+      },
     }
   } catch (unreachable) {
-    return refused(
-      unreachable instanceof Error ? unreachable.message : 'The engine could not run this program.'
-    )
+    return {
+      ok: false,
+      code: '',
+      message:
+        unreachable instanceof Error
+          ? unreachable.message
+          : 'The engine could not run this program.',
+    }
   }
 }

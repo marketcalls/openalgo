@@ -65,29 +65,47 @@ describe('what reaches the chart', () => {
     expect(registerIndicator).toHaveBeenCalledTimes(1)
   })
 
-  it('does not register a program that needs orders', async () => {
-    // THE ONE THAT MATTERS. Registered, the strategy appears in the indicator
-    // list, a trader adds it, and the engine refuses at load with OS6006. The
-    // button worked and the error is about capability tags.
+  it('registers a strategy, with a destination it can safely have', async () => {
+    // THE ONE THAT MATTERS. A strategy has plots, a title and settings exactly
+    // as a study does, and none of them reached the chart: a trader who saved
+    // one could not find it in the indicator list, so its lines had to come
+    // from a separate study kept in step by hand.
+    //
+    // `simulateOrders` is what makes registering it safe. Without it the engine
+    // refuses a program that places orders (OS6006), and with a destination
+    // that answered nothing it would run while never learning it holds a
+    // position: every close closing nothing, and the plots wrong wherever they
+    // read one.
     requires = ['core.1', 'orders']
     serving('a-strategy.oscript')
 
     const out = await loadOpenScriptStudies()
 
-    expect(registerIndicator).not.toHaveBeenCalled()
-    expect(out.loaded).toEqual([])
-    expect(out.skipped).toEqual([{ file: 'a-strategy.oscript', needs: 'orders' }])
+    expect(out.loaded).toEqual(['a-strategy.oscript'])
+    expect(registerIndicator).toHaveBeenCalledTimes(1)
+    expect(descriptorFor.mock.calls[0][1]).toMatchObject({ simulateOrders: true })
   })
 
-  it('records the skip as a skip and never as an error', async () => {
-    // Catches a strategy reported as a failure. Nothing went wrong: the trader
-    // saved a strategy, and this is the chart asking which scripts it can draw.
+  it('never asks for a destination for a study', async () => {
+    // Catches the option passed to everything. A study places no orders, so a
+    // venue for it is a thing built and never used, and an option set where it
+    // has no meaning is the next reader's question.
+    requires = ['core.1']
+    serving('a-study.oscript')
+
+    await loadOpenScriptStudies()
+
+    expect(descriptorFor.mock.calls[0][1].simulateOrders).toBeUndefined()
+  })
+
+  it('reports a strategy as loaded and never as an error', async () => {
     requires = ['core.1', 'orders']
     serving('a-strategy.oscript')
 
     const out = await loadOpenScriptStudies()
 
     expect(out.errors).toEqual([])
+    expect(out.skipped).toEqual([])
   })
 
   it('reads the requirement off the program, not off the word in the source', async () => {

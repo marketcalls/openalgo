@@ -27,7 +27,9 @@ import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
+import { idForScript } from '@/lib/trading/openscriptFiles'
 import { BacktestPanel } from '@/components/trading/BacktestPanel'
+import { StrategiesPanel } from '@/components/trading/StrategiesPanel'
 import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
@@ -226,6 +228,13 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * long enough to bring the panel back.
    */
   const [scriptSource, setScriptSource] = useState<string | null>(null)
+  /**
+   * A strategy the editor asked to have tested, until the backtest panel takes
+   * it. Held on the page rather than passed straight across, because the panel
+   * is not mounted while the editor is showing and the request has to outlive
+   * the switch between them.
+   */
+  const [backtestFile, setBacktestFile] = useState<string | null>(null)
   const showScriptSource = useCallback((file: string) => {
     setScriptSource(file)
     setPanel('scripts')
@@ -242,6 +251,22 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * the panel does something sensible before any pane has been focused.
    */
   const [focusedPane, setFocusedPane] = useState('p0')
+  /**
+   * Bumped whenever what `readChartContext` would answer has changed.
+   *
+   * A panel acting on the chart needs its instrument and its timeframe, and the
+   * chart is not a React value: it is a library holding its own state, so there
+   * is nothing to depend on. The only way to notice a change was to read it on
+   * a timer, a question asked every second and answered differently a few times
+   * a day.
+   *
+   * Three things change the answer and all three are already known here: the
+   * focused pane, that pane's symbol, and its timeframe. A counter is enough,
+   * because the panels re-read the context themselves and only need telling
+   * that it is worth re-reading.
+   */
+  const [chartRevision, setChartRevision] = useState(0)
+  const noteChartChanged = useCallback(() => setChartRevision((at) => at + 1), [])
   const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
   const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
   const [paneObjects, setPaneObjects] = useState<Record<string, ChartObjects>>({})
@@ -451,13 +476,22 @@ function TradingWorkspace({ account }: { account: string | null }) {
       setMagnet(t.drawStats().magnet)
       setStay(t.drawStats().stay)
     }
-    if (paneId) setFocusedPane(paneId)
+    if (paneId) {
+      setFocusedPane(paneId)
+      // The context follows the focused pane, so focusing another one changes
+      // the answer without any chart having changed.
+      noteChartChanged()
+    }
     if (t) setStats(t.drawStats())
-  }, [])
+  }, [noteChartChanged])
 
-  const noteSymbol = useCallback((paneId: string, key: string | null) => {
-    setPaneSymbols((prev) => (prev[paneId] === key ? prev : { ...prev, [paneId]: key }))
-  }, [])
+  const noteSymbol = useCallback(
+    (paneId: string, key: string | null) => {
+      setPaneSymbols((prev) => (prev[paneId] === key ? prev : { ...prev, [paneId]: key }))
+      noteChartChanged()
+    },
+    [noteChartChanged]
+  )
 
   /**
    * Load an instrument chosen in a side panel.
@@ -1288,6 +1322,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         onSymbolChange={(id, key) => {
                           if (!visibleGrid.current) noteSymbol(id, key)
                         }}
+                        onIntervalChange={() => {
+                          if (!visibleGrid.current) noteChartChanged()
+                        }}
                         onTerminalChange={noteTerminal}
                         onObjectsChange={(id, objects) => {
                           if (!visibleGrid.current) noteObjects(id, objects)
@@ -1332,6 +1369,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     onBeforeSourceChange={stopWorkspaceReplay}
                     onFocusPane={focusPane}
                     onSymbolChange={noteSymbol}
+                    onIntervalChange={noteChartChanged}
                     onObjectsChange={noteObjects}
                     onOpenScriptSource={showScriptSource}
                     onAlertsReady={noteAlerts}
@@ -1414,6 +1452,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
           )}
+          {apiKey && wsUrl && panel === 'strategies' && (
+            <StrategiesPanel getChartContext={readChartContext} />
+          )}
           {apiKey && wsUrl && panel === 'backtest' && (
             <BacktestPanel
               apiKey={apiKey}
@@ -1421,6 +1462,17 @@ function TradingWorkspace({ account }: { account: string | null }) {
               // is of the instrument and interval on the chart at the moment
               // Run is pressed, not of whatever this page last rendered with.
               getChartContext={readChartContext}
+              // Bumped when the focused pane, its instrument or its timeframe
+              // changes, so the panel re-reads the chart when there is something
+              // new to read rather than asking it every second.
+              chartRevision={chartRevision}
+              // The same pane helper every panel uses: the focused one, else any
+              // that is up. A run marks the chart it was a run of.
+              onMarkChart={(markers) =>
+                panelTarget()?.setBacktestMarkers(markers as never) ?? false
+              }
+              runFile={backtestFile}
+              onRan={() => setBacktestFile(null)}
             />
           )}
           {apiKey && wsUrl && panel === 'scripts' && (
@@ -1440,6 +1492,32 @@ function TradingWorkspace({ account }: { account: string | null }) {
               }}
               openFile={scriptSource}
               onOpened={() => setScriptSource(null)}
+              // **Applying a strategy does both halves, because it is one act.**
+              //
+              // A strategy has two things to show and they used to arrive by
+              // different doors. Adding it from the indicator list drew its
+              // plots and gave it a legend row and a settings dialog, and drew
+              // no trades. Applying it from the editor marked every entry and
+              // exit on the price, and drew no lines and no legend, so there
+              // was nothing on the chart to open settings on or to remove. A
+              // trader wanting both had to do both, and had no way of knowing
+              // that.
+              //
+              // So this adds it to the chart and runs it. The study is what
+              // carries the name, the band and the settings; the run is what
+              // knows the trades, because an order is not a marker the language
+              // declares and only the report has them.
+              onBacktest={(file) => {
+                const pane = panelTarget()
+                if (!pane) return false
+                // The plots first, so the legend is there while the run works.
+                // A strategy that will not register is not a reason to refuse
+                // the run: the marks are the half a trader asked for by name.
+                void pane.addIndicatorById(idForScript(file))
+                setBacktestFile(file)
+                setPanel('backtest')
+                return true
+              }}
             />
           )}
 
