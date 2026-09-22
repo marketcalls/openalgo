@@ -147,7 +147,7 @@ def _names_something(given: str) -> bool:
 # purpose: every field a run needs is here, and a field a caller invents is
 # refused by name rather than dropped, which is what keeps an imagined switch to
 # live from looking like it worked.
-SETTINGS_FIELDS = ("symbol", "exchange", "interval", "product", "inputs")
+SETTINGS_FIELDS = ("symbol", "exchange", "interval", "product", "inputs", "deployment")
 
 # The most logs one answer names. A script run every day for a year has that
 # many files, and a status page needs the recent ones rather than all of them.
@@ -921,6 +921,14 @@ def set_settings(filename):
     being told no is the only answer that leaves them knowing where the
     destination is actually decided.
 
+    **``deployment`` is what makes this an edit rather than a new one.** With it,
+    the deployment keeps the id its orders are tagged with, so its own book stays
+    its own. Without it, a new deployment is created with an id of its own, so a
+    deployment made where another was removed does not inherit that one's orders,
+    fills and position. Creating a second one on the same script, instrument and
+    interval is refused by the settings store, because that is one strategy
+    running twice on one instrument.
+
     The owning user is taken from the session and never from the body. It is
     stored so a run started by a schedule can find the key it authenticates
     with, and a body that could name somebody else would be a way to run a
@@ -983,6 +991,7 @@ def set_settings(filename):
         product=body.get("product") or "",
         user_id=session.get("user"),
         inputs=body.get("inputs"),
+        deployment=body.get("deployment") or "",
     )
     if not ok:
         return jsonify({"status": "error", "message": message}), 400

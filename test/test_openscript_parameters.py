@@ -109,9 +109,13 @@ def test_saving_again_replaces_the_parameters_rather_than_merging_them():
     setting nobody can see on screen.
     """
     assert save(inputs={"length": 20, "factor": 3})[0]
-    assert save(inputs={"length": 20})[0]
+    # Named, because saving without naming the deployment creates one, and a
+    # second on the same instrument and interval is refused. Editing is what
+    # this test is about.
+    only = next(iter(run_config.all_run_configs()))
+    assert save(inputs={"length": 20}, deployment=only)[0]
 
-    assert run_config.read_run_config("probe.oscript")["inputs"] == {"length": 20}
+    assert run_config.read_run_config(only)["inputs"] == {"length": 20}
 
 
 def test_a_file_edited_by_hand_is_checked_when_it_is_read(config_file):

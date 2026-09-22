@@ -377,6 +377,20 @@ def save_settings(client, filename="range.oscript", **fields):
     return client.post(f"/openscript/runner/config/{filename}", json=body)
 
 
+def deployed(client, script="range.oscript", symbol=None):
+    """The id the server minted for this deployment, read back from it.
+
+    Not worked out here. A deployment carries a token of its own so that one
+    made where another was removed is not that one, and a test that derived the
+    id would assert against a rule the server no longer follows.
+    """
+    listed = client.get("/openscript/runner/config").get_json()["settings"]
+    for one in listed:
+        if one["file"] == script and (symbol is None or one["symbol"] == symbol):
+            return one["deployment"]
+    raise AssertionError(f"nothing deployed for {script} {symbol or ''}: {listed}")
+
+
 # ---------------------------------------------------------------------------
 # Addressed by the deployment, which is what the page sends
 # ---------------------------------------------------------------------------
@@ -394,7 +408,7 @@ def test_a_deployment_id_reaches_the_start_route(client, stub):
     that was saved and compiled and perfectly runnable.
     """
     assert save_settings(client).status_code == 200
-    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    deployment = deployed(client)
 
     answer = client.post(f"/openscript/runner/start/{deployment}")
 
@@ -406,7 +420,7 @@ def test_a_deployment_id_reaches_the_start_route(client, stub):
 def test_a_deployment_id_reaches_stop_status_and_the_books(client, stub):
     """The same failure, on every other route a row's buttons reach."""
     assert save_settings(client).status_code == 200
-    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    deployment = deployed(client)
     client.post(f"/openscript/runner/start/{deployment}")
 
     followed = client.get(f"/openscript/runner/status/{deployment}")
@@ -439,9 +453,13 @@ def test_the_settings_answer_names_the_deployment_and_the_script(client, store):
 
     assert len(listed) == 1
     assert listed[0]["file"] == "range.oscript"
-    assert listed[0]["deployment"] == service.run_id_for(
+    # An id of its own, carrying what it runs so a person can read it, and a
+    # token so that a deployment made where another was removed is not that one.
+    assert listed[0]["deployment"].startswith("openscript_range_")
+    assert SYMBOL in listed[0]["deployment"]
+    assert listed[0]["deployment"] != service.run_id_for(
         "range.oscript", SYMBOL, EXCHANGE, INTERVAL
-    )
+    ), "a new deployment took the id every deployment on these four parts would share"
 
 
 def test_one_script_saved_against_two_instruments_is_two_settings_rows(client, store):
@@ -463,7 +481,7 @@ def test_one_script_saved_against_two_instruments_is_two_settings_rows(client, s
 def test_a_deployment_can_be_removed_and_the_others_are_left(client, store):
     assert save_settings(client, symbol="SYM1").status_code == 200
     assert save_settings(client, symbol="SYM2").status_code == 200
-    gone = service.run_id_for("range.oscript", "SYM1", EXCHANGE, INTERVAL)
+    gone = deployed(client, symbol="SYM1")
 
     answer = client.delete(f"/openscript/runner/config/{gone}")
 
@@ -481,7 +499,7 @@ def test_a_running_deployment_is_not_removed_out_from_under_its_own_run(client, 
     still trading. Refusing is one sentence they can act on.
     """
     assert save_settings(client).status_code == 200
-    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    deployment = deployed(client)
     assert client.post(f"/openscript/runner/start/{deployment}").status_code == 202
 
     answer = client.delete(f"/openscript/runner/config/{deployment}")
@@ -499,7 +517,7 @@ def test_removing_a_deployment_takes_its_schedule_with_it(client, store):
     trader believes no longer exists.
     """
     assert save_settings(client).status_code == 200
-    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    deployment = deployed(client)
     timed = client.post(
         f"/openscript/runner/schedule/{deployment}",
         json={"start_time": "09:20", "stop_time": "15:10", "days": ["mon"]},
@@ -1209,7 +1227,7 @@ def test_the_real_service_starts_and_stops_a_run_through_these_routes(
     """
     assert save_settings(client).status_code == 200
 
-    run_id = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    run_id = deployed(client)
     try:
         answer = client.post("/openscript/runner/start/range.oscript")
         assert answer.status_code == 202, answer.get_json()

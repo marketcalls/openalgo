@@ -63,7 +63,7 @@ from typing import Any
 
 import pytz
 
-from services.openscript_deployment import deployment_id, is_deployment_id
+from services.openscript_deployment import deployment_id, is_deployment_id, new_token
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -108,6 +108,7 @@ REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
 #: the key is no longer the script name: a reader holding an entry has to be
 #: able to say which file it runs without taking the key apart.
 FIELDS: tuple[str, ...] = (
+    "deployment",
     "script",
     "symbol",
     "exchange",
@@ -166,7 +167,7 @@ def _normalised(entry: dict) -> dict:
     filled["user_id"] = None
     filled["inputs"] = {}
     filled.update(entry)
-    for name in ("script", "symbol", "exchange", "interval", "product"):
+    for name in ("deployment", "script", "symbol", "exchange", "interval", "product"):
         filled[name] = "" if filled.get(name) is None else str(filled[name])
     # Read back through the same check that let it in. A file an operator edited
     # by hand, or one written by an older version, reaches a run otherwise, and
@@ -270,7 +271,12 @@ def all_run_configs() -> dict[str, dict]:
                 filled.get("exchange", ""),
                 filled.get("interval", ""),
             )
-        out[name] = filled
+        # The id a deployment carries is its own, and a deployment made before
+        # deployments carried one keeps the id its orders are already tagged
+        # with. Deriving a fresh one for it would hand its whole book to
+        # nobody: the rows stay in the account tagged as they were.
+        filled["deployment"] = filled.get("deployment") or name
+        out[str(filled["deployment"])] = filled
     return out
 
 
@@ -365,6 +371,7 @@ def write_run_config(
     product: str = "",
     user_id: str | None = None,
     inputs: Any = None,
+    deployment: str = "",
 ) -> tuple[bool, str]:
     """Save what one script is run on, replacing whatever was saved before.
 
@@ -376,6 +383,20 @@ def write_run_config(
     engine will resolve the script's ``input()`` declarations against. What may
     be one is decided in ``_checked_inputs``; what makes one correct for a
     particular script is decided by that script, when the engine loads it.
+
+    ``deployment`` names the one being edited, and an empty one creates. The
+    difference is the whole of what keeps a book its own:
+
+    - **Editing keeps the id**, so the deployment's own orders stay its own.
+    - **Creating mints a new one**, so a deployment made where another was
+      removed does not inherit that one's orders, fills and position. Worked out
+      from the four parts alone, the id was the same id again and a strategy
+      deployed a minute ago opened showing a day of trades it never made.
+    - **Creating a second deployment on the same script, instrument and interval
+      is refused**, because that is one strategy running twice on one
+      instrument: two runs, two positions, and a trader who believes they have
+      one. It is what the single key used to prevent by collapsing them, said
+      out loud instead.
 
     The exchange and the product are upper cased, because this platform states
     both in one case and a trader typing either in another means the same thing.
@@ -412,7 +433,48 @@ def write_run_config(
     if wrong:
         return False, wrong
 
+    stored = all_run_configs()
+    held = stored.get(deployment) if deployment else None
+
+    # The same four as something already deployed, and not that thing itself.
+    clash = next(
+        (
+            one
+            for one, saved in stored.items()
+            if one != deployment
+            and saved.get("script") == script
+            and saved.get("symbol") == symbol
+            and saved.get("exchange") == exchange
+            and saved.get("interval") == interval
+        ),
+        None,
+    )
+    if clash is not None:
+        return False, (
+            f"{script} is already deployed on {symbol} {exchange} at {interval}. One strategy "
+            "runs once on one instrument and interval: change the instrument or the interval, "
+            "or edit the deployment that is already there."
+        )
+
+    # **Editing keeps the id only while the deployment is still the same
+    # deployment.** Changing the instrument or the interval is not moving this
+    # one, it is making another: the form says so, and keeping the id would
+    # leave the new instrument showing the old one's orders, which is the exact
+    # confusion a token exists to end.
+    stays = held is not None and (
+        str(held.get("script") or "") == script
+        and str(held.get("symbol") or "") == symbol
+        and str(held.get("exchange") or "") == exchange
+        and str(held.get("interval") or "") == interval
+    )
+    key = (
+        str(held["deployment"])
+        if stays
+        else deployment_id(script, symbol, exchange, interval, token=new_token())
+    )
+
     entry = {
+        "deployment": key,
         "script": script,
         "symbol": symbol,
         "exchange": exchange,
@@ -422,12 +484,6 @@ def write_run_config(
         "inputs": settings,
         "updated_at": _ist_now().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
-
-    # The key is the deployment, so saving this script against a second
-    # instrument or a second interval adds a deployment rather than replacing
-    # the one already there. Saving it against the same three replaces that one,
-    # which is what editing a deployment's settings means.
-    key = deployment_id(script, symbol, exchange, interval)
 
     with _WRITE_LOCK:
         stored = all_run_configs()

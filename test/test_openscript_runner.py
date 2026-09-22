@@ -1483,10 +1483,12 @@ def test_saving_one_script_s_settings_leaves_every_other_script_alone(settings):
     assert run_config.write_run_config("one.oscript", "SYM1", "EXCH1", "1m")[0]
     assert run_config.write_run_config("two.oscript", "SYM2", "EXCH2", "5m")[0]
 
-    assert set(run_config.all_run_configs()) == {
-        "openscript_one_SYM1_EXCH1_1m",
-        "openscript_two_SYM2_EXCH2_5m",
-    }
+    # Each carries a token of its own, so the ids are read back rather than
+    # written down: a deployment made where another was removed must not be
+    # that one. What this test is about is that saving one left the other alone.
+    keys = run_config.all_run_configs()
+    assert len(keys) == 2
+    assert sorted(one["script"] for one in keys.values()) == ["one.oscript", "two.oscript"]
     assert run_config.read_run_config("one.oscript")["symbol"] == "SYM1"
     assert run_config.read_run_config("two.oscript")["symbol"] == "SYM2"
 
@@ -1783,7 +1785,8 @@ def test_the_signatures_two_other_callers_import_are_these():
         run_config.deployments_of: "(script: str) -> dict[str, dict]",
         run_config.write_run_config: (
             "(script: str, symbol: str, exchange: str, interval: str, product: str = '', "
-            "user_id: str | None = None, inputs: Any = None) -> tuple[bool, str]"
+            "user_id: str | None = None, inputs: Any = None, deployment: str = '') "
+            "-> tuple[bool, str]"
         ),
         run_config.delete_run_config: "(name: str) -> tuple[bool, str]",
         run_config.all_run_configs: "() -> dict[str, dict]",
@@ -1823,7 +1826,10 @@ def test_one_start_reaches_the_real_service_and_the_real_settings(tmp_path, monk
     ok, message = start_run("turn.oscript")
     try:
         assert ok, message
-        held = service.RUNNING_RUNS[deployed()]
+        # The deployment's own id, read back from the settings that were just
+        # saved: a run wears it so its orders land in its own book.
+        only = next(iter(run_config.all_run_configs()))
+        held = service.RUNNING_RUNS[only]
         assert held["symbol"] == "SYM1"
         assert psutil.pid_exists(held["pid"])
     finally:

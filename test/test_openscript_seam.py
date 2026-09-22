@@ -776,7 +776,10 @@ def test_the_real_routes_start_and_stop_a_real_run_through_the_real_service(seam
 
     # A run's id is its deployment's: the script, the instrument and the bar
     # together, which is what the settings saved just above name.
-    run_id = service.run_id_for("seam.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    # A run wears its deployment's own id, read back rather than worked out:
+    # a deployment carries a token so that one made where another was removed
+    # does not inherit that one's orders, fills and position.
+    run_id = settings_store.read_run_config("seam.oscript")["deployment"]
     try:
         started = seam.post("/openscript/runner/start/seam.oscript")
         assert started.status_code == 202, started.get_json()
