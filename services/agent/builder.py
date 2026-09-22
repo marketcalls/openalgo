@@ -514,6 +514,7 @@ def _register_chatgpt_models() -> None:
         from services.agent import chatgpt_models
 
         chatgpt_models.register(litellm)
+        chatgpt_models.quieten_usage_warning()
     except Exception:
         logger.exception("Could not register the supplemental ChatGPT models")
 

@@ -297,16 +297,16 @@ function TrailCell({ leg, live }: { leg: Leg; live: LegState | undefined }) {
       {armed ? (
         <>
           <span className="text-amber-600">
-            armed{effectiveSl != null && ` @ ${effectiveSl.toFixed(2)}`}
+            trailing{effectiveSl != null && ` @ ${effectiveSl.toFixed(2)}`}
           </span>
           <span className="text-[10px] text-muted-foreground">peak +{peakPts.toFixed(2)} pts</span>
         </>
       ) : (
         <>
           {armPrice != null ? (
-            <span className="text-muted-foreground">arm @ {armPrice.toFixed(2)}</span>
+            <span className="text-muted-foreground">trails from {armPrice.toFixed(2)}</span>
           ) : (
-            <span className="text-muted-foreground">arm pending</span>
+            <span className="text-muted-foreground">trail pending</span>
           )}
           <span className="text-[10px] text-muted-foreground">
             {peakShown != null ? peakShown.toFixed(2) : '—'} / {trailX} {unit}

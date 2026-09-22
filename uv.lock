@@ -1575,14 +1575,14 @@ wheels = [
 
 [[package]]
 name = "gitpython"
-version = "3.1.58"
+version = "3.1.62"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gitdb" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/26/d6/5f358ff283325580c2003a6d953aea18cfe10ae87b46f5ebc80fa3a386dc/gitpython-3.1.58.tar.gz", hash = "sha256:621416df10ef3fd0e19fabf9172ddeed0fa704d353d04f194eec56a625a95b22", size = 228498, upload-time = "2026-08-04T15:05:49.47Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/db/3ca813cbacb23ab6fe46ff38a9b5ef8e73e970c8051f2ce903aacafe0446/gitpython-3.1.62.tar.gz", hash = "sha256:1791de66309bc0c7cfca40bf8d2e3de7ca091cbf94e6051be1ad0722c61062af", size = 231728, upload-time = "2026-09-07T02:57:21.155Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/0c/9d8752098bc442f0726e64aa6135940b3a96809915d1aa4206c1bb97881d/gitpython-3.1.58-py3-none-any.whl", hash = "sha256:d331e722577f0fd7fc1f857419b3ecc07af66282b933d2a4d95f84a042fdd50f", size = 220183, upload-time = "2026-08-04T15:05:48.025Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/0b/29d7965215f8ef830a7ca1f42997fe13e5693d85e9edb18f938d063ef5f2/gitpython-3.1.62-py3-none-any.whl", hash = "sha256:7002251225e10e29d2e1f49e6532613fe5d5d9f0b6f1f02997a52b38fe56899e", size = 222753, upload-time = "2026-09-07T02:57:19.762Z" },
 ]
 
 [[package]]
@@ -2874,7 +2874,7 @@ wheels = [
 
 [[package]]
 name = "openalgo"
-version = "2.0.3"
+version = "2.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -2882,18 +2882,18 @@ dependencies = [
     { name = "pandas" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/4a/6d88688b51b7b28a4beec7d593ffd1d1578d537e7edc8ab89614c384bef3/openalgo-2.0.3.tar.gz", hash = "sha256:0adda3d103bc594bb6a7ffc87abe2f8e0cbe81fcc09b48d61f2046f9dbe68599", size = 155170, upload-time = "2026-07-15T11:02:42.354Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/11/924146f63ef8e1f67b05377fb224c141bd96da5bbe567d96dd6b6af62f62/openalgo-2.0.5.tar.gz", hash = "sha256:675d6eb592ef105e4647166d0abd30bb95d668cf7353403e31436b7ef6ced2d6", size = 186521, upload-time = "2026-09-11T06:41:33.581Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/9e/c358c94c76e5729c17c574760ba6d62b55c55c0d767933f6ae07218bdd1e/openalgo-2.0.3-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:35361a6588a84da8c93dcfbc9331f6cfb146e7d09ae48af99e4608ab7b54f985", size = 444879, upload-time = "2026-07-15T11:02:34.701Z" },
-    { url = "https://files.pythonhosted.org/packages/63/0e/b0cca7cd2ae547d73be93cc1ab14844c42603aab6605e016a9883f1ffd13/openalgo-2.0.3-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:cf4009cdbbdf2ae3b7eeea887d6940bc57b719c287568f39c260164c49eb7d88", size = 426543, upload-time = "2026-07-15T11:02:36.26Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/93/046d6aa95bd7d648d0eeef9949b721d59aab88e225826e2885e536acbfd5/openalgo-2.0.3-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:9a86a08daa0279bc1efde11e951927090644c6b1e483802825139bbc0123356e", size = 438206, upload-time = "2026-07-15T11:02:37.458Z" },
-    { url = "https://files.pythonhosted.org/packages/67/fd/f9dd0174e6b6112a9370db0ed6fcdc371ab9af90672b8c3bae2426769aff/openalgo-2.0.3-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:618821df2a9335e4d4e28101efa790c4513e21f2052e3184e8690e734aefc284", size = 459135, upload-time = "2026-07-15T11:02:38.702Z" },
-    { url = "https://files.pythonhosted.org/packages/34/96/ed4c1c9c6ad74f0fffa8a1735264898417acf4e428eef4ab1534bf894286/openalgo-2.0.3-cp39-abi3-win_amd64.whl", hash = "sha256:a9ec332555ee2d6af96f63d0a494d45dbf504ad7285cf35c0116d4c0b0848ec9", size = 400280, upload-time = "2026-07-15T11:02:41.109Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/78/7be6d35e12c3951e14b93dbe231fca03bf6279edac8fe503a4b690b0ac18/openalgo-2.0.5-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c20b01e3a7413ed62b7c5d8342ecc6c01c200abf8cf13f8394e693e1ae84fc28", size = 466505, upload-time = "2026-09-11T06:41:25.172Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/3f/d36e1a868d4396cbcac5225702f05a49f29c8b83760abcb89c5436efebdd/openalgo-2.0.5-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:70303029bfccb31be58cae5036292a33eeeaae506654955586b432fab424fbe0", size = 448026, upload-time = "2026-09-11T06:41:27.322Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/d5/f758948d0e7346e446c00a4970014bf40bf288f24385a8eb08170e62e1df/openalgo-2.0.5-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:62458dd7d583640bd39e8a27062837d696e647bdeb262596f71abbfabbc4ba62", size = 460796, upload-time = "2026-09-11T06:41:29.05Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/4e/09a829e646165728bec27c007df86294003e9e249245e2cc203c5b8a4c6c/openalgo-2.0.5-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:299b8c8745519aca2a8d7795b68b6d386d54f080aa0370a928117c3b634f63ba", size = 482003, upload-time = "2026-09-11T06:41:30.572Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/b6/c9ae5eba70ace27524ac02a7d0054d5cea407a4a9af12cfacfa2d83f6c05/openalgo-2.0.5-cp39-abi3-win_amd64.whl", hash = "sha256:1fe20400e59bfaeea15877786fc5cc177b8fa8599167fbea69a3b801ad05b896", size = 424334, upload-time = "2026-09-11T06:41:32.254Z" },
 ]
 
 [[package]]
 name = "openalgoui"
-version = "2.0.2.3"
+version = "2.0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "agno" },
@@ -3151,7 +3151,7 @@ requires-dist = [
     { name = "nbformat", specifier = "==5.11.1" },
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.4.4" },
-    { name = "openalgo", specifier = "==2.0.3" },
+    { name = "openalgo", specifier = "==2.0.5" },
     { name = "opengreeks", specifier = ">=0.2.0" },
     { name = "openstatz", specifier = "==0.4.1" },
     { name = "ordered-set", specifier = "==4.1.0" },
@@ -3227,7 +3227,7 @@ requires-dist = [
 analysis = [
     { name = "dash", specifier = ">=4.4.1" },
     { name = "dash-bootstrap-components", specifier = ">=2.0.4" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.59" },
     { name = "ipywidgets", specifier = ">=8.1.8" },
     { name = "matplotlib", specifier = ">=3.11.1" },
     { name = "scipy", specifier = ">=1.18.0" },

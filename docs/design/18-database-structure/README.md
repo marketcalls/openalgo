@@ -37,7 +37,7 @@ The sample environment currently names `HISTORIFY_DATABASE_URL`, while `database
 
 ## Sandbox Database
 
-Sandbox initialization is self-healing: startup must ensure every required table exists even if a prior initialization was partial. The presence of sandbox GTT tables does not mean REST analyzer GTT is implemented; those service calls currently return 501.
+Sandbox initialization is self-healing: startup must ensure every required table exists even if a prior initialization was partial. The sandbox GTT tables (`sandbox_gtt`, `sandbox_gtt_legs`) back the analyzer GTT services; `sandbox/gtt_manager.py` owns every transition.
 
 The sandbox managers own execution, order state, position netting, holdings/T+1 behavior, funds/margin, square-off, and settlement. No live broker order call belongs in this database layer.
 

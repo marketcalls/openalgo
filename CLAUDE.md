@@ -278,9 +278,35 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 (`frontend/src/lib/trading/customIndicators.ts`).
 
 - **Never bundle them.** `frontend/dist/` is built by CI from what is committed, so a bundled indicator would need committing first and the next `git pull` would erase it. Runtime loading keeps them outside the build: no Node.js, no rebuild, untouched by upgrades.
-- **They register after the built-ins**, so a custom id that collides with one of the 102 built-ins overrides it.
+- **They register after the built-ins**, so a custom id that collides with one of the 105 built-ins overrides it.
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
+
+### Bumping openalgo-charts also updates the chart-indicator skill
+
+The skill documents a specific build. `reference/api.md` carries the full export
+index and `pitfalls.md` carries the built-in ids a custom module can shadow, so
+a version bump that touches neither leaves the skill describing a library that
+is no longer installed. **Upgrading the pin and updating the skill are one
+change, not two.**
+
+```sh
+cd frontend && npm install openalgo-charts@<version> --save-exact
+node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
+node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
+```
+
+Then read the upstream changelog for the range you skipped and update the prose
+by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
+after* table in `api.md`, and the id-collision list in `pitfalls.md` if the
+registry grew. The generator only owns the export index; nothing generates the
+teaching.
+
+The `chart-indicator-skill` CI job runs both checks, so a stale skill fails the
+build. It exists because both scripts were already in the repo and nothing ran
+them: the index sat on 1.8.1 advertising "337 names" while `/trading` shipped
+2.1.5 with 363, and the eleven studies added in 1.8.3 were absent from the
+reference an indicator author reads.
 
 Two built-in pages exercise the streaming stack end to end: **`/websocket/test`**
 (market data; `/20`, `/30`, `/50` variants request those depth levels) and
@@ -380,6 +406,51 @@ open files". Preventing one at creation is far cheaper than hunting it later:
 After a change touching any of these, run the **`fd-audit`** skill before calling
 it done.
 
+**Every message a user reads is written for a trader, not a developer.** The
+people running this are traders self-hosting a platform. They cannot act on a
+status code, a protocol name or the internals of a request, and showing them one
+is not neutral: it reads as a fault they caused, and sends them looking through
+their own settings for something that was never wrong.
+
+- **Name the cause and the next action.** "Your OpenAI account has no credits
+  left. Add credits under billing." Not "HTTP 500", not "invalid_offer", not
+  "SDP parse failed". If there is no action, say who is fixing it and that
+  waiting is the whole of it.
+- **Never put a status code, an exception class, a protocol term or an endpoint
+  in front of a user.** `logger.exception()` already keeps the technical detail
+  where it belongs, which is `log/errors.jsonl`.
+- **Do not guess the cause in the message.** A confidently wrong message is
+  worse than a vague one: it sends someone to the wrong place with conviction.
+  Where a symptom has more than one cause, lead with the one the operator can
+  check themselves. A provider that answers an exhausted balance with a bare
+  500 taught this the expensive way.
+- **The audience is the same on every surface.** A spoken error is heard by
+  someone who cannot see a log, so it has to be a sentence, not a code.
+
+**The words this platform uses for its own ideas, and the words it never uses.**
+Two of these have already been fixed once. A word that comes back costs the
+rename again, so they are written down rather than remembered.
+
+- **Sandbox mode** and **analyzer mode**, never "paper trading" or "virtual
+  trading". The database is `sandbox.db`, the blueprint is `blueprints/sandbox.py`,
+  the endpoints are `/api/v1/sandbox/*`, and the strategy module's own column
+  reads `RUN_MODES = ("live", "sandbox")`. Release 2.0.1.0 renamed the display
+  strings to match the schema; the two words above are the result, and a third
+  term invented in a document, a comment or a commit message undoes it. Three
+  words for two ideas is how somebody ships a strategy believing it is safe.
+- **Never "arm", "armed" or "arming" anywhere a trader reads.** Not a label, a
+  button, a toggle, a toast, a tooltip, an empty state or a status badge. It
+  reads as a military or machine term rather than a trading one. Say what a
+  trader would say: an alert is **Active** or **Stopped**, a toggle is **on** or
+  **off**, a destination is **Live** or **Sandbox**. Internal identifiers,
+  storage keys and library state names are not covered, because nobody trading
+  reads those; the moment one reaches a screen it is.
+- **A specification's internal vocabulary is not this platform's vocabulary.**
+  Where OpenAlgo hosts another project, that project's spec may use a word for
+  its own purposes, and it stays in the spec. OpenScript's `stdlib.md` says
+  "paper" for the simulated destination and "arming" for the act of switching a
+  strategy to live; on a screen here those are **Sandbox** and **Live**.
+
 **Database access** goes through the SQLAlchemy ORM, not raw SQL.
 
 **Schema changes need a migration script, not just a startup hook.** Users
@@ -411,6 +482,24 @@ Biome (`frontend/biome.json`), functional components with hooks, PascalCase
 component files, TanStack Query for server state.
 
 **Commits.** Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`.
+
+**Nothing is published without a changelog entry, and the entry is part of the
+publish rather than a follow-up.** Whatever is going out (a platform release, a
+version bump, a package pushed to a registry) carries its own stanza in
+`docs/CHANGELOG.md` before it leaves, written for somebody deciding whether to
+upgrade rather than for whoever wrote it. The **`version-bump`** skill owns the
+procedure and the exact paths.
+
+A consumer reads the changelog at the one moment it matters to them, and they
+read it once. "Various fixes" answers nothing, and a version with no entry tells
+them to diff two tags, which they will not do: they will simply not upgrade. An
+entry written after the publish is an entry written for nobody, because the
+people who needed it have already decided.
+
+Say what a reader has to act on: what changed, what it breaks, what is now
+refused that used to be accepted, and what is still not modelled. A limitation
+somebody finds inside a report they had already believed cost more than it would
+have cost to write it down.
 
 **No icons or emojis anywhere** — source, comments, log messages, commit
 messages, PR descriptions, changelogs, release notes, or any generated text

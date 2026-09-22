@@ -16,6 +16,15 @@ isEncyptIn = True
 MAX_SCRIPS = 100
 FieldTypes = {"FLOAT32": 1, "LONG": 2, "DATE": 3, "STRING": 4}
 TRASH_VAL = -2147483648
+# The same sentinel as buf2long actually returns it. buf2long sums shifted bytes
+# with no sign extension, so the wire's 0x80000000 "field not available" marker
+# arrives as +2147483648 and never once equals the signed TRASH_VAL above -
+# leaving the guard in setLongValues dead, and an absent price decoding to a
+# plausible-looking 21474836.48 (2147483648 / 100).
+#
+# Do not "fix" this by making buf2long signed. It also reads message lengths,
+# topic ids, field counts and timestamps, none of which are two's-complement.
+TRASH_VAL_UNSIGNED = 0x80000000
 STRING_INDEX = {"NAME": 51, "SYMBOL": 52, "EXCHG": 53, "TSYMBOL": 54}
 DEPTH_INDEX = {"MULTIPLIER": 32, "PRECISION": 33}
 BinRespTypes = {
@@ -340,7 +349,13 @@ class TopicData:
         return f"{self.exchange}|{self.symbol}"
 
     def setLongValues(self, index_val, value):
-        if self.fieldDataArray[index_val] != value and value != TRASH_VAL:
+        # An unavailable field leaves the last known good value in place rather
+        # than overwriting it, which is what the sentinel check was always for:
+        # the packet is saying "no value this tick", not "the value is huge".
+        if self.fieldDataArray[index_val] != value and value not in (
+            TRASH_VAL,
+            TRASH_VAL_UNSIGNED,
+        ):
             self.fieldDataArray[index_val] = value
             self.updatedFieldsArray[index_val] = True
 
@@ -717,7 +732,15 @@ class ScripTopicData(TopicData):
             val = self.fieldDataArray[index]
             if self.updatedFieldsArray[index] and val is not None and dataType:
                 if dataType["type"] == FieldTypes["FLOAT32"]:
-                    val = f"{val / (self.multiplier * self.precisionValue):.2f}"
+                    # Round to the precision the broker declared for this
+                    # instrument, not a fixed 2 - which is what the depth and
+                    # index decoders in this same file already do. A hardcoded
+                    # 2 silently truncates CDS and BCD, where USDINR ticks at
+                    # 0.0025 and four decimals are the real quote (the same
+                    # trap noted in broker/kotak/mapping/order_data.py). It
+                    # also made this feed disagree with its own depth feed on
+                    # the price of one contract.
+                    val = f"{val / (self.multiplier * self.precisionValue):.{self.precision}f}"
                 elif dataType["type"] == FieldTypes["DATE"]:
                     val = getFormatDate(val)
                 # logger.info(f'{str(index)}:{dataType["name"]}:{str(val)}')

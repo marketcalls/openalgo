@@ -78,6 +78,15 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
       transform: () => new LineBreakTransform({ lines: 3 }),
     },
   ],
+  [
+    { value: 'tpo', label: 'Time Price Opportunity', iconKey: 'tpo', series: 'candlestick' },
+    {
+      value: 'session-volume-profile',
+      label: 'Session Volume Profile',
+      iconKey: 'profile',
+      series: 'candlestick',
+    },
+  ],
 ]
 
 export const CHART_TYPES: Record<string, ChartTypeDef> = Object.fromEntries(
@@ -95,6 +104,18 @@ const s = {
 /** Icon for a chart-type value (used in the dropdown button + menu items). */
 export function chartTypeIcon(iconKey: string): ReactNode {
   switch (iconKey) {
+    case 'tpo':
+      return (
+        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.3}>
+          <path d="M4 3v18M4 6h8M4 10h16M4 14h12M4 18h8M8 4v16M12 4v16M16 8v8M20 8v4" />
+        </svg>
+      )
+    case 'profile':
+      return (
+        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.3}>
+          <path d="M4 3v18M4 5h7v4H4M4 9h16v4H4M4 13h12v4H4M4 17h5v4H4" />
+        </svg>
+      )
     case 'candle':
       return (
         <svg viewBox="0 0 24 24" fill="currentColor">

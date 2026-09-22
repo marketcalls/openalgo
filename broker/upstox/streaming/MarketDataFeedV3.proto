@@ -1,11 +1,13 @@
 syntax = "proto3";
 package com.upstox.marketdatafeederv3udapi.rpc.proto;
+import "google/protobuf/wrappers.proto";
 
 message LTPC {
   double ltp = 1;
   int64 ltt = 2;
   int64 ltq = 3;
   double cp = 4;
+  google.protobuf.DoubleValue iep = 5; //indicative equilibrium price; set only during pre-open/closing auction
 }
 
 message MarketLevel {
@@ -58,6 +60,12 @@ message MarketFullFeed{
   double iv = 8; //implied volatility
   double tbq =9; //total buy quantity
   double tsq = 10; //total sell quantity
+  double iep = 11; //indicative equilibrium price (call auction)
+  double rp = 12; //reference price for the price bands
+  int64 ieq = 13; //indicative equilibrium quantity
+  int64 iiqTotal = 14; //net unmatched qty at IEP; can be negative
+  int64 iiqM = 15; //unmatched qty from unpriced market orders
+  bool casEligible = 16; //instrument may take part in a call auction
 }
 
 message IndexFullFeed{
@@ -108,8 +116,15 @@ enum MarketStatus {
 }
 
 
+message StatusInfo {
+  string status = 1;
+  int64 updatedTime = 2;
+}
+
 message MarketInfo {
   map<string, MarketStatus> segmentStatus = 1;
+  map<string, StatusInfo> casMarketStatus = 2;
+  map<string, StatusInfo> preOpenSessionStatus = 3;
 }
 
 message FeedResponse{

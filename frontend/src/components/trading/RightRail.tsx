@@ -8,18 +8,28 @@
  * closes it.
  */
 
-import { Bot, List, Table2 } from 'lucide-react'
+import { Bell, Bot, FileCode2, List, Shapes, Table2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
 
 const PANELS = [
-  // A plain list and a table. Nothing here is a metaphor: the watchlist is a
-  // list of instruments and the option chain is a table of strikes. The
-  // assistant is the one thing on the rail that is not a view of the market,
-  // so it is last rather than wedged between two that are.
+  // Nothing here is a metaphor: the watchlist is a list of instruments, the
+  // option chain is a table of strikes, and the objects panel is the shapes
+  // drawn on the chart. The assistant is the one thing on the rail that is
+  // not a view of the market, so it is last rather than wedged between two
+  // that are.
+  //
+  // Every panel carries a glyph. Objects spelled its label down the rail
+  // instead, which made one button twice the height of the three beside it
+  // and turned a row of icons into a row with a word in it.
   { id: 'watchlist', label: 'Watchlist', icon: List },
   { id: 'options', label: 'Option chain', icon: Table2 },
+  { id: 'objects', label: 'Objects', icon: Shapes },
+  // Beside the objects panel, because both answer "what is on this chart" and
+  // an alert line is one of the things drawn on it.
+  { id: 'alerts', label: 'Alerts', icon: Bell },
+  { id: 'scripts', label: 'Scripts', icon: FileCode2 },
   { id: 'agent', label: 'Assistant', icon: Bot },
 ] as const
 

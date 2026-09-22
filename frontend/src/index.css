@@ -875,3 +875,77 @@
 .scrollbar-thin::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* OpenScript editor syntax colours.
+ *
+ * Their own small palette rather than the app's accent, because the accent is
+ * the operator's choice from six hues and a keyword painted in it would vanish
+ * under one theme and shout under another. Low chroma on purpose: inside a
+ * monospace block these read as syntax, and a code panel is not the place to
+ * compete with the chart beside it.
+ *
+ * One place, so retuning them is one edit rather than a sweep through a
+ * component. Every pair below clears WCAG AA against the panel's own surface in
+ * the mode it belongs to.
+ */
+:root {
+  --oscript-comment: oklch(0.55 0.02 260);
+  --oscript-string: oklch(0.52 0.11 155);
+  --oscript-number: oklch(0.55 0.11 65);
+  --oscript-color: oklch(0.52 0.12 20);
+  --oscript-keyword: oklch(0.5 0.13 285);
+  --oscript-call: oklch(0.5 0.12 235);
+  --oscript-builtin: oklch(0.48 0.09 200);
+  --oscript-punctuation: oklch(0.55 0.02 260);
+}
+
+.dark {
+  --oscript-comment: oklch(0.62 0.02 260);
+  --oscript-string: oklch(0.78 0.13 155);
+  --oscript-number: oklch(0.8 0.12 75);
+  --oscript-color: oklch(0.78 0.12 25);
+  --oscript-keyword: oklch(0.76 0.12 290);
+  --oscript-call: oklch(0.78 0.11 235);
+  --oscript-builtin: oklch(0.8 0.09 200);
+  --oscript-punctuation: oklch(0.62 0.02 260);
+}
+
+.oscript-comment {
+  color: var(--oscript-comment);
+  font-style: italic;
+}
+.oscript-string {
+  color: var(--oscript-string);
+}
+.oscript-number {
+  color: var(--oscript-number);
+}
+/* A hexadecimal colour literal. It is a literal like a number and not like a
+   name, which is what it used to be painted as: the token's kind is hexColor,
+   and a rule that asked whether a kind was made of letters answered yes to it. */
+.oscript-color {
+  color: var(--oscript-color);
+}
+.oscript-keyword {
+  color: var(--oscript-keyword);
+}
+/* A function the language provides: plot, ema, input. */
+.oscript-call {
+  color: var(--oscript-call);
+}
+/* A value the language provides: close, aqua, math. Kept apart from a call
+   because one is a thing you do and the other is a thing you read, and a
+   reader scanning for where the work happens wants to tell them apart. */
+.oscript-builtin {
+  color: var(--oscript-builtin);
+}
+.oscript-punctuation {
+  color: var(--oscript-punctuation);
+}
+.oscript-identifier,
+.oscript-plain {
+  /* Inherited rather than named: this file defines --foreground as an HSL
+     triplet in some scopes and an oklch value in others, so wrapping it would
+     be invalid under half of them. The editor already sets its own colour. */
+  color: inherit;
+}

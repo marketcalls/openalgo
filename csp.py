@@ -121,6 +121,24 @@ def build_csp_header(csp_config):
     return "; ".join(directives)
 
 
+def _voice_surface_enabled():
+    """Whether the /agent voice surface is on, for the Permissions-Policy header.
+
+    Imported lazily and guarded: this runs on every response, and a security
+    header must not depend on the agent module being importable. Anything that
+    goes wrong reports False, which leaves the microphone closed.
+
+    Returns:
+        bool: True when the operator has enabled voice.
+    """
+    try:
+        from services.agent.settings import voice_enabled
+
+        return voice_enabled()
+    except Exception:
+        return False
+
+
 def get_security_headers():
     """
     Get additional security headers configuration from environment variables.
@@ -142,10 +160,25 @@ def get_security_headers():
         headers["Referrer-Policy"] = referrer_policy
 
     # Permissions Policy
-    permissions_policy = os.getenv(
-        "PERMISSIONS_POLICY",
-        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(), web-share=()",
-    )
+    #
+    # `microphone=()` disables the microphone for the whole origin, and it wins
+    # over every browser and operating-system permission: getUserMedia fails
+    # with NotAllowedError and the browser stores nothing, so the page looks as
+    # though it was refused by a setting the operator cannot find. That is the
+    # correct default and it stays the default. The one directive is relaxed to
+    # `self` only while the /agent voice surface is switched on, because a
+    # capability advertised to pages that have no use for it is a capability
+    # granted for nothing. Turning voice off closes it on the next response.
+    #
+    # An operator who sets PERMISSIONS_POLICY explicitly owns the whole string,
+    # and nothing here rewrites it.
+    permissions_policy = os.getenv("PERMISSIONS_POLICY")
+    if permissions_policy is None:
+        microphone = "microphone=(self)" if _voice_surface_enabled() else "microphone=()"
+        permissions_policy = (
+            f"camera=(), {microphone}, geolocation=(), payment=(), usb=(), "
+            "screen-wake-lock=(), web-share=()"
+        )
     if permissions_policy:
         headers["Permissions-Policy"] = permissions_policy
 

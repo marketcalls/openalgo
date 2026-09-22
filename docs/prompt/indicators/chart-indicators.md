@@ -8,7 +8,7 @@ They are not the same set as the Python `openalgo.ta` indicators, which compute
 VALUES and answer questions like "what is the RSI now". A name in one list is
 not necessarily in the other.
 
-102 indicators.
+105 indicators.
 
 ## Momentum
 
@@ -117,6 +117,9 @@ not necessarily in the other.
 - `net-volume` Net Volume (own pane)
 - `nvi` Negative Volume Index (own pane)
 - `obv` On-Balance Volume (own pane)
+- `open-interest` Open Interest (own pane)
+- `open-interest-buildup` Open Interest Buildup (on the price)
+- `open-interest-change` Open Interest Change (own pane)
 - `pvi` Positive Volume Index (own pane)
 - `pvo` Percentage Volume Oscillator (own pane)
 - `pvt` Price Volume Trend (own pane)

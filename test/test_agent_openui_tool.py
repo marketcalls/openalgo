@@ -29,9 +29,10 @@ from services.agent import prompts, viz_sink
 from services.agent.builder import DEFAULT_MAX_PROMPT_CHARS
 from services.agent.frames import Ui
 from services.agent.tools import (
-    CHAT_ONLY,
+    CHAT_AND_VOICE,
     SURFACE_CHART,
     SURFACE_CHAT,
+    SURFACE_VOICE,
     TOOLKITS,
     ToolContext,
     agno_available,
@@ -68,14 +69,19 @@ class TestTheRenderingTierIsRegistered:
         assert spec.module == "services.agent.tools.openui"
         assert spec.attr == "OpenUiToolkit"
 
-    def test_it_is_offered_on_chat_and_withheld_from_the_chart_panel(self):
+    def test_it_is_offered_where_there_is_a_screen_and_withheld_from_the_chart_panel(self):
         # The chart panel drives the real /trading terminal and is never taught
-        # the language, so it must never be handed the tool either.
-        assert _spec("openui").surfaces == CHAT_ONLY
+        # the language, so it must never be handed the tool either. Voice does
+        # get it: a spoken turn renders on screen exactly as a typed one does,
+        # and withholding it made "show me my order book" answerable by typing
+        # and refused by voice in the same conversation.
+        assert _spec("openui").surfaces == CHAT_AND_VOICE
 
         chat = {spec.key for spec in select_specs(ToolContext(api_key="k", surface=SURFACE_CHAT))}
+        voice = {spec.key for spec in select_specs(ToolContext(api_key="k", surface=SURFACE_VOICE))}
         chart = {spec.key for spec in select_specs(ToolContext(api_key="k", surface=SURFACE_CHART))}
         assert "openui" in chat
+        assert "openui" in voice
         assert "openui" not in chart
 
     def test_it_needs_no_trading_permission(self):

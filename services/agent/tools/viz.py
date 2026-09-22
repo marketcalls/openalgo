@@ -125,6 +125,7 @@ __all__ = [
     "PUT_COLOUR",
     "VIZ_KINDS",
     "VizToolkit",
+    "normalise_indicators",
     "plotly_spec",
     "tool_answer",
 ]
@@ -320,7 +321,7 @@ def _indicator(item: Any, position: int) -> dict[str, Any]:
     return {"id": identifier, "inputs": inputs}
 
 
-def _indicators(value: Any) -> list[dict[str, Any]]:
+def normalise_indicators(value: Any) -> list[dict[str, Any]]:
     """Normalise the ``indicators`` argument of the price chart.
 
     Args:
@@ -729,7 +730,7 @@ class VizToolkit(OpenAlgoToolkit):
             notices.append(interval_notice)
         start, end = normalise_range(start_date, end_date)
         shape = _chart_type(chart_type)
-        overlays = _indicators(indicators)
+        overlays = normalise_indicators(indicators)
 
         response = self.service_call(
             history_service.get_history,

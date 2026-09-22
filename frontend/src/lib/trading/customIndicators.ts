@@ -44,9 +44,19 @@ type ProblemReporter = (message: string) => void
 
 const INDEX_URL = '/custom-indicators/index.json'
 
-// Kept in step with the library's IndicatorInput union. 'session', 'timeframe'
-// and 'symbol' are strings the indicator parses itself; 'price' and 'time' are
-// numbers a host may also let the user pick off the chart.
+// The library's IndicatorInput union, and nothing beyond it.
+//
+// This set once also carried 'session', 'timeframe', 'symbol' and 'price',
+// which openalgo-charts never defined. Permitting a type nothing renders is
+// not neutral: the settings dialog switches on `input.type` with no default
+// case, so the row is dropped in silence. The indicator still computes, using
+// the default forever, while the control the author wrote never appears and
+// the user cannot change it. A session stays a 'text' input the indicator
+// parses; a fixed set of choices stays a 'select'.
+//
+// 2.4.0 added two for real, and IndicatorSettingsDialog renders both:
+// 'interval' is a timeframe code the engine can bucket by, and 'time' is a
+// wall-clock string in the chart's zone.
 const INPUT_TYPES = new Set([
   'number',
   'boolean',
@@ -54,10 +64,7 @@ const INPUT_TYPES = new Set([
   'text',
   'select',
   'source',
-  'session',
-  'timeframe',
-  'symbol',
-  'price',
+  'interval',
   'time',
 ])
 const PLACEMENTS = new Set(['onchart', 'pane'])
@@ -71,6 +78,7 @@ const PLACEMENTS = new Set(['onchart', 'pane'])
  * not re-imported, and its warnings are not repeated.
  */
 const processed = new Set<string>()
+let loading: Promise<CustomIndicatorLoad> | null = null
 
 /**
  * Ids present before any user module ran, captured once.
@@ -238,10 +246,23 @@ function guardCalc(
  * Fetch, import and run every user module that has not been seen yet.
  *
  * Never throws. A missing folder, a logged-out session and a syntax error in one
- * user file all have to leave the other 102 indicators working, so the index is
+ * user file all have to leave the other 105 indicators working, so the index is
  * treated as optional and each module is isolated from the next.
  */
-export async function loadCustomIndicators(
+export function loadCustomIndicators(
+  opts: { onProblem?: ProblemReporter } = {}
+): Promise<CustomIndicatorLoad> {
+  // A restore and a picker can overlap. Every caller must wait until the
+  // shared registry is ready, including modules another call already claimed.
+  if (!loading) {
+    loading = importCustomIndicators(opts).finally(() => {
+      loading = null
+    })
+  }
+  return loading
+}
+
+async function importCustomIndicators(
   opts: { onProblem?: ProblemReporter } = {}
 ): Promise<CustomIndicatorLoad> {
   const result: CustomIndicatorLoad = { loaded: [], errors: [] }

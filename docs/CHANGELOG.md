@@ -8,6 +8,283 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+- Upgrade `/trading` to the published openalgo-charts 2.4.5 package, with 105 built-in studies, open interest readouts and chart alerts. Open interest is a level: aggregation keeps the last reading rather than summing values. Missing live readings remain absent.
+- Add saved chart workspaces, study templates, comparison symbols with price or percentage scales, and CSV downloads of the displayed bars, studies and comparisons.
+- Share one toolbar across the selected chart and one replay transport across the workspace. Replay can follow the selected chart or all charts on a shared clock; order actions and workspace autosave pause until replay ends.
+- Preserve drawings, study settings, comparison scale preferences and alert lifecycle state when restoring a workspace. Alerts default to completed-bar evaluation and do not fire from restored history; delivery remains the host's responsibility.
+- Move the alert list out of its modal and onto the right rail, with a Log tab of what has fired.
+- Make an alert by right-clicking the chart at the price to be watched: it is created there and then, with no form, armed to fire once on a confirmed bar. The toolbar's Alerts button opens the form for one that needs a condition, a trigger or an expiry the defaults do not give it. Both seed from the same place, so the gesture produces exactly the alert the form would have proposed.
+- Move the alert list out of its modal and onto the right rail, with a Log tab of what has fired this session.
+- Make an alert by right-clicking the chart at the price to be watched: it is created there and then, with no form, armed to fire once. The toolbar's Alerts button opens the form for one that needs a condition, a trigger or an expiry the defaults do not give it. Both seed from the same place, so the gesture produces exactly the alert the form would have proposed.
+- Choose per alert how to be told when it fires: a sound and a desktop notification, both on by default and neither leaving the machine, and Telegram or WhatsApp through the services order notifications already use, both off unless asked for. A channel that refuses names itself and the others still go.
+- A chart with an armed alert keeps fetching while its tab is hidden. A chart with nothing armed still stops, which is the saving a background tab is for.
+- Fill values into an alert's message from the bar that fired it: `{{ticker}}`, `{{price}}`, `{{close}}`, `{{interval}}` and seven more. A placeholder spelled wrong is left as typed rather than blanked.
+- Upgrade `/trading` to openalgo-charts 2.4.8: press and hold the plot to pan, on both axes. The chart no longer pins mouse panning to the time axis, so dragging moves through price as well, and the choice is the trader's under Mouse drag in the Axes tab.
+- Find an instrument whose name contains an operator character. The symbol search split its box on `-` to look up the second leg of an expression, so `BAJAJ-AUTO` searched for `AUTO` and typing the hyphen emptied the list. Both the whole box and the leg are searched now.
+- Round a dragged alert to the instrument's tick, and rename it after the price its line landed on when the name was one we wrote. An alert dropped where the axis read 1,260.55 used to store 1260.5486842105263.
+- Say "on" rather than "armed" on the One-Click toggle and the alert form.
+- Upgrade `/trading` to openalgo-charts 2.5.0. An alert set on one timeframe is now visible on the others for the same instrument, labelled with the interval it was made on, and evaluated only there; the rail says why a visible alert is not watching rather than leaving it reading Active on a chart where nothing will fire. A dragged alert snaps to the source scale's own tick, including a left or independent scale. Chart tables measure each column from its widest cell, and every cell clips its text, so a long reading no longer covers the column beside it.
+- Point at a drawing or an alert and press Delete or Backspace to remove it. The key removes one thing in a fixed order: a placement in progress is cancelled, then selected drawings, then the drawing under the pointer, and an alert last, because an alert's line spans the pane and would otherwise be deleted while you meant to delete a shape. A field or a dialog always keeps the key.
+- Keep the alert log after the tab is closed. A firing is written to the database as it happens and read back when `/trading` next opens, so a browser closed at four o'clock no longer takes the afternoon's firings with it and an alert that fired on an unwatched screen still leaves a row. Each row names the channels that accepted the message, so a firing that reached nobody reads differently from one that never happened. Firings are kept for 90 days and Clear empties the log. Alerts are still evaluated by the chart that is open: this stores what happened, it does not make anything fire. **Requires a database migration.**
+- Upgrade `/trading` to openalgo-charts 2.5.1 and stop drawing the line of an alert that has fired or expired. The row, the state and the record all stay: a once-only alert that has fired is still fired after a reload, so it cannot fire again on a price it already reported. Only the line goes, because a level nothing is watching is a level in the way. Deleting such an alert was never the answer, since this terminal restores an alert's definition and its runtime from separate places and a removed record comes back armed.
+- Fire a new alert the moment its price is reached, rather than when the candle closes. A level touched at 13:15 on an hourly chart was reported at 14:15, and on a daily chart the next session, which reads as an alert that does not work. Bar close remains a field on the form for a level that only counts if it held, and an alert that already exists keeps the setting it was made with.
+- Chart an instrument whose name contains a hyphen. `BAJAJ-AUTO` reads as a subtraction to the chart's grammar, so the chart asked the history API for `BAJAJ` and for `AUTO` and was told, correctly, that neither exists. An exchange now settles what the name cannot: a computed chart carries none and one instrument always does, so a named instrument is never taken apart. In the symbol box the same question is settled by whether an instrument of that name exists, so a box naming one is never treated as arithmetic and never has a symbol appended to it, and an exact match now outranks an index that merely contains the word. A hyphenated symbol put into a real expression is quoted, the chart grammar's own escape, so `'NSE:BAJAJ-AUTO'/NIFTY` resolves as written.
+
+## [2.0.2.5] - 2026-09-14
+
+### Voice Agent Release
+
+29 commits since 2.0.2.4, excluding automated frontend build commits. Full
+notes: [version-2.0.2.5-released.md](releases/version-2.0.2.5-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling.
+
+### Highlights
+
+- The agent at `/agent` gains a third surface beside chat and chart: a spoken
+  one. The speech model hears and speaks and decides nothing; every answer it
+  reads out comes from the model configured at `/agent/config`, through the same
+  toolkits, the same risk guard and the same audit rows a typed question goes
+  through. No audio passes through the server.
+- Order placement by the agent is now opt-in. It shipped on, so a fresh install
+  could reach an order tool by typing a sentence with nobody having chosen that
+  (#2036).
+- The charting terminal moves from openalgo-charts 2.1.7 to 2.2.0, exposing all
+  85 drawing tools.
+- The 5paisa XTS, Tradejini and 5paisa feeds survive a full symbol book, and
+  Kotak depth payloads stop the trading chart polling REST (#2038, #2042, #2044).
+
+### Added
+
+- Voice surface on `/agent` and `/agent/config`, configured per installation
+  with the provider credential stored in the database. `Permissions-Policy`
+  relaxes `microphone` to `self` only while voice is enabled; an operator who
+  sets `PERMISSIONS_POLICY` explicitly still owns the whole string.
+- Every finalised spoken line is recorded under a `transcript` phase and
+  rendered in the thread beside the messages a delegated turn produces. The
+  first line of a session opens the thread, so a spoken-only exchange is no
+  longer unreachable once it ends.
+- A voice session with nobody speaking for three minutes hangs up, since an open
+  microphone is billed for as long as it is open. The interval is a setting.
+- The agent's spoken name defaults to Vega, chosen to sit far from an order
+  instruction phonetically. An operator's own name is left alone.
+- `upgrade/migrate_agent_voice.py` and
+  `upgrade/migrate_agent_voice_phrase_removal.py`, both idempotent and both
+  supporting `--status`.
+
+### Changed
+
+- Upgrade `/trading` to openalgo-charts 2.2.0 and expose all 85 drawing tools,
+  including advanced channels, pitchforks, Fibonacci and Gann geometry,
+  wavefronts and manual patterns. Saved drawing IDs and version 2 documents
+  remain compatible.
+- Drawing menu labels and glyphs follow the installed package through generated
+  metadata, keeping the drawing renderer lazy. Registry checks catch omitted
+  tools and stale metadata during future upgrades.
+- Notes, balloons, comments, signposts, price notes and tables use the existing
+  content editor. Tables explain column separators and multiline row entry.
+  Font colours reach the rendered letters; content edits preserve table grids
+  and theme defaults. Editors show only controls supported by each tool.
+- The TPO chart display defaults to letters rather than letters and blocks. A
+  stored choice is kept.
+- The Objects button on the `/trading` right rail is a glyph in the same 32px
+  box as every other panel, instead of its label spelled down the rail.
+- The spoken approval phrase is removed. An order is approved by answering a
+  full read-back, decided server-side, rather than by a configured secret word
+  that had to be remembered, was read aloud by the speech model, and was written
+  to the audit trail in plaintext.
+- Every message the voice surface can put in front of someone names the cause
+  and the next action in plain words, on the browser half too. No status codes,
+  no protocol terms. The rule is recorded in `CLAUDE.md` under Conventions.
+- Refresh the custom chart indicator skill and generated API index for 2.2.0.
+
+### Fixed
+
+- Restore **Time Price Opportunity** and **Session Volume Profile** in the
+  `/trading` chart-type menu. Both can be selected again, with their existing
+  settings, saved layouts, live updates and intraday interval handling.
+- A spoken order request resolved the contract and then announced the order
+  without calling the tool, so no pause, no approval prompt and no order, while
+  the trader had just been told one was on its way.
+- The voice surface could not draw. A spoken turn renders on screen exactly as a
+  typed one does, so withholding `render_ui` removed the half of the answer the
+  surface was designed around. `render_ui` also draws figures the operator
+  supplied in their own message, titled so they cannot be mistaken for an
+  account.
+- The thread sidebar only ever listed chat threads, making every past voice
+  conversation unreachable, and a spoken thread rendered typed turns above
+  earlier speech.
+- 5paisa XTS sent one blocking HTTP POST per symbol, so a 1000-symbol startup
+  was 1000 sequential round-trips and every reconnect replayed the book the same
+  way. Subscriptions are batched into one request per mode; every LTP and depth
+  unsubscribe had been targeting the quote feed, and the tick filter compared an
+  int against a string so it dropped every depth tick (#2042).
+- 5paisa XTS `unsubscribe()` called `disconnect()` on every invocation, so
+  dropping one symbol killed the feed for every other subscribed symbol, with
+  nothing able to bring it back (#2042).
+- Kotak dropped `ltp` from quote and depth payloads when the price was zero, and
+  suppressed the mode 2 publish entirely. The trading chart subscribes depth
+  alone for tradeable symbols, so a payload without the key read as "keep
+  polling" and nothing could ever clear the REST fallback (#2038).
+- Tradejini re-sent the complete symbol list once per symbol change, since a
+  subscribe replaces the server-side list rather than appending to it. Feed
+  syncs are coalesced into one request per feed (part of #1350, #2044).
+- The 5paisa `last_snapshot` cache was never pruned, so it grew for the life of
+  the Gunicorn worker and resurfaced stale prices on re-subscribe and across the
+  3 AM token rollover (#2044).
+- Ctrl+C on the development server printed a scheduler traceback every five
+  seconds and needed several presses. Six APScheduler instances were never
+  stopped, the websocket proxy thread was non-daemon with its cleanup registered
+  through `atexit`, and the health collector slept its whole sampling interval
+  in one call.
+- The LiteLLM pydantic serializer warning no longer prints on every `chatgpt/`
+  plan turn.
+- Replace the retired YouTube subscriber badge in the README, and sync SDK pin
+  references to 2.0.5 across the API and MCP architecture documentation (#2050).
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - the voice surface and everything that
+  followed it, including order placement made opt-in (#2036), the removal of the
+  spoken approval phrase and its audit-trail leak, spoken orders that place
+  rather than being announced, drawing from the voice surface, transcripts
+  captured and threaded, the idle hangup, the plain-language voice errors and
+  the two migrations; openalgo-charts 2.1.8, 2.1.9 and 2.2.0 with the generated
+  drawing metadata; TPO and session volume profile restored, the TPO letters
+  default and the Objects rail icon; the Ctrl+C shutdown fix; the LiteLLM
+  warning filter.
+- **@Kalaiviswa** - 5paisa XTS subscription batching and the unsubscribe
+  teardown, Kotak `ltp` in quote and depth payloads (#2038), Tradejini feed sync
+  coalescing (part of #1350) and the bounded 5paisa `last_snapshot` cache
+  (#2042, #2044).
+- **@Ayush7614** - SDK pin references synced to 2.0.5 in the documentation
+  (#2050).
+
+## [2.0.2.4] - 2026-09-11
+
+### Charting Profiles and Broker Correctness Release
+
+37 commits since 2.0.2.3, excluding automated frontend build commits. Full
+notes: [version-2.0.2.4-released.md](releases/version-2.0.2.4-released.md).
+
+### Highlights
+
+- The charting terminal moves from openalgo-charts 2.0.2 to 2.1.7 across four
+  engine upgrades, adding TPO and session volume profiles, a per-pane Objects
+  panel and the engine's data loading controller.
+- The Upstox V3 migration is complete, with CAS data, shared rate limiting and
+  WebSocket leak fixes (#2028).
+- Kotak market data now streams over SFeed with per-data-centre routing (#2016).
+- GTT history appears in the order book, and sandbox GTT no longer reports 501.
+
+### Changed
+
+- `/trading` drawings extend into empty chart space: a trend line, rectangle or
+  freehand stroke that reaches past the latest candle or before the first loaded
+  bar keeps its preview and commits where it was drawn, instead of disappearing
+  mid-gesture. Magnet snapping still requires an actual candle, and saved
+  drawings load unchanged.
+- Mouse and pen plot drags pan time and price by default. Horizontal-only
+  panning remains optional and preserves price autoscale; existing saved
+  preferences stay intact. Dragging the time axis left expands candle spacing
+  and dragging right compresses it. The bottom controls include Reset view, and
+  Axes settings retain the default visible-bar preference.
+- The profile entries were removed from the chart type menu, where they did not
+  belong, now that profiles are their own studies.
+
+### Fixed
+
+- Upstox reported tick size in paise rather than rupees, so every tick-derived
+  value was off by a factor of a hundred (#2026).
+- The Upstox synthetic daily candle was stamped in host local time rather than
+  IST, placing it on the wrong day for anyone not running in IST (#2030).
+- Upstox multiquotes never populated `prev_close`, breaking percentage-change
+  reporting wherever it was displayed (#1725).
+- Kotak holdings did not report `average_price` (#2001), and tradebook fills
+  were keyed on `order_timestamp` instead of `fill_timestamp`, losing per-fill
+  `trade_id` (#2007).
+- Samco kept reconnecting after a rejected session token (#2035), and a
+  Flattrade WebSocket close stalled the reconnect (#1965).
+- Groww tradebook prices are reported in the rupees Groww actually sends (#1995).
+- Holiday checks now apply the requested date range (#1938).
+- The central CORS policy is applied to blueprint decorators, which were
+  bypassing it (#1927).
+- Ctrl+C on the development server stops the health collector and releases its
+  sessions before exit, so a stopped instance no longer keeps writing to
+  `health.db` (#2031).
+- `/trading` keeps price and volume isolated during replay when a periodic
+  history refresh or an older history page completes. Leaving replay restores
+  the updated live session. A refresh from an earlier symbol, interval or load
+  is discarded, and a destroyed terminal cannot restart its refresh timer.
+- Symbol loads that finish after switching instruments or closing a pane no
+  longer overwrite the active history or rebuild a destroyed chart.
+- Older history pages discard obsolete symbol, interval and chart responses
+  without exhausting the new session or releasing another page's loading state.
+- Closing a pane during interval lookup no longer starts its WebSocket and
+  polling timer after teardown.
+- Custom indicators wait for concurrent registration to finish before they are
+  added or restored, preventing missing indicators during pane startup.
+- Negative Net GEX values are abbreviated with K/L/Cr suffixes (#1911); SIP
+  inputs are validated before prices load (#1884); backtester controls are
+  labelled for assistive technology (#1877); the Docker installer no longer
+  starts a container from a failed build (#2005).
+
+### Security
+
+- Cleared every open Dependabot advisory on the lockfiles. `npm audit` and the
+  Python resolve both report no known vulnerabilities.
+- GitPython raised to 3.1.62 (advisories through 3.1.58 cover config-injection
+  RCE, arbitrary file read and git-directory creation). It arrives transitively
+  through streamlit in the opt-in `analysis` group, so it never reaches a
+  production install; the floor in `pyproject.toml` keeps the lockfile clear.
+- maplibre-gl forced to 6.9.0 for the `DOM.sanitize()` XSS bypass. It is pulled
+  in only to satisfy the `plotly.js` peer dependency of `react-plotly.js`; the
+  app renders through `plotly.js-dist-min`, so the vulnerable code was never in
+  the shipped bundle and is still absent from it.
+- svgo raised to 4.1.0 (`removeScripts` sanitizer bypasses), vitest and
+  `@vitest/mocker` to 4.1.11 (path traversal via the mocker redirect), and
+  colord to 2.10.0 (slow rejection of malformed colour strings). All four are
+  build and test tooling, not runtime code.
+
+### Dependencies
+
+- `openalgo-charts`: 2.0.2 to 2.1.7
+- The pinned `openalgo` SDK: 2.0.3 to 2.0.5, with `requirements-nginx.txt`
+  realigned after it was left a version behind
+- `docker/login-action`: 3 to 4.5.2 (#1719)
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; the charting terminal
+  through four engine upgrades, TPO and session volume profiles, the pane
+  Objects panel, the data loading controller and replay isolation; GTT history
+  in the order book; ordered shutdown on Ctrl+C (#2031); clearing every open
+  Dependabot advisory; the `chart-indicator` skill regeneration and its CI gate.
+- **@Kalaiviswa** - the Upstox V3 migration and the Flattrade reconnect stall
+  (#2028, #1965); Kotak SFeed market data (#2016); the Upstox daily candle
+  stamped in IST (#2030); the Samco reconnect loop (#2035).
+- **@arsalanansari17** - tradebook fills keyed on `fill_timestamp` with per-fill
+  `trade_id` preserved (#2007); Kotak average price on holdings (#2001).
+- **@anishkun (Anish kunda)** - Upstox tick size normalized from paise to rupees
+  (#2026), and the root-cause analysis on #2029.
+- **@linuxsmiths** - Upstox multiquotes never populating `prev_close` (#1725).
+- **@nightcityblade** - holiday checks applying the requested date range (#1938).
+- **@WilliamK112 (Ching Wei Kang)** - central CORS policy applied to blueprint
+  decorators (#1927).
+- **@vibecoding-skills (Harsh Dattani)** - Groww tradebook prices in rupees
+  (#1995).
+- **@srajbr (Samiran Raj Boro)** - negative Net GEX abbreviations (#1911).
+- **@siddharthg2309 (Siddharth Gouthaman)** - SIP input validation (#1884).
+- **@hafzism (Hafeez)** - backtester control labelling (#1877).
+- **@aravindgandavadi (Aravind Gandavadi)** - the Docker installer no longer
+  starting a container from a failed build (#2005).
+- **@Mr-Neutr0n (hari)** - frontend test coverage for the Footer (#1964).
+- **@Pragitics (Pragit R V)** - the strategy-builder Greeks tab awaited rather
+  than queried synchronously (#1903).
+- **@santhiprakash (Santhi Prakash)** - README quick-contribution example
+  aligned with Conventional Commits (#1935).
+
 ## [2.0.2.3] - 2026-09-06
 
 ### Strategy Module, Agent and Charting Release

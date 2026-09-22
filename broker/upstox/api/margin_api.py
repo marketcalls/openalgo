@@ -1,5 +1,6 @@
 import json
 
+from broker.upstox.api.rate_limiter import apply_rate_limit
 from broker.upstox.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -65,6 +66,11 @@ def calculate_margin_api(positions, auth):
     client = get_httpx_client()
 
     try:
+        # Margin is a Standard API, not an order one -- computing a basket's
+        # margin places nothing. It shares the standard budget with data.py and
+        # funds.py; see broker/upstox/api/rate_limiter.py.
+        apply_rate_limit("standard")
+
         # Make the request using the Upstox margin API
         response = client.post(
             "https://api.upstox.com/v2/charges/margin", headers=headers, json=payload

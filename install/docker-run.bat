@@ -321,13 +321,31 @@ REM Stop and remove existing container if exists
 docker stop %CONTAINER% >nul 2>&1
 docker rm %CONTAINER% >nul 2>&1
 
-REM Calculate dynamic resource limits based on available RAM
-for /f "tokens=2 delims==" %%i in ('wmic computersystem get TotalPhysicalMemory /value ^| findstr TotalPhysicalMemory') do set TOTAL_RAM_BYTES=%%i
-set /a TOTAL_RAM_MB=%TOTAL_RAM_BYTES:~0,-6%
+REM Calculate dynamic resource limits based on available RAM.
+REM WMIC is absent from Windows 11 24H2 and later, so read both values from
+REM PowerShell. It also returns megabytes directly, which keeps the byte count
+REM out of set /a, where a machine with 4GB or more overflows 32-bit signed math.
+REM Each value is checked for being all digits, because a variable left empty
+REM here reaches set /a as text and evaluates to -1, which silently selects the
+REM most restrictive tier on every machine.
+set "TOTAL_RAM_MB="
+for /f "delims=" %%i in ('powershell -NoProfile -Command "[int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB)" 2^>nul') do set "TOTAL_RAM_MB=%%i"
+if defined TOTAL_RAM_MB for /f "delims=0123456789" %%x in ("!TOTAL_RAM_MB!") do set "TOTAL_RAM_MB="
 
-REM Get CPU cores
-for /f "tokens=2 delims==" %%i in ('wmic cpu get NumberOfCores /value ^| findstr NumberOfCores') do set CPU_CORES=%%i
-if "%CPU_CORES%"=="" set CPU_CORES=2
+REM Get CPU cores, summed over every socket
+set "CPU_CORES="
+for /f "delims=" %%i in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum" 2^>nul') do set "CPU_CORES=%%i"
+if defined CPU_CORES for /f "delims=0123456789" %%x in ("!CPU_CORES!") do set "CPU_CORES="
+if not defined CPU_CORES set "CPU_CORES=2"
+
+if not defined TOTAL_RAM_MB (
+    echo [NOTE] Could not read how much memory this machine has, so OpenAlgo is
+    echo        starting with cautious limits: one compute thread and a 256MB
+    echo        strategy memory cap. The container will run, just more slowly than
+    echo        this machine allows. Windows PowerShell is what reads the memory
+    echo        size, so making it available restores the full limits.
+    set "TOTAL_RAM_MB=0"
+)
 
 REM shm_size: 25% of RAM (min 256MB, max 2GB)
 set /a SHM_SIZE_MB=%TOTAL_RAM_MB% / 4

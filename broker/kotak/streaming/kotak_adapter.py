@@ -7,10 +7,13 @@ import threading
 import time
 
 from database.auth_db import get_auth_token
+from utils.config import get_broker_api_key
 from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
+from .kotak_feed_config import SOURCE_HSM, fetch_feed_config
 from .kotak_websocket import KotakWebSocket
+from .sfeed_websocket import KotakSFeedWebSocket
 
 logger = get_logger(__name__)
 
@@ -25,6 +28,45 @@ _SCRIP_OPS = {
     "ifs": ("index", False),
     "ifu": ("index", True),
 }
+
+
+def _data_center_from(auth_parts):
+    """The account's data centre, or "" for a token issued before it was stored.
+
+    Fifth and last part of the composite auth token. Absent means unknown,
+    which resolves to the default SFeed endpoint rather than failing - the
+    alternative would invalidate every token issued before the upgrade.
+    """
+    return auth_parts[4] if len(auth_parts) > 4 else ""
+
+
+def _build_feed_client(auth_config, user_id):
+    """Pick the market-data client this account's data centre is routed to.
+
+    Kotak resolves the feed host per data centre. Six of the ten live data
+    centres go to SFeed and four to cdtstream; none has selected the legacy
+    HSM host since at least September 2026, and Kotak's SDK removed its HSM
+    client entirely in 2.2.0. SFeed is therefore the default, with HSM kept
+    only for a data centre that still explicitly asks for it.
+
+    The two clients present the same interface and emit the same normalized
+    dicts, so nothing downstream of this function needs to know which it got.
+    """
+    config = fetch_feed_config(auth_config.get("data_center"))
+
+    if config["source"] == SOURCE_HSM:
+        logger.info(f"Kotak user {user_id}: data centre routes to the legacy HSM feed")
+        return KotakWebSocket(auth_config)
+
+    logger.info(
+        f"Kotak user {user_id}: market data via {config['market_data_url']} "
+        f"(source {config['source'] or 'default'})"
+    )
+    return KotakSFeedWebSocket(
+        auth_config,
+        ws_url=config["market_data_url"],
+        ucc=get_broker_api_key(),
+    )
 
 
 class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -77,7 +119,11 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # 50ms is enough to coalesce a burst (e.g. option chain load) without
         # adding a perceptible floor to single-symbol cold subscribes.
         self._batch_delay = 0.05
-        self._max_batch_size = 100  # HSI MAX_SCRIPS limit per frame
+        # Per-frame subscribe limit, replaced with the real one once the feed
+        # client is built - HSM caps a frame at 100 scrips, SFeed takes the
+        # whole list in one. Sending 100 at a time to SFeed would be 30 frames
+        # where Kotak's own client sends one.
+        self._max_batch_size = 100
 
     def initialize(self, broker_name: str, user_id: str, auth_data=None):
         """Initialize adapter for a specific user/session - following AliceBlue pattern.
@@ -108,16 +154,18 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             raise ValueError(f"No authentication token found for user {user_id}")
 
         auth_parts = auth_string.split(":::")
-        if len(auth_parts) != 4:
+        if len(auth_parts) < 4:
             logger.error("Invalid authentication token format")
             raise ValueError("Invalid authentication token format")
 
         self._auth_config = dict(
             zip(["auth_token", "sid", "hs_server_id", "access_token"], auth_parts)
         )
+        self._auth_config["data_center"] = _data_center_from(auth_parts)
 
         # Create websocket client
-        self._ws_client = KotakWebSocket(self._auth_config)
+        self._ws_client = _build_feed_client(self._auth_config, user_id)
+        self._max_batch_size = getattr(self._ws_client, "MAX_BATCH_SIZE", 100)
 
         # Set up internal callbacks - this MUST happen during initialization like AliceBlue
         self._setup_internal_callbacks()
@@ -418,7 +466,12 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "ltp": float(ltp),
                             "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
                         }
-                    elif mode == 2 and effective_ltp > 0:
+                    elif mode == 2:
+                        # Same contract point as mode 3 below: a quote payload
+                        # always carries ltp, defaulted to 0. Gating the whole
+                        # publish on a non-zero price meant a mode-2 subscriber
+                        # received nothing at all - not even the book's OHLC and
+                        # volume - until the instrument's first trade of the day.
                         publish_data = {
                             "ltp": effective_ltp,
                             "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
@@ -444,8 +497,23 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         else:
                             continue  # No depth data available at all
 
+                        # ltp is a first-class field of the mode-3 payload
+                        # (docs/prompt/websockets-format.md), emitted
+                        # unconditionally by every other broker adapter -
+                        # angel, shoonya, dhan, zerodha, upstox all default it
+                        # to 0 rather than dropping the key.
+                        #
+                        # Kotak used to omit it whenever effective_ltp was 0,
+                        # on the reasoning that this "lets the frontend fall
+                        # back to polled REST data". It does - permanently. The
+                        # chart subscribes Depth alone for tradeable symbols and
+                        # stops its REST quote poll only on a depth frame
+                        # carrying ltp, so a payload without the key is read as
+                        # "keep polling" and nothing can ever clear it
+                        # (issue #2038).
                         publish_data = {
                             "timestamp": int(time.time() * 1000),
+                            "ltp": effective_ltp,
                             "depth": {
                                 "buy": depth_buy,
                                 "sell": depth_sell,
@@ -453,10 +521,6 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "totalbuyqty": depth_total_buy,
                             "totalsellqty": depth_total_sell,
                         }
-                        # Only include LTP if valid; omitting it lets
-                        # the frontend fall back to polled REST data
-                        if effective_ltp > 0:
-                            publish_data["ltp"] = effective_ltp
                     else:
                         continue
                     publish_data.update(
@@ -781,7 +845,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return
 
             auth_parts = auth_string.split(":::")
-            if len(auth_parts) != 4:
+            if len(auth_parts) < 4:
                 logger.error("Invalid authentication token format during reconnection")
                 self._ws_client = None
                 return
@@ -792,9 +856,11 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     auth_parts,
                 )
             )
+            self._auth_config["data_center"] = _data_center_from(auth_parts)
 
             # Create new WebSocket client
-            self._ws_client = KotakWebSocket(self._auth_config)
+            self._ws_client = _build_feed_client(self._auth_config, self._user_id)
+            self._max_batch_size = getattr(self._ws_client, "MAX_BATCH_SIZE", 100)
 
             # Restore internal callbacks
             self._setup_internal_callbacks()

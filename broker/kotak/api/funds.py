@@ -18,7 +18,7 @@ def get_margin_data(auth_token):
     try:
         # Parse auth token components
         access_token_parts = auth_token.split(":::")
-        if len(access_token_parts) != 4:
+        if len(access_token_parts) < 4:
             logger.error(
                 f"Invalid auth token format. Expected 4 parts, got {len(access_token_parts)}"
             )

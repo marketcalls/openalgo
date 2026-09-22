@@ -6,6 +6,7 @@ Handles connection to Flattrade's market data streaming API
 import json
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,19 @@ class FlattradeWebSocket:
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
     HEARTBEAT_JOIN_TIMEOUT = 3  # Timeout for heartbeat thread join
+
+    # Market-data silence watchdog (issue #2075). A Noren session that keeps
+    # answering heartbeats while delivering no ticks is indistinguishable from
+    # a healthy one on _last_message_time alone, because every inbound frame
+    # stamps it - heartbeat acks included. Tick flow therefore gets its own
+    # clock, and the watchdog only arms once data has been arriving over time:
+    # frames in DATA_ARM_BUCKETS distinct buckets of DATA_ARM_BUCKET seconds,
+    # all within DATA_ARM_WINDOW. See _update_last_data_time for why spread
+    # matters and a frame count does not.
+    DATA_SILENCE_TIMEOUT = 180
+    DATA_ARM_BUCKET = 30
+    DATA_ARM_BUCKETS = 3
+    DATA_ARM_WINDOW = 300
 
     # Message types
     MSG_TYPE_CONNECT = "a"
@@ -104,10 +118,22 @@ class FlattradeWebSocket:
         self.on_close = on_close
         self.on_open = on_open
 
-        # Heartbeat management
+        # Heartbeat management. _heartbeat_stop is replaced with a FRESH Event
+        # for every connection rather than cleared and reused: a worker left over
+        # from a previous socket keeps a reference to its own event, so it can
+        # never be re-armed (and kept alive) by the next connect. See
+        # _stop_heartbeat/_heartbeat_worker.
         self._heartbeat_thread = None
+        self._heartbeat_stop = threading.Event()
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
+
+        # Market-data liveness, kept apart from _last_message_time above so a
+        # socket that only answers heartbeats cannot pass for a live feed.
+        # Per connection: _reset_data_liveness() clears all three on open.
+        self._last_data_message_time = None
+        self._data_watchdog_armed = False
+        self._data_bucket_starts = deque(maxlen=self.DATA_ARM_BUCKETS)
 
         # Logging
         self.logger = get_logger("flattrade_websocket")
@@ -195,6 +221,10 @@ class FlattradeWebSocket:
         self.running = False
         self.connected = False
         self._stop_event.set()
+        # Wake the heartbeat worker up front: _close_websocket() below makes the
+        # reader thread run _on_close -> _stop_heartbeat, and that must not have
+        # to wait out an interval-long sleep while stop() joins the reader.
+        self._heartbeat_stop.set()
 
         self._close_websocket()
         self._wait_for_thread_completion()
@@ -230,6 +260,7 @@ class FlattradeWebSocket:
         """Handle WebSocket connection open event"""
         self.connected = True
         self._update_last_message_time()
+        self._reset_data_liveness()
 
         self.logger.info("WebSocket connection opened, sending authentication")
 
@@ -266,6 +297,11 @@ class FlattradeWebSocket:
 
         if self._handle_internal_message(message):
             return
+
+        # Everything that is not an auth ack or a heartbeat ack is a market
+        # data frame (tk/tf/dk/df), so this is the point where the feed - as
+        # opposed to the socket - proves it is alive. Issue #2075.
+        self._update_last_data_time()
 
         self._call_external_callback(self.on_message, ws, message)
 
@@ -462,37 +498,120 @@ class FlattradeWebSocket:
         with self._heartbeat_lock:
             self._last_message_time = time.time()
 
+    def _update_last_data_time(self) -> None:
+        """Record a market-data frame and arm the data-silence watchdog.
+
+        Arming asks that data arrived *spread over time*, not that a lot of it
+        arrived. Noren answers every subscribe with a snapshot frame, so a
+        session opened overnight receives one frame per subscribed scrip
+        within a second of connecting - fifty symbols is fifty frames. Any
+        rule counting frames would arm on that burst and then recycle the
+        socket every DATA_SILENCE_TIMEOUT until the market opened, and
+        Flattrade answers reconnect churn with a server-side session cooldown,
+        which is the reason the adapter keeps a persistent session at all.
+
+        Bucketing is what separates the two. A burst lands in one bucket (two
+        if it straddles a boundary), while a live feed keeps producing frames
+        bucket after bucket. Requiring DATA_ARM_BUCKETS distinct buckets means
+        at least a couple of DATA_ARM_BUCKET-second spans of real flow before
+        the watchdog can fire, and DATA_ARM_WINDOW stops stray after-hours
+        ticks hours apart from accumulating into a false arm.
+
+        Arming lasts only for this connection. If the market closes while the
+        watchdog is armed, the feed falls silent, the socket is recycled once,
+        and the replacement starts disarmed and stays quiet - so the cost of a
+        wrong guess is bounded at one reconnect.
+        """
+        now = time.time()
+        newly_armed = False
+
+        with self._heartbeat_lock:
+            self._last_data_message_time = now
+
+            if not self._data_watchdog_armed:
+                bucket_start = now - (now % self.DATA_ARM_BUCKET)
+                if not self._data_bucket_starts or self._data_bucket_starts[-1] != bucket_start:
+                    self._data_bucket_starts.append(bucket_start)
+
+                if (
+                    len(self._data_bucket_starts) == self._data_bucket_starts.maxlen
+                    and now - self._data_bucket_starts[0] <= self.DATA_ARM_WINDOW
+                ):
+                    self._data_watchdog_armed = True
+                    newly_armed = True
+
+        if newly_armed:
+            self.logger.info("Market data is flowing; watching for tick silence from here on")
+
+    def _reset_data_liveness(self) -> None:
+        """Clear the per-connection market-data liveness state."""
+        with self._heartbeat_lock:
+            self._last_data_message_time = None
+            self._data_watchdog_armed = False
+            self._data_bucket_starts.clear()
+
     def _start_heartbeat(self) -> None:
         """Start heartbeat monitoring thread"""
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             return
 
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+        stop_event = threading.Event()
+        self._heartbeat_stop = stop_event
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_worker, args=(stop_event,), daemon=True
+        )
         self._heartbeat_thread.start()
         self.logger.debug("Heartbeat thread started")
 
     def _stop_heartbeat(self) -> None:
-        """Stop heartbeat monitoring thread and wait for it to terminate"""
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+        """Stop heartbeat monitoring thread and wait for it to terminate.
+
+        The worker sleeps on its own stop Event, so SETTING IT FIRST is what
+        makes the join below return at once. Clearing self.connected is not
+        enough - the worker only re-reads it after its sleep - so a close used
+        to block the websocket-client reader thread here for the full
+        HEARTBEAT_JOIN_TIMEOUT, log "Heartbeat thread did not terminate within
+        timeout", and still leave the worker running (issue #1965). That delay
+        landed in front of _call_external_callback(on_close), i.e. in front of
+        the adapter's reconnect scheduling, so it was pure added feed downtime.
+        """
+        # Set before the is_alive() check: even a worker that is between
+        # iterations must see this and exit rather than start another sleep.
+        self._heartbeat_stop.set()
+
+        thread = self._heartbeat_thread
+        if thread and thread.is_alive():
+            if thread is threading.current_thread():
+                # _check_connection_health() closes the socket from inside the
+                # worker, which can route back here on the same thread. Joining
+                # self would raise RuntimeError; the event above already tells
+                # the loop to stop.
+                self._heartbeat_thread = None
+                return
+
             self.logger.debug("Waiting for heartbeat thread to stop")
-            # Thread checks self.running and self.connected, which should be False now
-            self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
-            if self._heartbeat_thread.is_alive():
+            thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
                 # Safe to clear the reference even if the join timed out: the
-                # thread is daemon=True so it cannot block process exit, and
-                # _start_heartbeat() overwrites this attribute with a brand-new
-                # thread object on the next connect regardless. With the
-                # _stop_event fix below, the join should reliably complete
-                # near-instantly in practice anyway.
+                # thread is daemon=True so it cannot block process exit, it is
+                # bound to the stop Event that was just set (so it exits as soon
+                # as it is scheduled), and _start_heartbeat() installs a
+                # brand-new thread object on the next connect regardless.
         # Clear reference unconditionally - see comment above
         self._heartbeat_thread = None
 
-    def _heartbeat_worker(self) -> None:
-        """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
-        while self.running and self.connected:
+    def _heartbeat_worker(self, stop_event: threading.Event) -> None:
+        """Heartbeat worker thread - sends periodic heartbeats and monitors connection.
+
+        Sleeps on the Event it was STARTED with, not on self._heartbeat_stop:
+        that attribute is rebound on every connect, so reading it here would let
+        a leftover worker from the previous socket be re-armed by the new
+        connection and go on heartbeating a dead session forever.
+        """
+        while self.running and self.connected and not stop_event.is_set():
             try:
-                if self._stop_event.wait(self.HEARTBEAT_INTERVAL):
+                if stop_event.wait(self.HEARTBEAT_INTERVAL) or self._stop_event.is_set():
                     break
 
                 if self.running and self.connected:
@@ -526,21 +645,48 @@ class FlattradeWebSocket:
             return False
 
     def _check_connection_health(self) -> bool:
-        """
-        Check connection health based on last message timestamp
+        """Recycle the socket when the session has stopped being useful.
+
+        Two independent timeouts, because a Noren session fails in two ways:
+
+        * HEARTBEAT_TIMEOUT catches a socket that has gone quiet altogether.
+        * DATA_SILENCE_TIMEOUT catches one that still answers heartbeats while
+          delivering no market data. That case used to be invisible here - the
+          heartbeat ack itself refreshed _last_message_time - so the feed could
+          stay dead for the rest of the session with the app still reporting a
+          healthy connection, and nothing downstream that runs on ticks (stop
+          losses, sandbox order triggers, Flow conditions) would fire. Checked
+          only once the watchdog is armed; see _update_last_data_time.
+          Issue #2075.
 
         Returns:
-            bool: True if connection is healthy, False if timed out
+            bool: True if connection is healthy, False if it was recycled
         """
-        with self._heartbeat_lock:
-            if self._last_message_time:
-                time_since_message = time.time() - self._last_message_time
-                if time_since_message > self.HEARTBEAT_TIMEOUT:
-                    self.logger.error("Connection timeout - no messages received")
-                    self._close_websocket()
-                    return False
+        now = time.time()
+        reason = None
 
-        return True
+        with self._heartbeat_lock:
+            if self._last_message_time and now - self._last_message_time > self.HEARTBEAT_TIMEOUT:
+                reason = "no messages received"
+            elif (
+                self._data_watchdog_armed
+                and self._last_data_message_time
+                and now - self._last_data_message_time > self.DATA_SILENCE_TIMEOUT
+            ):
+                silent_for = now - self._last_data_message_time
+                reason = (
+                    f"no market data for {silent_for:.0f}s while the session kept "
+                    "answering heartbeats"
+                )
+
+        if reason is None:
+            return True
+
+        # Closed outside the lock: the reader thread runs _on_close, which can
+        # route back through _stop_heartbeat on this very thread.
+        self.logger.error(f"Connection timeout - {reason}")
+        self._close_websocket()
+        return False
 
     # Subscription Management
     def subscribe_touchline(self, scrip_list: str) -> bool:

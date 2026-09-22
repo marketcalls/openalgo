@@ -42,12 +42,13 @@ Feature: GTT orders
     Then the service imports the broker GTT API
     And a missing broker GTT module produces a not implemented response
 
-  # Source: services/place_gtt_order_service.py:34, services/modify_gtt_order_service.py:51, services/cancel_gtt_order_service.py:34, services/gtt_orderbook_service.py:13
-  Scenario Outline: Analyzer mode does not implement GTT operations
+  # Source: services/place_gtt_order_service.py:92, services/modify_gtt_order_service.py:51, services/cancel_gtt_order_service.py:50, services/gtt_orderbook_service.py:26, sandbox/gtt_manager.py
+  Scenario Outline: Analyzer mode routes GTT operations to the sandbox
     Given analyzer mode is enabled
     When the client requests "<operation>"
-    Then the GTT service returns HTTP 501
-    And sandbox GTT tables do not imply an implemented API path
+    Then the GTT service dispatches to the sandbox GTT manager instead of the broker
+    And the response carries mode "analyze"
+    And the sandbox trigger fires against live LTP and places a sandbox order
 
     Examples:
       | operation |

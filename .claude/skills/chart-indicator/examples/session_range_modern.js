@@ -37,7 +37,8 @@ export default function ({
       // A dedicated input type since 1.8.1. The host renders it and hints the
       // shape; the indicator still parses it, which is why the guard below
       // matters.
-      { key: 'window', type: 'session', label: 'Range Window', default: '0915-1015' },
+      { key: 'window', type: 'text', label: 'Range Window', default: '0915-1015',
+        tooltip: 'Start and end in HHMM, exchange time. Parsed with parseSessionSpec.' },
       { key: 'showSignals', type: 'boolean', label: 'Show Breakout Labels', default: true },
     ],
 

@@ -278,7 +278,9 @@ def cancel_gtt_order(trigger_id, auth):
     return {"status": "error", "message": msg}, response.status_code
 
 
-def get_gtt_book(auth):
+def get_gtt_book(auth, include_history=False):
+    # include_history is accepted for interface parity; this mapper still
+    # returns active triggers only until its status vocabulary is mapped.
     """List all Forever Orders for the user. Returns ``(response_dict, status_code)``.
 
     The returned dict has ``status`` and ``data`` where ``data`` is the

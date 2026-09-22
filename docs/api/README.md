@@ -187,4 +187,4 @@ Defaults from `.sample.env` are `API_RATE_LIMIT="50 per second"`, `ORDER_RATE_LI
 
 ## Client Libraries
 
-The Python client is available as `openalgo` and is pinned by this application at `2.0.2`. Go and Node.js examples in `examples/` demonstrate direct REST integration; they are not declared here as separately versioned official SDK releases.
+The Python client is available as `openalgo` and is pinned by this application at `2.0.5` (see `pyproject.toml`). Go and Node.js examples in `examples/` demonstrate direct REST integration; they are not declared here as separately versioned official SDK releases.

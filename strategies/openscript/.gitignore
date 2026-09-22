@@ -1,0 +1,13 @@
+# Ignore every OpenScript study written on this machine
+*.oscript
+
+# But keep this .gitignore and the folder README
+!.gitignore
+!README.md
+
+# Ignore backups, including the one taken on every save from the browser
+*.bak
+*.backup
+*~
+
+# Keep the directory but ignore its contents beyond the exceptions above.

@@ -16,11 +16,13 @@ and returned content; every name rejected was rejected by the backend in its own
 words, `The '<model>' model is not supported when using Codex with a ChatGPT
 account`:
 
-    available    gpt-5.5, gpt-5.6-sol, gpt-5.6-luna, gpt-5.6-terra
-    refused      gpt-5.6, gpt-5.6-cyber, gpt-5.5-pro, gpt-5.5-codex, gpt-5.6-codex
+    available    gpt-5.5, gpt-5.6-sol, gpt-5.6-luna, gpt-5.6-terra, gpt-6-astra
+    refused      gpt-5.6, gpt-5.6-cyber, gpt-5.5-pro, gpt-5.5-codex, gpt-5.6-codex,
+                 gpt-6, gpt-6-pro, gpt-6-astra-codex
 
-`gpt-5.6` being refused while three of its variants work is genuinely how the
-backend behaves, so the list is enumerated rather than derived from a pattern.
+`gpt-5.6` being refused while three of its variants work, and `gpt-6` refused
+while `gpt-6-astra` answers, is genuinely how the backend behaves, so the list is
+enumerated rather than derived from a pattern.
 
 **A plan is not an entitlement.** These are the models the *provider* serves;
 which of them a given plan may use is between the operator and OpenAI, and a
@@ -37,6 +39,7 @@ This module exists to be deleted. When LiteLLM ships these names, its own entry
 wins and this one is skipped, so the only cost of the overlap is this file.
 """
 
+import warnings
 from typing import Any
 
 from utils.logging import get_logger
@@ -67,6 +70,7 @@ SUPPLEMENTAL: dict[str, dict[str, Any]] = {
     "gpt-5.6-sol": {"max_input_tokens": 922000},
     "gpt-5.6-luna": {"max_input_tokens": 922000},
     "gpt-5.6-terra": {"max_input_tokens": 922000},
+    "gpt-6-astra": {"max_input_tokens": 922000},
 }
 
 
@@ -95,6 +99,50 @@ def _has_chatgpt_entry(cost: Any, key: str) -> bool:
     """
     existing = cost.get(key)
     return isinstance(existing, dict) and existing.get("litellm_provider") == PROVIDER
+
+
+def quieten_usage_warning() -> None:
+    """Stop one LiteLLM papercut from printing on every single turn.
+
+    The `chatgpt/` provider runs through `/v1/responses`, so LiteLLM serialises
+    the reply's `usage` as a `ResponseAPIUsage`, which wants `input_tokens` and
+    `output_tokens`. What comes back carries the chat-completions shape,
+    `prompt_tokens` and `completion_tokens`, so pydantic warns that the value
+    "may not be as expected" - once per model call, several times per turn::
+
+        UserWarning: Pydantic serializer warnings:
+          PydanticSerializationUnexpectedValue(Expected `ResponseAPIUsage` ...)
+
+    **The numbers are not wrong.** Verified against a real turn on this
+    provider: the usage frame reported input 23761, output 5, total 23766, with
+    no cost, which is correct for a plan. Nothing downstream reads the
+    serialised object; the token counts are taken from the fields that are
+    present.
+
+    So it is noise, and noise on every turn is worse than it sounds: a warning
+    nobody can act on is a warning everybody learns to scroll past, including
+    the next one that matters. The filter is written as narrowly as the warning
+    allows - this category, this message - so anything else pydantic has to say
+    still gets through.
+
+    Delete this when LiteLLM returns the right shape for this provider. Nothing
+    breaks if it is called and the warning no longer exists.
+    """
+    # `(?s)` is load-bearing. The warnings module compiles this with a bare
+    # `re.compile(message)` and matches from the start, and the real message
+    # carries a newline before the interesting part:
+    #
+    #     "Pydantic serializer warnings:\n  PydanticSerializationUnexpected..."
+    #
+    # Without DOTALL the leading `.*` stops at that newline and the filter
+    # silently matches nothing, which is exactly how it was written first: the
+    # warning kept printing and a truncated assertion said it had gone.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"(?s).*ResponseAPIUsage.*",
+        category=UserWarning,
+        module=r"pydantic\.main",
+    )
 
 
 def register(litellm: Any) -> tuple[str, ...]:
@@ -153,7 +201,7 @@ def register(litellm: Any) -> tuple[str, ...]:
             )
     except Exception:
         # Advisory, never fatal. A LiteLLM whose registry has a different shape
-        # costs the operator these four models, not a working agent.
+        # costs the operator these few models, not a working agent.
         logger.exception("Could not register the supplemental ChatGPT models")
         return ()
 

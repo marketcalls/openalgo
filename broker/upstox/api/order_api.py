@@ -1,10 +1,16 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.upstox.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from broker.upstox.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -18,8 +24,46 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+UPSTOX_BASE_URL = "https://api.upstox.com"
+# Order place/modify/cancel use the v3 API, which Upstox serves only from the
+# low-latency api-hft host. Every other endpoint (order book, trade book,
+# positions, holdings) has no v3 equivalent and stays on UPSTOX_BASE_URL.
+UPSTOX_HFT_BASE_URL = "https://api-hft.upstox.com"
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+# Order-mutating path fragments. Upstox's rate-limit table (04-rate-limits.md)
+# scopes the tighter order budget to Place, Modify, Cancel and Multi Order; the
+# order book, trade book, positions and holdings reads below are Standard APIs
+# even though they live in this file, and must not be charged to the order
+# bucket or a squareoff would be queued behind the polling the UI does anyway.
+_ORDER_PATH_FRAGMENTS = (
+    "/order/place",
+    "/order/modify",
+    "/order/cancel",
+    "/order/multi",
+    "/order/exit",
+    "/order/gtt",
+)
+
+
+def _rate_limit_category(endpoint, base_url):
+    """Which of Upstox's two published budgets this request draws on.
+
+    Order place/modify/cancel are the only endpoints served from the api-hft
+    host, so the host alone answers it today; the path check is kept so a v2
+    order endpoint added later is categorised correctly rather than silently
+    charged to the standard budget.
+    """
+    if base_url == UPSTOX_HFT_BASE_URL:
+        return "order"
+    lowered = (endpoint or "").lower()
+    if any(fragment in lowered for fragment in _ORDER_PATH_FRAGMENTS):
+        return "order"
+    return "standard"
+
+
+def get_api_response(
+    endpoint, auth, method="GET", payload="", base_url=UPSTOX_BASE_URL, retry_count=0
+):
     """
     A wrapper to send requests to the Upstox API and handle responses.
     Args:
@@ -27,10 +71,14 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         auth (str): The authentication token.
         method (str): The HTTP method (GET, POST, PUT, DELETE).
         payload (str): The JSON payload for POST and PUT requests.
+        base_url (str): The API host, only overridden for the v3 api-hft endpoints.
+        retry_count (int): Internal; how many 429 retries have already been spent.
     Returns:
         dict: The JSON response from the API, or an error dictionary.
     """
     logger.debug(f"Requesting {method} on endpoint: {endpoint}")
+    category = _rate_limit_category(endpoint, base_url)
+    apply_rate_limit(category)
     try:
         api_key = os.getenv("BROKER_API_KEY")
         if not api_key:
@@ -43,7 +91,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        url = f"https://api.upstox.com{endpoint}"
+        url = f"{base_url}{endpoint}"
 
         if method == "GET":
             response = client.get(url, headers=headers)
@@ -64,6 +112,26 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     except httpx.HTTPStatusError as e:
         error_response = e.response.text
+        # Reactive rate-limit handling. Only the read endpoints retry: this
+        # function also carries order modify and cancel, and a 429 cannot be
+        # distinguished from a response lost after Upstox accepted the request,
+        # so a mutation surfaces the error and lets the caller decide. The
+        # proactive pacer is what is meant to keep mutations out of this branch.
+        if is_rate_limited(e.response.status_code):
+            if category == "standard" and retry_count < MAX_RETRIES:
+                delay = retry_delay_from_headers(e.response.headers, retry_count)
+                logger.warning(
+                    f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
+                    f"(attempt {retry_count + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(delay)
+                return get_api_response(
+                    endpoint, auth, method, payload, base_url, retry_count + 1
+                )
+            logger.warning(
+                f"Upstox rate limit hit on {endpoint} (category={category}); not retrying"
+            )
+
         logger.exception(f"HTTP error on {endpoint}: {error_response}")
         try:
             return e.response.json()
@@ -205,6 +273,25 @@ def _extract_error(response):
     return body
 
 
+def _extract_order_id(data):
+    """Reads the order id out of a v3 order response body.
+
+    v3 place returns a list under "order_ids" (a sliced order yields one id per
+    slice) while modify and cancel kept v2's singular "order_id", so both shapes
+    are accepted rather than silently returning None if the other one arrives.
+    """
+    if not isinstance(data, dict):
+        return None
+
+    order_ids = data.get("order_ids")
+    if isinstance(order_ids, (list, tuple)):
+        return order_ids[0] if order_ids else None
+    if order_ids:
+        return order_ids
+
+    return data.get("order_id")
+
+
 def place_order_api(data, auth):
     """
     Places an order using the Upstox API.
@@ -223,21 +310,27 @@ def place_order_api(data, auth):
             return None, {"status": "error", "message": "Instrument token not found"}, None
 
         newdata = transform_data(data, token)
-        payload = json.dumps(
-            {
-                "quantity": newdata["quantity"],
-                "product": newdata.get("product", "I"),
-                "validity": newdata.get("validity", "DAY"),
-                "price": newdata.get("price", "0"),
-                "tag": newdata.get("tag", "string"),
-                "instrument_token": newdata["instrument_token"],
-                "order_type": newdata.get("order_type", "MARKET"),
-                "transaction_type": newdata["transaction_type"],
-                "disclosed_quantity": newdata.get("disclosed_quantity", "0"),
-                "trigger_price": newdata.get("trigger_price", "0"),
-                "is_amo": newdata.get("is_amo", False),
-            }
-        )
+        order_payload = {
+            "quantity": newdata["quantity"],
+            "product": newdata.get("product", "I"),
+            "validity": newdata.get("validity", "DAY"),
+            "price": newdata.get("price", "0"),
+            "tag": newdata.get("tag", "string"),
+            "instrument_token": newdata["instrument_token"],
+            "order_type": newdata.get("order_type", "MARKET"),
+            "transaction_type": newdata["transaction_type"],
+            "disclosed_quantity": newdata.get("disclosed_quantity", "0"),
+            "trigger_price": newdata.get("trigger_price", "0"),
+            "is_amo": newdata.get("is_amo", False),
+        }
+
+        # transform_data only sets market_protection when the caller supplied a
+        # usable value; leaving the key out is what selects Upstox's own -1
+        # default, so existing orders keep behaving exactly as before.
+        if "market_protection" in newdata:
+            order_payload["market_protection"] = newdata["market_protection"]
+
+        payload = json.dumps(order_payload)
         logger.debug(f"Placing order with payload: {payload}")
 
         client = get_httpx_client()
@@ -246,8 +339,15 @@ def place_order_api(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        # Order budget: 10/sec, 500/min, 2000/30min, five times tighter than
+        # the standard one. close_all_positions() loops straight through here,
+        # one call per open position, so this is the pacer that matters most.
+        # No 429 retry: a rejected place is indistinguishable from a response
+        # lost after Upstox accepted it, and a duplicate order is far worse
+        # than a failed one.
+        apply_rate_limit("order")
         response = client.post(
-            "https://api.upstox.com/v2/order/place", headers=headers, content=payload
+            f"{UPSTOX_HFT_BASE_URL}/v3/order/place", headers=headers, content=payload
         )
         response.raise_for_status()
 
@@ -259,7 +359,9 @@ def place_order_api(data, auth):
         logger.debug(f"Place order API response: {response_data}")
 
         if response_data.get("status") == "success":
-            order_id = response_data.get("data", {}).get("order_id")
+            order_id = _extract_order_id(response_data.get("data"))
+            if not order_id:
+                logger.error(f"Order placed but no order id in response: {response_data}")
             logger.debug(f"Successfully placed order. Order ID: {order_id}")
             return response, response_data, order_id
         else:
@@ -383,11 +485,14 @@ def cancel_order(orderid, auth):
     logger.debug(f"Attempting to cancel order ID: {orderid}")
     try:
         response_data = get_api_response(
-            f"/v2/order/cancel?order_id={orderid}", auth, method="DELETE"
+            f"/v3/order/cancel?order_id={orderid}",
+            auth,
+            method="DELETE",
+            base_url=UPSTOX_HFT_BASE_URL,
         )
 
         if response_data.get("status") == "success":
-            canceled_id = response_data.get("data", {}).get("order_id")
+            canceled_id = _extract_order_id(response_data.get("data"))
             logger.debug(f"Successfully canceled order ID: {canceled_id}")
             return {"status": "success", "orderid": canceled_id}, 200
         else:
@@ -412,10 +517,16 @@ def modify_order(data, auth):
         payload = json.dumps(transformed_order_data)
         logger.debug(f"Modify order payload: {payload}")
 
-        response_data = get_api_response("/v2/order/modify", auth, method="PUT", payload=payload)
+        response_data = get_api_response(
+            "/v3/order/modify",
+            auth,
+            method="PUT",
+            payload=payload,
+            base_url=UPSTOX_HFT_BASE_URL,
+        )
 
         if response_data.get("status") == "success":
-            modified_id = response_data.get("data", {}).get("order_id")
+            modified_id = _extract_order_id(response_data.get("data"))
             logger.debug(f"Successfully modified order. New Order ID: {modified_id}")
             return {"status": "success", "orderid": modified_id}, 200
         else:

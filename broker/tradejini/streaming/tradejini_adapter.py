@@ -22,6 +22,10 @@ from .tradejini_mapping import TradejiniCapabilityRegistry, TradejiniExchangeMap
 class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Tradejini-specific implementation of the WebSocket adapter"""
 
+    # Seconds of quiet before a dirty feed is re-sent. See _request_feed_sync
+    # for why the sync is coalesced rather than sent per call.
+    FEED_FLUSH_DEBOUNCE = 0.25
+
     def __init__(self):
         super().__init__()
         self.logger = get_logger("tradejini_websocket")
@@ -40,6 +44,12 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # it asked for. The running attempt hands over to it on the way out.
         self._retry_pending = False
         self._pending_delay = 0.0
+        # Feed sync coalescing: {feed: cancel_when_empty} awaiting a send, woken
+        # by _feed_dirty and drained by a single worker.
+        self._dirty_feeds = {}
+        self._feed_dirty = threading.Event()
+        self._flush_thread = None
+        self._flush_stop = threading.Event()
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -230,6 +240,9 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from Tradejini WebSocket"""
         self.running = False
+        # Drop queued syncs before the client goes: a pending flush must not
+        # fire a subscribe at a socket we are tearing down.
+        self._stop_feed_flusher()
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.disconnect()
 
@@ -252,6 +265,94 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if token_str not in tokens:
                     tokens.append(token_str)
         return tokens
+
+    def _request_feed_sync(self, feed: str, cancel_when_empty: bool = True) -> None:
+        """
+        Mark a feed dirty; the flush worker sends its complete list.
+
+        A subscribe request REPLACES the server-side list for its feed (see the
+        note above _feed_tokens), and the proxy calls subscribe() once per
+        symbol - so syncing on every call is O(N^2) in tokens sent. 1000 symbols
+        cost 1000 requests carrying ~500k token entries between them, and the
+        teardown costs the same again. Coalescing collapses a burst into one
+        request per feed.
+
+        cancel_when_empty is OR-ed across requests: a reconnect replay passes
+        False because there is no server-side list to cancel, but if an ordinary
+        unsubscribe is also pending then the cancel is both wanted and safe.
+        """
+        with self.lock:
+            self._dirty_feeds[feed] = self._dirty_feeds.get(feed, False) or cancel_when_empty
+            if self._flush_thread is None or not self._flush_thread.is_alive():
+                # A fresh stop event per worker: clearing a shared one would
+                # resurrect a stopping predecessor instead of replacing it.
+                self._flush_stop = threading.Event()
+                self._flush_thread = threading.Thread(
+                    target=self._feed_flush_worker,
+                    args=(self._flush_stop,),
+                    daemon=True,
+                    name="tradejini-feed-flush",
+                )
+                self._flush_thread.start()
+        self._feed_dirty.set()
+
+    def _feed_flush_worker(self, stop_event: threading.Event) -> None:
+        """Collapse a burst of subscribe/unsubscribe calls into one send per feed.
+
+        Takes its own stop event so a restart cannot revive it.
+        """
+        while not stop_event.is_set():
+            if not self._feed_dirty.wait(timeout=1.0):
+                # Idle. Exit rather than spin here once a second for the life of
+                # the connection - but decide under the same lock
+                # _request_feed_sync holds when it adds work and checks our
+                # liveness, or a feed added in the instant between an unlocked
+                # test and our return is stranded: the requester would see this
+                # thread still alive and start no replacement.
+                with self.lock:
+                    if not self._dirty_feeds:
+                        self._flush_thread = None
+                        return
+                continue
+            if stop_event.is_set():
+                return
+
+            # Let the burst settle: each new request re-sets the flag, so keep
+            # waiting until it stops arriving.
+            while True:
+                self._feed_dirty.clear()
+                if not self._feed_dirty.wait(self.FEED_FLUSH_DEBOUNCE):
+                    break
+                if stop_event.is_set():
+                    return
+
+            # Decide on an EMPTY set under the same lock _request_feed_sync
+            # holds when it adds work and checks our liveness. Testing outside
+            # it is a lost-wakeup race: a request could add a feed and see this
+            # thread still alive, in the instant between our unlocked test and
+            # our return, stranding that feed until the next request.
+            with self.lock:
+                pending = self._dirty_feeds
+                self._dirty_feeds = {}
+                if not pending:
+                    self._flush_thread = None
+                    return
+
+            for feed, cancel_when_empty in pending.items():
+                try:
+                    self._sync_feed(feed, cancel_when_empty=cancel_when_empty)
+                except Exception as e:
+                    self.logger.error(f"Error syncing {feed} feed: {e}")
+
+        with self.lock:
+            self._flush_thread = None
+
+    def _stop_feed_flusher(self) -> None:
+        """Drop queued syncs and wake the worker so it can exit promptly."""
+        self._flush_stop.set()
+        with self.lock:
+            self._dirty_feeds = {}
+        self._feed_dirty.set()
 
     def _sync_feed(self, feed: str, cancel_when_empty: bool = True) -> None:
         """
@@ -358,21 +459,17 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "is_fallback": is_fallback,
             }
 
-        # Subscribe if connected. The request carries every symbol on the feed,
-        # not just this one, because it replaces the server-side list.
+        # Queue a feed sync if connected. The request carries every symbol on
+        # the feed, not just this one, because it replaces the server-side list
+        # - so it is coalesced rather than sent per call.
         if self.connected and self.ws_client:
-            try:
-                self.logger.info(
-                    f"Subscribing to {symbol} with token {token} on {brexchange} "
-                    f"(token_str: {token}_{brexchange})"
-                )
+            self.logger.info(
+                f"Subscribing to {symbol} with token {token} on {brexchange} "
+                f"(token_str: {token}_{brexchange})"
+            )
 
-                # LTP (1) and Quote (2) both ride the L1 feed; Depth (3) uses L5
-                self._sync_feed("L1" if mode in (1, 2) else "L5")
-
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            # LTP (1) and Quote (2) both ride the L1 feed; Depth (3) uses L5
+            self._request_feed_sync("L1" if mode in (1, 2) else "L5")
 
         # Return success with capability info
         return self._create_success_response(
@@ -423,12 +520,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # list in place, and unsubscribeL1()/unsubscribeL2() cancel the whole
         # feed - so _sync_feed() only falls back to those when nothing remains.
         if self.connected and self.ws_client:
-            try:
-                self._sync_feed("L1" if mode in (1, 2) else "L5")
-
-            except Exception as e:
-                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
-                return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
+            self._request_feed_sync("L1" if mode in (1, 2) else "L5")
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -445,11 +537,11 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Subscriptions do not survive a reconnect, so replay each feed's
             # complete symbol list - one request per feed, not one per symbol.
+            # Queued like any other sync, so a replay landing in the middle of a
+            # subscribe burst is folded into the same send instead of racing it.
+            self._flush_stop.clear()
             for feed in ("L1", "L5"):
-                try:
-                    self._sync_feed(feed, cancel_when_empty=False)
-                except Exception as e:
-                    self.logger.error(f"Error replaying {feed} subscriptions: {e}")
+                self._request_feed_sync(feed, cancel_when_empty=False)
 
         elif status == "error":
             self.logger.error(f"Tradejini WebSocket error: {message.get('reason')}")

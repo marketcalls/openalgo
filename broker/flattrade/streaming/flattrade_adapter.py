@@ -41,6 +41,15 @@ class Config:
     MAX_RECONNECT_ATTEMPTS = 10
     BASE_RECONNECT_DELAY = 5
     MAX_RECONNECT_DELAY = 60
+
+    # A session that survives this long counts as healthy: it clears the flap
+    # backoff below. Anything shorter is a flap - the socket authenticated and
+    # was then dropped, which for PiConnect means something else authenticated
+    # with the same uid/accesstoken and evicted us (issue #1965).
+    STABLE_SESSION_SECONDS = 60
+    # Consecutive flaps before the log stops reporting an ordinary reconnect and
+    # names the single-session constraint as the likely cause.
+    FLAP_ALERT_THRESHOLD = 3
     CACHE_COMPLETENESS_THRESHOLD = 0.3
     WEBSOCKET_TIMEOUT = 30
 
@@ -360,6 +369,19 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.auth_refresh_retries = 0
         self.max_auth_refresh_retries = 3
 
+        # Flap tracking. reconnect_attempts above is reset by every successful
+        # connect, so on its own it can never escalate the delay when the broker
+        # keeps evicting an authenticated session: each eviction re-armed a flat
+        # 5s retry and OpenAlgo hammered PiConnect indefinitely (issue #1965).
+        # _backoff_level is reset only by a session that actually stayed up for
+        # Config.STABLE_SESSION_SECONDS, so a flap escalates 5 -> 10 -> 20 ...
+        # while a genuine network blip after a healthy session still retries in
+        # 5s. It is deliberately NOT wired into MAX_RECONNECT_ATTEMPTS: a
+        # contended session must keep retrying (slowly), not give up for good.
+        self._session_started_at = None
+        self._short_session_count = 0
+        self._backoff_level = 0
+
         # Batch subscription management - coalesce rapid subscribe calls into a
         # single touchline/depth message to avoid hammering the WebSocket
         self.subscription_queue = []
@@ -445,9 +467,16 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.batch_timer = None
             self.subscription_queue.clear()
 
-            if self.ws_client:
-                self.ws_client.stop()
-                self.ws_client = None
+            ws_client = self.ws_client
+            self.ws_client = None
+
+        # stop() closes the socket and joins the websocket-client reader thread,
+        # and that thread runs our _on_close, which takes self.lock. Calling it
+        # while holding the lock deadlocks the two until stop()'s join expires,
+        # so every teardown paid THREAD_JOIN_TIMEOUT and logged "WebSocket thread
+        # did not terminate within timeout" (issue #1965).
+        if ws_client:
+            ws_client.stop()
 
         # Clean up market data cache (outside lock - has its own lock)
         self.market_cache.clear()
@@ -807,6 +836,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Handle WebSocket connection open"""
         self.logger.info("Connected to Flattrade WebSocket")
         self.connected = True
+        self._session_started_at = time.monotonic()
         self._resubscribe_all()
 
     def _on_error(self, ws, error):
@@ -828,6 +858,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.batch_timer.cancel()
                 self.batch_timer = None
             self.subscription_queue.clear()
+            self._record_session_end()
 
         if self.running:
             if self.ws_client and getattr(self.ws_client, "auth_failed", False):
@@ -884,6 +915,45 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self._schedule_reconnection()
 
+    def _record_session_end(self) -> None:
+        """Classify the session that just ended as healthy or a flap.
+
+        Caller must hold self.lock. Sets up the delay _schedule_reconnection()
+        will use: a session that lived at least Config.STABLE_SESSION_SECONDS
+        clears the flap backoff, a shorter one escalates it.
+        """
+        started_at = self._session_started_at
+        self._session_started_at = None
+        if started_at is None:
+            # The socket closed before the connect callback ran - nothing to
+            # judge, so leave the existing backoff untouched.
+            return
+
+        duration = time.monotonic() - started_at
+        if duration >= Config.STABLE_SESSION_SECONDS:
+            self._short_session_count = 0
+            self._backoff_level = 0
+            return
+
+        self._short_session_count += 1
+        self._backoff_level = min(self._backoff_level + 1, Config.MAX_RECONNECT_ATTEMPTS)
+
+        if self._short_session_count == Config.FLAP_ALERT_THRESHOLD:
+            self.logger.error(
+                f"Flattrade market-data session dropped {self._short_session_count} times in a "
+                f"row within {Config.STABLE_SESSION_SECONDS}s (last one lasted {duration:.1f}s). "
+                "PiConnect allows ONE WebSocket session per uid/accesstoken, so this almost "
+                "always means another client is authenticating with the same Flattrade "
+                "credentials - a second OpenAlgo instance, a leftover process, or a separate "
+                "app/script. Reconnect delay is being backed off; close the other session to "
+                "restore a stable feed."
+            )
+        elif self._short_session_count > Config.FLAP_ALERT_THRESHOLD:
+            self.logger.warning(
+                f"Flattrade market-data session dropped again after {duration:.1f}s "
+                f"(flap {self._short_session_count})"
+            )
+
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
         # Use lock to prevent race with disconnect()
@@ -898,8 +968,11 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.running = False
                 return
 
+            # Back off on whichever is worse: failed connect attempts, or
+            # sessions that connected and were evicted seconds later.
+            backoff_level = max(self.reconnect_attempts, self._backoff_level)
             delay = min(
-                Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts), Config.MAX_RECONNECT_DELAY
+                Config.BASE_RECONNECT_DELAY * (2**backoff_level), Config.MAX_RECONNECT_DELAY
             )
 
             self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
@@ -914,7 +987,14 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
-        """Attempt to reconnect to WebSocket"""
+        """Attempt to reconnect to WebSocket.
+
+        Only the bookkeeping runs under self.lock. Stopping the old client joins
+        the reader thread that runs our _on_close, and connecting the new one
+        makes that thread run our _on_open -> _resubscribe_all(); both take
+        self.lock, so doing either while holding it stalls the reconnect until a
+        join times out instead of proceeding (issue #1965).
+        """
         # Use lock to prevent race with disconnect()
         with self.lock:
             # Clear timer reference since we're now executing
@@ -927,48 +1007,60 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             self.reconnect_attempts += 1
 
+            # CRITICAL: Clean up old WebSocket client to prevent FD leaks. Detach
+            # it here so nothing else can reach a client that is about to close.
+            old_client = self.ws_client
+            self.ws_client = None
+
+        if old_client:
+            self.logger.debug("Cleaning up old WebSocket client before reconnection")
             try:
-                # CRITICAL: Clean up old WebSocket client to prevent FD leaks
-                if self.ws_client:
-                    self.logger.debug("Cleaning up old WebSocket client before reconnection")
-                    try:
-                        self.ws_client.stop()
-                    except Exception as cleanup_err:
-                        self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
-                    self.ws_client = None
+                old_client.stop()
+            except Exception as cleanup_err:
+                self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
 
-                # Re-read fresh auth token from database before reconnecting.
-                # Flattrade tokens roll over daily at ~3 AM IST; reusing the
-                # construction-time token would reconnect with a dead token.
-                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
-                if fresh_token:
-                    self.accesstoken = fresh_token
-                else:
-                    self.logger.warning(
-                        "Could not fetch fresh auth token on reconnect; using existing token"
-                    )
-
-                # Recreate WebSocket client
-                self.ws_client = FlattradeWebSocket(
-                    user_id=self.actid,
-                    actid=self.actid,
-                    accesstoken=self.accesstoken,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open,
+        try:
+            # Re-read fresh auth token from database before reconnecting.
+            # Flattrade tokens roll over daily at ~3 AM IST; reusing the
+            # construction-time token would reconnect with a dead token.
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if fresh_token:
+                self.accesstoken = fresh_token
+            else:
+                self.logger.warning(
+                    "Could not fetch fresh auth token on reconnect; using existing token"
                 )
 
-                if self.ws_client.connect():
-                    self.connected = True
-                    self.reconnect_attempts = 0
-                    self.auth_refresh_retries = 0
-                    self.logger.info("Reconnected successfully")
-                else:
-                    self.logger.error("Reconnection failed")
+            # Recreate WebSocket client
+            ws_client = FlattradeWebSocket(
+                user_id=self.actid,
+                actid=self.actid,
+                accesstoken=self.accesstoken,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open,
+            )
 
-            except Exception as e:
-                self.logger.error(f"Reconnection error: {e}")
+            with self.lock:
+                # disconnect() may have run while the old client was closing.
+                if not self.running:
+                    self.logger.debug("Reconnection cancelled - adapter no longer running")
+                    return
+                # Publish before connecting: _on_open fires on the reader thread
+                # and _resubscribe_all() sends through self.ws_client.
+                self.ws_client = ws_client
+
+            if ws_client.connect():
+                self.connected = True
+                self.reconnect_attempts = 0
+                self.auth_refresh_retries = 0
+                self.logger.info("Reconnected successfully")
+            else:
+                self.logger.error("Reconnection failed")
+
+        except Exception as e:
+            self.logger.error(f"Reconnection error: {e}")
 
     def _resubscribe_all(self):
         """Resubscribe to all active subscriptions after reconnect"""

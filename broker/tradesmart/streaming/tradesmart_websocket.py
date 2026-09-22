@@ -11,6 +11,7 @@ import json
 import socket
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -54,9 +55,29 @@ class TradeSmartWebSocket:
     PING_TIMEOUT = 10
     HEARTBEAT_JOIN_TIMEOUT = 3
 
+    # Market-data silence watchdog (issue #2075, same defect as Flattrade,
+    # Shoonya and Zebu). A Noren session that keeps answering heartbeats while
+    # delivering no ticks is indistinguishable from a healthy one on
+    # _last_message_time alone, because every inbound frame stamps it -
+    # heartbeat acks included. Tick flow therefore gets its own clock, and the
+    # watchdog only arms once data has been arriving over time: frames in
+    # DATA_ARM_BUCKETS distinct buckets of DATA_ARM_BUCKET seconds, all within
+    # DATA_ARM_WINDOW. See _update_last_data_time for why spread matters and a
+    # frame count does not.
+    DATA_SILENCE_TIMEOUT = 180
+    DATA_ARM_BUCKET = 30
+    DATA_ARM_BUCKETS = 3
+    DATA_ARM_WINDOW = 300
+
     # Message types
     MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
+    # The doc's heartbeat ack is "hk"; "h" is kept because some Noren
+    # deployments echo the request type back instead. Only "h" was matched
+    # before, so an "hk" ack fell through to the market-data path - harmless
+    # while nothing read it, but it would have counted as a tick and defeated
+    # the silence watchdog below.
+    MSG_TYPE_HEARTBEAT_ACK = "hk"
     MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
@@ -92,6 +113,13 @@ class TradeSmartWebSocket:
         self._heartbeat_thread = None
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
+
+        # Market-data liveness, kept apart from _last_message_time above so a
+        # socket that only answers heartbeats cannot pass for a live feed.
+        # Per connection: _reset_data_liveness() clears all three on open.
+        self._last_data_message_time = None
+        self._data_watchdog_armed = False
+        self._data_bucket_starts = deque(maxlen=self.DATA_ARM_BUCKETS)
         # Signals every internal wait to return at once on shutdown. A bare
         # time.sleep(HEARTBEAT_INTERVAL) cannot be interrupted, so stop() used
         # to block for HEARTBEAT_JOIN_TIMEOUT and then warn -- see
@@ -208,6 +236,7 @@ class TradeSmartWebSocket:
     def _on_open(self, ws) -> None:
         self.connected = True
         self._update_last_message_time()
+        self._reset_data_liveness()
         self.logger.info("WebSocket opened, sending authentication")
         if self._send_authentication():
             self._start_heartbeat()
@@ -233,6 +262,10 @@ class TradeSmartWebSocket:
         self._update_last_message_time()
         if self._handle_internal_message(message):
             return
+        # Everything that is not an auth ack or a heartbeat ack is a market
+        # data frame (tk/tf/dk/df), so this is the point where the feed - as
+        # opposed to the socket - proves it is alive. Issue #2075.
+        self._update_last_data_time()
         self._call_external_callback(self.on_message, ws, message)
 
     def _handle_internal_message(self, message: str) -> bool:
@@ -241,7 +274,7 @@ class TradeSmartWebSocket:
             msg_type = data.get("t")
             if msg_type == self.MSG_TYPE_AUTH_ACK:
                 return self._handle_auth_response(data)
-            elif msg_type == self.MSG_TYPE_HEARTBEAT:
+            elif msg_type in (self.MSG_TYPE_HEARTBEAT_ACK, self.MSG_TYPE_HEARTBEAT):
                 self.logger.debug("Received heartbeat response")
                 return True
         except (json.JSONDecodeError, KeyError):
@@ -279,6 +312,55 @@ class TradeSmartWebSocket:
                 callback(*args)
             except Exception as e:
                 self.logger.error(f"Error in external callback: {e}")
+
+    def _update_last_data_time(self) -> None:
+        """Record a market-data frame and arm the data-silence watchdog.
+
+        Arming asks that data arrived *spread over time*, not that a lot of it
+        arrived. Noren answers every subscribe with a snapshot frame, so a
+        session opened overnight receives one frame per subscribed scrip
+        within a second of connecting - fifty symbols is fifty frames. Any
+        rule counting frames would arm on that burst and then recycle the
+        socket every DATA_SILENCE_TIMEOUT until the market opened.
+
+        Bucketing is what separates the two. A burst lands in one bucket (two
+        if it straddles a boundary), while a live feed keeps producing frames
+        bucket after bucket. Requiring DATA_ARM_BUCKETS distinct buckets means
+        at least a couple of DATA_ARM_BUCKET-second spans of real flow before
+        the watchdog can fire, and DATA_ARM_WINDOW stops stray after-hours
+        ticks hours apart from accumulating into a false arm.
+
+        Arming lasts only for this connection, so a market that closes while
+        the watchdog is armed costs one recycle and the replacement then sits
+        quiet.
+        """
+        now = time.time()
+        newly_armed = False
+
+        with self._heartbeat_lock:
+            self._last_data_message_time = now
+
+            if not self._data_watchdog_armed:
+                bucket_start = now - (now % self.DATA_ARM_BUCKET)
+                if not self._data_bucket_starts or self._data_bucket_starts[-1] != bucket_start:
+                    self._data_bucket_starts.append(bucket_start)
+
+                if (
+                    len(self._data_bucket_starts) == self._data_bucket_starts.maxlen
+                    and now - self._data_bucket_starts[0] <= self.DATA_ARM_WINDOW
+                ):
+                    self._data_watchdog_armed = True
+                    newly_armed = True
+
+        if newly_armed:
+            self.logger.info("Market data is flowing; watching for tick silence from here on")
+
+    def _reset_data_liveness(self) -> None:
+        """Clear the per-connection market-data liveness state."""
+        with self._heartbeat_lock:
+            self._last_data_message_time = None
+            self._data_watchdog_armed = False
+            self._data_bucket_starts.clear()
 
     def _update_last_message_time(self) -> None:
         with self._heartbeat_lock:
@@ -335,13 +417,48 @@ class TradeSmartWebSocket:
             return False
 
     def _check_connection_health(self) -> bool:
+        """Recycle the socket when the session has stopped being useful.
+
+        Two independent timeouts, because a Noren session fails in two ways:
+
+        * HEARTBEAT_TIMEOUT catches a socket that has gone quiet altogether.
+        * DATA_SILENCE_TIMEOUT catches one that still answers heartbeats while
+          delivering no market data. That case used to be invisible here - the
+          heartbeat ack itself refreshed _last_message_time - so the feed could
+          stay dead for the rest of the session with the app still reporting a
+          healthy connection, and nothing downstream that runs on ticks (stop
+          losses, sandbox order triggers, Flow conditions) would fire. Checked
+          only once the watchdog is armed; see _update_last_data_time.
+          Issue #2075.
+
+        Returns:
+            bool: True if connection is healthy, False if it was recycled
+        """
+        now = time.time()
+        reason = None
+
         with self._heartbeat_lock:
-            if self._last_message_time:
-                if time.time() - self._last_message_time > self.HEARTBEAT_TIMEOUT:
-                    self.logger.error("Connection timeout - no messages received")
-                    self._close_websocket()
-                    return False
-        return True
+            if self._last_message_time and now - self._last_message_time > self.HEARTBEAT_TIMEOUT:
+                reason = "no messages received"
+            elif (
+                self._data_watchdog_armed
+                and self._last_data_message_time
+                and now - self._last_data_message_time > self.DATA_SILENCE_TIMEOUT
+            ):
+                silent_for = now - self._last_data_message_time
+                reason = (
+                    f"no market data for {silent_for:.0f}s while the session kept "
+                    "answering heartbeats"
+                )
+
+        if reason is None:
+            return True
+
+        # Closed outside the lock: the reader thread runs _on_close, which can
+        # route back through _stop_heartbeat on this very thread.
+        self.logger.error(f"Connection timeout - {reason}")
+        self._close_websocket()
+        return False
 
     def subscribe_touchline(self, scrip_list: str) -> bool:
         return self._send_subscription_message(
