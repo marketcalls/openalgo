@@ -143,7 +143,7 @@ def test_thread_budget_has_no_pool_outside_gthread(monkeypatch):
     assert budget["streams"] == 0
 
 
-def test_thread_budget_under_gthread_counts_streams_and_warns_once(monkeypatch, caplog):
+def test_thread_budget_under_gthread_counts_streams_and_warns_once(monkeypatch):
     monkeypatch.setattr(runtime, "configured_threads", lambda: 10)
     monkeypatch.setattr(stream_registry, "socketio_connection_count", lambda: 1)
     tickets = [stream_registry.admit("sse") for _ in range(4)]
