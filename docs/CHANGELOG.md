@@ -8,29 +8,181 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
-- Run OpenScript strategies on engine 0.5.0. The compiler in the browser had been at 0.5.0 while the engine that runs the result was pinned to 0.4.0, because 0.4.0 was the only release on the index. Nothing was broken by that: the two agreed on the compiled program format, which is what actually has to match and is 1.1 in both. What was wrong was the note beside the pin claiming the halves were one release while they were not, and they now are. Both strategies on this install load unchanged in the new engine.
+## [2.0.2.6] - 2026-09-23
 
-- Upgrade `/trading` to the published openalgo-charts 2.4.5 package, with 105 built-in studies, open interest readouts and chart alerts. Open interest is a level: aggregation keeps the last reading rather than summing values. Missing live readings remain absent.
-- Add saved chart workspaces, study templates, comparison symbols with price or percentage scales, and CSV downloads of the displayed bars, studies and comparisons.
-- Share one toolbar across the selected chart and one replay transport across the workspace. Replay can follow the selected chart or all charts on a shared clock; order actions and workspace autosave pause until replay ends.
-- Preserve drawings, study settings, comparison scale preferences and alert lifecycle state when restoring a workspace. Alerts default to completed-bar evaluation and do not fire from restored history; delivery remains the host's responsibility.
-- Move the alert list out of its modal and onto the right rail, with a Log tab of what has fired.
-- Make an alert by right-clicking the chart at the price to be watched: it is created there and then, with no form, armed to fire once on a confirmed bar. The toolbar's Alerts button opens the form for one that needs a condition, a trigger or an expiry the defaults do not give it. Both seed from the same place, so the gesture produces exactly the alert the form would have proposed.
-- Move the alert list out of its modal and onto the right rail, with a Log tab of what has fired this session.
-- Make an alert by right-clicking the chart at the price to be watched: it is created there and then, with no form, armed to fire once. The toolbar's Alerts button opens the form for one that needs a condition, a trigger or an expiry the defaults do not give it. Both seed from the same place, so the gesture produces exactly the alert the form would have proposed.
-- Choose per alert how to be told when it fires: a sound and a desktop notification, both on by default and neither leaving the machine, and Telegram or WhatsApp through the services order notifications already use, both off unless asked for. A channel that refuses names itself and the others still go.
-- A chart with an armed alert keeps fetching while its tab is hidden. A chart with nothing armed still stops, which is the saving a background tab is for.
-- Fill values into an alert's message from the bar that fired it: `{{ticker}}`, `{{price}}`, `{{close}}`, `{{interval}}` and seven more. A placeholder spelled wrong is left as typed rather than blanked.
-- Upgrade `/trading` to openalgo-charts 2.4.8: press and hold the plot to pan, on both axes. The chart no longer pins mouse panning to the time axis, so dragging moves through price as well, and the choice is the trader's under Mouse drag in the Axes tab.
-- Find an instrument whose name contains an operator character. The symbol search split its box on `-` to look up the second leg of an expression, so `BAJAJ-AUTO` searched for `AUTO` and typing the hyphen emptied the list. Both the whole box and the leg are searched now.
-- Round a dragged alert to the instrument's tick, and rename it after the price its line landed on when the name was one we wrote. An alert dropped where the axis read 1,260.55 used to store 1260.5486842105263.
-- Say "on" rather than "armed" on the One-Click toggle and the alert form.
-- Upgrade `/trading` to openalgo-charts 2.5.0. An alert set on one timeframe is now visible on the others for the same instrument, labelled with the interval it was made on, and evaluated only there; the rail says why a visible alert is not watching rather than leaving it reading Active on a chart where nothing will fire. A dragged alert snaps to the source scale's own tick, including a left or independent scale. Chart tables measure each column from its widest cell, and every cell clips its text, so a long reading no longer covers the column beside it.
-- Point at a drawing or an alert and press Delete or Backspace to remove it. The key removes one thing in a fixed order: a placement in progress is cancelled, then selected drawings, then the drawing under the pointer, and an alert last, because an alert's line spans the pane and would otherwise be deleted while you meant to delete a shape. A field or a dialog always keeps the key.
-- Keep the alert log after the tab is closed. A firing is written to the database as it happens and read back when `/trading` next opens, so a browser closed at four o'clock no longer takes the afternoon's firings with it and an alert that fired on an unwatched screen still leaves a row. Each row names the channels that accepted the message, so a firing that reached nobody reads differently from one that never happened. Firings are kept for 90 days and Clear empties the log. Alerts are still evaluated by the chart that is open: this stores what happened, it does not make anything fire. **Requires a database migration.**
-- Upgrade `/trading` to openalgo-charts 2.5.1 and stop drawing the line of an alert that has fired or expired. The row, the state and the record all stay: a once-only alert that has fired is still fired after a reload, so it cannot fire again on a price it already reported. Only the line goes, because a level nothing is watching is a level in the way. Deleting such an alert was never the answer, since this terminal restores an alert's definition and its runtime from separate places and a removed record comes back armed.
-- Fire a new alert the moment its price is reached, rather than when the candle closes. A level touched at 13:15 on an hourly chart was reported at 14:15, and on a daily chart the next session, which reads as an alert that does not work. Bar close remains a field on the form for a level that only counts if it held, and an alert that already exists keeps the setting it was made with.
-- Chart an instrument whose name contains a hyphen. `BAJAJ-AUTO` reads as a subtraction to the chart's grammar, so the chart asked the history API for `BAJAJ` and for `AUTO` and was told, correctly, that neither exists. An exchange now settles what the name cannot: a computed chart carries none and one instrument always does, so a named instrument is never taken apart. In the symbol box the same question is settled by whether an instrument of that name exists, so a box naming one is never treated as arithmetic and never has a symbol appended to it, and an exact match now outranks an index that merely contains the word. A hyphenated symbol put into a real expression is quoted, the chart grammar's own escape, so `'NSE:BAJAJ-AUTO'/NIFTY` resolves as written.
+### OpenScript and Chart Alerts Release
+
+48 commits since 2.0.2.5, excluding automated frontend build commits. Full
+notes: [version-2.0.2.6-released.md](releases/version-2.0.2.6-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling.
+
+**Zerodha MCX quantity is now in units.** A script sending MCX orders through
+`/api/v1/` on Zerodha must send 100 for one lot of CRUDEOIL, not 1, as on every
+other broker. Re-download the master contract after upgrading (#1998).
+
+### Highlights
+
+- OpenScript arrives on `/trading`: a language for studies and strategies,
+  written in a panel on the chart, compiled on every save, backtested in the
+  browser beside the editor, and run on the server as one deployment per
+  instrument and interval, with Pause, Stop and restart. A script can only name
+  what the language gives it, so it has no way to make a network call or reach
+  into the page.
+- Chart alerts reach somebody who is not looking at the chart: a sound, a
+  desktop notification, Telegram or WhatsApp chosen per alert, a log that
+  survives the tab being closed, and firing when the price is reached rather
+  than when the candle closes.
+- The charting terminal moves from openalgo-charts 2.2.0 to 2.5.1, with chart
+  arithmetic over instruments, saved workspaces, comparisons, replay and open
+  interest studies.
+- An unconfigured freeze quantity no longer refuses every scalping order on
+  MCX, BFO and CDS, and five Noren-based feeds that could go silent while still
+  answering heartbeats now reconnect.
+
+### Added
+
+- Scripts panel on the `/trading` right rail for writing OpenScript studies and
+  strategies. Every save compiles and shows the diagnostic's code, line and fix
+  against the line. Scripts live in `strategies/openscript/`, gitignored and
+  inside the Docker volume, and are served as plain text, never as JavaScript.
+  A study written here has its own section in the indicator picker, and its
+  legend row opens its source.
+- Backtest a strategy from the right rail, in the browser, on the chart's own
+  instrument and interval, with equity and drawdown on one time axis.
+- Run a compiled strategy on the server. Orders go through the platform's own
+  order path, so the platform-wide analyzer setting decides where they go; a
+  run whose destination changes while it holds a position stops and names what
+  is open.
+- Deploy one strategy on many instruments. Pause ends the process and leaves the
+  position; Stop closes what the run holds and then ends it. A strategy left
+  running comes back after a restart.
+- Choose per alert how to be told: a sound and a desktop notification, both on
+  by default and neither leaving the machine, and Telegram or WhatsApp, both off
+  unless asked for. A channel that refuses names itself and the others still go.
+- Fill values into an alert's message from the bar that fired it: `{{ticker}}`,
+  `{{price}}`, `{{close}}`, `{{interval}}` and seven more. A placeholder spelled
+  wrong is left as typed rather than blanked.
+- Keep the alert log after the tab is closed. Each row names the channels that
+  accepted the message; firings are kept for 90 days and Clear empties the log.
+  Alerts are still evaluated by the chart that is open.
+- Make an alert by right-clicking the chart at the price to watch: it is created
+  there and then, once-only, on the instrument's tick. The toolbar's Alerts
+  button opens the form for one that needs a condition, a trigger or an expiry.
+- Chart arithmetic from the symbol search: `NIFTY/RELIANCE`,
+  `2*CE25000 - CE25200` or a straddle as one live series. A computed chart is
+  never tradeable.
+- Saved chart workspaces, study templates, comparison symbols on price or
+  percentage scales, replay across one chart or all of them, CSV export of the
+  displayed bars and studies, and open interest studies (#2077).
+- Delete or Backspace removes the drawing or alert under the pointer, taking an
+  alert last because its line spans the pane.
+- `average_price_basis` on a Kotak carried-forward position whose average is
+  the overnight valuation rather than an entry price (#2061).
+- A broker QA audit suite of 364 checks, run in sandbox and live modes (#2074,
+  #2089).
+- An `openscript` Claude Code skill that installs a script only after the
+  pinned compiler accepts it, with three CI gates keeping it in step.
+- `upgrade/migrate_alert_log.py`, idempotent and supporting `--status`.
+
+### Changed
+
+- Zerodha MCX quantity is counted in units, like every other broker, and the
+  adapter converts to Kite's contracts at every boundary. A quantity that is not
+  a whole number of contracts is refused rather than rounded (#1998).
+- A new alert fires when the price is reached rather than at bar close. Bar
+  close is still a field on the form, and an existing alert keeps its setting.
+- A fired or expired alert's line is no longer drawn. Its row, state and record
+  stay, so a once-only alert cannot fire again after a reload.
+- An alert set on one timeframe is visible on the others for the same
+  instrument, labelled with its interval and evaluated only there.
+- The alert list moved from its modal to the right rail, with a Log tab.
+- Dragging the chart pans through price as well as time; the choice is under
+  Mouse drag in the Axes tab.
+- Alert channels send at the same time rather than one after another.
+- `/api/v1/whatsapp/notify` answers `"status": "error"` when a send reached
+  nobody. The HTTP code is still 200.
+- Historify and Strategy Builder charts are drawn with the OpenAlgo chart
+  engine, with indicators, drawings and scroll-back history.
+- Kotak history requests are paced at the measured 1 per second.
+- OpenScript strategies run on engine 0.5.0, matching the browser compiler.
+- Trader-facing wording follows the platform's vocabulary: the One-Click toggle
+  says ON, an alert is Active, the trailing-stop readout on `/strategy` says
+  trailing or pending. The vocabulary rules are written down in `CLAUDE.md`.
+
+### Fixed
+
+- An unconfigured freeze quantity returned a limit of 1, so the scalping
+  terminal refused every order on MCX, BFO and CDS on every broker (#1998).
+- The strategy wizard's underlying picker listed company names on cash and
+  index exchanges, which resolved to nothing at run start (#1998).
+- Zerodha close-all reported success when an exit was refused; it now names the
+  symbols still held (#1998).
+- Zerodha quotes left out best bid and ask size, so the option chain showed 0
+  on every leg (#2045).
+- Kotak valued a carried-forward position at the overnight settlement price
+  rather than its cost where Kotak sends one (#2061).
+- Kotak intraday charts failed with "History contains an invalid candle", and a
+  lookback at the five-year horizon failed the whole pull (#2062, #2094).
+- Flattrade, Shoonya, Zebu, Tradesmart and Definedge feeds could stay silently
+  dead for a session while still answering heartbeats. Market data now has its
+  own liveness clock (#2075, #2089, #2094).
+- Delta Exchange read history dates as UTC and padded the future with flat
+  synthetic bars (#2074).
+- A deployment made where another was removed inherited its orders, fills and
+  position (#2106).
+- Every deployment showed the account's P&L as its own, and switching between
+  live and analyzer mode silently stopped every idle strategy (#2103).
+- A saved script did not appear in the indicator list until the page was
+  reloaded.
+- `BAJAJ-AUTO` and other hyphenated symbols could not be searched, picked or
+  charted (#2091).
+- A candle vanished for a few seconds after it closed.
+- A dragged alert was stored at the pointer's raw price and kept a name quoting
+  where it used to be.
+- The paired WhatsApp owner was told their own username was not linked, and a
+  send that reached nobody reported success.
+- A chart alert refused by a channel showed a hardcoded guess instead of the
+  server's reason.
+- A position already squared off showed a Close button (#2064).
+- A spoken approval window stayed open after its run was decided, cancelled or
+  abandoned.
+- `update.bat` misparsed on unescaped parentheses (#2080), and on Windows 11
+  without WMIC reported a backup it had not made; `docker-run.bat` sized the
+  container at its lowest tier.
+- Historify charts crashed on monthly, quarterly and yearly intervals and opened
+  empty on a store whose newest candle was days old.
+
+### Dependencies
+
+- `openalgo-charts` 2.2.0 to 2.5.1.
+- `openalgo-script` 0.5.0 (npm, the OpenScript compiler), new.
+- `openscript` 0.5.0 (PyPI, the OpenScript engine), new. Not yet in
+  `requirements-nginx.txt`: on an Ubuntu server install it by hand after
+  `update.sh`, as the release notes describe.
+- The pinned `openalgo` SDK is unchanged at 2.0.5.
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - OpenScript on `/trading` end to end: the
+  Scripts panel, the backtest panel, the server-side runner, deployments and
+  deployment identity, engine 0.5.0 and the `openscript` skill; chart alerts:
+  the stored log and its migration, per-alert channels, right-click creation,
+  firing at the price and the fired-line option; openalgo-charts 2.2.1 through
+  2.5.1; chart arithmetic, the chart workspace (#2077) and hyphenated symbols;
+  Historify, Strategy Builder and agent charts on the OpenAlgo engine; Zerodha
+  bid and ask size (#2045); Kotak carried-forward valuation (#2061); the
+  WhatsApp notify fixes; the spoken approval window; the installer fixes; the
+  wording sweep.
+- **@Kalaiviswa** - Zerodha MCX quantity in units, with the freeze quantity and
+  underlying picker fixes (#1998); Kotak history repair and pacing (#2094,
+  #2062); the heartbeat-without-ticks watchdog for Flattrade (#2089, #2075),
+  Shoonya, Zebu, Tradesmart and Definedge (#2094); Delta Exchange IST history
+  (#2074); the broker QA audit suite (#2074, #2089).
+- **@anishkun (Anish kunda)** - no Close button on a position already squared
+  off (#2064).
+- **@nimchand87** - escaped parentheses in `update.bat` (#2080).
 
 ## [2.0.2.5] - 2026-09-14
 
