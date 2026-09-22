@@ -207,7 +207,7 @@ Called bare. Most of the library, including every average, oscillator, band and 
 
 ## `bar.`
 
-This bar and its neighbours. `bar.close` is the one nearly every script starts from.
+Where this bar sits in the run, and what kind of bar it is. **Not the prices**: `open`, `high`, `low`, `close` and `volume` are bare names, and this namespace has no spelling of them.
 
 8 names.
 

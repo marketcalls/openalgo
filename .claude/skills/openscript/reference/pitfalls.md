@@ -190,10 +190,15 @@ avg = sma(close, 20)      // OS2002: avg is already declared at line built-in
 trendLine = sma(close, 20)
 ```
 
-350 names are taken, and the short obvious ones are the taken ones: `avg`,
-`log`, `max`, `min`, `cross`, `band`. The message names the collision, and the
-second error that usually follows it (`OS2014`) is the shadowed name being used
-where a value was expected.
+350 names are taken, and the short obvious ones are the taken ones. `avg`,
+`log`, `max`, `min`, `cross`, `sum`, `median`, `change`, `signal`, `size`,
+`count` and `level` are all library names, and every one of those is a word
+somebody reaches for when naming a variable. The message names the collision,
+and the second error that usually follows it (`OS2014`) is the shadowed name
+being used where a value was expected.
+
+`range`, `trend`, `mid`, `upper`, `lower`, `width`, `spread`, `slope`, `gap`
+and `body` are free, if a name that reads like the thing is wanted.
 
 ### `OS7016`: a `close` tag must name a tag an order was placed with
 
@@ -241,7 +246,7 @@ guessable from the call:
 plot(close, "c", aqua, width = n)        // fine: one input, carried as a reference
 plot(close, "c", aqua, width = n + 1)    // OS6018
 plot(close, "c", close > open ? lime : red)   // fine: colour varies per bar
-fill(u, l, blue, opacity = show ? 30 : 0)     // OS6018
+fill(u, l, blue, opacity = show ? 0.3 : 0)    // OS6018
 ```
 
 A **colour** may vary bar by bar, which is how a line is coloured by condition.

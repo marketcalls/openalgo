@@ -84,7 +84,7 @@ for (const name of described) {
 
 const NAMESPACE_NOTE = {
   '': 'Called bare. Most of the library, including every average, oscillator, band and comparison.',
-  bar: 'This bar and its neighbours. `bar.close` is the one nearly every script starts from.',
+  bar: 'Where this bar sits in the run, and what kind of bar it is. **Not the prices**: `open`, `high`, `low`, `close` and `volume` are bare names, and this namespace has no spelling of them.',
   chart: 'What the chart this is running on is showing.',
   session: 'Where this bar sits in the trading day.',
   date: 'Calendar facts about the bar, in the instrument\'s own zone.',

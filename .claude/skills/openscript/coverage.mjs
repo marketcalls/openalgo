@@ -130,6 +130,43 @@ if (invented.length > 0) {
   for (const one of invented.slice(0, 20)) say(`  not in the compiler: ${one}`)
 }
 
+// The prose, not just the tables, for the namespaced names.
+//
+// A table row is checked above; a sentence was not, and a sentence is where the
+// teaching is. `band` reached the pitfalls page in a list of names said to be
+// taken by the library. It is not a library name, and nothing here noticed,
+// because it was in prose.
+//
+// Only DOTTED names are checked, because they are the unambiguous ones: a
+// backticked `pos.equity` in these pages is always a library reference, while a
+// bare backticked word may be a keyword, an argument, a file or an ordinary
+// noun. That leaves the bare names unchecked, which is honest rather than
+// complete: the namespaced surface is where a plausible wrong name does the
+// most damage, since `pos.` and `order.` are exactly where a script reaches for
+// something the version does not have.
+
+// Scoped to the compiler's own namespaces, read from it rather than listed
+// here. `openalgo.ta` is a Python module named in the sentence that says which
+// of the three skills this is, and it is not a library reference; `pos.equity`
+// is. The namespace list is what tells them apart, and it cannot go stale.
+const NAMESPACES = new Set(engine.NAMESPACES)
+const dotted = new Map()
+for (const page of [...pages, { name: 'SKILL.md', text: skillText }]) {
+  for (const hit of page.text.matchAll(/`([a-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*)`/g)) {
+    const name = hit[1]
+    if (!NAMESPACES.has(name.slice(0, name.indexOf('.')))) continue
+    if (!dotted.has(name)) dotted.set(name, page.name)
+  }
+}
+const proseInvented = [...dotted].filter(([name]) => !known.has(name))
+say(
+  `              ${dotted.size - proseInvented.length}/${dotted.size} namespaced names in prose are real`
+)
+if (proseInvented.length > 0) {
+  failures += proseInvented.length
+  for (const [name, page] of proseInvented.slice(0, 20)) say(`  not in the compiler: ${page}: ${name}`)
+}
+
 // ---------------------------------------------------------------------------
 // 3. PLANNED MARKED: the page marks exactly the names the compiler refuses
 // ---------------------------------------------------------------------------
