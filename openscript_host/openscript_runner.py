@@ -471,7 +471,7 @@ class Session:
         served = engine.Serving(self.ledger)
         loaded = engine.load_text(
             text,
-            {},
+            self._settings(),
             served,
             capabilities=engine.capabilities(ORDERS_TAG) if self.trading else engine.capabilities(),
             read_time=engine.utc_time,
@@ -569,6 +569,46 @@ class Session:
             if data.get("lotsize") is not None:
                 record["lotSize"] = float(data["lotsize"])
         return record
+
+    def _settings(self) -> dict:
+        """The script's own parameters, as the trader saved them.
+
+        **Read from the environment, because the command line carries only what
+        a pattern can check.** An instrument, an exchange and an interval are
+        short strings from a fixed alphabet and are checked against one before
+        they ever reach a command. A parameter is a key the script chose and a
+        value the trader typed, and the parent already uses the environment for
+        what does not belong in a process list.
+
+        **A map that cannot be read is an empty one, and says so in the log.**
+        The alternative is a run that will not start over its settings, and the
+        run is what somebody is watching for. Every value here is still held to
+        the script's own declaration by the engine a moment later: the bounds, the
+        choices and the type are the script's, and a value that fails one refuses
+        the load with a sentence naming the parameter. So this is not the check
+        that makes a setting correct, only the one that turns text into values.
+        """
+        raw = os.getenv("OPENSCRIPT_INPUTS") or ""
+        if not raw.strip():
+            return {}
+        try:
+            given = json.loads(raw)
+        except ValueError:
+            say(
+                "The parameters saved for this strategy could not be read, so it is running on "
+                "the values written in the script."
+            )
+            return {}
+        if not isinstance(given, dict):
+            say(
+                "The parameters saved for this strategy are not a set of named values, so it is "
+                "running on the values written in the script."
+            )
+            return {}
+        named = {key: value for key, value in given.items() if isinstance(key, str)}
+        if named:
+            say(f"Running with {', '.join(sorted(named))} set from the saved parameters.")
+        return named
 
     def _check_readable(self, raw: dict) -> None:
         """Refuse a program this runner would answer under the wrong calendar.

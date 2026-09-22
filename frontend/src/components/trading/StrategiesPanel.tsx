@@ -36,10 +36,17 @@ import {
   startStrategy,
   stopStrategy,
 } from '@/api/openscriptRunner'
-import { kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
+import { compileSource, kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
+import {
+  type InputDeclaration,
+  inputsOf,
+  settingsFromForm,
+} from '@/lib/trading/backtestInputs'
+import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
 import { useThemeStore } from '@/stores/themeStore'
 import { cn } from '@/lib/utils'
 import { StrategyBooks } from './StrategyBooks'
+import { StrategyInputs } from './StrategyInputs'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
 interface Props {
@@ -79,6 +86,18 @@ export function StrategiesPanel({ getChartContext }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<RunSettings | null>(null)
+  /**
+   * What the script being edited declares, and what the trader has typed.
+   *
+   * Read by compiling the script when the editor opens, because the
+   * declarations are the script's own and nothing else on the server knows
+   * them. `typed` holds text rather than values: a form field holds text
+   * whatever it declares, and turning it into a value is the one job
+   * `settingsFromForm` has.
+   */
+  const [declarations, setDeclarations] = useState<InputDeclaration[]>([])
+  const [typed, setTyped] = useState<Record<string, string>>({})
+  const [sizeNote, setSizeNote] = useState('')
   const [unreachable, setUnreachable] = useState(false)
   /** Which strategy's books are open. One at a time: a panel of open tables is unreadable. */
   const [opened, setOpened] = useState<string | null>(null)
@@ -165,6 +184,37 @@ export function StrategiesPanel({ getChartContext }: Props) {
           product: 'MIS',
         }
       )
+
+      // The boxes start from what is saved, so opening the editor shows what
+      // this strategy will actually run on rather than an empty form beside a
+      // strategy that is already tuned. Text, because that is what a field
+      // holds; the values go back through the same reader either panel uses.
+      setTyped(
+        Object.fromEntries(
+          Object.entries(held?.inputs ?? {}).map(([key, value]) => [key, String(value)])
+        )
+      )
+
+      // Compiled here because the declarations are the script's own and the
+      // server stores only the values. A script that will not compile has no
+      // declarations to show, which is the honest answer: there is nothing to
+      // set until it does, and the editor where it is fixed says why.
+      setDeclarations([])
+      setSizeNote('')
+      void (async () => {
+        try {
+          const source = await readScript(file)
+          const built = await compileSource(file, source)
+          if (!built.ok || built.program === undefined) return
+          const program = JSON.parse(built.program)
+          setDeclarations(inputsOf(program))
+          setSizeNote(quantityNote(quantityOf(program)))
+        } catch {
+          // Left empty. A strategy whose parameters could not be read is still
+          // one a trader may want to point at an instrument and start, and
+          // taking the whole editor down over the parameters would stop that.
+        }
+      })()
     },
     [getChartContext, settings]
   )
@@ -297,13 +347,32 @@ export function StrategiesPanel({ getChartContext }: Props) {
                       ))}
                     </select>
                   </div>
+
+                  <StrategyInputs
+                    declarations={declarations}
+                    edited={typed}
+                    onChange={(key, value) => setTyped((held) => ({ ...held, [key]: value }))}
+                    note="A box left empty uses the script's own default. A running strategy reads these when it starts, so stop it and start it again to apply a change."
+                  />
+
+                  {sizeNote && (
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">{sizeNote}</p>
+                  )}
+
                   <div className="flex gap-1.5">
                     <button
                       type="button"
                       className="h-7 flex-1 rounded border border-border text-[11px] hover:bg-accent"
                       onClick={() =>
                         void act(file, async () => {
-                          await saveSettings(draft)
+                          // The same reader the backtest panel uses, so a value
+                          // this accepts is one that panel accepted: a strategy
+                          // must not trade live on a number its own backtest
+                          // would have refused.
+                          await saveSettings({
+                            ...draft,
+                            inputs: settingsFromForm(declarations, typed),
+                          })
                           setEditing(null)
                         })
                       }

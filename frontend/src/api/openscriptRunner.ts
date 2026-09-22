@@ -52,6 +52,19 @@ export interface RunSettings {
   exchange: string
   interval: string
   product: string
+  /**
+   * The script's own parameters, as the values its `input()` declarations are
+   * resolved against.
+   *
+   * Plain values, never the language's tagged form: an engine validates a
+   * supplied setting against the declaration it belongs to, which already
+   * states the kind, and refuses a tagged one outright.
+   *
+   * Only what the trader actually set. A parameter absent here runs on the
+   * default written in the script, which is the one value guaranteed to be the
+   * right type and inside the declared bounds.
+   */
+  inputs?: Record<string, boolean | number | string>
   updated_at?: string | null
 }
 
@@ -146,6 +159,11 @@ export async function saveSettings(settings: RunSettings): Promise<void> {
       exchange: settings.exchange,
       interval: settings.interval,
       product: settings.product,
+      // Always sent, including when empty. A save replaces what was stored, so
+      // leaving the field off on a save that cleared every parameter would keep
+      // the previous ones and run the strategy on settings the trader has just
+      // removed from the screen in front of them.
+      inputs: settings.inputs ?? {},
     })
   } catch (error) {
     throw problemFrom(error, `The settings for ${settings.file} could not be saved.`)

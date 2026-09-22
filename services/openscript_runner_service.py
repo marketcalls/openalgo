@@ -71,6 +71,7 @@ deliberately nothing it could pass.
 """
 
 import atexit
+import json
 import os
 import platform
 import signal
@@ -474,6 +475,12 @@ def start_run(
     interval = interval or saved.get("interval") or ""
     product = product or saved.get("product") or ""
     user_id = user_id or saved.get("user_id") or None
+    # The script's own parameters, exactly as they were saved. They are not an
+    # argument to this call: a run started from a page, a run started by a
+    # schedule and a run started again after a restart have to be the same run,
+    # and a caller that could supply its own would be a second place a strategy
+    # could be sized or tuned from.
+    inputs = saved.get("inputs") or {}
 
     if not (symbol and exchange and interval):
         # Said by the settings rather than here, so a trader reads one sentence
@@ -516,11 +523,28 @@ def start_run(
     try:
         return _spawn_claimed(
             script, run_id, symbol, exchange, interval, product,
-            user_id, history_days, poll_seconds,
+            user_id, history_days, poll_seconds, inputs,
         )
     finally:
         with PROCESS_LOCK:
             STARTING_RUNS.discard(run_id)
+
+
+def _inputs_as_text(inputs: dict | None, run_id: str) -> str:
+    """One script's parameters as the child reads them, or an empty set.
+
+    Nothing raises. A run whose parameters could not be encoded starts on the
+    script's own declared defaults, which is the behaviour of a script with no
+    parameters saved and is a run a trader can read, rather than a start that
+    fails over a settings map.
+    """
+    if not inputs:
+        return "{}"
+    try:
+        return json.dumps(inputs, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        logger.exception("The parameters saved for %s could not be carried to its run", run_id)
+        return "{}"
 
 
 def _spawn_claimed(
@@ -533,6 +557,7 @@ def _spawn_claimed(
     user_id: str | None,
     history_days: int,
     poll_seconds: float,
+    inputs: dict | None = None,
 ) -> tuple[bool, str]:
     """The slow half of a start, run with this script's id already claimed.
 
@@ -569,6 +594,16 @@ def _spawn_claimed(
     environment.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
     if api_key:
         environment["OPENALGO_API_KEY"] = api_key
+
+    # The script's parameters go through the environment rather than the command
+    # line, which carries only the fields checked against a pattern above. A
+    # parameter's value is a trader's text and a script's own key, so it belongs
+    # on the channel this already uses for what should not be argv: it has no
+    # length limit worth worrying about and does not appear in a process list
+    # beside every other run. Written even when empty, so a run started after
+    # settings were cleared is not handed the previous ones by an environment
+    # this worker inherited.
+    environment["OPENSCRIPT_INPUTS"] = _inputs_as_text(inputs, run_id)
 
     command = [
         sys.executable,

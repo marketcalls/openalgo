@@ -26,7 +26,6 @@ import {
 } from '@/lib/trading/backtestRun'
 import {
   declaredOf,
-  defaultValueOf,
   inputsOf,
   settingsFromForm,
 } from '@/lib/trading/backtestInputs'
@@ -40,6 +39,7 @@ import {
 import { quantityNote, quantityOf, unitsFor } from '@/lib/trading/strategyQuantity'
 import { kindOf, listScripts, readScript, type StoredScript } from '@/lib/trading/openscriptFiles'
 import { BacktestChart } from './BacktestChart'
+import { StrategyInputs } from './StrategyInputs'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
 /** The three chart facts a run is of. */
@@ -448,65 +448,12 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
 
             {showControls && (
               <div className="flex flex-col gap-2 border-t border-border p-2">
-                {declarations.length > 0 && (
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Inputs
-                    </span>
-                    {declarations.map((one) => {
-                      const fallback = defaultValueOf(one)
-                      return (
-                        <label key={one.key} className="flex items-center gap-1.5">
-                          <span className="flex-1 truncate text-[11px]" title={one.tooltip ?? one.label}>
-                            {one.label}
-                          </span>
-                          {one.kind === 'bool' ? (
-                            <select
-                              className="h-7 w-28 rounded border border-border bg-background px-1 text-[11px]"
-                              value={edited[one.key] ?? String(fallback ?? 'false')}
-                              onChange={(e) =>
-                                setEdited((held) => ({ ...held, [one.key]: e.target.value }))
-                              }
-                            >
-                              <option value="true">true</option>
-                              <option value="false">false</option>
-                            </select>
-                          ) : one.options && one.options.length > 0 ? (
-                            <select
-                              className="h-7 w-28 rounded border border-border bg-background px-1 text-[11px]"
-                              value={edited[one.key] ?? String(fallback ?? '')}
-                              onChange={(e) =>
-                                setEdited((held) => ({ ...held, [one.key]: e.target.value }))
-                              }
-                            >
-                              {one.options.map((option) => (
-                                <option key={String(option)} value={String(option)}>
-                                  {String(option)}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type={one.kind === 'number' ? 'number' : 'text'}
-                              className="h-7 w-28 rounded border border-border bg-background px-1.5 text-[11px]"
-                              placeholder={fallback === null ? '' : String(fallback)}
-                              value={edited[one.key] ?? ''}
-                              min={one.min ?? undefined}
-                              max={one.max ?? undefined}
-                              step={one.step ?? undefined}
-                              onChange={(e) =>
-                                setEdited((held) => ({ ...held, [one.key]: e.target.value }))
-                              }
-                            />
-                          )}
-                        </label>
-                      )
-                    })}
-                    <p className="text-[10px] text-muted-foreground">
-                      A box left empty uses the script's own default. Run again to apply a change.
-                    </p>
-                  </div>
-                )}
+                <StrategyInputs
+                  declarations={declarations}
+                  edited={edited}
+                  onChange={(key, value) => setEdited((held) => ({ ...held, [key]: value }))}
+                  note="A box left empty uses the script's own default. Run again to apply a change."
+                />
 
                 {declared && (
                   <div className="flex flex-col gap-1">

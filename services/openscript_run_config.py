@@ -46,6 +46,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 import pytz
 
@@ -90,7 +91,21 @@ REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 #: Every field one script's settings hold.
-FIELDS: tuple[str, ...] = ("symbol", "exchange", "interval", "product", "user_id")
+FIELDS: tuple[str, ...] = ("symbol", "exchange", "interval", "product", "user_id", "inputs")
+
+#: The most settings one script may carry, and the longest a key or a piece of
+#: text may be. A script declares its own inputs, so these are far above any
+#: real one; they are here because this file is written from a request body and
+#: a bound nobody set is a file somebody can grow without limit.
+MAX_INPUTS = 64
+MAX_KEY_LENGTH = 64
+MAX_TEXT_LENGTH = 256
+
+# An input key, as a compiler mints one: a name from the script. Restated here
+# because this value is stored and later handed to an engine, and a key that
+# could hold anything is a key that could be read as something else by whatever
+# reads it next.
+_INPUT_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,63}$")
 
 # Guards the read, change and rename that a write is. See the module note for
 # why it is the ordinary lock and not a real one.
@@ -125,10 +140,67 @@ def _normalised(entry: dict) -> dict:
     """
     filled = dict.fromkeys(FIELDS, "")
     filled["user_id"] = None
+    filled["inputs"] = {}
     filled.update(entry)
     for name in ("symbol", "exchange", "interval", "product"):
         filled[name] = "" if filled.get(name) is None else str(filled[name])
+    # Read back through the same check that let it in. A file an operator edited
+    # by hand, or one written by an older version, reaches a run otherwise, and
+    # the run is where a bad value costs an order rather than a message.
+    kept, _ = _checked_inputs(filled.get("inputs"))
+    filled["inputs"] = kept
     return filled
+
+
+def _checked_inputs(given: Any) -> tuple[dict, str]:
+    """The settings a run may carry, or an empty map and what is wrong with them.
+
+    **These are the script's own parameters, and this is the only place that
+    decides what one may be.** A value here is handed to an engine as the
+    setting for an ``input()`` the script declared, so the shapes allowed are
+    the shapes an engine reads: true or false, a number, or a piece of text.
+    Anything else, a list, a nested object, a number that is not one, is not a
+    setting any script could have asked for, and storing it would move the
+    refusal from a page a trader is looking at into a log written a minute later
+    by a process they cannot see.
+
+    **What is refused here is not what makes a value correct.** A script states
+    its own bounds and its own choices, and the engine holds a setting to them
+    when it loads the program. This is the coarser question asked first: whether
+    this is the kind of thing a setting can be at all.
+    """
+    if given is None or given == "":
+        return {}, ""
+    if not isinstance(given, dict):
+        return {}, "The strategy parameters must be given as a set of named values."
+    if len(given) > MAX_INPUTS:
+        return {}, f"A strategy may carry at most {MAX_INPUTS} parameters."
+
+    kept: dict = {}
+    for key, value in given.items():
+        if not isinstance(key, str) or not _INPUT_KEY.match(key):
+            return {}, f"{key!r} is not the name of a parameter a script can declare."
+        if isinstance(value, bool):
+            kept[key] = value
+            continue
+        if isinstance(value, (int, float)):
+            number = float(value)
+            # A number that is not one reaches the engine as a setting it cannot
+            # compare against a minimum, and JSON has no spelling for either, so
+            # this only arises from a file edited by hand or a caller sending
+            # something else entirely.
+            if number != number or number in (float("inf"), float("-inf")):
+                return {}, f"{key} was given a number that is not one."
+            kept[key] = value
+            continue
+        if isinstance(value, str):
+            if len(value) > MAX_TEXT_LENGTH:
+                return {}, f"{key} is longer than a parameter may be."
+            kept[key] = value
+            continue
+        return {}, f"{key} was given something a parameter cannot be."
+
+    return kept, ""
 
 
 def all_run_configs() -> dict[str, dict]:
@@ -222,12 +294,18 @@ def write_run_config(
     interval: str,
     product: str = "",
     user_id: str | None = None,
+    inputs: Any = None,
 ) -> tuple[bool, str]:
     """Save what one script is run on, replacing whatever was saved before.
 
     Everything is checked here and not only when a run starts, so a setting that
     could never start a run is refused while the trader is still looking at it
     rather than a minute later in a log.
+
+    The strategy's own parameters are stored beside them, as the values an
+    engine will resolve the script's ``input()`` declarations against. What may
+    be one is decided in ``_checked_inputs``; what makes one correct for a
+    particular script is decided by that script, when the engine loads it.
 
     The exchange and the product are upper cased, because this platform states
     both in one case and a trader typing either in another means the same thing.
@@ -260,12 +338,17 @@ def write_run_config(
             f"{product!r} is not a product this platform sends. Use one of {', '.join(PRODUCTS)}."
         )
 
+    settings, wrong = _checked_inputs(inputs)
+    if wrong:
+        return False, wrong
+
     entry = {
         "symbol": symbol,
         "exchange": exchange,
         "interval": interval,
         "product": product,
         "user_id": user_id,
+        "inputs": settings,
         "updated_at": _ist_now().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
 

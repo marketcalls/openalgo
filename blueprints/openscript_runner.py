@@ -133,7 +133,7 @@ SAFE_NAME = openscript_sources._SAFE_NAME
 # purpose: every field a run needs is here, and a field a caller invents is
 # refused by name rather than dropped, which is what keeps an imagined switch to
 # live from looking like it worked.
-SETTINGS_FIELDS = ("symbol", "exchange", "interval", "product")
+SETTINGS_FIELDS = ("symbol", "exchange", "interval", "product", "inputs")
 
 # The most logs one answer names. A script run every day for a year has that
 # many files, and a status page needs the recent ones rather than all of them.
@@ -220,6 +220,7 @@ def _settings_answer(filename: str, entry: dict) -> dict:
         "exchange": entry.get("exchange", ""),
         "interval": entry.get("interval", ""),
         "product": entry.get("product", ""),
+        "inputs": entry.get("inputs") or {},
         "updated_at": entry.get("updated_at"),
     }
 
@@ -808,11 +809,12 @@ def get_settings(filename):
 def set_settings(filename):
     """Save what one script is run on.
 
-    The body carries the instrument, the exchange and the interval, and
-    optionally the product. A field this route does not know is refused rather
-    than ignored, which is the rule that matters most here: this is the body a
-    caller would invent a destination in, and being told no is the only answer
-    that leaves them knowing where the destination is actually decided.
+    The body carries the instrument, the exchange and the interval, optionally
+    the product, and optionally the script's own parameters. A field this route
+    does not know is refused rather than ignored, which is the rule that matters
+    most here: this is the body a caller would invent a destination in, and
+    being told no is the only answer that leaves them knowing where the
+    destination is actually decided.
 
     The owning user is taken from the session and never from the body. It is
     stored so a run started by a schedule can find the key it authenticates
@@ -837,14 +839,17 @@ def set_settings(filename):
             {
                 "status": "error",
                 "message": (
-                    "Run settings are the instrument, the exchange, the interval and the "
-                    f"product. This one also carried {', '.join(unknown)}. Where a strategy's "
-                    "orders go is the platform's own setting and is not chosen here."
+                    "Run settings are the instrument, the exchange, the interval, the "
+                    "product and the script's own parameters. This one also carried "
+                    f"{', '.join(unknown)}. Where a strategy's orders go is the platform's own "
+                    "setting and is not chosen here."
                 ),
             }
         ), 400
 
     for field in SETTINGS_FIELDS:
+        if field == "inputs":
+            continue
         value = body.get(field)
         if value is not None and not isinstance(value, str):
             return jsonify(
@@ -854,6 +859,17 @@ def set_settings(filename):
                 }
             ), 400
 
+    # The parameters are not text and are not checked here. What one may be is
+    # decided once, where they are stored, because the same answer has to hold
+    # for a file an operator edited by hand and for one this route wrote.
+    if body.get("inputs") is not None and not isinstance(body.get("inputs"), dict):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Give the strategy parameters as a set of named values, or leave them out.",
+            }
+        ), 400
+
     ok, message = write_run_config(
         filename,
         symbol=body.get("symbol") or "",
@@ -861,6 +877,7 @@ def set_settings(filename):
         interval=body.get("interval") or "",
         product=body.get("product") or "",
         user_id=session.get("user"),
+        inputs=body.get("inputs"),
     )
     if not ok:
         return jsonify({"status": "error", "message": message}), 400
