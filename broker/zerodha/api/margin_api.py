@@ -1,6 +1,7 @@
 import json
 
 from broker.zerodha.mapping.margin_data import parse_margin_response, transform_margin_positions
+from broker.zerodha.mapping.mcx_contract_size import McxQuantityError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -30,7 +31,16 @@ def calculate_margin_api(positions, auth):
     AUTH_TOKEN = auth
 
     # Transform positions to Zerodha format
-    transformed_positions = transform_margin_positions(positions)
+    try:
+        transformed_positions = transform_margin_positions(positions)
+    except McxQuantityError as exc:
+        # Refuse the whole basket. Pricing the remaining legs would answer a
+        # question the caller did not ask, with a 200 to say so.
+        class MockResponse:
+            status_code = 400
+            status = 400
+
+        return MockResponse(), {"status": "error", "message": str(exc)}
 
     if not transformed_positions:
         error_response = {

@@ -852,8 +852,10 @@ underlying always wins, so a workflow whose `exchange` still holds the node
 default cannot misroute a SENSEX or CRUDEOIL order.
 
 `quantity` is in **lots** for every underlying. The lot size comes from the
-master contract, and most MCX option contracts carry a lot size of 1, so one lot
-is one contract there.
+master contract, so one lot of CRUDEOIL is 100 barrels on every broker. Kite
+reports `lot_size = 1` for MCX because it counts order quantity in contracts;
+`broker/zerodha` writes the real lot and converts at its own API boundary, so
+nothing here has to know that.
 
 #### optionsMultiOrder - Multi-Leg Options Strategy
 
@@ -2708,7 +2710,8 @@ funds (outputVariable=f)
   accept `quantity` **in shares**. Check this when generating from a single
   source. The lot size is read from the master contract, never guessed: an
   underlying with no usable lot size fails the node rather than sizing an order
-  on an assumption. Most MCX option contracts carry a lot size of 1.
+  on an assumption. MCX carries its real market lot on every broker, including
+  Zerodha, whose adapter converts to Kite's contract count on the way out.
 
 ---
 

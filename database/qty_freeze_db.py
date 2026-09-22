@@ -9,7 +9,7 @@ Orders exceeding this limit need to be split.
 Freeze quantities are admin-managed per exchange + underlying (NFO seeded from
 NSE's qtyfreeze.csv; BFO/CDS/MCX and others added via the Freeze Quantities page
 or a CSV upload). Any F&O exchange with a configured entry is honored; symbols
-without an entry default to 1 (no splitting cap applied).
+without an entry return 0, meaning no limit is known and none is enforced.
 """
 
 import csv
@@ -160,14 +160,22 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     Uses in-memory cache for fast lookups.
 
     Returns the configured freeze quantity for any F&O exchange (NFO, BFO, CDS,
-    MCX, ...) that has an entry, and 1 as the default when none is configured.
+    MCX, ...) that has an entry, and 0 when none is configured.
+
+    0 means "no freeze limit known", which is what every caller already tests
+    for. It must not be 1: the table is seeded with NFO rows only, so BFO, CDS,
+    MCX and any NFO underlying without a row resolved to a freeze limit of one
+    unit, and callers that reject `quantity > freeze` then refused every order
+    on those exchanges -- one lot of SENSEX (20) or CRUDEOIL (100) is above 1.
+    The only reason this went unnoticed is that NFO index options, which do
+    have rows, are the common case.
 
     Args:
         symbol: The underlying symbol (e.g., "NIFTY", "RELIANCE", "SENSEX", "CRUDEOIL")
         exchange: Exchange code (NFO, BFO, CDS, MCX, ...)
 
     Returns:
-        Freeze quantity (integer)
+        Freeze quantity, or 0 when none is configured.
     """
     global _cache_loaded
 
@@ -175,13 +183,13 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     if not _cache_loaded:
         load_freeze_qty_cache()
 
-    # Look up the configured entry for this exchange+symbol; default to 1 if none.
+    # Look up the configured entry for this exchange+symbol.
     cache_key = f"{exchange}:{symbol}"
     if cache_key in _freeze_qty_cache:
         return _freeze_qty_cache[cache_key]
 
-    # If not found, return 1 as default
-    return 1
+    # Not configured. 0, never 1 -- see the note above.
+    return 0
 
 
 def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
@@ -200,7 +208,7 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
         exchange: Exchange code
 
     Returns:
-        Freeze quantity (integer)
+        Freeze quantity, or 0 when the underlying has no configured limit.
     """
     import re
 
@@ -225,7 +233,9 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
         # Handle special cases like M&M, BAJAJ-AUTO
         return get_freeze_qty(underlying, exchange)
 
-    return 1
+    # The symbol did not parse (e.g. it starts with a digit, like 360ONE).
+    # Unknown, not "one unit".
+    return 0
 
 
 def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:
