@@ -37,7 +37,13 @@ import {
   type ReportTrade,
 } from '@/lib/trading/openPosition'
 import { quantityNote, quantityOf, unitsFor } from '@/lib/trading/strategyQuantity'
-import { kindOf, listScripts, readScript, type StoredScript } from '@/lib/trading/openscriptFiles'
+import {
+  compileSource,
+  kindOf,
+  listScripts,
+  readScript,
+  type StoredScript,
+} from '@/lib/trading/openscriptFiles'
 import { BacktestChart } from './BacktestChart'
 import { StrategyInputs } from './StrategyInputs'
 import { PANEL_HEADER, PanelShell } from './panelShell'
@@ -245,12 +251,49 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   // Read off the last run's program: what this script takes as inputs, and what
   // it declares about itself. Both are the program's own, so nothing here is a
   // second opinion about a default or a capital.
-  const declarations = useMemo(() => inputsOf(outcome?.program), [outcome?.program])
-  const declared = useMemo(() => declaredOf(outcome?.program), [outcome?.program])
+  // -- the controls, which exist before the first run ----------------------
+  //
+  // **Read by compiling the chosen script, not by waiting for a report.** These
+  // all used to come off the last run's program, so a strategy that had not run
+  // yet had no controls at all: the trader picked it, saw an empty panel, and
+  // had nothing to change. Worse, a run refused for any reason left the panel
+  // permanently bare, which is what a ceiling that was too low did.
+  //
+  // The run's own program still wins once there is one. It is the program that
+  // actually produced the figures on screen, so the settings shown beside them
+  // are the settings they were computed under.
+  const [chosen, setChosen] = useState<unknown>(null)
+
+  useEffect(() => {
+    if (!file) {
+      setChosen(null)
+      return
+    }
+    let live = true
+    void (async () => {
+      try {
+        const source = await readScript(file)
+        const built = await compileSource(file, source)
+        if (!live) return
+        setChosen(built.ok && built.program !== undefined ? JSON.parse(built.program) : null)
+      } catch {
+        // A script that will not compile has no controls to offer, which the
+        // run itself reports properly when it is pressed.
+        if (live) setChosen(null)
+      }
+    })()
+    return () => {
+      live = false
+    }
+  }, [file])
+
+  const shown = outcome?.program ?? chosen
+  const declarations = useMemo(() => inputsOf(shown), [shown])
+  const declared = useMemo(() => declaredOf(shown), [shown])
 
   // Where the order size comes from, which the language decides and this only
   // reports. See `strategyQuantity.ts`: what the script states, runs.
-  const quantity = useMemo(() => quantityOf(outcome?.program), [outcome?.program])
+  const quantity = useMemo(() => quantityOf(shown), [shown])
   const sending = useMemo(() => unitsFor(quantity, edited), [quantity, edited])
 
   // -- the position the strategy is still in --------------------------------
@@ -465,7 +508,7 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
                   declarations={declarations}
                   edited={edited}
                   onChange={(key, value) => setEdited((held) => ({ ...held, [key]: value }))}
-                  note="A box left empty uses the script's own default. Run again to apply a change."
+                  note="A box left empty uses the script's own default. Run again to apply a change. These are for testing on this chart only and never reach a strategy that is running live: set those under Strategies."
                 />
 
                 {declared && (

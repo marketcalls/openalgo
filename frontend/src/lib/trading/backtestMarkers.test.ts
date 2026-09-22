@@ -111,3 +111,51 @@ describe('the marks', () => {
     expect(sell.color).toBe('D')
   })
 })
+
+describe('a reversal, which puts two fills on one bar', () => {
+  /** The two markers a stop and reverse strategy emits at one flip. */
+  const closingLong = { time: 1, kind: 'exit', side: 'sell', units: 1, tag: 'StUp', price: 100 }
+  const openingShort = { time: 1, kind: 'entry', side: 'sell', units: 1, tag: 'StDn', price: 100 }
+
+  it('names an exit as one instead of drawing the tag it closed', () => {
+    // THE DEFECT. `close(tag = "StUp")` names the position to close, not the
+    // fill. Drawn bare it writes "StUp -1" on the bar the strategy goes short
+    // on: the name of a long beside a sell. A trader reads the two halves and
+    // has to pick one to believe.
+    expect(labelFor(closingLong, false)).toBe('Exit StUp\n-1')
+    expect(labelFor(closingLong, true)).toBe('-1\nExit StUp')
+  })
+
+  it('leaves an entry named by its own tag, which is a name', () => {
+    expect(labelFor(openingShort, true)).toBe('-1\nStDn')
+  })
+
+  it('makes the pair on one bar read as two orders and not a contradiction', () => {
+    // Both fills are real and both belong on the chart: a reversal is a close
+    // and an open, and the order book will show two orders. What must not
+    // happen is the two reading as one confused event.
+    const marks = chartMarkersFrom([closingLong, openingShort])
+
+    expect(marks).toHaveLength(2)
+    expect(marks[0].text).toContain('Exit StUp')
+    expect(marks[1].text).toContain('StDn')
+    expect(marks[1].text).not.toContain('Exit')
+    // Separated on the price, so the pair does not overprint at one point.
+    expect(marks[0].position).not.toBe(marks[1].position)
+  })
+
+  it('says a fill is an exit even where the close named nothing', () => {
+    expect(labelFor({ ...closingLong, tag: '' }, false)).toBe('Exit\n-1')
+  })
+
+  it('still ids the two fills of one reversal apart', () => {
+    // They share a bar, a price and a side. An id that collided would let one
+    // replace the other and the chart would show a reversal as a single order.
+    const marks = chartMarkersFrom([
+      { ...closingLong, tradeIndex: 1 },
+      { ...openingShort, tradeIndex: 2 },
+    ])
+
+    expect(marks[0].id).not.toBe(marks[1].id)
+  })
+})

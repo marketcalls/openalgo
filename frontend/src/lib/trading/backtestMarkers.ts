@@ -83,15 +83,32 @@ export function signedSize(side: unknown, units: unknown): string {
 }
 
 /**
- * One label: the tag against the arrow, the signed size on the far side.
+ * One label: the name against the arrow, the signed size on the far side.
  *
- * A fill with no tag is labelled by its size alone rather than by an empty
- * first line, because a blank row in the plate is a gap a reader tries to read.
+ * **An exit says so, and that is not decoration.** On a close the tag is a
+ * reference to the position being closed, not a name for the fill:
+ * `close(tag = "StUp")` means "close whatever StUp is holding". Drawn as a bare
+ * label it puts the name of a long position next to a sell, so a stop and
+ * reverse strategy writes `StUp -1` on the bar it goes short on, and a reader
+ * has to decide which half of that to believe. It is also the bar carrying the
+ * opposite entry, so both names appear together and the pair reads as a
+ * contradiction rather than as the two orders of one reversal.
+ *
+ * Naming the exit resolves it. `Exit StUp` beside `-1` is one story and the
+ * `StDn -1` on the same bar is the other: the long was closed and the short was
+ * opened, which is what happened and what the order book will show.
+ *
+ * A fill with no tag is labelled by its size alone rather than by an empty first
+ * line, because a blank row in the plate is a gap a reader tries to read. An
+ * exit with no tag still says it is one, because that is a fact about the fill
+ * rather than about a name it never had.
  */
 export function labelFor(marker: ReportMarker, above: boolean): string {
   const tag = typeof marker.tag === 'string' ? marker.tag.trim() : ''
+  const leaving = marker.kind === 'exit'
+  const name = leaving ? (tag === '' ? 'Exit' : `Exit ${tag}`) : tag
   const size = signedSize(marker.side, marker.units)
-  const lines = tag === '' ? [size] : above ? [size, tag] : [tag, size]
+  const lines = name === '' ? [size] : above ? [size, name] : [name, size]
   return lines.filter((line) => line !== '').join('\n')
 }
 
