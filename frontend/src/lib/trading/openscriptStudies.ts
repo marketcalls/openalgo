@@ -39,6 +39,13 @@ export interface OpenScriptLoad {
   loaded: string[]
   /** Per-script failures, already written for a trader to read. */
   errors: { file: string; message: string }[]
+  /**
+   * Scripts the chart tier cannot run, with the capability that stopped each.
+   *
+   * Not an error and not a silence: a caller that lists what loaded can say
+   * why a strategy is missing from it rather than leaving the trader to wonder.
+   */
+  skipped: { file: string; needs: string }[]
 }
 
 const INDEX_URL = '/openscript/index.json'
@@ -57,6 +64,27 @@ const compiled = new Set<string>()
 function messageOf(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
   return String(error)
+}
+
+/**
+ * What the chart tier can run, read off the program rather than off the file.
+ *
+ * A compiled program declares the capabilities it needs in `requires`, and the
+ * chart tier grants the drawing ones and not `orders`: it plots, it does not
+ * trade. Registering a program that needs `orders` produced a study a trader
+ * could add and the engine then refused at load with OS6006, a message about
+ * capability tags shown to somebody who had only pressed a button in a list.
+ *
+ * Checked against the program's own declaration and not against whether the
+ * source says `study` or `strategy`, because `requires` is the same fact the
+ * engine tests. A strategy that placed no orders would be runnable here and a
+ * study that somehow needed them would not, and both would be right.
+ */
+function needsMoreThanTheChartCanGive(program: unknown): string | null {
+  const requires = (program as { requires?: unknown })?.requires
+  if (!Array.isArray(requires)) return null
+  const beyond = requires.filter((tag) => tag === 'orders')
+  return beyond.length > 0 ? String(beyond[0]) : null
 }
 
 /**
@@ -100,7 +128,7 @@ async function programFor(file: string, text: string): Promise<unknown> {
  * fix, which the chart already puts in front of the trader.
  */
 export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
-  const result: OpenScriptLoad = { loaded: [], errors: [] }
+  const result: OpenScriptLoad = { loaded: [], errors: [], skipped: [] }
 
   let stored: StoredScript[]
   try {
@@ -129,6 +157,17 @@ export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
       const text = await response.text()
 
       const program = await programFor(script.file, text)
+
+      // A strategy belongs in the backtest panel and the runner, not in the
+      // indicator list. Skipped quietly rather than reported as an error,
+      // because nothing went wrong: the trader saved a strategy and this is the
+      // chart asking which of their scripts it can draw.
+      const beyond = needsMoreThanTheChartCanGive(program)
+      if (beyond !== null) {
+        result.skipped.push({ file: script.file, needs: beyond })
+        continue
+      }
+
       const descriptor = descriptorFor(program as never, {
         id: idForScript(script.file),
         category: 'OpenScript',
