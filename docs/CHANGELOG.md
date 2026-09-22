@@ -8,6 +8,8 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+- Run OpenScript strategies on engine 0.5.0. The compiler in the browser had been at 0.5.0 while the engine that runs the result was pinned to 0.4.0, because 0.4.0 was the only release on the index. Nothing was broken by that: the two agreed on the compiled program format, which is what actually has to match and is 1.1 in both. What was wrong was the note beside the pin claiming the halves were one release while they were not, and they now are. Both strategies on this install load unchanged in the new engine.
+
 - Upgrade `/trading` to the published openalgo-charts 2.4.5 package, with 105 built-in studies, open interest readouts and chart alerts. Open interest is a level: aggregation keeps the last reading rather than summing values. Missing live readings remain absent.
 - Add saved chart workspaces, study templates, comparison symbols with price or percentage scales, and CSV downloads of the displayed bars, studies and comparisons.
 - Share one toolbar across the selected chart and one replay transport across the workspace. Replay can follow the selected chart or all charts on a shared clock; order actions and workspace autosave pause until replay ends.
