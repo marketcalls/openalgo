@@ -34,6 +34,7 @@
  * Rewording them here would lose the part that says what to do.
  */
 
+import { Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   clearSettings,
@@ -340,6 +341,15 @@ export function StrategiesPanel({ getChartContext }: Props) {
    * right way round: the button that is safe is the quick one.
    */
   const [confirming, setConfirming] = useState<string | null>(null)
+  /**
+   * Which deployment is being removed, and is waiting to be confirmed.
+   *
+   * Removing costs nothing that cannot be done again: the strategy stays in the
+   * editor and its trades stay in the books. It is asked about anyway, because
+   * a deployment is a instrument, an interval and a set of parameters somebody
+   * chose, and re-entering them is a nuisance nobody should meet by misclick.
+   */
+  const [removing, setRemoving] = useState<string | null>(null)
   /** Which strategy's books are open. One at a time: a panel of open tables is unreadable. */
   const [opened, setOpened] = useState<string | null>(null)
   /** Bumped when a run starts or stops, so an open book refetches rather than going stale. */
@@ -837,7 +847,59 @@ export function StrategiesPanel({ getChartContext }: Props) {
                   >
                     {opened === file ? 'Hide' : 'Activity'}
                   </button>
+                  {held && (
+                    <button
+                      type="button"
+                      aria-label={`Remove ${one.file} on ${where?.symbol ?? ''}`}
+                      className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-destructive disabled:opacity-40"
+                      disabled={Boolean(run)}
+                      title={
+                        run
+                          ? 'Pause or stop this strategy before removing it'
+                          : 'Remove this deployment'
+                      }
+                      onClick={() => setRemoving(one.id)}
+                    >
+                      <Trash2 className="h-3 w-3" aria-hidden />
+                    </button>
+                  )}
                 </div>
+
+                {removing === one.id && (
+                  <div className="flex flex-col gap-1.5 rounded border border-border p-2">
+                    <p className="text-[11px] leading-relaxed">
+                      Remove {one.file} on{' '}
+                      {[where?.symbol, where?.exchange, where?.interval].filter(Boolean).join(' ')}?
+                    </p>
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      This removes the deployment and its schedule. The strategy itself is not
+                      deleted: it stays in the editor and can be deployed again. Anything it has
+                      already traded stays in your books.
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        className="h-7 flex-1 rounded border border-destructive/60 text-[11px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                        disabled={busy === file}
+                        onClick={() =>
+                          void act(file, async () => {
+                            await clearSettings(file)
+                            setRemoving(null)
+                          })
+                        }
+                      >
+                        {busy === file ? 'Removing' : 'Remove'}
+                      </button>
+                      <button
+                        type="button"
+                        className="h-7 rounded border border-border px-2 text-[11px] hover:bg-accent"
+                        onClick={() => setRemoving(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {confirming === one.id && (
                   <ConfirmStop

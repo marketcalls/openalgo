@@ -456,6 +456,69 @@ def test_one_script_saved_against_two_instruments_is_two_settings_rows(client, s
 
 
 # ---------------------------------------------------------------------------
+# Removing a deployment
+# ---------------------------------------------------------------------------
+
+
+def test_a_deployment_can_be_removed_and_the_others_are_left(client, store):
+    assert save_settings(client, symbol="SYM1").status_code == 200
+    assert save_settings(client, symbol="SYM2").status_code == 200
+    gone = service.run_id_for("range.oscript", "SYM1", EXCHANGE, INTERVAL)
+
+    answer = client.delete(f"/openscript/runner/config/{gone}")
+
+    assert answer.status_code == 200, answer.get_json()
+    left = client.get("/openscript/runner/config").get_json()["settings"]
+    assert [one["symbol"] for one in left] == ["SYM2"]
+
+
+def test_a_running_deployment_is_not_removed_out_from_under_its_own_run(client, stub):
+    """THE ONE THAT LEAVES A STRATEGY TRADING WITH NO SETTINGS.
+
+    Removing it used to leave a process on the market whose settings had gone:
+    the row could not be started again, its instrument was no longer recorded
+    anywhere, and a trader who believed they had deleted a strategy had one
+    still trading. Refusing is one sentence they can act on.
+    """
+    assert save_settings(client).status_code == 200
+    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    assert client.post(f"/openscript/runner/start/{deployment}").status_code == 202
+
+    answer = client.delete(f"/openscript/runner/config/{deployment}")
+
+    assert answer.status_code == 409
+    said = answer.get_json()["message"]
+    assert "Pause" in said and "Stop" in said, said
+    assert client.get("/openscript/runner/config").get_json()["settings"], "it was removed anyway"
+
+
+def test_removing_a_deployment_takes_its_schedule_with_it(client, store):
+    """Catches a start time left on the scheduler for settings that are gone.
+
+    It fires every morning, fails, and writes a line about a strategy the
+    trader believes no longer exists.
+    """
+    assert save_settings(client).status_code == 200
+    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    timed = client.post(
+        f"/openscript/runner/schedule/{deployment}",
+        json={"start_time": "09:20", "stop_time": "15:10", "days": ["mon"]},
+    )
+    assert timed.status_code == 200, timed.get_json()
+
+    client.delete(f"/openscript/runner/config/{deployment}")
+
+    body = client.get("/openscript/runner/status").get_json()
+    assert body["scheduled"] == [], "the schedule outlived the deployment it belonged to"
+
+
+def test_removing_something_that_is_not_there_says_so(client, store):
+    answer = client.delete("/openscript/runner/config/openscript_nothing_SYM_EXCH_1m")
+
+    assert answer.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # The seam that broke last time
 # ---------------------------------------------------------------------------
 

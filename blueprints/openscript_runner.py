@@ -1001,11 +1001,18 @@ def set_settings(filename):
 @openscript_runner_bp.route("/config/<path:filename>", methods=["DELETE"])
 @check_session_validity
 def clear_settings(filename):
-    """Forget what one script is run on.
+    """Remove one deployment: what it runs on, and when it was to start.
 
-    Nothing running is touched. A run already started keeps the instrument it
-    was started on, because that is the run that is on the market; this stops
-    the script being started again without somebody saying what it runs on.
+    **A deployment that is running is not removed.** It used to be, leaving a
+    process on the market whose settings had gone: the row could not be started
+    again, its instrument was no longer recorded anywhere, and a trader who
+    thought they had deleted a strategy had one still trading. Refusing is one
+    sentence they can act on, and Pause and Stop are both one press away.
+
+    **The schedule goes with it.** A deployment removed on its own left its
+    start time on the scheduler, which then fired every morning for settings
+    that were not there: a failure in a log, daily, for a strategy nobody
+    believed existed any more.
     """
     if not _names_something(filename):
         return _refusal(filename)
@@ -1015,12 +1022,45 @@ def clear_settings(filename):
             {"status": "error", "message": f"{filename} has no run settings saved."}
         ), 404
 
+    if is_running(filename):
+        return jsonify(
+            {
+                "status": "error",
+                "message": (
+                    "This strategy is running, so it has not been removed. Pause it to keep its "
+                    "position, or Stop it to close the position first, then remove it."
+                ),
+            }
+        ), 409
+
     ok, message = delete_run_config(filename)
     if not ok:
         return jsonify({"status": "error", "message": message}), 500
 
-    logger.info("Removed the run settings for %s", filename)
+    # After the settings and not before: a schedule with no settings behind it
+    # is a job that fails, and settings with no schedule are simply a strategy
+    # nobody has timed. If this half fails the log says so and the deployment is
+    # still gone, which is what was asked for.
+    _forget_schedule(filename)
+
+    logger.info("Removed the OpenScript deployment %s", filename)
     return jsonify({"status": "success", "file": filename, "message": message})
+
+
+def _forget_schedule(filename):
+    """Take one deployment's start and stop off the scheduler and the file.
+
+    Never raises. Removing a deployment is the act; this is the tidying beside
+    it, and a scheduler that could not be reached must not turn a removal that
+    happened into an error that says it did not.
+    """
+    try:
+        _remove_jobs(filename)
+        schedules = _load_schedules()
+        if schedules.pop(filename, None) is not None:
+            _save_schedules(schedules)
+    except Exception:
+        logger.exception("Could not remove the schedule for the deployment %s", filename)
 
 
 # ---------------------------------------------------------------------------
