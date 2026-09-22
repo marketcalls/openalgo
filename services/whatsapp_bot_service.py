@@ -902,7 +902,23 @@ class WhatsAppBotService:
                     elif cfg_jid:
                         ret = self._wa.send(cfg_jid, text or "")  # explicit owner JID
                     else:
-                        ret = self._wa.send(text or "")  # single-arg fallback
+                        # **Refused rather than attempted.** The single-arg
+                        # "route to owner" form returns without error and
+                        # nothing arrives, and the loop below then recorded
+                        # the recipient under "sent". So a self-send before
+                        # the owner JID had been captured reported success for
+                        # a message nobody received, which for an alert is the
+                        # one failure worse than not sending: the trader is
+                        # told it went.
+                        #
+                        # The media branch above already refuses for this
+                        # reason. This is the same refusal, in the same words.
+                        raise RuntimeError(
+                            "This device's own WhatsApp address has not been captured "
+                            "yet, and messages to the owner cannot be delivered without "
+                            "it. Send any message to this bot from the paired phone "
+                            "once, then try again."
+                        )
                 elif media_kwargs:
                     ret = self._wa.send(jid, **media_kwargs)
                     if document and (text or caption):
