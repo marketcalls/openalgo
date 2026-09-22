@@ -589,11 +589,26 @@ def start_run(
             f"{product!r} is not a product this platform sends. Use one of {', '.join(PRODUCTS)}."
         )
 
-    # From the instrument and the interval as resolved above, not from the name
-    # the caller used: two deployments of one script are two runs, and minting
-    # this from the script alone is what made the second one refuse to start and
-    # put its orders in the first one's book.
-    run_id = run_id_for(script, symbol, exchange, interval)
+    # **The deployment's own id, because that is what its books are filtered
+    # on.** A run tags every order with this, and the deployment's orderbook,
+    # tradebook and positions are a filter on that tag: minting one here from
+    # the four parts instead would tag a run's orders with an id nothing looks
+    # for, and the strategy would trade all day showing an empty book.
+    #
+    # Worked out from the parts only when there is nothing saved to read it
+    # from, which is a caller that passed the instrument straight in, or when
+    # the caller overrode the instrument or the interval so that this run is not
+    # the saved deployment at all.
+    matches = (
+        str(saved.get("symbol") or "") == symbol
+        and str(saved.get("exchange") or "") == exchange
+        and str(saved.get("interval") or "") == interval
+    )
+    run_id = (
+        str(saved.get("deployment") or "")
+        if matches and saved.get("deployment")
+        else run_id_for(script, symbol, exchange, interval)
+    )
     where = f"{script} on {symbol} {exchange} at {interval}"
 
     with PROCESS_LOCK:

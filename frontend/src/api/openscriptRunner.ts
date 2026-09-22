@@ -60,8 +60,10 @@ export interface RunSettings {
   /**
    * The id this deployment is known by, absent on one being created.
    *
-   * A new deployment has no id until it is saved, because the id is made from
-   * the instrument and the interval still being typed into the form.
+   * Sending it is what makes a save an **edit**. Without it the server creates
+   * a deployment with an id of its own, which is what keeps a deployment made
+   * where another was removed from inheriting that one's orders, fills and
+   * position.
    */
   deployment?: string
   /** The script this deployment runs. */
@@ -206,9 +208,14 @@ export async function closeStrategy(name: string): Promise<void> {
 /**
  * Save a deployment: the script, the instrument, the interval and the rest.
  *
- * Addressed by the **script**, not by the deployment, because this is what
- * creates one. Saving a script against an instrument and an interval it is
- * already deployed on edits that deployment; against a new pair it adds one.
+ * Addressed by the **script**, because the script is what is being deployed.
+ * Whether this edits or creates is `settings.deployment`: with it the
+ * deployment keeps the id its orders are tagged with, and without it the server
+ * mints a new one.
+ *
+ * Creating a second deployment on the same script, instrument and interval is
+ * refused by the server, because that is one strategy running twice on one
+ * instrument. The refusal comes back in its own words and says what to do.
  */
 export async function saveSettings(settings: RunSettings): Promise<void> {
   try {
@@ -222,6 +229,9 @@ export async function saveSettings(settings: RunSettings): Promise<void> {
       // the previous ones and run the strategy on settings the trader has just
       // removed from the screen in front of them.
       inputs: settings.inputs ?? {},
+      // Absent on a new deployment, which is what tells the server to mint an
+      // id rather than take over the one a removed deployment had.
+      ...(settings.deployment ? { deployment: settings.deployment } : {}),
     })
   } catch (error) {
     throw problemFrom(error, `The settings for ${settings.file} could not be saved.`)

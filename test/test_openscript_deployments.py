@@ -55,9 +55,22 @@ def store(tmp_path, monkeypatch):
 
 
 def save(script=SCRIPT, symbol="SYM1", exchange="EXCH1", interval="1m", **rest):
+    """Deploy, and answer the id that was minted for it.
+
+    Read back rather than worked out. A deployment's id carries a token of its
+    own so that one made where another was removed is not the same deployment,
+    and a test that derived the id would be asserting against a rule the store
+    no longer follows.
+    """
+    before = set(run_config.all_run_configs())
     ok, why = run_config.write_run_config(script, symbol, exchange, interval, **rest)
     assert ok, why
-    return deployment_id(script, symbol, exchange, interval)
+    made = set(run_config.all_run_configs()) - before
+    if not made:
+        # An edit, which adds no key. The caller named the deployment.
+        return rest.get("deployment", "")
+    assert len(made) == 1, made
+    return next(iter(made))
 
 
 # ---------------------------------------------------------------------------
@@ -95,30 +108,72 @@ def test_one_script_on_one_instrument_at_two_intervals_is_two_deployments():
     assert set(run_config.all_run_configs()) == {fast, slow}
 
 
-def test_saving_the_same_three_again_edits_that_deployment_rather_than_adding_one():
+def test_editing_a_deployment_keeps_its_id_and_adds_no_row():
     """Catches a new row on every save.
 
     Editing a deployment's product or its parameters is an edit, not a second
     deployment, or a trader adjusting a quantity would be left with a list that
-    grows by a row every time they press save.
+    grows by a row every time they press save. Keeping the id is the other half:
+    its orders carry that tag, and a new one would hand its whole book away.
     """
     first = save(product="MIS")
-    again = save(product="NRML")
 
-    assert first == again
+    again = save(product="NRML", deployment=first)
+
+    assert again == first
     assert len(run_config.all_run_configs()) == 1
     assert run_config.read_run_config(first)["product"] == "NRML"
 
 
-def test_a_deployment_carries_the_script_it_runs():
+def test_deploying_the_same_script_on_the_same_instrument_twice_is_refused():
+    """THE ONE THE SINGLE KEY USED TO PREVENT BY COLLAPSING.
+
+    Two deployments of one script on one instrument and interval are two runs,
+    two positions and a trader who believes they have one. It used to be
+    impossible because both keyed the same; now it is said out loud.
+    """
+    save(symbol="SYM1")
+
+    ok, why = run_config.write_run_config(SCRIPT, "SYM1", "EXCH1", "1m")
+
+    assert ok is False
+    assert "already deployed" in why, why
+    assert len(run_config.all_run_configs()) == 1
+
+
+def test_a_deployment_made_where_another_was_removed_is_not_that_one():
+    """THE ONE A TRADER REPORTED.
+
+    The id was worked out from the script and the instrument alone, so removing
+    a deployment and making another like it produced the same id again. The new
+    one inherited the old one's tag, and every book is a filter on that tag: a
+    strategy deployed a minute ago opened showing a day of trades it never made,
+    and a position it does not hold.
+    """
+    first = save()
+    ok, _ = run_config.delete_run_config(first)
+    assert ok
+
+    second = save()
+
+    assert second != first, "a recreated deployment inherited the removed one's orders"
+    # And it is still the same strategy on the same instrument, which is what a
+    # trader sees: only the identity behind it is new.
+    held = run_config.read_run_config(second)
+    assert (held["script"], held["symbol"], held["interval"]) == (SCRIPT, "SYM1", "1m")
+
+
+def test_a_deployment_carries_the_script_it_runs_and_its_own_id():
     """A page shows the strategy's name, and the key is no longer that name.
 
-    A long one ends in a digest, so the file cannot be recovered from the id:
-    it has to be stored.
+    A long one ends in a digest, so neither the file nor the token can be
+    recovered from the id: both have to be stored.
     """
     one = save()
 
-    assert run_config.read_run_config(one)["script"] == SCRIPT
+    held = run_config.read_run_config(one)
+    assert held["script"] == SCRIPT
+    assert held["deployment"] == one
 
 
 def test_removing_one_deployment_leaves_the_others_running():
@@ -322,3 +377,21 @@ def test_reading_an_old_file_forward_does_not_rewrite_it(store):
     run_config.all_run_configs()
 
     assert store.read_text(encoding="utf-8") == before
+
+
+def test_changing_a_deployment_s_instrument_makes_another_rather_than_moving_it():
+    """THE SAME CONFUSION, REACHED THROUGH THE SETTINGS FORM.
+
+    The form says changing the instrument or the interval makes a second
+    deployment. Keeping the id would leave the new instrument showing the old
+    one's orders, fills and position, which is what a token exists to end: the
+    tag is on orders that were placed on something else.
+    """
+    first = save(symbol="SYM1")
+
+    second = save(symbol="SYM2", deployment=first)
+
+    assert second != first
+    assert run_config.read_run_config(first)["symbol"] == "SYM1", "the first was moved"
+    assert run_config.read_run_config(second)["symbol"] == "SYM2"
+    assert len(run_config.all_run_configs()) == 2
