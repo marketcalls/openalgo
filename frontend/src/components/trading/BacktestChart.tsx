@@ -26,7 +26,7 @@
  */
 
 import type { Chart } from 'openalgo-charts'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -159,8 +159,12 @@ export function BacktestChart({ points, className }: Props) {
     }
   }, [points, mode, appMode])
 
-  const { equity } = seriesFrom(points)
-  if (equity.length < 2) return null
+  // Memoised, because this runs on every render and the run above it may hold
+  // fifty thousand points: walking all of them to find out whether there are at
+  // least two is work repeated for nothing on every unrelated state change in
+  // the panel.
+  const drawable = useMemo(() => seriesFrom(points).equity.length >= 2, [points])
+  if (!drawable) return null
 
   return (
     <div

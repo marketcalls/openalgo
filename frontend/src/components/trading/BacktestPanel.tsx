@@ -81,8 +81,21 @@ interface Props {
   onRan?(): void
 }
 
-/** How far back a run reaches when the panel is first opened. */
-const DEFAULT_DAYS = 180
+/**
+ * How far back a run reaches when the panel is first opened.
+ *
+ * **Coupled to `MAX_BARS`, which is why the number is written down here rather
+ * than chosen.** A hundred and eighty days is about a hundred and twenty three
+ * trading sessions, and an Indian equity session is 375 minutes, so the default
+ * range at the finest interval asks for roughly forty six thousand bars. That
+ * sits just under the ceiling on purpose: the panel's own default has to be a
+ * range the panel will actually run, and before the ceiling was raised this
+ * default was refused outright at one minute.
+ *
+ * Raising this without raising `MAX_BARS` puts the panel back in that state,
+ * where the first thing a trader sees on opening it is a refusal.
+ */
+export const DEFAULT_DAYS = 180
 
 function isoDaysAgo(days: number): string {
   const at = new Date()
