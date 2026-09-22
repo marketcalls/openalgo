@@ -227,6 +227,13 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * long enough to bring the panel back.
    */
   const [scriptSource, setScriptSource] = useState<string | null>(null)
+  /**
+   * A strategy the editor asked to have tested, until the backtest panel takes
+   * it. Held on the page rather than passed straight across, because the panel
+   * is not mounted while the editor is showing and the request has to outlive
+   * the switch between them.
+   */
+  const [backtestFile, setBacktestFile] = useState<string | null>(null)
   const showScriptSource = useCallback((file: string) => {
     setScriptSource(file)
     setPanel('scripts')
@@ -1430,6 +1437,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
               onMarkChart={(markers) =>
                 panelTarget()?.setBacktestMarkers(markers as never) ?? false
               }
+              runFile={backtestFile}
+              onRan={() => setBacktestFile(null)}
             />
           )}
           {apiKey && wsUrl && panel === 'scripts' && (
@@ -1449,6 +1458,15 @@ function TradingWorkspace({ account }: { account: string | null }) {
               }}
               openFile={scriptSource}
               onOpened={() => setScriptSource(null)}
+              // Applying a strategy tests it over this chart's history and marks
+              // what it did. The panel is switched to first, because the run's
+              // report is the other half of the answer and it is drawn there.
+              onBacktest={(file) => {
+                if (!panelTarget()) return false
+                setBacktestFile(file)
+                setPanel('backtest')
+                return true
+              }}
             />
           )}
 

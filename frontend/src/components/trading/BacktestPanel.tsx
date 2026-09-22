@@ -55,6 +55,16 @@ interface Props {
    * rather than leaving a reader to wonder where the arrows are.
    */
   onMarkChart?(markers: readonly unknown[]): boolean
+  /**
+   * A strategy another panel wants run, or null.
+   *
+   * The editor's apply button hands one over rather than refusing: applying a
+   * strategy to a chart means testing it over that chart's history and marking
+   * what it did, which is the only thing "apply" can honestly mean for a script
+   * that trades. Cleared through `onRan` so the same file can be sent twice.
+   */
+  runFile?: string | null
+  onRan?(): void
 }
 
 /** How far back a run reaches when the panel is first opened. */
@@ -114,7 +124,7 @@ function Figure({
   )
 }
 
-export function BacktestPanel({ apiKey, getChartContext, onMarkChart }: Props) {
+export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = null, onRan }: Props) {
   const [marked, setMarked] = useState<number | null>(null)
   // Only for the header. The run reads its own, fresh, at the moment it starts.
   const [target, setTarget] = useState<RunTarget | null>(null)
@@ -178,9 +188,27 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart }: Props) {
 
   useEffect(() => () => inflight.current?.abort(), [])
 
-  const run = useCallback(async () => {
+  // A file handed over from another panel: select it and run it. Kept as an
+  // effect on the prop rather than a method, because the panel may not be
+  // mounted at the moment the button is pressed, and the request has to survive
+  // until it is.
+  // The request is `runFile` and only `runFile`: `runNamed` and `onRan` are
+  // rebuilt whenever the date range or the chart changes, and listing them would
+  // re-run the handed-over strategy every time the trader touched a date box.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runFile is the request; the rest would re-fire it
+  useEffect(() => {
+    if (!runFile) return
+    setFile(runFile)
+    onRan?.()
+    // The run reads `file` from state, which this render has not committed yet,
+    // so it is started with the name directly.
+    void runNamed(runFile)
+  }, [runFile])
+
+  const runNamed = useCallback(
+    async (which: string) => {
     const chart = getChartContext()
-    if (!file || !chart) return
+    if (!which || !chart) return
 
     inflight.current?.abort()
     const controller = new AbortController()
@@ -189,9 +217,9 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart }: Props) {
     setRunning(true)
     setOutcome(null)
     try {
-      const source = await readScript(file, controller.signal)
+      const source = await readScript(which, controller.signal)
       const result = await runBacktest({
-        file,
+        file: which,
         source,
         symbol: chart.symbol,
         exchange: chart.exchange,
@@ -218,7 +246,11 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart }: Props) {
     } finally {
       if (!controller.signal.aborted) setRunning(false)
     }
-  }, [apiKey, file, from, getChartContext, onMarkChart, to])
+    },
+    [apiKey, from, getChartContext, onMarkChart, to]
+  )
+
+  const run = useCallback(() => runNamed(file), [file, runNamed])
 
   const summary = outcome?.summary
   const ready = Boolean(file && target) && !running

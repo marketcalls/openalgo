@@ -13,6 +13,14 @@
  * by a spinner alone, because a trader looking at this panel is asking whether
  * something is holding a position, and "working on it" is not an answer to that.
  *
+ * **Where the orders go is stated, not implied.** A run sends through the
+ * platform's own order path, so it trades live while the platform is live and
+ * sandbox while it is in analyzer mode. That is the intended behaviour and it
+ * is also the thing a trader must not have to infer: the same button, pressed
+ * on the same strategy, either simulates or spends money depending on a setting
+ * made somewhere else on the site. So the mode is on the header, and the start
+ * button says which destination it is about to use.
+ *
  * **Refusals are shown in the server's own words.** The runner refuses a start
  * for reasons a trader can act on, naming the script and what is missing.
  * Rewording them here would lose the part that says what to do.
@@ -29,6 +37,7 @@ import {
   stopStrategy,
 } from '@/api/openscriptRunner'
 import { kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
+import { useThemeStore } from '@/stores/themeStore'
 import { cn } from '@/lib/utils'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
@@ -60,6 +69,8 @@ function since(started: string | null): string {
 }
 
 export function StrategiesPanel({ getChartContext }: Props) {
+  const appMode = useThemeStore((state) => state.appMode)
+  const isLive = appMode === 'live'
   const [running, setRunning] = useState<RunningStrategy[]>([])
   const [settings, setSettings] = useState<RunSettings[]>([])
   const [strategies, setStrategies] = useState<string[]>([])
@@ -163,9 +174,22 @@ export function StrategiesPanel({ getChartContext }: Props) {
     >
       <div className={PANEL_HEADER}>
         <span className="text-xs font-medium">Strategies</span>
-        <span className="ml-auto text-[11px] text-muted-foreground">
-          {running.length} running
+        <span
+          className={cn(
+            'ml-auto shrink-0 rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide',
+            isLive
+              ? 'bg-destructive/15 text-destructive'
+              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+          )}
+          title={
+            isLive
+              ? 'Orders from a running strategy go to your broker'
+              : 'Orders from a running strategy go to the sandbox'
+          }
+        >
+          {isLive ? 'Live' : 'Analyzer'}
         </span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">{running.length} running</span>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
@@ -309,7 +333,7 @@ export function StrategiesPanel({ getChartContext }: Props) {
                     title={held ? undefined : 'Set an instrument first'}
                     onClick={() => void act(file, () => startStrategy(file))}
                   >
-                    {busy === file ? 'Starting' : 'Start'}
+                    {busy === file ? 'Starting' : isLive ? 'Start live' : 'Start in sandbox'}
                   </button>
                 )}
                 <button
@@ -326,9 +350,12 @@ export function StrategiesPanel({ getChartContext }: Props) {
 
         <p className="mt-auto text-[10px] leading-relaxed text-muted-foreground">
           A run is a process on the server and outlives this page: closing the browser stops
-          nothing. Orders go through this platform's own order path, so where they land is
-          decided by the sandbox and analyzer setting, the same as every other surface. A run
-          stops itself if that setting changes while it is holding a position.
+          nothing. Orders go through this platform's own order path, so a run trades with your
+          broker while the platform is in live mode and against the sandbox while it is in
+          analyzer mode, the same as every other surface here. That setting is made elsewhere
+          on the site and is shown above. A run stops itself if it changes while the run is
+          holding a position, because an exit sent somewhere the entry never went would leave a
+          position nothing is managing.
         </p>
       </div>
     </PanelShell>

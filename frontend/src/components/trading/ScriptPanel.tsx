@@ -157,6 +157,14 @@ interface Props {
    */
   onAddToChart: (indicatorId: string) => boolean
   /**
+   * Test this strategy over the chart's history and mark what it did.
+   *
+   * Answers a boolean for the same reason `onAddToChart` does: a button that
+   * does nothing and says nothing is the failure this panel keeps being caught
+   * by. False means there was no chart to test against.
+   */
+  onBacktest?: (file: string) => boolean
+  /**
    * A script to open as soon as the panel is up, from the braces button on a
    * study's legend row.
    *
@@ -170,7 +178,7 @@ interface Props {
   onOpened?: () => void
 }
 
-export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) {
+export function ScriptPanel({ onAddToChart, onBacktest, openFile = null, onOpened }: Props) {
   const [scripts, setScripts] = useState<StoredScript[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
@@ -512,19 +520,17 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
   const applyToChart = useCallback(() => {
     if (open === null) return
 
-    // A strategy is not in the chart's indicator list at all, because the chart
-    // tier plots and does not trade: the engine refuses a program that needs
-    // orders with OS6006, which is a sentence about capability tags shown to
-    // somebody who pressed a button. Said here, in the words of what they were
-    // trying to do, and pointing at the panel that does run one.
+    // Applying a strategy means testing it over the chart's history and marking
+    // what it did, which is the only thing "apply" can honestly mean for a
+    // script that trades: the chart tier draws and does not trade, so a
+    // strategy is not in the indicator list and adding it there was refused by
+    // the engine with OS6006. Handed to the backtest instead of refused.
     if (kind === 'strategy') {
+      if (onBacktest?.(open)) return
       setResult((previous) => ({
         ok: previous?.ok ?? false,
         diagnostics: previous?.diagnostics ?? [],
-        problem:
-          'A strategy places orders, and the chart draws rather than trades, so it cannot be ' +
-          'added as an indicator. Open the Backtest panel on the rail to run it over history, ' +
-          'or start it from the runner to trade it in sandbox mode.',
+        problem: 'There is no chart open to test this strategy against.',
       }))
       setConsoleOpen(true)
       return
@@ -537,7 +543,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       problem: 'There is no chart open to add this study to.',
     }))
     setConsoleOpen(true)
-  }, [kind, open, onAddToChart])
+  }, [kind, onBacktest, open, onAddToChart])
 
   // Ctrl+S is what anyone editing text reaches for, and without it the browser
   // opens its own save dialog over the panel.
