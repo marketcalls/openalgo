@@ -4,9 +4,22 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 
 from dotenv import load_dotenv
+
+#: Serialises every writer of .env in this process: the startup rotations
+#: below, the admin MCP settings save and the broker credentials save. Each
+#: of them reads the file, changes some lines and writes it back, so two at
+#: once would each write back a copy without the other's change. One lock for
+#: all of them, because separate locks per caller would not serialise them
+#: against each other. Reentrant, so a caller holding it for its own
+#: read-modify-write can still call update_env_values(). A stdlib lock: only
+#: request threads and startup write .env, never a real thread under eventlet.
+ENV_WRITE_LOCK = threading.RLock()
+
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Placeholder values shipped in .sample.env. OpenAlgo detects these on startup
 # and rotates them to fresh random secrets on first run. Coordinated with the
@@ -206,6 +219,17 @@ def check_env_version_compatibility() -> bool:
             print("   New features may not work properly with an outdated configuration!")
             print("=" * 70)
 
+            # A server started by systemd, Docker or a process manager has no
+            # terminal to answer this, and input() would either fail or wait
+            # forever. Neither may stop a trading server from starting.
+            if not _stdin_is_interactive():
+                print(
+                    "\n   No terminal is attached to answer, so OpenAlgo is starting\n"
+                    "   with the current .env. Update it as described above, then\n"
+                    "   restart OpenAlgo."
+                )
+                return True
+
             # Give user a chance to continue anyway
             try:
                 response = input("\nContinue anyway? (y/N): ").lower().strip()
@@ -237,6 +261,14 @@ def check_env_version_compatibility() -> bool:
         return True  # Continue if version parsing fails
 
     return True
+
+
+def _stdin_is_interactive() -> bool:
+    """Return True when someone at a terminal can answer a prompt."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def _db_has_user_data(env_dir: str) -> bool:
@@ -314,11 +346,12 @@ def _atomic_rewrite_dotenv(env_path: str, pairs: list) -> None:
             file lock on Windows, permission denied, etc.). Caller surfaces
             this with a manual-rotation instruction.
     """
-    with open(env_path, "r", encoding="utf-8", newline="") as f:
-        content = f.read()
-    for old, new in pairs:
-        content = content.replace(old, new)
-    _atomic_replace_text(env_path, content)
+    with ENV_WRITE_LOCK:
+        with open(env_path, "r", encoding="utf-8", newline="") as f:
+            content = f.read()
+        for old, new in pairs:
+            content = content.replace(old, new)
+        _atomic_replace_text(env_path, content)
 
 
 # Errors that mean "the temp-file-then-rename pattern can't work in this
@@ -480,6 +513,68 @@ def _atomic_replace_text(path: str, content: str) -> None:
             os.fsync(f.fileno())
         except OSError:
             pass
+
+
+def atomic_replace_text(path: str, content: str) -> None:
+    """Replace the whole of ``path`` with ``content`` as safely as the file allows.
+
+    The public name for :func:`_atomic_replace_text`. It does not take
+    ``ENV_WRITE_LOCK`` itself: a caller doing a read-modify-write of .env holds
+    the lock across the read and this call, or uses :func:`update_env_values`.
+    """
+    _atomic_replace_text(path, content)
+
+
+def _env_line(key: str, value: str) -> str:
+    """Format ``KEY = 'value'``, the style install.sh writes."""
+    if "'" in value:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'{key} = "{escaped}"'
+    return f"{key} = '{value}'"
+
+
+def update_env_values(path: str, updates: dict) -> None:
+    """Set each key in ``updates`` in the .env file at ``path``, atomically.
+
+    The first line assigning a key is replaced and later duplicates are left
+    alone; a key not present is appended. Line endings and every other line
+    are preserved. The read and the write happen under ``ENV_WRITE_LOCK``, so
+    two saves at once cannot each write back a copy without the other's change.
+
+    Args:
+        path: The .env file.
+        updates: Key to new value. Values are written single-quoted, or
+            double-quoted with escaping when they contain a single quote.
+
+    Raises:
+        ValueError: A key is not a valid variable name, or a value contains a
+            line break.
+        OSError: The file could not be read or written.
+    """
+    for key, value in updates.items():
+        if not _ENV_KEY_RE.match(str(key)):
+            raise ValueError(f"Refusing to write malformed env key: {key!r}")
+        if "\n" in str(value) or "\r" in str(value):
+            raise ValueError(f"Refusing to write a line break into env key {key}")
+
+    with ENV_WRITE_LOCK:
+        with open(path, encoding="utf-8", newline="") as f:
+            content = f.read()
+        lines = content.splitlines(keepends=True)
+        eol = "\r\n" if "\r\n" in content else "\n"
+        for key, value in updates.items():
+            pattern = re.compile(rf"^[ \t]*{re.escape(str(key))}[ \t]*=")
+            new_line = _env_line(str(key), str(value))
+            for index, line in enumerate(lines):
+                if pattern.match(line):
+                    ending = line[len(line.rstrip("\r\n")) :]
+                    lines[index] = new_line + ending
+                    break
+            else:
+                if lines and not lines[-1].endswith(("\n", "\r")):
+                    lines[-1] = lines[-1] + eol
+                lines.append(new_line + eol)
+        _atomic_replace_text(path, "".join(lines))
 
 
 # .sample.env ships this placeholder so install scripts and the bootstrap
@@ -656,7 +751,8 @@ def _ensure_fernet_salt(env_path: str) -> None:
             content, pepper_pat, fernet_line_pat, existing_value, eol
         )
         try:
-            _atomic_replace_text(env_path, new_content)
+            with ENV_WRITE_LOCK:
+                _atomic_replace_text(env_path, new_content)
         except OSError as e:
             _warn_fernet_write_failed("Could not relocate FERNET_SALT line in .env", e)
             os.environ["FERNET_SALT"] = existing_value
@@ -721,7 +817,8 @@ def _ensure_fernet_salt(env_path: str) -> None:
         content, pepper_pat, fernet_line_pat, new_salt, eol
     )
     try:
-        _atomic_replace_text(env_path, new_content)
+        with ENV_WRITE_LOCK:
+            _atomic_replace_text(env_path, new_content)
     except OSError as e:
         _warn_fernet_write_failed("Could not write FERNET_SALT to .env", e)
         return  # legacy static salt remains in effect via auth_db fallback

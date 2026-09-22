@@ -21,6 +21,7 @@ from database.master_contract_status_db import (
     update_download_stats,
     update_status,
 )
+from utils import real_threading
 from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
 from utils.session import get_session_expiry_time, set_session_login_time
@@ -268,13 +269,90 @@ def mask_api_credential(credential, show_chars=4):
     return credential[:show_chars] + "*" * 8
 
 
+# --- Master contract download: one at a time per broker ---------------------
+#
+# A download deletes the broker's whole symbol table and inserts it again. Two
+# of them at once (a login racing a forced re-download, or two logins) would
+# interleave those deletes and inserts and leave a table that is neither. So a
+# download claims its broker first, and a second start while one runs is
+# refused. The lock guards the set only; the download runs outside it.
+
+#: Shown when a download is refused because one is already running.
+MASTER_CONTRACT_BUSY_MESSAGE = (
+    "A master contract download is already running. Wait for it to finish, then try again."
+)
+
+_master_contract_lock = real_threading.Lock()
+_master_contract_running: set[str] = set()
+
+
+def _claim_master_contract_download(broker: str) -> bool:
+    """Mark ``broker``'s download as running. False if it already was."""
+    with _master_contract_lock:
+        if broker in _master_contract_running:
+            return False
+        _master_contract_running.add(broker)
+        return True
+
+
+def _release_master_contract_download(broker: str) -> None:
+    with _master_contract_lock:
+        _master_contract_running.discard(broker)
+
+
+def is_master_contract_download_running(broker: str) -> bool:
+    """Return True while a master contract download for ``broker`` is running."""
+    with _master_contract_lock:
+        return broker in _master_contract_running
+
+
+def try_start_master_contract_download(broker: str) -> bool:
+    """Start a background master contract download unless one is running.
+
+    Returns:
+        True if a download was started, False if one for ``broker`` was
+        already running (nothing is started then).
+    """
+    if not _claim_master_contract_download(broker):
+        logger.info(f"Master contract download for {broker} already running; not starting another")
+        return False
+    try:
+        thread = Thread(target=_run_claimed_download, args=(broker,), daemon=True)
+        thread.start()
+    except BaseException:
+        _release_master_contract_download(broker)
+        raise
+    return True
+
+
+def _run_claimed_download(broker: str):
+    """Run a download whose claim the caller already holds, then release it."""
+    try:
+        return _download_master_contract(broker)
+    finally:
+        _release_master_contract_download(broker)
+
+
 def async_master_contract_download(broker):
     """
     Asynchronously download the master contract and emit a WebSocket event upon completion,
     with the 'broker' parameter specifying the broker for which to download the contract.
 
     Tracks download duration and exchange-wise statistics for smart download feature.
+
+    Only one download per broker runs at a time. Called while one is already
+    running, this starts nothing and returns an error result saying so.
     """
+    if not _claim_master_contract_download(broker):
+        logger.info(
+            f"Master contract download for {broker} already running; this request was not started"
+        )
+        return {"status": "error", "message": MASTER_CONTRACT_BUSY_MESSAGE}
+    return _run_claimed_download(broker)
+
+
+def _download_master_contract(broker):
+    """Download the master contract for ``broker``. The caller holds its claim."""
     start_time = time.time()
 
     # Update status to downloading
@@ -438,9 +516,9 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
 
         if should_download:
-            # Start async download in background thread
-            thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-            thread.start()
+            # Start async download in background thread, unless one for this
+            # broker is already running.
+            try_start_master_contract_download(broker)
         else:
             # Use cached data - load existing master contract
             logger.info(f"Skipping download for {broker}: {reason}")
