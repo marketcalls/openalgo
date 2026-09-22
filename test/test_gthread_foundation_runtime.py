@@ -463,7 +463,10 @@ def test_a_real_eventlet_imported_without_patching_changes_no_branch(tmp_path):
             assert sys.modules[name].USE_ASYNC is True, name
         import services.agent.chatgpt_oauth as oauth
         assert oauth._real_sleep is time.sleep
-        assert "__original_module_threading" not in sys.modules
+        # Not asserted here: "__original_module_threading" absent. Importing
+        # eventlet builds that copy itself (eventlet.hubs asks its patcher for
+        # the original threading module), which is why nothing in the app may
+        # import eventlet merely to ask whether it is active.
         print("OK")
         """,
     )
