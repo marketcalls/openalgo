@@ -709,7 +709,15 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
               <Figure label="Profit factor" value={orDash(summary.profitFactor, (v) => money(v))} />
               <Figure label="Expectancy" value={money(summary.expectancy)} />
               <Figure label="Max drawdown" value={money(summary.maxDrawdown)} tone="bad" />
-              <Figure label="Max run-up" value={money(summary.maxRunUp)} tone="good" />
+              {/* Shown only when the engine reports it. The run-up is a newer
+                  figure than the pinned engine computes, so on that engine this
+                  tile was a dash on every run: an empty box beside real numbers
+                  reads as data that failed to arrive rather than as a figure
+                  this version does not have. Rendering it conditionally means it
+                  appears on its own the day the engine supplies it. */}
+              {summary.maxRunUp !== undefined && summary.maxRunUp !== null && (
+                <Figure label="Max run-up" value={money(summary.maxRunUp)} tone="good" />
+              )}
             </div>
 
             <BacktestChart points={outcome?.equity ?? []} />
