@@ -224,8 +224,13 @@ class Scheduler:
     def __init__(self):
         self.jobs = {}
 
-    def add_job(self, func, trigger, id, replace_existing=False):
-        self.jobs[id] = {"func": func, "trigger": trigger}
+    def add_job(self, func, trigger, id, replace_existing=False, **rest):
+        # **rest because the real scheduler takes the trigger's own arguments,
+        # and this stands in for it. A stub narrower than the thing it replaces
+        # is a stub that refuses a call the real one accepts: this one rejected
+        # the reaper's interval job, which made the module look broken when it
+        # was the fake that was.
+        self.jobs[id] = {"func": func, "trigger": trigger, **rest}
 
     def get_job(self, job_id):
         return self.jobs.get(job_id)
@@ -1147,3 +1152,87 @@ def test_every_route_is_behind_the_session_guard(scripts, schedules, store, monk
 
     for answer in calls:
         assert answer.status_code in (302, 401)
+
+
+# ---------------------------------------------------------------------------
+# The sweep, and the flag that used to burn its only attempt
+# ---------------------------------------------------------------------------
+
+
+def test_the_reaper_is_registered_so_a_finished_run_is_swept_with_nobody_watching(
+    monkeypatch, client, stub, host, schedules
+):
+    # Catches the reaper going unregistered, which is how it was: nothing in the
+    # application called reap_finished_runs, so on a headless deployment a run
+    # that ended by itself stayed in the registry and that script could never be
+    # started again for the life of the worker.
+    monkeypatch.setattr(runner, "_RESTORED", False)
+
+    runner.restore_schedules()
+
+    job = host.SCHEDULER.get_job(runner.REAP_JOB_ID)
+    assert job is not None, "nothing sweeps finished runs"
+    assert job["trigger"] == "interval"
+    assert job["minutes"] == runner.REAP_MINUTES
+
+
+def test_a_scheduler_that_is_not_ready_leaves_the_attempt_to_be_made_again(
+    monkeypatch, client, stub, host, schedules
+):
+    # Catches the flag being set before the work. It was, so a worker that
+    # imported this module before the platform scheduler was running burned the
+    # only attempt: every schedule failed into the log and nothing tried again,
+    # and a scheduled strategy simply never ran.
+    schedules.parent.mkdir(parents=True, exist_ok=True)
+    schedules.write_text(
+        json.dumps({"range.oscript": {"start_time": "09:20", "stop_time": None, "days": ["mon"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "_RESTORED", False)
+
+    real_scheduler = runner._scheduler
+
+    def no_scheduler(_host):
+        raise runner.SchedulerUnavailable("not running yet")
+
+    monkeypatch.setattr(runner, "_scheduler", no_scheduler)
+    runner.restore_schedules()
+
+    assert runner._RESTORED is False, "the failed attempt was recorded as done"
+    assert host.SCHEDULER.get_job("openscript_start_range.oscript") is None
+
+    # The scheduler arrives, and the second attempt is allowed to happen. Put
+    # back only this one patch: monkeypatch.undo() would take the fixtures with
+    # it and the second call would run against a different world entirely.
+    monkeypatch.setattr(runner, "_scheduler", real_scheduler)
+    runner.restore_schedules()
+
+    assert host.SCHEDULER.get_job("openscript_start_range.oscript") is not None
+
+
+def test_a_reaper_that_cannot_be_registered_does_not_cost_the_schedules(
+    monkeypatch, client, stub, host, schedules
+):
+    # The two are registered on one scheduler and must not share a fate. A run
+    # left in the registry is cleared by the next read of it; a schedule that was
+    # never restored is a strategy that never runs, so the second must survive
+    # the first failing.
+    schedules.parent.mkdir(parents=True, exist_ok=True)
+    schedules.write_text(
+        json.dumps({"range.oscript": {"start_time": "09:20", "stop_time": None, "days": ["mon"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "_RESTORED", False)
+
+    real_add = host.SCHEDULER.add_job
+
+    def refuse_the_interval(func, trigger, id, replace_existing=False, **rest):
+        if trigger == "interval":
+            raise RuntimeError("this scheduler will not take an interval job")
+        return real_add(func, trigger, id, replace_existing=replace_existing, **rest)
+
+    monkeypatch.setattr(host.SCHEDULER, "add_job", refuse_the_interval)
+    runner.restore_schedules()
+
+    assert host.SCHEDULER.get_job(runner.REAP_JOB_ID) is None
+    assert host.SCHEDULER.get_job("openscript_start_range.oscript") is not None

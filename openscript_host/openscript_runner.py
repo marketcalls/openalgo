@@ -515,6 +515,10 @@ class Session:
         self._sending = False
         #: The order the platform gave each intent, and the intents still moving.
         self._orders: dict[int, str] = {}
+        #: Where this run's orders are actually going, learned from the first one
+        #: the platform accepted rather than asked for in advance. None until an
+        #: order has been accepted. See ``_route`` for why it is watched.
+        self._destination: str | None = None
         self._open: set[int] = set()
         self._previous_close = None
 
@@ -1096,6 +1100,19 @@ class Session:
         Nothing here passes ``force_live`` and there is no way to make it. The
         order path reads the platform's analyzer toggle before anything else, so
         where this run's orders go is where every other surface's orders go.
+
+        **That is a decision with a consequence, and the consequence is guarded
+        rather than left silent.** Because the toggle is read per order and not
+        per run, an operator turning the analyzer on to try something elsewhere
+        would send this run's exits to the sandbox while the broker still holds
+        the position the entries opened. The platform says so in its own words in
+        ``services/place_order_service.py``. ``force_live`` is the documented way
+        out and this runner deliberately does not take it, so instead the
+        destination of the first accepted order is remembered and every later one
+        is checked against it. A run whose destination changes underneath it is
+        stopped, loudly, with the position named: continuing would be sending an
+        exit somewhere the entry never went, which is the one outcome worse than
+        stopping.
         """
         if intent.kind == "cancel":
             self._cancel(intent)
@@ -1142,6 +1159,23 @@ class Session:
             if isinstance(answered, dict):
                 reason = str(answered.get("message", reason))
             self._reject(intent, reason)
+            return False
+
+        went_to = "analyzer" if str(answered.get("mode", "")) == "analyze" else "live"
+        if self._destination is None:
+            self._destination = went_to
+            say(f"Orders from this run are going to the {went_to} destination.")
+        elif went_to != self._destination:
+            # Do not try to put it back. The entry is where it is, and this run
+            # can no longer reason about the position it thinks it holds.
+            self.stop()
+            say(
+                f"STOPPING: this order went to the {went_to} destination and every order "
+                f"before it went to the {self._destination} one. The platform's analyzer "
+                "setting changed while this run was holding a position. Whatever is open "
+                "was opened against the earlier destination and must be checked and closed "
+                "by a person: this run will send nothing further."
+            )
             return False
 
         order_id = str(answered.get("orderid", ""))
@@ -1352,7 +1386,10 @@ def main(argv=None) -> int:
         say("Asked to stop. Finishing the current bar.")
         session.stop()
 
-    for name in ("SIGTERM", "SIGINT"):
+    # SIGBREAK is the Windows half: the service sends CTRL_BREAK_EVENT to this
+    # process group, and without a handler for it the default action ends the
+    # process where it stands rather than at the end of the bar.
+    for name in ("SIGTERM", "SIGINT", "SIGBREAK"):
         handled = getattr(signal, name, None)
         if handled is not None:
             try:

@@ -273,11 +273,32 @@ def _terminate(process: subprocess.Popen, pid: int, gentle: float = 5.0, forced:
     Gentle first, because a run asked to stop finishes the bar it is on and
     leaves, which is what keeps its ledger and its log consistent with what it
     actually sent. The forced signal exists for a run that cannot answer.
+
+    **On Windows the gentle step is a console break and not ``terminate``.**
+    ``Popen.terminate`` there is ``TerminateProcess``, which is the forced step
+    under a gentler name: the child gets no signal, runs no handler and stops
+    wherever it happened to be, which can be between sending one leg of a bar and
+    sending the other. The child is spawned into a process group of its own
+    (``CREATE_NEW_PROCESS_GROUP``) precisely so a break can be delivered to it,
+    and it handles ``SIGBREAK`` alongside ``SIGTERM``. Only if that is refused or
+    ignored does this fall through to killing it.
     """
     try:
         if IS_WINDOWS:
+            broken = False
+            try:
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+                broken = True
+            except (OSError, ValueError, AttributeError):
+                # No group to break, or the platform refused it. Say so rather
+                # than reporting a gentle stop that never happened.
+                logger.warning(
+                    "Could not ask process %s to stop gently; it will be terminated", pid
+                )
+            if broken and _wait_for_exit(process, gentle):
+                return True
             process.terminate()
-            if _wait_for_exit(process, gentle):
+            if _wait_for_exit(process, forced):
                 return True
             process.kill()
             return _wait_for_exit(process, forced)

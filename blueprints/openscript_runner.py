@@ -95,6 +95,7 @@ from services.openscript_run_config import (
 from services.openscript_runner_service import (
     is_running,
     logs_for,
+    reap_finished_runs,
     run_id_for,
     running_runs,
     start_run,
@@ -516,28 +517,84 @@ def _scheduled_stop(filename):
         logger.exception("The scheduled stop of %s failed", filename)
 
 
-def restore_schedules():
-    """Put the stored schedules back on the scheduler, once.
+#: How often finished runs are swept when nobody is looking at the page.
+REAP_MINUTES = 5
 
-    Cheap when there are none: the file is read, found empty, and the scheduler
-    is never touched, so importing this module costs nothing on an installation
-    that has never scheduled anything.
+#: The scheduler id the sweep is registered under.
+REAP_JOB_ID = "openscript_reap_finished_runs"
+
+
+def _reap_quietly():
+    """The scheduled sweep. Never raises, because a job that raises is dropped."""
+    try:
+        gone = reap_finished_runs()
+        if gone:
+            logger.info("Swept %d finished OpenScript run(s): %s", len(gone), ", ".join(gone))
+    except Exception:
+        logger.exception("The OpenScript reaper failed; it will run again")
+
+
+def restore_schedules():
+    """Put the stored schedules back, and start the sweep that reaps finished runs.
+
+    Cheap when there are no schedules: the file is read, found empty, and no job
+    is registered for it. The reaper is registered either way, because a finished
+    run has to be dropped from the registry whether or not anything is scheduled.
+
+    **The flag is set at the end and not at the beginning.** It was set first,
+    which meant the first attempt was the only attempt: a worker that imported
+    this module before the platform scheduler was running burned it, every
+    schedule failed into the log, and nothing tried again for the life of that
+    worker, so a scheduled strategy simply never ran. Now a failure leaves the
+    flag down and the next call retries.
     """
     global _RESTORED
     if _RESTORED:
         return
-    _RESTORED = True
 
     schedules = _load_schedules()
-    if not schedules:
+
+    try:
+        scheduler = _scheduler(_strategy_host())
+    except Exception:
+        # Without a scheduler there is nothing to restore onto, so leave the flag
+        # down and let the next call try again.
+        logger.exception("The platform scheduler is not available yet; will retry")
         return
 
+    # Best effort, and deliberately not fatal. A run that is not swept is a stale
+    # row that the next read of the registry clears anyway; a schedule that is not
+    # restored is a strategy that silently never runs. The second is far worse, so
+    # a failure here must not cost the restoration below.
+    try:
+        scheduler.add_job(
+            _reap_quietly,
+            "interval",
+            minutes=REAP_MINUTES,
+            id=REAP_JOB_ID,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    except Exception:
+        logger.exception(
+            "Could not start the OpenScript reaper; finished runs are swept on the next "
+            "read of the registry instead"
+        )
+
+    restored = 0
     for filename, entry in schedules.items():
         try:
             _register_jobs(filename, entry)
+            restored += 1
         except Exception:
             logger.exception("Could not restore the schedule for %s", filename)
-    logger.info("Restored %d OpenScript schedules", len(schedules))
+
+    _RESTORED = True
+    logger.info(
+        "Restored %d of %d OpenScript schedules and started the reaper every %d minutes",
+        restored, len(schedules), REAP_MINUTES,
+    )
 
 
 # ---------------------------------------------------------------------------

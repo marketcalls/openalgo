@@ -381,3 +381,27 @@ OpenScript is developed as its own open source project so that other platforms
 can adopt it, under Apache-2.0, with a written specification and a conformance
 suite. The language reference, the error catalogue and the integration guides
 live there rather than being restated here.
+
+## Where a run's orders go, and what happens if that changes
+
+A strategy run sends its orders through the platform's own order path, the same
+one every other surface uses, so sandbox mode and analyzer mode are honoured
+without this runner knowing anything about them. It does **not** pass
+`force_live`.
+
+That is a deliberate decision and it has a consequence worth stating plainly.
+The destination is decided per order and not per run, so an operator who turns
+the analyzer on while a strategy is holding a position would send that
+strategy's exits to the sandbox while the broker still holds what its entries
+opened. The platform describes this failure in its own words in
+`services/place_order_service.py`.
+
+So the run watches for it. The destination of the first order the platform
+accepts is remembered, every later order is checked against it, and a run whose
+destination changes underneath it **stops immediately** and says so in its log,
+naming what is open. It does not try to put the position back: the entry is
+where it is, and a run that can no longer reason about what it holds should not
+be sending anything. Whatever is open at that point has to be checked and closed
+by a person.
+
+A run that stays where it started is never interrupted by this.

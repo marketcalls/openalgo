@@ -971,3 +971,125 @@ class PurePosix:
 def _within(path: PurePosix, folder: PurePosix) -> bool:
     """Whether a path is the folder or sits under it."""
     return path.text == folder.text or path.text.startswith(folder.text.rstrip("/") + "/")
+
+
+# ---------------------------------------------------------------------------
+# Where the orders actually went
+# ---------------------------------------------------------------------------
+#
+# This runner deliberately does not pass ``force_live``. That was decided, and
+# it has a consequence the platform itself documents in
+# ``services/place_order_service.py``: the destination is read per order, so an
+# operator turning the analyzer on while a run holds a position sends that
+# run's exits to the sandbox while the broker still holds what the entries
+# opened. The guard below is the whole of what stands in for ``force_live``, so
+# it is tested rather than trusted.
+
+
+class _Answering:
+    """A platform that accepts every order and says where it sent it."""
+
+    def __init__(self, modes):
+        self.modes = list(modes)
+        self.sent = 0
+
+    def placeorder(self, **_ignored):
+        mode = self.modes[min(self.sent, len(self.modes) - 1)]
+        self.sent += 1
+        answer = {"status": "success", "orderid": f"ORD-{self.sent}"}
+        if mode == "analyzer":
+            answer["mode"] = "analyze"
+        return answer
+
+
+def _routing_session(modes):
+    """A Session with only the parts ``_route`` touches, and a stated destination."""
+    session = object.__new__(runner.Session)
+    session.client = _Answering(modes)
+    session.options = types.SimpleNamespace(
+        strategy_name="probe", symbol="AAA", exchange="XX", script="probe.oscript"
+    )
+    session.product = "MIS"
+    session.stopping = False
+    session._orders = {}
+    session._open = set()
+    session._destination = None
+    return session
+
+
+def _an_order(intent_id=1, side="buy"):
+    return types.SimpleNamespace(
+        kind="place",
+        intent_id=intent_id,
+        side=side,
+        qty=1,
+        placement=types.SimpleNamespace(order_type="market", limit=None, trigger=None),
+    )
+
+
+def test_the_destination_of_the_first_accepted_order_is_remembered(capsys):
+    # Catches the run never learning where it is sending, which is what makes
+    # every later comparison impossible. Without this there is nothing to
+    # compare a changed destination against and the guard cannot fire at all.
+    session = _routing_session(["live"])
+
+    assert session._route(_an_order()) is True
+    assert session._destination == "live"
+    assert "live destination" in capsys.readouterr().out
+
+
+def test_an_analyzer_answer_is_recorded_as_the_analyzer_destination(capsys):
+    # Catches the mode marker being read off the wrong key or compared against
+    # the wrong word. The platform answers "analyze"; reading anything else
+    # makes every sandbox run look like a live one and the guard never fires.
+    session = _routing_session(["analyzer"])
+
+    assert session._route(_an_order()) is True
+    assert session._destination == "analyzer"
+
+
+def test_a_run_whose_destination_changes_under_it_stops_and_says_what_is_open(capsys):
+    # THE ONE THAT MATTERS. Catches the guard being absent, which is how this
+    # was written: the entry goes live, an operator turns the analyzer on, and
+    # the exit is accepted by the sandbox while the broker still holds the
+    # position. The platform reports success for both, so nothing else in this
+    # program can tell that the position is now unmanaged.
+    session = _routing_session(["live", "analyzer"])
+
+    assert session._route(_an_order(1, "buy")) is True
+    assert session.stopping is False
+
+    assert session._route(_an_order(2, "sell")) is False
+    assert session.stopping is True, "the run carried on after its exits were diverted"
+
+    said = capsys.readouterr().out
+    assert "STOPPING" in said
+    assert "analyzer" in said and "live" in said
+    assert "checked and closed by a person" in said
+
+
+def test_a_destination_that_does_not_change_never_stops_the_run(capsys):
+    # The other side, and the reason the guard compares rather than refuses: a
+    # run that stayed where it started must go on trading. A guard that stopped
+    # on every second order would be worse than no guard, because it would look
+    # like the platform was flapping.
+    session = _routing_session(["analyzer", "analyzer", "analyzer"])
+
+    for at in range(3):
+        assert session._route(_an_order(at + 1)) is True
+    assert session.stopping is False
+    assert session._destination == "analyzer"
+
+
+def test_the_runner_never_asks_for_a_live_order():
+    # The decision itself, held as a check rather than a promise in a comment.
+    # force_live is what makes an order bypass the analyzer toggle, and no part
+    # of this program may pass it.
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    offending = [
+        line.strip()
+        for line in source.splitlines()
+        if "force_live" in line and not line.lstrip().startswith("#")
+        and "``force_live``" not in line
+    ]
+    assert offending == [], f"the runner asks for a live order: {offending}"
