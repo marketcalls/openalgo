@@ -449,6 +449,13 @@ CATCHUP_SHARE = 0.9
 FEED_BARS_COMPARED = 10
 FEED_DISAGREEMENT = 0.001
 
+#: How often to look for an instruction while asleep between bars.
+#:
+#: A trader who has pressed Stop is waiting on this, so it is seconds rather
+#: than the ordinary cadence. It is not smaller because this is a file read and
+#: the ordinary answer is that there is nothing in it.
+ASK_EVERY = 2.0
+
 #: When to wake after a boundary while the tick stream is closing the bars.
 #:
 #: A shade past the builder's own settle offset, so that a run waking at the
@@ -2230,6 +2237,14 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
         while waited < sleeping and not session.stopping:
             time.sleep(min(0.5, sleeping - waited))
             waited += 0.5
+            # A trader who has pressed Stop is waiting on this. Without it the
+            # instruction is not seen until the sleep is over, which on a one
+            # minute bar is up to the ordinary cadence: measured at ten seconds
+            # between the press and the closing order. Read every few seconds
+            # rather than on every half second, because this is a file and the
+            # ordinary case is that there is nothing in it.
+            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name):
+                break
 
     say("Stopped.")
     return EXIT_OK
