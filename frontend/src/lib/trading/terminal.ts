@@ -1450,6 +1450,9 @@ export class TradingTerminal {
       .replace(/^\/api\/v1\/[\w/]+\s+failed\s+\(\d+\)(:\s*)?/i, '')
     return m.trim() || 'request failed'
   }
+  /** Strategies already explained as not being indicators, for this page. */
+  private readonly saidSkipped = new Set<string>()
+
   private toast(msg: string, kind: ToastKind = '') {
     this.cb.onToast(msg, kind)
   }
@@ -3275,6 +3278,26 @@ export class TradingTerminal {
     // any other way: there is no build step between saving and running, so this
     // toast is the compiler's only route to the person who wrote the mistake.
     for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    // A strategy is not in the indicator list, and until now nothing said so.
+    //
+    // The chart tier draws and does not trade, so a script that places orders is
+    // skipped when the indicators are registered. That is correct, and it is
+    // also invisible: a trader who saved a strategy opens the picker, cannot
+    // find it, and has nothing to read. "Nothing happens" is what they report,
+    // and they are right, because there is nothing there to press.
+    //
+    // Said once per script for the life of the page. `loadIndicators` runs on
+    // every picker open, every layout restore and every symbol change, so a
+    // toast per call would be the same sentence several times a minute.
+    for (const one of studies.skipped) {
+      if (this.saidSkipped.has(one.file)) continue
+      this.saidSkipped.add(one.file)
+      this.toast(
+        `${one.file} places orders, so it is not an indicator. Use the Backtest panel to see it ` +
+          `on the chart, or Strategies to run it.`
+      )
+    }
   }
 
   /** Restore sources before the evaluator validates their saved identities. */
