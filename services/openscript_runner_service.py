@@ -85,8 +85,10 @@ from time import monotonic, sleep
 import psutil
 import pytz
 
+from services.openscript_deployment import deployment_id, is_deployment_id
 from services.openscript_run_config import (
     PRODUCTS,
+    deployments_of,
     is_product,
     is_run_field,
     is_script_name,
@@ -172,9 +174,14 @@ OS_TYPE = platform.system().lower()
 IS_WINDOWS = OS_TYPE == "windows"
 
 
-def run_id_for(script: str) -> str:
-    """The id one script's run is known by, in the registry and in its log name."""
-    return f"{ID_PREFIX}_{script[: -len('.oscript')] if script.endswith('.oscript') else script}"
+def run_id_for(script: str, symbol: str = "", exchange: str = "", interval: str = "") -> str:
+    """The id one deployment is known by: registry key, log name and order tag.
+
+    Minted by `openscript_deployment`, which is the one place that decides what
+    a deployment is called. See it for why the instrument and the interval are
+    part of the identity rather than only the script.
+    """
+    return deployment_id(script, symbol, exchange, interval)
 
 
 def _ist_now() -> datetime:
@@ -501,7 +508,7 @@ def _api_key_for(user_id: str | None) -> str | None:
 
 
 def start_run(
-    script: str,
+    name: str,
     symbol: str = "",
     exchange: str = "",
     interval: str = "",
@@ -510,13 +517,14 @@ def start_run(
     history_days: int = 5,
     poll_seconds: float = 15.0,
 ) -> tuple[bool, str]:
-    """Start one script in a process of its own and return at once.
+    """Start one deployment in a process of its own and return at once.
 
-    **The script name alone is enough**, and that is how a run is started: the
+    **The name alone is enough**, and that is how a run is started: the
     instrument, the exchange, the interval, the product and the owning user come
-    from the settings saved against that script. Anything passed here wins over
-    what is saved, for a caller that already holds it, and a script with neither
-    is refused by name saying which of the three is missing.
+    from the settings saved against that deployment. ``name`` is a deployment
+    id, or a script name when that script has exactly one deployment. Anything
+    passed here wins over what is saved, for a caller that already holds it, and
+    a deployment with neither is refused saying which of the three is missing.
 
     It does not wait for the run to load its program, reach the platform or place
     anything. There is nothing to wait for that would be worth stopping every
@@ -525,13 +533,21 @@ def start_run(
     installed and whether the instrument answers are all the child's to find out,
     and each of them is a sentence in that log naming the script.
     """
-    if not is_script_name(script):
+    if not is_deployment_id(name) and not is_script_name(name):
         return False, (
-            f"{script!r} is not a script name. A name is letters, digits, dot, dash or "
+            f"{name!r} is not a script name. A name is letters, digits, dot, dash or "
             "underscore, and ends in .oscript"
         )
 
-    saved = read_run_config(script) or {}
+    saved = read_run_config(name) or {}
+    # Which file this deployment runs. Taken from the settings, because a
+    # deployment id is not a file name and cannot be turned back into one: the
+    # long ones end in a digest.
+    script = str(saved.get("script") or "") or (name if is_script_name(name) else "")
+    if not is_script_name(script):
+        _, why = require_run_config(name)
+        return False, why or f"{name} is not a deployment on this server"
+
     symbol = symbol or saved.get("symbol") or ""
     exchange = exchange or saved.get("exchange") or ""
     interval = interval or saved.get("interval") or ""
@@ -547,15 +563,18 @@ def start_run(
     if not (symbol and exchange and interval):
         # Said by the settings rather than here, so a trader reads one sentence
         # about a missing setting wherever they meet it.
-        _, why = require_run_config(script)
+        _, why = require_run_config(name)
         return False, why or (
             f"{script} has no instrument, exchange and interval to run on. Save its run "
             "settings, then start it again."
         )
 
-    for name, value in (("instrument", symbol), ("exchange", exchange), ("interval", interval)):
+    for field, value in (("instrument", symbol), ("exchange", exchange), ("interval", interval)):
         if not is_run_field(value):
-            return False, f"{value!r} is not {'an' if name == 'exchange' else 'a'} {name} this can start a run on"
+            return False, (
+                f"{value!r} is not {'an' if field == 'exchange' else 'a'} {field} this can "
+                "start a run on"
+            )
 
     # A product reaches the same command line as the three above, so it is
     # checked the same way and against the list the run itself checks it against.
@@ -568,16 +587,21 @@ def start_run(
             f"{product!r} is not a product this platform sends. Use one of {', '.join(PRODUCTS)}."
         )
 
-    run_id = run_id_for(script)
+    # From the instrument and the interval as resolved above, not from the name
+    # the caller used: two deployments of one script are two runs, and minting
+    # this from the script alone is what made the second one refuse to start and
+    # put its orders in the first one's book.
+    run_id = run_id_for(script, symbol, exchange, interval)
+    where = f"{script} on {symbol} {exchange} at {interval}"
 
     with PROCESS_LOCK:
         _forget_finished_locked()
         if run_id in RUNNING_RUNS:
-            return False, f"{script} is already running"
+            return False, f"{where} is already running"
         if run_id in STOPPING_RUNS:
-            return False, f"{script} is still stopping, try again in a moment"
+            return False, f"{where} is still stopping, try again in a moment"
         if run_id in STARTING_RUNS:
-            return False, f"{script} is already starting"
+            return False, f"{where} is already starting"
         # Claimed in the hold that checked, and released in the finally below
         # whatever happens after it.
         STARTING_RUNS.add(run_id)
@@ -729,7 +753,7 @@ def _spawn_claimed(
     # Recorded after the child exists, so nothing is ever noted as running that
     # was not. See `openscript_running`: this survives a restart and is what
     # brings the strategy back, and only a trader pressing Stop clears it.
-    mark_running(script, process.pid)
+    mark_running(run_id, process.pid)
 
     logger.info("Started the OpenScript run %s as process %s", run_id, process.pid)
     return True, f"{script} started at {started.strftime('%H:%M:%S IST')}"
@@ -779,27 +803,57 @@ def stop_run(script_or_run_id: str, forget: bool = True) -> tuple[bool, str]:
             STOPPING_RUNS.discard(run_id)
 
     if forget:
-        mark_stopped(str(held.get("script") or ""))
+        mark_stopped(run_id)
 
     logger.info("Stopped the OpenScript run %s", run_id)
     return True, f"{held.get('script', run_id)} stopped"
 
 
 def _as_run_id(given: str) -> str:
-    """A caller may name the script or the run. Both reach the same id.
+    """A caller may name the deployment or the script. Both reach one id.
 
     The two are told apart by the extension and not by the prefix. Every script
-    name ends ``.oscript`` (``is_script_name`` requires it) and no run id does,
-    because ``run_id_for`` strips it. Testing the prefix instead read a script
-    genuinely named ``openscript_something.oscript`` as though it were already a
-    run id: ``start_run`` registered it under ``openscript_openscript_something``
-    while ``stop_run`` and ``status_of`` looked for ``openscript_something.oscript``,
+    name ends ``.oscript`` (``is_script_name`` requires it) and no deployment id
+    does. Testing the prefix instead read a script genuinely named
+    ``openscript_something.oscript`` as though it were already a run id:
+    ``start_run`` registered it under ``openscript_openscript_something`` while
+    ``stop_run`` and ``status_of`` looked for ``openscript_something.oscript``,
     so the run started, answered "not running" ever after, and could not be
     stopped through any route.
+
+    **A script name is resolved through its runs first and its settings
+    second**, because the id now carries the instrument and the interval and
+    cannot be worked out from the name alone.
+
+    The registry is asked first on purpose. What a caller naming a file means is
+    "the run of this file", and a run started with an instrument passed straight
+    to `start_run` has an id no settings file knows: resolving only through the
+    settings would answer an id matching nothing, and a run that is up could not
+    be stopped or asked about by the only name its caller has.
+
+    A script running twice, or deployed twice and running neither, answers an id
+    that matches no run. That is deliberate: stopping whichever of two
+    deployments happened to be looked at first would stop a position on an
+    instrument the caller never named.
     """
-    if given.endswith(".oscript"):
-        return run_id_for(given)
-    return given if given.startswith(f"{ID_PREFIX}_") else run_id_for(given)
+    if not given.endswith(".oscript") and given.startswith(f"{ID_PREFIX}_"):
+        return given
+
+    script = given if given.endswith(".oscript") else f"{given}.oscript"
+
+    with PROCESS_LOCK:
+        running = [
+            run_id for run_id, held in RUNNING_RUNS.items() if held.get("script") == script
+        ]
+    if len(running) == 1:
+        return running[0]
+    if running:
+        return run_id_for(script)
+
+    theirs = deployments_of(script)
+    if len(theirs) == 1:
+        return next(iter(theirs))
+    return run_id_for(script)
 
 
 def is_running(script_or_run_id: str) -> bool:
@@ -875,37 +929,37 @@ def restore_runs() -> tuple[int, int]:
     """
     adopted = 0
     started = 0
-    for script, held in all_running().items():
+    for run_id, held in all_running().items():
         try:
             pid = held.get("pid")
             if _process_is_alive(pid):
-                if _adopt(script, int(pid)):
+                if _adopt(run_id, int(pid)):
                     adopted += 1
                     continue
                 # Alive, and this worker cannot confirm it is the run it was
                 # told about. Starting one beside it is the outcome this whole
                 # function exists to avoid, so nothing is started and a person
-                # is told: two runs of one strategy double every position and
+                # is told: two runs of one deployment double every position and
                 # neither knows about the other.
                 logger.error(
-                    "%s is recorded as running under process %s, which is alive but is not a run "
-                    "of that script. Nothing was started for it, because a second run would "
-                    "double its position. Check that process, then start the strategy again.",
-                    script, pid,
+                    "%s is recorded as running under process %s, which is alive but is not that "
+                    "run. Nothing was started for it, because a second run would double its "
+                    "position. Check that process, then start the strategy again.",
+                    run_id, pid,
                 )
                 continue
 
-            ok, why = start_run(script)
+            ok, why = start_run(run_id)
             if ok:
                 started += 1
             else:
                 # Left out of the record: it is not running and nothing here is
                 # going to make it run, so a trader pressing Start is the next
                 # step rather than this trying again on every restart.
-                mark_stopped(script)
-                logger.warning("Could not put %s back after a restart: %s", script, why)
+                mark_stopped(run_id)
+                logger.warning("Could not put %s back after a restart: %s", run_id, why)
         except Exception:
-            logger.exception("Could not restore the OpenScript run for %s", script)
+            logger.exception("Could not restore the OpenScript run for %s", run_id)
 
     if adopted or started:
         logger.info(
@@ -915,8 +969,8 @@ def restore_runs() -> tuple[int, int]:
     return adopted, started
 
 
-def _is_our_run(script: str, pid: int) -> bool:
-    """Whether this process really is a run of this script.
+def _is_our_run(run_id: str, pid: int) -> bool:
+    """Whether this process really is this deployment's run.
 
     **An id on its own proves nothing, and acting on one is dangerous.** Process
     ids are reused on every platform this runs on, and the gap between a worker
@@ -925,8 +979,12 @@ def _is_our_run(script: str, pid: int) -> bool:
     the registry, and the next Stop would terminate whatever it happened to be.
 
     So the command line is read and has to name both this runner and this
-    script. That is the same test the strategy host makes of its own children,
-    and `psutil` reads a command line on every platform.
+    deployment. The deployment and not the file, because a run carries its id on
+    its own command line as ``--strategy-name``: matching the file alone would
+    let one deployment of a script adopt another deployment of the same script,
+    and the next Stop would then stop the wrong instrument. That is the same
+    test the strategy host makes of its own children, sharpened by the one thing
+    this has that it does not.
 
     **Unreadable is not the same as ours.** A process this worker may not
     inspect, or one whose command line has gone because it is a zombie, answers
@@ -944,21 +1002,21 @@ def _is_our_run(script: str, pid: int) -> bool:
     if not words:
         return False
     written = " ".join(str(one) for one in words)
-    return RUNNER_SCRIPT.name in written and script in written
+    return RUNNER_SCRIPT.name in written and run_id in written
 
 
-def _adopt(script: str, pid: int) -> bool:
+def _adopt(run_id: str, pid: int) -> bool:
     """Take over a live child of a previous worker. True once it is registered.
 
     The log file is the one that process is already writing to, found rather
     than guessed: opening a new one would split a run's own account of itself
     across two files at the moment somebody most wants to read it.
     """
-    if not _is_our_run(script, pid):
+    if not _is_our_run(run_id, pid):
         return False
 
-    run_id = run_id_for(script)
-    saved = read_run_config(script) or {}
+    saved = read_run_config(run_id) or {}
+    script = str(saved.get("script") or "")
     logs = logs_for(run_id)
 
     with PROCESS_LOCK:

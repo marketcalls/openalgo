@@ -65,7 +65,7 @@ const COLUMNS: Record<Tab, Column[]> = {
 
 const LABEL: Record<Tab, string> = { orders: 'Orders', trades: 'Trades', positions: 'Positions' }
 
-const READ: Record<Tab, (file: string, signal?: AbortSignal) => Promise<StrategyBook>> = {
+const READ: Record<Tab, (deployment: string, signal?: AbortSignal) => Promise<StrategyBook>> = {
   orders: strategyOrderbook,
   trades: strategyTradebook,
   positions: strategyPositions,
@@ -97,12 +97,21 @@ function sign(value: unknown): number {
 }
 
 interface Props {
-  file: string
+  /**
+   * The deployment whose book this is, not the script it runs.
+   *
+   * One script is deployed on several instruments at once and each order
+   * carries the deployment's own id, which is the whole of the attribution. A
+   * book asked for by file name showed a run on one instrument the orders a
+   * second run of the same file had placed on another, and nothing on the
+   * screen said which position the rows belonged to.
+   */
+  deployment: string
   /** Bumped by the panel when a run starts or stops, so the books refetch. */
   revision?: number
 }
 
-export function StrategyBooks({ file, revision = 0 }: Props) {
+export function StrategyBooks({ deployment, revision = 0 }: Props) {
   const [tab, setTab] = useState<Tab>('orders')
   const [book, setBook] = useState<StrategyBook | null>(null)
   const [loading, setLoading] = useState(false)
@@ -114,13 +123,13 @@ export function StrategyBooks({ file, revision = 0 }: Props) {
       const controller = new AbortController()
       inflight.current = controller
       setLoading(true)
-      const answered = await READ[which](file, controller.signal)
+      const answered = await READ[which](deployment, controller.signal)
       if (!controller.signal.aborted) {
         setBook(answered)
         setLoading(false)
       }
     },
-    [file]
+    [deployment]
   )
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision is a refetch signal, not a value this reads
@@ -184,9 +193,7 @@ export function StrategyBooks({ file, revision = 0 }: Props) {
         </button>
       </div>
 
-      {book?.problem && (
-        <p className="px-1 py-1 text-[10px] text-destructive">{book.problem}</p>
-      )}
+      {book?.problem && <p className="px-1 py-1 text-[10px] text-destructive">{book.problem}</p>}
 
       {!book?.problem && book && book.rows.length === 0 && (
         <p className="px-1 py-1 text-[10px] text-muted-foreground">

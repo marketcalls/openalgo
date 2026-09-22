@@ -134,7 +134,7 @@ class Runner:
         self.raise_on_start = None
 
         def start_run(
-            script: str,
+            name: str,
             symbol: str = "",
             exchange: str = "",
             interval: str = "",
@@ -143,6 +143,10 @@ class Runner:
             history_days: int = 5,
             poll_seconds: float = 15.0,
         ) -> tuple[bool, str]:
+            # A route names the deployment. These tests deploy each script
+            # once, so the name it uses is the file name and the run it makes is
+            # that file's only deployment.
+            script = name
             self.started.append(
                 (
                     (script, symbol, exchange, interval, user_id, product),
@@ -368,6 +372,84 @@ def save_settings(client, filename="range.oscript", **fields):
 
 
 # ---------------------------------------------------------------------------
+# Addressed by the deployment, which is what the page sends
+# ---------------------------------------------------------------------------
+
+
+def test_a_deployment_id_reaches_the_start_route(client, stub):
+    """THE ONE THE BROWSER FOUND AND THIS FILE DID NOT.
+
+    Every other test here starts by file name, which is what a caller had
+    before deployments existed. The page sends a deployment id, because one
+    script is deployed on several instruments and the file name no longer says
+    which. The route looked for that id on disk and answered "there is no
+    script named openscript_range_TESTSYM_EXCH_5m": a name the trader never
+    typed, pointing at a file that was never meant to exist, for a strategy
+    that was saved and compiled and perfectly runnable.
+    """
+    assert save_settings(client).status_code == 200
+    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+
+    answer = client.post(f"/openscript/runner/start/{deployment}")
+
+    assert answer.status_code == 202, answer.get_json()
+    assert stub.started, "the service was never asked to start anything"
+    assert stub.started[0][0][0] == deployment
+
+
+def test_a_deployment_id_reaches_stop_status_and_the_books(client, stub):
+    """The same failure, on every other route a row's buttons reach."""
+    assert save_settings(client).status_code == 200
+    deployment = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
+    client.post(f"/openscript/runner/start/{deployment}")
+
+    followed = client.get(f"/openscript/runner/status/{deployment}")
+    assert followed.status_code == 200, followed.get_json()
+    assert followed.get_json()["running"] is True
+
+    stopped = client.post(f"/openscript/runner/stop/{deployment}")
+    assert stopped.status_code == 200, stopped.get_json()
+    assert stub.stopped == [deployment]
+
+
+def test_a_deployment_that_names_no_saved_strategy_is_refused_plainly(client, stub):
+    """A name with nothing behind it says so, rather than naming a file.
+
+    The sentence a trader reads has to be about the thing they pressed, which
+    is a row in a list, not about a path on a server they have never seen.
+    """
+    answer = client.post("/openscript/runner/start/openscript_nothing_SYM_EXCH_1m")
+
+    assert answer.status_code == 404
+    assert "openscript_nothing_SYM_EXCH_1m" in answer.get_json()["message"]
+    assert stub.started == []
+
+
+def test_the_settings_answer_names_the_deployment_and_the_script(client, store):
+    """A page needs both: one to address the run, one to show the trader."""
+    assert save_settings(client).status_code == 200
+
+    listed = client.get("/openscript/runner/config").get_json()["settings"]
+
+    assert len(listed) == 1
+    assert listed[0]["file"] == "range.oscript"
+    assert listed[0]["deployment"] == service.run_id_for(
+        "range.oscript", SYMBOL, EXCHANGE, INTERVAL
+    )
+
+
+def test_one_script_saved_against_two_instruments_is_two_settings_rows(client, store):
+    """Saving is how a deployment is made, so a second instrument adds a row."""
+    assert save_settings(client, symbol="SYM1").status_code == 200
+    assert save_settings(client, symbol="SYM2").status_code == 200
+
+    listed = client.get("/openscript/runner/config").get_json()["settings"]
+
+    assert sorted(one["symbol"] for one in listed) == ["SYM1", "SYM2"]
+    assert len({one["deployment"] for one in listed}) == 2
+
+
+# ---------------------------------------------------------------------------
 # The seam that broke last time
 # ---------------------------------------------------------------------------
 
@@ -583,7 +665,7 @@ def test_a_run_that_ends_at_once_still_answers_with_its_identity(client, stub, m
     """
 
     def start_run(
-        script: str,
+        name: str,
         symbol: str = "",
         exchange: str = "",
         interval: str = "",
@@ -592,7 +674,7 @@ def test_a_run_that_ends_at_once_still_answers_with_its_identity(client, stub, m
         history_days: int = 5,
         poll_seconds: float = 15.0,
     ) -> tuple[bool, str]:
-        return True, f"{script} started"
+        return True, f"{name} started"
 
     assert_matches(start_run, service.start_run)
     monkeypatch.setattr(runner, "start_run", start_run)
@@ -601,6 +683,8 @@ def test_a_run_that_ends_at_once_still_answers_with_its_identity(client, stub, m
 
     assert answer.status_code == 202
     body = answer.get_json()
+    # Nothing is saved and nothing registered, so the only name this can answer
+    # with is the script's own. A run that is up answers with its deployment's.
     assert body["run"]["id"] == service.run_id_for("range.oscript")
     assert body["run"]["state"] == "finished"
     assert "log" in body["message"]
@@ -1056,7 +1140,7 @@ def test_the_real_service_starts_and_stops_a_run_through_these_routes(
     """
     assert save_settings(client).status_code == 200
 
-    run_id = service.run_id_for("range.oscript")
+    run_id = service.run_id_for("range.oscript", SYMBOL, EXCHANGE, INTERVAL)
     try:
         answer = client.post("/openscript/runner/start/range.oscript")
         assert answer.status_code == 202, answer.get_json()

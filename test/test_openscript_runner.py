@@ -929,14 +929,25 @@ def slow_runner(tmp_path, monkeypatch, quiet_service):
 
 
 def _start(**overrides):
+    """Start one deployment: the script, the instrument and the bar together.
+
+    Named ``name`` rather than ``script`` because a run is a deployment: one
+    script is deployed on several instruments and several intervals at once, and
+    each is started, stopped and tracked on its own.
+    """
     given = {
-        "script": "turn.oscript",
+        "name": "turn.oscript",
         "symbol": "SYM1",
         "exchange": "EXCH1",
         "interval": "1m",
     }
     given.update(overrides)
     return service.start_run(**given)
+
+
+def deployed(script="turn.oscript", symbol="SYM1", exchange="EXCH1", interval="1m"):
+    """The id the deployment `_start` starts is known by."""
+    return service.run_id_for(script, symbol, exchange, interval)
 
 
 def test_starting_a_run_hands_the_worker_back_at_once(slow_runner):
@@ -969,7 +980,7 @@ def test_stopping_a_run_reaps_the_process(slow_runner):
     """
     ok, said = _start()
     assert ok, said
-    held = service.RUNNING_RUNS[service.run_id_for("turn.oscript")]
+    held = service.RUNNING_RUNS[deployed()]
     pid = held["pid"]
     process = held["process"]
 
@@ -1048,7 +1059,7 @@ def test_the_log_goes_where_this_platform_already_keeps_strategy_logs(slow_runne
     ok, said = _start()
     assert ok, said
     try:
-        run_id = service.run_id_for("turn.oscript")
+        run_id = deployed()
         written = service.logs_for(run_id)
         assert written, "the run wrote no log at all"
         assert re.match(rf"^{re.escape(run_id)}_\d{{8}}_\d{{6}}_IST\.log$", written[0].name)
@@ -1095,7 +1106,7 @@ def test_a_run_that_has_finished_is_dropped_from_the_registry(quiet_service, tmp
 
     ok, said = _start()
     assert ok, said
-    run_id = service.run_id_for("turn.oscript")
+    run_id = deployed()
 
     process = service.RUNNING_RUNS[run_id]["process"]
     deadline = time.monotonic() + 30
@@ -1121,12 +1132,12 @@ def test_every_run_is_stopped_before_the_worker_goes(slow_runner):
     """
     ok, said = _start()
     assert ok, said
-    held = service.RUNNING_RUNS[service.run_id_for("turn.oscript")]
+    held = service.RUNNING_RUNS[deployed()]
     process = held["process"]
 
     stopped = service.stop_every_run()
 
-    assert stopped == [service.run_id_for("turn.oscript")]
+    assert stopped == [deployed()]
     assert process.poll() is not None
     assert service.RUNNING_RUNS == {}
 
@@ -1472,7 +1483,10 @@ def test_saving_one_script_s_settings_leaves_every_other_script_alone(settings):
     assert run_config.write_run_config("one.oscript", "SYM1", "EXCH1", "1m")[0]
     assert run_config.write_run_config("two.oscript", "SYM2", "EXCH2", "5m")[0]
 
-    assert set(run_config.all_run_configs()) == {"one.oscript", "two.oscript"}
+    assert set(run_config.all_run_configs()) == {
+        "openscript_one_SYM1_EXCH1_1m",
+        "openscript_two_SYM2_EXCH2_5m",
+    }
     assert run_config.read_run_config("one.oscript")["symbol"] == "SYM1"
     assert run_config.read_run_config("two.oscript")["symbol"] == "SYM2"
 
@@ -1583,7 +1597,7 @@ def test_a_run_that_ended_by_itself_is_gone_without_anybody_sweeping(
 
     ok, said = service.start_run("turn.oscript", "SYM1", "EXCH1", "1m")
     assert ok, said
-    run_id = service.run_id_for("turn.oscript")
+    run_id = deployed()
 
     # Read straight out of the dictionary, so waiting for the child does not
     # itself go through the sweep this test is about.
@@ -1743,7 +1757,7 @@ def test_the_signatures_two_other_callers_import_are_these():
     """
     contract = {
         service.start_run: (
-            "(script: str, symbol: str = '', exchange: str = '', interval: str = '', "
+            "(name: str, symbol: str = '', exchange: str = '', interval: str = '', "
             "user_id: str | None = None, product: str = '', history_days: int = 5, "
             "poll_seconds: float = 15.0) -> tuple[bool, str]"
         ),
@@ -1753,19 +1767,22 @@ def test_the_signatures_two_other_callers_import_are_these():
         service.running_runs: "() -> list[dict]",
         service.reap_finished_runs: "() -> list[str]",
         service.stop_every_run: "() -> list[str]",
-        service.run_id_for: "(script: str) -> str",
+        service.run_id_for: (
+            "(script: str, symbol: str = '', exchange: str = '', interval: str = '') -> str"
+        ),
         service.logs_for: "(run_id: str) -> list[pathlib.Path]",
         service.log_file_for: (
             "(run_id: str, started: datetime.datetime | None = None) -> pathlib.Path"
         ),
         service.runner_program_path: "() -> pathlib.Path | None",
-        run_config.read_run_config: "(script: str) -> dict | None",
-        run_config.require_run_config: "(script: str) -> tuple[dict | None, str]",
+        run_config.read_run_config: "(name: str) -> dict | None",
+        run_config.require_run_config: "(name: str) -> tuple[dict | None, str]",
+        run_config.deployments_of: "(script: str) -> dict[str, dict]",
         run_config.write_run_config: (
             "(script: str, symbol: str, exchange: str, interval: str, product: str = '', "
             "user_id: str | None = None, inputs: Any = None) -> tuple[bool, str]"
         ),
-        run_config.delete_run_config: "(script: str) -> tuple[bool, str]",
+        run_config.delete_run_config: "(name: str) -> tuple[bool, str]",
         run_config.all_run_configs: "() -> dict[str, dict]",
         run_config.is_script_name: "(name: str) -> bool",
         run_config.is_run_field: "(value: str) -> bool",
@@ -1803,7 +1820,7 @@ def test_one_start_reaches_the_real_service_and_the_real_settings(tmp_path, monk
     ok, message = start_run("turn.oscript")
     try:
         assert ok, message
-        held = service.RUNNING_RUNS[run_id_for("turn.oscript")]
+        held = service.RUNNING_RUNS[deployed()]
         assert held["symbol"] == "SYM1"
         assert psutil.pid_exists(held["pid"])
     finally:

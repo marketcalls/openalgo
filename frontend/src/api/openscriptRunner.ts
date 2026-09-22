@@ -26,6 +26,16 @@ const BASE = '/openscript/runner'
 /** One process the server is running. `state` is always running: see below. */
 export interface RunningStrategy {
   id: string
+  /**
+   * The deployment this run is of, which is what everything else addresses.
+   *
+   * One script is deployed on several instruments, and on one instrument at
+   * several intervals, at the same time. Each is a separate run with its own
+   * position, its own book and its own decision to stop, so a call naming only
+   * the file would not say which of them it meant. Same value as `id`.
+   */
+  deployment: string
+  /** The script this deployment runs, which is what a trader reads. */
   file: string
   /**
    * Always `running`.
@@ -45,8 +55,16 @@ export interface RunningStrategy {
   log: string | null
 }
 
-/** What a script will be run against, saved on the server per script. */
+/** One deployment: a script, what it runs on, and how it is configured. */
 export interface RunSettings {
+  /**
+   * The id this deployment is known by, absent on one being created.
+   *
+   * A new deployment has no id until it is saved, because the id is made from
+   * the instrument and the interval still being typed into the form.
+   */
+  deployment?: string
+  /** The script this deployment runs. */
   file: string
   symbol: string
   exchange: string
@@ -68,8 +86,10 @@ export interface RunSettings {
   updated_at?: string | null
 }
 
-/** When a script starts and stops, on the platform's own scheduler. */
+/** When a deployment starts and stops, on the platform's own scheduler. */
 export interface Schedule {
+  /** The deployment this belongs to, or the script for one saved before these. */
+  deployment?: string
   file: string
   start_time: string | null
   stop_time: string | null
@@ -127,11 +147,16 @@ export async function overview(signal?: AbortSignal): Promise<RunnerOverview> {
 }
 
 /**
- * Start one script. Answers the run it created, never an outcome.
+ * Start one deployment. Answers the run it created, never an outcome.
  *
  * It takes no body: what a run is of comes from the settings saved against the
- * script, so a start that carried an instrument would be a second place the
- * same fact is stated. A script with no settings is refused by name.
+ * deployment, so a start that carried an instrument would be a second place the
+ * same fact is stated. A deployment with no settings is refused by name.
+ *
+ * `name` is a deployment id. A script name still works while that script is
+ * deployed once, and is refused rather than guessed when it is deployed twice:
+ * starting whichever of two happened to be looked at first would put a position
+ * on an instrument nobody named.
  */
 export async function startStrategy(file: string): Promise<RunningStrategy> {
   try {
@@ -152,6 +177,13 @@ export async function stopStrategy(file: string): Promise<void> {
   }
 }
 
+/**
+ * Save a deployment: the script, the instrument, the interval and the rest.
+ *
+ * Addressed by the **script**, not by the deployment, because this is what
+ * creates one. Saving a script against an instrument and an interval it is
+ * already deployed on edits that deployment; against a new pair it adds one.
+ */
 export async function saveSettings(settings: RunSettings): Promise<void> {
   try {
     await webClient.post(`${BASE}/config/${encodeURIComponent(settings.file)}`, {
@@ -170,6 +202,7 @@ export async function saveSettings(settings: RunSettings): Promise<void> {
   }
 }
 
+/** Remove one deployment, addressed by its id. */
 export async function clearSettings(file: string): Promise<void> {
   try {
     await webClient.delete(`${BASE}/config/${encodeURIComponent(file)}`)
@@ -180,7 +213,10 @@ export async function clearSettings(file: string): Promise<void> {
 
 export async function saveSchedule(schedule: Schedule): Promise<void> {
   try {
-    await webClient.post(`${BASE}/schedule/${encodeURIComponent(schedule.file)}`, {
+    // The deployment, because a schedule starts a run and a run is of a
+    // deployment. The file is the fallback for a script deployed once.
+    const at = schedule.deployment || schedule.file
+    await webClient.post(`${BASE}/schedule/${encodeURIComponent(at)}`, {
       start_time: schedule.start_time,
       stop_time: schedule.stop_time,
       days: schedule.days,
@@ -245,6 +281,14 @@ function rowsOf(data: unknown): Record<string, unknown>[] {
   return []
 }
 
+/**
+ * One of a deployment's three books.
+ *
+ * Addressed by the deployment, because an order's tag is the deployment's id
+ * and that tag is the whole of the attribution. Asked for by file name, a
+ * script deployed twice is answered nothing at all rather than one deployment's
+ * orders mixed with the other's, which is the failure this replaced.
+ */
 async function book(kind: string, file: string, signal?: AbortSignal): Promise<StrategyBook> {
   try {
     const res = await webClient.get<{ status: string; data?: unknown; message?: string }>(
@@ -252,7 +296,11 @@ async function book(kind: string, file: string, signal?: AbortSignal): Promise<S
       { signal }
     )
     if (res.data?.status !== 'success') {
-      return { ...EMPTY, raw: res.data, problem: res.data?.message || `The ${kind} could not be read.` }
+      return {
+        ...EMPTY,
+        raw: res.data,
+        problem: res.data?.message || `The ${kind} could not be read.`,
+      }
     }
     const data = res.data.data
     const statistics =

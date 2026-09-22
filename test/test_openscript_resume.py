@@ -20,6 +20,12 @@ import pytest
 
 from services import openscript_runner_service as service
 from services import openscript_running as running
+from services.openscript_deployment import deployment_id
+
+#: One deployment: a script, the instrument it runs on and the bar it runs on.
+#: What is started, stopped, recorded and restored is this and never the file,
+#: because one file is deployed on several instruments at once.
+PROBE = deployment_id("probe.oscript", "SYM1", "EXCH1", "1m")
 
 
 @pytest.fixture(autouse=True)
@@ -37,16 +43,38 @@ def state(tmp_path, monkeypatch):
 
 
 def test_a_start_is_remembered_and_a_stop_forgets_it():
-    running.mark_running("probe.oscript", 4242)
-    assert running.all_running()["probe.oscript"]["pid"] == 4242
+    running.mark_running(PROBE, 4242)
+    assert running.all_running()[PROBE]["pid"] == 4242
 
-    running.mark_stopped("probe.oscript")
+    running.mark_stopped(PROBE)
     assert running.all_running() == {}
 
 
-def test_a_name_that_is_not_a_script_is_never_recorded():
-    """This file names what a later worker will start, so it holds script names."""
-    for bad in ("", "../etc/passwd", "probe.py", "probe"):
+def test_two_deployments_of_one_script_are_two_records():
+    """THE ONE THIS FILE GAINED WITH DEPLOYMENTS.
+
+    A trader runs one strategy on two instruments, and on one instrument at two
+    intervals. Recorded by file name, the second would overwrite the first and a
+    restart would put back one run where there were two, leaving the other
+    position open with nothing watching it.
+    """
+    here = deployment_id("probe.oscript", "SYM1", "EXCH1", "1m")
+    there = deployment_id("probe.oscript", "SYM2", "EXCH1", "1m")
+    slower = deployment_id("probe.oscript", "SYM1", "EXCH1", "1h")
+
+    for one, pid in ((here, 1), (there, 2), (slower, 3)):
+        running.mark_running(one, pid)
+
+    assert sorted(running.all_running()) == sorted((here, there, slower))
+
+    # And stopping one leaves the others exactly where they were.
+    running.mark_stopped(there)
+    assert sorted(running.all_running()) == sorted((here, slower))
+
+
+def test_a_name_that_is_not_a_deployment_is_never_recorded():
+    """This file names what a later worker will start, so it holds ids."""
+    for bad in ("", "../etc/passwd", "probe.py", "probe", "probe.oscript"):
         running.mark_running(bad, 1)
     assert running.all_running() == {}
 
@@ -66,10 +94,8 @@ def test_a_state_file_nobody_can_read_is_an_empty_one(state):
 
 def test_a_pid_that_is_not_one_is_dropped_rather_than_carried(state):
     """A pid is acted on, so a value that cannot be one must not reach that."""
-    state.write_text(
-        json.dumps({"probe.oscript": {"pid": "nonsense", "since": "x"}}), encoding="utf-8"
-    )
-    assert running.all_running()["probe.oscript"]["pid"] is None
+    state.write_text(json.dumps({PROBE: {"pid": "nonsense", "since": "x"}}), encoding="utf-8")
+    assert running.all_running()[PROBE]["pid"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -92,12 +118,14 @@ def test_a_live_run_is_taken_over_rather_than_started_again(monkeypatch):
     still there and still trading. Starting a second run for each doubles every
     position, silently, and neither run knows about the other.
     """
-    running.mark_running("probe.oscript", 777)
-    alive(monkeypatch, 777, ["python", "-u", "openscript_runner.py", "--script", "probe.oscript"])
-    monkeypatch.setattr(service, "read_run_config", lambda script: {"symbol": "TCS"})
+    running.mark_running(PROBE, 777)
+    alive(monkeypatch, 777, ["python", "-u", "openscript_runner.py", "--strategy-name", PROBE])
+    monkeypatch.setattr(
+        service, "read_run_config", lambda one: {"script": "probe.oscript", "symbol": "SYM1"}
+    )
     monkeypatch.setattr(service, "logs_for", lambda run_id: [])
     started = []
-    monkeypatch.setattr(service, "start_run", lambda script: started.append(script) or (True, ""))
+    monkeypatch.setattr(service, "start_run", lambda one: started.append(one) or (True, ""))
 
     adopted, fresh = service.restore_runs()
 
@@ -114,10 +142,10 @@ def test_a_pid_belonging_to_something_else_is_never_adopted(monkeypatch):
     somebody else. Adopting it puts a stranger in the registry, and the next
     Stop terminates whatever it happens to be.
     """
-    running.mark_running("probe.oscript", 777)
+    running.mark_running(PROBE, 777)
     alive(monkeypatch, 777, ["/usr/bin/some-other-program", "--unrelated"])
     started = []
-    monkeypatch.setattr(service, "start_run", lambda script: started.append(script) or (True, ""))
+    monkeypatch.setattr(service, "start_run", lambda one: started.append(one) or (True, ""))
 
     adopted, fresh = service.restore_runs()
 
@@ -144,20 +172,20 @@ def test_a_command_line_that_cannot_be_read_is_not_ours(monkeypatch):
         monkeypatch.setattr(service, "_process_is_alive", lambda one: True)
         monkeypatch.setattr(service.psutil, "Process", boom)
 
-        assert service._is_our_run("probe.oscript", 777) is False
+        assert service._is_our_run(PROBE, 777) is False
 
 
 def test_a_process_that_has_gone_is_started_fresh(monkeypatch):
     """The ordinary restart: a clean exit stopped the children, so start them."""
-    running.mark_running("probe.oscript", 777)
+    running.mark_running(PROBE, 777)
     monkeypatch.setattr(service, "_process_is_alive", lambda one: False)
     started = []
-    monkeypatch.setattr(service, "start_run", lambda script: started.append(script) or (True, ""))
+    monkeypatch.setattr(service, "start_run", lambda one: started.append(one) or (True, ""))
 
     adopted, fresh = service.restore_runs()
 
     assert (adopted, fresh) == (0, 1)
-    assert started == ["probe.oscript"]
+    assert started == [PROBE]
 
 
 def test_a_strategy_that_will_not_start_is_dropped_rather_than_retried_for_ever(monkeypatch):
@@ -166,9 +194,9 @@ def test_a_strategy_that_will_not_start_is_dropped_rather_than_retried_for_ever(
     It is written to the log with the reason, and a trader presses Start when
     they have dealt with it.
     """
-    running.mark_running("probe.oscript", 777)
+    running.mark_running(PROBE, 777)
     monkeypatch.setattr(service, "_process_is_alive", lambda one: False)
-    monkeypatch.setattr(service, "start_run", lambda script: (False, "no instrument set"))
+    monkeypatch.setattr(service, "start_run", lambda one: (False, "no instrument set"))
 
     service.restore_runs()
 
@@ -176,12 +204,12 @@ def test_a_strategy_that_will_not_start_is_dropped_rather_than_retried_for_ever(
 
 
 def test_one_strategy_failing_does_not_stop_the_others(monkeypatch):
-    running.mark_running("good.oscript", 1)
-    running.mark_running("bad.oscript", 2)
+    running.mark_running(deployment_id("good.oscript", "SYM1", "EXCH1", "1m"), 1)
+    running.mark_running(deployment_id("bad.oscript", "SYM1", "EXCH1", "1m"), 2)
     monkeypatch.setattr(service, "_process_is_alive", lambda one: False)
 
-    def start(script):
-        if script == "bad.oscript":
+    def start(one):
+        if one.startswith(deployment_id("bad.oscript", "SYM1", "EXCH1", "1m")):
             raise RuntimeError("something went wrong")
         return True, ""
 

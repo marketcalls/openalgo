@@ -1,10 +1,23 @@
-"""What one OpenScript file is run on: the instrument, the exchange, the interval.
+"""What one OpenScript deployment is run on: the instrument, exchange and interval.
 
 A compiled program says what to compute and what to send. It does not say which
 instrument to compute it over, and nothing in the script can say it either: the
 same script is run on one instrument by one trader and on another by the next.
-So the server keeps that answer per script, and a start reads it here rather
-than carrying it.
+So the server keeps that answer, and a start reads it here rather than carrying
+it.
+
+**The unit is a deployment and not a script.** One script is deployed on several
+instruments at once, each with its own position, its own book and its own
+decision to stop, so the settings are keyed by what `openscript_deployment`
+mints from the script and the instrument together. They used to be keyed by the
+script alone, which meant a strategy could be deployed once and a second
+instrument silently replaced the first.
+
+**An older file is read forward rather than migrated.** A file written when the
+key was the script name carries the instrument inside each entry, which is
+everything needed to work out the key it would have today, so it is read as if
+it had always been in this shape. Nothing is rewritten until the next save,
+which means a downgrade still reads what a trader has.
 
 **Why a start does not carry the instrument.** A run started from a page, a run
 started by a schedule and a run started again after a restart have to be the
@@ -50,6 +63,7 @@ from typing import Any
 
 import pytz
 
+from services.openscript_deployment import deployment_id, is_deployment_id
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -90,8 +104,18 @@ REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
     ("interval", "the interval"),
 )
 
-#: Every field one script's settings hold.
-FIELDS: tuple[str, ...] = ("symbol", "exchange", "interval", "product", "user_id", "inputs")
+#: Every field one deployment's settings hold. ``script`` is among them because
+#: the key is no longer the script name: a reader holding an entry has to be
+#: able to say which file it runs without taking the key apart.
+FIELDS: tuple[str, ...] = (
+    "script",
+    "symbol",
+    "exchange",
+    "interval",
+    "product",
+    "user_id",
+    "inputs",
+)
 
 #: The most settings one script may carry, and the longest a key or a piece of
 #: text may be. A script declares its own inputs, so these are far above any
@@ -142,7 +166,7 @@ def _normalised(entry: dict) -> dict:
     filled["user_id"] = None
     filled["inputs"] = {}
     filled.update(entry)
-    for name in ("symbol", "exchange", "interval", "product"):
+    for name in ("script", "symbol", "exchange", "interval", "product"):
         filled[name] = "" if filled.get(name) is None else str(filled[name])
     # Read back through the same check that let it in. A file an operator edited
     # by hand, or one written by an older version, reaches a run otherwise, and
@@ -204,7 +228,7 @@ def _checked_inputs(given: Any) -> tuple[dict, str]:
 
 
 def all_run_configs() -> dict[str, dict]:
-    """Every script that has run settings saved, by file name.
+    """Every deployment that has run settings saved, by deployment id.
 
     An unreadable file answers the same as an absent one, and says why in the
     log. The alternative is a start that fails with a message about a file, to a
@@ -225,56 +249,102 @@ def all_run_configs() -> dict[str, dict]:
         return {}
 
     if not isinstance(stored, dict):
-        logger.error("The OpenScript run settings at %s are not a set of scripts", CONFIG_FILE)
+        logger.error("The OpenScript run settings at %s are not a set of deployments", CONFIG_FILE)
         return {}
 
+    out: dict[str, dict] = {}
+    for name, entry in stored.items():
+        if not isinstance(name, str) or not isinstance(entry, dict):
+            continue
+        filled = _normalised(entry)
+        if is_script_name(name):
+            # Written when the key was the script name. Everything needed to
+            # work out the key it would have today is inside it, so it is read
+            # as though it had always been in this shape rather than migrated:
+            # nothing is rewritten until the next save, and a trader who goes
+            # back to an older version still has their settings.
+            filled["script"] = name
+            name = deployment_id(
+                name,
+                filled.get("symbol", ""),
+                filled.get("exchange", ""),
+                filled.get("interval", ""),
+            )
+        out[name] = filled
+    return out
+
+
+def deployments_of(script: str) -> dict[str, dict]:
+    """Every deployment of one script, by deployment id."""
     return {
-        name: _normalised(entry)
-        for name, entry in stored.items()
-        if isinstance(name, str) and isinstance(entry, dict)
+        name: entry
+        for name, entry in all_run_configs().items()
+        if entry.get("script") == script
     }
 
 
-def read_run_config(script: str) -> dict | None:
-    """One script's run settings, or nothing when it has none saved.
+def read_run_config(name: str) -> dict | None:
+    """One deployment's run settings, or nothing when there are none saved.
 
-    Nothing also answers a name that is not a script name, because a caller
-    holding one has nothing to look up and a lookup that succeeded on it would
-    be the more surprising answer.
+    ``name`` is a deployment id, or a script name when that script has exactly
+    one deployment. **A script deployed twice is not resolved by name**, because
+    guessing which of two instruments a caller meant is how an order reaches the
+    one they did not.
     """
-    if not is_script_name(script):
+    if is_deployment_id(name):
+        found = all_run_configs().get(name)
+        return dict(found) if found is not None else None
+
+    if not is_script_name(name):
         return None
-    found = all_run_configs().get(script)
-    return dict(found) if found is not None else None
+    theirs = deployments_of(name)
+    if len(theirs) != 1:
+        return None
+    return dict(next(iter(theirs.values())))
 
 
-def require_run_config(script: str) -> tuple[dict | None, str]:
+def require_run_config(name: str) -> tuple[dict | None, str]:
     """The settings a run needs, or nothing and a sentence saying what is missing.
 
     This is the answer a start acts on. The second half is written for the
-    trader who asked for the run: it names the script, names what is not there
-    and names what to do about it, because the person reading it is the one who
-    can fix it and the run cannot.
+    trader who asked for the run: it names what is not there and names what to
+    do about it, because the person reading it is the one who can fix it and the
+    run cannot.
     """
-    if not is_script_name(script):
+    if not is_deployment_id(name) and not is_script_name(name):
         return None, (
-            f"{script!r} is not a script name. A name is letters, digits, dot, dash or "
+            f"{name!r} is not a script name. A name is letters, digits, dot, dash or "
             "underscore, and ends in .oscript"
         )
 
-    found = read_run_config(script)
+    if is_script_name(name):
+        theirs = deployments_of(name)
+        if len(theirs) > 1:
+            # Resolving this by picking one is how an order reaches the
+            # instrument a trader did not mean. The deployments are named so the
+            # caller can say which.
+            where = ", ".join(
+                f"{one.get('symbol')} {one.get('exchange')} at {one.get('interval')}"
+                for one in theirs.values()
+            )
+            return None, (
+                f"{name} is deployed {len(theirs)} times ({where}), so this cannot tell which "
+                "one to start. Start it from its own row."
+            )
+
+    found = read_run_config(name)
     if found is None:
         return None, (
-            f"{script} has no run settings saved on this server, so nothing says which "
+            f"{name} has no run settings saved on this server, so nothing says which "
             "instrument, exchange and interval to run it on. Save its run settings, then "
             "start it again."
         )
 
-    absent = [words for name, words in REQUIRED_FIELDS if not str(found.get(name) or "").strip()]
+    absent = [words for field, words in REQUIRED_FIELDS if not str(found.get(field) or "").strip()]
     if absent:
         return None, (
-            f"{script} is missing {_listed(absent)} from its run settings. Save them, then "
-            "start it again."
+            f"{found.get('script') or name} is missing {_listed(absent)} from its run settings. "
+            "Save them, then start it again."
         )
 
     return found, ""
@@ -343,6 +413,7 @@ def write_run_config(
         return False, wrong
 
     entry = {
+        "script": script,
         "symbol": symbol,
         "exchange": exchange,
         "interval": interval,
@@ -352,9 +423,15 @@ def write_run_config(
         "updated_at": _ist_now().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
 
+    # The key is the deployment, so saving this script against a second
+    # instrument or a second interval adds a deployment rather than replacing
+    # the one already there. Saving it against the same three replaces that one,
+    # which is what editing a deployment's settings means.
+    key = deployment_id(script, symbol, exchange, interval)
+
     with _WRITE_LOCK:
         stored = all_run_configs()
-        stored[script] = entry
+        stored[key] = entry
         saved, why = _save(stored)
 
     if not saved:
@@ -362,29 +439,43 @@ def write_run_config(
     return True, f"{script} will run on {symbol} {exchange} at {interval}"
 
 
-def delete_run_config(script: str) -> tuple[bool, str]:
-    """Forget what one script is run on.
+def delete_run_config(name: str) -> tuple[bool, str]:
+    """Remove one deployment.
 
-    A script with no settings can no longer be started, which is the point: a
-    trader who has finished with a script wants it to stop being one command
-    away from running.
+    A deployment with no settings can no longer be started, which is the point:
+    a trader who has finished running a strategy on an instrument wants it to
+    stop being one command away from running.
+
+    ``name`` is a deployment id, or a script name when that script has exactly
+    one deployment. A script deployed twice is refused by name rather than
+    resolved, for the reason `read_run_config` gives: the wrong guess here
+    removes a deployment a trader is still running.
     """
-    if not is_script_name(script):
+    if not is_deployment_id(name) and not is_script_name(name):
         return False, (
-            f"{script!r} is not a script name. A name is letters, digits, dot, dash or "
+            f"{name!r} is not a script name. A name is letters, digits, dot, dash or "
             "underscore, and ends in .oscript"
         )
 
     with _WRITE_LOCK:
         stored = all_run_configs()
-        if script not in stored:
-            return False, f"{script} has no run settings saved"
-        del stored[script]
+        key = name
+        if key not in stored:
+            theirs = [one for one, entry in stored.items() if entry.get("script") == name]
+            if len(theirs) > 1:
+                return False, (
+                    f"{name} is deployed {len(theirs)} times, so this cannot tell which to "
+                    "remove. Remove it from its own row."
+                )
+            if not theirs:
+                return False, f"{name} has no run settings saved"
+            key = theirs[0]
+        gone = stored.pop(key)
         saved, why = _save(stored)
 
     if not saved:
         return False, why
-    return True, f"The run settings for {script} are gone"
+    return True, f"The run settings for {gone.get('script') or key} are gone"
 
 
 def _save(configs: dict[str, dict]) -> tuple[bool, str]:

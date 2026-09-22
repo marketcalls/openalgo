@@ -1,5 +1,10 @@
 """Which strategies a trader means to have running, across a restart.
 
+**The unit is a deployment, not a script.** One script deployed on two
+instruments, or on one instrument at two intervals, is two runs with two
+positions, so each is recorded and restored on its own. See
+`openscript_deployment`.
+
 **This records an intention, not a fact.** The fact is whether a process exists,
 which the registry in ``openscript_runner_service`` holds and which dies with
 the worker. What survives here is that somebody pressed Start and has not
@@ -35,7 +40,7 @@ from typing import Any
 
 import pytz
 
-from services.openscript_run_config import is_script_name
+from services.openscript_deployment import is_deployment_id
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -59,7 +64,7 @@ def _now() -> str:
 
 
 def all_running() -> dict[str, dict[str, Any]]:
-    """Every script a trader means to have running, by file name.
+    """Every deployment a trader means to have running, by deployment id.
 
     An unreadable file answers the same as an absent one and says why in the
     log. The alternative is a worker that will not start over a state file,
@@ -84,7 +89,7 @@ def all_running() -> dict[str, dict[str, Any]]:
 
     out: dict[str, dict[str, Any]] = {}
     for name, entry in stored.items():
-        if not isinstance(name, str) or not isinstance(entry, dict) or not is_script_name(name):
+        if not isinstance(name, str) or not isinstance(entry, dict) or not is_deployment_id(name):
             continue
         pid = entry.get("pid")
         out[name] = {
@@ -94,18 +99,18 @@ def all_running() -> dict[str, dict[str, Any]]:
     return out
 
 
-def mark_running(script: str, pid: int | None) -> None:
-    """Record that this script is meant to be running, as this process id."""
-    if not is_script_name(script):
+def mark_running(run_id: str, pid: int | None) -> None:
+    """Record that this deployment is meant to be running, as this process id."""
+    if not is_deployment_id(run_id):
         return
-    _change(lambda held: held.update({script: {"pid": pid, "since": _now()}}))
+    _change(lambda held: held.update({run_id: {"pid": pid, "since": _now()}}))
 
 
-def mark_stopped(script: str) -> None:
-    """Record that a trader has stopped this script, so it does not come back."""
-    if not is_script_name(script):
+def mark_stopped(run_id: str) -> None:
+    """Record that a trader has stopped this deployment, so it does not come back."""
+    if not is_deployment_id(run_id):
         return
-    _change(lambda held: held.pop(script, None))
+    _change(lambda held: held.pop(run_id, None))
 
 
 def _change(edit) -> None:

@@ -21,8 +21,16 @@ def order(oid, strategy, symbol="TCS", exchange="NSE", status="complete"):
     }
 
 
-MINE = "openscript_supertrend-strategy"
 SCRIPT = "supertrend-strategy.oscript"
+
+#: The deployment whose book these read. A book belongs to a deployment and not
+#: to a file, because one file is deployed on several instruments at once and an
+#: order's tag is what says which of them placed it.
+MINE = "openscript_supertrend-strategy_SYM1_EXCH1_1m"
+
+#: The same script deployed on a second instrument. Its orders are in the same
+#: global book and must never appear in the first one's.
+SIBLING = "openscript_supertrend-strategy_SYM2_EXCH1_1m"
 
 
 class TestTheTag:
@@ -33,8 +41,37 @@ class TestTheTag:
         # nothing" rather than as a bug.
         from services.openscript_runner_service import run_id_for
 
-        assert books.tag_for(SCRIPT) == run_id_for(SCRIPT)
-        assert books.tag_for(SCRIPT).startswith(books.PREFIX)
+        assert books.tag_for(MINE) == run_id_for(SCRIPT, "SYM1", "EXCH1", "1m")
+        assert books.tag_for(MINE).startswith(books.PREFIX)
+
+    def test_a_file_name_is_not_a_deployment_and_takes_no_book(self):
+        """THE ONE THE DEPLOYMENT CHANGE IS FOR.
+
+        A file name names no instrument, and one file is deployed on several at
+        once. The tag was minted from the file alone, so two deployments shared
+        it and each one's book listed the other's orders: the panel showed a run
+        on a commodity future listing the stock orders the same file had placed
+        that morning, and a trader could not tell which position they were
+        reading.
+        """
+        assert books.tag_for(SCRIPT) == ""
+
+    def test_no_tag_shows_no_rows_and_never_every_untagged_row(self):
+        """Catches an empty tag used as a filter.
+
+        Comparing against an empty string matches exactly the orders carrying no
+        strategy at all, which is every order the trader placed by hand. A book
+        that could not be identified would show somebody else's trades.
+        """
+        rows = [order("1", ""), order("2", None), order("3", MINE)]
+
+        assert books._mine(rows, SCRIPT) == []
+
+    def test_two_deployments_of_one_script_do_not_share_a_book(self):
+        rows = [order("1", MINE), order("2", SIBLING), order("3", MINE)]
+
+        assert [row["orderid"] for row in books._mine(rows, MINE)] == ["1", "3"]
+        assert [row["orderid"] for row in books._mine(rows, SIBLING)] == ["2"]
 
 
 class TestAttribution:
@@ -45,7 +82,7 @@ class TestAttribution:
             order("3", MINE, status="open"),
             order("4", "openscript_ema-crossover", symbol="RELIANCE"),
         ]
-        assert [r["orderid"] for r in books._mine(rows, SCRIPT)] == ["1", "3"]
+        assert [r["orderid"] for r in books._mine(rows, MINE)] == ["1", "3"]
 
     def test_another_openscript_strategy_is_not_mine(self):
         # Catches a prefix match. Every OpenScript run's tag starts the same way,
@@ -61,7 +98,7 @@ class TestAttribution:
         assert books._mine(rows, SCRIPT) == []
 
     def test_whitespace_around_a_tag_does_not_hide_a_row(self):
-        assert len(books._mine([order("1", f"  {MINE} ")], SCRIPT)) == 1
+        assert len(books._mine([order("1", f"  {MINE} ")], MINE)) == 1
 
     def test_a_book_that_is_not_a_list_is_empty_rather_than_a_crash(self):
         for shape in (None, {}, "orders", 7):
@@ -162,7 +199,7 @@ class TestThroughTheWholeBook:
     def test_the_orderbook_recounts_rather_than_passing_the_global_totals(self, monkeypatch):
         monkeypatch.setattr(books, "_fetch", lambda *_a, **_k: (True, self.GLOBAL))
 
-        answered = books.orderbook(SCRIPT, "key", "sandbox")
+        answered = books.orderbook(MINE, "key", "sandbox")
 
         assert [o["orderid"] for o in answered["data"]["orders"]] == ["1", "3"]
         counted = answered["data"]["statistics"]
@@ -177,7 +214,7 @@ class TestThroughTheWholeBook:
         }
         monkeypatch.setattr(books, "_fetch", lambda *_a, **_k: (True, book))
 
-        answered = books.tradebook(SCRIPT, "key", "sandbox")
+        answered = books.tradebook(MINE, "key", "sandbox")
 
         assert [t["orderid"] for t in answered["data"]["trades"]] == ["1"]
 
@@ -201,7 +238,7 @@ class TestThroughTheWholeBook:
 
         monkeypatch.setattr(books, "_fetch", fetch)
 
-        answered = books.positions(SCRIPT, "key", "sandbox")
+        answered = books.positions(MINE, "key", "sandbox")
 
         assert [p["symbol"] for p in answered["data"]["positions"]] == ["TCS"]
 
@@ -210,7 +247,7 @@ class TestThroughTheWholeBook:
             books, "_fetch", lambda *_a, **_k: (False, {"message": "Sandbox is not enabled"})
         )
 
-        answered = books.orderbook(SCRIPT, "key", "sandbox")
+        answered = books.orderbook(MINE, "key", "sandbox")
 
         assert answered["status"] == "error"
         assert answered["message"] == "Sandbox is not enabled"

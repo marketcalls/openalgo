@@ -84,15 +84,18 @@ import pytz
 from flask import Blueprint, jsonify, request, session
 
 import blueprints.openscript as openscript_sources
+from services.openscript_deployment import is_deployment_id
 from services.openscript_run_config import (
     PRODUCTS,
     all_run_configs,
     delete_run_config,
+    is_script_name,
     read_run_config,
     require_run_config,
     write_run_config,
 )
 from services.openscript_runner_service import (
+    _as_run_id,
     is_running,
     logs_for,
     reap_finished_runs,
@@ -129,6 +132,16 @@ _TIME = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 # becomes a name that route will not store, so there is deliberately only one,
 # and it lives with the files.
 SAFE_NAME = openscript_sources._SAFE_NAME
+
+
+def _names_something(given: str) -> bool:
+    """Whether a path segment names a script or a deployment of one.
+
+    Both reach these routes. A trader's page names deployments, because that is
+    what is started, stopped and tracked, and a caller holding only a file name
+    still works while a script is deployed once.
+    """
+    return bool(SAFE_NAME.match(given or "")) or is_deployment_id(given or "")
 
 # What a settings body may carry, and nothing else. The list is short on
 # purpose: every field a run needs is here, and a field a caller invents is
@@ -196,6 +209,10 @@ def _run_answer(info: dict) -> dict:
     """
     return {
         "id": info.get("run"),
+        # The same two names a settings answer carries, for the same reason.
+        # A run's id is its deployment's id: that is what a book is filtered on
+        # and what tells two runs of one script apart.
+        "deployment": info.get("run"),
         "file": info.get("script"),
         "state": "running",
         "symbol": info.get("symbol"),
@@ -208,15 +225,23 @@ def _run_answer(info: dict) -> dict:
     }
 
 
-def _settings_answer(filename: str, entry: dict) -> dict:
-    """One script's run settings, as this route reports them.
+def _settings_answer(name: str, entry: dict) -> dict:
+    """One deployment's run settings, as this route reports them.
+
+    **Both names are reported.** ``deployment`` is what is started, stopped,
+    scheduled and asked for a book, because one script is deployed on several
+    instruments and several intervals at once. ``file`` is the script it runs,
+    which is what a trader reads and what the editor opens. A page given only
+    the first could not name the strategy, and one given only the second could
+    not tell two deployments apart.
 
     The owning user is not among them. It is stored so that a run started by a
     schedule, with nobody watching, can find the key it authenticates with, and
     it is not something the page that sets an instrument needs back.
     """
     return {
-        "file": filename,
+        "deployment": name,
+        "file": entry.get("script") or name,
         "symbol": entry.get("symbol", ""),
         "exchange": entry.get("exchange", ""),
         "interval": entry.get("interval", ""),
@@ -265,22 +290,41 @@ def _refusal(filename):
     ), 400
 
 
-def _why_not_runnable(filename):
-    """Why this script cannot be started, as ``(code, sentence)``, or None.
+def _script_of(given):
+    """The file a name runs: itself for a script, the settings for a deployment.
+
+    A deployment id is not a file name and cannot be turned back into one, since
+    a long one ends in a digest. Read out of the settings instead, which is the
+    one place that records which file a deployment runs.
+    """
+    if is_script_name(given):
+        return given
+    saved = read_run_config(given) or {}
+    return str(saved.get("script") or "")
+
+
+def _why_not_runnable(name):
+    """Why this cannot be started, as ``(code, sentence)``, or None.
 
     Two states, and the second is the one worth a sentence of its own. A source
     with no compiled program beside it is saved, editable and openable, and
     nothing on this server will run it, which is a fact about the script rather
     than a fault in the request.
 
+    ``name`` is a deployment or a script, so the file is resolved before it is
+    looked for. Looking for a deployment id on disk answers "there is no script
+    named openscript_turn_SYM_EXCH_1m", which names something the trader never
+    typed and points them at a file that was never supposed to exist.
+
     What it is run on is deliberately not checked here. The service reads the
     saved settings itself and refuses by name when they are missing, and asking
     the same question twice in two places is how the two answers end up
     disagreeing about which one a trader has to fix.
     """
+    filename = _script_of(name)
     directory = _script_dir()
-    if not (directory / filename).is_file():
-        return 404, f"There is no script named {filename}."
+    if not filename or not (directory / filename).is_file():
+        return 404, f"There is no strategy saved for {name}."
     program = directory / (filename + openscript_sources._PROGRAM_SUFFIX)
     if not program.is_file():
         return 409, (
@@ -320,7 +364,7 @@ def _load_schedules():
     return {
         name: entry
         for name, entry in stored.items()
-        if isinstance(name, str) and SAFE_NAME.match(name) and isinstance(entry, dict)
+        if isinstance(name, str) and _names_something(name) and isinstance(entry, dict)
     }
 
 
@@ -415,7 +459,7 @@ def _remove_jobs(filename):
 
 
 def _register_jobs(filename, entry):
-    """Put one script's start and stop on the scheduler.
+    """Put one deployment's start and stop on the scheduler.
 
     The trigger class and the timezone come off the strategy host, so this is
     the same trigger, on the same scheduler, in the same zone as every other
@@ -633,7 +677,7 @@ def start(filename):
     be a second answer to a settled question, and a client that believed it had
     chosen and was ignored is the worst of the three outcomes.
     """
-    if not SAFE_NAME.match(filename):
+    if not _names_something(filename):
         return _refusal(filename)
 
     options = request.get_json(silent=True)
@@ -657,7 +701,9 @@ def start(filename):
     if not ok:
         return jsonify({"status": "error", "message": message}), 409
 
-    run_id = run_id_for(filename)
+    # The deployment that was started, which is what the caller asked for when
+    # it named one and what its single deployment is when it named a script.
+    run_id = _as_run_id(filename)
     info = status_of(filename)
     if info is None:
         # It started and has already ended, which a script whose engine is
@@ -670,6 +716,7 @@ def start(filename):
                 "status": "success",
                 "run": {
                     "id": run_id,
+                    "deployment": run_id,
                     "file": filename,
                     "state": "finished",
                     "started_at": None,
@@ -702,7 +749,7 @@ def stop(filename):
     answer is the truth: if it refuses after the check passed, its refusal is
     what comes back.
     """
-    if not SAFE_NAME.match(filename):
+    if not _names_something(filename):
         return _refusal(filename)
 
     if not is_running(filename):
@@ -729,7 +776,7 @@ def status(filename):
     """
     restore_schedules()
 
-    if filename is not None and not SAFE_NAME.match(filename):
+    if filename is not None and not _names_something(filename):
         return _refusal(filename)
 
     running = sorted(
@@ -778,12 +825,17 @@ def status(filename):
 @openscript_runner_bp.route("/config", methods=["GET"])
 @check_session_validity
 def list_settings():
-    """What every script with settings saved is run on."""
+    """What every deployment is run on, ordered by the script each one runs."""
     stored = all_run_configs()
     return jsonify(
         {
             "status": "success",
-            "settings": [_settings_answer(name, entry) for name, entry in sorted(stored.items())],
+            "settings": sorted(
+                (_settings_answer(name, entry) for name, entry in stored.items()),
+                # By the script a trader reads, then by where it runs, so two
+                # deployments of one strategy sit together in the list.
+                key=lambda one: (one["file"], one["symbol"], one["interval"]),
+            ),
             "products": list(PRODUCTS),
         }
     )
@@ -798,7 +850,7 @@ def get_settings(filename):
     it with, so the page asking the question and the run that would have failed
     say the same thing.
     """
-    if not SAFE_NAME.match(filename):
+    if not _names_something(filename):
         return _refusal(filename)
 
     saved = read_run_config(filename)
@@ -913,7 +965,7 @@ def clear_settings(filename):
     was started on, because that is the run that is on the market; this stops
     the script being started again without somebody saying what it runs on.
     """
-    if not SAFE_NAME.match(filename):
+    if not _names_something(filename):
         return _refusal(filename)
 
     if read_run_config(filename) is None:
@@ -949,7 +1001,7 @@ def set_schedule(filename):
     straight back off, because a schedule that runs today and is gone after a
     restart is a schedule nobody can reason about.
     """
-    if not SAFE_NAME.match(filename):
+    if not _names_something(filename):
         return _refusal(filename)
 
     restore_schedules()
@@ -1073,7 +1125,7 @@ def clear_schedule(filename):
     running is touched: this stops the script being started again, and stopping
     the run in front of you is the stop route's job.
     """
-    if not SAFE_NAME.match(filename):
+    if not _names_something(filename):
         return _refusal(filename)
 
     restore_schedules()
@@ -1134,6 +1186,78 @@ def _api_key():
         return None
 
 
+# ---------------------------------------------------------------------------
+# What a trader picks from rather than types
+# ---------------------------------------------------------------------------
+#
+# **A deployment names an instrument, an exchange, an interval and a product,
+# and every one of them typed by hand is a run that fails later.** A symbol is
+# the one string a broker mapping matches on, so a character wrong is a start
+# refused a minute later in a log, or worse an instrument that exists and is not
+# the one meant. An interval the broker does not serve is a run that fetches
+# nothing. A product the exchange does not take is an order rejected at the
+# broker, after a signal has been acted on.
+#
+# So the form offers what this platform already knows: the instrument master for
+# the symbol, the broker's own interval list for the bar. Both are read through
+# the platform's own services, which is where that knowledge already is.
+
+
+@openscript_runner_bp.route("/instruments", methods=["GET"])
+@check_session_validity
+def instruments():
+    """Instruments matching a query on one exchange, for the deployment form.
+
+    Deliberately not restricted to a list of exchanges this blueprint keeps. A
+    strategy runs on whatever the broker serves, and a second whitelist here
+    would be a venue a trader can chart and backtest but not deploy on.
+    """
+    exchange = (request.args.get("exchange") or "").strip().upper()
+    query = (request.args.get("q") or "").strip()
+    if len(query) < 2:
+        # One character matches most of an exchange, which is a list nobody can
+        # read. Answered as an empty result rather than a refusal: the box is
+        # being typed into, and an error on every first keystroke is noise.
+        return jsonify({"status": "success", "data": []})
+
+    api_key = _api_key()
+    if not api_key:
+        return jsonify(
+            {"status": "error", "message": "No API key for this session, so nothing can be searched."}
+        ), 400
+
+    from services.search_service import search_symbols
+
+    _ok, response, code = search_symbols(query=query, exchange=exchange or None, api_key=api_key)
+    return jsonify(response), code
+
+
+@openscript_runner_bp.route("/intervals", methods=["GET"])
+@check_session_validity
+def intervals():
+    """The bars this broker serves, for the deployment form.
+
+    The broker's own answer rather than a list kept here. Offering a timeframe
+    the broker does not serve is a deployment that saves, starts, and fetches no
+    history at all.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return jsonify(
+            {"status": "error", "message": "No API key for this session, so the intervals are unknown."}
+        ), 400
+
+    from services.intervals_service import get_intervals_with_auth
+    from services.strategy_module.order_dispatch import resolve_live_auth
+
+    auth_token, broker, error = resolve_live_auth(api_key)
+    if error:
+        return jsonify({"status": "error", "message": error}), 400
+
+    _ok, response, code = get_intervals_with_auth(auth_token, broker)
+    return jsonify(response), code
+
+
 def _mode_for(filename):
     """Which book to read: the run's own side, never the platform's toggle.
 
@@ -1170,7 +1294,7 @@ def _book(filename, which):
     neither, the platform's own setting is the only thing left to go on, and a
     strategy that never ran has an empty book either way.
     """
-    if not SAFE_NAME.match(filename or ""):
+    if not _names_something(filename):
         return _refusal(filename)
 
     from services import openscript_books
@@ -1181,7 +1305,10 @@ def _book(filename, which):
             {"status": "error", "message": "No API key for this session, so no book can be read."}
         ), 400
 
-    answer = which(filename, api_key, _mode_for(filename))
+    # A book belongs to a deployment, because that is what an order's tag names.
+    # A caller holding only a file name is resolved here, where the settings
+    # are, so the books module stays a filter over rows and reads nothing.
+    answer = which(_as_run_id(filename), api_key, _mode_for(filename))
     return jsonify(answer), (200 if answer.get("status") == "success" else 502)
 
 

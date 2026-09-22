@@ -17,7 +17,6 @@ import pytest
 
 from services import openscript_books as books
 
-
 TAG = "openscript_probe"
 
 

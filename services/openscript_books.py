@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.openscript_deployment import is_deployment_id
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -48,15 +49,21 @@ logger = get_logger(__name__)
 PREFIX = "openscript_"
 
 
-def tag_for(script: str) -> str:
-    """The `strategy` value a run of this script tags its orders with.
+def tag_for(name: str) -> str:
+    """The `strategy` value this deployment's run tags its orders with.
 
-    One place, because the runner writes it and this reads it, and the two
-    drifting apart would answer an empty book for a strategy that was trading.
+    A deployment's id **is** that value, so this is a check rather than a
+    lookup: nothing here reads a file, and a book can be taken of a deployment
+    whose settings have since been removed.
+
+    **A name that is not a deployment answers nothing, and nothing means no
+    book.** The tag used to be minted from the script alone, so two deployments
+    of one file shared it and each one's book listed the other's orders: a run
+    on a commodity future showed the stock orders the same file had placed that
+    morning. A caller that holds only a file name resolves it first, where the
+    settings are, rather than here.
     """
-    from services.openscript_runner_service import run_id_for
-
-    return run_id_for(script)
+    return name if is_deployment_id(name) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +202,17 @@ def _fetch(book: str, mode: str, api_key: str) -> tuple[bool, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _mine(rows: Any, script: str) -> list[dict[str, Any]]:
-    """The rows this strategy's runs placed, and no others."""
-    wanted = tag_for(script)
+def _mine(rows: Any, name: str) -> list[dict[str, Any]]:
+    """The rows this deployment's run placed, and no others.
+
+    No tag means no rows, and never every untagged row. A comparison against an
+    empty tag matches exactly the orders that carry no strategy at all, which is
+    every order the trader placed by hand: a deployment that could not be
+    identified would show a book of somebody else's trades.
+    """
+    wanted = tag_for(name)
+    if not wanted:
+        return []
     return [row for row in _rows(rows) if _text(row.get("strategy")) == wanted]
 
 

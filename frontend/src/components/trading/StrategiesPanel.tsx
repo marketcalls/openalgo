@@ -1,5 +1,13 @@
 /**
- * The strategies this server is running, and the ones it could.
+ * The strategies this server is deployed to run, and what each of them is doing.
+ *
+ * **A row is a deployment and not a file.** One strategy is deployed on several
+ * instruments, and on one instrument at several timeframes, all at once: each
+ * has its own position, its own book, its own log and its own decision to stop.
+ * The list used to be one row per file, so deploying a strategy a second time
+ * silently replaced the first and the two shared a book. A trader looking at a
+ * run on a commodity future saw the stock orders the same file had placed that
+ * morning, with nothing to say which position they were reading.
  *
  * Every row here is a process on the server, not a thing in this tab. A run
  * outlives the page: closing the browser stops nothing, and this panel is a
@@ -28,30 +36,27 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  type RunningStrategy,
-  type RunSettings,
   clearSettings,
   overview,
+  type RunningStrategy,
+  type RunSettings,
   saveSettings,
   startStrategy,
   stopStrategy,
   strategyPositions,
 } from '@/api/openscriptRunner'
-import { compileSource, kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
-import {
-  type InputDeclaration,
-  inputsOf,
-  settingsFromForm,
-} from '@/lib/trading/backtestInputs'
-import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
-import { type PositionSummary, summaryOf } from '@/lib/trading/strategyPosition'
 import { type PriceableItem, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
-import { useThemeStore } from '@/stores/themeStore'
+import { type InputDeclaration, inputsOf, settingsFromForm } from '@/lib/trading/backtestInputs'
+import { deploymentsOf, matches } from '@/lib/trading/deployments'
+import { compileSource, kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
+import { type PositionSummary, summaryOf } from '@/lib/trading/strategyPosition'
+import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
 import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/stores/themeStore'
+import { PANEL_HEADER, PanelShell } from './panelShell'
 import { StrategyBooks } from './StrategyBooks'
 import { StrategyInputs } from './StrategyInputs'
-import { PANEL_HEADER, PanelShell } from './panelShell'
 
 interface Props {
   /** The chart, for filling new settings from what the trader is looking at. */
@@ -143,7 +148,12 @@ function Holding({
         <div className="flex items-baseline gap-1.5 text-[10px]">
           <span className="text-muted-foreground">Flat</span>
           {profit !== null && profit !== 0 && (
-            <span className={cn('ml-auto font-mono tabular-nums', profit >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+            <span
+              className={cn(
+                'ml-auto font-mono tabular-nums',
+                profit >= 0 ? 'text-emerald-500' : 'text-destructive'
+              )}
+            >
               {money(profit)}
             </span>
           )}
@@ -169,7 +179,9 @@ function Holding({
                 <span className="text-muted-foreground">@{one.averagePrice.toFixed(2)}</span>
               )}
               {profit !== null && (
-                <span className={cn('ml-auto', profit >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+                <span
+                  className={cn('ml-auto', profit >= 0 ? 'text-emerald-500' : 'text-destructive')}
+                >
                   {money(profit)}
                 </span>
               )}
@@ -189,13 +201,136 @@ function Holding({
           one a trader would act on believing it current. */}
       {positions.length > 0 && !isLive && (
         <span className="text-[9px] leading-tight text-muted-foreground">
-          Not marked to a live price just now: this is what the platform last
-          said, and it moves again when prices arrive.
+          Not marked to a live price just now: this is what the platform last said, and it moves
+          again when prices arrive.
         </span>
       )}
     </div>
   )
 }
+
+/**
+ * The instrument, the interval, the product and the script's own parameters.
+ *
+ * One component, used by the form that creates a deployment and by the form
+ * that edits one. Two copies would be two places a field could be added, and
+ * the one nobody remembered would be the one a trader could not set.
+ */
+function DeploymentForm({
+  draft,
+  setDraft,
+  declarations,
+  typed,
+  setTyped,
+  sizeNote,
+  onSave,
+  onCancel,
+  onRemove,
+  busy,
+  saveLabel,
+}: {
+  draft: RunSettings
+  setDraft(next: RunSettings): void
+  declarations: InputDeclaration[]
+  typed: Record<string, string>
+  setTyped(next: (held: Record<string, string>) => Record<string, string>): void
+  sizeNote: string
+  onSave(): void
+  onCancel(): void
+  onRemove: (() => void) | null
+  busy: boolean
+  saveLabel: string
+}) {
+  const ready = Boolean(
+    draft.file && draft.symbol.trim() && draft.exchange.trim() && draft.interval.trim()
+  )
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-1.5">
+        <input
+          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
+          placeholder="Instrument"
+          value={draft.symbol}
+          onChange={(e) => setDraft({ ...draft, symbol: e.target.value })}
+        />
+        <input
+          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
+          placeholder="Exchange"
+          value={draft.exchange}
+          onChange={(e) => setDraft({ ...draft, exchange: e.target.value })}
+        />
+        <input
+          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
+          placeholder="Interval"
+          value={draft.interval}
+          onChange={(e) => setDraft({ ...draft, interval: e.target.value })}
+        />
+        <select
+          className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
+          value={draft.product}
+          onChange={(e) => setDraft({ ...draft, product: e.target.value })}
+        >
+          {PRODUCTS.map((one) => (
+            <option key={one} value={one}>
+              {one}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <StrategyInputs
+        declarations={declarations}
+        edited={typed}
+        onChange={(key, value) => setTyped((held) => ({ ...held, [key]: value }))}
+        note="A box left empty uses the script's own default. A running strategy reads these when it starts, so stop it and start it again to apply a change."
+      />
+
+      {sizeNote && <p className="text-[10px] leading-relaxed text-muted-foreground">{sizeNote}</p>}
+
+      <p className="text-[10px] leading-relaxed text-muted-foreground">
+        The instrument and the interval are part of what this deployment is. Changing either one
+        makes a second deployment rather than moving this one, so the strategy you are already
+        running is left exactly where it is.
+      </p>
+
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          className="h-7 flex-1 rounded border border-border text-[11px] hover:bg-accent disabled:opacity-50"
+          disabled={busy || !ready}
+          title={ready ? undefined : 'An instrument, an exchange and an interval are needed'}
+          onClick={onSave}
+        >
+          {saveLabel}
+        </button>
+        <button
+          type="button"
+          className="h-7 rounded border border-border px-2 text-[11px] hover:bg-accent"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        {onRemove && (
+          <button
+            type="button"
+            className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-destructive"
+            onClick={onRemove}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
+/**
+ * The sentinel `editing` holds while a deployment is being created.
+ *
+ * Not a deployment id and never mistakable for one: a server id begins with a
+ * letter or a digit, so nothing it mints can collide with this.
+ */
+const NEW = '+new'
 
 export function StrategiesPanel({ getChartContext }: Props) {
   const appMode = useThemeStore((state) => state.appMode)
@@ -260,11 +395,15 @@ export function StrategiesPanel({ getChartContext }: Props) {
     // of every other strategy on the page.
     const holdings = await Promise.all(
       found.running.map(async (run) => {
+        // By the deployment, because that is what an order carries and what
+        // the position book is filtered on. Asked for by file, two deployments
+        // of one script would each be shown the sum of both positions.
+        const id = run.deployment || run.id
         try {
-          const answered = await strategyPositions(run.file, signal)
-          return [run.file, summaryOf(answered.raw)] as const
+          const answered = await strategyPositions(id, signal)
+          return [id, summaryOf(answered.raw)] as const
         } catch {
-          return [run.file, null] as const
+          return [id, null] as const
         }
       })
     )
@@ -374,6 +513,9 @@ export function StrategiesPanel({ getChartContext }: Props) {
     return () => controller.abort()
   }, [])
 
+  /** Every deployment, running first. See `deployments`, where it is tested. */
+  const deployments = useMemo(() => deploymentsOf(settings, running), [settings, running])
+
   const act = useCallback(
     async (file: string, what: () => Promise<unknown>) => {
       setBusy(file)
@@ -391,14 +533,24 @@ export function StrategiesPanel({ getChartContext }: Props) {
     [refresh]
   )
 
+  /**
+   * Open the form, on an existing deployment or on a new one.
+   *
+   * `at` is a deployment id, or `NEW` for one being created. A new one starts
+   * on the chart's own instrument and on the first strategy saved, because a
+   * trader deploying a strategy is almost always looking at the instrument they
+   * mean and typing the whole of it again is the part they would not thank
+   * anybody for.
+   */
   const openEditor = useCallback(
-    (file: string) => {
-      const held = settings.find((one) => one.file === file)
+    (at: string, file?: string) => {
+      const held = at === NEW ? null : (settings.find((one) => one.deployment === at) ?? null)
+      const script = held?.file ?? file ?? ''
       const chart = getChartContext()
-      setEditing(file)
+      setEditing(at)
       setDraft(
         held ?? {
-          file,
+          file: script,
           // Filled from the chart, because a trader configuring a strategy is
           // almost always looking at the instrument they mean.
           symbol: chart?.symbol ?? '',
@@ -426,8 +578,8 @@ export function StrategiesPanel({ getChartContext }: Props) {
       setSizeNote('')
       void (async () => {
         try {
-          const source = await readScript(file)
-          const built = await compileSource(file, source)
+          const source = await readScript(script)
+          const built = await compileSource(script, source)
           if (!built.ok || built.program === undefined) return
           const program = JSON.parse(built.program)
           setDeclarations(inputsOf(program))
@@ -441,8 +593,6 @@ export function StrategiesPanel({ getChartContext }: Props) {
     },
     [getChartContext, settings]
   )
-
-  const runningFor = (file: string) => running.find((one) => one.file === file) ?? null
 
   return (
     <PanelShell
@@ -472,11 +622,68 @@ export function StrategiesPanel({ getChartContext }: Props) {
         <span className="shrink-0 text-[11px] text-muted-foreground">{running.length} running</span>
       </div>
 
+      <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+        <button
+          type="button"
+          className="h-7 rounded border border-border bg-accent/40 px-2 text-[11px] hover:bg-accent disabled:opacity-50"
+          disabled={strategies.length === 0}
+          title={
+            strategies.length === 0
+              ? 'Save a strategy first. A study plots and places no orders.'
+              : 'Run a strategy on an instrument'
+          }
+          onClick={() => (editing === NEW ? setEditing(null) : openEditor(NEW, strategies[0]))}
+        >
+          {editing === NEW ? 'Cancel' : 'Deploy a strategy'}
+        </button>
+        <span className="text-[10px] text-muted-foreground">
+          {deployments.length === 1 ? '1 deployment' : `${deployments.length} deployments`}
+        </span>
+      </div>
+
+      {editing === NEW && draft && (
+        <div className="flex flex-col gap-1.5 border-b border-border bg-muted/40 p-2">
+          <label className="text-[10px] font-medium text-muted-foreground" htmlFor="deploy-script">
+            Strategy
+          </label>
+          <select
+            id="deploy-script"
+            className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
+            value={draft.file}
+            onChange={(e) => openEditor(NEW, e.target.value)}
+          >
+            {strategies.map((one) => (
+              <option key={one} value={one}>
+                {one}
+              </option>
+            ))}
+          </select>
+          <DeploymentForm
+            draft={draft}
+            setDraft={setDraft}
+            declarations={declarations}
+            typed={typed}
+            setTyped={setTyped}
+            sizeNote={sizeNote}
+            onSave={() =>
+              void act(NEW, async () => {
+                await saveSettings({ ...draft, inputs: settingsFromForm(declarations, typed) })
+                setEditing(null)
+              })
+            }
+            onCancel={() => setEditing(null)}
+            onRemove={null}
+            busy={busy === NEW}
+            saveLabel="Deploy"
+          />
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
         {unreachable && (
           <p className="rounded border border-amber-500/40 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-            The runner cannot be reached, so this list may be out of date. Anything already
-            running on the server is still running.
+            The runner cannot be reached, so this list may be out of date. Anything already running
+            on the server is still running.
           </p>
         )}
 
@@ -486,11 +693,11 @@ export function StrategiesPanel({ getChartContext }: Props) {
           </p>
         )}
 
-        {strategies.length > 6 && (
+        {deployments.length > 6 && (
           <input
             type="search"
             className="h-7 rounded border border-border bg-background px-2 text-[11px]"
-            placeholder={`Search ${strategies.length} strategies`}
+            placeholder="Search by strategy or instrument"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -498,109 +705,77 @@ export function StrategiesPanel({ getChartContext }: Props) {
 
         {strategies.length === 0 && (
           <p className="text-[11px] text-muted-foreground">
-            No strategies saved. A study plots and places no orders, so only a script that
-            declares itself a strategy can be run.
+            No strategies saved. A study plots and places no orders, so only a script that declares
+            itself a strategy can be run.
           </p>
         )}
 
-        {strategies
-          .filter((file) => file.toLowerCase().includes(search.trim().toLowerCase()))
-          .sort((a, b) => Number(Boolean(runningFor(b))) - Number(Boolean(runningFor(a))))
-          .map((file) => {
-          const run = runningFor(file)
-          const held = settings.find((one) => one.file === file) ?? null
-          const holding = holdings[file]
-          const isEditing = editing === file
+        {strategies.length > 0 && deployments.length === 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            Nothing deployed yet. Deploy a strategy on an instrument to run it. The same strategy
+            can be deployed on as many instruments and timeframes as you like, and each one runs,
+            holds and reports on its own.
+          </p>
+        )}
 
-          return (
-            <div key={file} className="flex flex-col gap-1.5 rounded border border-border p-2">
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={cn(
-                    'h-1.5 w-1.5 shrink-0 rounded-full',
-                    run ? 'bg-emerald-500' : 'bg-muted-foreground/40'
-                  )}
-                  aria-hidden
-                />
-                <span className="truncate text-xs font-medium" title={file}>
-                  {file}
-                </span>
-                <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-                  {run ? `running ${since(run.started_at)}` : 'stopped'}
-                </span>
-              </div>
+        {deployments
+          .filter((one) => matches(one, search))
+          .map((one) => {
+            const file = one.id
+            const run = one.run
+            const held = one.settings
+            const holding = holdings[one.id]
+            const isEditing = editing === one.id
 
-              <div className="font-mono text-[10px] text-muted-foreground">
-                {run
-                  ? `${run.symbol} ${run.exchange} ${run.interval} ${run.product} · pid ${run.pid}`
-                  : held
-                    ? `${held.symbol} ${held.exchange} ${held.interval} ${held.product}`
-                    : 'No instrument set. Set one before this can start.'}
-              </div>
-
-              {run && (
-                <Holding
-                  summary={holding}
-                  live={Object.fromEntries(
-                    Object.entries(marked)
-                      .filter(([key]) => key.startsWith(`${file}|`))
-                      .map(([key, value]) => [key.slice(file.length + 1), value])
-                  )}
-                  isLive={pricesAreLive}
-                />
-              )}
-
-              {isEditing && draft && (
-                <div className="flex flex-col gap-1.5 rounded bg-muted/40 p-1.5">
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <input
-                      className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-                      placeholder="Instrument"
-                      value={draft.symbol}
-                      onChange={(e) => setDraft({ ...draft, symbol: e.target.value })}
-                    />
-                    <input
-                      className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-                      placeholder="Exchange"
-                      value={draft.exchange}
-                      onChange={(e) => setDraft({ ...draft, exchange: e.target.value })}
-                    />
-                    <input
-                      className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-                      placeholder="Interval"
-                      value={draft.interval}
-                      onChange={(e) => setDraft({ ...draft, interval: e.target.value })}
-                    />
-                    <select
-                      className="h-7 rounded border border-border bg-background px-1.5 text-[11px]"
-                      value={draft.product}
-                      onChange={(e) => setDraft({ ...draft, product: e.target.value })}
-                    >
-                      {PRODUCTS.map((one) => (
-                        <option key={one} value={one}>
-                          {one}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <StrategyInputs
-                    declarations={declarations}
-                    edited={typed}
-                    onChange={(key, value) => setTyped((held) => ({ ...held, [key]: value }))}
-                    note="A box left empty uses the script's own default. A running strategy reads these when it starts, so stop it and start it again to apply a change."
+            return (
+              <div key={one.id} className="flex flex-col gap-1.5 rounded border border-border p-2">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      run ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                    )}
+                    aria-hidden
                   />
+                  <span className="truncate text-xs font-medium" title={one.file}>
+                    {one.file}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                    {run ? `running ${since(run.started_at)}` : 'stopped'}
+                  </span>
+                </div>
 
-                  {sizeNote && (
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">{sizeNote}</p>
-                  )}
+                <div className="font-mono text-[10px] text-muted-foreground">
+                  {run
+                    ? `${run.symbol} ${run.exchange} ${run.interval} ${run.product} · pid ${run.pid}`
+                    : held
+                      ? `${held.symbol} ${held.exchange} ${held.interval} ${held.product}`
+                      : 'No instrument set. Set one before this can start.'}
+                </div>
 
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      className="h-7 flex-1 rounded border border-border text-[11px] hover:bg-accent"
-                      onClick={() =>
-                        void act(file, async () => {
+                {run && (
+                  <Holding
+                    summary={holding}
+                    live={Object.fromEntries(
+                      Object.entries(marked)
+                        .filter(([key]) => key.startsWith(`${file}|`))
+                        .map(([key, value]) => [key.slice(file.length + 1), value])
+                    )}
+                    isLive={pricesAreLive}
+                  />
+                )}
+
+                {isEditing && draft && (
+                  <div className="flex flex-col gap-1.5 rounded bg-muted/40 p-1.5">
+                    <DeploymentForm
+                      draft={draft}
+                      setDraft={setDraft}
+                      declarations={declarations}
+                      typed={typed}
+                      setTyped={setTyped}
+                      sizeNote={sizeNote}
+                      onSave={() =>
+                        void act(one.id, async () => {
                           // The same reader the backtest panel uses, so a value
                           // this accepts is one that panel accepted: a strategy
                           // must not trade live on a number its own backtest
@@ -612,85 +787,73 @@ export function StrategiesPanel({ getChartContext }: Props) {
                           setEditing(null)
                         })
                       }
-                    >
-                      Save
-                    </button>
+                      onCancel={() => setEditing(null)}
+                      onRemove={
+                        held
+                          ? () =>
+                              void act(one.id, async () => {
+                                await clearSettings(one.id)
+                                setEditing(null)
+                              })
+                          : null
+                      }
+                      busy={busy === one.id}
+                      saveLabel="Save"
+                    />
+                  </div>
+                )}
+
+                <div className="flex gap-1.5">
+                  {run ? (
                     <button
                       type="button"
-                      className="h-7 rounded border border-border px-2 text-[11px] hover:bg-accent"
-                      onClick={() => setEditing(null)}
+                      className="h-7 flex-1 rounded border border-border text-[11px] hover:border-destructive/50 hover:text-destructive disabled:opacity-50"
+                      disabled={busy === file}
+                      onClick={() => void act(file, () => stopStrategy(file))}
                     >
-                      Cancel
+                      {busy === file ? 'Stopping' : 'Stop'}
                     </button>
-                    {held && (
-                      <button
-                        type="button"
-                        className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-destructive"
-                        onClick={() =>
-                          void act(file, async () => {
-                            await clearSettings(file)
-                            setEditing(null)
-                          })
-                        }
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="h-7 flex-1 rounded border border-border bg-accent/40 text-[11px] hover:bg-accent disabled:opacity-50"
+                      disabled={busy === file || !held}
+                      title={held ? undefined : 'Set an instrument first'}
+                      onClick={() => void act(file, () => startStrategy(file))}
+                    >
+                      {busy === file ? 'Starting' : isLive ? 'Start live' : 'Start in sandbox'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => (isEditing ? setEditing(null) : openEditor(file))}
+                  >
+                    Settings
+                  </button>
+                  <button
+                    type="button"
+                    className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-expanded={opened === file}
+                    onClick={() => setOpened((held) => (held === file ? null : file))}
+                  >
+                    {opened === file ? 'Hide' : 'Activity'}
+                  </button>
                 </div>
-              )}
 
-              <div className="flex gap-1.5">
-                {run ? (
-                  <button
-                    type="button"
-                    className="h-7 flex-1 rounded border border-border text-[11px] hover:border-destructive/50 hover:text-destructive disabled:opacity-50"
-                    disabled={busy === file}
-                    onClick={() => void act(file, () => stopStrategy(file))}
-                  >
-                    {busy === file ? 'Stopping' : 'Stop'}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="h-7 flex-1 rounded border border-border bg-accent/40 text-[11px] hover:bg-accent disabled:opacity-50"
-                    disabled={busy === file || !held}
-                    title={held ? undefined : 'Set an instrument first'}
-                    onClick={() => void act(file, () => startStrategy(file))}
-                  >
-                    {busy === file ? 'Starting' : isLive ? 'Start live' : 'Start in sandbox'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-                  onClick={() => (isEditing ? setEditing(null) : openEditor(file))}
-                >
-                  Settings
-                </button>
-                <button
-                  type="button"
-                  className="h-7 rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-expanded={opened === file}
-                  onClick={() => setOpened((held) => (held === file ? null : file))}
-                >
-                  {opened === file ? 'Hide' : 'Activity'}
-                </button>
+                {opened === one.id && <StrategyBooks deployment={one.id} revision={revision} />}
               </div>
-
-              {opened === file && <StrategyBooks file={file} revision={revision} />}
-            </div>
-          )
-        })}
+            )
+          })}
 
         <p className="mt-auto text-[10px] leading-relaxed text-muted-foreground">
           A run is a process on the server and outlives this page: closing the browser stops
           nothing. Orders go through this platform's own order path, so a run trades with your
-          broker while the platform is in live mode and against the sandbox while it is in
-          analyzer mode, the same as every other surface here. That setting is made elsewhere
-          on the site and is shown above. A run stops itself if it changes while the run is
-          holding a position, because an exit sent somewhere the entry never went would leave a
-          position nothing is managing.
+          broker while the platform is in live mode and against the sandbox while it is in analyzer
+          mode, the same as every other surface here. That setting is made elsewhere on the site and
+          is shown above. A run stops itself if it changes while the run is holding a position,
+          because an exit sent somewhere the entry never went would leave a position nothing is
+          managing.
         </p>
       </div>
     </PanelShell>

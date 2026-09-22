@@ -314,6 +314,12 @@ EXPECTED_ROUTES = {
     "/openscript/runner/orderbook/<filename>": {"GET"},
     "/openscript/runner/tradebook/<filename>": {"GET"},
     "/openscript/runner/positions/<filename>": {"GET"},
+    # What a trader picks a deployment's instrument and bar from, rather than
+    # typing them. Both read through the platform's own services: a symbol one
+    # character wrong is a start refused a minute later in a log, or an
+    # instrument that exists and is not the one meant.
+    "/openscript/runner/instruments": {"GET"},
+    "/openscript/runner/intervals": {"GET"},
 }
 
 
@@ -763,7 +769,9 @@ def test_the_real_routes_start_and_stop_a_real_run_through_the_real_service(seam
     assert saved.status_code == 200, saved.get_json()
     assert settings_store.read_run_config("seam.oscript")["symbol"] == SYMBOL
 
-    run_id = service.run_id_for("seam.oscript")
+    # A run's id is its deployment's: the script, the instrument and the bar
+    # together, which is what the settings saved just above name.
+    run_id = service.run_id_for("seam.oscript", SYMBOL, EXCHANGE, INTERVAL)
     try:
         started = seam.post("/openscript/runner/start/seam.oscript")
         assert started.status_code == 202, started.get_json()
