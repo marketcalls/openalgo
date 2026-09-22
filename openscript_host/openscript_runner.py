@@ -515,6 +515,11 @@ class Session:
         self._sending = False
         #: The order the platform gave each intent, and the intents still moving.
         self._orders: dict[int, str] = {}
+        #: For an intent whose order it shares with another, the part of that
+        #: order which is its own: (already allocated before it, its own size).
+        #: Absent for an intent that got an order to itself, which is most of
+        #: them. See ``_batches`` for when two intents share one order.
+        self._shares: dict[int, tuple[int, int]] = {}
         #: Where this run's orders are actually going, learned from the first one
         #: the platform accepted rather than asked for in advance. None until an
         #: order has been accepted. See ``_route`` for why it is watched.
@@ -1086,17 +1091,25 @@ class Session:
         not filled, so a run whose only completed send was a cancellation has not
         moved a position and is not half moved.
         """
+        # Grouped first, so a reversal reaches the broker as the one order it
+        # nets to rather than as the two the engine's own position bookkeeping
+        # needs. `_batches` says why, and why most bars have one intent each.
+        batches = self._batches(sending)
+        flat = [one for batch in batches for one in batch]
+
         moved = 0
-        for at, intent in enumerate(sending):
-            if self._route(intent):
-                if intent.kind != "cancel":
+        for index_of_batch, batch in enumerate(batches):
+            if self._route_batch(batch):
+                if any(one.kind != "cancel" for one in batch):
                     moved += 1
                 continue
 
+            at = sum(len(each) for each in batches[:index_of_batch])
             # Nothing after the refused order goes out. The ledger is told about
             # each of them, or it would go on holding rows for orders that are not
-            # with the platform and this run would never replace them.
-            for later in sending[at + 1 :]:
+            # with the platform and this run would never replace them. The
+            # batch's own intents are already accounted for by `_route_batch`.
+            for later in flat[at + len(batch) :]:
                 if later.kind == "cancel":
                     say(
                         "A cancellation was not asked for, because an order earlier on this bar "
@@ -1128,8 +1141,116 @@ class Session:
             return None
         return None
 
-    def _route(self, intent) -> bool:
+    def _batches(self, sending):
+        """One bar's intents, grouped into the orders this runner will send.
+
+        **Why two intents can be one order.** The engine never sends an order
+        across zero: an instruction taking a position from long to short is two
+        intents, one closing the outgoing position and one opening its
+        replacement, each with its own position reference, so that a fill
+        arriving late can say which of the two it settled. That is the engine's
+        bookkeeping and it is right. It is not the broker's: a broker holds one
+        net position in one instrument, and telling it to buy one and then buy
+        one again is telling it to buy two, in two orders, at two commissions
+        and two spreads, for a position change a trader asked for once.
+
+        So orders that differ only in which of this run's own positions they
+        belong to are sent as one, and the fill is split back across the intents
+        afterwards by ``_shares``. The engine keeps its two positions and the
+        broker sees the one order it would have netted anyway.
+
+        **It also removes the half moved bar.** ``_send`` has to stop a run whose
+        first order reached the platform and whose second did not, because a
+        reversal that only closed leaves a strategy flat when it meant to be the
+        other way round and there is no way to take the first one back. One order
+        cannot half move a position: it is accepted or it is not.
+
+        **What is never merged.** Only plain market orders of the same side, in
+        the same instrument, under the same product. A limit and a market are
+        different instructions; two sides net to a quantity nobody wrote; and a
+        cancellation is not an order at all. Anything that is not exactly like
+        its neighbour starts a new batch, so the merge can only ever combine
+        orders that a broker would have filled identically.
+
+        **Order is kept.** A batch is made of neighbours, never gathered from
+        across the bar, because the sequence is what ``_send`` reports a half
+        moved position against and what the fill allocation below counts on.
+        """
+        batches: list[list] = []
+        for intent in sending:
+            if batches and self._merges(batches[-1][-1], intent):
+                batches[-1].append(intent)
+            else:
+                batches.append([intent])
+        return batches
+
+    def _merges(self, earlier, later) -> bool:
+        """Whether these two are the same instruction twice, for one broker.
+
+        **Anything it cannot read is a no.** Merging is an optimisation and not
+        merging is always correct, so an intent whose shape this does not
+        recognise falls back to the order per call this runner has always sent.
+        The alternative is a fault raised in the middle of a bar that is placing
+        orders, which stops a run over a saving.
+        """
+        try:
+            if earlier.kind != "place" or later.kind != "place":
+                return False
+            if str(earlier.side) != str(later.side):
+                return False
+            for one in (earlier, later):
+                placement = one.placement
+                # A market order and nothing else. A limit or a stop carries a
+                # price the broker matches on, and two of them are not one order
+                # however alike they look.
+                if (placement.order_type or "market") != "market":
+                    return False
+                if placement.limit is not None or placement.trigger is not None:
+                    return False
+                if one.qty is None or one.qty <= 0 or float(one.qty) != int(one.qty):
+                    return False
+            # The instrument and the product are this run's own and are the same
+            # for every order it sends, so they are equal by construction.
+            # Compared anyway, because a leg is coming and the day it does this
+            # is the line that would otherwise net two instruments into one
+            # order. An intent that states neither is not merged: this cannot
+            # tell "the same instrument" from "no instrument named".
+            here = getattr(earlier, "instrument", None)
+            there = getattr(later, "instrument", None)
+            if here is None or there is None:
+                return False
+            return (
+                here.symbol == there.symbol
+                and here.exchange == there.exchange
+                and str(getattr(earlier, "product", "")) == str(getattr(later, "product", ""))
+            )
+        except Exception:
+            logger_say = "Two orders on this bar could not be compared, so each was sent on its own."
+            say(logger_say)
+            return False
+
+    def _route_batch(self, batch) -> bool:
+        """One batch as one order, or one intent the ordinary way."""
+        if len(batch) == 1:
+            return self._route(batch[0])
+
+        total = sum(int(one.qty) for one in batch)
+        sent = self._route(batch[0], quantity=total, covering=batch)
+        if not sent:
+            # The one order carried all of them, so a refusal refuses all of
+            # them. The first is already recorded by `_route`; the rest are told
+            # here, or the ledger would hold rows for orders nobody has.
+            for later in batch[1:]:
+                self._reject(later, "the order these were sent as one of was not accepted")
+        return sent
+
+    def _route(self, intent, quantity=None, covering=None) -> bool:
         """One intent, as the platform's own order call. True when it reached it.
+
+        ``quantity`` and ``covering`` are how a batch is sent: the order carries
+        the whole batch's size and every intent in it is recorded against the
+        one order id, each with the part of it that is its own. See ``_batches``
+        for why two intents are ever one order.
 
         The answer is what ``_send`` measures a half moved bar with, so it is
         about the platform having accepted the order and nothing more: it is not a
@@ -1163,7 +1284,7 @@ class Session:
             self._reject(intent, f"the order type {intent.placement.order_type} is not sent here")
             return False
 
-        quantity = intent.qty
+        quantity = intent.qty if quantity is None else quantity
         if quantity is None or quantity <= 0:
             self._reject(intent, "the order had no quantity to send")
             return False
@@ -1219,12 +1340,27 @@ class Session:
             return False
 
         order_id = str(answered.get("orderid", ""))
-        self._orders[intent.intent_id] = order_id
-        self._open.add(intent.intent_id)
-        say(
-            f"Sent {intent.side} {int(quantity)} {self.options.symbol} as {price_type} "
-            f"{self.product}. Order {order_id}."
-        )
+        for at, one in enumerate(covering or [intent]):
+            self._orders[one.intent_id] = order_id
+            self._open.add(one.intent_id)
+            if covering is not None:
+                # What this intent owns of the shared order: everything the
+                # intents before it own, then its own size. The fold hands out a
+                # fill against these in the same order.
+                before = sum(int(each.qty) for each in covering[:at])
+                self._shares[one.intent_id] = (before, int(one.qty))
+
+        if covering is not None and len(covering) > 1:
+            say(
+                f"Sent {intent.side} {int(quantity)} {self.options.symbol} as {price_type} "
+                f"{self.product}, for {len(covering)} order calls this bar made. "
+                f"Order {order_id}."
+            )
+        else:
+            say(
+                f"Sent {intent.side} {int(quantity)} {self.options.symbol} as {price_type} "
+                f"{self.product}. Order {order_id}."
+            )
         return True
 
     def _cancel(self, intent) -> None:
@@ -1321,6 +1457,23 @@ class Session:
             filled = float(data.get("quantity", 0) or 0)
             raw_price = data.get("average_price")
             price = float(raw_price) if raw_price else None
+
+        # **An order this intent shares with another gives it only its own part.**
+        # A reversal is sent as one order and the engine holds it as two, so the
+        # order's whole quantity reported against each of them would fold twice
+        # what actually traded and leave the run believing it holds double.
+        #
+        # Handed out in the order the intents were sent: everything before this
+        # one fills first, then this one, up to what it asked for. A whole fill
+        # gives each exactly its own size, which is every fill this platform
+        # reports, since a working order's partial fill is invisible until it
+        # finishes. A short fill would settle the earlier intent and leave the
+        # later one open, which is the truthful reading of one order that only
+        # partly traded.
+        share = self._shares.get(intent_id)
+        if share is not None:
+            before, own = share
+            filled = float(max(0.0, min(float(own), filled - float(before))))
 
         if word in FINISHED:
             self._open.discard(intent_id)
