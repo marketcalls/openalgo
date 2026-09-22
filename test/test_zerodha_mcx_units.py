@@ -17,6 +17,7 @@ import pytest
 
 from broker.zerodha.mapping.mcx_contract_size import (
     MCX_CONTRACT_SIZES,
+    MCX_SIZE_REVISIONS,
     McxQuantityError,
     from_kite_quantity,
     get_contract_size,
@@ -76,13 +77,13 @@ class TestUnitsPerContract:
         assert units_per_contract("CRUDEOIL26SEPFUT", exchange) == 1
 
     def test_unmapped_underlying_passes_through(self):
-        """CARDAMOM trades but is absent from the table.
+        """An underlying in neither source keeps Kite's own contract count.
 
-        A factor of 1 keeps Kite's own contract count, which is what shipped
-        before the table existed. Guessing a size here would mis-size a live
-        order; reading one lot as one unit merely looks inconsistent.
+        That is what shipped before the table existed. Guessing a size would
+        mis-size a live order; reading one lot as one unit merely looks
+        inconsistent. CARDAMOM used to sit here and is now mapped from Angel.
         """
-        assert units_per_contract("CARDAMOM26OCTFUT", "MCX") == 1
+        assert units_per_contract("NOTACOMMODITY26OCTFUT", "MCX") == 1
 
     def test_missing_symbol_is_not_an_error(self):
         assert units_per_contract(None, "MCX") == 1
@@ -156,15 +157,31 @@ class TestInboundFromKite:
 
 
 class TestRoundTrip:
-    @pytest.mark.parametrize("root,size", sorted(MCX_CONTRACT_SIZES.items()))
+    @pytest.mark.parametrize(
+        "root,size",
+        [kv for kv in sorted(MCX_CONTRACT_SIZES.items()) if kv[0] not in MCX_SIZE_REVISIONS],
+    )
     def test_every_mapped_underlying_survives_a_round_trip(self, root, size):
         symbol = f"{root}26SEPFUT"
         units = size * 3
         assert from_kite_quantity(to_kite_quantity(units, symbol, "MCX"), symbol, "MCX") == units
 
-    def test_table_matches_the_source_csv_row_count(self):
-        # 29 rows scraped from zerodha.com/margin-calculator/Commodity/.
-        assert len(MCX_CONTRACT_SIZES) == 29
+    @pytest.mark.parametrize("root", sorted(MCX_SIZE_REVISIONS))
+    def test_a_revised_root_needs_the_master_contract_to_round_trip(self, root):
+        """Excluded from the sweep above on purpose, not by oversight.
+
+        These have two live sizes at once, so the root-keyed table cannot
+        answer and the conversion refuses rather than picking one. With a
+        master row present it round-trips like everything else, which
+        test_zerodha_mcx_review_fixes.py asserts.
+        """
+        with pytest.raises(McxQuantityError):
+            to_kite_quantity(MCX_CONTRACT_SIZES[root] * 3, f"{root}27NOV26FUT", "MCX")
+
+    def test_table_matches_the_source_row_count(self):
+        # 29 rows scraped from zerodha.com/margin-calculator/Commodity/, plus
+        # CARDAMOM sourced from Angel One's scrip master.
+        assert len(MCX_CONTRACT_SIZES) == 30
         assert all(isinstance(v, int) and v > 0 for v in MCX_CONTRACT_SIZES.values())
 
 
