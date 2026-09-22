@@ -15,11 +15,13 @@ Observed live at about forty five seconds on a one minute bar.
 import pytest
 
 from openscript_host.openscript_runner import (
-    CATCHUP_SECONDS,
+    CATCHUP_SHARE,
+    LATENESS_ENOUGH,
     RETRY_LATER,
     RETRY_SOON,
     RETRY_SOON_WINDOW,
     SETTLE_SECONDS,
+    expected_settle,
     interval_seconds,
     next_wake,
 )
@@ -173,15 +175,31 @@ def test_the_first_look_is_soon_enough_to_matter():
 
 
 def test_the_quick_retry_gives_up_rather_than_spinning():
-    """A bar that never comes must not be asked for every two seconds all day.
+    """A bar that never comes must not be asked for all day.
 
-    A halt, a holiday or an instrument that stopped trading. After the catch-up
+    A halt, a holiday or an instrument that stopped trading. Past the catch-up
     window the run goes back to its ordinary cadence.
     """
     began = float(1_000_000 * MINUTE)
-    late = began + CATCHUP_SECONDS + 1
+    late = began + MINUTE * CATCHUP_SHARE + 1
 
     assert next_wake(late, MINUTE, POLL, waiting_since=began) > RETRY_LATER
+
+
+def test_it_keeps_looking_long_enough_for_a_slow_feed():
+    """THE DEFECT MEASURED ON A REAL PLATFORM.
+
+    The catch-up window was a flat twenty seconds, against a history endpoint
+    that carries a closed one minute bar about thirty five seconds after it
+    closes. The run gave up before the bar could arrive, fell back to its
+    ordinary cadence, and sent the order half a minute later than the bar was
+    actually available. Giving up early is the one way this loop is slower than
+    not having been written.
+    """
+    began = float(1_000_000 * MINUTE)
+
+    # Still looking at thirty five seconds, which is when that feed answers.
+    assert next_wake(began + 35, MINUTE, POLL, waiting_since=began) <= RETRY_LATER
 
 
 def test_the_retry_still_respects_the_cadence_ceiling():
@@ -195,3 +213,38 @@ def test_every_intraday_interval_lands_on_its_own_boundary(bar):
     now += next_wake(now, bar, float(bar), None)
 
     assert now % bar == pytest.approx(SETTLE_SECONDS)
+
+
+# ---------------------------------------------------------------------------
+# Learning how late this feed is
+# ---------------------------------------------------------------------------
+
+
+def test_with_no_readings_it_looks_straight_after_the_close():
+    """The right guess for a prompt feed, and one wasted fetch a bar for a slow one."""
+    assert expected_settle([]) == SETTLE_SECONDS
+    assert expected_settle([35.0] * (LATENESS_ENOUGH - 1)) == SETTLE_SECONDS
+
+
+def test_it_aims_just_before_the_earliest_a_bar_has_arrived():
+    """THE POINT. A feed's lateness is a fact about the feed, not about the clock.
+
+    Aimed at the earliest seen rather than the average, and a second before it:
+    being early costs one fetch and being late costs a fill.
+    """
+    assert expected_settle([35.0, 36.0, 34.9]) == pytest.approx(33.9)
+
+
+def test_a_prompt_feed_is_never_pushed_later_than_the_fixed_offset():
+    """Catches the learned value dragging a fast feed backwards."""
+    assert expected_settle([0.1, 0.2, 0.15]) == SETTLE_SECONDS
+
+
+def test_the_learned_offset_is_where_the_wake_lands():
+    """The two halves together: what was learned is what is aimed at."""
+    settle = expected_settle([35.0, 35.8])
+    now = float(1_000_000 * MINUTE) + 40
+
+    landed = (now + next_wake(now, MINUTE, 60.0, None, settle)) % MINUTE
+
+    assert landed == pytest.approx(settle)

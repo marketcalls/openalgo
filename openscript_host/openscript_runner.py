@@ -415,10 +415,23 @@ SETTLE_SECONDS = 0.25
 RETRY_SOON = 0.25
 RETRY_SOON_WINDOW = 3.0
 RETRY_LATER = 1.0
-#: The most this will keep asking for a bar before going back to the ordinary
-#: cadence. A halted instrument must not be asked for four times a second all
-#: day.
-CATCHUP_SECONDS = 20.0
+#: The most this will keep asking for a bar, as a share of the bar itself.
+#:
+#: **A share rather than a count of seconds, because how late a feed is has
+#: nothing to do with the clock and everything to do with the feed.** This was a
+#: flat twenty seconds, and it was measured against a platform whose history
+#: carries a closed one minute bar about thirty five seconds after it closes:
+#: the run gave up at twenty, fell back to its ordinary cadence, and sent the
+#: order half a minute later than the bar was actually available. Giving up
+#: before the bar can arrive is the one way this loop can be slower than not
+#: having been written.
+CATCHUP_SHARE = 0.9
+
+#: How many recent bars' lateness to remember, and the smallest sample worth
+#: acting on. Short, because a feed that changes its behaviour should be
+#: followed within a bar or two rather than averaged with an hour of history.
+LATENESS_REMEMBERED = 5
+LATENESS_ENOUGH = 2
 
 
 def interval_seconds(interval: str) -> int:
@@ -442,7 +455,35 @@ def interval_seconds(interval: str) -> int:
     return count * units[unit] if count > 0 else 0
 
 
-def next_wake(now: float, bar_seconds: int, poll_seconds: float, waiting_since: float | None) -> float:
+def expected_settle(lateness: list[float]) -> float:
+    """How long after a close to look first, learned from how late bars have been.
+
+    **A feed's lateness is a fact about the feed, so it is measured rather than
+    assumed.** One platform's history carries a closed one minute bar about
+    thirty five seconds after it closes; another may carry it at once. A fixed
+    first look is either far too early, which spends a fetch on a bar that
+    cannot be there, or far too late, which is slippage on every order.
+
+    So this aims a second before the shortest lateness recently seen, and the
+    quick retry covers the rest. A second early rather than at the median,
+    because being early costs one fetch and being late costs a fill.
+
+    Until there are enough readings it answers the small fixed offset, which is
+    the right guess for a feed that is prompt and costs one wasted fetch a bar
+    for one that is not.
+    """
+    if len(lateness) < LATENESS_ENOUGH:
+        return SETTLE_SECONDS
+    return max(SETTLE_SECONDS, min(lateness) - 1.0)
+
+
+def next_wake(
+    now: float,
+    bar_seconds: int,
+    poll_seconds: float,
+    waiting_since: float | None,
+    settle: float = SETTLE_SECONDS,
+) -> float:
     """How long to sleep before looking again.
 
     **The point of this is that an order goes out on the bar it was decided
@@ -468,7 +509,11 @@ def next_wake(now: float, bar_seconds: int, poll_seconds: float, waiting_since: 
 
     if bar_seconds > 0 and waiting_since is not None:
         waited = now - waiting_since
-        if waited < CATCHUP_SECONDS:
+        # Kept looking for most of a bar rather than for a fixed count of
+        # seconds. Giving up before the bar can arrive is the one way this loop
+        # is slower than not having been written: the run falls back to its
+        # ordinary cadence and sends the order whenever that next lands.
+        if waited < bar_seconds * CATCHUP_SHARE:
             # Quickly while the bar is plausibly about to arrive, then slowly.
             # A fetch answering with nothing is one this run pays for and learns
             # nothing from, so the rate falls away as the wait stops being about
@@ -489,9 +534,9 @@ def next_wake(now: float, bar_seconds: int, poll_seconds: float, waiting_since: 
     # point at all, and the alignment this function exists for silently never
     # happens.
     closed = (now // bar_seconds) * bar_seconds
-    target = closed + SETTLE_SECONDS
+    target = closed + settle
     if target <= now:
-        target = closed + bar_seconds + SETTLE_SECONDS
+        target = closed + bar_seconds + settle
 
     return max(0.0, min(target, ordinary) - now)
 
@@ -1712,6 +1757,10 @@ def main(argv=None) -> int:
     #: When this run last crossed a bar boundary without the bar behind it being
     #: there yet. None while nothing is being waited for.
     waiting_since: float | None = None
+    #: How late the last few bars were, in seconds after their own close. See
+    #: `expected_settle`: a feed's lateness is a fact about the feed and is
+    #: learned from it rather than guessed once.
+    lateness: list[float] = []
 
     while not session.stopping:
         known = len(session._times)
@@ -1731,13 +1780,28 @@ def main(argv=None) -> int:
         now = time.time()
         if len(session._times) > known:
             # The bar this run was waiting for arrived and has been executed.
+            # How late it was is the feed's own answer to the only question this
+            # loop has, so it is kept: the newest bar this run has confirmed
+            # closed one interval after it opened.
+            if bar_seconds > 0 and session._times:
+                closed = session._times[-1] / 1000.0 + bar_seconds
+                late = now - closed
+                # A negative reading is a clock that disagrees with the feed's,
+                # and a reading of minutes is a run catching up on history
+                # rather than watching a bar close. Neither says anything about
+                # how late this feed is.
+                if 0.0 <= late < bar_seconds:
+                    lateness.append(late)
+                    del lateness[:-LATENESS_REMEMBERED]
             waiting_since = None
         elif bar_seconds > 0 and waiting_since is None and now % bar_seconds < max(1.0, SETTLE_SECONDS * 2):
             # A boundary has just passed and the bar behind it is not here yet.
             waiting_since = now
 
         waited = 0.0
-        sleeping = next_wake(now, bar_seconds, options.poll_seconds, waiting_since)
+        sleeping = next_wake(
+            now, bar_seconds, options.poll_seconds, waiting_since, expected_settle(lateness)
+        )
         while waited < sleeping and not session.stopping:
             time.sleep(min(0.5, sleeping - waited))
             waited += 0.5
