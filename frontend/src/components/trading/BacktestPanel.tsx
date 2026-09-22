@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type PriceableItem, useLivePrice } from '@/hooks/useLivePrice'
 import { cn } from '@/lib/utils'
 import {
   type BacktestOutcome,
@@ -30,6 +31,13 @@ import {
   settingsFromForm,
 } from '@/lib/trading/backtestInputs'
 import { chartMarkersFrom } from '@/lib/trading/backtestMarkers'
+import {
+  markToPrice,
+  openCountOf,
+  openPositionOf,
+  type ReportTrade,
+} from '@/lib/trading/openPosition'
+import { quantityNote, quantityOf, unitsFor } from '@/lib/trading/strategyQuantity'
 import { kindOf, listScripts, readScript, type StoredScript } from '@/lib/trading/openscriptFiles'
 import { BacktestChart } from './BacktestChart'
 import { PANEL_HEADER, PanelShell } from './panelShell'
@@ -144,6 +152,8 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   const [running, setRunning] = useState(false)
   const [outcome, setOutcome] = useState<BacktestOutcome | null>(null)
   const inflight = useRef<AbortController | null>(null)
+  /** The strategy and instrument the automatic run last covered. See below. */
+  const ranAutomatically = useRef('')
 
   // Only strategies, which means reading each script to ask what it declares
   // itself to be. The list is small and this happens once per panel open.
@@ -197,21 +207,26 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
 
   useEffect(() => () => inflight.current?.abort(), [])
 
-  // A file handed over from another panel: select it and run it. Kept as an
-  // effect on the prop rather than a method, because the panel may not be
-  // mounted at the moment the button is pressed, and the request has to survive
-  // until it is.
-  // The request is `runFile` and only `runFile`: `runNamed` and `onRan` are
-  // rebuilt whenever the date range or the chart changes, and listing them would
-  // re-run the handed-over strategy every time the trader touched a date box.
+  // A file handed over from another panel: select it. The run follows from the
+  // selection, below, rather than being started here as well, because two paths
+  // that both start a run are two paths that both start the same run.
+  //
+  // Kept as an effect on the prop rather than a method, because the panel may
+  // not be mounted at the moment the button is pressed and the request has to
+  // survive until it is.
+  //
+  // The request is `runFile` and only `runFile`: `onRan` is rebuilt by its
+  // owner, and listing it would re-select the handed-over strategy over a
+  // choice the trader had since made.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runFile is the request; the rest would re-fire it
   useEffect(() => {
     if (!runFile) return
     setFile(runFile)
+    // Handing over the strategy already selected must still run it: that press
+    // is a trader asking for this strategy on this chart, and answering it with
+    // nothing because the name matched reads as the button being broken.
+    ranAutomatically.current = ''
     onRan?.()
-    // The run reads `file` from state, which this render has not committed yet,
-    // so it is started with the name directly.
-    void runNamed(runFile)
   }, [runFile])
 
   // Read off the last run's program: what this script takes as inputs, and what
@@ -219,6 +234,44 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   // second opinion about a default or a capital.
   const declarations = useMemo(() => inputsOf(outcome?.program), [outcome?.program])
   const declared = useMemo(() => declaredOf(outcome?.program), [outcome?.program])
+
+  // Where the order size comes from, which the language decides and this only
+  // reports. See `strategyQuantity.ts`: what the script states, runs.
+  const quantity = useMemo(() => quantityOf(outcome?.program), [outcome?.program])
+  const sending = useMemo(() => unitsFor(quantity, edited), [quantity, edited])
+
+  // -- the position the strategy is still in --------------------------------
+  //
+  // A strategy applied to the chart draws and does not trade, so the question
+  // in front of a trader watching one is where it would have them right now.
+  // The run already answers it: the trade it never closed. What is added here
+  // is the price, which the report cannot know because it ended at the last
+  // bar and the instrument has gone on trading since.
+  const trades = outcome?.trades as readonly ReportTrade[] | undefined
+  const holding = useMemo(() => openPositionOf(trades), [trades])
+  const alsoOpen = useMemo(() => Math.max(0, openCountOf(trades) - 1), [trades])
+
+  // The platform's own live price and not a second feed. It already holds the
+  // socket, decides when a tick has gone stale, falls back to quotes when the
+  // socket is not there and stops work while the tab is hidden. All that is
+  // wanted from it is the last price of the instrument this position is in.
+  const watching = useMemo<PriceableItem[]>(
+    () => (holding && target ? [{ symbol: target.symbol, exchange: target.exchange }] : []),
+    [holding, target]
+  )
+  const { data: quoted, isLive } = useLivePrice(watching, { enabled: watching.length > 0 })
+  const livePrice = quoted[0]?.ltp ?? null
+
+  // Valued only against a price that actually arrived. Falling back to the
+  // entry would show a profit of exactly zero, which reads as a position that
+  // has not moved rather than as one nobody has priced.
+  const valued = useMemo(
+    () =>
+      holding === null || livePrice === null
+        ? null
+        : markToPrice(holding, livePrice, outcome?.contract?.pointValue ?? 1),
+    [holding, livePrice, outcome?.contract?.pointValue]
+  )
 
   const runNamed = useCallback(
     async (which: string) => {
@@ -267,6 +320,46 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   )
 
   const run = useCallback(() => runNamed(file), [file, runNamed])
+
+  // -- the automatic run ----------------------------------------------------
+  //
+  // **Three things start a run on their own: choosing a strategy, changing the
+  // instrument, changing the interval.** Those are the three that change what a
+  // run is *of*, so the report on screen would otherwise describe something the
+  // chart is no longer showing, which is the one failure here a trader cannot
+  // see: the figures are real, they are just about a different instrument.
+  //
+  // **Nothing else does, and that is deliberate.** A date box and an input box
+  // are edits somebody makes several of before they mean any of them, and
+  // re-running per keystroke would freeze the workspace answering questions
+  // nobody asked, over a range half-typed. Those changes wait for the button.
+  //
+  // `runNamed` is rebuilt whenever a date or an input changes, so it cannot be a
+  // dependency here: listing it would make every keystroke a trigger and undo
+  // the paragraph above. It is read through a ref that is kept current by the
+  // effect above this one, which runs first because effects run in the order
+  // they are declared.
+  const latestRun = useRef(runNamed)
+  useEffect(() => {
+    latestRun.current = runNamed
+  }, [runNamed])
+
+  // One string for the three things, so a chart poll that answered the same
+  // instrument does not count as a change. The separator is a pipe because a
+  // script name, an instrument, an exchange and an interval are each letters,
+  // digits and a few punctuation marks that do not include one, so no two
+  // different triples can spell the same key. `target` is already only rebuilt
+  // when one of them differs, and this is the second guard: a run in flight
+  // that was started for exactly this must not be started again beside itself.
+  const automatic =
+    file && target ? `${file}|${target.symbol}|${target.exchange}|${target.interval}` : ''
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key is the trigger; runNamed is read through a ref on purpose
+  useEffect(() => {
+    if (!automatic || ranAutomatically.current === automatic) return
+    ranAutomatically.current = automatic
+    void latestRun.current(file)
+  }, [automatic])
 
   const summary = outcome?.summary
   const ready = Boolean(file && target) && !running
@@ -427,7 +520,8 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
                       </dd>
                       <dt>Order size</dt>
                       <dd className="text-right">
-                        {declared.qty} {declared.qtyType}
+                        {sending === null ? `${declared.qty} ${declared.qtyType}` : `${sending} ${declared.qtyType}`}
+                        {quantity.kind === 'input' && ' (yours)'}
                       </dd>
                       <dt>Pyramiding</dt>
                       <dd className="text-right">{declared.pyramiding}</dd>
@@ -475,6 +569,61 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
                 {d.line}:{d.column} {d.code} {d.message}
               </span>
             ))}
+          </div>
+        )}
+
+        {quantity.kind !== 'unknown' && (
+          <p className="rounded border border-border px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+            <span className="font-medium text-foreground">
+              Order size {sending === null ? '' : sending}
+            </span>
+            {' - '}
+            {quantityNote(quantity)}
+          </p>
+        )}
+
+        {holding && (
+          <div className="flex flex-col gap-1 rounded border border-border p-2">
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Position now
+              </span>
+              <span
+                className={cn(
+                  'ml-auto text-[9px] uppercase tracking-wide',
+                  isLive && livePrice !== null ? 'text-emerald-500' : 'text-muted-foreground'
+                )}
+              >
+                {livePrice === null ? 'No price yet' : isLive ? 'Live' : 'Last known'}
+              </span>
+            </div>
+
+            <div className="flex items-baseline gap-2 font-mono text-[12px] tabular-nums">
+              <span className={holding.side === 'short' ? 'text-destructive' : 'text-emerald-500'}>
+                {holding.side === 'short' ? 'Short' : 'Long'} {holding.units}
+              </span>
+              <span className="text-muted-foreground">at {holding.entryPrice.toFixed(2)}</span>
+              {valued && (
+                <span
+                  className={cn(
+                    'ml-auto',
+                    valued.profit >= 0 ? 'text-emerald-500' : 'text-destructive'
+                  )}
+                >
+                  {money(valued.profit)}
+                  {valued.profitPercent !== null && ` (${percent(valued.profitPercent)})`}
+                </span>
+              )}
+            </div>
+
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              {valued
+                ? `Marked at ${valued.price.toFixed(2)}. `
+                : 'No price has arrived for this instrument yet, so it is not valued. '}
+              {alsoOpen > 0 && `${alsoOpen} more open ${alsoOpen === 1 ? 'trade' : 'trades'}. `}
+              This strategy is on the chart, which draws and does not trade. Nothing is held at
+              your broker because of it. Add it under Strategies to trade it.
+            </p>
           </div>
         )}
 

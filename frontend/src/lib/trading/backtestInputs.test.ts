@@ -79,7 +79,7 @@ describe('what the form sends back', () => {
     // declaration's own value.
     const sent = settingsFromForm(declarations, { atrLen: '14' })
 
-    expect(sent).toEqual({ atrLen: { kind: 'number', value: 14 } })
+    expect(sent).toEqual({ atrLen: 14 })
     expect(sent.factor).toBeUndefined()
   })
 
@@ -95,16 +95,16 @@ describe('what the form sends back', () => {
     // turns a typo into a refused run instead of a field that will not take it.
     expect(settingsFromForm(declarations, { atrLen: '0' })).toEqual({})
     expect(settingsFromForm(declarations, { atrLen: '500' })).toEqual({})
-    expect(settingsFromForm(declarations, { atrLen: '200' })).toEqual({
-      atrLen: { kind: 'number', value: 200 },
-    })
+    expect(settingsFromForm(declarations, { atrLen: '200' })).toEqual({ atrLen: 200 })
   })
 
   it('drops a number that is not one rather than sending NaN', () => {
     expect(settingsFromForm(declarations, { atrLen: 'abc' })).toEqual({})
   })
 
-  it('tags a value by the kind the declaration states', () => {
+  it('reads a value as the type the declaration states, and sends it plain', () => {
+    // A form field holds text whatever it declares, so the kind is what turns
+    // "true" into a boolean and leaves "hello" a string.
     const mixed = inputsOf({
       inputs: [
         { key: 'on', kind: 'bool', label: 'On', default: ['b', true] },
@@ -112,8 +112,25 @@ describe('what the form sends back', () => {
       ],
     })
     expect(settingsFromForm(mixed, { on: 'true', name: 'hello' })).toEqual({
-      on: { kind: 'bool', value: true },
-      name: { kind: 'string', value: 'hello' },
+      on: true,
+      name: 'hello',
     })
+  })
+
+  it('sends the bare value and never the language tagged form', () => {
+    // THE DEFECT THIS FILE ONCE ASSERTED. A settings map looks like it should
+    // carry the tagged value a compiled program writes a constant as, and every
+    // test here agreed with that because every test mocked the engine. A real
+    // engine validates a supplied setting against the declaration, which already
+    // states the kind, so a tagged one arrives as an object where a number was
+    // declared and the entire run is refused with OS6019. Every input a trader
+    // typed produced a refused run. Pinned against a real engine end to end in
+    // `backtestEngine.test.ts`; this is the unit-level guard.
+    const sent = settingsFromForm(declarations, { atrLen: '14', factor: '2.5' })
+
+    for (const value of Object.values(sent)) {
+      expect(typeof value).not.toBe('object')
+    }
+    expect(sent).toEqual({ atrLen: 14, factor: 2.5 })
   })
 })

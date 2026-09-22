@@ -16,12 +16,20 @@
  * the figures in front of them rest on.
  */
 
-/** The language's own tagged value, which is what a setting is carried as. */
-export type InputValue =
-  | { readonly kind: 'absent' }
-  | { readonly kind: 'bool'; readonly value: boolean }
-  | { readonly kind: 'number'; readonly value: number }
-  | { readonly kind: 'string'; readonly value: string }
+/**
+ * One setting, as the engine reads it: the plain value and nothing around it.
+ *
+ * **Not the language's tagged value.** A compiled program writes a constant as a
+ * two element array tagged by kind, and a settings map looks like it should be
+ * carried the same way. It is not: an engine resolves a supplied setting by
+ * validating it against the declaration it belongs to, which already says the
+ * kind, so what it wants is the value itself. A tagged value arrives as an
+ * object where a number was declared and the whole run is refused (OS6019),
+ * which is a run that never starts for a trader who typed a perfectly good
+ * number. Both engines agree on this, and it is checked against a real one in
+ * `backtestEngine.test.ts` rather than against a mock that would take anything.
+ */
+export type InputValue = boolean | number | string
 
 /** One `input()` declaration, as the compiled program records it. */
 export interface InputDeclaration {
@@ -136,6 +144,8 @@ export function defaultValueOf(declared: InputDeclaration): string | number | bo
  * declared bounds. Sending every field back would make this panel the authority
  * on defaults, and the first divergence would be a run whose inputs the script
  * never agreed to.
+ *
+ * Every value is plain: see `InputValue` for why an engine refuses a tagged one.
  */
 export function settingsFromForm(
   declarations: readonly InputDeclaration[],
@@ -148,7 +158,7 @@ export function settingsFromForm(
     if (typed === undefined || typed === '') continue
 
     if (declared.kind === 'bool') {
-      out[declared.key] = { kind: 'bool', value: typed === 'true' }
+      out[declared.key] = typed === 'true'
       continue
     }
     if (declared.kind === 'number') {
@@ -160,10 +170,10 @@ export function settingsFromForm(
       // that will not take it.
       if (declared.min !== null && value < declared.min) continue
       if (declared.max !== null && value > declared.max) continue
-      out[declared.key] = { kind: 'number', value }
+      out[declared.key] = value
       continue
     }
-    out[declared.key] = { kind: 'string', value: typed }
+    out[declared.key] = typed
   }
 
   return out
