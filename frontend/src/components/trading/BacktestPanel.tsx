@@ -162,7 +162,17 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   const [marked, setMarked] = useState<number | null>(null)
   /** What the trader typed into an input box, by key. Only what they changed. */
   const [edited, setEdited] = useState<Record<string, string>>({})
+  /**
+   * Whether the settings section is open.
+   *
+   * It opens itself for a script that declares inputs, because a collapsed
+   * section is indistinguishable from a strategy that has no parameters, and a
+   * trader looking for the ones they wrote finds neither them nor a reason.
+   * `controlsAreTheirs` records a trader closing it by hand, after which it
+   * stays as they left it.
+   */
   const [showControls, setShowControls] = useState(false)
+  const [controlsAreTheirs, setControlsAreTheirs] = useState(false)
   // Only for the header. The run reads its own, fresh, at the moment it starts.
   const [target, setTarget] = useState<RunTarget | null>(null)
   const [scripts, setScripts] = useState<StoredScript[]>([])
@@ -319,6 +329,13 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
   }, [file])
 
   const shown = outcome?.program ?? chosen
+  const declaredInputs = useMemo(() => inputsOf(shown), [shown])
+
+  useEffect(() => {
+    if (controlsAreTheirs) return
+    setShowControls(declaredInputs.length > 0)
+  }, [declaredInputs, controlsAreTheirs])
+
   const declarations = useMemo(() => inputsOf(shown), [shown])
   const declared = useMemo(() => declaredOf(shown), [shown])
 
@@ -527,12 +544,15 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
           {running ? 'Running' : 'Run backtest'}
         </button>
 
-        {(declarations.length > 0 || declared) && (
+        {file !== '' && (declarations.length > 0 || declared) && (
           <div className="rounded border border-border">
             <button
               type="button"
               className="flex h-7 w-full items-center px-2 text-[10px] uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
-              onClick={() => setShowControls((open) => !open)}
+              onClick={() => {
+                setControlsAreTheirs(true)
+                setShowControls((open) => !open)
+              }}
               aria-expanded={showControls}
             >
               Settings
@@ -541,12 +561,20 @@ export function BacktestPanel({ apiKey, getChartContext, onMarkChart, runFile = 
 
             {showControls && (
               <div className="flex flex-col gap-2 border-t border-border p-2">
-                <StrategyInputs
-                  declarations={declarations}
-                  edited={edited}
-                  onChange={(key, value) => setEdited((held) => ({ ...held, [key]: value }))}
-                  note="A box left empty uses the script's own default. Run again to apply a change. These are for testing on this chart only and never reach a strategy that is running live: set those under Strategies."
-                />
+                {declarations.length === 0 ? (
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    This script declares no settings, so there is nothing to change here. Its
+                    numbers are written into it: to make one adjustable, give it a name with
+                    input(), as in length = input(9, "Fast length", min = 1).
+                  </p>
+                ) : (
+                  <StrategyInputs
+                    declarations={declarations}
+                    edited={edited}
+                    onChange={(key, value) => setEdited((held) => ({ ...held, [key]: value }))}
+                    note="A box left empty uses the script's own default. Run again to apply a change. These are for testing on this chart only and never reach a strategy that is running live: set those under Strategies."
+                  />
+                )}
 
                 {declared && (
                   <div className="flex flex-col gap-1">
