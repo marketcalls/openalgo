@@ -213,9 +213,19 @@ export interface StrategyBook {
   rows: Record<string, unknown>[]
   statistics: Record<string, unknown> | null
   problem: string | null
+  /**
+   * The whole answer, envelope and all.
+   *
+   * Carried because the rows are not the whole of it. A positions answer states
+   * its totals beside the list rather than inside it, and those totals include
+   * profit already realised on rows the book no longer holds, which adding up
+   * what came back cannot see. A reader that wants them needs the envelope, and
+   * a second request to get it would be asking the same question twice.
+   */
+  raw: unknown
 }
 
-const EMPTY: StrategyBook = { rows: [], statistics: null, problem: null }
+const EMPTY: StrategyBook = { rows: [], statistics: null, problem: null, raw: null }
 
 /**
  * The rows out of whichever key this book calls them.
@@ -242,14 +252,14 @@ async function book(kind: string, file: string, signal?: AbortSignal): Promise<S
       { signal }
     )
     if (res.data?.status !== 'success') {
-      return { ...EMPTY, problem: res.data?.message || `The ${kind} could not be read.` }
+      return { ...EMPTY, raw: res.data, problem: res.data?.message || `The ${kind} could not be read.` }
     }
     const data = res.data.data
     const statistics =
       data && typeof data === 'object' && 'statistics' in (data as Record<string, unknown>)
         ? ((data as Record<string, unknown>).statistics as Record<string, unknown>)
         : null
-    return { rows: rowsOf(data), statistics, problem: null }
+    return { rows: rowsOf(data), statistics, problem: null, raw: res.data }
   } catch (error) {
     // A book that cannot be read is said so in the row rather than thrown: one
     // failing tab must not take down the panel a trader is using to decide

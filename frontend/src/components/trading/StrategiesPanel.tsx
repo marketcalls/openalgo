@@ -35,6 +35,7 @@ import {
   saveSettings,
   startStrategy,
   stopStrategy,
+  strategyPositions,
 } from '@/api/openscriptRunner'
 import { compileSource, kindOf, listScripts, readScript } from '@/lib/trading/openscriptFiles'
 import {
@@ -43,6 +44,7 @@ import {
   settingsFromForm,
 } from '@/lib/trading/backtestInputs'
 import { quantityNote, quantityOf } from '@/lib/trading/strategyQuantity'
+import { type PositionSummary, summaryOf } from '@/lib/trading/strategyPosition'
 import { useThemeStore } from '@/stores/themeStore'
 import { cn } from '@/lib/utils'
 import { StrategyBooks } from './StrategyBooks'
@@ -76,6 +78,90 @@ function since(started: string | null): string {
   return `${hours}h ${mins % 60}m`
 }
 
+/** Money, as a trader reads it. Two places, and a sign that is always shown. */
+function money(value: number): string {
+  const shown = Math.abs(value).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  return `${value < 0 ? '-' : '+'}${shown}`
+}
+
+/**
+ * What one running strategy is holding, on its row.
+ *
+ * **It is always rendered for a running strategy, including when flat.** A row
+ * that shows a position only when there is one leaves a trader unable to tell
+ * "this strategy is flat" from "this panel has not told me yet", and those two
+ * want opposite reactions. Flat is stated.
+ *
+ * **What is shown is the platform's own answer, not a calculation.** The
+ * strategy sent orders, they filled, and the platform folds them into a
+ * position with a profit attached. A panel that worked one out from the order
+ * list would be a second opinion about money.
+ *
+ * The profit is the platform's total where it gave one, which counts profit
+ * already taken on a position that has since been closed. That is why it can be
+ * a number beside no open position at all, and why the note says so rather than
+ * leaving a reader to think the two disagree.
+ */
+function Holding({ summary }: { summary: PositionSummary | null | undefined }) {
+  if (summary === undefined) {
+    return <div className="text-[10px] text-muted-foreground">Reading what it holds...</div>
+  }
+  if (summary === null) {
+    // Said rather than left blank. A silent row is read as flat.
+    return (
+      <div className="text-[10px] text-muted-foreground">
+        What this is holding could not be read just now.
+      </div>
+    )
+  }
+
+  const { positions, profit, profitIsPlatforms } = summary
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      {positions.length === 0 ? (
+        <div className="flex items-baseline gap-1.5 text-[10px]">
+          <span className="text-muted-foreground">Flat</span>
+          {profit !== null && profit !== 0 && (
+            <span className={cn('ml-auto font-mono tabular-nums', profit >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+              {money(profit)}
+            </span>
+          )}
+        </div>
+      ) : (
+        positions.map((one) => (
+          <div
+            key={`${one.symbol}-${one.exchange}`}
+            className="flex items-baseline gap-1.5 font-mono text-[10px] tabular-nums"
+          >
+            <span className={one.side === 'short' ? 'text-destructive' : 'text-emerald-500'}>
+              {one.side === 'short' ? 'SHORT' : 'LONG'} {one.quantity}
+            </span>
+            <span className="truncate text-muted-foreground">{one.symbol}</span>
+            {one.averagePrice !== null && (
+              <span className="text-muted-foreground">@{one.averagePrice.toFixed(2)}</span>
+            )}
+            {one.profit !== null && (
+              <span className={cn('ml-auto', one.profit >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+                {money(one.profit)}
+              </span>
+            )}
+          </div>
+        ))
+      )}
+
+      {profitIsPlatforms && positions.length === 0 && profit !== null && profit !== 0 && (
+        <span className="text-[9px] leading-tight text-muted-foreground">
+          Taken on positions this strategy has already closed today.
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function StrategiesPanel({ getChartContext }: Props) {
   const appMode = useThemeStore((state) => state.appMode)
   const isLive = appMode === 'live'
@@ -104,11 +190,14 @@ export function StrategiesPanel({ getChartContext }: Props) {
   /** Bumped when a run starts or stops, so an open book refetches rather than going stale. */
   const [revision, setRevision] = useState(0)
   const [search, setSearch] = useState('')
+  /** What each running strategy is holding, by file. Refreshed with the list. */
+  const [holdings, setHoldings] = useState<Record<string, PositionSummary | null>>({})
   const live = useRef(true)
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    let found: Awaited<ReturnType<typeof overview>>
     try {
-      const found = await overview(signal)
+      found = await overview(signal)
       if (!live.current) return
       setRunning(found.running)
       setSettings(found.settings)
@@ -117,7 +206,35 @@ export function StrategiesPanel({ getChartContext }: Props) {
       // Shown rather than swallowed: a panel that silently stops refreshing
       // reads as "nothing is running", which is the one wrong answer here.
       if (live.current) setUnreachable(true)
+      return
     }
+
+    // -- what each running strategy is holding ------------------------------
+    //
+    // **Asked for only where something is running.** A stopped strategy holds
+    // nothing this could report, and a trader may have hundreds saved: one
+    // request per saved strategy every few seconds would be a panel that costs
+    // more than it tells anybody.
+    //
+    // **On the same timer as the list, deliberately.** The position and the run
+    // it belongs to are read together, so a row never shows a live position
+    // beside a strategy the same refresh has just found stopped.
+    //
+    // Each is asked for on its own and a failure is that strategy's alone: one
+    // instrument the broker will not answer about must not blank the positions
+    // of every other strategy on the page.
+    const holdings = await Promise.all(
+      found.running.map(async (run) => {
+        try {
+          const answered = await strategyPositions(run.file, signal)
+          return [run.file, summaryOf(answered.raw)] as const
+        } catch {
+          return [run.file, null] as const
+        }
+      })
+    )
+    if (!live.current) return
+    setHoldings(Object.fromEntries(holdings))
   }, [])
 
   useEffect(() => {
@@ -286,6 +403,7 @@ export function StrategiesPanel({ getChartContext }: Props) {
           .map((file) => {
           const run = runningFor(file)
           const held = settings.find((one) => one.file === file) ?? null
+          const holding = holdings[file]
           const isEditing = editing === file
 
           return (
@@ -313,6 +431,8 @@ export function StrategiesPanel({ getChartContext }: Props) {
                     ? `${held.symbol} ${held.exchange} ${held.interval} ${held.product}`
                     : 'No instrument set. Set one before this can start.'}
               </div>
+
+              {run && <Holding summary={holding} />}
 
               {isEditing && draft && (
                 <div className="flex flex-col gap-1.5 rounded bg-muted/40 p-1.5">
