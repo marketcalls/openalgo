@@ -198,6 +198,9 @@ export default function OIProfile() {
       if (requestIdRef.current !== requestId) return
       if (response.status === 'success') {
         setProfileData(response)
+        // A success can still carry a note, when the daily OI change covers
+        // only some contracts because loading the rest took too long.
+        if (response.message) showToast.warning(response.message)
       } else {
         showToast.error(response.message || 'Failed to fetch OI Profile data')
       }

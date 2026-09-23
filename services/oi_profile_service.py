@@ -24,10 +24,37 @@ from services.strategy_chart_service import (
     _cap_last_n_trading_dates,
     _resolve_trading_window,
 )
+from utils import runtime
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Longest one OI Profile request spends fetching previous-day OI under the
+#: gthread worker, in seconds. A 20-strike chain is up to 82 contracts, and
+#: broker history requests are paced at about three a second, so a complete
+#: fetch normally takes 30 to 40 seconds and fits. What the budget cuts short
+#: is the case that ran for minutes: repeated broker refusals, each followed by
+#: a backoff, while the request holds one of the gthread worker's fixed pool of
+#: threads. Under eventlet and the development server there is no budget.
+GTHREAD_OI_CHANGE_BUDGET_SECONDS = 60.0
+
+
+def _oi_change_deadline() -> float | None:
+    """Return the time.monotonic() deadline for the daily OI fetch, or None."""
+    if not runtime.gthread_active():
+        return None
+    return time.monotonic() + GTHREAD_OI_CHANGE_BUDGET_SECONDS
+
+
+def _oi_change_note(loaded: int, requested: int) -> str:
+    """The sentence shown when the daily OI change covers only some contracts."""
+    return (
+        f"Loading the previous day's OI took too long, so the daily OI change is "
+        f"shown for {loaded} of {requested} option contracts. Refresh in a minute "
+        f"to load the rest."
+    )
+
 
 # Index symbols that need special exchange for quotes
 NSE_INDEX_SYMBOLS = {
@@ -57,7 +84,10 @@ def _find_futures_symbol(
         # For crypto exchanges, perpetuals (PERPFUT) serve as the underlying
         if exchange.upper() in CRYPTO_EXCHANGES:
             _perp = fno_search_symbols(
-                query=f"{underlying}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+                query=f"{underlying}USDFUT",
+                exchange=exchange,
+                instrumenttype=INSTRUMENT_PERPFUT,
+                limit=1,
             )
             if not _perp:
                 return None
@@ -102,7 +132,10 @@ def _find_futures_symbol(
 
 
 def _fetch_daily_oi_changes(
-    option_symbols: list[dict], options_exchange: str, api_key: str
+    option_symbols: list[dict],
+    options_exchange: str,
+    api_key: str,
+    deadline: float | None = None,
 ) -> dict[str, float]:
     """
     Fetch daily history for options and return previous day's OI.
@@ -115,6 +148,10 @@ def _fetch_daily_oi_changes(
         option_symbols: List of dicts with 'symbol' key
         options_exchange: Exchange for options (NFO, BFO)
         api_key: OpenAlgo API key
+        deadline: A time.monotonic() value after which no further symbol is
+            fetched and no retry is waited for, or None for no limit. A symbol
+            not fetched in time is left out of the result rather than given
+            a previous OI of zero.
 
     Returns:
         Dict mapping symbol -> previous_day_oi
@@ -135,7 +172,10 @@ def _fetch_daily_oi_changes(
     MAX_RETRIES = 2
     RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
 
-    def fetch_one_with_retry(symbol: str) -> tuple[str, float]:
+    def out_of_time(wait: float = 0.0) -> bool:
+        return deadline is not None and time.monotonic() + wait >= deadline
+
+    def fetch_one_with_retry(symbol: str) -> tuple[str, float | None]:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 success, resp, status_code = get_history(
@@ -156,7 +196,11 @@ def _fetch_daily_oi_changes(
                 # Rate limited - retry with backoff
                 if status_code == 429 and attempt < MAX_RETRIES:
                     delay = RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s")
+                    if out_of_time(delay):
+                        return symbol, None
+                    logger.warning(
+                        f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s"
+                    )
                     time.sleep(delay)
                     continue
 
@@ -164,7 +208,11 @@ def _fetch_daily_oi_changes(
             except Exception as e:
                 if attempt < MAX_RETRIES and "429" in str(e):
                     delay = RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s")
+                    if out_of_time(delay):
+                        return symbol, None
+                    logger.warning(
+                        f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s"
+                    )
                     time.sleep(delay)
                     continue
                 return symbol, 0.0
@@ -174,12 +222,24 @@ def _fetch_daily_oi_changes(
     for i in range(0, len(symbols_to_fetch), BATCH_SIZE):
         batch = symbols_to_fetch[i : i + BATCH_SIZE]
         for symbol in batch:
+            if out_of_time():
+                break
             sym, prev_oi = fetch_one_with_retry(symbol)
-            results[sym] = prev_oi
+            if prev_oi is not None:
+                results[sym] = prev_oi
 
         # Delay between batches (skip after last batch)
         if i + BATCH_SIZE < len(symbols_to_fetch):
+            if out_of_time(BATCH_DELAY):
+                break
             time.sleep(BATCH_DELAY)
+
+    wanted = len(set(symbols_to_fetch))
+    if deadline is not None and len(results) < wanted:
+        logger.warning(
+            f"OI Profile daily OI fetch stopped at its time budget: "
+            f"{len(results)} of {wanted} contracts loaded"
+        )
 
     return results
 
@@ -319,8 +379,13 @@ def get_oi_profile_data(
 
         # Step 3: Fetch daily OI changes (parallel)
         prev_oi_map = _fetch_daily_oi_changes(
-            option_symbols_for_history, options_exchange, api_key
+            option_symbols_for_history,
+            options_exchange,
+            api_key,
+            deadline=_oi_change_deadline(),
         )
+        oi_change_requested = len({s["symbol"] for s in option_symbols_for_history})
+        oi_change_loaded = len(prev_oi_map)
 
         # Step 4: Compute OI changes
         for item in oi_chain:
@@ -337,22 +402,25 @@ def get_oi_profile_data(
             item.pop("ce_symbol", None)
             item.pop("pe_symbol", None)
 
-        return (
-            True,
-            {
-                "status": "success",
-                "underlying": chain_response.get("underlying", underlying),
-                "spot_price": spot_price,
-                "atm_strike": atm_strike,
-                "lot_size": lot_size or 1,
-                "expiry_date": expiry_date,
-                "futures_symbol": futures_symbol,
-                "interval": interval,
-                "candles": candles,
-                "oi_chain": oi_chain,
-            },
-            200,
-        )
+        response = {
+            "status": "success",
+            "underlying": chain_response.get("underlying", underlying),
+            "spot_price": spot_price,
+            "atm_strike": atm_strike,
+            "lot_size": lot_size or 1,
+            "expiry_date": expiry_date,
+            "futures_symbol": futures_symbol,
+            "interval": interval,
+            "candles": candles,
+            "oi_chain": oi_chain,
+        }
+        if oi_change_loaded < oi_change_requested:
+            # Reachable only when the gthread time budget cut the fetch short.
+            response["message"] = _oi_change_note(oi_change_loaded, oi_change_requested)
+            response["oi_change_loaded"] = oi_change_loaded
+            response["oi_change_requested"] = oi_change_requested
+
+        return True, response, 200
 
     except Exception as e:
         logger.exception(f"Error in get_oi_profile_data: {e}")
