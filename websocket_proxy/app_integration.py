@@ -24,12 +24,16 @@ unexpectedly it is restarted once its ports are free, with backoff; and it
 exits by itself if the worker that started it dies without cleaning up, so an
 orphan cannot keep the ports. Under eventlet neither is done, as before.
 
-**Signal handlers.** Under gunicorn this module installs none, in any mode.
-It used to replace gunicorn's graceful SIGTERM handling with one that cleaned
-up and called ``os._exit(0)``, which killed in-flight requests, an order whose
-broker call was already sent among them. Gunicorn drains, ``atexit`` and the
-shutdown hooks (``utils/shutdown.py``) stop the child. The development
-server's thread mode keeps its handler.
+**Signal handlers.** Under the gthread worker this module installs none. Its
+handler replaces gunicorn's graceful SIGTERM handling with one that cleans up
+and calls ``os._exit(0)``, which kills in-flight requests, an order whose
+broker call was already sent among them; under gthread gunicorn drains, and
+``atexit`` and the shutdown hooks (``utils/shutdown.py``) stop the child.
+Under the eventlet worker the handler is installed exactly as before, because
+an install that has not opted in must see no change, and a graceful eventlet
+stop waits for every open browser long-poll (measured about 23 seconds with
+one tab open, against an immediate exit). The development server's thread
+mode keeps its handler.
 """
 
 import asyncio
@@ -529,10 +533,24 @@ def _terminate_websocket_subprocess():
         _websocket_subprocess = None
 
 
-def _install_dev_signal_handlers() -> None:
-    """The development server's Ctrl+C path for thread mode. Never under gunicorn."""
-    if _runtime.under_gunicorn():
-        return
+def _signal_handlers_wanted(mode: str) -> bool:
+    """Whether this module installs :func:`signal_handler` for ``mode``.
+
+    * Never under the gthread worker: gunicorn's graceful stop is kept.
+    * Under the eventlet worker (subprocess mode), exactly as before.
+    * On the development server's thread mode, as before (the Ctrl+C path).
+    """
+    if _runtime.gthread_active():
+        return False
+    if mode == "subprocess":
+        return _eventlet_active()
+    if mode == "thread":
+        return not _runtime.under_gunicorn()
+    return False
+
+
+def _install_signal_handlers() -> None:
+    """Replace SIGINT and SIGTERM with :func:`signal_handler`."""
     try:
         # SIGINT (Ctrl+C) - Available on all platforms
         signal.signal(signal.SIGINT, signal_handler)
@@ -572,8 +590,11 @@ def start_websocket_server(mode: str | None = None):
 
     if mode == "subprocess":
         _spawn_websocket_subprocess()
-        # No signal handlers under gunicorn: its own graceful stop drains
+        # Under eventlet, forward Ctrl+C and SIGTERM to the cleanup exactly as
+        # before. Under gthread, none: gunicorn's own graceful stop drains
         # requests, and atexit plus the shutdown hooks stop the child.
+        if _signal_handlers_wanted(mode):
+            _install_signal_handlers()
         return None
 
     logger.debug("Starting WebSocket proxy server in a separate thread")
@@ -647,7 +668,8 @@ def start_websocket_server(mode: str | None = None):
     atexit.register(cleanup_websocket_server)
 
     # Register signal handlers for graceful shutdown (development server only)
-    _install_dev_signal_handlers()
+    if _signal_handlers_wanted("thread"):
+        _install_signal_handlers()
 
     logger.debug("WebSocket proxy server thread started")
     return _websocket_thread

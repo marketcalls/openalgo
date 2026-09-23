@@ -166,29 +166,48 @@ def proxy_state(monkeypatch):
         thread.join(5)
 
 
-def test_under_gunicorn_no_handler_replaces_the_graceful_stop(
+def test_under_gthread_no_handler_replaces_the_graceful_stop(
     clean_env, monkeypatch, recorded_signals, proxy_state
 ):
     _pretend_gunicorn(monkeypatch)
-    monkeypatch.setattr(runtime, "gthread_active", lambda: False)
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
     monkeypatch.setattr(ai, "_launch_child", lambda: FakeProc())
+    monkeypatch.setattr(ai, "_start_supervisor", lambda: None)
     monkeypatch.setattr(ngrok_manager, "_ngrok_initialized", False)
 
     ai.start_websocket_server("subprocess")
     ngrok_manager.setup_ngrok_handlers()
-    ai._install_dev_signal_handlers()
 
     # Before the fix both modules installed SIGINT and SIGTERM handlers here,
     # the proxy's ending in os._exit(0).
     assert recorded_signals == []
+    assert ai._signal_handlers_wanted("thread") is False
+
+
+def test_the_eventlet_worker_keeps_its_handler_exactly_as_before(
+    clean_env, monkeypatch, recorded_signals, proxy_state
+):
+    _pretend_gunicorn(monkeypatch)
+    monkeypatch.setattr(runtime, "gthread_active", lambda: False)
+    monkeypatch.setattr(ai, "_eventlet_active", lambda: True)
+    monkeypatch.setattr(ai, "_launch_child", lambda: FakeProc())
+
+    ai.start_websocket_server("subprocess")
+
+    # Installs that have not opted in see no change: a graceful eventlet stop
+    # would wait on every open browser long-poll.
+    assert signal.SIGINT in recorded_signals
+    assert RecordingSignalModule.SIGTERM in recorded_signals
 
 
 def test_the_dev_server_keeps_its_ctrl_c_handlers(clean_env, monkeypatch, recorded_signals):
+    monkeypatch.setattr(runtime, "gthread_active", lambda: False)
     monkeypatch.setattr(ngrok_manager, "_ngrok_initialized", False)
     monkeypatch.setattr(ngrok_manager.atexit, "register", lambda fn: None)
     ngrok_manager.setup_ngrok_handlers()
-    ai._install_dev_signal_handlers()
     assert signal.SIGINT in recorded_signals
+    assert ai._signal_handlers_wanted("thread") is True
+    ai._install_signal_handlers()
 
 
 # --- supervision (gthread only) ----------------------------------------------------

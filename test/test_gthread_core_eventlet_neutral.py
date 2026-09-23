@@ -6,9 +6,11 @@ greenlet sees when nothing races. This runs a real eventlet hub in a
 subprocess (monkey_patch() is global and cannot be undone) with gunicorn's
 eventlet worker module stubbed in, and checks the eventlet-side answers:
 
-* the proxy is a child process, unsupervised, with no drain watcher;
-* the health thresholds, the httpx timeout and gunicorn's SIGTERM handler
-  are untouched;
+* the proxy is a child process, unsupervised, with no drain watcher, and
+  its SIGTERM handler is installed as it always was;
+* the health thresholds, the httpx timeout and the ngrok handlers (a no-op
+  under gunicorn, overridden by the proxy's handler as before) are
+  unchanged;
 * a mode change queued behind another waits its turn instead of being
   refused, and the hub keeps running while it waits;
 * the locked caches work from many greenlets at once.
@@ -76,6 +78,21 @@ def test_the_eventlet_worker_keeps_todays_topology_and_limits():
         import utils.ngrok_manager as ng
         ng.setup_ngrok_handlers()
         assert signal.getsignal(signal.SIGTERM) is before
+
+        # The proxy integration still installs its SIGTERM handler under
+        # eventlet, exactly as before, and starts no supervisor.
+        class Child:
+            pid = 1
+
+            def poll(self):
+                return None
+
+        import atexit
+        atexit.register = lambda fn: None
+        ai._launch_child = lambda: Child()
+        ai.start_websocket_server("subprocess")
+        assert signal.getsignal(signal.SIGTERM) is ai.signal_handler
+        assert ai._supervisor_thread is None
 
         import blueprints.master_contract_status as mcs
         assert mcs.gthread_active() is False
