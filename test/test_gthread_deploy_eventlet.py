@@ -86,7 +86,15 @@ def test_the_child_really_runs_under_eventlet(tmp_path):
 def test_the_runtime_report_is_what_it_was(tmp_path):
     result = run(
         """
+        from pathlib import Path
         import blueprints.admin as admin
+
+        # A private .env without the setting: the default install.
+        env_file = Path(os.environ["HOOK_TMP"]) / ".env"
+        env_file.write_text("APP_KEY = 'x'\\n")
+        admin._resolve_env_path = lambda: env_file
+        os.environ.pop("OPENALGO_WORKER_CLASS", None)
+
         before = ticks[0]
         started = time.monotonic()
         info = admin._runtime_info()
