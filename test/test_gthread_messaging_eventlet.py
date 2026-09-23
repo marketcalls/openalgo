@@ -126,8 +126,43 @@ def test_telegram_start_and_stop_keep_the_hub_turning(tmp_path):
     assert "greenlet.error" not in result.stderr
 
 
+def test_a_real_thread_taking_the_strategy_hosts_green_lock_hangs(tmp_path):
+    """hosts-09, the defect: the old path, so the fix below cannot pass vacuously.
+
+    The bot's real thread took the strategy host's lock (a green RLock under
+    eventlet) while a request greenlet held it. It never gets it.
+    """
+    result = run(
+        """
+        from utils import real_threading as rt
+
+        process_lock = threading.RLock()  # green, like PROCESS_LOCK under eventlet
+        done = []
+
+        def stop_strategy(sid):
+            with process_lock:
+                done.append(sid)
+
+        def holder():
+            with process_lock:
+                eventlet.sleep(0.4)
+
+        eventlet.spawn(holder)
+        eventlet.sleep(0.05)
+        t = _orig.Thread(target=stop_strategy, args=("s1",), daemon=True)
+        t.start()
+        finished = rt.join(t, timeout=2.0)
+        print("HANG" if not finished and not done else "PASSED THROUGH")
+        sys.stdout.flush()
+        os._exit(0)  # the stuck real thread is abandoned
+        """,
+        tmp_path,
+    )
+    assert "HANG" in result.stdout, result.stdout + result.stderr
+
+
 def test_the_telegram_thread_reaches_the_strategy_host_only_through_the_hub(tmp_path):
-    """hosts-09: a real thread taking the host's green lock waits forever."""
+    """hosts-09, the fix: the call runs on the hub and the bot's loop polls for it."""
     result = run(
         """
         import services.telegram_bot_service as tg
@@ -147,19 +182,6 @@ def test_the_telegram_thread_reaches_the_strategy_host_only_through_the_hub(tmp_
             with process_lock:
                 eventlet.sleep(0.4)
 
-        # The defect: the old path called it from the bot's real thread.
-        direct = {}
-
-        def direct_call():
-            direct["result"] = stop_strategy("s1")
-
-        eventlet.spawn(holder)
-        eventlet.sleep(0.05)
-        t = _orig.Thread(target=direct_call, daemon=True)
-        t.start()
-        assert not rt.join(t, timeout=2.0), "a real thread got a green lock; the premise is gone"
-
-        # The fix: the bot's loop hands the call to the hub and polls for it.
         svc = tg.TelegramBotService()
         out = {}
 
@@ -174,9 +196,9 @@ def test_the_telegram_thread_reaches_the_strategy_host_only_through_the_hub(tmp_
         h = eventlet.spawn(holder)
         eventlet.sleep(0.05)
         before = len(ticks)
-        t2 = _orig.Thread(target=bot_thread, daemon=True)
-        t2.start()
-        assert rt.join(t2, timeout=10), "the bot thread never finished"
+        t = _orig.Thread(target=bot_thread, daemon=True)
+        t.start()
+        assert rt.join(t, timeout=10), "the bot thread never finished"
         during = len(ticks) - before
         g.kill()
         h.wait()
@@ -187,8 +209,6 @@ def test_the_telegram_thread_reaches_the_strategy_host_only_through_the_hub(tmp_
         assert out["took"] < 2.0, out["took"]
         assert during > 5, f"the hub froze: {during} ticks"
         print("OK")
-        sys.stdout.flush()
-        os._exit(0)  # the thread stuck in the defect case is abandoned
         """,
         tmp_path,
     )

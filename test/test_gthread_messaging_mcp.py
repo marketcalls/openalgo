@@ -480,12 +480,18 @@ def test_concurrent_audit_writes_lose_and_tear_no_lines(monkeypatch, tmp_path):
 
     lines = path.read_text(encoding="utf-8").splitlines()
     entries = [json.loads(line) for line in lines]  # a torn line fails here
-    assert 1 <= len(entries) <= 50 + writers
-    # Nothing that was written last is missing: each writer's final entry is
-    # the newest line of that writer and must have survived every trim.
-    last = {(e["worker"], e["n"]) for e in entries}
-    for worker in range(writers):
-        assert (worker, per_writer - 1) in last
+    # Every append past the first trim trims again, so exactly the cap is left.
+    assert len(entries) == 50
+    # With append and trim in one critical section the file is always a suffix
+    # of the order the writes happened in. A writer's own writes happen in
+    # order, so whatever of one writer survives must be an unbroken run ending
+    # at its last write. An append lost between a trim's read and its rewrite
+    # leaves a hole in that run, or cuts its end off.
+    kept: dict[int, list[int]] = {}
+    for entry in entries:
+        kept.setdefault(entry["worker"], []).append(entry["n"])
+    for worker, ns in kept.items():
+        assert ns == list(range(ns[0], per_writer)), (worker, ns)
     assert not list(tmp_path.glob(".mcp-audit-*.tmp"))
 
 
