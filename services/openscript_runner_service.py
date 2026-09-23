@@ -77,6 +77,9 @@ import platform
 import signal
 import subprocess
 import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -98,7 +101,9 @@ from services.openscript_run_config import (
     require_run_config,
 )
 from services.openscript_running import all_running, mark_running, mark_stopped
+from utils import runtime
 from utils.logging import get_logger
+from utils.shutdown import register_shutdown_hook
 
 logger = get_logger(__name__)
 
@@ -168,9 +173,42 @@ STOPPING_RUNS: set[str] = set()
 #: none yet, so a placeholder would be swept the moment it was made.
 STARTING_RUNS: set[str] = set()
 
-#: Guards the two above and nothing else. The hub's own lock, not a real one:
+#: Runs whose position is being closed right now by a Stop. Claimed before the
+#: run is asked to close, in the same hold that checks for a stop already under
+#: way. Without it a Pause landing during the close (a second tab, or the
+#: scheduled stop) terminated the run before it had read the instruction, it
+#: left holding its position, and the close then answered "closed and stopped".
+#: A pause is refused while the close holds the claim.
+CLOSING_RUNS: set[str] = set()
+
+#: Deployments whose settings are being removed right now. A start is refused
+#: while its id is here, and a removal is refused while the run is starting,
+#: running or stopping, so settings never disappear under a run.
+DELETING_RUNS: set[str] = set()
+
+#: Guards the sets above and nothing else. The hub's own lock, not a real one:
 #: see the module note for why that is the right one here.
 PROCESS_LOCK = RLock()
+
+#: Set once the gthread worker begins shutting down. A start is refused after
+#: it, so a scheduled start cannot launch a run behind the stop that is ending
+#: the others.
+_SHUTTING_DOWN = threading.Event()
+
+#: What a start is told once shutdown has begun.
+SHUTTING_DOWN_MESSAGE = "The server is shutting down, so this strategy was not started"
+
+#: What a Pause is told while a Stop is closing the position.
+CLOSING_MESSAGE = "This strategy is closing its position. Wait for it to finish."
+
+#: What removing a deployment is told while its run is up.
+RUNNING_DELETE_REFUSAL = (
+    "This strategy is running, so it has not been removed. Pause it to keep its "
+    "position, or Stop it to close the position first, then remove it."
+)
+
+#: What removing a deployment is told while it is stopping or being removed.
+BUSY_DELETE_REFUSAL = "This strategy is still being stopped or removed. Try again in a moment."
 
 OS_TYPE = platform.system().lower()
 IS_WINDOWS = OS_TYPE == "windows"
@@ -339,7 +377,9 @@ class Adopted:
             raise OSError(str(refused)) from refused
 
 
-def _terminate(process: subprocess.Popen, pid: int, gentle: float = 5.0, forced: float = 2.0) -> bool:
+def _terminate(
+    process: subprocess.Popen, pid: int, gentle: float = 5.0, forced: float = 2.0
+) -> bool:
     """Ask a run to stop, and insist if it does not. True once it is gone.
 
     Gentle first, because a run asked to stop finishes the bar it is on and
@@ -604,29 +644,51 @@ def start_run(
         and str(saved.get("exchange") or "") == exchange
         and str(saved.get("interval") or "") == interval
     )
+    is_saved_deployment = bool(matches and saved.get("deployment"))
     run_id = (
         str(saved.get("deployment") or "")
-        if matches and saved.get("deployment")
+        if is_saved_deployment
         else run_id_for(script, symbol, exchange, interval)
     )
     where = f"{script} on {symbol} {exchange} at {interval}"
 
+    if _SHUTTING_DOWN.is_set():
+        return False, SHUTTING_DOWN_MESSAGE
+
     with PROCESS_LOCK:
         _forget_finished_locked()
+        if _SHUTTING_DOWN.is_set():
+            return False, SHUTTING_DOWN_MESSAGE
         if run_id in RUNNING_RUNS:
             return False, f"{where} is already running"
         if run_id in STOPPING_RUNS:
             return False, f"{where} is still stopping, try again in a moment"
         if run_id in STARTING_RUNS:
             return False, f"{where} is already starting"
+        if run_id in DELETING_RUNS:
+            return False, f"{where} is being removed, so it was not started"
         # Claimed in the hold that checked, and released in the finally below
         # whatever happens after it.
         STARTING_RUNS.add(run_id)
 
     try:
+        # The settings were read before the claim, so a removal could have
+        # finished in between. Read again now the claim stands (a removal
+        # refuses while it does): a run must never start on settings that are
+        # already gone.
+        if is_saved_deployment and read_run_config(run_id) is None:
+            return False, (f"{where} was removed while it was being started, so it was not started")
         return _spawn_claimed(
-            script, run_id, symbol, exchange, interval, product,
-            user_id, history_days, poll_seconds, inputs,
+            script,
+            run_id,
+            symbol,
+            exchange,
+            interval,
+            product,
+            user_id,
+            history_days,
+            poll_seconds,
+            inputs,
         )
     finally:
         with PROCESS_LOCK:
@@ -767,18 +829,22 @@ def _spawn_claimed(
             "product": product,
         }
 
-    # Recorded after the child exists, so nothing is ever noted as running that
-    # was not. See `openscript_running`: this survives a restart and is what
-    # brings the strategy back, and only a trader pressing Stop clears it.
-    mark_running(run_id, process.pid)
+        # Recorded after the child exists, so nothing is ever noted as running
+        # that was not. See `openscript_running`: this survives a restart and is
+        # what brings the strategy back, and only a trader pressing Stop clears
+        # it. Inside the hold that registers the run, because a Pause can only
+        # claim the run after this hold ends, so its "stopped" is always written
+        # after this "running". Written after the release, a Pause landing in
+        # between was overwritten, and the strategy the trader had stopped was
+        # started again by the next restart. Lock order: PROCESS_LOCK, then the
+        # running file's own lock; nothing takes them the other way round.
+        mark_running(run_id, process.pid)
 
     logger.info("Started the OpenScript run %s as process %s", run_id, process.pid)
     return True, f"{script} started at {started.strftime('%H:%M:%S IST')}"
 
 
-def stop_run(
-    script_or_run_id: str, forget: bool = True, close: bool = False
-) -> tuple[bool, str]:
+def stop_run(script_or_run_id: str, forget: bool = True, close: bool = False) -> tuple[bool, str]:
     """End one run and reap its process.
 
     **There are two ways to end a run and they are not the same thing.**
@@ -820,6 +886,35 @@ def stop_run(
     run_id = _as_run_id(script_or_run_id)
 
     if close:
+        # Claimed before the run is asked to close, in the hold that checks for
+        # a stop already under way, and held until this call is done. A Pause
+        # arriving meanwhile is refused rather than terminating the run before
+        # it has read the instruction, which left it holding its position while
+        # this answered "closed and stopped".
+        with PROCESS_LOCK:
+            _forget_finished_locked()
+            if run_id in STOPPING_RUNS:
+                return False, "That run is already stopping"
+            if run_id in CLOSING_RUNS:
+                return False, CLOSING_MESSAGE
+            CLOSING_RUNS.add(run_id)
+        try:
+            return _stop_run_claimed(run_id, forget, close)
+        finally:
+            with PROCESS_LOCK:
+                CLOSING_RUNS.discard(run_id)
+
+    return _stop_run_claimed(run_id, forget, close)
+
+
+def _stop_run_claimed(run_id: str, forget: bool, close: bool) -> tuple[bool, str]:
+    """The body of ``stop_run``. A close holds its CLOSING_RUNS claim throughout.
+
+    A pause asked for by a trader or a schedule (``forget``) waits for a close
+    in progress to finish. The worker going down (not ``forget``) does not: a
+    child outlives its parent, so it is ended whatever else is under way.
+    """
+    if close:
         gone, why = _close_and_wait(run_id)
         if not gone:
             return False, why
@@ -828,6 +923,8 @@ def stop_run(
         _forget_finished_locked()
         if run_id in STOPPING_RUNS:
             return False, "That run is already stopping"
+        if not close and forget and run_id in CLOSING_RUNS:
+            return False, CLOSING_MESSAGE
         held = RUNNING_RUNS.pop(run_id, None)
         if held is None:
             if close:
@@ -943,9 +1040,7 @@ def _as_run_id(given: str) -> str:
     script = given if given.endswith(".oscript") else f"{given}.oscript"
 
     with PROCESS_LOCK:
-        running = [
-            run_id for run_id, held in RUNNING_RUNS.items() if held.get("script") == script
-        ]
+        running = [run_id for run_id, held in RUNNING_RUNS.items() if held.get("script") == script]
     if len(running) == 1:
         return running[0]
     if running:
@@ -963,6 +1058,53 @@ def is_running(script_or_run_id: str) -> bool:
     with PROCESS_LOCK:
         _forget_finished_locked()
         return run_id in RUNNING_RUNS
+
+
+def is_starting(script_or_run_id: str) -> bool:
+    """Whether a start of this run has been claimed and has not finished yet."""
+    run_id = _as_run_id(script_or_run_id)
+    with PROCESS_LOCK:
+        return run_id in STARTING_RUNS
+
+
+def _is_claimed(run_id: str) -> bool:
+    """Whether this run is starting, running, stopping or closing right now."""
+    with PROCESS_LOCK:
+        _forget_finished_locked()
+        return (
+            run_id in RUNNING_RUNS
+            or run_id in STARTING_RUNS
+            or run_id in STOPPING_RUNS
+            or run_id in CLOSING_RUNS
+        )
+
+
+@contextmanager
+def removal_claim(script_or_run_id: str) -> Iterator[str]:
+    """Claim a deployment for removal, for the body of a ``with``.
+
+    Yields an empty string when the claim was taken and the removal may go
+    ahead, or the sentence to answer with when it may not: the run is starting,
+    running or stopping, or another removal holds it. A start is refused while
+    the claim stands, so the settings cannot be removed from under a run that
+    is being started, which ``is_running`` alone could not see.
+    """
+    run_id = _as_run_id(script_or_run_id)
+    with PROCESS_LOCK:
+        _forget_finished_locked()
+        if run_id in RUNNING_RUNS or run_id in STARTING_RUNS:
+            refusal = RUNNING_DELETE_REFUSAL
+        elif run_id in STOPPING_RUNS or run_id in CLOSING_RUNS or run_id in DELETING_RUNS:
+            refusal = BUSY_DELETE_REFUSAL
+        else:
+            refusal = ""
+            DELETING_RUNS.add(run_id)
+    try:
+        yield refusal
+    finally:
+        if not refusal:
+            with PROCESS_LOCK:
+                DELETING_RUNS.discard(run_id)
 
 
 def status_of(script_or_run_id: str) -> dict | None:
@@ -1046,13 +1188,21 @@ def restore_runs() -> tuple[int, int]:
                     "%s is recorded as running under process %s, which is alive but is not that "
                     "run. Nothing was started for it, because a second run would double its "
                     "position. Check that process, then start the strategy again.",
-                    run_id, pid,
+                    run_id,
+                    pid,
                 )
                 continue
 
             ok, why = start_run(run_id)
             if ok:
                 started += 1
+            elif _is_claimed(run_id) or _SHUTTING_DOWN.is_set():
+                # Refused because something else is starting, running or
+                # stopping it (another restore pass, or a trader), or because
+                # the worker is going down. The run is not lost, so its record
+                # stays: clearing it would leave a strategy that is running, or
+                # that should come back, out of the next restart.
+                logger.info("%s was not put back by this pass: %s", run_id, why)
             else:
                 # Left out of the record: it is not running and nothing here is
                 # going to make it run, so a trader pressing Start is the next
@@ -1065,7 +1215,9 @@ def restore_runs() -> tuple[int, int]:
     if adopted or started:
         logger.info(
             "Put back %d OpenScript run(s): %d already running and taken over, %d started",
-            adopted + started, adopted, started,
+            adopted + started,
+            adopted,
+            started,
         )
     return adopted, started
 
@@ -1237,7 +1389,100 @@ def _stop_every_run_at_exit() -> None:
         logger.exception("Stopping the OpenScript runs at exit did not finish cleanly")
 
 
+#: How long begin_shutdown gives the runs to stop, together, before it kills
+#: what is left. A stop is a gentle signal, five seconds, a forced one and two
+#: more, so this covers one full stop, and with the strategy host's share it
+#: stays inside the shutdown budget in utils.shutdown.
+_SHUTDOWN_STOP_BUDGET_SECONDS = 8.0
+
+
+def begin_shutdown(budget_s: float = _SHUTDOWN_STOP_BUDGET_SECONDS) -> list[str]:
+    """Stop every run now, within a budget, and refuse any new start.
+
+    The gthread worker runs this from utils.shutdown's early hook: it never
+    reaches atexit while a request thread is still streaming, so the atexit
+    handler below would never run and the runs would go on trading with
+    nothing supervising them.
+
+    Runs are paused, not closed, exactly as at exit: the worker going down is
+    not the trader deciding to stop, so the record that brings each one back
+    after the restart is kept. They are stopped side by side, and whatever is
+    still alive when the budget runs out is killed with its process group.
+
+    Returns:
+        The ids of the runs that had to be killed.
+    """
+    with PROCESS_LOCK:
+        _SHUTTING_DOWN.set()
+        _forget_finished_locked()
+        held = {run_id: dict(entry) for run_id, entry in RUNNING_RUNS.items()}
+
+    if not held:
+        return []
+
+    logger.info("Stopping %d OpenScript run(s) before this worker exits", len(held))
+    deadline = monotonic() + max(0.0, budget_s)
+    workers = []
+    for run_id in held:
+        worker = threading.Thread(
+            target=_stop_for_shutdown, args=(run_id,), name=f"openscript-stop-{run_id}", daemon=True
+        )
+        worker.start()
+        workers.append(worker)
+    for worker in workers:
+        worker.join(max(0.0, deadline - monotonic()))
+
+    killed = []
+    for run_id, entry in held.items():
+        process = entry.get("process")
+        pid = entry.get("pid")
+        try:
+            alive = process is not None and process.poll() is None
+        except Exception:
+            alive = False
+        if not alive or not pid:
+            continue
+        try:
+            if IS_WINDOWS:
+                process.kill()
+            else:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            killed.append(run_id)
+            logger.warning(
+                "The OpenScript run %s (process %s) did not stop in time and was killed",
+                run_id,
+                pid,
+            )
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    return killed
+
+
+def _stop_for_shutdown(run_id: str) -> None:
+    """One run's stop during shutdown. Never raises."""
+    try:
+        stop_run(run_id, forget=False)
+    except Exception:
+        logger.exception("An OpenScript run did not stop cleanly during shutdown")
+
+
+def _shutdown_hook() -> None:
+    """The early shutdown hook: under gthread, stop the runs now.
+
+    Under eventlet and on the development server the interpreter reaches
+    atexit, so the handler below stops them there exactly as it always has.
+    """
+    if runtime.gthread_active():
+        begin_shutdown()
+
+
 # Registered at import, which is what the strategy host does with its own, and
 # for the same reason: the thing that must not be forgotten is the one that has to
 # happen without anybody remembering to ask for it.
 atexit.register(_stop_every_run_at_exit)
+register_shutdown_hook(
+    _shutdown_hook,
+    name="openscript_runs",
+    budget_s=_SHUTDOWN_STOP_BUDGET_SECONDS + 2,
+    early=True,
+)

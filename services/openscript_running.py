@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -130,8 +131,13 @@ def _change(edit) -> None:
 
 
 def _save(state: dict[str, Any]) -> None:
-    """Through a temporary file and a rename, so a kill cannot leave half of it."""
-    temporary = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    """Through a temporary file and a rename, so a kill cannot leave half of it.
+
+    The temporary file is named for this write alone. The write lock only
+    serialises writers in this process, and two writers sharing one temporary
+    path could publish half of one file inside the other.
+    """
+    temporary = STATE_FILE.with_name(f"{STATE_FILE.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(temporary, "w", encoding="utf-8") as handle:
