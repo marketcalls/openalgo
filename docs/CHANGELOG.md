@@ -54,6 +54,11 @@ did:**
 - IIFL: an order write answered with a rate limit is not sent a second time,
   and a cancel or modify whose failure came back inside an HTTP 200 is reported
   as a failure.
+- Docker: the container starts the market data service again if it stops
+  (after 1 second, then longer if it keeps stopping, up to 30 seconds), and
+  stops it within 5 seconds of OpenAlgo stopping. The container's first process
+  is now the start script, which passes a stop or an interrupt on to OpenAlgo;
+  other signals no longer reach it.
 
 **Changes on every install, eventlet included:**
 
@@ -86,6 +91,22 @@ did:**
   closed. When requests do not overlap, the outcome is exactly as before.
 - Removed `services/telegram_bot_service_fixed.py` and
   `services/telegram_bot_service_v2.py`, which nothing imported.
+- Motilal Oswal, Pocketful, Tradejini and Nubra: quote and market depth
+  requests answer as soon as the broker has sent everything they read, instead
+  of always waiting a fixed time. The answers are the same; they come sooner.
+- Pocketful: other requests no longer queue behind the market data feed while
+  it connects.
+- OpenScript: Stop reports "closed and stopped" only when the run confirms that
+  its position was closed. A run that crashed, or was stopped before its
+  closing order filled, is still marked stopped, and Stop now says it could not
+  confirm the close and asks you to check your positions. A run started before
+  this update cannot confirm, so its first Stop afterwards says so even when it
+  did close.
+- `install/update.sh` updates an instance made by `install-multi.sh` when run
+  from inside it, and restarts that instance's service. It used to treat such
+  an instance as a development checkout and never stopped or started its
+  service. A server that also has a single install at `/var/python/openalgo`
+  keeps updating that one, as before.
 
 **Going back to an older release.** A service switched to the launcher starts
 through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
