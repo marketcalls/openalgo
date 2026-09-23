@@ -4613,7 +4613,7 @@ def sec_order_updates(run: Runner, base: list) -> None:
                                f"{len(unpopulated)} update(s) carry neither quantity: "
                                f"{unpopulated[:4]}")
             if not checked:
-                raise Warn(f"no update carried populated filled/pending quantities"
+                raise Warn("no update carried populated filled/pending quantities"
                            + (f" - {len(unpopulated)} left both at 0" if unpopulated else ""))
 
         run.check("OU-05", quantities, endpoint="ws.orders",
