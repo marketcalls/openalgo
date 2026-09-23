@@ -494,58 +494,66 @@ class BrokerData:
             subscription_result = self.ws_connection.subscribe_snapquote_data(snapquote_payload)
             logger.info(f"Subscription result: {subscription_result}")
 
-            # Wait for data to be received with increased timeout
-            attempts = 0
-            max_attempts = 15  # Increased attempts further
-            snapquote_data = None
+            # Unsubscribe in a finally: the connection counts who holds each
+            # instrument, and a request that never released one would keep it
+            # subscribed for every later request.
+            try:
+                # Wait for data to be received with increased timeout
+                attempts = 0
+                max_attempts = 15  # Increased attempts further
+                snapquote_data = None
 
-            # Set debug logging to see all messages
-            logging.getLogger("broker.pocketful.api.packet_decoder").setLevel(logging.DEBUG)
-            logging.getLogger("broker.pocketful.api.pocketfulwebsocket").setLevel(logging.DEBUG)
+                # Set debug logging to see all messages
+                logging.getLogger("broker.pocketful.api.packet_decoder").setLevel(logging.DEBUG)
+                logging.getLogger("broker.pocketful.api.pocketfulwebsocket").setLevel(logging.DEBUG)
 
-            # Send a dummy heartbeat to ensure connection is active
-            if hasattr(self.ws_connection, "_send_heartbeat"):
-                self.ws_connection._send_heartbeat()
+                # Send a dummy heartbeat to ensure connection is active
+                if hasattr(self.ws_connection, "_send_heartbeat"):
+                    self.ws_connection._send_heartbeat()
 
-            logger.info(f"Waiting for snapquote data for instrument {instrument_token}")
+                logger.info(f"Waiting for snapquote data for instrument {instrument_token}")
 
-            # Try a different approach - multiple shorter waits instead of longer ones
-            while attempts < max_attempts:
-                time.sleep(1.0)  # Standard wait time
-                snapquote_data = self.ws_connection.read_snapquote_data()
-                logger.info(f"Attempt {attempts + 1}: Received data: {snapquote_data}")
+                # Try a different approach - multiple shorter waits instead of longer ones
+                while attempts < max_attempts:
+                    time.sleep(1.0)  # Standard wait time
+                    snapquote_data = self.ws_connection.read_snapquote_data()
+                    logger.info(f"Attempt {attempts + 1}: Received data: {snapquote_data}")
 
-                # If we get any data at all, dump the raw data to help with debugging
-                if isinstance(snapquote_data, dict) and snapquote_data:
-                    logger.info(f"Received some data on attempt {attempts + 1}: {snapquote_data}")
-
-                # More flexible check for valid data
-                if snapquote_data and isinstance(snapquote_data, dict):
-                    # Try different keys that might be present
-                    token_in_data = snapquote_data.get("instrument_token") or snapquote_data.get(
-                        "instrumentToken"
-                    )
-                    if token_in_data:
+                    # If we get any data at all, dump the raw data to help with debugging
+                    if isinstance(snapquote_data, dict) and snapquote_data:
                         logger.info(
-                            f"Received data with token {token_in_data} (looking for {instrument_token})"
+                            f"Received some data on attempt {attempts + 1}: {snapquote_data}"
                         )
 
-                        # More flexible token matching
-                        if str(token_in_data) == str(instrument_token):
+                    # More flexible check for valid data
+                    if snapquote_data and isinstance(snapquote_data, dict):
+                        # Try different keys that might be present
+                        token_in_data = snapquote_data.get(
+                            "instrument_token"
+                        ) or snapquote_data.get("instrumentToken")
+                        if token_in_data:
                             logger.info(
-                                f"Received valid market depth data for {exchange}:{br_symbol}"
+                                f"Received data with token {token_in_data} (looking for {instrument_token})"
                             )
-                            break
+
+                            # More flexible token matching
+                            if str(token_in_data) == str(instrument_token):
+                                logger.info(
+                                    f"Received valid market depth data for {exchange}:{br_symbol}"
+                                )
+                                break
+                            else:
+                                logger.debug(
+                                    f"Received data for different instrument: {token_in_data}"
+                                )
                         else:
-                            logger.debug(f"Received data for different instrument: {token_in_data}")
-                    else:
-                        # If no token is found, log the full response
-                        logger.info(f"Received response without token field: {snapquote_data}")
+                            # If no token is found, log the full response
+                            logger.info(f"Received response without token field: {snapquote_data}")
 
-                attempts += 1
-
-            # Unsubscribe after receiving data
-            self.ws_connection.unsubscribe_snapquote_data(snapquote_payload)
+                    attempts += 1
+            finally:
+                # Unsubscribe after receiving data
+                self.ws_connection.unsubscribe_snapquote_data(snapquote_payload)
 
             # If no valid data received, try to use cached data or raise error
             if (
@@ -792,119 +800,124 @@ class BrokerData:
             except Exception as e:
                 logger.warning(f"Failed to subscribe to instrument {instrument}: {str(e)}")
 
-        # Step 3: Collect data while waiting - read continuously to capture all instruments
-        received_data = {}
-        num_instruments = len(instruments_to_subscribe)
-        max_wait_time = min(
-            max(num_instruments * 0.5, 3), 15
-        )  # Between 3-15 seconds based on instrument count
-        start_time = time.time()
+        # Unsubscribe in a finally, for the reason given in
+        # _get_market_depth_websocket.
+        try:
+            # Step 3: Collect data while waiting - read continuously to capture all instruments
+            received_data = {}
+            num_instruments = len(instruments_to_subscribe)
+            max_wait_time = min(
+                max(num_instruments * 0.5, 3), 15
+            )  # Between 3-15 seconds based on instrument count
+            start_time = time.time()
 
-        logger.debug(
-            f"Collecting data for up to {max_wait_time:.1f}s for {num_instruments} instruments..."
-        )
+            logger.debug(
+                f"Collecting data for up to {max_wait_time:.1f}s for {num_instruments} instruments..."
+            )
 
-        # Read continuously until we have all data or timeout
-        while time.time() - start_time < max_wait_time:
-            detailed_data = self.ws_connection.read_detailed_marketdata()
+            # Read continuously until we have all data or timeout
+            while time.time() - start_time < max_wait_time:
+                detailed_data = self.ws_connection.read_detailed_marketdata()
 
-            if detailed_data and isinstance(detailed_data, dict):
-                token_in_data = detailed_data.get("instrument_token") or detailed_data.get(
-                    "instrumentToken"
-                )
-                if token_in_data and str(token_in_data) in symbol_map:
-                    received_data[str(token_in_data)] = detailed_data
-                    logger.debug(
-                        f"Received data for token {token_in_data} ({len(received_data)}/{num_instruments})"
+                if detailed_data and isinstance(detailed_data, dict):
+                    token_in_data = detailed_data.get("instrument_token") or detailed_data.get(
+                        "instrumentToken"
                     )
+                    if token_in_data and str(token_in_data) in symbol_map:
+                        received_data[str(token_in_data)] = detailed_data
+                        logger.debug(
+                            f"Received data for token {token_in_data} ({len(received_data)}/{num_instruments})"
+                        )
 
-            # Exit early if we have all data
-            if len(received_data) >= num_instruments:
-                logger.debug(f"All {num_instruments} instruments received, exiting early")
-                break
+                # Exit early if we have all data
+                if len(received_data) >= num_instruments:
+                    logger.debug(f"All {num_instruments} instruments received, exiting early")
+                    break
 
-            # Small delay between reads to avoid busy loop
-            time.sleep(0.05)
+                # Small delay between reads to avoid busy loop
+                time.sleep(0.05)
 
-        logger.debug(
-            f"Data collection completed: {len(received_data)}/{num_instruments} instruments received"
-        )
+            logger.debug(
+                f"Data collection completed: {len(received_data)}/{num_instruments} instruments received"
+            )
 
-        # Step 5: Build results from received data
-        for token_str, info in symbol_map.items():
-            detailed_data = received_data.get(token_str)
+            # Step 5: Build results from received data
+            for token_str, info in symbol_map.items():
+                detailed_data = received_data.get(token_str)
 
-            if detailed_data:
-                # Extract and format quote data from detailed market data
-                # Note: Price values are multiplied by 100
-                last_traded_price = (
-                    detailed_data.get("last_traded_price", 0) / 100
-                    if detailed_data.get("last_traded_price")
-                    else 0
-                )
-                bid_price = (
-                    detailed_data.get("best_bid_price", 0) / 100
-                    if detailed_data.get("best_bid_price")
-                    else 0
-                )
-                ask_price = (
-                    detailed_data.get("best_ask_price", 0) / 100
-                    if detailed_data.get("best_ask_price")
-                    else 0
-                )
-                high_price = (
-                    detailed_data.get("high_price", 0) / 100
-                    if detailed_data.get("high_price")
-                    else 0
-                )
-                low_price = (
-                    detailed_data.get("low_price", 0) / 100 if detailed_data.get("low_price") else 0
-                )
-                open_price = (
-                    detailed_data.get("open_price", 0) / 100
-                    if detailed_data.get("open_price")
-                    else 0
-                )
-                close_price = (
-                    detailed_data.get("close_price", 0) / 100
-                    if detailed_data.get("close_price")
-                    else 0
-                )
-                volume = detailed_data.get("trade_volume", 0)
+                if detailed_data:
+                    # Extract and format quote data from detailed market data
+                    # Note: Price values are multiplied by 100
+                    last_traded_price = (
+                        detailed_data.get("last_traded_price", 0) / 100
+                        if detailed_data.get("last_traded_price")
+                        else 0
+                    )
+                    bid_price = (
+                        detailed_data.get("best_bid_price", 0) / 100
+                        if detailed_data.get("best_bid_price")
+                        else 0
+                    )
+                    ask_price = (
+                        detailed_data.get("best_ask_price", 0) / 100
+                        if detailed_data.get("best_ask_price")
+                        else 0
+                    )
+                    high_price = (
+                        detailed_data.get("high_price", 0) / 100
+                        if detailed_data.get("high_price")
+                        else 0
+                    )
+                    low_price = (
+                        detailed_data.get("low_price", 0) / 100
+                        if detailed_data.get("low_price")
+                        else 0
+                    )
+                    open_price = (
+                        detailed_data.get("open_price", 0) / 100
+                        if detailed_data.get("open_price")
+                        else 0
+                    )
+                    close_price = (
+                        detailed_data.get("close_price", 0) / 100
+                        if detailed_data.get("close_price")
+                        else 0
+                    )
+                    volume = detailed_data.get("trade_volume", 0)
 
-                results.append(
-                    {
-                        "symbol": info["symbol"],
-                        "exchange": info["exchange"],
-                        "data": {
-                            "bid": bid_price,
-                            "ask": ask_price,
-                            "open": open_price,
-                            "high": high_price,
-                            "low": low_price,
-                            "ltp": last_traded_price,
-                            "prev_close": close_price,
-                            "volume": volume,
-                            "oi": detailed_data.get("currentOpenInterest", 0),
-                        },
-                    }
-                )
-            else:
-                results.append(
-                    {
-                        "symbol": info["symbol"],
-                        "exchange": info["exchange"],
-                        "error": "No data received",
-                    }
-                )
-
-        # Step 6: Unsubscribe after getting data
-        logger.info(f"Unsubscribing from {len(instruments_to_subscribe)} symbols")
-        for instrument in instruments_to_subscribe:
-            try:
-                self.ws_connection.unsubscribe_detailed_marketdata(instrument)
-            except Exception as e:
-                logger.warning(f"Failed to unsubscribe from instrument {instrument}: {str(e)}")
+                    results.append(
+                        {
+                            "symbol": info["symbol"],
+                            "exchange": info["exchange"],
+                            "data": {
+                                "bid": bid_price,
+                                "ask": ask_price,
+                                "open": open_price,
+                                "high": high_price,
+                                "low": low_price,
+                                "ltp": last_traded_price,
+                                "prev_close": close_price,
+                                "volume": volume,
+                                "oi": detailed_data.get("currentOpenInterest", 0),
+                            },
+                        }
+                    )
+                else:
+                    results.append(
+                        {
+                            "symbol": info["symbol"],
+                            "exchange": info["exchange"],
+                            "error": "No data received",
+                        }
+                    )
+        finally:
+            # Step 6: Unsubscribe after getting data
+            logger.info(f"Unsubscribing from {len(instruments_to_subscribe)} symbols")
+            for instrument in instruments_to_subscribe:
+                try:
+                    self.ws_connection.unsubscribe_detailed_marketdata(instrument)
+                except Exception as e:
+                    logger.warning(f"Failed to unsubscribe from instrument {instrument}: {str(e)}")
 
         logger.info(
             f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols"
