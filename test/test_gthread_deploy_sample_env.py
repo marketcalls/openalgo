@@ -50,5 +50,5 @@ def test_the_block_reads_as_plain_trader_language():
     block = text[start : text.index("# OPENALGO_WORKER_CLASS = 'eventlet'", start)]
     assert "23:30 IST" in block
     assert "docs/gthread/README.md" in block
-    for dash in ("–", "—"):
+    for dash in (chr(0x2013), chr(0x2014)):  # en and em dash
         assert dash not in block

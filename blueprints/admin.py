@@ -2515,7 +2515,7 @@ def _set_env_value(env_path: Path, key: str, value: str) -> None:
 
         # Reuse the rotate_pepper helper: it already handles the Docker single-file
         # bind-mount case (install-docker.sh maps ./.env:/app/.env, which makes
-        # /app/.env a mountpoint that rename(2) refuses to overwrite — EBUSY/EXDEV)
+        # /app/.env a mountpoint that rename(2) refuses to overwrite: EBUSY/EXDEV)
         # plus Windows ERROR_ACCESS_DENIED retries. See issue #1337 for the user
         # report on the admin MCP-settings save path.
         _atomic_replace_text(str(env_path), "".join(lines))
