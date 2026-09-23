@@ -63,7 +63,8 @@ def test_cancel_returns_and_leaves_the_lock_free(monkeypatch):
     assert result["value"][0] is True
     assert result["value"][2] == 200
     assert statuses == ["cancelled"]
-    assert "J1" not in hs._running_jobs
+    # Marked cancelled for the processor, which removes the entry as it leaves.
+    assert hs._running_jobs.get("J1") is False
     assert "J1" not in hs._paused_jobs
     assert not hs._job_state_lock.locked(), "the state lock was left held"
 

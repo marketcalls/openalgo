@@ -151,3 +151,106 @@ def test_a_trader_stop_still_records_the_stop(host):
 
     assert ok and _wait_dead(child)
     assert ps.STRATEGY_CONFIGS["s1"]["is_running"] is False
+
+
+# ---------------------------------------------------------------------------
+# hosts-messaging-05: a Historify retry right after a cancel
+# ---------------------------------------------------------------------------
+#
+# cancel_job removed the job from the running registry while its processor was
+# still mid-download. A retry landing before the processor's next check found
+# no processor, claimed the job and started a second one; the first read the
+# retry's claim as "not cancelled" and carried on beside it, and its cleanup
+# then removed the retry's claim, so the retried job was marked cancelled.
+
+
+@pytest.fixture
+def historify(monkeypatch):
+    import database.historify_db as historify_db
+    from services import historify_service as hs
+
+    status = {"value": "running"}
+    submitted = []
+    monkeypatch.setattr(
+        historify_db, "get_download_job", lambda job_id: {"id": job_id, "status": status["value"]}
+    )
+    monkeypatch.setattr(
+        historify_db,
+        "update_job_status",
+        lambda job_id, value, *a, **k: status.__setitem__("value", value),
+    )
+    monkeypatch.setattr(
+        historify_db,
+        "get_job_items",
+        lambda job_id, status=None: [{"id": 1, "symbol": "SBIN", "status": "error"}],
+    )
+    monkeypatch.setattr(historify_db, "update_job_item_status", lambda *a, **k: None)
+    monkeypatch.setattr(hs, "_emit_job_cancelled", lambda job_id: None)
+    monkeypatch.setattr(hs._job_executor, "submit", lambda fn, *a: submitted.append(a))
+    running = dict(hs._running_jobs)
+    paused = dict(hs._paused_jobs)
+    yield hs, status, submitted
+    hs._running_jobs.clear()
+    hs._running_jobs.update(running)
+    hs._paused_jobs.clear()
+    hs._paused_jobs.update(paused)
+
+
+def _processor_claimed(hs, job_id):
+    with hs._job_state_lock:
+        hs._running_jobs[job_id] = True
+        hs._paused_jobs[job_id] = threading.Event()
+        hs._paused_jobs[job_id].set()
+
+
+def _processor_sees_cancelled(hs, job_id):
+    """The exact check the processor makes before each symbol."""
+    with hs._job_state_lock:
+        return not hs._running_jobs.get(job_id, False)
+
+
+def test_a_retry_before_the_processor_sees_the_cancel_is_refused(historify):
+    hs, status, submitted = historify
+    _processor_claimed(hs, "H1")
+
+    assert hs.cancel_job("H1")[2] == 200
+    ok, body, code = hs.retry_failed_items("H1", "key")
+
+    assert (ok, code) == (False, 409)
+    assert body["message"] == hs.RETRY_BUSY_MESSAGE
+    assert submitted == [], "a second processor was started beside the first"
+    assert _processor_sees_cancelled(hs, "H1")
+
+
+def test_once_the_processor_has_left_the_retry_runs(historify):
+    hs, status, submitted = historify
+    _processor_claimed(hs, "H2")
+    assert hs.cancel_job("H2")[2] == 200
+
+    hs._cleanup_job("H2")  # the processor's cancelled path, on its next check
+    ok, _body, code = hs.retry_failed_items("H2", "key")
+
+    assert (ok, code) == (True, 200)
+    assert len(submitted) == 1
+    assert not _processor_sees_cancelled(hs, "H2"), "the retried job reads as cancelled"
+
+
+def test_cancelling_a_job_no_processor_holds_leaves_nothing_behind(historify):
+    hs, status, submitted = historify
+
+    assert hs.cancel_job("H3")[2] == 200
+
+    assert "H3" not in hs._running_jobs
+    assert hs.retry_failed_items("H3", "key")[2] == 200
+
+
+def test_a_processor_that_finds_no_job_releases_its_claim(historify, monkeypatch):
+    import database.historify_db as historify_db
+
+    hs, status, submitted = historify
+    _processor_claimed(hs, "H4")
+    monkeypatch.setattr(historify_db, "get_download_job", lambda job_id: None)
+
+    hs._process_download_job("H4", "key")
+
+    assert "H4" not in hs._running_jobs, "the claim outlived its processor"
