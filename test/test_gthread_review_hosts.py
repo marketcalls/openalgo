@@ -54,7 +54,14 @@ def host(monkeypatch, tmp_path):
 def _running_strategy(tmp_path, children, strategy_id="s1"):
     script = tmp_path / f"{strategy_id}.py"
     script.write_text("import time\nwhile True:\n    time.sleep(1)\n", encoding="utf-8")
-    child = subprocess.Popen([sys.executable, str(script)])
+    # Its own process group, as the host starts every strategy: the stop signals
+    # the whole group, which would otherwise include this test run.
+    if sys.platform == "win32":
+        child = subprocess.Popen(
+            [sys.executable, str(script)], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        child = subprocess.Popen([sys.executable, str(script)], start_new_session=True)
     children.append(child)
     ps.STRATEGY_CONFIGS[strategy_id] = {
         "name": strategy_id,
