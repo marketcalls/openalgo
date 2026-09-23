@@ -271,7 +271,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     raw = read_requested(args.env_file)
-    effective, requested, warnings = resolve(raw, module_available("eventlet"))
+    # Asked only what the operator requested (start.sh), whether eventlet is
+    # installed is not this call's business, so it is not reported.
+    eventlet_available = args.print_field == "requested" or module_available("eventlet")
+    effective, requested, warnings = resolve(raw, eventlet_available)
     if effective == "gthread" and args.threads > 0:
         warnings.extend(thread_limit_warnings(args.threads))
     for line in warnings:

@@ -755,3 +755,23 @@ if [ "$STASHED" = true ]; then
 fi
 
 log_message "\nUpdate completed successfully!" "$GREEN"
+
+# OPENALGO WEB SERVER SWITCH: begin
+# Only for an install whose .env asks for the gthread web server
+# (OPENALGO_WORKER_CLASS = 'gthread') and whose service does not use the
+# launcher yet. Every other install skips this silently: nothing is printed
+# and nothing changes. The switch script comes from the code just pulled and
+# keeps its own backup, checks OpenAlgo after the restart and puts the
+# previous service file back if anything fails. It refuses to restart
+# OpenAlgo between 09:00 and 23:30 IST. Guide: docs/gthread/README.md
+if [ "$SERVER_MODE" = true ] && [ -f "$OPENALGO_PATH/install/switch-worker.sh" ] \
+    && sudo -n bash "$OPENALGO_PATH/install/switch-worker.sh" --check --service "$SERVICE_NAME" > /dev/null 2>&1; then
+    log_message "\nYour .env asks for the gthread web server. Switching $SERVICE_NAME to it..." "$BLUE"
+    sudo bash "$OPENALGO_PATH/install/switch-worker.sh" --service "$SERVICE_NAME" --yes 2>&1 | tee -a "$LOG_FILE"
+    switch_status=${PIPESTATUS[0]}
+    if [ "$switch_status" -eq 2 ]; then
+        log_message "OpenAlgo is not running after the switch. See the messages above." "$RED"
+        exit 1
+    fi
+fi
+# OPENALGO WEB SERVER SWITCH: end
