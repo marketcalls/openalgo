@@ -88,6 +88,14 @@ class SharedZmqPublisher:
     Shared ZeroMQ publisher that can be used by multiple adapter instances.
     Ensures all connections publish to the same ZeroMQ socket, so the WebSocketProxy
     receives data from all connections on a single port.
+
+    The singleton is built completely before it is published. It used to be
+    published by ``__new__`` and then set up by ``__init__``, which marked it
+    initialised before creating the context, the socket and the connection
+    flag: a second thread arriving in between got the half-built object and
+    failed reading ``_connected``, so a cache invalidation after a re-login or
+    an order update was silently dropped. ``SharedZmqPublisher()`` and
+    :meth:`instance` both return the finished object.
     """
 
     _instance = None
@@ -95,26 +103,45 @@ class SharedZmqPublisher:
 
     def __new__(cls):
         """Singleton pattern to ensure only one shared publisher exists"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
+        return cls.instance()
+
+    @classmethod
+    def instance(cls) -> "SharedZmqPublisher":
+        """Return the shared publisher, building it on first use.
+
+        Built and set up entirely under ``_lock``, and only then published,
+        so no caller can see a publisher without its socket.
+        """
+        existing = cls._instance
+        if existing is not None:
+            return existing
+        with cls._lock:
+            if cls._instance is None:
+                publisher = super().__new__(cls)
+                publisher._setup()
+                cls._instance = publisher
+            return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
+        # Construction happens once, in instance(); calling the class again
+        # must not reset a publisher other threads are using.
+        pass
 
-        self._initialized = True
+    def _setup(self) -> None:
         self.logger = get_logger("shared_zmq_publisher")
+        self.zmq_port = None
+        self._connected = False
+        self._publish_lock = threading.Lock()
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PUB)
         self.socket.setsockopt(zmq.LINGER, 1000)
         self.socket.setsockopt(zmq.SNDHWM, 1000)
-        self.zmq_port = None
-        self._connected = False
-        self._publish_lock = threading.Lock()
+        self._initialized = True
+
+    @property
+    def connected(self) -> bool:
+        """True once connect() has attached this publisher to the proxy's SUB."""
+        return self._connected
 
     def connect(self) -> int:
         """Connect this PUB to the proxy's SUB on the ZMQ bus.
@@ -162,6 +189,10 @@ class SharedZmqPublisher:
             return
 
         with self._publish_lock:
+            if self.socket is None:
+                # cleanup() closed it; a publish racing the shutdown is dropped.
+                self.logger.debug("Cannot publish: ZMQ publisher already closed")
+                return
             try:
                 self.socket.send_multipart(
                     [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
@@ -171,28 +202,33 @@ class SharedZmqPublisher:
 
     def cleanup(self):
         """Clean up ZeroMQ resources with separate error handling for each step"""
-        # Close socket first (separate try/except to ensure context.term() is attempted)
-        try:
-            if self.socket:
-                self.socket.close(linger=0)
-        except Exception as e:
-            self.logger.warning(f"Error closing shared ZMQ socket: {e}")
-        finally:
-            self.socket = None
+        # Under the publish lock, so no publish can be using the socket while
+        # it closes (a ZMQ socket must never be used from two threads at once).
+        with self._publish_lock:
+            # Close socket first (separate try/except to ensure context.term() is attempted)
+            try:
+                if self.socket:
+                    self.socket.close(linger=0)
+            except Exception as e:
+                self.logger.warning(f"Error closing shared ZMQ socket: {e}")
+            finally:
+                self.socket = None
 
-        # Terminate context (always attempt even if socket.close() failed)
-        try:
-            if self.context:
-                self.context.term()
-        except Exception as e:
-            self.logger.warning(f"Error terminating shared ZMQ context: {e}")
-        finally:
-            self.context = None
+            # Terminate context (always attempt even if socket.close() failed)
+            try:
+                if self.context:
+                    self.context.term()
+            except Exception as e:
+                self.logger.warning(f"Error terminating shared ZMQ context: {e}")
+            finally:
+                self.context = None
 
-        # Reset state
-        self._connected = False
-        self._initialized = False
-        SharedZmqPublisher._instance = None
+            # Reset state
+            self._connected = False
+            self._initialized = False
+        with SharedZmqPublisher._lock:
+            if SharedZmqPublisher._instance is self:
+                SharedZmqPublisher._instance = None
         self.logger.info("Shared ZMQ publisher cleaned up")
 
 

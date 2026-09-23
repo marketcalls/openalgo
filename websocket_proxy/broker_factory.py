@@ -1,5 +1,6 @@
 import importlib
 
+from utils import real_threading
 from utils.logging import get_logger
 
 from .base_adapter import (
@@ -17,6 +18,21 @@ BROKER_ADAPTERS: dict[str, type[BaseBrokerWebSocketAdapter]] = {}
 
 # Registry of pooled adapters (one pool per user_id + broker combination)
 _POOLED_ADAPTERS: dict[str, ConnectionPool] = {}
+
+# Guards _POOLED_ADAPTERS. In production the proxy is a child process whose
+# own loop is the only thing touching the registry, but on the development
+# server it runs as a thread beside request threads (logins tear pools down
+# through cleanup_pools_for_user) and the health sampler, so a check-then-
+# insert could build two pools for one user and a live-dict iteration could
+# fail. A real lock, because the proxy's threads are real, held only for dict
+# work: pools are built, disconnected and asked for stats outside it.
+_POOL_LOCK = real_threading.RLock()
+
+
+def _pool_snapshot() -> list[tuple[str, ConnectionPool]]:
+    """The registered pools right now, as a list safe to iterate."""
+    with _POOL_LOCK:
+        return list(_POOLED_ADAPTERS.items())
 
 
 def register_adapter(broker_name: str, adapter_class: type[BaseBrokerWebSocketAdapter]) -> None:
@@ -134,22 +150,30 @@ class _PooledAdapterWrapper:
             pool_key = f"{self._broker_name}_{user_id}"
 
             # Check if pool already exists for this user
-            if pool_key in _POOLED_ADAPTERS:
-                self._pool = _POOLED_ADAPTERS[pool_key]
+            with _POOL_LOCK:
+                existing = _POOLED_ADAPTERS.get(pool_key)
+            if existing is not None:
+                self._pool = existing
                 self.logger.info(f"Reusing existing pool for {pool_key}")
             else:
-                self._pool = ConnectionPool(
+                candidate = ConnectionPool(
                     adapter_class=self._adapter_class,
                     broker_name=self._broker_name,
                     user_id=user_id,
                     max_symbols_per_connection=MAX_SYMBOLS_PER_WEBSOCKET,
                     max_connections=MAX_WEBSOCKET_CONNECTIONS,
                 )
-                _POOLED_ADAPTERS[pool_key] = self._pool
-                self.logger.info(
-                    f"Created new connection pool for {pool_key}: "
-                    f"max {MAX_SYMBOLS_PER_WEBSOCKET} symbols × {MAX_WEBSOCKET_CONNECTIONS} connections"
-                )
+                # Insert only if nobody registered one meanwhile, so two first
+                # connects for one user share one pool instead of two feeds.
+                with _POOL_LOCK:
+                    self._pool = _POOLED_ADAPTERS.setdefault(pool_key, candidate)
+                if self._pool is candidate:
+                    self.logger.info(
+                        f"Created new connection pool for {pool_key}: "
+                        f"max {MAX_SYMBOLS_PER_WEBSOCKET} symbols × {MAX_WEBSOCKET_CONNECTIONS} connections"
+                    )
+                else:
+                    self.logger.info(f"Reusing existing pool for {pool_key}")
 
             self._user_id = user_id
 
@@ -177,9 +201,13 @@ class _PooledAdapterWrapper:
         """Disconnect and cleanup the pool"""
         if self._pool:
             self._pool.disconnect()
-            # Remove from global registry
+            # Remove from global registry, but only our own pool: a login may
+            # already have replaced it under the same key, and evicting that
+            # one would strand its live feed outside the registry.
             pool_key = f"{self._broker_name}_{self._user_id}"
-            _POOLED_ADAPTERS.pop(pool_key, None)
+            with _POOL_LOCK:
+                if _POOLED_ADAPTERS.get(pool_key) is self._pool:
+                    del _POOLED_ADAPTERS[pool_key]
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5):
         """Subscribe to market data"""
@@ -298,7 +326,7 @@ def get_pool_stats(broker_name: str = None) -> dict:
         Dictionary with pool statistics
     """
     stats = {}
-    for pool_key, pool in _POOLED_ADAPTERS.items():
+    for pool_key, pool in _pool_snapshot():
         if broker_name is None or pool_key.startswith(broker_name):
             stats[pool_key] = pool.get_stats()
     return stats
@@ -306,12 +334,14 @@ def get_pool_stats(broker_name: str = None) -> dict:
 
 def cleanup_all_pools():
     """Disconnect and cleanup all connection pools"""
-    for pool_key, pool in list(_POOLED_ADAPTERS.items()):
+    with _POOL_LOCK:
+        pools = list(_POOLED_ADAPTERS.items())
+        _POOLED_ADAPTERS.clear()
+    for pool_key, pool in pools:
         try:
             pool.disconnect()
         except Exception as e:
             logger.exception(f"Error cleaning up pool {pool_key}: {e}")
-    _POOLED_ADAPTERS.clear()
 
 
 def cleanup_pools_for_user(user_id: str, broker_name: str | None = None) -> int:
@@ -337,18 +367,22 @@ def cleanup_pools_for_user(user_id: str, broker_name: str | None = None) -> int:
         return 0
 
     targets: list[str] = []
+    detached: list[tuple[str, ConnectionPool]] = []
     suffix = f"_{user_id}"
-    for pool_key in list(_POOLED_ADAPTERS.keys()):
-        if not pool_key.endswith(suffix):
-            continue
-        if broker_name is not None and not pool_key.startswith(f"{broker_name}_"):
-            continue
-        targets.append(pool_key)
+    with _POOL_LOCK:
+        for pool_key in list(_POOLED_ADAPTERS.keys()):
+            if not pool_key.endswith(suffix):
+                continue
+            if broker_name is not None and not pool_key.startswith(f"{broker_name}_"):
+                continue
+            targets.append(pool_key)
+        for pool_key in targets:
+            pool = _POOLED_ADAPTERS.pop(pool_key, None)
+            if pool is not None:
+                detached.append((pool_key, pool))
 
-    for pool_key in targets:
-        pool = _POOLED_ADAPTERS.pop(pool_key, None)
-        if pool is None:
-            continue
+    # Disconnected outside the lock: a broker disconnect can take seconds.
+    for pool_key, pool in detached:
         try:
             pool.disconnect()
         except Exception as e:
@@ -384,7 +418,8 @@ def get_resource_health() -> dict:
         adapter_stats = {"error": str(e)}
 
     pool_stats = {}
-    for pool_key, pool in _POOLED_ADAPTERS.items():
+    pools = _pool_snapshot()
+    for pool_key, pool in pools:
         try:
             pool_stats[pool_key] = pool.get_stats()
         except Exception as e:
@@ -397,7 +432,7 @@ def get_resource_health() -> dict:
             "brokers": list(BROKER_ADAPTERS.keys()),
         },
         "active_pools": {
-            "count": len(_POOLED_ADAPTERS),
+            "count": len(pools),
             "pools": pool_stats,
         },
     }
