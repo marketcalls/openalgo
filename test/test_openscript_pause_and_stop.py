@@ -377,13 +377,135 @@ def test_nothing_in_the_command_module_needs_the_platform_to_import():
 
     source = Path(service.__file__).parent / "openscript_commands.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
-    top = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-    ]
+    top = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
     names = {getattr(node, "module", "") or "" for node in top}
 
     assert not {one for one in names if one.startswith("utils.")}, names
     assert not {one for one in names if one.startswith("database.")}, names
     assert not {one for one in names if one.startswith("blueprints.")}, names
+
+
+# ---------------------------------------------------------------------------
+# A close measures the run only once nothing of it is still working
+# ---------------------------------------------------------------------------
+
+
+class _Ledger:
+    """Enough of the engine's ledger for a close: settled fills make the size."""
+
+    def __init__(self, sides):
+        self.sides = sides
+        self.frames = []
+        self.held = 0.0
+
+    def deliver(self, frame):
+        self.frames.append(frame)
+
+    def settle(self):
+        for frame in self.frames:
+            if frame.status == "filled":
+                self.held += self.sides[frame.intent_id] * frame.filled_qty
+        self.frames = []
+        return []
+
+    def size(self):
+        return self.held
+
+
+class _Broker:
+    """The platform as a run's client sees it, for one entry order and a close."""
+
+    def __init__(self, entry_status, cancel_takes=True, readable=True):
+        self.status = {"ENTRY7": entry_status}
+        self.cancel_takes = cancel_takes
+        self.readable = readable
+        self.placed: list[dict] = []
+        self.cancelled: list[str] = []
+
+    def placeorder(self, **order):
+        self.placed.append(order)
+        self.status["CLOSE1"] = "complete"
+        return {"status": "success", "orderid": "CLOSE1"}
+
+    def cancelorder(self, order_id, strategy):
+        self.cancelled.append(order_id)
+        if self.cancel_takes and self.status.get(order_id) == "open":
+            self.status[order_id] = "cancelled"
+        return {"status": "success"}
+
+    def orderstatus(self, order_id, strategy):
+        if not self.readable and order_id != "CLOSE1":
+            raise ConnectionError("the platform did not answer")
+        return {
+            "status": "success",
+            "data": {
+                "order_status": self.status[order_id],
+                "quantity": 50,
+                "average_price": 800.0,
+            },
+        }
+
+
+def _closing_session(child, broker):
+    """A run that sent BUY 50 (intent 7, order ENTRY7) and has not folded it yet."""
+    session = child.Session.__new__(child.Session)
+    session.ledger = _Ledger({7: +1})
+    session._open = {7}
+    session._orders = {7: "ENTRY7"}
+    session._shares = {}
+    session.client = broker
+    session.engine = SimpleNamespace(OrderFrame=lambda **frame: SimpleNamespace(**frame))
+    session.options = SimpleNamespace(strategy_name=RUN, symbol="SBIN", exchange="NSE")
+    session.product = "MIS"
+    return session
+
+
+def test_a_fill_the_run_has_not_folded_yet_is_closed():
+    """THE ONE THAT LEFT 50 SBIN WITH NOTHING MANAGING IT.
+
+    The entry filled a second before Stop, and the run folds a fill only when it
+    next executes, so its size still read 0: it said nothing was open, sent no
+    order, and confirmed a close while the account held the position.
+    """
+    child = _child_program()
+    broker = _Broker("complete")
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=1.0) is True
+
+    assert [(one["action"], one["quantity"]) for one in broker.placed] == [("SELL", 50)]
+    assert broker.cancelled == [], "a filled order was sent a cancellation"
+
+
+def test_a_resting_order_is_cancelled_before_the_run_measures_itself():
+    """A limit or stop order counts as nothing held, and could fill after the run left."""
+    child = _child_program()
+    broker = _Broker("open")
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=1.0) is True
+
+    assert broker.cancelled == ["ENTRY7"]
+    assert broker.placed == [], "nothing had filled, so there was nothing to close"
+    assert session._open == set()
+
+
+def test_an_order_that_does_not_cancel_leaves_the_run_running():
+    child = _child_program()
+    broker = _Broker("open", cancel_takes=False)
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=0.2) is False
+
+    assert broker.placed == []
+    assert session._open == {7}, "the run forgot an order that is still working"
+
+
+def test_an_order_that_cannot_be_read_leaves_the_run_running():
+    child = _child_program()
+    broker = _Broker("complete", readable=False)
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=0.2) is False
+
+    assert broker.placed == []
