@@ -309,9 +309,19 @@ def main(argv: list[str] | None = None) -> int:
 
     def runtime_report() -> str:
         response = requests.get(
-            f"{base}/admin/api/system", cookies={cookie[0]: cookie[1]}, timeout=15
+            f"{base}/admin/api/system",
+            cookies={cookie[0]: cookie[1]},
+            headers={"Accept": "application/json"},
+            timeout=15,
+            allow_redirects=False,
         )
-        runtime = response.json()["data"]["runtime"]
+        try:
+            runtime = response.json()["data"]["runtime"]
+        except ValueError:
+            raise RuntimeError(
+                f"status {response.status_code}, {response.headers.get('Content-Type')}: "
+                f"{response.text[:120]!r}"
+            ) from None
         problems = []
         if runtime.get("worker_class") != args.worker:
             problems.append(f"worker_class {runtime.get('worker_class')}")
