@@ -253,13 +253,45 @@ def sec_master(run: Runner) -> None:
                 "select count(*) from symtoken where instrumenttype in ('FUT','CE','PE') "
                 "and (lotsize is null or lotsize <= 0)"
             ).fetchone()[0]
-            varies = c.execute(
-                "select count(*) from (select name, exchange from symtoken "
-                "where instrumenttype='FUT' group by name, exchange "
-                "having count(distinct lotsize) > 1)"
-            ).fetchone()[0]
+            varying = c.execute(
+                "select name, exchange from symtoken where instrumenttype='FUT' "
+                "group by name, exchange having count(distinct lotsize) > 1"
+            ).fetchall()
         need(n == 0, f"{n} derivative rows with null/zero lotsize")
-        need(varies == 0, f"{varies} underlyings whose FUT lotsize varies by expiry")
+
+        # A lot size that differs across expiries is NOT automatically wrong.
+        # Exchanges revise lot sizes, and a revision applies to newly listed
+        # far contracts while the near ones keep the old lot - MCXBULLDEX
+        # currently runs 30 on Sep/Oct and 15 on Nov/Dec. What would be a
+        # parser bug is a lot that flips back and forth across the expiry
+        # sequence, so assert monotonicity rather than uniformity.
+        months = {m: i for i, m in enumerate(
+            ("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+             "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+        revised, broken = [], []
+        for nm, exch in varying:
+            with run.db() as c:
+                rows = c.execute(
+                    "select expiry, lotsize from symtoken where name=? and exchange=? "
+                    "and instrumenttype='FUT'", (nm, exch)).fetchall()
+            seq = []
+            for exp, lot in rows:
+                try:
+                    d, mo, y = exp.split("-")
+                    seq.append(((int(y), months.get(mo.upper(), 13), int(d)), int(lot)))
+                except Exception:
+                    continue
+            seq.sort()
+            lots_in_order = [lot for _, lot in seq]
+            # one clean step from an old lot to a new one == a revision
+            steps = sum(1 for a, b in zip(lots_in_order, lots_in_order[1:], strict=False) if a != b)
+            (revised if steps <= 1 else broken).append(
+                f"{nm}@{exch}: {'->'.join(str(x) for x in dict.fromkeys(lots_in_order))}")
+        need(not broken,
+             f"FUT lot size flips back and forth across the expiry sequence, which a "
+             f"revision cannot produce: {broken[:4]}")
+        if revised:
+            run.note_limit("lot-size revisions in flight", "; ".join(revised[:6]))
         if "MCX" in ex_list:
             with run.db() as c:
                 vals = {r[0] for r in c.execute(
@@ -1798,14 +1830,24 @@ def sec_orders(run: Runner) -> None:
                   endpoint="placeorder", exchange=oe, symbol=os_,
                   expected="MPP emulation on a near-zero-premium option")
 
+    # BSE is cash equity, so it has no FUT_* slot. Mapping every exchange to
+    # one meant no BSE order was ever placed, which in turn made OB-05 fail
+    # for want of a BSE row in the orderbook - an artefact of this loop, not
+    # a broker defect.
     for ex2 in run.env["exchanges"]:
-        slot = f"FUT_{ex2}"
-        if slot in m:
-            s2, e2 = m[slot]
-            run.check(f"OD-11.{ex2}", lambda s2=s2, e2=e2: place(
-                "MARKET", "BUY", "NRML", "OD-11", symbol=s2, exchange=e2,
-                qty=_lot(run, s2, e2)), endpoint="placeorder", exchange=ex2, symbol=s2,
-                expected="every claimed exchange accepts an order")
+        if ex2 in INDEX_EXCHANGES:
+            continue
+        slot = "EQ_BSE" if ex2 == "BSE" else f"FUT_{ex2}"
+        if slot not in m:
+            run.record(f"OD-11.{ex2}", SKIP, f"{slot} unresolved - no instrument to order",
+                       endpoint="placeorder", exchange=ex2)
+            continue
+        s2, e2 = m[slot]
+        product = "CNC" if ex2 in ("NSE", "BSE") else "NRML"
+        run.check(f"OD-11.{ex2}", lambda s2=s2, e2=e2, p=product: place(
+            "MARKET", "BUY", p, "OD-11", symbol=s2, exchange=e2,
+            qty=_lot(run, s2, e2)), endpoint="placeorder", exchange=ex2, symbol=s2,
+            expected="every claimed exchange accepts an order")
 
     def decimal_strike_roundtrip():
         """OD-13 - the claim is that a decimal strike survives the round trip
