@@ -441,15 +441,9 @@ class ConnectionPool:
         detected on connect/subscribe (issue #1419).
         """
         try:
-            from database.auth_db import auth_cache, feed_token_cache
+            from database.auth_db import invalidate_user_auth_cache
 
-            cleared = []
-            if f"auth-{self.user_id}" in auth_cache:
-                del auth_cache[f"auth-{self.user_id}"]
-                cleared.append("auth_cache")
-            if f"feed-{self.user_id}" in feed_token_cache:
-                del feed_token_cache[f"feed-{self.user_id}"]
-                cleared.append("feed_token_cache")
+            cleared = invalidate_user_auth_cache(self.user_id)
             if cleared:
                 self.logger.info(
                     f"Cleared auth caches for user {self.user_id}: {', '.join(cleared)}"

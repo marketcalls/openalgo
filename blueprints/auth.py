@@ -18,7 +18,7 @@ from flask import (
 )
 from flask_wtf.csrf import generate_csrf
 
-from database.auth_db import auth_cache, feed_token_cache, upsert_auth
+from database.auth_db import invalidate_user_auth_cache, upsert_auth
 from database.settings_db import get_smtp_settings, set_smtp_settings
 from database.user_db import (  # Import the function
     User,
@@ -1328,15 +1328,13 @@ def logout():
     session.clear()
 
     if was_logged_in and username:
-        # Clear cache entries before database update to prevent stale data access
-        cache_key_auth = f"auth-{username}"
-        cache_key_feed = f"feed-{username}"
-        if cache_key_auth in auth_cache:
-            del auth_cache[cache_key_auth]
-            logger.info(f"Cleared auth cache for user: {username}")
-        if cache_key_feed in feed_token_cache:
-            del feed_token_cache[cache_key_feed]
-            logger.info(f"Cleared feed token cache for user: {username}")
+        # Clear cache entries before database update to prevent stale data
+        # access. Never a membership test then a delete: another thread can
+        # drop the entry between the two, and the KeyError used to escape
+        # here, after the browser session was cleared but before the broker
+        # token below was revoked. invalidate_user_auth_cache never raises.
+        invalidate_user_auth_cache(username)
+        logger.info(f"Cleared cached broker session for user: {username}")
 
         # Clear symbol cache on logout
         try:

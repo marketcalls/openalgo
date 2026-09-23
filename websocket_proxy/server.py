@@ -1933,24 +1933,13 @@ class WebSocketProxy:
             user_id: The user's ID
         """
         try:
-            from database.auth_db import (
-                auth_cache,
-                broker_cache,
-                feed_token_cache,
-            )
+            from database.auth_db import broker_cache, invalidate_user_auth_cache
 
             cache_key_auth = f"auth-{user_id}"
-            cache_key_feed = f"feed-{user_id}"
 
-            caches_cleared = []
-            if cache_key_auth in auth_cache:
-                del auth_cache[cache_key_auth]
-                caches_cleared.append("auth_cache")
-            if cache_key_feed in feed_token_cache:
-                del feed_token_cache[cache_key_feed]
-                caches_cleared.append("feed_token_cache")
-            if cache_key_auth in broker_cache:
-                del broker_cache[cache_key_auth]
+            # One call per cache, never a membership test then a delete.
+            caches_cleared = invalidate_user_auth_cache(user_id)
+            if broker_cache.pop(cache_key_auth, None) is not None:
                 caches_cleared.append("broker_cache")
 
             if caches_cleared:

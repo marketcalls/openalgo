@@ -113,7 +113,14 @@ def restore_auth_cache() -> dict:
     start_time = time.time()
 
     try:
-        from database.auth_db import Auth, auth_cache, broker_cache, feed_token_cache
+        from database.auth_db import Auth, AuthRecord, auth_cache, feed_token_cache
+
+        # Read before the query. Restoration runs at boot, alongside the first
+        # login: a login that commits and clears the caches while this SELECT
+        # is in flight moves the generation, and its fresh token then stays
+        # in place instead of being overwritten by the row read here.
+        auth_generation = auth_cache.generation
+        feed_generation = feed_token_cache.generation
 
         # Get all non-revoked auth records
         auth_records = Auth.query.filter_by(is_revoked=False).all()
@@ -129,15 +136,18 @@ def restore_auth_cache() -> dict:
         for auth_record in auth_records:
             try:
                 name = auth_record.name
+                # A frozen copy, never the ORM row: the row belongs to this
+                # thread's session, which is removed when restoration ends.
+                record = AuthRecord.from_row(auth_record)
 
                 # Populate auth cache
                 cache_key_auth = f"auth-{name}"
-                auth_cache[cache_key_auth] = auth_record
+                auth_cache.fill(cache_key_auth, record, auth_generation)
 
                 # Populate feed token cache if available
-                if auth_record.feed_token:
+                if record.feed_token:
                     cache_key_feed = f"feed-{name}"
-                    feed_token_cache[cache_key_feed] = auth_record
+                    feed_token_cache.fill(cache_key_feed, record, feed_generation)
 
                 # Note: Broker cache is not restored here because it uses hashed API key as key,
                 # which we can't reconstruct without the actual API key.
