@@ -95,10 +95,13 @@ from services.openscript_run_config import (
     write_run_config,
 )
 from services.openscript_runner_service import (
+    RUNNING_DELETE_REFUSAL,
     _as_run_id,
     is_running,
+    is_starting,
     logs_for,
     reap_finished_runs,
+    removal_claim,
     restore_runs,
     run_id_for,
     running_runs,
@@ -106,6 +109,7 @@ from services.openscript_runner_service import (
     status_of,
     stop_run,
 )
+from utils.db_sessions import releases_scoped_sessions
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -143,6 +147,7 @@ def _names_something(given: str) -> bool:
     """
     return bool(SAFE_NAME.match(given or "")) or is_deployment_id(given or "")
 
+
 # What a settings body may carry, and nothing else. The list is short on
 # purpose: every field a run needs is here, and a field a caller invents is
 # refused by name rather than dropped, which is what keeps an imagined switch to
@@ -162,8 +167,12 @@ SCHEDULES_FILE = Path("strategies") / "openscript_runner_schedules.json"
 # Writers of the file above. Requests write it and scheduled jobs only read it,
 # and under the production server both of those are green while on the
 # development server both are real, so neither world has one kind waiting on the
-# other and a plain lock is the right one. The critical section is a parse, a
-# dict update and one atomic rename.
+# other and a plain lock is the right one. It is held across both halves of a
+# schedule change, the jobs on the scheduler and the entry in the file, so the
+# two always agree: a change to one deployment's schedule can no longer drop
+# another's from the file while its jobs stay on the scheduler. The scheduled
+# jobs only read the file and never take it, and the only lock taken inside it
+# is the scheduler's own.
 _SCHEDULES_LOCK = threading.RLock()
 
 # Set once the stored schedules have been put back on the scheduler. A module
@@ -171,6 +180,11 @@ _SCHEDULES_LOCK = threading.RLock()
 # module is imported at startup and registering the jobs is the last thing it
 # does.
 _RESTORED = False
+
+# Single flight for restore_schedules. Page polls call it too, so when the
+# import time attempt could not reach the scheduler several could run the
+# restoration at once, each restoring the same runs.
+_RESTORE_LOCK = threading.Lock()
 
 
 class SchedulerUnavailable(RuntimeError):
@@ -515,8 +529,13 @@ def _is_trading_day(filename):
         return True
 
 
+@releases_scoped_sessions
 def _scheduled_start(filename):
     """Start one script because its schedule said so.
+
+    Releases the scoped sessions it bound when it returns: a scheduler thread
+    has no request teardown and is reused, so a session left behind stays open
+    on it.
 
     This runs on the scheduler and not in a request, so it raises nothing: an
     exception escaping here is a job the scheduler may stop running, and a
@@ -546,6 +565,7 @@ def _scheduled_start(filename):
         logger.exception("The scheduled start of %s failed", filename)
 
 
+@releases_scoped_sessions
 def _scheduled_stop(filename):
     """Stop one script because its schedule said so.
 
@@ -570,6 +590,7 @@ REAP_MINUTES = 5
 REAP_JOB_ID = "openscript_reap_finished_runs"
 
 
+@releases_scoped_sessions
 def _reap_quietly():
     """The scheduled sweep. Never raises, because a job that raises is dropped."""
     try:
@@ -594,11 +615,19 @@ def restore_schedules():
     worker, so a scheduled strategy simply never ran. Now a failure leaves the
     flag down and the next call retries.
     """
-    global _RESTORED
     if _RESTORED:
         return
+    # One restoration at a time: a second caller waits for the first and then
+    # finds the flag set, rather than restoring the same runs alongside it.
+    with _RESTORE_LOCK:
+        if _RESTORED:
+            return
+        _restore_schedules_locked()
 
-    schedules = _load_schedules()
+
+def _restore_schedules_locked():
+    """The body of restore_schedules. The caller holds _RESTORE_LOCK."""
+    global _RESTORED
 
     try:
         scheduler = _scheduler(_strategy_host())
@@ -629,12 +658,16 @@ def restore_schedules():
         )
 
     restored = 0
-    for filename, entry in schedules.items():
-        try:
-            _register_jobs(filename, entry)
-            restored += 1
-        except Exception:
-            logger.exception("Could not restore the schedule for %s", filename)
+    # Read and registered in one hold of the schedules lock, so a schedule
+    # removed meanwhile is not put back on the scheduler from a stale read.
+    with _SCHEDULES_LOCK:
+        schedules = _load_schedules()
+        for filename, entry in schedules.items():
+            try:
+                _register_jobs(filename, entry)
+                restored += 1
+            except Exception:
+                logger.exception("Could not restore the schedule for %s", filename)
 
     # What a trader had running, put back. After the schedules, because a
     # strategy that is both scheduled and running should have its jobs in place
@@ -649,7 +682,9 @@ def restore_schedules():
     _RESTORED = True
     logger.info(
         "Restored %d of %d OpenScript schedules and started the reaper every %d minutes",
-        restored, len(schedules), REAP_MINUTES,
+        restored,
+        len(schedules),
+        REAP_MINUTES,
     )
 
 
@@ -737,6 +772,23 @@ def start(filename):
     ), 202
 
 
+def _not_running(filename):
+    """The answer for a run that is not up: still starting, or simply not running.
+
+    A run whose start has been claimed and has not finished is in neither
+    state yet, and "not running" would send a trader who has just pressed
+    Start looking for a fault that is not there.
+    """
+    if is_starting(filename):
+        return jsonify(
+            {
+                "status": "error",
+                "message": f"{filename} is still starting. Try again in a moment.",
+            }
+        ), 409
+    return jsonify({"status": "error", "message": f"{filename} is not running."}), 404
+
+
 @openscript_runner_bp.route("/pause/<path:filename>", methods=["POST"])
 @openscript_runner_bp.route("/stop/<path:filename>", methods=["POST"])
 @check_session_validity
@@ -766,7 +818,7 @@ def pause(filename):
         return _refusal(filename)
 
     if not is_running(filename):
-        return jsonify({"status": "error", "message": f"{filename} is not running."}), 404
+        return _not_running(filename)
 
     ok, message = stop_run(filename)
     if not ok:
@@ -795,7 +847,7 @@ def close(filename):
         return _refusal(filename)
 
     if not is_running(filename):
-        return jsonify({"status": "error", "message": f"{filename} is not running."}), 404
+        return _not_running(filename)
 
     ok, message = stop_run(filename, close=True)
     if not ok:
@@ -1032,25 +1084,25 @@ def clear_settings(filename):
         ), 404
 
     if is_running(filename):
-        return jsonify(
-            {
-                "status": "error",
-                "message": (
-                    "This strategy is running, so it has not been removed. Pause it to keep its "
-                    "position, or Stop it to close the position first, then remove it."
-                ),
-            }
-        ), 409
+        return jsonify({"status": "error", "message": RUNNING_DELETE_REFUSAL}), 409
 
-    ok, message = delete_run_config(filename)
-    if not ok:
-        return jsonify({"status": "error", "message": message}), 500
+    # Claimed for the removal in the hold that checks whether a run is starting,
+    # running or stopping, and a start is refused while the claim stands. The
+    # check above cannot see a run that is still being started, and a removal
+    # landing then left a process on the market whose settings were gone.
+    with removal_claim(filename) as refusal:
+        if refusal:
+            return jsonify({"status": "error", "message": refusal}), 409
 
-    # After the settings and not before: a schedule with no settings behind it
-    # is a job that fails, and settings with no schedule are simply a strategy
-    # nobody has timed. If this half fails the log says so and the deployment is
-    # still gone, which is what was asked for.
-    _forget_schedule(filename)
+        ok, message = delete_run_config(filename)
+        if not ok:
+            return jsonify({"status": "error", "message": message}), 500
+
+        # After the settings and not before: a schedule with no settings behind
+        # it is a job that fails, and settings with no schedule are simply a
+        # strategy nobody has timed. If this half fails the log says so and the
+        # deployment is still gone, which is what was asked for.
+        _forget_schedule(filename)
 
     logger.info("Removed the OpenScript deployment %s", filename)
     return jsonify({"status": "success", "file": filename, "message": message})
@@ -1064,10 +1116,15 @@ def _forget_schedule(filename):
     happened into an error that says it did not.
     """
     try:
-        _remove_jobs(filename)
-        schedules = _load_schedules()
-        if schedules.pop(filename, None) is not None:
-            _save_schedules(schedules)
+        # Both halves in one hold, as every other schedule change: an unlocked
+        # read, change and write here could drop another deployment's schedule
+        # saved in between, leaving its jobs running today and gone after a
+        # restart.
+        with _SCHEDULES_LOCK:
+            _remove_jobs(filename)
+            schedules = _load_schedules()
+            if schedules.pop(filename, None) is not None:
+                _save_schedules(schedules)
     except Exception:
         logger.exception("Could not remove the schedule for the deployment %s", filename)
 
@@ -1160,30 +1217,38 @@ def set_schedule(filename):
 
     entry = {"start_time": start_time, "stop_time": stop_time, "days": days}
 
-    try:
-        _register_jobs(filename, entry)
-    except Exception:
-        # Its own sentence rather than the runner's, because nothing was asked
-        # to start or stop here and saying so would send the reader looking in
-        # the wrong place.
-        logger.exception("Could not schedule %s", filename)
-        return jsonify(
-            {
-                "status": "error",
-                "message": (
-                    "The schedule could not be set on this server right now. Nothing was changed."
-                ),
-            }
-        ), 503
+    # The jobs and the stored entry change in one hold, so a concurrent set or
+    # clear of the same deployment cannot leave the scheduler and the file
+    # disagreeing about whether it is scheduled.
+    with _SCHEDULES_LOCK:
+        try:
+            _register_jobs(filename, entry)
+        except Exception:
+            # Its own sentence rather than the runner's, because nothing was
+            # asked to start or stop here and saying so would send the reader
+            # looking in the wrong place.
+            logger.exception("Could not schedule %s", filename)
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "The schedule could not be set on this server right now. Nothing was "
+                        "changed."
+                    ),
+                }
+            ), 503
 
-    try:
-        with _SCHEDULES_LOCK:
+        try:
             schedules = _load_schedules()
             schedules[filename] = entry
             _save_schedules(schedules)
-    except OSError:
-        logger.exception("Could not store the schedule for %s", filename)
-        _remove_jobs(filename)
+            stored = True
+        except OSError:
+            logger.exception("Could not store the schedule for %s", filename)
+            _remove_jobs(filename)
+            stored = False
+
+    if not stored:
         return jsonify(
             {
                 "status": "error",
@@ -1220,10 +1285,10 @@ def clear_schedule(filename):
         return _refusal(filename)
 
     restore_schedules()
-    _remove_jobs(filename)
 
     try:
         with _SCHEDULES_LOCK:
+            _remove_jobs(filename)
             schedules = _load_schedules()
             if schedules.pop(filename, None) is not None:
                 _save_schedules(schedules)
@@ -1314,7 +1379,10 @@ def instruments():
     api_key = _api_key()
     if not api_key:
         return jsonify(
-            {"status": "error", "message": "No API key for this session, so nothing can be searched."}
+            {
+                "status": "error",
+                "message": "No API key for this session, so nothing can be searched.",
+            }
         ), 400
 
     from services.search_service import search_symbols
@@ -1335,7 +1403,10 @@ def intervals():
     api_key = _api_key()
     if not api_key:
         return jsonify(
-            {"status": "error", "message": "No API key for this session, so the intervals are unknown."}
+            {
+                "status": "error",
+                "message": "No API key for this session, so the intervals are unknown.",
+            }
         ), 400
 
     from services.intervals_service import get_intervals_with_auth

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -63,6 +64,7 @@ def _said(message: str) -> None:
         get_logger(__name__).exception(message)
     except Exception:  # noqa: BLE001 - there is nowhere left to say it
         pass
+
 
 #: Beside the run settings and the running state, for the same reason.
 COMMAND_FILE = Path("strategies") / "openscript_commands.json"
@@ -149,8 +151,15 @@ def _change(edit) -> None:
 
 
 def _save(state: dict[str, Any]) -> None:
-    """Through a temporary file and a rename, so a kill cannot leave half of it."""
-    temporary = COMMAND_FILE.with_suffix(COMMAND_FILE.suffix + ".tmp")
+    """Through a temporary file and a rename, so a kill cannot leave half of it.
+
+    The temporary file is named for this write alone. Both the platform and
+    every run write this file, from different processes, and the write lock
+    only serialises writers inside one of them: through one shared temporary
+    path, one writer's rename could publish the other's half written bytes, or
+    fail, and a lost "close" left a Stop waiting out its whole timeout.
+    """
+    temporary = COMMAND_FILE.with_name(f"{COMMAND_FILE.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(temporary, "w", encoding="utf-8") as handle:
@@ -160,6 +169,9 @@ def _save(state: dict[str, Any]) -> None:
         os.replace(temporary, COMMAND_FILE)
     except OSError:
         _said(f"Could not save the OpenScript commands to {COMMAND_FILE}")
+    finally:
+        # Gone already after a successful rename. On any failure it is a file
+        # of this write alone that nothing will come back for.
         try:
             Path(temporary).unlink(missing_ok=True)
         except OSError:

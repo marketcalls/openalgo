@@ -1308,8 +1308,14 @@ _job_executor = ThreadPoolExecutor(max_workers=int(os.getenv("HISTORIFY_MAX_WORK
 _running_jobs: dict[str, bool] = {}
 _paused_jobs: dict[str, threading.Event] = {}  # Event is set when NOT paused
 
-# Lock for thread-safe access to job state dictionaries
+# Lock for thread-safe access to job state dictionaries. Not reentrant: nothing
+# that holds it may call a function that takes it again (_cleanup_job does).
 _job_state_lock = threading.Lock()
+
+#: What a retry of a download that still has a processor running is told.
+RETRY_BUSY_MESSAGE = (
+    "This download is already running. Wait for it to finish, then retry the failed symbols."
+)
 
 
 def cleanup_zombie_jobs():
@@ -1861,8 +1867,15 @@ def cancel_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             pause_event = _paused_jobs.get(job_id)
             if pause_event:
                 pause_event.set()
-            # Clean up in-memory state
-            _cleanup_job(job_id)
+            # Clean up in-memory state. Popped here rather than through
+            # _cleanup_job, which takes _job_state_lock itself: the lock is not
+            # reentrant, so calling it from inside this block blocked the cancel
+            # forever and every later user of the lock with it (the download
+            # workers, pause, resume, retry and every new job). The processor
+            # sees the job gone on its next check and leaves through its
+            # cancelled path, whose own _cleanup_job is a no-op by then.
+            _running_jobs.pop(job_id, None)
+            _paused_jobs.pop(job_id, None)
 
         # Emit cancellation event to frontend
         _emit_job_cancelled(job_id)
@@ -2022,23 +2035,40 @@ def retry_failed_items(job_id: str, api_key: str) -> tuple[bool, dict[str, Any],
         if not failed_items:
             return True, {"status": "success", "message": "No failed items to retry"}, 200
 
-        # Reset failed items to pending
-        from database.historify_db import update_job_item_status
-
-        for item in failed_items:
-            update_job_item_status(item["id"], "pending")
-
-        # Reset job counters
-        update_job_status(job_id, "pending")
-
-        # Mark job as running with thread-safe access
+        # Claim the job in the same hold that checks it. Two retries arriving
+        # together (a double click) both passed the status check above, and
+        # both then started a processor for the same job: every symbol
+        # downloaded twice against the broker's rate limit, with the two
+        # progress counters overwriting each other. A job still tracked here
+        # has a processor alive, running or paused, so a second one is refused.
         with _job_state_lock:
+            if job_id in _running_jobs:
+                return (
+                    False,
+                    {"status": "error", "message": RETRY_BUSY_MESSAGE},
+                    409,
+                )
             _running_jobs[job_id] = True
             _paused_jobs[job_id] = threading.Event()
             _paused_jobs[job_id].set()  # Not paused initially
 
-        # Start background processing
-        _job_executor.submit(_process_download_job, job_id, api_key)
+        try:
+            # Reset failed items to pending
+            from database.historify_db import update_job_item_status
+
+            for item in failed_items:
+                update_job_item_status(item["id"], "pending")
+
+            # Reset job counters
+            update_job_status(job_id, "pending")
+
+            # Start background processing
+            _job_executor.submit(_process_download_job, job_id, api_key)
+        except Exception:
+            # Nothing was started, so the claim must not outlive this call or
+            # the job could never be retried again.
+            _cleanup_job(job_id)
+            raise
 
         return (
             True,
