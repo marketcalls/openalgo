@@ -958,9 +958,19 @@ class RiskTickFeed:
         self._emit(events)
 
     def _ensure_ws(self):
-        """The shared websocket client, or None. Caller holds ``_ws_lock``."""
-        if self._ws is not None and getattr(self._ws, "connected", True):
-            return self._ws
+        """The shared websocket client, or None. Caller holds ``_ws_lock``.
+
+        A held client is kept while it is ``alive`` (running, loop thread up),
+        even between reconnects, and fetched again once it has stopped for
+        good: get_websocket_client then hands out its replacement. A client
+        without ``alive`` (a test double) falls back to ``connected``.
+        """
+        if self._ws is not None:
+            alive = getattr(self._ws, "alive", None)
+            if alive is None:
+                alive = getattr(self._ws, "connected", True)
+            if alive:
+                return self._ws
         api_key = self._resolve_api_key()
         if not api_key:
             return None
@@ -977,13 +987,22 @@ class RiskTickFeed:
         if client is None:
             return None
         self._ws = client
-        if not self._ws_callbacks_registered:
-            # on_tick is the ONLY thing registered on the feed's own thread, and
-            # all it does is enqueue. _on_auth re-subscribes after a reconnect,
-            # which the client does not do for us.
+        # Checked on the client itself rather than remembered here: a client
+        # that stopped for good is replaced by get_websocket_client, and the
+        # replacement adopts its callbacks, so a remembered flag would either
+        # skip registering on a fresh client or register a second time on one
+        # that already carries them.
+        callbacks = getattr(client, "callbacks", None)
+        if callbacks is None:
+            callbacks = {}
+        # on_tick is the ONLY thing registered on the feed's own thread, and
+        # all it does is enqueue. _on_auth re-subscribes after a reconnect,
+        # which the client does not do for us.
+        if self.on_tick not in callbacks.get("market_data", ()):
             client.register_callback("market_data", self.on_tick)
+        if self._on_auth not in callbacks.get("auth", ()):
             client.register_callback("auth", self._on_auth)
-            self._ws_callbacks_registered = True
+        self._ws_callbacks_registered = True
         return self._ws
 
     def _on_auth(self, data: dict) -> None:

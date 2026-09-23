@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 # too, which is what this module is for.
 from utils import real_threading as _original_threading
 from utils.logging import get_logger
+from utils.runtime import is_monkey_patched
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -63,9 +64,27 @@ class WebSocketClient:
     #: trade for market data: the next tick supersedes it anyway.
     DISPATCH_QUEUE_MAX = 10000
 
-    #: Idle poll gap for the dispatcher. It drains everything available before
-    #: sleeping, so this only bounds latency when the queue is empty.
+    #: Idle poll gap for the dispatcher under eventlet. It drains everything
+    #: available before sleeping, so this only bounds latency when the queue is
+    #: empty.
     DISPATCH_POLL_SECONDS = 0.005
+
+    #: Where nothing is patched (gthread, the development server) the dispatcher
+    #: is a real thread and blocks on the queue instead of polling; this is how
+    #: often it wakes to notice a disconnect.
+    DISPATCH_BLOCK_SECONDS = 0.5
+
+    #: How long connect() waits for the socket, and then again for the proxy to
+    #: accept the API key.
+    CONNECT_TIMEOUT_SECONDS = 10
+
+    #: Reconnect backoff: 2, 4, 8, 16, then this ceiling, for as long as the
+    #: client is running. The count resets once a reconnect authenticates.
+    RECONNECT_MAX_BACKOFF_SECONDS = 30
+
+    #: Consecutive failed reconnects logged with a traceback before the rest of
+    #: the streak is logged as a short warning, now and then.
+    RECONNECT_VERBOSE_FAILURES = 5
 
     def __init__(self, api_key: str, host: str = "localhost", port: int = 8765):
         """
@@ -161,13 +180,14 @@ class WebSocketClient:
             self._dispatch_thread.start()
 
             # Wait for connection
-            timeout = 10
+            timeout = self.CONNECT_TIMEOUT_SECONDS
             start_time = time.time()
             while not self.connected and time.time() - start_time < timeout:
                 time.sleep(0.1)
 
             if not self.connected:
                 logger.error("Failed to connect to WebSocket server")
+                self._abandon()
                 return False
 
             # Wait for authentication
@@ -177,6 +197,7 @@ class WebSocketClient:
 
             if not self.authenticated:
                 logger.error("Failed to authenticate with WebSocket server")
+                self._abandon()
                 return False
 
             logger.info("Successfully connected and authenticated")
@@ -184,7 +205,48 @@ class WebSocketClient:
 
         except Exception as e:
             logger.exception(f"Error connecting to WebSocket: {e}")
+            self._abandon()
             return False
+
+    def _abandon(self) -> None:
+        """Stop both threads of a connect that failed. Never raises.
+
+        A failed connect used to return with ``running`` still True, so its
+        loop thread kept reconnecting in the background and its dispatch thread
+        kept waking, for a client nobody holds: every retry while the proxy was
+        still starting leaked one of each.
+        """
+        try:
+            self.disconnect()
+        except Exception:
+            logger.exception("Could not stop a websocket client whose connect failed")
+
+    @property
+    def alive(self) -> bool:
+        """True while this client is running and its loop thread is still up.
+
+        A client that is alive may be between reconnects (``connected`` False
+        for a moment); it will come back on its own. One that is not alive
+        never will, and get_websocket_client replaces it.
+        """
+        thread = self.thread
+        return bool(self.running and thread is not None and thread.is_alive())
+
+    def has_callback(self, event_type: str, callback: Callable) -> bool:
+        """Whether ``callback`` is already registered for ``event_type``."""
+        return callback in self.callbacks.get(event_type, ())
+
+    def adopt_callbacks(self, other: "WebSocketClient") -> None:
+        """Take over every callback registered on ``other``, without duplicates.
+
+        Used when a dead client is replaced, so a consumer that registered its
+        tick and auth callbacks once keeps receiving them from the replacement.
+        """
+        for event_type, callbacks in other.callbacks.items():
+            mine = self.callbacks.setdefault(event_type, [])
+            for callback in list(callbacks):
+                if callback not in mine:
+                    mine.append(callback)
 
     def disconnect(self):
         """Disconnect from the WebSocket server"""
@@ -195,7 +257,12 @@ class WebSocketClient:
             # call_soon_threadsafe avoids building a concurrent Future whose
             # condition would belong to the wrong world.
             coro = self._disconnect()
-            self.loop.call_soon_threadsafe(lambda: self.loop.create_task(coro))
+            try:
+                self.loop.call_soon_threadsafe(lambda: self.loop.create_task(coro))
+            except RuntimeError:
+                # The loop has already finished (a client that stopped
+                # reconnecting); its socket went with it.
+                coro.close()
 
         # Wait for thread to finish
         if self.thread and self.thread.is_alive():
@@ -573,14 +640,22 @@ class WebSocketClient:
         touches (SocketIO, the event bus, the sandbox engine, the database) is
         then reached from the world those primitives belong to.
 
-        The queue is real, so get_nowait() plus a yield is the only safe way to
-        read it; a blocking get() from a green thread would freeze the worker.
+        The queue is real, so under eventlet get_nowait() plus a yield is the
+        only safe way to read it; a blocking get() from a green thread would
+        freeze the worker. Where nothing is patched (the gthread worker, the
+        development server) this is a real thread, and it blocks on the queue
+        instead of waking two hundred times a second to find it empty.
         """
+        green = is_monkey_patched("thread")
         while self.running:
             try:
-                event_type, data = self._dispatch_queue.get_nowait()
+                if green:
+                    event_type, data = self._dispatch_queue.get_nowait()
+                else:
+                    event_type, data = self._dispatch_queue.get(timeout=self.DISPATCH_BLOCK_SECONDS)
             except _original_threading.Empty:
-                time.sleep(self.DISPATCH_POLL_SECONDS)
+                if green:
+                    time.sleep(self.DISPATCH_POLL_SECONDS)
                 continue
             for callback in list(self.callbacks.get(event_type, ())):
                 try:
@@ -624,12 +699,34 @@ class WebSocketClient:
         finally:
             self.loop.close()
 
-    async def _connect_and_run(self):
-        """Connect to WebSocket and handle messages"""
-        retry_count = 0
-        max_retries = 5
+    async def _sleep_while_running(self, seconds: float) -> None:
+        """Back off before a reconnect, returning early once the client stops.
 
-        while self.running and retry_count < max_retries:
+        A plain asyncio.sleep of up to thirty seconds held the loop thread past
+        disconnect(), whose join gives up after five, so a stopped client's
+        thread lingered for the rest of the backoff.
+        """
+        deadline = time.monotonic() + seconds
+        while self.running:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(0.25, remaining))
+
+    async def _connect_and_run(self):
+        """Connect, authenticate and handle messages, reconnecting until stopped.
+
+        The client used to count reconnects for its whole life and stop for
+        good at the fifth, while ``running`` stayed True and the client stayed
+        cached: after the fifth proxy restart in a worker's lifetime every
+        tick-driven stop in the process went quiet until the next restart. The
+        count now covers one streak of failures only, is reset by a reconnect
+        that authenticates, and never ends the loop while the client runs.
+        """
+        failures = 0
+
+        while self.running:
+            authenticated_here = False
             try:
                 async with websockets.connect(self.ws_url) as websocket:
                     self.ws = websocket
@@ -644,6 +741,14 @@ class WebSocketClient:
                         if not self.running:
                             break
                         await self._handle_message(message)
+                        if self.authenticated and not authenticated_here:
+                            authenticated_here = True
+                            failures = 0
+
+                # A clean close ends the iteration without raising; the socket
+                # is gone either way, so say so before reconnecting.
+                self.connected = False
+                self.authenticated = False
 
             except websockets.exceptions.ConnectionClosed as e:
                 logger.warning(f"WebSocket connection closed: {e}")
@@ -651,21 +756,31 @@ class WebSocketClient:
                 self.authenticated = False
 
                 if self.running:
-                    retry_count += 1
-                    wait_time = min(2**retry_count, 30)  # Exponential backoff
-                    logger.info(
-                        f"Reconnecting in {wait_time} seconds... (attempt {retry_count}/{max_retries})"
-                    )
-                    await asyncio.sleep(wait_time)
+                    failures += 1
+                    wait_time = min(2**failures, self.RECONNECT_MAX_BACKOFF_SECONDS)
+                    logger.info(f"Reconnecting in {wait_time} seconds... (attempt {failures})")
+                    await self._sleep_while_running(wait_time)
 
             except Exception as e:
-                logger.exception(f"Error in WebSocket connection: {e}")
                 self.connected = False
                 self.authenticated = False
 
                 if self.running:
-                    retry_count += 1
-                    await asyncio.sleep(5)
+                    failures += 1
+                    if failures <= self.RECONNECT_VERBOSE_FAILURES:
+                        logger.exception(f"Error in WebSocket connection: {e}")
+                        wait_time = 5
+                    else:
+                        # A long outage: keep trying, but quietly and less often.
+                        wait_time = self.RECONNECT_MAX_BACKOFF_SECONDS
+                        if failures % 10 == 0:
+                            logger.warning(
+                                "Still cannot reach the market data server after "
+                                f"{failures} attempts; retrying every {wait_time} seconds"
+                            )
+                    await self._sleep_while_running(wait_time)
+                else:
+                    logger.exception(f"Error in WebSocket connection: {e}")
 
     async def _authenticate(self):
         """Send authentication message"""
@@ -757,8 +872,34 @@ class WebSocketClient:
 
 
 # Singleton instance management
-_client_instances = {}
-_client_lock = threading.Lock()
+#
+# One client per API key, shared by every consumer in the process (the
+# scalping risk monitor, the strategy tick feed, the websocket service).
+#
+# _client_lock guards the two dicts below and nothing else: it is never held
+# across a connect, which can take up to twice CONNECT_TIMEOUT_SECONDS. It used
+# to be, and every caller for every key queued behind one slow connect, which
+# under the gthread worker is a request thread per caller. A real lock, because
+# its critical section is dict work only and any thread in any runtime may ask
+# for a client.
+_client_instances: dict[str, WebSocketClient] = {}
+_client_lock = _original_threading.Lock()
+
+
+class _PendingConnect:
+    """One connect in progress for a key, which other callers wait on."""
+
+    __slots__ = ("client", "done")
+
+    def __init__(self) -> None:
+        self.done = _original_threading.Event()
+        self.client: WebSocketClient | None = None
+
+
+_pending_connects: dict[str, _PendingConnect] = {}
+
+#: The message a caller gets when the market data server cannot be reached.
+CONNECT_FAILED_MESSAGE = "Failed to connect to WebSocket server"
 
 
 def get_websocket_client(
@@ -768,6 +909,12 @@ def get_websocket_client(
     Get or create a WebSocket client instance for the given API key.
     Uses singleton pattern to reuse connections.
 
+    Single flight per key: one caller connects while the others for that key
+    wait for its result, and callers for other keys are not held up at all.
+    A cached client that has stopped for good (see ``WebSocketClient.alive``)
+    is replaced, and the replacement takes over its callbacks, so a consumer
+    that registered once keeps receiving ticks.
+
     Args:
         api_key: API key for authentication
         host: WebSocket server host
@@ -775,24 +922,81 @@ def get_websocket_client(
 
     Returns:
         WebSocketClient instance
+
+    Raises:
+        ConnectionError: The server could not be reached or refused the key.
     """
     with _client_lock:
-        if api_key not in _client_instances:
-            client = WebSocketClient(api_key, host, port)
-            if client.connect():
-                _client_instances[api_key] = client
-            else:
-                raise ConnectionError("Failed to connect to WebSocket server")
+        client = _client_instances.get(api_key)
+        if client is not None and client.alive:
+            return client
+        pending = _pending_connects.get(api_key)
+        owner = pending is None
+        if owner:
+            pending = _PendingConnect()
+            _pending_connects[api_key] = pending
 
-        return _client_instances[api_key]
+    if not owner:
+        # Somebody else is connecting this key; share their result.
+        _original_threading.wait_for(pending.done, 2 * WebSocketClient.CONNECT_TIMEOUT_SECONDS + 10)
+        if pending.client is not None:
+            return pending.client
+        raise ConnectionError(CONNECT_FAILED_MESSAGE)
+
+    stale = client
+    try:
+        replacement = WebSocketClient(api_key, host, port)
+        if stale is not None:
+            replacement.adopt_callbacks(stale)
+            try:
+                # Its loop has ended; this stops the dispatch thread it left.
+                stale.disconnect()
+            except Exception:
+                logger.exception("Could not stop a websocket client that had stopped reconnecting")
+        connected = replacement.connect()
+        with _client_lock:
+            # Cached even when the connect failed: a dead client is replaced on
+            # the next call, and it carries the callbacks over to that one.
+            _client_instances[api_key] = replacement
+        if not connected:
+            raise ConnectionError(CONNECT_FAILED_MESSAGE)
+        pending.client = replacement
+        return replacement
+    finally:
+        with _client_lock:
+            if _pending_connects.get(api_key) is pending:
+                del _pending_connects[api_key]
+        pending.done.set()
+
+
+def close_websocket_client(api_key: str) -> bool:
+    """Close and forget the client for one API key, if there is one.
+
+    For when that key stops being valid (rotated or revoked): its client would
+    otherwise stay cached, authenticated with the old key until the proxy
+    restarts. The next get_websocket_client builds a fresh one.
+
+    Returns:
+        True when a client was closed.
+    """
+    with _client_lock:
+        client = _client_instances.pop(api_key, None)
+    if client is None:
+        return False
+    try:
+        client.disconnect()
+    except Exception:
+        logger.exception("Error closing a websocket client")
+    return True
 
 
 def close_all_clients():
     """Close all WebSocket client connections"""
     with _client_lock:
-        for _api_key, client in _client_instances.items():
-            try:
-                client.disconnect()
-            except Exception as e:
-                logger.exception(f"Error closing client: {e}")
+        clients = list(_client_instances.values())
         _client_instances.clear()
+    for client in clients:
+        try:
+            client.disconnect()
+        except Exception as e:
+            logger.exception(f"Error closing client: {e}")
