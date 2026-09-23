@@ -263,18 +263,18 @@ def _across_processes() -> Iterator[bool]:
     handle = None
     held = False
     try:
-        path = COMMAND_FILE.with_name(f"{COMMAND_FILE.name}.lock")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(path, "a+b")  # noqa: SIM115 - closed below, whatever happens
-        until = time.monotonic() + _LOCK_WAIT_SECONDS
-        while True:
-            held = _try_lock(handle)
-            if held or time.monotonic() >= until:
-                break
-            time.sleep(_LOCK_POLL_SECONDS)
-    except OSError:
-        held = False
-    try:
+        try:
+            path = COMMAND_FILE.with_name(f"{COMMAND_FILE.name}.lock")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(path, "a+b")  # noqa: SIM115 - closed below, on every path
+            until = time.monotonic() + _LOCK_WAIT_SECONDS
+            while True:
+                held = _try_lock(handle)
+                if held or time.monotonic() >= until:
+                    break
+                time.sleep(_LOCK_POLL_SECONDS)
+        except OSError:
+            held = False
         yield held
     finally:
         if handle is not None:
