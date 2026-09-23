@@ -88,6 +88,9 @@ RUN_KEYS = {
     "exchange",
     "interval",
     "product",
+    # The side the platform was on when the run started, which is where its
+    # books are read from whatever the toggle says later.
+    "mode",
     "pid",
     "started_at",
     "log_file",

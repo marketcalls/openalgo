@@ -1219,6 +1219,7 @@ export function ChartPane({
         <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
         <IndicatorSettingsDialog
           req={indSettings}
+          chartInterval={interval}
           onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
           onDefaults={(id) =>
             terminalRef.current

@@ -68,6 +68,19 @@ child reaches the platform's own order path, which reads the analyzer toggle
 before anything else, so a run's orders go where every other surface's orders go.
 This service passes no destination, no mode and no override, and there is
 deliberately nothing it could pass.
+
+**What it does note is which side the platform was on when a run started**, as
+``mode`` beside the run and in the deployment's settings, because that is the
+side the run's orders went to and so the side its books are read from. Reading
+them from whatever the toggle says when somebody opens the page showed a live
+strategy an empty sandbox book the moment the toggle moved. It is a record of
+what happened, read by nothing on the order path.
+
+**And it reads the instrument for the child.** The record the engine reads (the
+tick, the lot, the zone and the trading session from the market calendar) is
+read here, by ``services/openscript_instrument_service.py``, and handed over in
+the child's environment, because the child holds an API key and no session and
+deliberately opens neither the platform's database nor its logging.
 """
 
 import atexit
@@ -90,12 +103,15 @@ from services.openscript_commands import clear as forget_instruction
 from services.openscript_deployment import deployment_id, is_deployment_id
 from services.openscript_run_config import (
     PRODUCTS,
+    RUN_MODES,
     deployments_of,
     is_product,
     is_run_field,
     is_script_name,
     read_run_config,
+    record_run_mode,
     require_run_config,
+    run_mode_of,
 )
 from services.openscript_running import all_running, mark_running, mark_stopped
 from utils.logging import get_logger
@@ -482,6 +498,10 @@ def _status_locked(run_id: str, held: dict) -> dict:
         "exchange": held.get("exchange"),
         "interval": held.get("interval"),
         "product": held.get("product", ""),
+        # The side the platform was on when this run started, which is where
+        # its orders went and so where its books are read. Empty where it could
+        # not be read.
+        "mode": held.get("mode", ""),
         "pid": held.get("pid"),
         "started_at": held.get("started_at"),
         "log_file": held.get("log_file"),
@@ -507,6 +527,47 @@ def _api_key_for(user_id: str | None) -> str | None:
     except Exception:
         logger.exception("Could not read the API key for an OpenScript run")
         return None
+
+
+def _analyzer_mode() -> str:
+    """Which side the platform sends an order to right now: sandbox or live.
+
+    Read when a run starts, which is the only moment it answers the question
+    that matters later: where this run's orders went. Empty when it cannot be
+    read, and then nothing is recorded and a book falls back to the platform's
+    setting at the time it is opened, which is what it did before this existed.
+    """
+    try:
+        from database.settings_db import get_analyze_mode
+
+        return "sandbox" if get_analyze_mode() else "live"
+    except Exception:
+        logger.exception("Could not read whether the platform is in analyzer mode")
+        return ""
+
+
+def _instrument_facts_text(symbol: str, exchange: str, on_date, run_id: str) -> str:
+    """What the platform holds about a run's instrument, as the child reads it.
+
+    The facts service's own answer, unchanged: the engine's instrument record
+    and the calendar's window for the day the run starts on. The child builds
+    its record from it and picks the session (``Session._record`` in the
+    runner). Read here, outside the registry lock, because a database read is
+    not in-memory bookkeeping.
+
+    Nothing raises. A run whose facts could not be read starts with a record
+    that states less, and says so in its own log, and a script that needs what
+    is missing is refused there by name.
+    """
+    try:
+        from services.openscript_instrument_service import get_instrument_facts
+
+        return json.dumps(
+            get_instrument_facts(symbol, exchange, on_date), ensure_ascii=False, allow_nan=False
+        )
+    except Exception:
+        logger.exception("Could not read the instrument details for the OpenScript run %s", run_id)
+        return ""
 
 
 def start_run(
@@ -678,6 +739,10 @@ def _spawn_claimed(
     api_key = _api_key_for(user_id)
     started = _ist_now()
     log_file = log_file_for(run_id, started)
+    # The calendar's day is the day in its own zone, which is the zone the
+    # start time is taken in.
+    facts = _instrument_facts_text(symbol, exchange, started.date(), run_id)
+    mode = _analyzer_mode()
 
     try:
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -707,6 +772,9 @@ def _spawn_claimed(
     # settings were cleared is not handed the previous ones by an environment
     # this worker inherited.
     environment["OPENSCRIPT_INPUTS"] = _inputs_as_text(inputs, run_id)
+    # The instrument the same way and for the same reason, and written even
+    # when nothing could be read, so a run is never handed another run's.
+    environment["OPENSCRIPT_INSTRUMENT"] = facts
 
     command = [
         sys.executable,
@@ -765,12 +833,18 @@ def _spawn_claimed(
             "exchange": exchange,
             "interval": interval,
             "product": product,
+            "mode": mode,
         }
 
     # Recorded after the child exists, so nothing is ever noted as running that
     # was not. See `openscript_running`: this survives a restart and is what
     # brings the strategy back, and only a trader pressing Stop clears it.
     mark_running(run_id, process.pid)
+    # Beside the deployment's settings as well, because a run that has stopped
+    # still has a book, and it is on the side this run traded on whatever the
+    # toggle says by the time somebody looks.
+    if mode in RUN_MODES:
+        record_run_mode(run_id, mode)
 
     logger.info("Started the OpenScript run %s as process %s", run_id, process.pid)
     return True, f"{script} started at {started.strftime('%H:%M:%S IST')}"
@@ -1137,6 +1211,10 @@ def _adopt(run_id: str, pid: int) -> bool:
             "exchange": saved.get("exchange", ""),
             "interval": saved.get("interval", ""),
             "product": saved.get("product", ""),
+            # The side it was started on, as its start recorded it. This worker
+            # did not start it, so the platform's toggle now says nothing about
+            # where its orders went.
+            "mode": run_mode_of(run_id),
         }
 
     logger.info("Took over the OpenScript run %s, already running as process %s", run_id, pid)
