@@ -8,8 +8,19 @@
  * descriptor — its value `inputs` and the generated per-plot style inputs — so
  * one component covers MACD, Bollinger, Supertrend and anything you register,
  * with no indicator-specific code.
+ *
+ * A value input's `group` is a heading the rows under it sit beneath, and its
+ * `tooltip` is a line of help under its row. Both are how a script explains
+ * itself (`stdlib.md` 13.2): a label has to be short enough for the grid, and
+ * the sentence saying what the number actually does has nowhere else to go.
+ *
+ * One place where a study has to be told apart from a JavaScript indicator: an
+ * OpenScript interval input takes only the language's timeframes, so its
+ * choices are rebuilt from the terminal's (see `openscriptIntervals.ts`).
  */
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { isScriptInstance } from '@/lib/trading/openscriptFiles'
+import { scriptIntervalChoices } from '@/lib/trading/openscriptIntervals'
 import type { IndicatorField, IndicatorSettingsRequest } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { PlotStyleRow } from './PlotStyleRow'
@@ -17,10 +28,21 @@ import { TickBox } from './TickBox'
 
 interface Props {
   req: IndicatorSettingsRequest | null
+  /**
+   * The chart's own interval, as the terminal holds it (`5m`, `D`).
+   *
+   * What "Chart interval" means for an OpenScript study, which cannot store an
+   * empty interval the way a JavaScript indicator can. Without it that choice
+   * is left out rather than guessed.
+   */
+  chartInterval?: string
   onApply(instanceId: string, patch: Record<string, unknown>): void
   onDefaults(instanceId: string): Promise<Record<string, unknown> | null>
   onClose(): void
 }
+
+/** A field as the dialog draws it: the terminal's shape, help text included. */
+export type SettingsFieldShape = IndicatorField
 
 const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4']
 const LINE_STYLES = ['solid', 'dashed', 'dotted']
@@ -45,14 +67,43 @@ const TEXT_PLACEHOLDER: Record<string, string | undefined> = {
 export const CONTROL =
   'h-7 rounded border border-border bg-background px-2 text-[13px] text-foreground outline-none transition-colors focus:border-primary'
 
-export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: Props) {
+export function IndicatorSettingsDialog({
+  req,
+  chartInterval,
+  onApply,
+  onDefaults,
+  onClose,
+}: Props) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [tab, setTab] = useState<'inputs' | 'style'>('inputs')
+  const script = req !== null && isScriptInstance(req.instanceId)
+
+  /**
+   * Stored values, with every OpenScript interval spelled the language's way.
+   *
+   * An empty interval, which is what "Chart interval" stored before, and a
+   * broker code such as `D` are both refused at load with OS6001, so a study
+   * holding one is not running. Showing it as the choice it maps to means Ok
+   * puts it right; showing it as stored would leave the select disagreeing
+   * with the value behind it.
+   */
+  const normalise = useCallback(
+    (given: Record<string, unknown>): Record<string, unknown> => {
+      if (!req || !script) return given
+      const out = { ...given }
+      for (const f of req.inputs) {
+        if (f.type !== 'interval') continue
+        out[f.key] = scriptIntervalChoices(f.options, chartInterval, given[f.key]).value
+      }
+      return out
+    },
+    [req, script, chartInterval]
+  )
 
   useEffect(() => {
-    setValues(req ? { ...req.values } : {})
+    setValues(req ? normalise({ ...req.values }) : {})
     setTab(req && req.inputs.length === 0 ? 'style' : 'inputs')
-  }, [req])
+  }, [req, normalise])
 
   useEffect(() => {
     if (!req) return
@@ -63,10 +114,16 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
     return () => window.removeEventListener('keydown', onKey)
   }, [req, onClose])
 
-  const fields = useMemo(
-    () => (req ? (tab === 'inputs' ? req.inputs : req.styleInputs) : []),
-    [req, tab]
-  )
+  const fields: SettingsFieldShape[] = useMemo(() => {
+    if (!req) return []
+    if (tab === 'style') return req.styleInputs
+    if (!script) return req.inputs
+    return req.inputs.map((f) =>
+      f.type === 'interval'
+        ? { ...f, options: scriptIntervalChoices(f.options, chartInterval, values[f.key]).choices }
+        : f
+    )
+  }, [req, tab, script, chartInterval, values])
 
   if (!req) return null
 
@@ -77,7 +134,7 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
   }
   const reset = async () => {
     const d = await onDefaults(req.instanceId)
-    if (d) setValues(d)
+    if (d) setValues(normalise(d))
   }
 
   const tabs: { key: 'inputs' | 'style'; label: string; n: number }[] = [
@@ -154,14 +211,23 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
             </div>
           ) : (
             <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
-              {fields.map((f) => (
-                <SettingsField
-                  key={f.key}
-                  field={f}
-                  id={`${req.instanceId}-${f.key}`}
-                  value={values[f.key]}
-                  onChange={(v) => set(f.key, v)}
-                />
+              {inputGroupsOf(fields).map(([heading, group]) => (
+                <Fragment key={heading}>
+                  {heading !== '' && (
+                    <h4 className="col-span-2 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {heading}
+                    </h4>
+                  )}
+                  {group.map((f) => (
+                    <SettingsField
+                      key={f.key}
+                      field={f}
+                      id={`${req.instanceId}-${f.key}`}
+                      value={values[f.key]}
+                      onChange={(v) => set(f.key, v)}
+                    />
+                  ))}
+                </Fragment>
               ))}
             </div>
           )}
@@ -217,6 +283,26 @@ function groupsOf(fields: IndicatorField[]): [string, IndicatorField[]][] {
 }
 
 /**
+ * Value inputs, bucketed under their `group` heading in first-seen order.
+ *
+ * Bucketed rather than headed wherever the group changes, because the language
+ * says a group is a heading the dialog groups rows under: a script that
+ * declares a second "Bands" input further down the file means it to sit with
+ * the first, not under a second "Bands" heading. Rows with no group keep the
+ * empty key and are drawn without a heading.
+ */
+function inputGroupsOf(fields: SettingsFieldShape[]): [string, SettingsFieldShape[]][] {
+  const out = new Map<string, SettingsFieldShape[]>()
+  for (const f of fields) {
+    const k = f.group ?? ''
+    const list = out.get(k) ?? []
+    list.push(f)
+    out.set(k, list)
+  }
+  return [...out]
+}
+
+/**
  * One label -> control row, rendered by the field's declared type.
  *
  * Exported because the chart settings dialog renders the same vocabulary: the
@@ -229,7 +315,7 @@ export function SettingsField({
   value,
   onChange,
 }: {
-  field: IndicatorField
+  field: SettingsFieldShape
   id: string
   value: unknown
   onChange(v: unknown): void
@@ -239,41 +325,52 @@ export function SettingsField({
       {field.label}
     </label>
   )
+  // The declaration's help text, on its own line under the row and spanning
+  // both columns. Written out rather than hidden behind a hover, because a
+  // hover is not there on a touch screen or to a keyboard, and the sentence is
+  // the part of the row that says what the number does.
+  const helpId = field.tooltip ? `${id}-help` : undefined
+  const row = (control: ReactNode) => (
+    <>
+      {label}
+      {control}
+      {field.tooltip && (
+        <p id={helpId} className="col-span-2 -mt-2 text-[11px] leading-snug text-muted-foreground">
+          {field.tooltip}
+        </p>
+      )}
+    </>
+  )
 
   if (field.type === 'boolean') {
-    return (
-      <>
-        {label}
-        <TickBox
-          id={id}
-          checked={value === true}
-          onChange={onChange}
-          disabled={!!field.unavailable}
-        />
-      </>
+    return row(
+      <TickBox
+        id={id}
+        checked={value === true}
+        onChange={onChange}
+        disabled={!!field.unavailable}
+      />
     )
   }
 
   if (field.type === 'color') {
     const v = typeof value === 'string' ? value : '#4f8cff'
-    return (
-      <>
-        {label}
-        <div className="flex items-center gap-2">
-          <input
-            id={id}
-            type="color"
-            disabled={!!field.unavailable}
-            value={v}
-            onChange={(e) => onChange(e.target.value)}
-            aria-label={field.label}
-            // A colour control is a swatch, not a bar: square and small enough
-            // that a column of them reads as a palette rather than as blocks.
-            // Native swatch chrome is bulky, so it is clipped to a flat chip.
-            className="h-[26px] w-[26px] cursor-pointer rounded-md border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-[3px] [&::-webkit-color-swatch]:rounded [&::-webkit-color-swatch]:border-0"
-          />
-        </div>
-      </>
+    return row(
+      <div className="flex items-center gap-2">
+        <input
+          id={id}
+          type="color"
+          disabled={!!field.unavailable}
+          value={v}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={field.label}
+          aria-describedby={helpId}
+          // A colour control is a swatch, not a bar: square and small enough
+          // that a column of them reads as a palette rather than as blocks.
+          // Native swatch chrome is bulky, so it is clipped to a flat chip.
+          className="h-[26px] w-[26px] cursor-pointer rounded-md border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-[3px] [&::-webkit-color-swatch]:rounded [&::-webkit-color-swatch]:border-0"
+        />
+      </div>
     )
   }
 
@@ -281,6 +378,8 @@ export function SettingsField({
   // options with the intervals this broker actually serves, so a study can
   // never be handed a timeframe the feed cannot answer. Falling back to the
   // chart's own interval (the empty value) is what an unfilled list means.
+  // An OpenScript study arrives here with its options already rebuilt, since
+  // the language takes neither the empty value nor a code such as `D`.
   if (field.type === 'source' || field.type === 'select' || field.type === 'interval') {
     const opts = field.options
       ? field.options.map((o) => ({ label: o.label, value: String(o.value) }))
@@ -290,32 +389,30 @@ export function SettingsField({
             label: o.charAt(0).toUpperCase() + o.slice(1),
             value: o,
           }))
-    return (
-      <>
-        {label}
-        <div className="relative w-full">
-          <select
-            id={id}
-            disabled={!!field.unavailable}
-            value={String(value ?? '')}
-            onChange={(e) => onChange(e.target.value)}
-            className={cn(CONTROL, 'w-full appearance-none pr-7')}
-          >
-            {opts.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <svg
-            viewBox="0 0 10 10"
-            className="pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          >
-            <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth={1.5} />
-          </svg>
-        </div>
-      </>
+    return row(
+      <div className="relative w-full">
+        <select
+          id={id}
+          disabled={!!field.unavailable}
+          value={String(value ?? '')}
+          onChange={(e) => onChange(e.target.value)}
+          aria-describedby={helpId}
+          className={cn(CONTROL, 'w-full appearance-none pr-7')}
+        >
+          {opts.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <svg
+          viewBox="0 0 10 10"
+          className="pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        >
+          <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth={1.5} />
+        </svg>
+      </div>
     )
   }
 
@@ -323,19 +420,17 @@ export function SettingsField({
   // input needs its own branch: `<input type="number">` rejects a value like
   // '0915-1015' outright and renders an empty box with spinner arrows.
   if (TEXT_TYPES.has(field.type)) {
-    return (
-      <>
-        {label}
-        <input
-          id={id}
-          type="text"
-          disabled={!!field.unavailable}
-          value={typeof value === 'string' ? value : ''}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={TEXT_PLACEHOLDER[field.type]}
-          className={cn(CONTROL, 'w-full')}
-        />
-      </>
+    return row(
+      <input
+        id={id}
+        type="text"
+        disabled={!!field.unavailable}
+        value={typeof value === 'string' ? value : ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={TEXT_PLACEHOLDER[field.type]}
+        aria-describedby={helpId}
+        className={cn(CONTROL, 'w-full')}
+      />
     )
   }
 
@@ -351,48 +446,46 @@ export function SettingsField({
     // value never drifts into 1.4000000000000001.
     onChange(Number(clamped.toFixed(String(step).split('.')[1]?.length ?? 0)))
   }
-  return (
-    <>
-      {label}
-      <div className={cn(CONTROL, 'flex w-full items-center gap-1 p-0 pl-2')}>
-        <input
-          id={id}
-          type="number"
+  return row(
+    <div className={cn(CONTROL, 'flex w-full items-center gap-1 p-0 pl-2')}>
+      <input
+        id={id}
+        type="number"
+        disabled={!!field.unavailable}
+        value={typeof value === 'number' || typeof value === 'string' ? String(value) : ''}
+        min={field.min}
+        max={field.max}
+        step={step}
+        onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+        aria-describedby={helpId}
+        // The native spinner is a bright, oversized chrome control; ours
+        // matches the theme and is always visible.
+        className="w-full min-w-0 bg-transparent text-[13px] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <span className="flex h-full flex-col justify-center border-l border-border">
+        <button
+          type="button"
+          aria-label="Increase"
           disabled={!!field.unavailable}
-          value={typeof value === 'number' || typeof value === 'string' ? String(value) : ''}
-          min={field.min}
-          max={field.max}
-          step={step}
-          onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
-          // The native spinner is a bright, oversized chrome control; ours
-          // matches the theme and is always visible.
-          className="w-full min-w-0 bg-transparent text-[13px] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        />
-        <span className="flex h-full flex-col justify-center border-l border-border">
-          <button
-            type="button"
-            aria-label="Increase"
-            disabled={!!field.unavailable}
-            onClick={() => nudge(1)}
-            className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
-          >
-            <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true">
-              <path d="M1 5 5 1.5 9 5" fill="none" stroke="currentColor" strokeWidth={1.6} />
-            </svg>
-          </button>
-          <button
-            type="button"
-            aria-label="Decrease"
-            disabled={!!field.unavailable}
-            onClick={() => nudge(-1)}
-            className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
-          >
-            <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true">
-              <path d="M1 1 5 4.5 9 1" fill="none" stroke="currentColor" strokeWidth={1.6} />
-            </svg>
-          </button>
-        </span>
-      </div>
-    </>
+          onClick={() => nudge(1)}
+          className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
+        >
+          <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true">
+            <path d="M1 5 5 1.5 9 5" fill="none" stroke="currentColor" strokeWidth={1.6} />
+          </svg>
+        </button>
+        <button
+          type="button"
+          aria-label="Decrease"
+          disabled={!!field.unavailable}
+          onClick={() => nudge(-1)}
+          className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
+        >
+          <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true">
+            <path d="M1 1 5 4.5 9 1" fill="none" stroke="currentColor" strokeWidth={1.6} />
+          </svg>
+        </button>
+      </span>
+    </div>
   )
 }
