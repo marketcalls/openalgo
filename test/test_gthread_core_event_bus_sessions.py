@@ -67,7 +67,13 @@ def test_a_stale_worker_session_cannot_double_book_a_fill(own_book, pinned_tags)
     worker_b = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bus-b")
     try:
         assert worker_a.submit(
-            book.record_order_tag, "ord-1", "u1", "gt-strategy", "NIFTY30SEP2624000CE", "NFO", "NRML"
+            book.record_order_tag,
+            "ord-1",
+            "u1",
+            "gt-strategy",
+            "NIFTY30SEP2624000CE",
+            "NFO",
+            "NRML",
         ).result(30)
 
         # Worker A books 50. Worker B then sees a duplicate 50, books nothing,

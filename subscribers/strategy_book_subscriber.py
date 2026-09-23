@@ -167,7 +167,5 @@ def register(bus) -> None:
         "split.completed",
         "options.completed",
     ):
-        bus.subscribe(
-            topic, on_batch_completed, name="StrategyBookBatchTagger", critical=True
-        )
+        bus.subscribe(topic, on_batch_completed, name="StrategyBookBatchTagger", critical=True)
     logger.debug("Strategy book subscriber registered")

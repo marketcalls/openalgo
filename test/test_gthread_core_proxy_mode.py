@@ -50,7 +50,9 @@ def clean_env(monkeypatch):
 
 
 def _pretend_gunicorn(monkeypatch):
-    monkeypatch.setitem(sys.modules, "gunicorn.workers.base", types.ModuleType("gunicorn.workers.base"))
+    monkeypatch.setitem(
+        sys.modules, "gunicorn.workers.base", types.ModuleType("gunicorn.workers.base")
+    )
 
 
 # --- resolve_proxy_mode --------------------------------------------------------

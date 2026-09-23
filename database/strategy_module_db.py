@@ -94,9 +94,7 @@ def _forget_session_pnl(strategy_id: int | None) -> None:
     that commit cannot store the total that leaves the run out, which would
     have delayed a daily loss limit by up to the TTL.
     """
-    _session_pnl_cache.invalidate_where(
-        lambda key: strategy_id is None or key[0] == strategy_id
-    )
+    _session_pnl_cache.invalidate_where(lambda key: strategy_id is None or key[0] == strategy_id)
 
 
 # Webhook token prefix, so a leaked string is recognisable in a log or a paste.

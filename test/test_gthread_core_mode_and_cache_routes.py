@@ -227,7 +227,9 @@ def cache_client(monkeypatch):
     monkeypatch.setattr(auth_utils, "_master_contract_running", {"zerodha"})
     reloads = []
     clears = []
-    monkeypatch.setattr(hook, "load_symbols_to_cache", lambda broker: reloads.append(broker) or True)
+    monkeypatch.setattr(
+        hook, "load_symbols_to_cache", lambda broker: reloads.append(broker) or True
+    )
     monkeypatch.setattr(tde, "clear_cache", lambda: clears.append(1))
     app = Flask(__name__)
     app.secret_key = "test"
