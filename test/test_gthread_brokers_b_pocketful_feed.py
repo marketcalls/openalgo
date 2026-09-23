@@ -189,3 +189,24 @@ def test_concurrent_requests_on_one_instrument_release_it_once(socket):
     assert errors == []
     assert feed._subscribers == {}
     assert 1 <= len(_unsubscribes(socket)) <= count
+
+
+class DeadSocket(FakeSocket):
+    def send(self, message):
+        raise ConnectionError("socket is already closed.")
+
+
+def test_a_failed_unsubscribe_still_clears_the_released_instrument(socket, monkeypatch):
+    """A send that failed left the last packet as the latest one, and the next
+    quote for that instrument was answered from it at once, as if fresh."""
+    client = feed.PocketfulSocket("C1", "tok")
+    client.subscribe_detailed_marketdata(_payload(2885))
+    feed.dtlmktdata_dict["2885_1"] = _tick(2885)
+    feed.detailed_marketdata_response = _tick(2885)
+    monkeypatch.setattr(feed, "websock", DeadSocket())
+
+    assert client.unsubscribe_detailed_marketdata(_payload(2885)) is False
+
+    assert feed._subscribers == {}
+    assert feed.detailed_marketdata_response == {}, "the packet outlived its last request"
+    assert feed.dtlmktdata_dict == {}

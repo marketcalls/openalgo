@@ -490,9 +490,16 @@ class PocketfulSocket:
         return data
 
     def unsubscribe_detailed_marketdata(self, detailedmarketdata_payload):
-        """Unsubscribe from detailed market data"""
+        """Unsubscribe from detailed market data.
+
+        The released instrument's data is cleared whether or not the broker was
+        told, as the compact and snapquote modes already do. A send that failed
+        (the socket dropped, or another request holds the reconnect) used to
+        leave the last packet behind as the latest one, and the next quote for
+        that instrument was answered from it at once, as if it were fresh.
+        """
+        released, idle = _release("marketdata", [detailedmarketdata_payload])
         try:
-            released, idle = _release("marketdata", [detailedmarketdata_payload])
             if released:
                 unsubscription_pkt = [
                     [
@@ -509,6 +516,8 @@ class PocketfulSocket:
             return True
         except Exception as e:
             logger.error(f"Error unsubscribing from detailed market data: {str(e)}")
+            # Still clear data even on error
+            _clear_released("marketdata", released, idle)
             return False
 
     def subscribe_compact_marketdata(self, compactmarketdata_payload):
