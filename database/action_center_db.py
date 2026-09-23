@@ -271,9 +271,9 @@ def reject_pending_order(order_id, reason, rejected_by, user_id):
 #: by claim_pending_order_for_execution before the broker call, and replaced by
 #: a final status on every path that returns. An order left in it by a crash
 #: must never be resent automatically: the operator checks the broker's order
-#: book. It is stored and returned by the Action Center API, but the Action
-#: Center page does not show broker_status yet, so such a row looks like any
-#: other approved order there.
+#: book. The Action Center page shows an order in it as not confirmed, tells
+#: the trader to check the broker's order book before placing it again, and
+#: offers no way to send it again (frontend/src/pages/ActionCenter.tsx).
 SUBMITTING = "submitting"
 
 #: broker_status of an approved smart order that needed no order, because the

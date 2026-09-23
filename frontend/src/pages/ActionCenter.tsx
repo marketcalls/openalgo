@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -14,8 +15,9 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { io, type Socket } from 'socket.io-client'
 import { webClient } from '@/api/client'
+import { useSocketContext } from '@/components/socket/SocketProvider'
+import { useKeepReconnecting } from '@/components/socket/useKeepReconnecting'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -57,6 +59,26 @@ interface PendingOrder {
   status: 'pending' | 'approved' | 'rejected'
   created_at_ist: string
   raw_order_data: Record<string, unknown>
+  /** What the broker said once the order was sent, e.g. open, complete, rejected. */
+  broker_status?: string | null
+  broker_order_id?: string | null
+}
+
+/**
+ * The broker_status of an approved order OpenAlgo has started sending and has
+ * no broker answer recorded for (SUBMITTING in database/action_center_db.py).
+ *
+ * It is written just before the order goes to the broker and replaced by the
+ * broker's answer as soon as there is one, which also refreshes this page. An
+ * order that stays in it was cut off mid-send, by a restart or a crash, so it
+ * may or may not be at the broker. OpenAlgo never sends such an order again on
+ * its own, and this page offers no way to: only the broker's order book can say
+ * whether it arrived.
+ */
+const SENDING_NOT_CONFIRMED = 'submitting'
+
+function isSendNotConfirmed(order: PendingOrder): boolean {
+  return order.status === 'approved' && order.broker_status === SENDING_NOT_CONFIRMED
 }
 
 interface OrderStats {
@@ -98,8 +120,8 @@ export default function ActionCenterPage() {
   const [isRejecting, setIsRejecting] = useState<number | null>(null)
   const [isApprovingAll, setIsApprovingAll] = useState(false)
 
-  // Socket ref for realtime updates
-  const socketRef = useRef<Socket | null>(null)
+  // The app-wide Socket.IO connection, for realtime updates
+  const { socket } = useSocketContext()
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const fetchData = useCallback(async () => {
@@ -133,26 +155,20 @@ export default function ActionCenterPage() {
     fetchData()
   }, [fetchData])
 
-  // Socket connection for realtime order updates
+  // Alert sound for newly queued orders
   useEffect(() => {
-    // Create audio element for alert sounds
     audioRef.current = new Audio('/sounds/alert.mp3')
     audioRef.current.preload = 'auto'
+  }, [])
 
-    // Connect to socket server
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
-    })
-
-    const socket = socketRef.current
+  // Realtime order updates, on the app-wide connection SocketProvider owns.
+  // This page used to open a second connection of its own, which the server had
+  // to keep waiting alongside the first for as long as the page was open.
+  useEffect(() => {
+    if (!socket) return
 
     // Listen for new pending orders (semi-auto mode)
-    socket.on('pending_order_created', (data: { api_type: string; message: string }) => {
+    const onCreated = (data: { api_type: string; message: string }) => {
       const { shouldShowToast, shouldPlaySound } = useAlertStore.getState()
 
       // Play alert sound if enabled
@@ -167,18 +183,30 @@ export default function ActionCenterPage() {
 
       // Refresh data to show new order (always do this regardless of toast settings)
       fetchData()
-    })
+    }
 
     // Listen for order updates (approved, rejected, deleted)
-    socket.on('pending_order_updated', () => {
+    const onUpdated = () => {
       // Refresh data
       fetchData()
-    })
-
-    return () => {
-      socket.disconnect()
     }
-  }, [fetchData])
+
+    socket.on('pending_order_created', onCreated)
+    socket.on('pending_order_updated', onUpdated)
+
+    // Remove only this page's handlers: the connection is shared with the rest
+    // of the app and stays open.
+    return () => {
+      socket.off('pending_order_created', onCreated)
+      socket.off('pending_order_updated', onUpdated)
+    }
+  }, [socket, fetchData])
+
+  // The connection this page used to own never stopped trying to reconnect, so
+  // a trader waiting here for orders to approve got them again after a server
+  // restart of any length. The shared connection gives up after five attempts;
+  // keep it trying while this page is open.
+  useKeepReconnecting(socket)
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -581,6 +609,15 @@ export default function ActionCenterPage() {
                               )}
                             </Button>
 
+                            {isSendNotConfirmed(order) && (
+                              <Badge
+                                variant="outline"
+                                className="h-8 border-amber-500 text-amber-700 dark:text-amber-400"
+                              >
+                                Not confirmed
+                              </Badge>
+                            )}
+
                             {order.status === 'pending' ? (
                               <>
                                 <Button
@@ -622,6 +659,27 @@ export default function ActionCenterPage() {
                           </div>
                         </TableCell>
                       </TableRow>
+
+                      {/* An order cut off while it was being sent: say so, and
+                          say what to check, because nothing will resend it. */}
+                      {isSendNotConfirmed(order) && (
+                        <TableRow>
+                          <TableCell colSpan={10} className="p-2">
+                            <Alert variant="warning">
+                              <AlertTriangle className="h-4 w-4" />
+                              <AlertTitle>
+                                This order may or may not have reached your broker
+                              </AlertTitle>
+                              <AlertDescription>
+                                OpenAlgo started sending it but has no answer from your broker
+                                recorded, so it cannot tell whether the broker received it. OpenAlgo
+                                will not send it again. Check your broker's order book before you
+                                place this order again.
+                              </AlertDescription>
+                            </Alert>
+                          </TableCell>
+                        </TableRow>
+                      )}
 
                       {/* Expanded Details Row */}
                       {expandedOrders.has(order.id) && (

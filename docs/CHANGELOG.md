@@ -75,6 +75,13 @@ did:**
   cancelled a moment ago and has not stopped yet.
 - Action Center: an approval whose send could not be recorded is put back in
   the pending list and the operator is told it was not sent.
+- Action Center: an approved order that a restart or crash cut off while it was
+  being sent is shown as not confirmed, with a note that it may or may not have
+  reached the broker and to check the broker's order book before placing it
+  again. OpenAlgo never sends it again, and the page offers no way to.
+- Each browser tab keeps one live update connection, shared by every page in
+  it. The Action Center, WhatsApp and Historify pages used to open a second
+  one, and Historify showed every order alert twice while it was open.
 - A sandbox GTT leg whose position has another order in progress fires on the
   next tick instead of holding up every other tick until that order finishes.
 - The system report shows the web server, the one `.env` asks for, the request
@@ -121,10 +128,7 @@ through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
 revision; it puts the saved service file back and sets `.env` back to eventlet.
 
 **Still not modelled.** The sandbox margin reconcile does not count margin held
-by open and trigger-pending orders (unchanged from before). The Action Center
-page does not yet show an order left "submitting" by a crash mid-send any
-differently from one that reached the broker; check the broker's order book
-after a crash.
+by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 

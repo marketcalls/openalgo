@@ -8,10 +8,10 @@ import {
   RefreshCcw,
   Send,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { io, type Socket } from 'socket.io-client'
+import { useCallback, useEffect, useState } from 'react'
 
 import { whatsappApi } from '@/api/whatsapp'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -43,7 +43,7 @@ export default function WhatsAppIndex() {
   const [busy, setBusy] = useState<string | null>(null)
   const [sendPhone, setSendPhone] = useState('')
   const [sendMessage, setSendMessage] = useState('')
-  const socketRef = useRef<Socket | null>(null)
+  const { socket } = useSocketContext()
 
   const refresh = useCallback(async () => {
     try {
@@ -57,23 +57,15 @@ export default function WhatsAppIndex() {
 
   useEffect(() => {
     refresh()
+  }, [refresh])
 
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-    const url = port ? `${protocol}//${host}:${port}` : `${protocol}//${host}`
+  // Pairing events arrive on the app-wide connection SocketProvider owns. This
+  // page used to open a second connection of its own, with the same settings,
+  // which the server had to keep waiting alongside the first.
+  useEffect(() => {
+    if (!socket) return
 
-    const socket = io(url, {
-      transports: ['polling'],
-      upgrade: false,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 20000,
-      forceNew: true,
-    })
-    socketRef.current = socket
-
-    socket.on('whatsapp_qr', (data: WhatsAppQrEvent) => {
+    const onQr = (data: WhatsAppQrEvent) => {
       setPairState((prev) => ({
         ...(prev ?? {
           status: 'awaiting_scan',
@@ -87,9 +79,9 @@ export default function WhatsAppIndex() {
         qr_data_url: data.data_url,
         error: null,
       }))
-    })
+    }
 
-    socket.on('whatsapp_pair_code', (data: WhatsAppPairCodeEvent) => {
+    const onPairCode = (data: WhatsAppPairCodeEvent) => {
       setPairState((prev) => ({
         ...(prev ?? {
           status: 'awaiting_scan',
@@ -102,9 +94,9 @@ export default function WhatsAppIndex() {
         status: 'awaiting_scan',
         pair_code: data.code,
       }))
-    })
+    }
 
-    socket.on('whatsapp_paired', (_data: WhatsAppPairedEvent) => {
+    const onPaired = (_data: WhatsAppPairedEvent) => {
       // Don't surface the owner's phone in the toast — privacy.
       setPairState((prev) => ({
         ...(prev ?? {
@@ -121,18 +113,18 @@ export default function WhatsAppIndex() {
       }))
       showToast.success('WhatsApp paired successfully', 'whatsapp')
       refresh()
-    })
+    }
 
-    socket.on('whatsapp_pair_status', (s: WhatsAppPairState) => {
+    const onPairStatus = (s: WhatsAppPairState) => {
       setPairState(s)
       if (s.status === 'failed' && s.error) {
         showToast.error(s.error, 'whatsapp')
       } else if (s.status === 'paired') {
         refresh()
       }
-    })
+    }
 
-    socket.on('whatsapp_status', (s: WhatsAppStatusEvent) => {
+    const onStatus = (s: WhatsAppStatusEvent) => {
       setBundle((prev) => {
         if (!prev) return prev
         return {
@@ -140,13 +132,24 @@ export default function WhatsAppIndex() {
           config: { ...prev.config, is_running: s.is_running, is_paired: s.is_paired },
         }
       })
-    })
-
-    return () => {
-      socket.disconnect()
-      socketRef.current = null
     }
-  }, [refresh])
+
+    socket.on('whatsapp_qr', onQr)
+    socket.on('whatsapp_pair_code', onPairCode)
+    socket.on('whatsapp_paired', onPaired)
+    socket.on('whatsapp_pair_status', onPairStatus)
+    socket.on('whatsapp_status', onStatus)
+
+    // Remove only this page's handlers: the connection is shared with the
+    // rest of the app and stays open.
+    return () => {
+      socket.off('whatsapp_qr', onQr)
+      socket.off('whatsapp_pair_code', onPairCode)
+      socket.off('whatsapp_paired', onPaired)
+      socket.off('whatsapp_pair_status', onPairStatus)
+      socket.off('whatsapp_status', onStatus)
+    }
+  }, [socket, refresh])
 
   const startPair = async () => {
     setBusy('pair')

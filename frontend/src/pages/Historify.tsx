@@ -31,6 +31,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { authApi } from '@/api/auth'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -83,7 +84,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
-import { useSocket } from '@/hooks/useSocket'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -387,8 +387,11 @@ export default function Historify() {
   // Catalog filtering
   const [catalogFilter, setCatalogFilter] = useState({ exchange: '', interval: '', search: '' })
 
-  // Socket.IO for real-time progress
-  const { socket } = useSocket()
+  // Socket.IO for real-time progress, on the app-wide connection SocketProvider
+  // owns. Calling useSocket() here opened a second connection for this page
+  // and registered every global alert handler a second time, so each order
+  // toast and sound played twice while this page was open.
+  const { socket } = useSocketContext()
 
   // Computed values (allIntervals not needed for now since we use storage_intervals)
   // const allIntervals = intervals
