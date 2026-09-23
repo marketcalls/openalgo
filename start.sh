@@ -338,12 +338,35 @@ fi
 if [ "$OPENALGO_WORKER_REQUESTED" = "gthread" ] && [ -f /app/install/openalgo-gunicorn.sh ]; then
     echo "[OpenAlgo] Starting application on port ${APP_PORT} with gthread..."
     mkdir -p /tmp/gunicorn_workers
+    # This shell stays in front of the web server instead of handing over to
+    # it, to look after the WebSocket proxy started above. With --proxy-mode
+    # external the web server never starts one itself, so if the proxy dies
+    # nothing else brings it back and live market data stops until the
+    # container is restarted. Here it is started again after a pause that
+    # doubles on each quick failure (1 second up to 30), and only once the
+    # previous one has exited, so two never run at once. A stop signal is
+    # passed on to the web server; once it has finished, the proxy is stopped
+    # too (5 seconds, then forced) and the container exits with the web
+    # server's status. No proxy is started again after a stop begins.
+    GTHREAD_STOPPING=0
+    GTHREAD_SIGNAL=TERM
+    GUNICORN_PID=""
+    gthread_forward() {
+        GTHREAD_STOPPING=1
+        GTHREAD_SIGNAL="$1"
+        if [ -n "$GUNICORN_PID" ]; then
+            kill -s "$1" "$GUNICORN_PID" 2>/dev/null
+        fi
+    }
+    trap 'gthread_forward TERM' TERM
+    trap 'gthread_forward INT' INT
+
     # A stop gets 30 seconds for open requests, beside the strategies and
     # OpenScript runs stopping. Docker kills a container 10 seconds after the
     # stop signal unless docker-compose.yaml sets stop_grace_period, so the
     # gthread switch steps require stop_grace_period: 45s. See
     # docs/gthread/README.md.
-    exec /bin/bash /app/install/openalgo-gunicorn.sh \
+    /bin/bash /app/install/openalgo-gunicorn.sh \
         --app-dir /app \
         --venv /app/.venv \
         --env-file "$ENV_FILE" \
@@ -352,7 +375,72 @@ if [ "$OPENALGO_WORKER_REQUESTED" = "gthread" ] && [ -f /app/install/openalgo-gu
         --timeout 300 \
         --graceful-timeout 30 \
         --worker-tmp-dir /tmp/gunicorn_workers \
-        --log-level warning
+        --log-level warning &
+    GUNICORN_PID=$!
+    # A stop that arrived while it was being started is passed on now.
+    if [ "$GTHREAD_STOPPING" -ne 0 ]; then
+        kill -s "$GTHREAD_SIGNAL" "$GUNICORN_PID" 2>/dev/null
+    fi
+
+    # Sleep in the background and wait for it, so a stop signal is handled at
+    # once rather than after the sleep.
+    gthread_pause() {
+        sleep "$1" &
+        local pause_pid=$!
+        if ! wait "$pause_pid" 2>/dev/null; then
+            kill "$pause_pid" 2>/dev/null
+            wait "$pause_pid" 2>/dev/null
+        fi
+    }
+
+    PROXY_BACKOFF=1
+    PROXY_STARTED_AT=$(date +%s)
+    while kill -0 "$GUNICORN_PID" 2>/dev/null; do
+        if [ "$GTHREAD_STOPPING" -eq 0 ] && [ -n "${WEBSOCKET_PID:-}" ] \
+            && ! kill -0 "$WEBSOCKET_PID" 2>/dev/null; then
+            wait "$WEBSOCKET_PID" 2>/dev/null
+            PROXY_STATUS=$?
+            # A proxy that ran for a minute was not failing quickly.
+            if [ $(( $(date +%s) - PROXY_STARTED_AT )) -ge 60 ]; then
+                PROXY_BACKOFF=1
+            fi
+            echo "[OpenAlgo] The WebSocket proxy server stopped (exit status $PROXY_STATUS). Live market data is paused; starting it again in $PROXY_BACKOFF seconds."
+            gthread_pause "$PROXY_BACKOFF"
+            if [ "$GTHREAD_STOPPING" -ne 0 ] || ! kill -0 "$GUNICORN_PID" 2>/dev/null; then
+                break
+            fi
+            /app/.venv/bin/python -m websocket_proxy.server &
+            WEBSOCKET_PID=$!
+            PROXY_STARTED_AT=$(date +%s)
+            echo "[OpenAlgo] WebSocket proxy server started again with PID $WEBSOCKET_PID"
+            PROXY_BACKOFF=$(( PROXY_BACKOFF * 2 ))
+            if [ "$PROXY_BACKOFF" -gt 30 ]; then
+                PROXY_BACKOFF=30
+            fi
+        fi
+        gthread_pause 1
+    done
+
+    # The web server has exited: collect its status, then stop the proxy.
+    wait "$GUNICORN_PID" 2>/dev/null
+    GUNICORN_STATUS=$?
+    while kill -0 "$GUNICORN_PID" 2>/dev/null; do
+        # wait was cut short by a second stop signal; the web server is still
+        # finishing, so keep waiting for it.
+        wait "$GUNICORN_PID" 2>/dev/null
+        GUNICORN_STATUS=$?
+    done
+    if [ -n "${WEBSOCKET_PID:-}" ] && kill -0 "$WEBSOCKET_PID" 2>/dev/null; then
+        echo "[OpenAlgo] Stopping the WebSocket proxy server..."
+        kill -TERM "$WEBSOCKET_PID" 2>/dev/null
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$WEBSOCKET_PID" 2>/dev/null || break
+            gthread_pause 0.5
+        done
+        kill -KILL "$WEBSOCKET_PID" 2>/dev/null
+        wait "$WEBSOCKET_PID" 2>/dev/null
+    fi
+    exit "$GUNICORN_STATUS"
 fi
 
 echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
