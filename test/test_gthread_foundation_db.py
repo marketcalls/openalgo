@@ -7,7 +7,8 @@ Each fix here closes a race without changing what happens when nothing races:
 * a critical subscriber is never shed with the best-effort ones;
 * approving, rejecting and claiming an Action Center order is one conditional
   UPDATE, so of several racing callers exactly one wins;
-* a master contract download is single flight per broker;
+* a master contract download is single flight per broker, and a refused start
+  leaves the running download's status row alone;
 * every .env writer goes through one lock, and a save reaches the value the
   app reads even when the key is assigned twice;
 * the version check is unchanged: an outdated .env still stops a server that
@@ -413,6 +414,184 @@ def test_a_non_overlapping_download_runs_and_releases_its_claim(monkeypatch):
     with pytest.raises(RuntimeError):
         auth_utils.async_master_contract_download("zerodha")
     assert auth_utils.is_master_contract_download_running("zerodha") is False
+
+
+def _wait_until_idle(broker, timeout=5):
+    deadline = time.monotonic() + timeout
+    while auth_utils.is_master_contract_download_running(broker) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return not auth_utils.is_master_contract_download_running(broker)
+
+
+@pytest.fixture
+def status_row(monkeypatch):
+    """The broker's master contract status row, in memory, recording each reset."""
+    row = {"status": "success", "is_ready": True}
+    resets = []
+
+    def init_broker_status(broker):
+        resets.append(broker)
+        row.update(status="pending", is_ready=False)
+
+    monkeypatch.setattr(auth_utils, "init_broker_status", init_broker_status)
+    return types.SimpleNamespace(row=row, resets=resets)
+
+
+@pytest.fixture
+def download_in_its_tail(monkeypatch, status_row):
+    """A download that has written success and is still running its tail work.
+
+    The real one writes success, then loads the symbol cache, restores
+    strategies and runs the sandbox catch-up, holding its claim for seconds,
+    and never writes the status row again.
+    """
+    in_tail = threading.Event()
+    release = threading.Event()
+    runs = []
+
+    def fake_download(broker):
+        runs.append((broker, dict(status_row.row)))
+        status_row.row.update(status="success", is_ready=True)
+        in_tail.set()
+        release.wait(10)
+        return {"status": "success"}
+
+    monkeypatch.setattr(auth_utils, "_download_master_contract", fake_download)
+    monkeypatch.setattr(auth_utils, "_master_contract_running", set())
+    yield types.SimpleNamespace(in_tail=in_tail, release=release, runs=runs)
+    release.set()
+    assert _wait_until_idle("zerodha"), "the fake download never finished"
+
+
+def test_a_refused_start_leaves_the_running_downloads_status_alone(
+    status_row, download_in_its_tail
+):
+    """Resetting the row before the claim left it pending for good.
+
+    The download holding the claim had already written success and would not
+    write again, so a reset from a start that was then refused left the broker
+    not ready (strategies refusing to start) until the next login.
+    """
+    assert auth_utils.try_start_master_contract_download("zerodha", reset_status=True) is True
+    assert download_in_its_tail.in_tail.wait(5)
+    # The winning start reset the row before its download ran, as it always did.
+    assert status_row.resets == ["zerodha"]
+    assert download_in_its_tail.runs[0][1] == {"status": "pending", "is_ready": False}
+    assert status_row.row == {"status": "success", "is_ready": True}
+
+    assert auth_utils.try_start_master_contract_download("zerodha", reset_status=True) is False
+    assert status_row.resets == ["zerodha"], "a refused start reset the running download's row"
+    assert status_row.row == {"status": "success", "is_ready": True}
+    assert len(download_in_its_tail.runs) == 1
+
+
+@pytest.fixture
+def master_contract_client(monkeypatch):
+    """A test client for the master contract routes with a valid session."""
+    from flask import Flask
+
+    import utils.session as session_utils
+    from blueprints.master_contract_status import master_contract_status_bp
+
+    monkeypatch.setattr(session_utils, "is_session_valid", lambda: True)
+    app = Flask(__name__)
+    app.secret_key = "test"
+    app.register_blueprint(master_contract_status_bp)
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["broker"] = "zerodha"
+    return client
+
+
+def test_a_forced_download_while_one_runs_is_refused_and_says_so(
+    status_row, download_in_its_tail, master_contract_client
+):
+    """The route used to reset the row, start nothing, and report a start."""
+    url = "/api/master-contract/download"
+    first = master_contract_client.post(url, json={"force": True})
+    assert first.status_code == 200 and first.get_json()["started"] is True
+    assert download_in_its_tail.in_tail.wait(5)
+
+    second = master_contract_client.post(url, json={"force": True})
+    body = second.get_json()
+    assert second.status_code == 409, body
+    assert body["status"] == "error" and body["started"] is False
+    assert body["message"] == auth_utils.MASTER_CONTRACT_BUSY_MESSAGE
+    assert status_row.resets == ["zerodha"]
+    assert status_row.row == {"status": "success", "is_ready": True}
+    assert len(download_in_its_tail.runs) == 1
+
+    # Once it has finished, a forced download starts again as before.
+    download_in_its_tail.release.set()
+    assert _wait_until_idle("zerodha")
+    third = master_contract_client.post(url, json={"force": True})
+    assert third.status_code == 200 and third.get_json()["started"] is True
+    assert _wait_until_idle("zerodha")
+    assert len(download_in_its_tail.runs) == 2
+    assert status_row.resets == ["zerodha", "zerodha"]
+
+
+def _log_in(monkeypatch, should_download):
+    """Run handle_auth_success for a JSON login with its side effects stubbed."""
+    from datetime import timedelta
+
+    from flask import Flask
+
+    import database.auth_db as auth_db
+    import extensions
+
+    monkeypatch.setattr(auth_utils, "upsert_auth", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        auth_utils, "should_download_master_contract", lambda broker: (should_download, "test")
+    )
+    monkeypatch.setattr(auth_utils, "set_session_login_time", lambda: None)
+    monkeypatch.setattr(auth_utils, "get_session_expiry_time", lambda: timedelta(hours=1))
+    monkeypatch.setattr(auth_utils, "get_real_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr(auth_db, "register_session", lambda **kwargs: None)
+    monkeypatch.setattr(auth_db, "get_active_sessions", lambda username: [])
+    monkeypatch.setattr(auth_db, "log_login_attempt", lambda **kwargs: None)
+    monkeypatch.setattr(extensions.socketio, "emit", lambda *args, **kwargs: None)
+
+    app = Flask(__name__)
+    app.secret_key = "test"
+    with app.test_request_context("/", headers={"Accept": "application/json"}):
+        response, status = auth_utils.handle_auth_success("token", "trader", "zerodha")
+        return status, response.get_json()
+
+
+def test_a_login_during_a_running_download_leaves_its_status_alone(
+    monkeypatch, status_row, download_in_its_tail
+):
+    assert auth_utils.try_start_master_contract_download("zerodha", reset_status=True) is True
+    assert download_in_its_tail.in_tail.wait(5)
+    status_row.resets.clear()
+
+    status, body = _log_in(monkeypatch, should_download=True)
+    assert status == 200 and body["status"] == "success"
+    assert status_row.resets == [], "the login reset the running download's row"
+    assert status_row.row == {"status": "success", "is_ready": True}
+    assert len(download_in_its_tail.runs) == 1
+
+
+def test_a_login_with_nothing_running_resets_then_downloads_as_before(
+    monkeypatch, status_row, download_in_its_tail
+):
+    status, _body = _log_in(monkeypatch, should_download=True)
+    assert status == 200
+    assert download_in_its_tail.in_tail.wait(5)
+    assert status_row.resets == ["zerodha"]
+    assert download_in_its_tail.runs[0][1] == {"status": "pending", "is_ready": False}
+
+
+def test_a_login_on_a_fresh_cache_resets_the_row_and_loads_it_as_before(monkeypatch, status_row):
+    loaded = threading.Event()
+    monkeypatch.setattr(auth_utils, "load_existing_master_contract", lambda broker: loaded.set())
+    monkeypatch.setattr(auth_utils, "_master_contract_running", set())
+
+    status, _body = _log_in(monkeypatch, should_download=False)
+    assert status == 200
+    assert loaded.wait(5)
+    assert status_row.resets == ["zerodha"]
 
 
 # --- .env writes and the version check ---------------------------------------

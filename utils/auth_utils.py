@@ -306,17 +306,29 @@ def is_master_contract_download_running(broker: str) -> bool:
         return broker in _master_contract_running
 
 
-def try_start_master_contract_download(broker: str) -> bool:
+def try_start_master_contract_download(broker: str, *, reset_status: bool = False) -> bool:
     """Start a background master contract download unless one is running.
+
+    Args:
+        broker: The broker whose master contract to download.
+        reset_status: Reset the broker's status row to pending once the claim
+            is won, before the download starts. A caller that resets the row
+            for a new download passes this rather than resetting it first: a
+            reset made before the claim, when the claim is then refused,
+            overwrites the status of the download that holds it, and that
+            download may already have written success and never write again.
+            The row would then read pending, not ready, until the next login.
 
     Returns:
         True if a download was started, False if one for ``broker`` was
-        already running (nothing is started then).
+        already running (nothing is started and the status row is untouched).
     """
     if not _claim_master_contract_download(broker):
         logger.info(f"Master contract download for {broker} already running; not starting another")
         return False
     try:
+        if reset_status:
+            init_broker_status(broker)
         thread = Thread(target=_run_claimed_download, args=(broker,), daemon=True)
         thread.start()
     except BaseException:
@@ -508,19 +520,24 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     )
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
-        # Initialize master contract status for this broker
-        init_broker_status(broker)
 
-        # Smart download: Check if we need to download or can use cached data
+        # Smart download: Check if we need to download or can use cached data.
+        # The check reads only the last download time and broker, which
+        # resetting the status row does not touch, so it can come first.
         should_download, reason = should_download_master_contract(broker)
         logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
 
         if should_download:
-            # Start async download in background thread, unless one for this
-            # broker is already running.
-            try_start_master_contract_download(broker)
+            # Initialize the status row and start the download in a background
+            # thread, unless one for this broker is already running. That one
+            # owns the row, so it is reset only once this download's claim is
+            # won: resetting it first would leave it pending after the running
+            # download had already reported success.
+            try_start_master_contract_download(broker, reset_status=True)
         else:
-            # Use cached data - load existing master contract
+            # Initialize master contract status for this broker, then use
+            # cached data - load existing master contract
+            init_broker_status(broker)
             logger.info(f"Skipping download for {broker}: {reason}")
             thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
             thread.start()

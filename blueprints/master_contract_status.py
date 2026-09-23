@@ -1,12 +1,11 @@
-from threading import Thread
-
 from flask import Blueprint, jsonify, request, session
 
-from database.master_contract_status_db import check_if_ready, get_status, init_broker_status
+from database.master_contract_status_db import check_if_ready, get_status
 from utils.auth_utils import (
-    async_master_contract_download,
+    MASTER_CONTRACT_BUSY_MESSAGE,
     get_master_contract_cutoff,
     should_download_master_contract,
+    try_start_master_contract_download,
 )
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -183,10 +182,16 @@ def force_master_contract_download():
                     "should_download": False
                 }), 200
 
-        # Initialize status and start download
-        init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-        thread.start()
+        # Claim the broker, then initialize status and start the download. A
+        # download already running owns the status row: resetting it here and
+        # then being refused would leave it pending after that download had
+        # reported success, while telling the trader a new one had started.
+        if not try_start_master_contract_download(broker, reset_status=True):
+            return jsonify({
+                "status": "error",
+                "message": MASTER_CONTRACT_BUSY_MESSAGE,
+                "started": False
+            }), 409
 
         return jsonify({
             "status": "success",
