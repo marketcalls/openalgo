@@ -25,6 +25,16 @@ exception the child names: an instruction it tried and could not carry out. Left
 in place that would be attempted on every wake, sending a closing order a minute
 for a position that is not closing.
 
+**A close that worked is said so here, by the child, before it leaves.** The
+parent cannot tell from the process alone: a run exits the same way after
+closing its position as after being told to stop, and a run taken over from a
+previous worker reports no exit status at all. So once its closing order has
+filled (or it held nothing) the child turns its ``close`` into ``closed``, and
+the parent reports a Stop as done only when it finds that. Anything else, after
+the process has gone, is a close nobody can vouch for, and the trader is told
+to check the position. ``closed`` is not an instruction: a run never acts on
+it.
+
 **Nothing here is imported at module level from the rest of the platform.** Both
 sides of this file are its readers, and one of them is a separate process with
 its own working directory that deliberately does not attach to the platform's
@@ -73,6 +83,10 @@ COMMAND_FILE = Path("strategies") / "openscript_commands.json"
 #: child reading an instruction it does not recognise has to be able to ignore
 #: it rather than guess.
 CLOSE = "close"
+
+#: What the child writes over its ``close`` once the position is confirmed
+#: closed, for the parent to read after the process has gone. Never acted on.
+CLOSED = "closed"
 
 _WRITE_LOCK = Lock()
 
@@ -133,6 +147,29 @@ def clear(run_id: str) -> None:
     if not is_deployment_id(run_id):
         return
     _change(lambda held: held.pop(run_id, None))
+
+
+def record_closed(run_id: str) -> None:
+    """The child's word that its close is done: ``close`` becomes ``closed``.
+
+    Only an outstanding ``close`` is changed. An entry the parent has already
+    cleared (it stopped waiting) is left gone rather than written back, so no
+    instruction outlives the Stop that asked for it.
+    """
+    if not is_deployment_id(run_id):
+        return
+
+    def mark(held: dict[str, dict[str, Any]]) -> None:
+        entry = held.get(run_id)
+        if entry is not None and entry.get("what") == CLOSE:
+            entry["what"] = CLOSED
+
+    _change(mark)
+
+
+def close_confirmed(run_id: str) -> bool:
+    """Whether this run said its close is done. The parent asks once the run has gone."""
+    return command_for(run_id) == CLOSED
 
 
 def _change(edit) -> None:

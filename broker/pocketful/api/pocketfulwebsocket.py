@@ -24,7 +24,12 @@ logger = get_logger(__name__)
 # Global variables for WebSocket communication
 websock = None
 ws_connected = False
-ws_connect_lock = threading.Lock()  # Lock for thread-safe socket operations
+# Guards the connection bookkeeping: websock, ws_connected's reuse check and
+# _connect_attempt. It is never held across a wait. Connecting takes seconds
+# (closing a stale socket, then up to five seconds for the broker to answer),
+# and while one caller did that under this lock every other quote and depth
+# request queued on it, holding its own thread for as long.
+ws_connect_lock = threading.Lock()
 snapquote_marketdata_response = {}
 compact_marketdata_response = {}
 detailed_marketdata_response = {}
@@ -43,6 +48,28 @@ snpqtdata_dict = {}
 # mode has no holders left the stores are wiped as before.
 _subscribers_lock = threading.Lock()
 _subscribers = {}  # (mode, exchangeCode, instrumentToken) -> holders
+
+
+class _ConnectAttempt:
+    """One connection under way. Its owner connects; later callers wait for it."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.ok = False
+
+
+# The connection being made right now, or None. Claimed and cleared under
+# ws_connect_lock; the connecting itself happens outside it.
+_connect_attempt = None
+
+# How long a connection gets: a pause after closing a stale socket, then up to
+# _CONNECT_POLLS checks _CONNECT_POLL_SECONDS apart for the broker to answer.
+_STALE_CLOSE_PAUSE = 1.0
+_CONNECT_POLLS = 10
+_CONNECT_POLL_SECONDS = 0.5
+# A caller waiting on another caller's connection gives up after this long.
+# The owner always finishes well inside it; this only bounds a stuck close.
+_JOIN_WAIT_SECONDS = 15.0
 
 # Feed mode -> (per-instrument store, latest-message variable) in this module.
 _MODE_STORES = {
@@ -317,25 +344,68 @@ class PocketfulSocket:
         return res.json()
 
     def run_socket(self):
-        """Connect to the WebSocket server with proper thread safety"""
-        global websock, ws_connected, ws_connect_lock
+        """Connect the shared feed socket, or wait for the connection already under way.
 
-        # Use a lock to prevent multiple simultaneous connection attempts
-        with ws_connect_lock:
-            # Check if we already have a working connection
-            if websock and ws_connected:
-                logger.info("WebSocket already connected, reusing existing connection")
+        Only one caller connects at a time. The lock is held only to read and
+        claim the connection state, never across the connecting: the caller
+        that claims it closes any stale socket, opens the new one and waits for
+        the broker to answer with the lock released, and a caller arriving
+        meanwhile waits for that same connection instead of queueing on the
+        lock behind it.
+
+        A caller whose awaited connection failed tries once more, connecting
+        itself or joining the next one, as it did when it queued on the lock and
+        then found no connection. Returns True once connected.
+        """
+        global websock, _connect_attempt
+
+        joined = None
+        for _ in range(2):
+            with ws_connect_lock:
+                # Check if we already have a working connection
+                if websock and ws_connected:
+                    logger.info("WebSocket already connected, reusing existing connection")
+                    return True
+
+                attempt = _connect_attempt
+                stale = None
+                owner = attempt is None
+                if owner:
+                    attempt = _ConnectAttempt()
+                    _connect_attempt = attempt
+                    # A socket that is not connected is replaced. Taking it out
+                    # of websock here also ends its heartbeat.
+                    stale, websock = websock, None
+
+            if owner:
+                return self._connect_claimed(attempt, stale)
+
+            if attempt is joined:
+                # The connection this caller already waited for is still being
+                # wound up; there is nothing new to wait for.
+                break
+            logger.info("WebSocket connection already under way, waiting for it")
+            if attempt.done.wait(_JOIN_WAIT_SECONDS) and attempt.ok:
                 return True
+            joined = attempt
 
+        logger.error("Failed to establish WebSocket connection")
+        return False
+
+    def _connect_claimed(self, attempt, stale):
+        """Make the connection this caller claimed in run_socket. Never holds the lock to wait."""
+        global websock, _connect_attempt
+
+        ok = False
+        try:
             # If we have a socket but it's not connected, close it properly
-            if websock and not ws_connected:
+            if stale is not None:
                 try:
                     logger.info("Closing stale WebSocket connection")
-                    websock.close()
-                    time.sleep(1)  # Small delay to ensure socket closes
+                    stale.close()
+                    time.sleep(_STALE_CLOSE_PAUSE)  # Small delay to ensure socket closes
                 except Exception as e:
                     logger.warning(f"Error closing stale connection: {str(e)}")
-                websock = None
 
             try:
                 client_id = self.client_id
@@ -349,22 +419,24 @@ class PocketfulSocket:
                 logger.info(f"Connecting to WebSocket: {full_url}")
 
                 # Connect to WebSocket
-                websock = self._connect(full_url)
+                client_socket = self._connect(full_url)
+                with ws_connect_lock:
+                    websock = client_socket
 
                 # Start WebSocket in a thread
-                ws_thread = threading.Thread(target=self._webs_start, args=(websock,))
+                ws_thread = threading.Thread(target=self._webs_start, args=(client_socket,))
                 ws_thread.daemon = True
                 ws_thread.start()
 
-                # Wait for connection to establish with increased timeout
+                # Wait for connection to establish, with the lock released
                 counter = 0
-                max_attempts = 10  # Increased from 5
-                while counter < max_attempts:
+                while counter < _CONNECT_POLLS:
                     status = get_ws_connection_status()
                     if status:
                         logger.info("WebSocket connection successful")
+                        ok = True
                         return True
-                    time.sleep(0.5)  # Shorter interval checks
+                    time.sleep(_CONNECT_POLL_SECONDS)  # Shorter interval checks
                     counter += 1
 
                 logger.error("Failed to establish WebSocket connection (timeout)")
@@ -373,6 +445,12 @@ class PocketfulSocket:
             except Exception as e:
                 logger.error(f"WebSocket connection error: {str(e)}")
                 return False
+        finally:
+            with ws_connect_lock:
+                attempt.ok = ok
+                if _connect_attempt is attempt:
+                    _connect_attempt = None
+            attempt.done.set()
 
     def _connect(self, url):
         """Create WebSocket connection"""

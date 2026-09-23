@@ -16,6 +16,3 @@ services/whatsapp_bot_service.py::WhatsAppBotService._run_pair  # benign: its ow
 
 # --- Streams that hold a request thread while they are open ---------------
 services/agent/stream.py::_pump  # benign: under gthread at most 6 agent streams are admitted and a turn ends after 15 minutes; every runtime ends the stream when shutdown begins
-
-# --- Sleeping while holding a lock ----------------------------------------
-broker/pocketful/api/pocketfulwebsocket.py::PocketfulSocket.run_socket  # pending brokers_b: one caller connects while the others wait on the lock for up to about 6 s, holding their request threads

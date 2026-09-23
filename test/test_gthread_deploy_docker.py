@@ -14,9 +14,11 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -63,13 +65,18 @@ def test_the_gthread_branch_needs_an_explicit_request():
 
 def test_the_gthread_stop_fits_the_grace_period_the_guide_requires():
     text = _start_text()
-    launcher = text[text.index("exec /bin/bash /app/install/openalgo-gunicorn.sh") :]
-    launcher = launcher[: launcher.index("\nfi\n")]
+    launcher = text[text.index("/bin/bash /app/install/openalgo-gunicorn.sh") :]
+    launcher = launcher[: launcher.index(" &\n")]
     graceful = int(re.search(r"--graceful-timeout (\d+)", launcher).group(1))
     required = re.search(r"stop_grace_period: (\d+)s", GUIDE.read_text(encoding="utf-8"))
     assert required, "docs/gthread/README.md must tell Docker users which stop_grace_period to set"
     # The worker's window plus time for the arbiter and the proxy to exit.
     assert graceful + 10 <= int(required.group(1))
+    # start.sh gives the proxy 5 seconds (ten half second looks) after the web
+    # server has gone, inside those 10.
+    supervisor = text[text.index("GUNICORN_PID=$!") : text.index(EVENTLET_START)]
+    assert "for _ in 1 2 3 4 5 6 7 8 9 10; do" in supervisor
+    assert "gthread_pause 0.5" in supervisor
     assert "--proxy-mode external" in launcher
     assert '--env-file "$ENV_FILE"' in launcher
 
@@ -164,3 +171,168 @@ def test_start_sh_picks_the_web_server_from_env(tmp_path, env_text, expected):
         assert "--worker-class gthread --threads 64 --workers 1 --bind 0.0.0.0:5000" in line
         assert "--graceful-timeout 30" in line
         assert "-c " in line and "gunicorn_hooks.py" in line
+
+
+# ---------------------------------------------------------------------------
+# Docker gthread: start.sh looks after the WebSocket proxy
+# ---------------------------------------------------------------------------
+#
+# With --proxy-mode external the web server never starts a proxy, so start.sh
+# keeps the one it started alive: it is started again after a pause if it
+# dies, never while the previous one is still running, and stopped with the
+# container. Driven here with a fake /app: a proxy and a gunicorn that only
+# record what happens to them.
+
+FAKE_PYTHON = r"""#!/bin/bash
+if [ "$1" = "-m" ] && [ "$2" = "websocket_proxy.server" ]; then
+  # Never two at once: every proxy started before this one must be gone.
+  if [ -f "$STATE/proxy_starts" ]; then
+    while read -r earlier; do
+      if kill -0 "$earlier" 2>/dev/null; then echo "$earlier" >> "$STATE/two_proxies"; fi
+    done < "$STATE/proxy_starts"
+  fi
+  echo "$$" >> "$STATE/proxy_starts"
+  trap 'echo "$$" >> "$STATE/proxy_stopped"; exit 0' TERM
+  while :; do sleep 0.05; done
+fi
+exec "__PYTHON__" "$@"
+"""
+
+FAKE_GUNICORN = r"""#!/bin/bash
+echo "$$" > "$STATE/gunicorn_pid"
+trap 'echo TERM >> "$STATE/gunicorn_signals"; exit 0' TERM
+while :; do sleep 0.05; done
+"""
+
+
+def _wait_until(check, seconds=10.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _lines(path: Path) -> list[str]:
+    return path.read_text().split() if path.exists() else []
+
+
+@pytest.fixture
+def docker_box(tmp_path):
+    if sys.platform == "win32" or shutil.which("bash") is None:
+        pytest.skip("runs start.sh with bash")
+    app = tmp_path / "app"
+    (app / "install" / "lib").mkdir(parents=True)
+    for rel in (
+        "install/openalgo-gunicorn.sh",
+        "install/lib/resolve_runtime.py",
+        "install/lib/gunicorn_hooks.py",
+    ):
+        shutil.copy2(ROOT / rel, app / rel)
+    (app / "app.py").write_text("")
+    (app / ".env").write_text("OPENALGO_WORKER_CLASS = 'gthread'\n")
+    bin_dir = app / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").write_text(FAKE_PYTHON.replace("__PYTHON__", sys.executable))
+    (bin_dir / "gunicorn").write_text(FAKE_GUNICORN)
+    for name in ("python", "gunicorn"):
+        path = bin_dir / name
+        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    state = tmp_path / "state"
+    state.mkdir()
+
+    text = _start_text()
+    start = text.rindex("# ====", 0, text.index("# WEBSOCKET PROXY SERVER"))
+    tail = re.sub(
+        r"/app(?=[/\s\"']|$)",
+        lambda _match: str(app),
+        text[start:],
+        flags=re.M,
+    )
+    program = f'ENV_FILE="{app}/.env"\ncd "{app}"\n{tail}'
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OPENALGO_")}
+    env["STATE"] = str(state)
+    log = tmp_path / "start.log"
+    handle = open(log, "w")
+    process = subprocess.Popen(
+        ["bash", "-c", program],
+        stdout=handle,
+        stderr=subprocess.STDOUT,
+        env=env,
+        start_new_session=True,
+    )
+    box = type("DockerBox", (), {})()
+    box.process, box.state, box.log = process, state, log
+    yield box
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(10)
+    handle.close()
+    for pid in _lines(state / "proxy_starts") + _lines(state / "gunicorn_pid"):
+        if _alive(int(pid)):
+            os.kill(int(pid), signal.SIGKILL)
+
+
+def _started(state: Path) -> bool:
+    return bool(_lines(state / "proxy_starts")) and bool(_lines(state / "gunicorn_pid"))
+
+
+def test_a_proxy_that_dies_is_started_again_and_never_twice(docker_box):
+    state = docker_box.state
+    assert _wait_until(lambda: _started(state))
+    first = int(_lines(state / "proxy_starts")[0])
+
+    os.kill(first, signal.SIGKILL)
+
+    assert _wait_until(lambda: len(_lines(state / "proxy_starts")) == 2), docker_box.log.read_text()
+    second = int(_lines(state / "proxy_starts")[1])
+    assert second != first and _alive(second)
+    assert not (state / "two_proxies").exists(), "a proxy started while another was running"
+    said = docker_box.log.read_text()
+    assert "The WebSocket proxy server stopped" in said
+    assert "starting it again in 1 seconds" in said
+
+    # A second quick failure waits longer.
+    os.kill(second, signal.SIGKILL)
+    assert _wait_until(lambda: "starting it again in 2 seconds" in docker_box.log.read_text())
+    assert _wait_until(lambda: len(_lines(state / "proxy_starts")) == 3)
+    assert not (state / "two_proxies").exists()
+
+
+def test_a_stop_ends_the_web_server_first_then_the_proxy(docker_box):
+    state = docker_box.state
+    assert _wait_until(lambda: _started(state))
+    proxy = int(_lines(state / "proxy_starts")[0])
+    gunicorn = int(_lines(state / "gunicorn_pid")[0])
+
+    docker_box.process.send_signal(signal.SIGTERM)
+    code = docker_box.process.wait(20)
+
+    assert code == 0
+    assert _lines(state / "gunicorn_signals") == ["TERM"]
+    assert _lines(state / "proxy_stopped") == [str(proxy)]
+    assert not _alive(proxy) and not _alive(gunicorn)
+    assert len(_lines(state / "proxy_starts")) == 1, "a proxy was started during the stop"
+
+
+def test_a_web_server_that_exits_takes_the_proxy_with_it(docker_box):
+    state = docker_box.state
+    assert _wait_until(lambda: _started(state))
+    proxy = int(_lines(state / "proxy_starts")[0])
+    gunicorn = int(_lines(state / "gunicorn_pid")[0])
+
+    os.kill(gunicorn, signal.SIGKILL)
+    code = docker_box.process.wait(20)
+
+    assert code == 128 + signal.SIGKILL
+    assert _lines(state / "proxy_stopped") == [str(proxy)]
+    assert not _alive(proxy)
