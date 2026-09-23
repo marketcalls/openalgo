@@ -116,7 +116,7 @@ def test_the_stash_survives_concurrent_stash_and_replay(monkeypatch):
             start.wait()
             for i in range(400):
                 key = f"T{n}-{i}"
-                order_events._pending_updates[key] = _fill(key)
+                order_events._pending_updates[key] = [_fill(key)]
                 order_events.replay_for(key)
         except Exception as exc:  # noqa: BLE001 - reported below
             errors.append(repr(exc))
