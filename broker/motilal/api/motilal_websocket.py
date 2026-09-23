@@ -1314,6 +1314,52 @@ class MotilalWebSocket:
                 logger.debug(f"Available depth keys: {list(self.last_depth.keys())}")
                 return None
 
+    def has_snapshot(
+        self, exchange: str, scrip_code, need_oi: bool = False, whole_book: bool = True
+    ) -> bool:
+        """Whether every packet a quote or depth read uses has arrived for a scrip.
+
+        For a caller waiting on the feed, so it can stop waiting the moment the
+        data is complete rather than after a fixed pause. It reads quietly,
+        because it is asked many times a second while the accessors above log.
+
+        Motilal sends one packet per field group (see _parse_binary_market_data),
+        so one packet is never the whole answer: the LTP packet ('A'), the day
+        OHLC packet ('G'), the depth levels ('B' to 'F') and, for a derivative,
+        the open interest packet ('m'). Complete means each one the read uses is
+        here. unregister_scrip drops a scrip's data, so what is here arrived
+        while it was registered.
+
+        Args:
+            exchange: Motilal exchange name, as registered.
+            scrip_code: Scrip code (token).
+            need_oi: Also require the open interest packet.
+            whole_book: Require all five depth levels. Otherwise level one is
+                enough when it has a price on both sides, which is all a quote
+                reads; a side without one needs the whole book, because the
+                quote then reads the first level that has a price.
+        """
+        key = self._store_key(exchange, scrip_code)
+        with self.lock:
+            quote = self.last_quotes.get(key) or {}
+            if "ltp" not in quote or "open" not in quote:
+                return False
+            if need_oi and key not in self.last_oi:
+                return False
+            depth = self.last_depth.get(key)
+            if not depth:
+                return False
+            bids = depth.get("bids") or []
+            asks = depth.get("asks") or []
+            book = list(zip(bids[:5], asks[:5], strict=False))
+            full = len(book) == 5 and all(bid is not None and ask is not None for bid, ask in book)
+            if whole_book or full:
+                return full
+            best_bid, best_ask = book[0] if book else (None, None)
+            if best_bid is None or best_ask is None:
+                return False
+            return bool(best_bid.get("price")) and bool(best_ask.get("price"))
+
     def get_open_interest(self, exchange: str, scrip_code: str):
         """
         Get the latest open interest for an instrument.

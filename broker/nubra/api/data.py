@@ -73,6 +73,53 @@ def _feed_gated(on_busy=None):
     return decorate
 
 
+# --- Waiting on the feed ---------------------------------------------------
+# A quote or depth request subscribes and then waits for its data. It used to
+# wait a fixed time, or look every half second for a book; it now looks every
+# _FEED_POLL_SECONDS and stops as soon as what it reads is complete. What it
+# reads, and how, is unchanged, so the answer is the same one, only sooner.
+#
+# Complete means, per channel:
+# * an orderbook: five priced levels on each side (the depth request itself is
+#   what turns five levels on, so an earlier, shallower book can come first),
+#   plus the greeks channel's open interest, which arrives separately;
+# * an instrument's quote on the index channel: its first message, which
+#   carries every field the answer reads. That channel is read before the
+#   orderbook, so only it can end a quote's wait early.
+# An index quote comes from one minute candles, and nothing shows the first
+# candle is the current one, so index quotes keep the full wait.
+_FEED_POLL_SECONDS = 0.05
+_QUOTE_WAIT_SECONDS = 2.0
+_DEPTH_STEP_SECONDS = 0.5
+_DEPTH_STEPS = 10
+
+
+def _wait_for_feed(ready, seconds: float) -> bool:
+    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
+
+    True as soon as it is, False once the time is up. time.sleep yields to the
+    other requests under eventlet and holds only this request's thread elsewhere.
+    """
+    deadline = time.monotonic() + seconds
+    while not ready():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_FEED_POLL_SECONDS, remaining))
+    return True
+
+
+def _book_complete(depth) -> bool:
+    """Whether a cached orderbook entry has five priced levels a side and its open interest."""
+    if not depth or not depth.get("ltp", 0) > 0 or "oi" not in depth:
+        return False
+    bids = depth.get("bids") or []
+    asks = depth.get("asks") or []
+    if len(bids) < 5 or len(asks) < 5:
+        return False
+    return all(level.get("price", 0) > 0 for level in bids[:5] + asks[:5])
+
+
 # Workers for the quote fan-out when no WebSocket is available.
 _QUOTE_FANOUT_WORKERS = 5
 
@@ -361,8 +408,16 @@ class BrokerData:
             if not success:
                 return None
 
-            # Single wait for all channels to deliver data
-            time.sleep(2.0)
+            # Single wait for all channels to deliver data. For an instrument it
+            # ends as soon as the index channel, which is read first below, has
+            # its quote; otherwise it lasts the full time, as before.
+            def index_quote_arrived():
+                if is_index_request:
+                    return False
+                quote = websocket.get_quote(ws_exchange, br_symbol)
+                return bool(quote) and quote.get("ltp", 0) > 0
+
+            _wait_for_feed(index_quote_arrived, _QUOTE_WAIT_SECONDS)
 
             # Check index/OHLCV channel first
             quote = websocket.get_quote(ws_exchange, br_symbol)
@@ -579,7 +634,17 @@ class BrokerData:
                 websocket.subscribe_ohlcv(br_syms, "1m", ws_exchange)
 
             # --- Single wait for all data to arrive ---
-            time.sleep(2.0)
+            # Up to the same two seconds, ending as soon as every instrument's
+            # book is complete. A batch with an index waits the full time.
+            def batch_arrived():
+                if index_items:
+                    return False
+                return all(
+                    _book_complete(websocket.get_market_depth(token_int))
+                    for _symbol, _exchange, token_int in orderbook_items
+                )
+
+            _wait_for_feed(batch_arrived, _QUOTE_WAIT_SECONDS)
 
             # --- Collect orderbook results ---
             for symbol, exchange, token_int in orderbook_items:
@@ -1190,10 +1255,17 @@ class BrokerData:
             websocket.change_orderbook_depth(5)
             websocket.subscribe_greeks([token_int])
 
-            # Poll for data (check every 0.5s, up to 5s)
+            # Poll for data (check every 0.5s, up to 5s). Within each half
+            # second, a complete book ends the wait at once; otherwise the book
+            # is read at the half second as before.
             depth = None
-            for _ in range(10):
-                time.sleep(0.5)
+            for _ in range(_DEPTH_STEPS):
+                if _wait_for_feed(
+                    lambda: _book_complete(websocket.get_market_depth(token_int)),
+                    _DEPTH_STEP_SECONDS,
+                ):
+                    depth = websocket.get_market_depth(token_int)
+                    break
                 depth = websocket.get_market_depth(token_int)
                 if depth and depth.get("ltp", 0) > 0:
                     break

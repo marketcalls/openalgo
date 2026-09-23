@@ -65,6 +65,32 @@ def _feed_gated(on_busy=None):
     return decorate
 
 
+# --- Waiting on the feed ---------------------------------------------------
+# A quote or depth request registers its scrips and then waits for their data.
+# It used to wait a fixed time whatever happened; it now looks every
+# _FEED_POLL_SECONDS and stops as soon as everything it will read has arrived
+# (see MotilalWebSocket.has_snapshot). What it reads, and how, is unchanged, so
+# the answer is the same one, only sooner. When the data is not all there the
+# wait lasts exactly as long as before.
+_FEED_POLL_SECONDS = 0.05
+_DEPTH_WAIT_SECONDS = 3.0
+
+
+def _wait_for_feed(ready, seconds: float) -> bool:
+    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
+
+    True as soon as it is, False once the time is up. time.sleep yields to the
+    other requests under eventlet and holds only this request's thread elsewhere.
+    """
+    deadline = time.monotonic() + seconds
+    while not ready():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_FEED_POLL_SECONDS, remaining))
+    return True
+
+
 # Live market-data WebSocket per broker session, shared across BrokerData
 # instances. It has to live at module scope because quotes_service/depth_service
 # build a new BrokerData for every request, so an instance attribute is always
@@ -891,11 +917,29 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Step 2: Wait for data to arrive
+        # Step 2: Wait for data to arrive, up to the same 2-5 seconds as before,
+        # ending as soon as every scrip's quote is complete. A batch with an
+        # index waits the whole time, as it always did: index data is kept after
+        # an index is unregistered, so what is already here may be from an
+        # earlier request rather than this one.
         pending = len(registered_scrips) + len(index_map)
         wait_time = min(max(pending * 0.1, 2), 5)  # Between 2-5 seconds
-        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
-        time.sleep(wait_time)
+        logger.debug(f"Waiting up to {wait_time:.1f}s for quote data...")
+
+        def batch_arrived():
+            if index_map:
+                return False
+            return all(
+                websocket.has_snapshot(
+                    scrip["motilal_exchange"],
+                    scrip["token"],
+                    need_oi=scrip["exchange_type"] == "DERIVATIVES",
+                    whole_book=False,
+                )
+                for scrip in registered_scrips
+            )
+
+        _wait_for_feed(batch_arrived, wait_time)
 
         # Step 3: Collect results from WebSocket
         for key, info in symbol_map.items():
@@ -1102,8 +1146,20 @@ class BrokerData:
             logger.debug(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
             logger.warning("Motilal may only provide depth level 1 (best bid/ask) via WebSocket")
 
-            # Wait for depth data to arrive (increased time for potential multiple levels)
-            time.sleep(3.0)
+            # Wait for depth data to arrive, for up to the same three seconds,
+            # ending as soon as the book, the LTP and day OHLC packets and (for
+            # a derivative) the open interest packet are all here. When any of
+            # them does not come, the read below happens at three seconds as
+            # before.
+            _wait_for_feed(
+                lambda: websocket.has_snapshot(
+                    motilal_exchange,
+                    token,
+                    need_oi=exchange_type == "DERIVATIVES",
+                    whole_book=True,
+                ),
+                _DEPTH_WAIT_SECONDS,
+            )
 
             # Retrieve depth (may contain 1-5 levels depending on broker feed)
             depth = websocket.get_market_depth(motilal_exchange, token)

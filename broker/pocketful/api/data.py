@@ -72,6 +72,41 @@ def _feed_gated(on_busy=None):
     return decorate
 
 
+# --- Waiting on the feed ---------------------------------------------------
+# A quote or depth request subscribes and then waits for its instrument's
+# packet. Each Pocketful packet carries the whole quote or the whole five level
+# book, so the first one for the instrument is the answer. The request used to
+# look once a second; it now looks every _FEED_POLL_SECONDS and takes that
+# packet as soon as it is there. The test for "this instrument's packet" is the
+# one it always used, and with no packet the wait lasts as long as before.
+_FEED_POLL_SECONDS = 0.05
+_QUOTE_WAIT_SECONDS = 10.0
+_DEPTH_WAIT_SECONDS = 15.0
+
+
+def _wait_for_feed(ready, seconds: float) -> bool:
+    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
+
+    True as soon as it is, False once the time is up. time.sleep yields to the
+    other requests under eventlet and holds only this request's thread elsewhere.
+    """
+    deadline = time.monotonic() + seconds
+    while not ready():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_FEED_POLL_SECONDS, remaining))
+    return True
+
+
+def _is_packet_for(data, instrument_token) -> bool:
+    """Whether a feed packet is this instrument's: the check both waits have always made."""
+    if not data or not isinstance(data, dict):
+        return False
+    token_in_data = data.get("instrument_token") or data.get("instrumentToken")
+    return bool(token_in_data) and str(token_in_data) == str(instrument_token)
+
+
 class PocketfulPermissionError(Exception):
     """Custom exception for Pocketful API permission errors"""
 
@@ -264,25 +299,18 @@ class BrokerData:
         # Use try/finally to ensure unsubscribe is always called
         detailed_data = None
         try:
-            # Wait for data to be received
-            attempts = 0
-            max_attempts = 10
+            # Wait for this instrument's packet, taking it as soon as it arrives.
+            # What was read last is kept, as before, for the checks below.
+            last_read = {}
 
-            while attempts < max_attempts:
-                time.sleep(1.0)
-                detailed_data = self.ws_connection.read_detailed_marketdata()
-                logger.info(f"Attempt {attempts + 1}: Received detailed data: {detailed_data}")
+            def arrived():
+                last_read["data"] = self.ws_connection.read_detailed_marketdata()
+                return _is_packet_for(last_read["data"], instrument_token)
 
-                # Check if we have valid data for our instrument
-                if detailed_data and isinstance(detailed_data, dict):
-                    token_in_data = detailed_data.get("instrument_token") or detailed_data.get(
-                        "instrumentToken"
-                    )
-                    if token_in_data and str(token_in_data) == str(instrument_token):
-                        logger.info(f"Received valid detailed data for {exchange}:{br_symbol}")
-                        break
-
-                attempts += 1
+            if _wait_for_feed(arrived, _QUOTE_WAIT_SECONDS):
+                logger.info(f"Received valid detailed data for {exchange}:{br_symbol}")
+            detailed_data = last_read.get("data")
+            logger.info(f"Received detailed data: {detailed_data}")
         finally:
             # Always unsubscribe, even if an exception occurs
             self.ws_connection.unsubscribe_detailed_marketdata(detailed_payload)
@@ -560,9 +588,6 @@ class BrokerData:
             # instrument, and a request that never released one would keep it
             # subscribed for every later request.
             try:
-                # Wait for data to be received with increased timeout
-                attempts = 0
-                max_attempts = 15  # Increased attempts further
                 snapquote_data = None
 
                 # Set debug logging to see all messages
@@ -575,44 +600,19 @@ class BrokerData:
 
                 logger.info(f"Waiting for snapquote data for instrument {instrument_token}")
 
-                # Try a different approach - multiple shorter waits instead of longer ones
-                while attempts < max_attempts:
-                    time.sleep(1.0)  # Standard wait time
-                    snapquote_data = self.ws_connection.read_snapquote_data()
-                    logger.info(f"Attempt {attempts + 1}: Received data: {snapquote_data}")
+                # Wait for this instrument's book, taking it as soon as it
+                # arrives. What was read last is kept, as before, for the
+                # checks below.
+                last_read = {}
 
-                    # If we get any data at all, dump the raw data to help with debugging
-                    if isinstance(snapquote_data, dict) and snapquote_data:
-                        logger.info(
-                            f"Received some data on attempt {attempts + 1}: {snapquote_data}"
-                        )
+                def arrived():
+                    last_read["data"] = self.ws_connection.read_snapquote_data()
+                    return _is_packet_for(last_read["data"], instrument_token)
 
-                    # More flexible check for valid data
-                    if snapquote_data and isinstance(snapquote_data, dict):
-                        # Try different keys that might be present
-                        token_in_data = snapquote_data.get(
-                            "instrument_token"
-                        ) or snapquote_data.get("instrumentToken")
-                        if token_in_data:
-                            logger.info(
-                                f"Received data with token {token_in_data} (looking for {instrument_token})"
-                            )
-
-                            # More flexible token matching
-                            if str(token_in_data) == str(instrument_token):
-                                logger.info(
-                                    f"Received valid market depth data for {exchange}:{br_symbol}"
-                                )
-                                break
-                            else:
-                                logger.debug(
-                                    f"Received data for different instrument: {token_in_data}"
-                                )
-                        else:
-                            # If no token is found, log the full response
-                            logger.info(f"Received response without token field: {snapquote_data}")
-
-                    attempts += 1
+                if _wait_for_feed(arrived, _DEPTH_WAIT_SECONDS):
+                    logger.info(f"Received valid market depth data for {exchange}:{br_symbol}")
+                snapquote_data = last_read.get("data")
+                logger.info(f"Received data: {snapquote_data}")
             finally:
                 # Unsubscribe after receiving data
                 self.ws_connection.unsubscribe_snapquote_data(snapquote_payload)
