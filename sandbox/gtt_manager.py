@@ -444,9 +444,7 @@ class GTTManager:
             if claimed.rowcount != 1:
                 db_session.rollback()
                 db_session.expire_all()
-                logger.info(
-                    f"GTT {trigger_id}: no longer active when the modify was applied"
-                )
+                logger.info(f"GTT {trigger_id}: no longer active when the modify was applied")
                 return self._not_found(trigger_id)
 
             staged, message = self.fund_manager.stage_margin_delta(
@@ -952,8 +950,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
     if claimed_parent.rowcount != 1:
         db_session.refresh(gtt)
         logger.info(
-            f"GTT {gtt.gtt_id} is no longer active ('{gtt.gtt_status}') - "
-            f"not firing leg {leg_id}"
+            f"GTT {gtt.gtt_id} is no longer active ('{gtt.gtt_status}') - not firing leg {leg_id}"
         )
         _revert_claim(leg_id)
         return False
@@ -1027,7 +1024,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
             message = response.get("message") if isinstance(response, dict) else response
             logger.error(f"GTT leg {leg_id} order rejected: {message}")
             _compensate_failed_fire(
-                gtt, leg_id, released if released_ok else Decimal('0.00'), order_committed=False
+                gtt, leg_id, released if released_ok else Decimal("0.00"), order_committed=False
             )
             return False
 
@@ -1086,13 +1083,14 @@ def _notify_websocket_engine(gtt: SandboxGTT) -> None:
     """
     try:
         from sandbox.websocket_execution_engine import (
-            get_websocket_execution_engine,
             is_websocket_execution_engine_running,
+            peek_websocket_execution_engine,
         )
 
         if not is_websocket_execution_engine_running():
             return
-        engine = get_websocket_execution_engine()
+        # peek: an engine stopped since the check is not recreated for this.
+        engine = peek_websocket_execution_engine()
         if engine is not None:
             engine.notify_gtt_placed(gtt)
     except Exception as e:
@@ -1260,9 +1258,7 @@ def reclaim_stranded_parents() -> int:
     """
     recovered = 0
     try:
-        stranded = (
-            SandboxGTT.query.filter(SandboxGTT.gtt_status == "triggered").all()
-        )
+        stranded = SandboxGTT.query.filter(SandboxGTT.gtt_status == "triggered").all()
         for gtt in stranded:
             legs = gtt.legs or []
             if any(leg.triggered_order_id for leg in legs):
@@ -1419,9 +1415,7 @@ def expire_due_gtts() -> int:
             )
             if claimed.rowcount != 1:
                 db_session.rollback()
-                logger.debug(
-                    f"GTT {gtt.gtt_id}: resolved by another path before it expired"
-                )
+                logger.debug(f"GTT {gtt.gtt_id}: resolved by another path before it expired")
                 continue
 
             db_session.execute(
@@ -1451,9 +1445,7 @@ def expire_due_gtts() -> int:
                 db_session.commit()
             except Exception:
                 db_session.rollback()
-                logger.exception(
-                    f"GTT {gtt.gtt_id}: expiry commit failed; nothing was applied"
-                )
+                logger.exception(f"GTT {gtt.gtt_id}: expiry commit failed; nothing was applied")
                 continue
 
             expired += 1

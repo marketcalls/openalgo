@@ -15,7 +15,6 @@ import sys
 import threading
 import time
 from decimal import Decimal
-from typing import Dict, List, Optional, Set
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -137,9 +136,16 @@ class WebSocketExecutionEngine:
         self._unsubscribe_all_ws()
 
     def _rebuild_order_index(self):
-        """Build index of pending orders from database"""
-        subscriptions_to_add: dict[str, list[tuple[str, str]]] = {}
+        """Build index of pending orders from database
 
+        The database is read before self._lock is taken, and the lock is then
+        held only to merge the result into the index. self._lock is a real
+        lock: a greenlet holding it across a statement that waits in the
+        database's lock-retry loop yields to the hub while holding it, and the
+        next greenlet to want it (an order being placed) then blocks the hub
+        thread for good. Anything notified while the rebuild was reading is
+        kept, not wiped by the merge.
+        """
         with self._lock:
             self._pending_orders_index.clear()
             self._pending_gtt_index.clear()
@@ -147,106 +153,121 @@ class WebSocketExecutionEngine:
             self._user_symbol_refcounts.clear()
             self._position_refs.clear()
 
-            try:
-                # "open" (resting in the regular book) and "trigger pending"
-                # (SL/SL-M resting in the Stop-Loss book) both need tick
-                # monitoring for their respective price conditions.
-                pending_orders = SandboxOrders.query.filter(
-                    SandboxOrders.order_status.in_(["open", "trigger pending"])
-                ).all()
+        try:
+            order_entries, gtt_entries, position_entries = self._read_index_sources()
+        except Exception as e:
+            logger.exception(f"Error building order index: {e}")
+            return
 
-                for order in pending_orders:
-                    # Skip orders on expired F&O contracts: the symbol is gone
-                    # from the master contract after the daily refresh, so
-                    # subscribing it just makes the broker adapter log
-                    # token-lookup errors on every boot ("No brsymbol found").
-                    # Cancellation (with margin release) is handled by the
-                    # square-off cycle's _cancel_expired_contract_orders --
-                    # deliberately NOT done here, since cancel_order re-enters
-                    # this engine via notify_order_completed and would deadlock
-                    # on self._lock.
-                    from datetime import date
+        subscriptions_to_add: dict[str, list[tuple[str, str]]] = {}
 
-                    from sandbox.position_manager import get_contract_expiry
+        def first_reference(user_id, symbol_key):
+            if self._increment_user_symbol_refcount(user_id, symbol_key):
+                exchange, symbol = symbol_key.split(":", 1)
+                subscriptions_to_add.setdefault(user_id, []).append((symbol, exchange))
 
-                    expiry_date = get_contract_expiry(order.symbol, order.exchange)
-                    if expiry_date is not None and date.today() > expiry_date:
-                        logger.info(
-                            f"Skipping WS subscription for {order.symbol}: contract "
-                            f"expired {expiry_date}; order {order.orderid} awaits auto-cancel"
-                        )
-                        continue
+        pos_subscribed = 0
+        with self._lock:
+            for symbol_key, orderid, user_id in order_entries:
+                bucket = self._pending_orders_index.setdefault(symbol_key, [])
+                self._monitored_symbols.add(symbol_key)
+                if orderid in bucket:
+                    continue  # placed and notified while the rebuild was reading
+                bucket.append(orderid)
+                first_reference(user_id, symbol_key)
 
-                    symbol_key = f"{order.exchange}:{order.symbol}"
-                    if symbol_key not in self._pending_orders_index:
-                        self._pending_orders_index[symbol_key] = []
-                    self._pending_orders_index[symbol_key].append(order.orderid)
-                    self._monitored_symbols.add(symbol_key)
-                    self._increment_user_symbol_refcount(order.user_id, symbol_key)
+            for symbol_key, leg_id, user_id in gtt_entries:
+                legs = self._pending_gtt_index.setdefault(symbol_key, [])
+                self._monitored_symbols.add(symbol_key)
+                if leg_id in legs:
+                    continue  # placed and notified while the rebuild was reading
+                legs.append(leg_id)
+                first_reference(user_id, symbol_key)
 
-                # Resting GTTs need tick monitoring exactly like resting orders,
-                # and are frequently the only thing in the book - a user with no
-                # open orders but an active GTT must still be subscribed.
-                from sandbox import gtt_manager
+            for user_id, key in position_entries:
+                if (user_id, key) not in self._position_refs:
+                    self._position_refs.add((user_id, key))
+                    first_reference(user_id, key)
+                    pos_subscribed += 1
 
-                gtt_legs = gtt_manager.get_active_legs()
-                for leg, gtt in gtt_legs:
-                    symbol_key = f"{gtt.exchange}:{gtt.symbol}"
-                    self._pending_gtt_index.setdefault(symbol_key, []).append(leg.id)
-                    self._monitored_symbols.add(symbol_key)
-                    self._increment_user_symbol_refcount(gtt.user_id, symbol_key)
+            monitored = len(self._monitored_symbols)
 
-                logger.debug(
-                    f"Built order index: {len(pending_orders)} orders and "
-                    f"{len(gtt_legs)} GTT legs across "
-                    f"{len(self._monitored_symbols)} symbols"
-                )
-
-                # Event-driven MTM: open positions hold feed subscriptions too,
-                # so a restart re-warms MarketDataService for every held symbol
-                # (the poll loop then reads ticks instead of REST-fetching).
-                # Contracts already past expiry are skipped -- their positions
-                # are awaiting settlement, and the symbol may already be gone
-                # from the master contract.
-                from datetime import date
-
-                from database.sandbox_db import SandboxPositions
-                from sandbox.position_manager import get_contract_expiry
-
-                open_positions = SandboxPositions.query.filter(
-                    SandboxPositions.quantity != 0
-                ).all()
-                pos_subscribed = 0
-                for pos in open_positions:
-                    expiry = get_contract_expiry(pos.symbol, pos.exchange)
-                    if expiry is not None and date.today() > expiry:
-                        continue
-                    key = f"{pos.exchange}:{pos.symbol}"
-                    if (pos.user_id, key) not in self._position_refs:
-                        self._position_refs.add((pos.user_id, key))
-                        self._increment_user_symbol_refcount(pos.user_id, key)
-                        pos_subscribed += 1
-                if pos_subscribed:
-                    logger.info(
-                        f"Position feed: {pos_subscribed} open-position symbols added to index"
-                    )
-
-            except Exception as e:
-                logger.exception(f"Error building order index: {e}")
-                return
-
-            # Build subscriptions per user (outside lock)
-            for user_id, symbols in self._user_symbol_refcounts.items():
-                new_symbols = []
-                for symbol_key in symbols:
-                    exchange, symbol = symbol_key.split(":", 1)
-                    new_symbols.append((symbol, exchange))
-                if new_symbols:
-                    subscriptions_to_add[user_id] = new_symbols
+        logger.debug(
+            f"Built order index: {len(order_entries)} orders and "
+            f"{len(gtt_entries)} GTT legs across "
+            f"{monitored} symbols"
+        )
+        if pos_subscribed:
+            logger.info(f"Position feed: {pos_subscribed} open-position symbols added to index")
 
         # Subscribe for all users
         for user_id, symbols in subscriptions_to_add.items():
             self._subscribe_ws_symbols(user_id, symbols)
+
+    @staticmethod
+    def _read_index_sources():
+        """Read what the index is built from: pending orders, GTT legs, open positions.
+
+        Returns:
+            ``(orders, gtt_legs, positions)``: lists of
+            ``(symbol_key, orderid, user_id)``, ``(symbol_key, leg_id, user_id)``
+            and ``(user_id, symbol_key)``.
+        """
+        from datetime import date
+
+        from database.sandbox_db import SandboxPositions
+        from sandbox import gtt_manager
+        from sandbox.position_manager import get_contract_expiry
+
+        # "open" (resting in the regular book) and "trigger pending"
+        # (SL/SL-M resting in the Stop-Loss book) both need tick
+        # monitoring for their respective price conditions.
+        pending_orders = SandboxOrders.query.filter(
+            SandboxOrders.order_status.in_(["open", "trigger pending"])
+        ).all()
+
+        orders = []
+        for order in pending_orders:
+            # Skip orders on expired F&O contracts: the symbol is gone
+            # from the master contract after the daily refresh, so
+            # subscribing it just makes the broker adapter log
+            # token-lookup errors on every boot ("No brsymbol found").
+            # Cancellation (with margin release) is handled by the
+            # square-off cycle's _cancel_expired_contract_orders --
+            # deliberately NOT done here, since cancel_order re-enters
+            # this engine via notify_order_completed and would deadlock
+            # on self._lock.
+            expiry_date = get_contract_expiry(order.symbol, order.exchange)
+            if expiry_date is not None and date.today() > expiry_date:
+                logger.info(
+                    f"Skipping WS subscription for {order.symbol}: contract "
+                    f"expired {expiry_date}; order {order.orderid} awaits auto-cancel"
+                )
+                continue
+            orders.append((f"{order.exchange}:{order.symbol}", order.orderid, order.user_id))
+
+        # Resting GTTs need tick monitoring exactly like resting orders,
+        # and are frequently the only thing in the book - a user with no
+        # open orders but an active GTT must still be subscribed.
+        legs = [
+            (f"{gtt.exchange}:{gtt.symbol}", leg.id, gtt.user_id)
+            for leg, gtt in gtt_manager.get_active_legs()
+        ]
+
+        # Event-driven MTM: open positions hold feed subscriptions too,
+        # so a restart re-warms MarketDataService for every held symbol
+        # (the poll loop then reads ticks instead of REST-fetching).
+        # Contracts already past expiry are skipped -- their positions
+        # are awaiting settlement, and the symbol may already be gone
+        # from the master contract.
+        positions = []
+        for pos in SandboxPositions.query.filter(SandboxPositions.quantity != 0).all():
+            expiry = get_contract_expiry(pos.symbol, pos.exchange)
+            if expiry is not None and date.today() > expiry:
+                continue
+            positions.append((pos.user_id, f"{pos.exchange}:{pos.symbol}"))
+
+        return orders, legs, positions
 
     def notify_order_placed(self, order):
         """Called when a new order is placed to update the index"""
@@ -335,9 +356,7 @@ class WebSocketExecutionEngine:
             from database.sandbox_db import SandboxPositions
 
             remaining = (
-                SandboxPositions.query.filter_by(
-                    user_id=user_id, symbol=symbol, exchange=exchange
-                )
+                SandboxPositions.query.filter_by(user_id=user_id, symbol=symbol, exchange=exchange)
                 .filter(SandboxPositions.quantity != 0)
                 .count()
             )
@@ -413,7 +432,9 @@ class WebSocketExecutionEngine:
                     self._drop_gtt_leg(symbol_key, leg_id, self._leg_user_id(leg))
                     continue
 
-                if not gtt_manager.leg_is_triggered_by(leg.trigger_direction, leg.trigger_price, ltp):
+                if not gtt_manager.leg_is_triggered_by(
+                    leg.trigger_direction, leg.trigger_price, ltp
+                ):
                     continue
 
                 if gtt_manager.try_claim_trigger(leg_id):
@@ -660,16 +681,12 @@ class WebSocketExecutionEngine:
 
             api_key = get_api_key_for_tradingview(user_id)
             if not api_key:
-                logger.warning(
-                    f"WebSocket subscribe skipped: no API key for user {user_id}"
-                )
+                logger.warning(f"WebSocket subscribe skipped: no API key for user {user_id}")
                 return
             broker = get_broker_name(api_key) if api_key else None
             broker_name = broker or "unknown"
             if broker_name == "unknown":
-                logger.warning(
-                    f"WebSocket subscribe may fail: unknown broker for user {user_id}"
-                )
+                logger.warning(f"WebSocket subscribe may fail: unknown broker for user {user_id}")
 
             symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
             success, response, status_code = subscribe_to_symbols(
@@ -692,16 +709,12 @@ class WebSocketExecutionEngine:
 
             api_key = get_api_key_for_tradingview(user_id)
             if not api_key:
-                logger.warning(
-                    f"WebSocket unsubscribe skipped: no API key for user {user_id}"
-                )
+                logger.warning(f"WebSocket unsubscribe skipped: no API key for user {user_id}")
                 return
             broker = get_broker_name(api_key) if api_key else None
             broker_name = broker or "unknown"
             if broker_name == "unknown":
-                logger.warning(
-                    f"WebSocket unsubscribe may fail: unknown broker for user {user_id}"
-                )
+                logger.warning(f"WebSocket unsubscribe may fail: unknown broker for user {user_id}")
 
             symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
             success, response, status_code = unsubscribe_from_symbols(
@@ -746,6 +759,17 @@ def get_websocket_execution_engine() -> WebSocketExecutionEngine:
         return _websocket_execution_engine
 
 
+def peek_websocket_execution_engine() -> WebSocketExecutionEngine | None:
+    """Return the engine if one exists, without ever creating one.
+
+    For callers that only want to tell a running engine something, such as a
+    fill announcing a position. Going through the get-or-create getter made
+    every fill in polling mode construct a dormant engine, and a fill landing
+    while the engine was being stopped create a fresh one nobody would start.
+    """
+    return _websocket_execution_engine
+
+
 def start_websocket_execution_engine():
     """Start the WebSocket execution engine"""
     engine = get_websocket_execution_engine()
@@ -757,12 +781,16 @@ def stop_websocket_execution_engine():
     """Stop the WebSocket execution engine"""
     global _websocket_execution_engine
 
+    # Detach it under the lock, stop it after: stop() joins the fallback
+    # thread for up to 10 seconds, and a fill on that thread asking whether
+    # the engine is running would otherwise wait out the whole join.
     with _engine_lock:
-        if _websocket_execution_engine:
-            _websocket_execution_engine.stop()
-            _websocket_execution_engine = None
-            return True, "WebSocket execution engine stopped"
-        return True, "WebSocket execution engine not running"
+        engine = _websocket_execution_engine
+        _websocket_execution_engine = None
+    if engine:
+        engine.stop()
+        return True, "WebSocket execution engine stopped"
+    return True, "WebSocket execution engine not running"
 
 
 def is_websocket_execution_engine_running() -> bool:

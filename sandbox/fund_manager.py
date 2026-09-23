@@ -18,6 +18,8 @@ Auto-Reset:
 import os
 import sys
 import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -26,7 +28,7 @@ import pytz
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import update
+from sqlalchemy import Float, inspect, select, type_coerce, update
 
 from database.sandbox_db import (
     SandboxFunds,
@@ -41,14 +43,195 @@ from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
 
+#: Every money column of a funds row. A write is applied only if none of them
+#: moved since it was read, so two writers can never both start from the same
+#: balance and have the second erase the first.
+_MONEY_COLUMNS = (
+    "total_capital",
+    "available_balance",
+    "used_margin",
+    "realized_pnl",
+    "today_realized_pnl",
+    "unrealized_pnl",
+    "total_pnl",
+)
+
+#: Attempts before a funds write gives up. A failed attempt leaves this
+#: session holding SQLite's write lock, so the next read is the final word and
+#: the second attempt succeeds; the rest are headroom, not an expected path.
+_FUNDS_WRITE_ATTEMPTS = 5
+
+#: What a trader sees in the one case the attempts run out.
+FUNDS_BUSY_MESSAGE = (
+    "Your sandbox funds were being updated by another order at the same moment. Please try again."
+)
+
+
+@dataclass(frozen=True)
+class FundsSnapshot:
+    """One read of a funds row.
+
+    Attributes:
+        values: Each money column as the ORM reads it (Decimal rounded to the
+            column's two places, or None). Every calculation starts from these,
+            exactly as it did when the row was read through the ORM.
+        stored: The same columns exactly as stored. The write compares against
+            these, because the stored value can carry more places than the
+            rounded one and would never compare equal to it.
+    """
+
+    values: dict
+    stored: dict
+
+
+def read_funds_snapshot(user_id) -> FundsSnapshot | None:
+    """Read a user's funds row fresh from the database, never from the session.
+
+    A plain query hands back the object already in the session's identity map
+    with the values it had when first loaded, so a thread that had read the
+    row earlier would compute from a balance another thread has since changed.
+    A column select is not cached, so this is always the committed row (or,
+    inside a write transaction, the row this transaction sees).
+
+    Returns:
+        The snapshot, or None when the user has no funds row.
+    """
+    columns = [getattr(SandboxFunds, name) for name in _MONEY_COLUMNS]
+    stored = [
+        type_coerce(getattr(SandboxFunds, name), Float).label(f"stored_{name}")
+        for name in _MONEY_COLUMNS
+    ]
+    row = db_session.execute(
+        select(*columns, *stored).where(SandboxFunds.user_id == user_id)
+    ).first()
+    if row is None:
+        return None
+    count = len(_MONEY_COLUMNS)
+    return FundsSnapshot(
+        values={name: row[index] for index, name in enumerate(_MONEY_COLUMNS)},
+        stored={name: row[count + index] for index, name in enumerate(_MONEY_COLUMNS)},
+    )
+
+
+def _expire_cached_funds(user_id) -> None:
+    """Drop the session's cached copy of a funds row after a direct UPDATE."""
+    for obj in list(db_session.identity_map.values()):
+        if isinstance(obj, SandboxFunds) and inspect(obj).dict.get("user_id") == user_id:
+            db_session.expire(obj)
+
+
+def write_funds_if_unchanged(user_id, snapshot: FundsSnapshot, new_values: dict) -> bool:
+    """Write ``new_values`` only if the row still holds what ``snapshot`` read.
+
+    Only the columns whose value actually changes are written, which is what
+    the ORM's own flush does, so a funds row ends up byte for byte the same as
+    it did when these methods assigned attributes and committed. Nothing is
+    committed here.
+
+    Args:
+        user_id: The funds row's owner.
+        snapshot: The read the new values were computed from.
+        new_values: Column name to new Decimal value.
+
+    Returns:
+        True if written (or there was nothing to write), False if another
+        writer changed the row in between and the caller must read again.
+    """
+    changes = {name: value for name, value in new_values.items() if value != snapshot.values[name]}
+    if not changes:
+        return True
+    stmt = update(SandboxFunds).where(SandboxFunds.user_id == user_id)
+    for name in _MONEY_COLUMNS:
+        column = getattr(SandboxFunds, name)
+        stored = snapshot.stored[name]
+        if stored is None:
+            stmt = stmt.where(column.is_(None))
+        else:
+            stmt = stmt.where(type_coerce(column, Float) == stored)
+    result = db_session.execute(
+        stmt.values(**changes), execution_options={"synchronize_session": False}
+    )
+    if result.rowcount != 1:
+        return False
+    _expire_cached_funds(user_id)
+    return True
+
+
+def apply_funds_change(
+    user_id,
+    compute: Callable[[dict], tuple[bool, str, dict]],
+    ensure: Callable[[], object] | None = None,
+) -> tuple[bool, str]:
+    """Read a funds row, compute its new values and write them as one step.
+
+    ``compute`` receives the row's current values and returns
+    ``(ok, message, new_values)``. A refusal (``ok`` False) writes nothing. If
+    another writer changed the row between the read and the write, the whole
+    thing is repeated from a fresh read, so the result is what it would have
+    been had the two run one after the other. Nothing is committed here.
+
+    Args:
+        user_id: The funds row's owner.
+        compute: The calculation, run against each fresh read.
+        ensure: Called once when the row is missing, to create it.
+
+    Returns:
+        ``(ok, message)``: compute's own, or a funds-missing or busy outcome.
+    """
+    for _attempt in range(_FUNDS_WRITE_ATTEMPTS):
+        snapshot = read_funds_snapshot(user_id)
+        if snapshot is None and ensure is not None:
+            ensure()
+            ensure = None
+            snapshot = read_funds_snapshot(user_id)
+        if snapshot is None:
+            return False, "Funds not initialized"
+        ok, message, new_values = compute(snapshot.values)
+        if not ok:
+            return False, message
+        if write_funds_if_unchanged(user_id, snapshot, new_values):
+            return True, message
+    logger.error(
+        f"Funds for user {user_id} changed under every one of "
+        f"{_FUNDS_WRITE_ATTEMPTS} attempts; nothing was written"
+    )
+    return False, FUNDS_BUSY_MESSAGE
+
+
+def _released(values: dict, amount: Decimal, realized_pnl: Decimal, count_today: bool) -> dict:
+    """New funds values after releasing ``amount`` of margin with ``realized_pnl``.
+
+    The additions run in the same order the attribute assignments always did,
+    so the Decimal results match to the last digit.
+    """
+    available = values["available_balance"] + amount
+    available += realized_pnl
+    realized = values["realized_pnl"] + realized_pnl
+    new_values = {
+        "used_margin": values["used_margin"] - amount,
+        "available_balance": available,
+        "realized_pnl": realized,
+        "total_pnl": realized + values["unrealized_pnl"],
+    }
+    if count_today:
+        new_values["today_realized_pnl"] = (
+            values["today_realized_pnl"] or Decimal("0.00")
+        ) + realized_pnl
+    return new_values
+
 
 class FundManager:
-    """Manages sandbox funds for sandbox mode"""
+    """Manages sandbox funds for sandbox mode.
 
-    # Class-level lock for thread safety across all fund operations.
-    # RLock (reentrant) is required because guarded methods call
-    # _ensure_funds_initialized() -> initialize_funds(), which re-acquires
-    # the same lock on the same thread.
+    Every change to a balance is a compare-and-set against a fresh read (see
+    :func:`apply_funds_change`), not an update of an object loaded earlier.
+    That is what keeps two threads, or a thread and a GTT's staged change, from
+    starting at the same balance and losing one of their writes; a process lock
+    could not, because the stale value comes from the session, not the thread.
+    """
+
+    # Guards creating a funds row and the scheduled reset only. Balance changes
+    # need no lock: each is a single conditional write in the database.
     _lock = threading.RLock()
 
     def __init__(self, user_id):
@@ -94,7 +277,10 @@ class FundManager:
     def get_funds(self):
         """Get current fund status for user"""
         try:
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+            # populate_existing: a thread that read this row before (a pooled
+            # request thread, a job thread) would otherwise be handed its own
+            # earlier copy instead of the balance as it stands now.
+            funds = SandboxFunds.query.filter_by(user_id=self.user_id).populate_existing().first()
 
             if not funds:
                 # Initialize funds if not exists
@@ -102,7 +288,9 @@ class FundManager:
                 if not success:
                     return None
 
-                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+                funds = (
+                    SandboxFunds.query.filter_by(user_id=self.user_id).populate_existing().first()
+                )
 
             # Check if reset is needed
             self._check_and_reset_funds(funds)
@@ -198,7 +386,9 @@ class FundManager:
         Returns:
             SandboxFunds or None: The funds record, or None if initialization failed.
         """
-        funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        # populate_existing: return the row as it stands now, not a copy this
+        # thread's session loaded earlier and never refreshed.
+        funds = SandboxFunds.query.filter_by(user_id=self.user_id).populate_existing().first()
         if not funds:
             logger.info(f"Auto-initializing funds for user {self.user_id}")
             success, message = self.initialize_funds()
@@ -207,6 +397,14 @@ class FundManager:
                 return None
             funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
         return funds
+
+    def _apply(self, compute):
+        """Apply ``compute`` to this user's funds as one compare-and-set write.
+
+        Creates the funds row first if it is missing, as every mutator always
+        did. Nothing is committed here.
+        """
+        return apply_funds_change(self.user_id, compute, ensure=self._ensure_funds_initialized)
 
     def check_margin_available(self, required_margin):
         """Check if user has sufficient margin available"""
@@ -295,12 +493,10 @@ class FundManager:
 
             # The in-memory copy is now stale; drop it so later reads see the
             # value the database actually holds.
-            db_session.expire(self._ensure_funds_initialized())
+            _expire_cached_funds(self.user_id)
 
             # Deliberately no commit: the caller owns the transaction.
-            logger.info(
-                f"Staged ₹{delta} margin change for user {self.user_id}. {description}"
-            )
+            logger.info(f"Staged ₹{delta} margin change for user {self.user_id}. {description}")
             return True, f"Margin change staged: ₹{delta}"
         except Exception as e:
             logger.exception(f"Error staging margin for user {self.user_id}: {e}")
@@ -308,101 +504,180 @@ class FundManager:
 
     def block_margin(self, amount, description=""):
         """Block margin for a trade"""
-        with self._lock:
-            try:
-                funds = self._ensure_funds_initialized()
+        try:
+            amount = Decimal(str(amount))
 
-                if not funds:
-                    return False, "Funds not initialized"
-
-                amount = Decimal(str(amount))
-
+            def compute(funds):
                 # A negative "block" is a release wearing the wrong name: it
                 # subtracts from used_margin and credits available_balance,
-                # inventing cash. Amounts are always positive; direction is the
-                # method you call.
+                # inventing cash. Amounts are always positive; direction is
+                # the method you call.
                 if amount <= 0:
-                    return False, f"Block amount must be positive, got {amount}"
+                    return False, f"Block amount must be positive, got {amount}", None
 
-                if funds.available_balance < amount:
+                if funds["available_balance"] < amount:
                     return (
                         False,
-                        f"Insufficient funds. Required: ₹{amount}, Available: ₹{funds.available_balance}",
+                        f"Insufficient funds. Required: ₹{amount}, Available: ₹{funds['available_balance']}",
+                        None,
                     )
 
-                # Block the margin
-                funds.available_balance -= amount
-                funds.used_margin += amount
+                return (
+                    True,
+                    f"Margin blocked: ₹{amount}",
+                    {
+                        "available_balance": funds["available_balance"] - amount,
+                        "used_margin": funds["used_margin"] + amount,
+                    },
+                )
 
-                db_session.commit()
+            ok, message = self._apply(compute)
+            if not ok:
+                return False, message
 
-                logger.info(f"Blocked ₹{amount} margin for user {self.user_id}. {description}")
-                return True, f"Margin blocked: ₹{amount}"
+            db_session.commit()
 
-            except Exception as e:
-                db_session.rollback()
-                logger.exception(f"Error blocking margin for user {self.user_id}: {e}")
-                return False, f"Error blocking margin: {str(e)}"
+            logger.info(f"Blocked ₹{amount} margin for user {self.user_id}. {description}")
+            return True, message
+
+        except Exception as e:
+            db_session.rollback()
+            logger.exception(f"Error blocking margin for user {self.user_id}: {e}")
+            return False, f"Error blocking margin: {str(e)}"
+
+    def stage_release_margin(
+        self, amount, realized_pnl=0, description="", count_today=True, log=True
+    ):
+        """Release blocked margin and book P&L WITHOUT committing.
+
+        The same arithmetic and the same refusals as :meth:`release_margin`,
+        for a caller that must land the release and its own state change in
+        one commit (expiry settlement, which otherwise released the margin in
+        one commit and closed the position in the next, so a second settler
+        arriving in between released it again).
+
+        Args:
+            amount: Margin to release; never negative.
+            realized_pnl: P&L to book; a loss is negative.
+            description: For the log line.
+            count_today: Also add the P&L to today's realized P&L.
+            log: Log the release here; the committing wrapper logs after its
+                commit instead.
+
+        Returns:
+            ``(ok, message)``. Nothing is committed.
+        """
+        amount = Decimal(str(amount))
+        realized_pnl = Decimal(str(realized_pnl))
+
+        def compute(funds):
+            # A negative release blocks margin and destroys available cash;
+            # same reasoning as block_margin. realized_pnl is deliberately
+            # unrestricted - a loss is a legitimate negative.
+            if amount < 0:
+                return False, f"Release amount cannot be negative, got {amount}", None
+
+            # Refuse to release more than is reserved. Letting it through
+            # drives used_margin negative and credits the difference as
+            # available cash, so a single over-release anywhere - a double
+            # release, a stale amount, a recovery bug - invents money and
+            # every figure derived from the balance is wrong afterwards.
+            # Failing here instead leaves the margin blocked, which
+            # reconcile_margin(auto_fix=True) already exists to correct.
+            if amount > funds["used_margin"]:
+                logger.error(
+                    f"Refusing to release ₹{amount} for user {self.user_id}: only "
+                    f"₹{funds['used_margin']} is reserved. {description}"
+                )
+                return (
+                    False,
+                    f"Cannot release ₹{amount}: only ₹{funds['used_margin']} is reserved",
+                    None,
+                )
+
+            return (
+                True,
+                f"Margin released: ₹{amount}, P&L: ₹{realized_pnl}",
+                _released(funds, amount, realized_pnl, count_today),
+            )
+
+        ok, message = self._apply(compute)
+        if ok and log:
+            self._log_release(amount, realized_pnl, description)
+        return ok, message
+
+    def _log_release(self, amount, realized_pnl, description):
+        logger.info(
+            f"Released ₹{Decimal(str(amount))} margin for user {self.user_id}. "
+            f"Realized P&L: ₹{Decimal(str(realized_pnl))}. {description}"
+        )
 
     def release_margin(self, amount, realized_pnl=0, description=""):
         """Release blocked margin and update P&L"""
-        with self._lock:
-            try:
-                funds = self._ensure_funds_initialized()
+        try:
+            ok, message = self.stage_release_margin(amount, realized_pnl, description, log=False)
+            if not ok:
+                return False, message
 
-                if not funds:
-                    return False, "Funds not initialized"
+            db_session.commit()
 
-                amount = Decimal(str(amount))
-                realized_pnl = Decimal(str(realized_pnl))
+            self._log_release(amount, realized_pnl, description)
+            return True, message
 
-                # A negative release blocks margin and destroys available cash;
-                # same reasoning as block_margin. realized_pnl is deliberately
-                # unrestricted - a loss is a legitimate negative.
-                if amount < 0:
-                    return False, f"Release amount cannot be negative, got {amount}"
+        except Exception as e:
+            db_session.rollback()
+            logger.exception(f"Error releasing margin for user {self.user_id}: {e}")
+            return False, f"Error releasing margin: {str(e)}"
 
-                # Refuse to release more than is reserved. Letting it through
-                # drives used_margin negative and credits the difference as
-                # available cash, so a single over-release anywhere - a double
-                # release, a stale amount, a recovery bug - invents money and
-                # every figure derived from the balance is wrong afterwards.
-                # Failing here instead leaves the margin blocked, which
-                # reconcile_margin(auto_fix=True) already exists to correct.
-                if amount > funds.used_margin:
-                    logger.error(
-                        f"Refusing to release ₹{amount} for user {self.user_id}: only "
-                        f"₹{funds.used_margin} is reserved. {description}"
-                    )
-                    return (
-                        False,
-                        f"Cannot release ₹{amount}: only ₹{funds.used_margin} is reserved",
-                    )
+    def stage_transfer_margin_to_holdings(self, amount, description="", log=True):
+        """:meth:`transfer_margin_to_holdings` without the commit.
 
-                # Release the margin
-                funds.used_margin -= amount
-                funds.available_balance += amount
+        T+1 settlement stages every transfer and commits once with the holding
+        and position changes they belong to.
 
-                # Add realized P&L (all-time)
-                funds.available_balance += realized_pnl
-                funds.realized_pnl += realized_pnl
-                # Add to today's realized P&L (resets daily at session boundary)
-                funds.today_realized_pnl = (
-                    funds.today_realized_pnl or Decimal("0.00")
-                ) + realized_pnl
-                funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
+        Returns:
+            ``(ok, message)``. Nothing is committed.
+        """
+        amount = Decimal(str(amount))
 
-                db_session.commit()
+        def compute(funds):
+            if amount <= 0:
+                return False, f"Transfer amount must be positive, got {amount}", None
 
-                logger.info(
-                    f"Released ₹{amount} margin for user {self.user_id}. Realized P&L: ₹{realized_pnl}. {description}"
+            # Same ceiling as release_margin. This is the T+1 settlement
+            # path, so an over-transfer drives used_margin negative and the
+            # difference silently becomes headroom for further trades -
+            # without even the visible cash bump a bad release leaves.
+            if amount > funds["used_margin"]:
+                logger.error(
+                    f"Refusing to transfer ₹{amount} to holdings for user "
+                    f"{self.user_id}: only ₹{funds['used_margin']} is reserved. "
+                    f"{description}"
                 )
-                return True, f"Margin released: ₹{amount}, P&L: ₹{realized_pnl}"
+                return (
+                    False,
+                    f"Cannot transfer ₹{amount}: only ₹{funds['used_margin']} is reserved",
+                    None,
+                )
 
-            except Exception as e:
-                db_session.rollback()
-                logger.exception(f"Error releasing margin for user {self.user_id}: {e}")
-                return False, f"Error releasing margin: {str(e)}"
+            # Reduce used margin (release from used_margin)
+            # But do NOT credit available_balance - money is now in holdings
+            return (
+                True,
+                f"Margin transferred to holdings: ₹{amount}",
+                {"used_margin": funds["used_margin"] - amount},
+            )
+
+        ok, message = self._apply(compute)
+        if ok and log:
+            self._log_transfer(amount, description)
+        return ok, message
+
+    def _log_transfer(self, amount, description):
+        logger.debug(
+            f"Transferred ₹{Decimal(str(amount))} margin to holdings for user "
+            f"{self.user_id}. {description}"
+        )
 
     def transfer_margin_to_holdings(self, amount, description=""):
         """
@@ -410,105 +685,146 @@ class FundManager:
         Reduces used_margin without crediting available_balance
         (the money is now represented in holdings value, not available cash)
         """
-        with self._lock:
-            try:
-                funds = self._ensure_funds_initialized()
+        try:
+            ok, message = self.stage_transfer_margin_to_holdings(amount, description, log=False)
+            if not ok:
+                return False, message
 
-                if not funds:
-                    return False, "Funds not initialized"
+            db_session.commit()
 
-                amount = Decimal(str(amount))
+            self._log_transfer(amount, description)
+            return True, message
 
-                if amount <= 0:
-                    return False, f"Transfer amount must be positive, got {amount}"
+        except Exception as e:
+            db_session.rollback()
+            logger.exception(f"Error transferring margin to holdings for user {self.user_id}: {e}")
+            return False, f"Error transferring margin to holdings: {str(e)}"
 
-                # Same ceiling as release_margin. This is the T+1 settlement
-                # path, so an over-transfer drives used_margin negative and the
-                # difference silently becomes headroom for further trades -
-                # without even the visible cash bump a bad release leaves.
-                if amount > funds.used_margin:
-                    logger.error(
-                        f"Refusing to transfer ₹{amount} to holdings for user "
-                        f"{self.user_id}: only ₹{funds.used_margin} is reserved. "
-                        f"{description}"
-                    )
-                    return (
-                        False,
-                        f"Cannot transfer ₹{amount}: only ₹{funds.used_margin} is reserved",
-                    )
+    def stage_credit_sale_proceeds(self, amount, description="", log=True):
+        """:meth:`credit_sale_proceeds` without the commit.
 
-                # Reduce used margin (release from used_margin)
-                # But do NOT credit available_balance - money is now in holdings
-                funds.used_margin -= amount
+        Returns:
+            ``(ok, message)``. Nothing is committed.
+        """
+        amount = Decimal(str(amount))
 
-                db_session.commit()
+        def compute(funds):
+            # A negative credit debits available_balance with none of the
+            # sufficiency checks a real debit goes through.
+            if amount <= 0:
+                return False, f"Credit amount must be positive, got {amount}", None
 
-                logger.debug(
-                    f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}"
-                )
-                return True, f"Margin transferred to holdings: ₹{amount}"
+            # Credit sale proceeds to available balance
+            return (
+                True,
+                f"Sale proceeds credited: ₹{amount}",
+                {"available_balance": funds["available_balance"] + amount},
+            )
 
-            except Exception as e:
-                db_session.rollback()
-                logger.exception(f"Error transferring margin to holdings for user {self.user_id}: {e}")
-                return False, f"Error transferring margin to holdings: {str(e)}"
+        ok, message = self._apply(compute)
+        if ok and log:
+            self._log_credit(amount, description)
+        return ok, message
+
+    def _log_credit(self, amount, description):
+        logger.info(
+            f"Credited ₹{Decimal(str(amount))} sale proceeds for user {self.user_id}. {description}"
+        )
 
     def credit_sale_proceeds(self, amount, description=""):
         """
         Credit sale proceeds from selling CNC holdings
         Increases available_balance when holdings are sold
         """
-        with self._lock:
-            try:
-                funds = self._ensure_funds_initialized()
+        try:
+            ok, message = self.stage_credit_sale_proceeds(amount, description, log=False)
+            if not ok:
+                return False, message
 
-                if not funds:
-                    return False, "Funds not initialized"
+            db_session.commit()
 
-                amount = Decimal(str(amount))
+            self._log_credit(amount, description)
+            return True, message
 
-                # A negative credit debits available_balance with none of the
-                # sufficiency checks a real debit goes through.
-                if amount <= 0:
-                    return False, f"Credit amount must be positive, got {amount}"
+        except Exception as e:
+            db_session.rollback()
+            logger.exception(f"Error crediting sale proceeds for user {self.user_id}: {e}")
+            return False, f"Error crediting sale proceeds: {str(e)}"
 
-                # Credit sale proceeds to available balance
-                funds.available_balance += amount
+    def stage_prior_session_release(self, amount, realized_pnl, description=""):
+        """Settle a position left over from a previous session, WITHOUT committing.
 
-                db_session.commit()
+        The catch-up for an MIS position that outlived its session. It differs
+        from :meth:`stage_release_margin` on purpose: the P&L belongs to a day
+        that has already closed, so it goes to all-time realized P&L and not
+        to today's, and used margin is floored at zero rather than refused.
 
-                logger.info(
-                    f"Credited ₹{amount} sale proceeds for user {self.user_id}. {description}"
-                )
-                return True, f"Sale proceeds credited: ₹{amount}"
+        Returns:
+            ``(ok, message)``. Nothing is committed.
+        """
+        amount = Decimal(str(amount))
+        realized_pnl = Decimal(str(realized_pnl))
 
-            except Exception as e:
-                db_session.rollback()
-                logger.exception(f"Error crediting sale proceeds for user {self.user_id}: {e}")
-                return False, f"Error crediting sale proceeds: {str(e)}"
+        def compute(funds):
+            # Release margin back to available balance
+            available = funds["available_balance"] + (amount + realized_pnl)
+            used = funds["used_margin"] - amount
+
+            # Add to all-time realized P&L only (NOT today_realized_pnl)
+            realized = (funds["realized_pnl"] or Decimal("0.00")) + realized_pnl
+            total = realized + (funds["unrealized_pnl"] or Decimal("0.00"))
+
+            # Ensure used_margin doesn't go negative
+            if used < 0:
+                used = Decimal("0.00")
+
+            return (
+                True,
+                f"Prior-session position settled: ₹{amount}, P&L: ₹{realized_pnl}",
+                {
+                    "available_balance": available,
+                    "used_margin": used,
+                    "realized_pnl": realized,
+                    "total_pnl": total,
+                },
+            )
+
+        # No ensure: this catch-up only ever adjusted a funds row that already
+        # existed, and settling a stale position must not create one.
+        ok, message = apply_funds_change(self.user_id, compute)
+        if ok:
+            logger.debug(
+                f"Staged prior-session release of ₹{amount} for user {self.user_id}. {description}"
+            )
+        return ok, message
 
     def update_unrealized_pnl(self, unrealized_pnl):
         """Update unrealized P&L from open positions"""
-        with self._lock:
-            try:
-                funds = self._ensure_funds_initialized()
+        try:
+            unrealized_pnl = Decimal(str(unrealized_pnl))
 
-                if not funds:
-                    return False, "Funds not initialized"
+            def compute(funds):
+                return (
+                    True,
+                    "Unrealized P&L updated",
+                    {
+                        "unrealized_pnl": unrealized_pnl,
+                        "total_pnl": funds["realized_pnl"] + unrealized_pnl,
+                    },
+                )
 
-                unrealized_pnl = Decimal(str(unrealized_pnl))
+            ok, message = self._apply(compute)
+            if not ok:
+                return False, message
 
-                funds.unrealized_pnl = unrealized_pnl
-                funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
+            db_session.commit()
 
-                db_session.commit()
+            return True, message
 
-                return True, "Unrealized P&L updated"
-
-            except Exception as e:
-                db_session.rollback()
-                logger.exception(f"Error updating unrealized P&L for user {self.user_id}: {e}")
-                return False, f"Error updating unrealized P&L: {str(e)}"
+        except Exception as e:
+            db_session.rollback()
+            logger.exception(f"Error updating unrealized P&L for user {self.user_id}: {e}")
+            return False, f"Error updating unrealized P&L: {str(e)}"
 
     def calculate_margin_required(self, symbol, exchange, product, quantity, price, action=None):
         """Calculate margin required for a trade based on leverage rules"""
@@ -624,6 +940,56 @@ def reset_all_user_funds():
         logger.exception(f"Error in scheduled auto-reset: {e}")
 
 
+def rebase_starting_capital(new_capital) -> int:
+    """Move every funds row onto a new starting capital, keeping its margin and P&L.
+
+    For each row, total capital becomes ``new_capital`` and the available
+    balance becomes ``new_capital - used_margin + total_pnl``. Each row is
+    written as a compare-and-set against a fresh read, so a margin block that
+    commits while this runs is kept rather than overwritten by a balance
+    computed from before it. All rows are committed together.
+
+    Args:
+        new_capital: The new starting capital.
+
+    Returns:
+        The number of funds rows updated.
+
+    Raises:
+        RuntimeError: A row kept changing under every attempt; nothing is
+            committed and the caller rolls back.
+    """
+    new_capital = Decimal(str(new_capital))
+    user_ids = [
+        user_id
+        for (user_id,) in db_session.execute(
+            select(SandboxFunds.user_id).order_by(SandboxFunds.id)
+        ).all()
+    ]
+
+    def compute(funds):
+        # Calculate what the new available balance should be
+        # New available = new_capital - used_margin + total_pnl
+        return (
+            True,
+            "",
+            {
+                "total_capital": new_capital,
+                "available_balance": new_capital - funds["used_margin"] + funds["total_pnl"],
+            },
+        )
+
+    for user_id in user_ids:
+        ok, message = apply_funds_change(user_id, compute)
+        if not ok:
+            raise RuntimeError(
+                f"Could not move funds of user {user_id} to the new capital: {message}"
+            )
+
+    db_session.commit()
+    return len(user_ids)
+
+
 def reconcile_margin(user_id, auto_fix=True):
     """
     Reconcile used_margin in funds with actual margin blocked in positions.
@@ -639,80 +1005,111 @@ def reconcile_margin(user_id, auto_fix=True):
         tuple: (has_discrepancy: bool, discrepancy_amount: Decimal, message: str)
     """
     try:
-        # Calculate total margin blocked across all open positions
-        positions = SandboxPositions.query.filter_by(user_id=user_id).all()
-        total_position_margin = sum(
-            Decimal(str(pos.margin_blocked or 0))
-            for pos in positions
-            if pos.quantity != 0  # Only count open positions
-        )
+        for _attempt in range(_FUNDS_WRITE_ATTEMPTS):
+            outcome = _reconcile_once(user_id, auto_fix)
+            if outcome is not None:
+                return outcome
+            # Funds moved between the read and the write. The failed write left
+            # this session holding SQLite's write lock, so reading positions,
+            # GTTs and funds again gives the final word.
 
-        # Active GTTs hold margin too. Without counting them a resting GTT looks
-        # exactly like a leaked reservation, and with auto_fix on that would
-        # release the very margin the GTT needs to place its order when it
-        # fires.
-        try:
-            from database.sandbox_db import SandboxGTT
-
-            total_gtt_margin = sum(
-                Decimal(str(gtt.margin_blocked or 0))
-                for gtt in SandboxGTT.query.filter_by(
-                    user_id=user_id, gtt_status="active"
-                ).all()
-            )
-        except Exception:
-            logger.exception(
-                "Could not total active GTT margin during reconciliation; "
-                "skipping reconciliation rather than risk releasing it"
-            )
-            return False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"
-
-        total_position_margin += total_gtt_margin
-
-        # Get current used_margin from funds
-        funds = SandboxFunds.query.filter_by(user_id=user_id).first()
-        if not funds:
-            return False, Decimal("0"), "No funds record found for user"
-
-        current_used_margin = Decimal(str(funds.used_margin or 0))
-
-        # Calculate discrepancy
-        discrepancy = current_used_margin - total_position_margin
-
-        if discrepancy == 0:
-            return False, Decimal("0"), "No margin discrepancy detected"
-
-        # Log the discrepancy
+        db_session.rollback()
         logger.warning(
-            f"Margin discrepancy detected for user {user_id}: "
-            f"used_margin={current_used_margin}, position_margin={total_position_margin}, "
-            f"discrepancy={discrepancy}"
+            f"Margin reconciliation for user {user_id} skipped: funds kept changing while it ran"
         )
-
-        if auto_fix:
-            # Fix the discrepancy by adjusting used_margin and available_balance
-            funds.used_margin = total_position_margin
-            funds.available_balance += discrepancy  # Release the stuck margin
-            db_session.commit()
-
-            logger.info(
-                f"Margin reconciled for user {user_id}: "
-                f"Released {discrepancy} stuck margin, "
-                f"new used_margin={total_position_margin}"
-            )
-
-            return True, discrepancy, f"Margin reconciled. Released {discrepancy} stuck margin."
-        else:
-            return (
-                True,
-                discrepancy,
-                f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
-            )
+        return False, Decimal("0"), "Funds changed during reconciliation; skipped"
 
     except Exception as e:
         logger.exception(f"Error reconciling margin for user {user_id}: {e}")
         db_session.rollback()
         return False, Decimal("0"), f"Error during reconciliation: {str(e)}"
+
+
+def _reconcile_once(user_id, auto_fix):
+    """One read-compare-write pass of :func:`reconcile_margin`.
+
+    Returns:
+        reconcile_margin's result tuple, or None when the funds row changed
+        between the read and the write and the pass must be repeated.
+    """
+    # Calculate total margin blocked across all open positions. populate_existing
+    # so the margins are the committed ones, not copies this session loaded
+    # earlier (a second pass, a pooled thread).
+    positions = SandboxPositions.query.filter_by(user_id=user_id).populate_existing().all()
+    total_position_margin = sum(
+        Decimal(str(pos.margin_blocked or 0))
+        for pos in positions
+        if pos.quantity != 0  # Only count open positions
+    )
+
+    # Active GTTs hold margin too. Without counting them a resting GTT looks
+    # exactly like a leaked reservation, and with auto_fix on that would
+    # release the very margin the GTT needs to place its order when it
+    # fires.
+    try:
+        from database.sandbox_db import SandboxGTT
+
+        total_gtt_margin = sum(
+            Decimal(str(gtt.margin_blocked or 0))
+            for gtt in SandboxGTT.query.filter_by(user_id=user_id, gtt_status="active")
+            .populate_existing()
+            .all()
+        )
+    except Exception:
+        logger.exception(
+            "Could not total active GTT margin during reconciliation; "
+            "skipping reconciliation rather than risk releasing it"
+        )
+        return False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"
+
+    total_position_margin += total_gtt_margin
+
+    # Get current used_margin from funds, fresh from the database: a copy read
+    # earlier would decide the discrepancy on a balance that has since moved.
+    snapshot = read_funds_snapshot(user_id)
+    if snapshot is None:
+        return False, Decimal("0"), "No funds record found for user"
+
+    current_used_margin = Decimal(str(snapshot.values["used_margin"] or 0))
+
+    # Calculate discrepancy
+    discrepancy = current_used_margin - total_position_margin
+
+    if discrepancy == 0:
+        return False, Decimal("0"), "No margin discrepancy detected"
+
+    # Log the discrepancy
+    logger.warning(
+        f"Margin discrepancy detected for user {user_id}: "
+        f"used_margin={current_used_margin}, position_margin={total_position_margin}, "
+        f"discrepancy={discrepancy}"
+    )
+
+    if not auto_fix:
+        return (
+            True,
+            discrepancy,
+            f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
+        )
+
+    # Fix the discrepancy by adjusting used_margin and available_balance, but
+    # only if the funds row is still what was read: an order that blocked
+    # margin in between would otherwise have its block erased.
+    new_values = {
+        "used_margin": total_position_margin,
+        "available_balance": snapshot.values["available_balance"] + discrepancy,
+    }
+    if not write_funds_if_unchanged(user_id, snapshot, new_values):
+        return None
+    db_session.commit()
+
+    logger.info(
+        f"Margin reconciled for user {user_id}: "
+        f"Released {discrepancy} stuck margin, "
+        f"new used_margin={total_position_margin}"
+    )
+
+    return True, discrepancy, f"Margin reconciled. Released {discrepancy} stuck margin."
 
 
 def reconcile_all_users_margin():
