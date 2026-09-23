@@ -4,26 +4,49 @@ import os
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
-# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
-# asyncio.run() cannot be called under eventlet's monkey-patched event loop
-def _is_eventlet_patched():
-    # utils.runtime answers without importing eventlet. Importing it here just
-    # to ask put it into sys.modules under the gthread worker, which flipped
-    # every later "eventlet in sys.modules" check in the process.
-    from utils.runtime import is_monkey_patched
 
-    return is_monkey_patched("socket")
+def _use_async() -> bool:
+    """Whether a quote batch runs on asyncio: on the development server only.
 
-USE_ASYNC = not _is_eventlet_patched()
+    asyncio.run() cannot run under eventlet's monkey-patched hub, so eventlet
+    takes the thread pool path. The gthread worker takes it too, deliberately:
+    production keeps the one path it has always run until the asyncio path has
+    been soaked under gthread (test/shoonya_getquotes_soak.py). Both questions
+    are answered by utils.runtime, which never imports eventlet to ask.
+    """
+    return not (runtime.is_monkey_patched() or runtime.gthread_active())
+
+
+USE_ASYNC = _use_async()
+
+# Under gthread the thread pool path runs on one process-wide pool of this size
+# instead of a new pool of real OS threads per quote batch.
+_QUOTE_POOL_WORKERS = 20
+
+
+def _quote_pool(batch: int):
+    """The executor for one quote batch, as a context manager.
+
+    Under eventlet this is a pool of its own per call, exactly as before (green
+    threads there). Under gthread it is the shared pool, which the ``with``
+    block must not shut down.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("zebu-quotes", _QUOTE_POOL_WORKERS))
+    return ThreadPoolExecutor(max_workers=min(batch, 20))
+
 
 logger = get_logger(__name__)
 
@@ -372,8 +395,10 @@ class BrokerData:
 
         # Step 2: Make concurrent API calls
         # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
-        # if called from within an already-running event loop
-        use_async = USE_ASYNC
+        # if called from within an already-running event loop. The worker is
+        # asked again here in case this module was imported before gunicorn
+        # had registered it.
+        use_async = USE_ASYNC and not runtime.gthread_active()
         if use_async:
             try:
                 asyncio.get_running_loop()
@@ -386,7 +411,7 @@ class BrokerData:
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
             # ThreadPoolExecutor approach
-            with ThreadPoolExecutor(max_workers=min(len(prepared_symbols), 20)) as executor:
+            with _quote_pool(len(prepared_symbols)) as executor:
                 futures = [
                     executor.submit(
                         self._fetch_single_quote_sync,
