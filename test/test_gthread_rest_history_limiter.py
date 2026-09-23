@@ -47,13 +47,24 @@ def _fresh_limiter(monkeypatch):
 
 
 def test_concurrent_callers_are_spaced_one_interval_apart():
-    """The defect: six callers arriving together all went through at once."""
+    """The defect: six callers arriving together all went through at once.
+
+    Checked against when the callers arrived rather than between neighbours:
+    a sleep never ends early, but on a loaded machine one can end late, and
+    the caller after it then returns less than an interval behind it although
+    both kept their booked turns. The k-th caller to return can never do so
+    sooner than k intervals after they all arrived; with the old limiter all
+    six returned together.
+    """
     barrier = threading.Barrier(6)
+    arrived = []
     returned = []
     lock = threading.Lock()
 
     def caller():
         barrier.wait()
+        with lock:
+            arrived.append(time.monotonic())
         history_service._enforce_rate_limit()
         with lock:
             returned.append(time.monotonic())
@@ -64,10 +75,12 @@ def test_concurrent_callers_are_spaced_one_interval_apart():
     for thread in threads:
         thread.join(10)
 
+    assert len(returned) == 6
+    start = min(arrived)
     returned.sort()
-    gaps = [b - a for a, b in zip(returned, returned[1:], strict=False)]
-    assert len(gaps) == 5
-    assert min(gaps) >= INTERVAL - 0.02, gaps
+    offsets = [at - start for at in returned]
+    for turn, offset in enumerate(offsets):
+        assert offset >= turn * INTERVAL - 0.01, offsets
 
 
 def test_a_single_caller_waits_as_it_did_before():
