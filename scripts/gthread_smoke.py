@@ -374,10 +374,18 @@ def main(argv: list[str] | None = None) -> int:
             arbiter = psutil.Process(args.pid)
             started = time.monotonic()
             os.kill(args.pid, signal.SIGTERM)
-            try:
-                arbiter.wait(timeout=args.stop_within)
-            except psutil.TimeoutExpired:
-                raise RuntimeError(f"still running {args.stop_within:.0f}s after SIGTERM") from None
+            # Polled rather than Process.wait(): the arbiter is usually not our
+            # child, and an exited process whose parent has not reaped it yet
+            # is a zombie, which counts as stopped.
+            while True:
+                try:
+                    if arbiter.status() == psutil.STATUS_ZOMBIE:
+                        break
+                except psutil.NoSuchProcess:
+                    break
+                if time.monotonic() - started > args.stop_within:
+                    raise RuntimeError(f"still running {args.stop_within:.0f}s after SIGTERM")
+                time.sleep(0.1)
             elapsed = time.monotonic() - started
             for item in open_items:
                 try:
