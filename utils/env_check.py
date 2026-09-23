@@ -219,17 +219,6 @@ def check_env_version_compatibility() -> bool:
             print("   New features may not work properly with an outdated configuration!")
             print("=" * 70)
 
-            # A server started by systemd, Docker or a process manager has no
-            # terminal to answer this, and input() would either fail or wait
-            # forever. Neither may stop a trading server from starting.
-            if not _stdin_is_interactive():
-                print(
-                    "\n   No terminal is attached to answer, so OpenAlgo is starting\n"
-                    "   with the current .env. Update it as described above, then\n"
-                    "   restart OpenAlgo."
-                )
-                return True
-
             # Give user a chance to continue anyway
             try:
                 response = input("\nContinue anyway? (y/N): ").lower().strip()
@@ -261,14 +250,6 @@ def check_env_version_compatibility() -> bool:
         return True  # Continue if version parsing fails
 
     return True
-
-
-def _stdin_is_interactive() -> bool:
-    """Return True when someone at a terminal can answer a prompt."""
-    try:
-        return sys.stdin is not None and sys.stdin.isatty()
-    except (AttributeError, ValueError, OSError):
-        return False
 
 
 def _db_has_user_data(env_dir: str) -> bool:
@@ -536,10 +517,13 @@ def _env_line(key: str, value: str) -> str:
 def update_env_values(path: str, updates: dict) -> None:
     """Set each key in ``updates`` in the .env file at ``path``, atomically.
 
-    The first line assigning a key is replaced and later duplicates are left
-    alone; a key not present is appended. Line endings and every other line
-    are preserved. The read and the write happen under ``ENV_WRITE_LOCK``, so
-    two saves at once cannot each write back a copy without the other's change.
+    Every line assigning a key is replaced, duplicates included: python-dotenv
+    applies the last assignment, so replacing only the first would leave the
+    value the app reads unchanged. This matches the broker credentials writer.
+    A commented-out line is left alone, and a key not present is appended.
+    Line endings and every other line are preserved. The read and the write
+    happen under ``ENV_WRITE_LOCK``, so two saves at once cannot each write
+    back a copy without the other's change.
 
     Args:
         path: The .env file.
@@ -563,14 +547,15 @@ def update_env_values(path: str, updates: dict) -> None:
         lines = content.splitlines(keepends=True)
         eol = "\r\n" if "\r\n" in content else "\n"
         for key, value in updates.items():
-            pattern = re.compile(rf"^[ \t]*{re.escape(str(key))}[ \t]*=")
+            pattern = re.compile(rf"^[ \t]*(?:export[ \t]+)?{re.escape(str(key))}[ \t]*=")
             new_line = _env_line(str(key), str(value))
+            replaced = False
             for index, line in enumerate(lines):
                 if pattern.match(line):
                     ending = line[len(line.rstrip("\r\n")) :]
                     lines[index] = new_line + ending
-                    break
-            else:
+                    replaced = True
+            if not replaced:
                 if lines and not lines[-1].endswith(("\n", "\r")):
                     lines[-1] = lines[-1] + eol
                 lines.append(new_line + eol)

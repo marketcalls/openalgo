@@ -8,8 +8,10 @@ Each fix here closes a race without changing what happens when nothing races:
 * approving, rejecting and claiming an Action Center order is one conditional
   UPDATE, so of several racing callers exactly one wins;
 * a master contract download is single flight per broker;
-* every .env writer goes through one lock, and a headless server with an
-  outdated .env starts instead of waiting on a prompt nobody can answer.
+* every .env writer goes through one lock, and a save reaches the value the
+  app reads even when the key is assigned twice;
+* the version check is unchanged: an outdated .env still stops a server that
+  has no terminal to answer the prompt, as it always has.
 """
 
 from __future__ import annotations
@@ -426,11 +428,38 @@ def test_update_env_values_replaces_appends_and_keeps_line_endings(tmp_path):
         {"MCP_HTTP_ENABLED": "True", "MCP_PUBLIC_URL": "https://example.test", "Q": "it's"},
     )
     content = env.read_bytes().decode()
-    assert content.startswith("# comment\r\nMCP_HTTP_ENABLED = 'True'\r\nOTHER='x'\r\n")
-    assert "MCP_HTTP_ENABLED = 'dup'" in content, "only the first assignment is replaced"
+    assert content.startswith(
+        "# comment\r\nMCP_HTTP_ENABLED = 'True'\r\nOTHER='x'\r\nMCP_HTTP_ENABLED = 'True'\r\n"
+    )
     assert "MCP_PUBLIC_URL = 'https://example.test'\r\n" in content
     assert 'Q = "it\'s"\r\n' in content
     assert "\n" not in content.replace("\r\n", "")
+
+
+def test_a_duplicated_key_is_saved_where_the_app_reads_it(tmp_path):
+    """python-dotenv applies the last assignment, so every one must change.
+
+    A .env with a key assigned twice is what pasting a block from .sample.env
+    leaves behind. Replacing only the first line reported a save that the app
+    never saw. A commented-out line is documentation and stays as it was.
+    """
+    from dotenv import dotenv_values
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "BROKER_API_KEY = 'old1'\n"
+        "# BROKER_API_KEY = 'example'\n"
+        "OTHER = 'x'\n"
+        "BROKER_API_KEY = 'old2'\n"
+        "export BROKER_API_KEY='old3'\n",
+        encoding="utf-8",
+    )
+    env_check.update_env_values(str(env), {"BROKER_API_KEY": "new"})
+    assert dotenv_values(env)["BROKER_API_KEY"] == "new"
+    content = env.read_text(encoding="utf-8")
+    assert "# BROKER_API_KEY = 'example'\n" in content
+    assert "old1" not in content and "old2" not in content and "old3" not in content
+    assert content.count("BROKER_API_KEY = 'new'") == 3
 
 
 def test_update_env_values_refuses_bad_keys_and_line_breaks(tmp_path):
@@ -484,15 +513,25 @@ class _Stdin:
         return self._tty
 
 
-def test_an_outdated_env_on_a_headless_server_starts_without_prompting(tmp_path, monkeypatch):
+def test_an_outdated_env_on_a_headless_server_still_refuses_to_start(tmp_path, monkeypatch):
+    """The default install sees no change: an outdated .env still stops startup.
+
+    Under systemd stdin is /dev/null, so the prompt's input() raises EOFError
+    and the check returns False, which makes the worker refuse to boot until
+    the operator updates .env. That is how it behaved before the gthread work,
+    and how it must keep behaving on every install that has not opted in.
+    """
     module = _load_env_check_copy(tmp_path, "1.0.0", "9.9.9")
     monkeypatch.setattr(sys, "stdin", _Stdin(False))
+    prompts = []
 
-    def no_prompt(*_args):
-        raise AssertionError("input() called with no terminal attached")
+    def no_terminal(*args):
+        prompts.append(args)
+        raise EOFError
 
-    monkeypatch.setattr("builtins.input", no_prompt)
-    assert module.check_env_version_compatibility() is True
+    monkeypatch.setattr("builtins.input", no_terminal)
+    assert module.check_env_version_compatibility() is False
+    assert len(prompts) == 1, "the prompt was skipped instead of answered with end of file"
 
 
 def test_an_outdated_env_at_a_terminal_still_asks(tmp_path, monkeypatch):
@@ -502,14 +541,3 @@ def test_an_outdated_env_at_a_terminal_still_asks(tmp_path, monkeypatch):
     assert module.check_env_version_compatibility() is False
     monkeypatch.setattr("builtins.input", lambda *_a: "y")
     assert module.check_env_version_compatibility() is True
-
-
-def test_a_closed_stdin_counts_as_headless(monkeypatch):
-    class Closed:
-        def isatty(self):
-            raise ValueError("I/O operation on closed file")
-
-    monkeypatch.setattr(sys, "stdin", Closed())
-    assert env_check._stdin_is_interactive() is False
-    monkeypatch.setattr(sys, "stdin", None)
-    assert env_check._stdin_is_interactive() is False
