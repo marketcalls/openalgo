@@ -477,6 +477,10 @@ class ScalpingRiskMonitor:
         # The in-flight check and its marker are one decision, made under the
         # lock: exit workers clear the marker from their own threads.
         with self._lock:
+            if self._states.get(key) is not state:
+                # Cleared (or replaced by a sync) since the tick decided: an
+                # exit already completed for it, or the next tick re-decides.
+                return
             if key in self._exit_inflight:
                 return
             if now - self._last_exit_attempt.get(key, 0.0) < EXIT_RETRY_COOLDOWN_SEC:

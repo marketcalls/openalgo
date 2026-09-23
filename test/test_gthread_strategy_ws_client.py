@@ -38,9 +38,12 @@ ROOT = Path(__file__).resolve().parents[1]
 class ProxyStub:
     """A websocket server on an ephemeral port that accepts any API key.
 
-    ``drop_after_auth`` closes each connection with an error code right after
-    acknowledging it, as a proxy restart does.
+    ``drop_after_auth`` closes each connection with an error code shortly after
+    acknowledging it, as a proxy restart does. The pause is longer than
+    connect()'s 100 ms poll, so the first connect always sees it authenticated.
     """
+
+    DROP_AFTER_SECONDS = 0.3
 
     def __init__(self, drop_after_auth=False):
         self.drop_after_auth = drop_after_auth
@@ -60,7 +63,7 @@ class ProxyStub:
                 self.auths += 1
                 await websocket.send(json.dumps({"type": "auth", "status": "success"}))
                 if self.drop_after_auth:
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(self.DROP_AFTER_SECONDS)
                     await websocket.close(code=1011, reason="proxy restarting")
                     return
 
@@ -99,10 +102,15 @@ def _wait_until(predicate, timeout):
 
 
 @pytest.fixture
-def fast(monkeypatch):
-    """Short timeouts and backoff, so a lifecycle runs in seconds."""
-    monkeypatch.setattr(wc.WebSocketClient, "CONNECT_TIMEOUT_SECONDS", 1)
+def fast_backoff(monkeypatch):
+    """A short reconnect backoff, so a run of drops takes seconds."""
     monkeypatch.setattr(wc.WebSocketClient, "RECONNECT_MAX_BACKOFF_SECONDS", 0.05)
+
+
+@pytest.fixture
+def fast(monkeypatch, fast_backoff):
+    """Short connect timeouts too, for tests that expect a connect to fail."""
+    monkeypatch.setattr(wc.WebSocketClient, "CONNECT_TIMEOUT_SECONDS", 1)
 
 
 @pytest.fixture
@@ -113,7 +121,7 @@ def forget_clients():
         wc.close_websocket_client(key)
 
 
-def test_a_client_keeps_reconnecting_past_the_fifth_drop(fast):
+def test_a_client_keeps_reconnecting_past_the_fifth_drop(fast_backoff):
     stub = ProxyStub(drop_after_auth=True)
     client = wc.WebSocketClient("gt-reconnect-key", host="127.0.0.1", port=stub.port)
     try:
@@ -144,7 +152,11 @@ def test_a_failed_connect_leaves_no_thread_behind(fast, forget_clients):
     )
 
 
-def test_a_slow_connect_for_one_key_does_not_hold_up_another(fast, forget_clients):
+def test_a_slow_connect_for_one_key_does_not_hold_up_another(
+    fast_backoff, forget_clients, monkeypatch
+):
+    # Long enough that waiting behind the unreachable key is unmistakable.
+    monkeypatch.setattr(wc.WebSocketClient, "CONNECT_TIMEOUT_SECONDS", 3)
     stub = ProxyStub()
     closed = _closed_port()
     forget_clients.extend(["gt-slow-key", "gt-fast-key"])
@@ -168,8 +180,8 @@ def test_a_slow_connect_for_one_key_does_not_hold_up_another(fast, forget_client
         elapsed = time.monotonic() - began
 
         assert client.alive
-        assert elapsed < 0.9, f"a healthy key waited {elapsed:.2f}s behind an unreachable one"
-        slow_thread.join(10)
+        assert elapsed < 2.0, f"a healthy key waited {elapsed:.2f}s behind an unreachable one"
+        slow_thread.join(15)
     finally:
         wc.close_websocket_client("gt-fast-key")
         stub.close()
@@ -349,6 +361,9 @@ import time
 
 import utils.real_threading as rt
 from services import websocket_client as wc
+
+# As app.py does at import: marks the hub's thread and starts its drainer.
+assert rt.start_hub_worker()
 
 # Single flight under eventlet: the second caller waits cooperatively while the
 # first connects, and the hub keeps running the whole time.

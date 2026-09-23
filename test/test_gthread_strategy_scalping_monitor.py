@@ -199,6 +199,28 @@ def test_a_breach_starts_one_exit_however_many_ticks_arrive(monitor, monkeypatch
     assert started == [KEY]
 
 
+def test_a_stop_cleared_after_the_tick_decided_is_not_exited_again(monitor, monkeypatch):
+    """The exit now starts after the lock is released, so it re-checks that the
+    stop it was decided for is still the live one."""
+    started = []
+    monkeypatch.setattr(monitor, "_exit_worker", lambda *args: started.append(args[0]))
+    decided = _long(trailing_enabled=False)
+    monitor._states[KEY] = decided
+
+    # Cleared between the tick's decision and the dispatch.
+    monitor._clear_state(KEY, SYMBOL, "NFO", "NRML", "live")
+    monitor._dispatch_exit(KEY, decided, "sl", 90.0)
+    assert started == []
+
+    # Replaced by a sync with a fresh row: the next tick decides again.
+    monitor._states[KEY] = _long(trailing_enabled=False)
+    monitor._dispatch_exit(KEY, decided, "sl", 90.0)
+    assert started == []
+
+    monitor._dispatch_exit(KEY, monitor._states[KEY], "sl", 90.0)
+    assert _wait_for(lambda: started == [KEY], 2)
+
+
 def test_sync_cannot_bring_back_a_stop_cleared_while_it_read(monitor, monkeypatch):
     """The exit clears the stop between sync's read and its install."""
     row = _long()
