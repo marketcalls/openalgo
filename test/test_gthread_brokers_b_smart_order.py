@@ -111,6 +111,9 @@ def plugin(request, monkeypatch):
         return str(module._get_cached_positions(auth).get(symbol, 0))
 
     monkeypatch.setattr(module, "get_positions", fake.get_positions)
+    # The fake book is a successful read by construction; the plugin's check
+    # of a real reply is pinned per broker in test_position_read_failure.py.
+    monkeypatch.setattr(module, "_position_book_ok", lambda _data: True)
     monkeypatch.setattr(module, "place_order_api", fake.place_order_api)
     monkeypatch.setattr(module, "get_open_position", get_open_position)
     monkeypatch.setattr(runtime, "gthread_active", lambda: False)

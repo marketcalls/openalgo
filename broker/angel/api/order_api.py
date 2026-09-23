@@ -15,6 +15,7 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -124,9 +125,21 @@ def _get_symbol_lock(symbol, exchange, product):
     return _symbol_locks.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """Angel marks success with status true, a real bool.
+
+    get_api_response's own failures carry status "error", which is truthy, so
+    the value has to be checked, not its truthiness.
+    """
+    return isinstance(positions_data, dict) and positions_data.get("status") in (True, "true")
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _position_cache.get(auth, lambda: get_positions(auth))
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book("angel", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -225,6 +238,7 @@ def place_order_api(data, auth):
     return response, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 

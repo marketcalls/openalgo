@@ -18,6 +18,7 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -120,9 +121,17 @@ def _get_symbol_lock(symbol, exchange, product):
     return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """Paytm Money wraps a position book it read as {"status": "success", ...}."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _POSITION_BOOK.get(auth, lambda: get_positions(auth))
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book("paytm", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -346,6 +355,7 @@ def place_order_api(data, auth):
     return res, response, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 

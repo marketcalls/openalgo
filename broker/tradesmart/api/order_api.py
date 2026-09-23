@@ -12,6 +12,7 @@ from broker.tradesmart.mapping.transform_data import (
 )
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -85,9 +86,25 @@ def _get_symbol_lock(symbol, exchange, product):
     return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """The PositionBook is a list whenever it holds a row.
+
+    An empty book comes back as {"stat": "Not_Ok", "emsg": "no data"}, which
+    read_position_book recognises as empty. Any other Not_Ok is a failed read.
+    """
+    return isinstance(positions_data, list)
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _POSITION_BOOK.get(auth, lambda: get_positions(auth))
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book(
+            "tradesmart",
+            lambda: get_positions(auth),
+            _position_book_ok,
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -147,6 +164,7 @@ def place_order_api(data, auth):
     return res, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """Place a position-aware smart order (reconciles to target position_size)."""
     res = None

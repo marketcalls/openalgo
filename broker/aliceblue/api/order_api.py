@@ -25,6 +25,7 @@ from utils import runtime
 from utils.broker_backpressure import BrokerBusyError, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import (
     POSITION_BOOK_TTL_SECONDS,
     SMART_ORDER_LOCK_WAIT_SECONDS,
@@ -37,6 +38,10 @@ logger = get_logger(__name__)
 
 # AliceBlue V2 API base URL
 BASE_URL = "https://a3.aliceblueonline.com"
+
+# The messages get_api_response writes when a request failed on our side of
+# the wire, as opposed to an answer AliceBlue sent.
+_REQUEST_FAILURE_PREFIXES = ("HTTP error:", "Invalid JSON response:", "General error:")
 
 
 # ─── API request helper ──────────────────────────────────────────────────────
@@ -173,6 +178,10 @@ def get_positions(auth):
     if result is None:
         # V2 API returns error message when there are no positions
         msg = response.get("message", "")
+        # A request that never got an answer is not AliceBlue saying the book
+        # is empty, even when the HTTP error text reads "404 Not Found".
+        if isinstance(msg, str) and msg.startswith(_REQUEST_FAILURE_PREFIXES):
+            return {"stat": "Not_Ok", "emsg": msg}
         if "No position" in msg or "not found" in msg.lower() or "Failed to retrieve" in msg:
             logger.debug(f"No positions found: {msg}")
             return []
@@ -269,9 +278,23 @@ def _acquire_symbol_lock(lock):
     return lock.acquire(timeout=SMART_ORDER_LOCK_WAIT_SECONDS)
 
 
+def _position_book_ok(positions_data):
+    """get_positions returns a list for a book it read, [] included.
+
+    EC920 is AliceBlue's own "No positions found for this user" answer. Every
+    other {"stat": "Not_Ok"} is a failed read.
+    """
+    if isinstance(positions_data, list):
+        return True
+    return isinstance(positions_data, dict) and "EC920" in str(positions_data.get("emsg", ""))
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _position_cache.get_or_load(auth, lambda: get_positions(auth))
+    return _position_cache.get_or_load(
+        auth,
+        lambda: read_position_book("aliceblue", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -371,6 +394,7 @@ def place_order_api(data, auth):
 
 # ─── Smart order ──────────────────────────────────────────────────────────────
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 

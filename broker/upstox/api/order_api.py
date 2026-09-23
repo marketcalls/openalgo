@@ -27,6 +27,11 @@ from utils.broker_backpressure import (
 )
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -207,9 +212,17 @@ def _get_symbol_lock(symbol, exchange, product):
     return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """Upstox wraps a position book it read as {"status": "success", ...}."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _POSITION_BOOK.get(auth, lambda: get_positions(auth))
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book("upstox", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -250,9 +263,9 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             logger.error(f"Failed to get positions: {positions_data.get('message')}")
 
         return net_qty
-    except BrokerBusyError:
-        # A refused read says nothing about the position. Reading it as flat
-        # would send an order sized against a position that may be open.
+    except (BrokerBusyError, PositionReadError):
+        # A refused or failed read says nothing about the position. Reading it
+        # as flat would send an order sized against a position that may be open.
         raise
     except Exception:
         logger.exception(f"Error getting open position for {tradingsymbol}")
@@ -400,6 +413,7 @@ def place_order_api(data, auth):
         return _ErrorResponse(500), {"status": "error", "message": str(e)}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Places a smart order by comparing the desired position size with the current open position.
@@ -455,6 +469,8 @@ def place_smartorder_api(data, auth):
         # The position read or the order was refused by the pacer (gthread
         # only), so nothing was sent.
         return busy_response(str(exc))
+    except PositionReadError:
+        raise
     except Exception as e:
         logger.exception("Unexpected error in place_smartorder_api")
         return None, {"status": "error", "message": str(e)}, None

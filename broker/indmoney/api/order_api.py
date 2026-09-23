@@ -21,6 +21,12 @@ from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.broker_backpressure import BrokerBusyError, BusyResponse, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+    says_no_positions,
+)
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -301,7 +307,30 @@ def _enrich_positions_with_ltp(positions, auth):
 
 
 
-def get_positions(auth, include_ltp=True):
+class _PartialPositionBook(PositionReadError):
+    """Some of the four position queries failed.
+
+    Carries the rows that were read and the segments that were not, so a smart
+    order in a segment that was read in full can still go ahead: an account
+    without F&O should not lose its equity smart orders to a derivative query.
+    """
+
+    def __init__(self, rows, failed_segments, detail):
+        super().__init__("indmoney", detail)
+        self.rows = rows
+        self.failed_segments = failed_segments
+
+
+# The query segment that holds each exchange's positions.
+_SEGMENT_BY_EXCHANGE = {
+    "NSE": "equity",
+    "BSE": "equity",
+    "NFO": "derivative",
+    "BFO": "derivative",
+}
+
+
+def get_positions(auth, include_ltp=True, strict=False):
     """
     Fetch all positions for the current trading day.
     Fetches positions from all combinations of segment and product:
@@ -313,9 +342,14 @@ def get_positions(auth, include_ltp=True):
         include_ltp: Attach live prices so the position book can show market
             value and MTM. Skipped on the smart-order path, which only needs
             net quantity and should not pay for an extra quote round trip.
+        strict: Raise _PartialPositionBook when a query fails, instead of
+            leaving its rows out. The position book leaves them out; the smart
+            order passes True, because a missing row reads as flat.
     """
     try:
         all_positions = []
+        failed_segments = set()
+        failures = []
 
         # Define all combinations of segment and product
         position_queries = [
@@ -331,6 +365,11 @@ def get_positions(auth, include_ltp=True):
 
             # Debug: Log the actual API response to understand the structure
             logger.debug(f"Positions API response for {query}: {result}")
+
+            if strict and _position_query_failed(result):
+                failed_segments.add(query["segment"])
+                failures.append(f"{query}: {str(result)[:200]}")
+                continue
 
             # /portfolio/positions returns `data` as a FLAT ARRAY. Collect the
             # rows first, then tag every row with the query it came from - the
@@ -362,18 +401,38 @@ def get_positions(auth, include_ltp=True):
                     pos["query_product"] = query["product"]
                     all_positions.append(pos)
 
+        if failed_segments:
+            raise _PartialPositionBook(all_positions, failed_segments, "; ".join(failures))
+
         if include_ltp and all_positions:
             _enrich_positions_with_ltp(all_positions, auth)
 
         logger.debug(f"Fetched {len(all_positions)} total positions (all segments and products)")
         return all_positions
 
-    except BrokerBusyError:
+    except (BrokerBusyError, PositionReadError):
         # Returning [] here would read as "no open positions".
         raise
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
+        if strict:
+            raise
         return []
+
+
+def _position_query_failed(result):
+    """True when one /portfolio/positions query did not come back as a book.
+
+    get_api_response returns the rows of a query that worked (a list, or None
+    for an empty one) and {"status": "error"/"failure", ...} for every failure.
+    """
+    if result is None or isinstance(result, list):
+        return False
+    if not isinstance(result, dict):
+        return True
+    if result.get("status") in ("error", "failure") or result.get("success") is False:
+        return not says_no_positions(result)
+    return False
 
 
 def get_holdings(auth):
@@ -414,11 +473,23 @@ def _get_symbol_lock(symbol, exchange, product):
     return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """get_positions(strict=True) returns a list, or raises when a query failed."""
+    return isinstance(positions_data, list)
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     # The smart-order path only reads net quantity, so skip the LTP round
     # trip that the position book needs.
-    return _POSITION_BOOK.get(auth, lambda: get_positions(auth, include_ltp=False))
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book(
+            "indmoney",
+            lambda: get_positions(auth, include_ltp=False, strict=True),
+            _position_book_ok,
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -445,7 +516,15 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     # converting to broker symbol format for the fallback name match.
     target_token = str(get_token(tradingsymbol, exchange) or "")
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-    positions_response = _get_cached_positions(auth)
+    try:
+        positions_response = _get_cached_positions(auth)
+    except _PartialPositionBook as partial:
+        # Only the other segment failed. This one was read in full, so its rows
+        # are the whole answer for this symbol.
+        segment = _SEGMENT_BY_EXCHANGE.get(str(exchange).upper())
+        if segment is None or segment in partial.failed_segments:
+            raise
+        positions_response = partial.rows
     net_qty = "0"
     # logger.debug(f"Positions response: {positions_response}")
 
@@ -628,6 +707,7 @@ def place_order_api(data, auth):
     return res, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
     # If no API call is made in this function then res will return None

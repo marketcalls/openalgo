@@ -68,7 +68,7 @@ class FakeBroker:
         self.hold = hold
         self.placing = threading.Event()
 
-    def get_positions(self, auth):
+    def get_positions(self, auth, *args, **kwargs):
         with self.lock:
             return {"qty": self.qty}
 
@@ -87,8 +87,17 @@ class FakeBroker:
 
 
 def _wire(monkeypatch, module, broker: FakeBroker):
-    """Route the module's position read and order call to the fake broker."""
+    """Route the module's position read and order call to the fake broker.
+
+    The fake book is a successful read by construction, so the plugin's own
+    check of a real reply (utils/position_read.py, pinned per broker in
+    test_position_read_failure.py) is told to accept it. 5 Paisa reads the
+    smart order's book through _request_positions, so that goes to the fake too.
+    """
     monkeypatch.setattr(module, "get_positions", broker.get_positions)
+    if hasattr(module, "_request_positions"):
+        monkeypatch.setattr(module, "_request_positions", broker.get_positions)
+    monkeypatch.setattr(module, "_position_book_ok", lambda _data: True)
     monkeypatch.setattr(module, "place_order_api", broker.place_order_api)
 
     def get_open_position(*args, **kwargs):
@@ -381,6 +390,9 @@ for name in ("dhan", "aliceblue", "flattrade"):
 
     module.place_order_api = place_order_api
     module.get_positions = lambda auth, book=book: dict(book)
+    # A placeholder book is a successful read here; the plugin's check of a
+    # real reply is pinned per broker in test_position_read_failure.py.
+    module._position_book_ok = lambda _data: True
     module.get_open_position = get_open_position
     order = {
         "symbol": "SBIN", "exchange": "NSE", "product": "MIS", "action": "BUY",

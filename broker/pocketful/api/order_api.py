@@ -14,6 +14,7 @@ from database.auth_db import Auth, db_session
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -290,12 +291,15 @@ def get_trade_book(auth):
         return {"status": "error", "message": error_msg}
 
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Get the position book from Pocketful API.
 
     Args:
         auth: Authentication token for Pocketful API
+        strict: Report a 200 answer that is not a success as an error. The
+            position book shows it as an empty book; the smart order passes
+            True, because an empty book reads as flat.
 
     Returns:
         Dictionary with position data in standard format
@@ -352,6 +356,11 @@ def get_positions(auth):
                         positions = position_data["data"]["positions"]
 
                 logger.debug(f"DEBUG - Found {len(positions)} positions in response")
+
+                if strict and position_data.get("status") != "success":
+                    error_msg = position_data.get("message") or "Pocketful did not return positions"
+                    logger.error(f"Error fetching positions: {position_data}")
+                    return {"status": "error", "message": error_msg}
 
                 # Create a response in the expected format
                 response_data = {
@@ -532,9 +541,21 @@ def _get_symbol_lock(symbol, exchange, product):
     return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """get_positions(strict=True) says status "success" only for a book it read."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _POSITION_BOOK.get(auth, lambda: get_positions(auth))
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book(
+            "pocketful",
+            lambda: get_positions(auth, strict=True),
+            _position_book_ok,
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -656,6 +677,7 @@ def place_order_api(data, auth_token):
     return res, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 

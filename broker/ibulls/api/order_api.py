@@ -17,6 +17,11 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
@@ -97,9 +102,17 @@ def _get_symbol_lock(symbol, exchange, product):
     return _symbol_locks.hold(symbol, exchange, product)
 
 
+def _position_book_ok(positions_data):
+    """XTS marks a position read that worked with type "success"; a failure says "error"."""
+    return isinstance(positions_data, dict) and positions_data.get("type") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    return _position_cache.get(auth, lambda: get_positions(auth))
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book("ibulls", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
@@ -207,6 +220,7 @@ def place_order_api(data, auth):
     return response, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data: dict, auth: str) -> tuple:
     """
     Place a smart order to achieve target position size based on the OpenAlgo specification.
@@ -257,6 +271,8 @@ def place_smartorder_api(data: dict, auth: str) -> tuple:
                 return SymbolLocks.busy(symbol)
             return _place_smartorder_locked_ibulls(data, AUTH_TOKEN, symbol, exchange, product, action)
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {str(e)}"
         logger.exception(error_msg)
@@ -289,6 +305,8 @@ def _place_smartorder_locked_ibulls(data, AUTH_TOKEN, symbol, exchange, product,
             logger.debug(f"Target Position Size: {position_size}")
             logger.debug("=== END ANALYSIS ===")
 
+        except PositionReadError:
+            raise
         except Exception as e:
             error_msg = f"Failed to fetch current position for {symbol}"
             logger.error(f"{error_msg}. Error: {str(e)}")
@@ -367,6 +385,8 @@ def _place_smartorder_locked_ibulls(data, AUTH_TOKEN, symbol, exchange, product,
         # If we get here, no order was placed
         return None, {"status": "success", "message": response_msg or "No action needed"}, None
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Error in _place_smartorder_locked_ibulls: {str(e)}"
         logger.exception(error_msg)

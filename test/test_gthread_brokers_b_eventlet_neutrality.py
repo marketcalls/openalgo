@@ -120,6 +120,9 @@ def test_green_smart_orders_for_one_symbol_place_one_order(tmp_path, broker):
             return str(module._get_cached_positions(auth).get(symbol, 0))
 
         module.get_positions = get_positions
+        # A placeholder book is a successful read here; the plugin's check of
+        # a real reply is pinned per broker in test_position_read_failure.py.
+        module._position_book_ok = lambda _data: True
         module.place_order_api = place_order_api
         module.get_open_position = get_open_position
 
