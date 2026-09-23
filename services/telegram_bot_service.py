@@ -6,15 +6,19 @@ import functools
 import importlib.util
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.runtime import is_monkey_patched as _is_monkey_patched
 from utils.runtime import original as _original_module
 from utils.runtime import worker_class as _worker_class
 
-# The original threading module, to run the bot in a real OS thread, bypassing
-# eventlet's monkey-patching which causes event loop conflicts. Chosen by
-# whether eventlet patched this process, never by whether it was imported.
+# The original threading module, the one utils.real_threading is built on:
+# the bot and the Kaleido renderer need real OS threads, because asyncio
+# cannot run on a green one. Chosen by whether eventlet patched this process,
+# never by whether it was imported. The bot's own lifecycle primitives come
+# from utils.real_threading; this name is kept for the renderer and for the
+# code and tests that read it.
 original_threading = _original_module("threading")
 
 import base64
@@ -54,36 +58,75 @@ def _eventlet_installed() -> bool:
         return False
 
 
+#: Seconds a start waits for the bot to begin polling before it answers.
+BOT_START_WAIT_SECONDS = 5.0
+
+#: Seconds a stop waits for the bot thread to finish.
+BOT_STOP_JOIN_SECONDS = 10.0
+
+#: What a start or stop is told while another one is still in progress.
+BOT_BUSY_MESSAGE = "The bot is still starting or stopping. Check its status in a few seconds."
+
+#: Seconds the bot waits for a strategy stop (or listing) run on the web
+#: server's own loop under eventlet. A stop waits for the strategy process to
+#: exit, which takes up to about ten seconds.
+STRATEGY_CALL_TIMEOUT_SECONDS = 60.0
+
+#: Seconds between reconnect attempts' stop checks while backing off.
+_BACKOFF_STEP_SECONDS = 1.0
+
+
 def use_sync_initialization() -> bool:
-    """Return True when the bot is started through the synchronous path.
+    """Return True where the eventlet-era start path would have been taken.
 
-    The synchronous path validates the token with plain httpx and runs the bot
-    thread with the eventlet handling; the other path validates it through
-    python-telegram-bot on an asyncio loop. They differ in what a trader sees
-    when validation fails: the synchronous path stores the token and retries
-    on a network error, where the asyncio path refuses with the library's
-    message.
+    Token validation no longer depends on this: :meth:`TelegramBotService.
+    initialize_bot_sync` and :meth:`TelegramBotService.initialize_bot` both
+    validate with one bounded ``getMe`` request and never stop a running bot,
+    in every runtime. The answer is kept, unchanged, for ``app.py``'s auto
+    start, which still branches on it, and for the tests that pin it:
 
-    * The eventlet worker needs the synchronous path, because asyncio cannot
-      run on a green thread.
-    * The development server takes it whenever eventlet is installed in its
-      environment, as every install.sh server's is. The choice used to be
-      ``"eventlet" in sys.modules``, and the websocket proxy's startup probe
-      imported eventlet merely to ask whether it was active, so on such a
-      server the check was always true by the first request. The probe no
-      longer imports it, so that outcome is kept here on purpose, answered by
-      whether eventlet is installed rather than by import order.
-    * The gthread worker runs the bot on real OS threads, where the asyncio
-      path is correct, and takes it whatever is installed.
+    * the eventlet worker: True;
+    * the development server: True when eventlet is installed in its
+      environment, as every install.sh server's is (answered by whether it is
+      installed, never by import order), else False;
+    * the gthread worker: False.
 
     Returns:
-        True for the synchronous path, False for the asyncio path.
+        True for the branch the eventlet worker took, False for the other.
     """
     if _is_monkey_patched():
         return True
     if _worker_class() != "dev":
         return False
     return _eventlet_installed()
+
+
+def _running_python_strategies() -> list[tuple[str, str]]:
+    """The running Python strategies as ``(id, display name)``, oldest first.
+
+    Uses ``blueprints.python_strategy.snapshot_running_strategies`` when the
+    strategy host provides it, which reads the table under its own lock, and
+    otherwise copies the table's keys, one atomic read under the GIL. Called
+    through :meth:`TelegramBotService._in_app_world`, so under eventlet it runs
+    on the hub, where that lock belongs.
+    """
+    from blueprints import python_strategy
+
+    snapshot = getattr(python_strategy, "snapshot_running_strategies", None)
+    if callable(snapshot):
+        return [(str(sid), str(name)) for sid, name in snapshot()]
+    configs = python_strategy.STRATEGY_CONFIGS
+    return [
+        (sid, configs.get(sid, {}).get("name", sid))
+        for sid in list(python_strategy.RUNNING_STRATEGIES.keys())
+    ]
+
+
+def _stop_python_strategy(strategy_id: str) -> tuple[bool, str]:
+    """Stop one Python strategy. Runs on the hub under eventlet (see above)."""
+    from blueprints.python_strategy import stop_strategy_process
+
+    return stop_strategy_process(strategy_id)
 
 
 class TelegramBotService:
@@ -98,7 +141,26 @@ class TelegramBotService:
         self.bot_thread = None
         self.bot_loop = None  # Store the bot's event loop
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
-        self._stop_event = original_threading.Event()  # Thread-safe stop signal
+
+        # One bot at a time. Each start is a generation with its own stop
+        # Event, and a thread writes the shared fields (is_running, bot_loop,
+        # is_active in the database) only while its generation is the current
+        # one, so a thread that outlives its stop cannot overwrite a newer
+        # bot's state. The lock is real because the bot thread is real in
+        # every runtime and request code takes it too; nothing is done under
+        # it but reading and assigning these fields.
+        self._lifecycle_lock = real_threading.Lock()
+        self._gen = 0
+        self._gen_stop = real_threading.Event()
+
+    @property
+    def _stop_event(self):
+        """The current generation's stop signal, set to ask the bot to stop."""
+        return self._gen_stop
+
+    def _is_current(self, gen: int | None) -> bool:
+        """True while ``gen`` is the latest bot generation (None means current)."""
+        return gen is None or gen == self._gen
 
     def _get_sdk_client(self, telegram_id: int) -> openalgo_api | None:
         """Get or create OpenAlgo SDK client for a user"""
@@ -187,9 +249,7 @@ class TelegramBotService:
             except BaseException as exc:  # noqa: BLE001 - propagate across thread
                 result_q.put(("err", exc))
 
-        t = original_threading.Thread(
-            target=_worker, daemon=True, name="openalgo-kaleido-render"
-        )
+        t = original_threading.Thread(target=_worker, daemon=True, name="openalgo-kaleido-render")
         t.start()
         t.join()
 
@@ -547,138 +607,134 @@ class TelegramBotService:
             return None
 
     async def initialize_bot(self, token: str) -> tuple[bool, str]:
-        """Initialize the Telegram bot with given token"""
-        from telegram.ext import Application
+        """Validate and store the bot token, for a caller running an event loop.
+
+        Validates exactly as :meth:`initialize_bot_sync` does, which it calls:
+        one bounded ``getMe`` request, blocking this coroutine's loop for at
+        most its timeout. The only caller is a start path that builds a
+        throwaway loop for this one call.
+
+        It used to stop a running bot first, through ``await
+        self.stop_bot()``. ``stop_bot`` is synchronous, so that stopped the bot
+        and then failed on awaiting the tuple it returned, answering a Start
+        pressed on a running bot with a Python error and no bot. Validating a
+        token has no reason to touch the bot that is running.
+
+        Args:
+            token: The bot token from BotFather.
+
+        Returns:
+            ``(success, message)``, as :meth:`initialize_bot_sync`.
+        """
+        return self.initialize_bot_sync(token)
+
+    def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
+        """Validate the bot token with Telegram and store it.
+
+        The one start path in every runtime: a single ``getMe`` request on the
+        shared HTTP client, bounded at ten seconds, which is what the eventlet
+        worker has always used. No asyncio loop is created or set on the
+        calling thread, which under the gthread worker is a pooled request
+        thread that serves every later request too. A running bot is left
+        running.
+
+        A token Telegram rejects is refused. When Telegram cannot be reached
+        the token is stored anyway, and the bot retries on start.
+
+        Args:
+            token: The bot token from BotFather.
+
+        Returns:
+            ``(success, message)``, the message written for the trader.
+        """
+        from utils.httpx_client import get_httpx_client
 
         try:
-            # If bot is running, stop it first
-            if self.is_running:
-                await self.stop_bot()
-                # Wait a moment for cleanup
-                await asyncio.sleep(1)
-
+            response = get_httpx_client().get(
+                f"https://api.telegram.org/bot{token}/getMe", timeout=10
+            )
+        except Exception as e:
+            logger.exception(f"Telegram token check could not reach Telegram: {e}")
+            # Store token anyway for retry later
             self.bot_token = token
+            return True, "Token stored (will validate on start)"
 
-            # Create a temporary bot just to verify the token
-            temp_app = Application.builder().token(token).build()
-            await temp_app.initialize()
-
-            # Test the token by getting bot info
-            bot_info = await temp_app.bot.get_me()
-
-            await temp_app.shutdown()
-
+        try:
+            data = response.json() if response.status_code == 200 else {}
+        except ValueError:
+            data = {}
+        if response.status_code == 200 and data.get("ok"):
+            bot_info = data.get("result", {}) or {}
+            bot_username = bot_info.get("username", "unknown")
+            self.bot_token = token
             # Persist the token and username only. is_active is owned by
             # start_bot/stop_bot: writing False here would flip the flag off on
             # the auto-start path (app.py) purely to have start_bot set it back
             # a moment later, and a crash in that window would leave the bot
             # disabled on the next boot.
-            update_bot_config({"bot_token": token, "bot_username": bot_info.username})
+            update_bot_config({"bot_token": token, "bot_username": bot_username})
+            logger.info(f"Bot validated: @{bot_username}")
+            return True, f"Bot initialized successfully: @{bot_username}"
 
-            return True, f"Bot initialized successfully: @{bot_info.username}"
+        logger.warning(
+            f"Telegram refused the bot token check (HTTP {response.status_code}: "
+            f"{data.get('description', '') if isinstance(data, dict) else ''})"
+        )
+        if response.status_code in (401, 404):
+            return (
+                False,
+                "Telegram did not accept this bot token. Copy it again from BotFather and save it.",
+            )
+        return (
+            False,
+            "Telegram did not confirm the bot token. Try again in a few minutes, and "
+            "if it keeps failing, copy the token again from BotFather.",
+        )
 
-        except Exception as e:
-            logger.exception(f"Failed to initialize bot: {e}")
-            return False, str(e)
+    def _run_bot_in_thread(self, gen: int | None = None, stop=None):
+        """Run one bot generation on this real thread, with its own event loop.
 
-    def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
-        """Synchronous initialization for eventlet environments"""
-        # Check if we're in eventlet environment (see use_sync_initialization)
-        if use_sync_initialization():
-            logger.info("Using synchronous initialization for eventlet environment")
-            # Use synchronous httpx to validate token
-            from utils.httpx_client import get_httpx_client
-
-            try:
-                response = get_httpx_client().get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("ok"):
-                        bot_info = data.get("result", {})
-                        bot_username = bot_info.get("username", "unknown")
-
-                        # Store token and update config
-                        self.bot_token = token
-                        # is_active deliberately not written here — see
-                        # initialize_bot for why.
-                        update_bot_config({"bot_token": token, "bot_username": bot_username})
-
-                        logger.info(f"Bot validated: @{bot_username}")
-                        return True, f"Bot initialized successfully: @{bot_username}"
-                    else:
-                        return (
-                            False,
-                            f"Invalid response: {data.get('description', 'Unknown error')}",
-                        )
-                else:
-                    return False, f"HTTP {response.status_code}: Failed to validate token"
-
-            except Exception as e:
-                logger.exception(f"Sync initialization error: {e}")
-                # Store token anyway for retry later
-                self.bot_token = token
-                return True, "Token stored (will validate on start)"
-
-        else:
-            # Non-eventlet environment, use regular async initialization
-            logger.info("Using async initialization (non-eventlet environment)")
-            import asyncio
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(self.initialize_bot(token))
-            finally:
-                loop.close()
-
-    def _run_bot_in_thread(self):
-        """Run bot in separate thread with its own isolated event loop"""
-        # Check if eventlet is active (see use_sync_initialization)
-        if use_sync_initialization():
-            logger.info("Eventlet detected - using special handling for asyncio")
-            # For eventlet, we need to be very careful with asyncio
-            import asyncio
-
-            # Reset the event loop policy to avoid eventlet's monkey-patching
-            try:
-                # Use the default, unpatched event loop policy
-                from asyncio import DefaultEventLoopPolicy, SelectorEventLoop
-
-                policy = DefaultEventLoopPolicy()
-                asyncio.set_event_loop_policy(policy)
-                logger.info("Reset to default event loop policy")
-            except Exception as e:
-                logger.warning(f"Could not reset event loop policy: {e}")
-        else:
-            import asyncio
-
-        # Create new event loop in this thread
+        Args:
+            gen: The generation this thread belongs to. Shared state is written
+                only while it is still the current one. None means whichever
+                generation is current.
+            stop: This generation's stop Event, the current one when None.
+        """
+        if stop is None:
+            stop = self._gen_stop
         logger.debug("Creating new event loop in bot thread")
 
-        # Create a new event loop for this thread
+        # A new event loop for this thread. No process-wide event loop policy
+        # is set: that replaced the policy for every thread in the process to
+        # reach the same default this call already gets.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        self.bot_loop = loop  # Store the loop so we can schedule tasks in it
+        with self._lifecycle_lock:
+            if self._is_current(gen):
+                self.bot_loop = loop  # Store the loop so we can schedule tasks in it
 
+        http_client = None
         try:
             # Create HTTP client in this thread's event loop
-            self.http_client = httpx.AsyncClient(timeout=30.0)
+            http_client = httpx.AsyncClient(timeout=30.0)
+            self.http_client = http_client
 
             # Run the bot
-            loop.run_until_complete(self._start_bot_isolated())
+            loop.run_until_complete(self._start_bot_isolated(gen, stop))
         except Exception as e:
             logger.exception(f"Bot thread error: {e}")
         finally:
             # Cleanup
             try:
-                if self.http_client:
-                    loop.run_until_complete(self.http_client.aclose())
+                if http_client is not None:
+                    loop.run_until_complete(http_client.aclose())
             except Exception:
                 pass
             loop.close()
-            self.bot_loop = None  # Clear the reference
-            self.is_running = False
+            with self._lifecycle_lock:
+                if self._is_current(gen):
+                    self.bot_loop = None  # Clear the reference
+                    self.is_running = False
 
     async def handle_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors in telegram bot operations"""
@@ -709,7 +765,37 @@ class TelegramBotService:
             except Exception:
                 pass  # If we can't send the message, just ignore
 
-    async def _start_bot_isolated(self):
+    async def _sleep_unless_stopped(self, stop, seconds: float) -> bool:
+        """Sleep on the bot's loop in short steps, returning True once stopped.
+
+        The reconnect backoff reaches 80 seconds, and a stop that waited for it
+        outlived stop_bot's join, so the next start raced a thread that then
+        went back to polling.
+        """
+        deadline = asyncio.get_running_loop().time() + seconds
+        while not stop.is_set():
+            left = deadline - asyncio.get_running_loop().time()
+            if left <= 0:
+                return False
+            await asyncio.sleep(min(_BACKOFF_STEP_SECONDS, left))
+        return True
+
+    def _publish_running(self, gen: int | None, stop) -> bool:
+        """Mark this generation as polling, unless it was stopped or replaced."""
+        with self._lifecycle_lock:
+            if not self._is_current(gen) or stop.is_set():
+                return False
+            self.is_running = True
+        update_bot_config({"is_active": True})
+        return True
+
+    def _clear_running(self, gen: int | None) -> None:
+        """Mark this generation as not polling, if it is still the current one."""
+        with self._lifecycle_lock:
+            if self._is_current(gen):
+                self.is_running = False
+
+    async def _start_bot_isolated(self, gen: int | None = None, stop=None):
         """Start the bot with proper handlers and network error handling"""
         import telegram.error
         from telegram import Update
@@ -719,11 +805,14 @@ class TelegramBotService:
             CommandHandler,
         )
 
+        if stop is None:
+            stop = self._gen_stop
+
         retry_count = 0
         max_retries = 5
         base_delay = 5  # seconds
 
-        while retry_count < max_retries:
+        while retry_count < max_retries and not stop.is_set():
             try:
                 # Create application
                 self.application = Application.builder().token(self.bot_token).build()
@@ -764,20 +853,19 @@ class TelegramBotService:
                     allowed_updates=Update.ALL_TYPES,
                 )
 
-                self.is_running = True
-                update_bot_config({"is_active": True})
-                logger.debug("Telegram bot started successfully and is polling for updates")
+                if self._publish_running(gen, stop):
+                    logger.debug("Telegram bot started successfully and is polling for updates")
 
                 # Reset retry count on successful connection
                 retry_count = 0
 
                 # Keep running until stop signal
-                while not self._stop_event.is_set():
+                while not stop.is_set():
                     await asyncio.sleep(1)
 
                 # Stop signal received - clean shutdown
                 logger.debug("Stop signal received, shutting down bot...")
-                self.is_running = False
+                self._clear_running(gen)
 
                 # Stop the updater and wait for tasks to complete
                 if self.application and self.application.updater.running:
@@ -806,19 +894,21 @@ class TelegramBotService:
 
                 if retry_count < max_retries:
                     logger.info(f"Retrying in {delay} seconds...")
-                    await asyncio.sleep(delay)
+                    if await self._sleep_unless_stopped(stop, delay):
+                        self._clear_running(gen)
+                        break
                 else:
                     logger.error("Max retries reached. Unable to connect to Telegram servers.")
                     logger.info(
                         "This might be due to: 1) No internet connection, 2) Telegram blocked by firewall/ISP, 3) DNS issues"
                     )
-                    self.is_running = False
+                    self._clear_running(gen)
                     break
 
             except Exception as e:
                 # For non-network errors, log and stop
                 logger.exception(f"Unexpected error in bot operation: {e}")
-                self.is_running = False
+                self._clear_running(gen)
                 break
 
         # Cleanup after the retry loop
@@ -832,65 +922,145 @@ class TelegramBotService:
             except Exception as e:
                 logger.debug(f"Error stopping updater: {e}")
 
+    def _busy_answer(self) -> tuple[bool, str] | None:
+        """The refusal for a start while a bot thread is alive, else None.
+
+        Call with ``_lifecycle_lock`` held.
+        """
+        if not self._bot_thread_alive():
+            return None
+        if self.is_running:
+            return False, "Bot is already running"
+        return False, BOT_BUSY_MESSAGE
+
+    def _bot_thread_alive(self) -> bool:
+        """True while the registered bot thread runs, or is about to.
+
+        A thread is registered under the lock and started just after it is
+        released, and until then ``is_alive()`` is False, so a registered
+        thread with no ident yet counts as alive: without that, every start
+        racing into that gap spawned a poller of its own.
+        """
+        thread = self.bot_thread
+        return thread is not None and (thread.ident is None or thread.is_alive())
+
     def start_bot(self) -> tuple[bool, str]:
-        """Start the bot in a separate thread"""
+        """Start the bot on a real thread, unless one is already alive.
+
+        Single flight. A bot thread that is alive, whether polling, still
+        connecting, backing off a network error or finishing a stop, refuses a
+        second start, because two pollers on one token get 409 Conflict from
+        Telegram and the bot stops answering, /closeall included. The check
+        and the new thread's registration happen in one hold of the lifecycle
+        lock; the configuration read happens before it.
+
+        Returns:
+            ``(success, message)``.
+        """
         try:
-            if self.is_running:
-                return False, "Bot is already running"
+            with self._lifecycle_lock:
+                busy = self._busy_answer()
+            if busy is not None:
+                return busy
 
             config = get_bot_config()
             if not config or not config.get("bot_token"):
                 return False, "Bot token not configured"
 
-            self.bot_token = config["bot_token"]
+            with self._lifecycle_lock:
+                busy = self._busy_answer()
+                if busy is not None:
+                    return busy
+                self._gen += 1
+                gen = self._gen
+                stop = real_threading.Event()
+                self._gen_stop = stop
+                self.bot_token = config["bot_token"]
+                self.is_running = False
+                # Start bot in separate thread with isolated event loop
+                thread = real_threading.Thread(
+                    target=self._run_bot_in_thread,
+                    args=(gen, stop),
+                    daemon=True,
+                    name="TelegramBotThread",
+                )
+                self.bot_thread = thread
+            try:
+                thread.start()
+            except BaseException:
+                with self._lifecycle_lock:
+                    if self.bot_thread is thread:
+                        self.bot_thread = None
+                raise
 
-            # Reset stop event
-            self._stop_event.clear()
-
-            # Start bot in separate thread with isolated event loop
-            self.bot_thread = original_threading.Thread(
-                target=self._run_bot_in_thread, daemon=True, name="TelegramBotThread"
-            )
-            self.bot_thread.start()
-
-            # Wait for bot to start
-            import time
-
-            for _ in range(10):  # Wait up to 5 seconds
+            # Wait for bot to start. time.sleep is eventlet's cooperative one
+            # under that worker, so the wait never holds up another request.
+            deadline = time.monotonic() + BOT_START_WAIT_SECONDS
+            while time.monotonic() < deadline:
                 if self.is_running:
                     return True, "Bot started successfully"
+                if not thread.is_alive():
+                    break
                 time.sleep(0.5)
+            if self.is_running:
+                return True, "Bot started successfully"
 
             return False, "Bot failed to start within timeout"
 
         except Exception as e:
             logger.exception(f"Failed to start bot: {e}")
-            return False, str(e)
+            return False, "The bot could not be started. Check the server logs for the cause."
 
     def stop_bot(self) -> tuple[bool, str]:
-        """Stop the bot"""
+        """Stop the bot, including one that is still starting or backing off.
+
+        The stop is sent to the thread that is alive even when it is not yet
+        polling: answering "not running" there left a starting bot to come up
+        after the trader had asked it to stop. A thread that has not finished
+        within the join timeout stays registered, so a start cannot put a
+        second poller beside it.
+
+        Returns:
+            ``(success, message)``.
+        """
         try:
-            if not self.is_running:
-                return False, "Bot is not running"
+            with self._lifecycle_lock:
+                thread = self.bot_thread
+                stop = self._gen_stop
+                gen = self._gen
+                alive = self._bot_thread_alive()
+                if not self.is_running and not alive:
+                    return False, "Bot is not running"
 
             logger.debug("Stopping Telegram bot...")
 
             # Signal the thread to stop
-            self._stop_event.set()
+            stop.set()
+
+            # A start registers its thread just before starting it; give it
+            # the moment it needs, since a thread cannot be joined before then.
+            start_deadline = time.monotonic() + 1.0
+            while thread is not None and thread.ident is None:
+                if time.monotonic() >= start_deadline:
+                    break
+                time.sleep(0.01)
 
             # Wait for thread to finish
-            if self.bot_thread and self.bot_thread.is_alive():
+            if alive and thread is not None and thread.ident is not None:
                 # Cooperative: bot_thread is a real OS thread and stop_bot()
                 # is reached from the /telegram stop route, so a blocking
                 # join would freeze every other request for up to 10s.
-                real_threading.join(self.bot_thread, timeout=10.0)
-                if self.bot_thread.is_alive():
+                real_threading.join(thread, timeout=BOT_STOP_JOIN_SECONDS)
+                if thread.is_alive():
                     logger.warning("Bot thread did not stop cleanly")
-                    self.is_running = False
 
-            self.bot_thread = None
-            self.application = None
-            self.bot_loop = None  # Clear the loop reference
+            with self._lifecycle_lock:
+                if self._gen == gen:
+                    self.is_running = False
+                    if thread is None or not thread.is_alive():
+                        self.bot_thread = None
+                        self.application = None
+                        self.bot_loop = None  # Clear the loop reference
 
             # Update database
             update_bot_config({"is_active": False})
@@ -900,10 +1070,65 @@ class TelegramBotService:
 
         except Exception as e:
             logger.exception(f"Failed to stop bot: {e}")
-            return False, str(e)
+            return False, "The bot could not be stopped. Check the server logs for the cause."
 
     # Alias for compatibility
     stop_bot_sync = stop_bot
+
+    async def _in_app_world(self, fn, *args, timeout: float, offload: bool = True):
+        """Call ``fn(*args)`` where the web app's own code runs, from the bot's loop.
+
+        The bot's loop runs on a real OS thread in every runtime. Under the
+        eventlet worker the Python strategy host guards its process table
+        with a green lock and its status stream with green queues, and a real
+        thread that takes either can wedge a request waiting on them for good.
+        So under eventlet the call is handed to the hub with
+        ``utils.real_threading.submit_to_hub`` and this coroutine polls a real
+        Event with ``asyncio.sleep``, which keeps the bot answering meanwhile.
+        Everywhere else there is nothing green to reach, and ``fn`` runs as it
+        always did: on the loop's executor, or inline when ``offload`` is
+        False.
+
+        Args:
+            fn: The callable.
+            *args: Its positional arguments.
+            timeout: Seconds to wait under eventlet before giving up.
+            offload: Run on the executor outside eventlet (False runs inline,
+                for a cheap read).
+
+        Returns:
+            Whatever ``fn`` returned.
+
+        Raises:
+            TimeoutError: Under eventlet, when the call did not finish in time.
+            Exception: Whatever ``fn`` raised.
+        """
+        loop = asyncio.get_running_loop()
+        if not real_threading.is_monkey_patched():
+            if not offload:
+                return fn(*args)
+            return await loop.run_in_executor(None, functools.partial(fn, *args))
+
+        done = real_threading.Event()
+        box: dict[str, Any] = {}
+
+        def task() -> None:
+            try:
+                box["value"] = fn(*args)
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the bot's loop
+                box["error"] = exc
+            finally:
+                done.set()
+
+        real_threading.submit_to_hub(task)
+        deadline = loop.time() + timeout
+        while not done.is_set():
+            if loop.time() >= deadline:
+                raise TimeoutError(f"the web app did not finish the call within {timeout}s")
+            await asyncio.sleep(0.05)
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
     # Command Handlers
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1210,7 +1435,9 @@ class TelegramBotService:
             try:
                 price = float(order.get("price", 0))
                 price_str = (
-                    "Market" if price == 0 and order.get("pricetype") == "MARKET" else f"{cs}{price}"
+                    "Market"
+                    if price == 0 and order.get("pricetype") == "MARKET"
+                    else f"{cs}{price}"
                 )
             except (ValueError, TypeError):
                 price_str = f"{cs}{order.get('price', 0)}"
@@ -1896,7 +2123,7 @@ class TelegramBotService:
 
         log_command(user.id, "menu", update.effective_chat.id)
 
-    def _format_orderbook(self, response: dict, cs: str = '₹') -> str:
+    def _format_orderbook(self, response: dict, cs: str = "₹") -> str:
         """Format orderbook response into message"""
         if not response or response.get("status") != "success":
             return "Failed to fetch orderbook"
@@ -1936,7 +2163,7 @@ class TelegramBotService:
             message += f"_... and {len(orders) - 10} more orders_"
         return message
 
-    def _format_tradebook(self, response: dict, cs: str = '₹') -> str:
+    def _format_tradebook(self, response: dict, cs: str = "₹") -> str:
         """Format tradebook response into message"""
         if not response or response.get("status") != "success":
             return "Failed to fetch tradebook"
@@ -1966,7 +2193,7 @@ class TelegramBotService:
             message += f"_... and {len(trades) - 10} more trades_"
         return message
 
-    def _format_positions(self, response: dict, cs: str = '₹') -> str:
+    def _format_positions(self, response: dict, cs: str = "₹") -> str:
         """Format positions response into message"""
         if not response or response.get("status") != "success":
             return "Failed to fetch positions"
@@ -1993,7 +2220,7 @@ class TelegramBotService:
             message += f"_... and {len(active_positions) - 10} more positions_"
         return message
 
-    def _format_holdings(self, response: dict, cs: str = '₹') -> str:
+    def _format_holdings(self, response: dict, cs: str = "₹") -> str:
         """Format holdings response into message"""
         if not response or response.get("status") != "success":
             return "Failed to fetch holdings"
@@ -2016,7 +2243,7 @@ class TelegramBotService:
             message += f"_... and {len(holdings) - 10} more holdings_"
         return message
 
-    def _format_funds(self, response: dict, cs: str = '₹') -> str:
+    def _format_funds(self, response: dict, cs: str = "₹") -> str:
         """Format funds response into message"""
         if not response or response.get("status") != "success":
             return "Failed to fetch funds"
@@ -2037,7 +2264,7 @@ class TelegramBotService:
             f"Total: {cs}{(available + collateral):,.2f}"
         )
 
-    def _format_pnl_funds(self, response: dict, cs: str = '₹') -> str:
+    def _format_pnl_funds(self, response: dict, cs: str = "₹") -> str:
         """Format P&L from the funds response (realized + unrealized + total).
 
         Shared by the /pnl command and the menu P&L button so both report the
@@ -2129,14 +2356,11 @@ class TelegramBotService:
             await update.message.reply_text("Please link your account first using /link")
             return
 
-        from blueprints.python_strategy import RUNNING_STRATEGIES, STRATEGY_CONFIGS
-
         # Snapshot the running strategies (id, display name) at the moment of invocation.
         # Using user_data for index→id mapping keeps callback_data within Telegram's 64-byte cap.
-        running = [
-            (sid, STRATEGY_CONFIGS.get(sid, {}).get("name", sid))
-            for sid in list(RUNNING_STRATEGIES.keys())
-        ]
+        running = await self._in_app_world(
+            _running_python_strategies, timeout=STRATEGY_CALL_TIMEOUT_SECONDS, offload=False
+        )
 
         if not running:
             await update.message.reply_text(
@@ -2152,12 +2376,8 @@ class TelegramBotService:
             [InlineKeyboardButton(f"{name}", callback_data=f"spy_{idx}")]
             for idx, (_, name) in enumerate(running)
         ]
-        keyboard.append(
-            [InlineKeyboardButton("Stop All", callback_data="spy_all")]
-        )
-        keyboard.append(
-            [InlineKeyboardButton("Cancel", callback_data="cancel_action")]
-        )
+        keyboard.append([InlineKeyboardButton("Stop All", callback_data="spy_all")])
+        keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel_action")])
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
@@ -2294,17 +2514,25 @@ class TelegramBotService:
 
             stop_msg = ""
             try:
-                from blueprints.python_strategy import RUNNING_STRATEGIES, stop_strategy_process
-
-                running_ids = list(RUNNING_STRATEGIES.keys())
+                running_ids = [
+                    sid
+                    for sid, _name in await self._in_app_world(
+                        _running_python_strategies,
+                        timeout=STRATEGY_CALL_TIMEOUT_SECONDS,
+                        offload=False,
+                    )
+                ]
                 if not running_ids:
                     stop_msg = "ℹ No Python strategies were running."
                 else:
-                    loop = asyncio.get_event_loop()
                     stopped, failed = 0, 0
                     for sid in running_ids:
                         try:
-                            ok, _ = await loop.run_in_executor(None, stop_strategy_process, sid)
+                            ok, _ = await self._in_app_world(
+                                _stop_python_strategy,
+                                sid,
+                                timeout=STRATEGY_CALL_TIMEOUT_SECONDS,
+                            )
                             if ok:
                                 stopped += 1
                             else:
@@ -2337,9 +2565,7 @@ class TelegramBotService:
 
             stoppy_list = context.user_data.get("stoppy_list", [])
             if idx < 0 or idx >= len(stoppy_list):
-                await query.edit_message_text(
-                    "Selection expired. Please run /stoppython again."
-                )
+                await query.edit_message_text("Selection expired. Please run /stoppython again.")
                 return
 
             sid, name = stoppy_list[idx]
@@ -2361,9 +2587,7 @@ class TelegramBotService:
             stoppy_list = context.user_data.get("stoppy_list", [])
             count = len(stoppy_list)
             if count == 0:
-                await query.edit_message_text(
-                    "Selection expired. Please run /stoppython again."
-                )
+                await query.edit_message_text("Selection expired. Please run /stoppython again.")
                 return
 
             keyboard = [
@@ -2391,18 +2615,15 @@ class TelegramBotService:
 
             stoppy_list = context.user_data.get("stoppy_list", [])
             if idx < 0 or idx >= len(stoppy_list):
-                await query.edit_message_text(
-                    "Selection expired. Please run /stoppython again."
-                )
+                await query.edit_message_text("Selection expired. Please run /stoppython again.")
                 return
 
             sid, name = stoppy_list[idx]
             await query.edit_message_text(f"Stopping *{name}*...", parse_mode=ParseMode.MARKDOWN)
             try:
-                from blueprints.python_strategy import stop_strategy_process
-
-                loop = asyncio.get_event_loop()
-                ok, msg = await loop.run_in_executor(None, stop_strategy_process, sid)
+                ok, msg = await self._in_app_world(
+                    _stop_python_strategy, sid, timeout=STRATEGY_CALL_TIMEOUT_SECONDS
+                )
                 emoji = "[OK]" if ok else "[FAILED]"
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -2423,19 +2644,27 @@ class TelegramBotService:
         if callback_data == "csy_all":
             await query.edit_message_text("Stopping all running strategies...")
             try:
-                from blueprints.python_strategy import RUNNING_STRATEGIES, stop_strategy_process
-
-                running_ids = list(RUNNING_STRATEGIES.keys())
+                running_ids = [
+                    sid
+                    for sid, _name in await self._in_app_world(
+                        _running_python_strategies,
+                        timeout=STRATEGY_CALL_TIMEOUT_SECONDS,
+                        offload=False,
+                    )
+                ]
                 if not running_ids:
                     await context.bot.send_message(
                         chat_id=chat_id, text="ℹ No Python strategies were running."
                     )
                 else:
-                    loop = asyncio.get_event_loop()
                     stopped, failed = 0, 0
                     for sid in running_ids:
                         try:
-                            ok, _ = await loop.run_in_executor(None, stop_strategy_process, sid)
+                            ok, _ = await self._in_app_world(
+                                _stop_python_strategy,
+                                sid,
+                                timeout=STRATEGY_CALL_TIMEOUT_SECONDS,
+                            )
                             if ok:
                                 stopped += 1
                             else:
@@ -2469,10 +2698,13 @@ class TelegramBotService:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, set_analyze_mode, new_mode)
 
-                # Sync mode to frontend via SocketIO
+                # Sync mode to frontend via SocketIO. This runs on the bot's real
+                # thread, so the emit goes through the helper that hands it to
+                # the hub under eventlet instead of touching green queues here.
                 try:
-                    from extensions import socketio
-                    socketio.emit("app_mode_changed", {"analyze_mode": new_mode})
+                    from extensions import emit_from_any_thread
+
+                    emit_from_any_thread("app_mode_changed", {"analyze_mode": new_mode})
                 except Exception:
                     pass
 
@@ -2630,7 +2862,9 @@ class TelegramBotService:
                         # Add small delay to avoid rate limits
                         await asyncio.sleep(0.1)
                 except Exception as e:
-                    logger.exception(f"Failed to send broadcast to {user.get('telegram_id')}: {str(e)}")
+                    logger.exception(
+                        f"Failed to send broadcast to {user.get('telegram_id')}: {str(e)}"
+                    )
                     fail_count += 1
 
             logger.debug(f"Broadcast complete: {success_count} success, {fail_count} failed")
