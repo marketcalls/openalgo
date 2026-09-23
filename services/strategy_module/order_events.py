@@ -132,6 +132,12 @@ def _shutdown_pool() -> None:
 #: real lock, whose critical section is dictionary work only.
 _pending_updates: LockedTTLCache = LockedTTLCache(maxsize=512, ttl=120)
 
+#: How many times replay_for has run, bumped under the stash's lock before it
+#: pops. An update worker that missed its row compares this with the value it
+#: read before its lookup: unchanged means no replay ran in between, so any
+#: replay for that order is still to come and will find the stashed frame.
+_replays = 0
+
 
 def replay_for(order_id: str | None) -> None:
     """Apply an update that arrived before this order's row was written.
@@ -144,31 +150,49 @@ def replay_for(order_id: str | None) -> None:
     the same call when its own re-check finds the row, so exactly one of the
     two applies it.
     """
+    global _replays
     if not order_id:
         return
-    event = _pending_updates.pop(str(order_id), None)
+    with _pending_updates.lock:
+        _replays += 1
+        event = _pending_updates.pop(str(order_id), None)
     if event is None:
         return
     logger.debug("Replaying an order update that arrived before its row: %s", order_id)
     _apply_update(str(order_id), event)
 
 
-def _stash_until_recorded(order_id: str, event: Any):
-    """Hold an update whose row is not there yet, then look once more.
+def _stash_until_recorded(order_id: str, event: Any, replays_before: int):
+    """Hold an update whose row is not there yet, then look once more if needed.
 
     Stashing and replaying is a handshake between two threads: the update
     worker that missed the row, and the thread that records it and then calls
-    replay_for. Stash-then-look closes the gap between them. Once the frame is
-    stashed, either the recording thread has not yet replayed (and will find
-    it), or it already has (and this second look finds the row). Whichever of
-    the two pops the frame applies it; the other gets nothing back.
+    replay_for. Once the frame is stashed, any replay still to come will find
+    it. The one that can miss it is a replay that ran between this worker's
+    lookup and its stash, and replay_for counts itself before it pops, so a
+    changed count after the stash is exactly when a second look is needed.
+    If the row is there now, whichever of the two pops the frame applies it;
+    the other gets nothing back.
+
+    The count keeps the common case cheap. An update for another surface's
+    order, which is almost every update, still costs one lookup unless a
+    strategy happened to record an order in that instant.
+
+    Args:
+        order_id: The broker order id the update names.
+        event: The update.
+        replays_before: ``_replays`` as read before the first lookup.
 
     Returns:
         The order row when this call took the frame back and must apply it,
         otherwise None (still held for replay_for, applied by it already, or
         somebody else's order).
     """
-    _pending_updates[order_id] = event
+    with _pending_updates.lock:
+        _pending_updates[order_id] = event
+        replayed_meanwhile = _replays != replays_before
+    if not replayed_meanwhile:
+        return None
     # Nothing is loaded in this session yet (the first lookup found no row),
     # but expire anyway so the second look can only read what is committed.
     try:
@@ -542,6 +566,8 @@ def _push_fill(run_id: int, order: dict[str, Any] | None) -> None:
 def _apply_update(order_id: str, event: Any) -> None:
     """Match the update to a strategy order and apply it."""
     try:
+        # Read before the lookup; see _stash_until_recorded.
+        replays_before = _replays
         row = store.get_order_by_broker_id(order_id)
         if row is None:
             # Either somebody else's order, which is the overwhelmingly common
@@ -563,7 +589,7 @@ def _apply_update(order_id: str, event: Any) -> None:
             # committed and replay_for called between the lookup above and the
             # stash: under the gthread worker those run in parallel, and a
             # frame stashed after its replay would never be applied.
-            row = _stash_until_recorded(order_id, event)
+            row = _stash_until_recorded(order_id, event, replays_before)
             if row is None:
                 return
 

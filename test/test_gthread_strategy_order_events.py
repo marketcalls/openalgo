@@ -19,6 +19,7 @@ parallel, which breaks it two ways, each pinned here:
 
 import sys
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -146,7 +147,6 @@ def _race(unacknowledged_order, broker_order_id, *, replay_before_stash):
     """
     real_lookup = store.get_order_by_broker_id
     worker_missed = threading.Event()
-    worker_stashed = threading.Event()
     recorded = threading.Event()
     worker_ident: list[int] = []
     worker_lookups = []
@@ -161,8 +161,8 @@ def _race(unacknowledged_order, broker_order_id, *, replay_before_stash):
             if replay_before_stash:
                 assert recorded.wait(10), "the recording thread never ran"
             return None
-        # The second look, which only the fixed worker makes after stashing.
-        worker_stashed.set()
+        # The second look, which only the fixed worker makes, and only when a
+        # replay ran between its first look and its stash.
         if not replay_before_stash:
             assert recorded.wait(10), "the recording thread never ran"
         return real_lookup(order_id)
@@ -174,9 +174,11 @@ def _race(unacknowledged_order, broker_order_id, *, replay_before_stash):
     def recorder():
         assert worker_missed.wait(10), "the worker never looked the row up"
         if not replay_before_stash:
-            # Replay after the stash. Unfixed code never looks a second time,
-            # so do not wait long for it; its stash is already there.
-            worker_stashed.wait(2)
+            # Replay only once the frame is stashed.
+            deadline = time.monotonic() + 5
+            while order_events._pending_updates.get(broker_order_id) is None:
+                assert time.monotonic() < deadline, "the worker never stashed"
+                time.sleep(0.005)
         try:
             assert store.update_order(
                 unacknowledged_order.order_id, status="open", broker_order_id=broker_order_id
@@ -215,18 +217,24 @@ def test_a_fill_that_misses_its_row_is_applied_when_replay_ran_first(unacknowled
 
 
 def test_a_fill_stashed_before_its_replay_is_applied_once(unacknowledged_order):
-    """The other interleaving: replay_for takes it, the worker's second look
-    finds the row but nothing left to apply, so it is applied exactly once."""
+    """The other interleaving: the frame is stashed first and replay_for takes
+    it, so it is applied exactly once."""
     apply_fill = _race(unacknowledged_order, "BRK-GT-RACE-2", replay_before_stash=False)
 
     assert apply_fill.call_count == 1
 
 
-def test_somebody_elses_order_is_still_only_held(unacknowledged_order):
-    """No row now or on the second look: held for replay, nothing applied."""
-    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
+def test_somebody_elses_order_is_held_for_one_lookup(unacknowledged_order):
+    """Almost every update belongs to another surface. With no replay running
+    it costs one lookup, as before, and is held rather than applied."""
+    real_lookup = store.get_order_by_broker_id
+    with (
+        patch.object(store, "get_order_by_broker_id", side_effect=real_lookup) as lookup,
+        patch("services.strategy_module.engine.apply_fill") as apply_fill,
+    ):
         order_events._apply_update("NOT-OURS-1", _fill("NOT-OURS-1"))
     try:
+        assert lookup.call_count == 1
         assert apply_fill.call_count == 0
         assert order_events._pending_updates.get("NOT-OURS-1") is not None
     finally:
