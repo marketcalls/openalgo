@@ -171,9 +171,16 @@ def _isolated_token_dir(tmp_path, monkeypatch):
     that should not happen at all.
 
     Points the module at a temporary directory for every test in this file, and
-    puts it back afterwards.
+    puts it back afterwards. The stored copy in `ag_secret` is shut out as well:
+    `ensure_ready` rebuilds the file from that row when the file is missing, and
+    the test database is shared by the whole suite and survives between runs,
+    so a credential another test stored there would answer the gate here.
     """
+    from database import agent_db
+
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    monkeypatch.setattr(agent_db, "get_secret", lambda name: None)
+    monkeypatch.setattr(agent_db, "set_secret", lambda name, value: (True, None))
     chatgpt_oauth.configure_token_dir(tmp_path / "chatgpt")
     yield
     chatgpt_oauth.configure_token_dir(None)
