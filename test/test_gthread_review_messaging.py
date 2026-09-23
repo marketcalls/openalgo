@@ -22,6 +22,7 @@ os.environ.setdefault("OPENALGO_MCP_HTTP_BOOT", "1")
 # Importing it pins the installed openalgo SDK over the repo folder of the same
 # name, which mcp/mcpserver.py would otherwise import instead.
 import test_mcp_integrity  # noqa: E402, F401
+
 from utils.mcp_tool_registry import _load_mcpserver_module  # noqa: E402
 
 
