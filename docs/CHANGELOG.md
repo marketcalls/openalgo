@@ -8,6 +8,19 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ubuntu installs on 2.0.2.6 could not run OpenScript strategies or the
+  agent.** `requirements-nginx.txt`, which `install.sh`, `install-multi.sh` and
+  `update.sh` install from, was missing `openscript`, `litellm`, `agno` and
+  `ddgs`. The OpenScript editor worked, but running a strategy on the server
+  failed, and so did the first agent chat, while the site itself looked
+  healthy. After pulling, run `update.sh` once more: it installs the four
+  packages and changes no version you already have. Docker and the development
+  server were not affected. `requirements.txt` gains the same four, and a CI
+  test now fails whenever `pyproject.toml` has a library the requirements files
+  lack.
+
 ## [2.0.2.6] - 2026-09-23
 
 ### OpenScript and Chart Alerts Release
