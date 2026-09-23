@@ -46,6 +46,11 @@ class AliceBlueWebSocket:
     # {"k": "", "t": "h"} and draws no response.
     HEARTBEAT_INTERVAL_SECONDS = 50
 
+    #: How many subscribe() calls currently want each "exchange|token" key.
+    #: None until the first subscribe(); a key with no count is released by
+    #: its first unsubscribe(), which is how every key behaved before counting.
+    _subscription_refs: dict | None = None
+
     def __init__(self, user_id: str, session_id: str):
         """
         Initialize the AliceBlue WebSocket client.
@@ -65,6 +70,7 @@ class AliceBlueWebSocket:
         self.subscriptions = {}  # Dictionary to track subscribed instruments: exchange|token -> instrument object
         self.last_quotes = {}  # Dictionary to store quote data: exchange:token -> quote data
         self.last_depth = {}  # Dictionary to store depth data: exchange:token -> depth data
+        self._subscription_refs = {}  # exchange|token -> subscribers still reading it
         self._connect_thread = None
         self._reconnect_thread = None
         self._stop_event = threading.Event()
@@ -823,15 +829,24 @@ class AliceBlueWebSocket:
             logger.warning("No instruments to subscribe")
             return False
 
-        # Add instruments to subscriptions mapping: exchange|token -> instrument
+        # Add instruments to subscriptions mapping: exchange|token -> instrument,
+        # and count this subscriber, so another request's unsubscribe of the
+        # same instrument cannot end the feed (and erase the tick) this one is
+        # still waiting on. The socket is pooled across concurrent requests.
         with self.lock:
+            refs = self._subscription_refs
+            if refs is None:
+                refs = self._subscription_refs = {}
             for instrument in instruments:
                 subscription_key = f"{instrument.exchange}|{instrument.token}"
                 self.subscriptions[subscription_key] = instrument
                 self.subscribed_tokens.add(subscription_key)
-                logger.info(
-                    f"Storing subscription: {subscription_key} -> {getattr(instrument, 'symbol', 'Unknown')}"
-                )
+                refs[subscription_key] = refs.get(subscription_key, 0) + 1
+        for instrument in instruments:
+            logger.info(
+                f"Storing subscription: {instrument.exchange}|{instrument.token} -> "
+                f"{getattr(instrument, 'symbol', 'Unknown')}"
+            )
 
         # Format according to AliceBlue API documentation: {"k":"NFO|54957#MCX|239484","t":"t"}
         # For depth: {"k":"NFO|54957#MCX|239484","t":"d"}
@@ -857,6 +872,9 @@ class AliceBlueWebSocket:
                 self.ws.send(json.dumps(message))
             except Exception as e:
                 logger.error(f"Failed to send subscription message: {e}")
+                # The caller will not unsubscribe what it never got, so take
+                # back this call's counts rather than pin the keys for good.
+                self._release(instruments)
                 return False
 
             logger.info(
@@ -867,62 +885,84 @@ class AliceBlueWebSocket:
             logger.warning("No valid subscription keys generated")
             return False
 
+    def _release(self, instruments):
+        """Drop one subscriber from each instrument; return the keys now unwanted.
+
+        A key whose last subscriber this was leaves the subscription maps, and
+        its cached tick and depth go with it. Those caches are keyed
+        "exchange:token" while subscriptions are keyed "exchange|token", and
+        unsubscribe once cleared only the latter, so every option-chain sweep
+        left ~80 quote entries behind for good on a pooled, long-lived socket
+        in a worker that never restarts. A key another request still reads
+        keeps both its subscription and its cached data.
+
+        All of it under self.lock, the lock the message thread writes the
+        caches under.
+
+        Returns:
+            list[str]: The "exchange|token" keys nobody subscribes to any more.
+        """
+        released = []
+        with self.lock:
+            refs = self._subscription_refs
+            for instrument in instruments:
+                subscription_key = f"{instrument.exchange}|{instrument.token}"
+                remaining = (refs.get(subscription_key, 0) if refs is not None else 0) - 1
+                if remaining > 0:
+                    refs[subscription_key] = remaining
+                    continue
+                if refs is not None:
+                    refs.pop(subscription_key, None)
+                self.subscriptions.pop(subscription_key, None)
+                self.subscribed_tokens.discard(subscription_key)
+                cache_key = f"{instrument.exchange}:{instrument.token}"
+                self.last_quotes.pop(cache_key, None)
+                self.last_depth.pop(cache_key, None)
+                released.append(subscription_key)
+        return released
+
     def unsubscribe(self, instruments, is_depth=False):
-        """Unsubscribe from market data for specified instruments"""
+        """Unsubscribe from market data for specified instruments.
+
+        Only instruments no other request is still reading are unsubscribed at
+        the broker; the rest just lose this caller's claim on them. The
+        bookkeeping happens even on a dropped connection, so a socket that
+        reconnects does not resubscribe what nobody wants.
+        """
+        if not instruments:
+            logger.warning("No instruments to unsubscribe")
+            return False
+
+        subscription_keys = self._release(instruments)
+        for subscription_key in subscription_keys:
+            logger.info(f"Removed subscription: {subscription_key}")
 
         if not self.is_connected:
             logger.error("Cannot unsubscribe: WebSocket is not connected")
             return False
 
-        if not instruments:
-            logger.warning("No instruments to unsubscribe")
-            return False
+        if not subscription_keys:
+            logger.debug("Every instrument is still wanted by another request; nothing to send")
+            return True
 
         # Format according to AliceBlue API documentation: {"k":"NFO|54957#MCX|239484","t":"u"}
-        subscription_keys = []
-        for instrument in instruments:
-            # Remove from subscriptions using the same key format as subscription
-            subscription_key = f"{instrument.exchange}|{instrument.token}"
-            if subscription_key in self.subscriptions:
-                del self.subscriptions[subscription_key]
-                logger.info(f"Removed subscription: {subscription_key}")
+        subscription_key = "#".join(subscription_keys)
+        message = {
+            "t": "u",  # t = Type of request, u for unsubscription
+            "k": subscription_key,  # Format: "NFO|54957#MCX|239484"
+        }
 
-            self.subscribed_tokens.discard(subscription_key)
+        logger.info(f"Sending unsubscription message: {json.dumps(message)}")
 
-            # Drop the cached tick and depth for this instrument too. These are
-            # keyed "exchange:token" while subscriptions are keyed
-            # "exchange|token", and unsubscribe only ever cleared the latter -
-            # so every option-chain sweep left ~80 quote entries behind
-            # permanently. The connection is now pooled and long-lived, and the
-            # worker never restarts, so that accumulated for the whole session.
-            cache_key = f"{instrument.exchange}:{instrument.token}"
-            self.last_quotes.pop(cache_key, None)
-            self.last_depth.pop(cache_key, None)
-
-            subscription_keys.append(subscription_key)
-
-        if subscription_keys:
-            # Create the unsubscription message with the correct format
-            subscription_key = "#".join(subscription_keys)
-            message = {
-                "t": "u",  # t = Type of request, u for unsubscription
-                "k": subscription_key,  # Format: "NFO|54957#MCX|239484"
-            }
-
-            logger.info(f"Sending unsubscription message: {json.dumps(message)}")
-
-            # Send the message
-            try:
-                self.ws.send(json.dumps(message))
-            except Exception as e:
-                logger.error(f"Failed to send unsubscription message: {e}")
-                return False
-
-            logger.info(f"Unsubscribed from {len(instruments)} instruments")
-            return True
-        else:
-            logger.warning("No valid unsubscription keys generated")
+        # Send the message
+        try:
+            self.ws.send(json.dumps(message))
+        except Exception as e:
+            logger.error(f"Failed to send unsubscription message: {e}")
             return False
+
+        logger.info(f"Unsubscribed from {len(subscription_keys)} instruments")
+        return True
 
     def _resubscribe(self):
         """

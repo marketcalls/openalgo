@@ -32,6 +32,22 @@ HISTORICAL_API_URL = BASE_URL + "open-api/od/ChartAPIService/api/chart/history"
 _WS_REGISTRY: dict = {}
 _WS_REGISTRY_LOCK = threading.Lock()
 
+# Held for the whole build of a socket: look up, connect, register. The first
+# burst after an idle minute (an option chain firing multiquotes, depth and an
+# index quote together) used to send every request down the build path at
+# once, and each loser's socket was overwritten in the registry and never
+# disconnected; its connect had invalidated the winner's server session, and
+# its reconnect loop, which has no attempt cap, ran for the life of the worker.
+# Callers queue here instead and take the socket the first one built. A plain
+# stdlib lock: only request threads take it, and it is green under eventlet.
+_WS_CREATE_LOCK = threading.Lock()
+
+# Bumped, under _WS_REGISTRY_LOCK, every time a socket is registered. A caller
+# reads it before queueing on _WS_CREATE_LOCK, so once through it can tell a
+# socket built while it waited (take it) from the one it found wanting
+# (replace it).
+_ws_generation = 0
+
 
 def close_all_websockets():
     """Disconnect and drop every pooled market-data socket.
@@ -116,6 +132,32 @@ class BrokerData:
             if cached is not None and cached.is_websocket_connected():
                 return cached
 
+        # One build at a time. Read the generation before queueing, so a socket
+        # another request registers while this one waits counts as newer than
+        # the one this request found missing, idle or broken, even under
+        # force_new: two requests asking for a fresh socket at once must not
+        # tear down each other's.
+        with _WS_REGISTRY_LOCK:
+            seen_generation = _ws_generation
+        with _WS_CREATE_LOCK:
+            with _WS_REGISTRY_LOCK:
+                current = _WS_REGISTRY.get(self.session_id)
+                built_meanwhile = _ws_generation != seen_generation
+            if built_meanwhile and current is not None and current.is_websocket_connected():
+                return current
+            return self._build_websocket()
+
+    def _build_websocket(self):
+        """Replace this session's socket with a freshly connected one.
+
+        Called only while holding _WS_CREATE_LOCK.
+
+        Returns:
+            AliceBlueWebSocket: The connected socket, or None if it could not
+            be built.
+        """
+        global _ws_generation
+
         try:
             # Drop whatever was registered for this session before replacing it,
             # so a stale socket and its threads are not left behind.
@@ -173,13 +215,14 @@ class BrokerData:
             # socket is authenticated with a dead one. Leaving it registered
             # would strand a socket plus its reader and heartbeat threads every
             # single day in a worker that never restarts.
+            # Anything else still registered under this session is superseded
+            # too and is closed rather than overwritten and orphaned.
             with _WS_REGISTRY_LOCK:
-                superseded = [
-                    (sid, sock) for sid, sock in _WS_REGISTRY.items() if sid != self.session_id
-                ]
+                superseded = [(sid, sock) for sid, sock in _WS_REGISTRY.items() if sock is not ws]
                 for sid, _ in superseded:
                     del _WS_REGISTRY[sid]
                 _WS_REGISTRY[self.session_id] = ws
+                _ws_generation += 1
 
             for _, sock in superseded:
                 logger.info("Closing AliceBlue WebSocket for a superseded session")
