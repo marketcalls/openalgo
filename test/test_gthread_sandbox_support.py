@@ -15,6 +15,7 @@ import os
 import sys
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from decimal import Decimal
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -144,6 +145,60 @@ def funds_of(user_id: str) -> dict:
     }
     db_session.remove()
     return values
+
+
+@contextmanager
+def only_funds_of(user_id: str):
+    """Leave ``user_id`` as the only funds row for the duration of the block.
+
+    A starting-capital change applies to every funds row in the database, and
+    the test database is shared with the rest of the suite, so the other rows
+    are set aside and put back exactly as they were afterwards.
+    """
+    from database.sandbox_db import SandboxFunds, db_session
+
+    table = SandboxFunds.__table__
+    saved = [
+        dict(row._mapping)
+        for row in db_session.execute(table.select().where(table.c.user_id != user_id)).all()
+    ]
+    db_session.execute(table.delete().where(table.c.user_id != user_id))
+    db_session.commit()
+    db_session.remove()
+    try:
+        yield
+    finally:
+        release_sessions()
+        for row in saved:
+            db_session.execute(table.insert().values(row))
+        db_session.commit()
+        db_session.remove()
+
+
+@contextmanager
+def configs_restored(keys):
+    """Put the given sandbox config values back as they were after the block."""
+    from database.sandbox_db import SandboxConfig, db_session
+
+    saved = {
+        key: row.config_value
+        for key in keys
+        if (row := SandboxConfig.query.filter_by(config_key=key).first()) is not None
+    }
+    db_session.remove()
+    try:
+        yield
+    finally:
+        release_sessions()
+        for key in keys:
+            row = SandboxConfig.query.filter_by(config_key=key).first()
+            if key in saved:
+                if row is not None:
+                    row.config_value = saved[key]
+            elif row is not None:
+                db_session.delete(row)
+        db_session.commit()
+        db_session.remove()
 
 
 def release_sessions() -> None:

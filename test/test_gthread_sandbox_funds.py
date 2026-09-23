@@ -25,6 +25,7 @@ import pytest
 from test_gthread_sandbox_support import (
     CAPITAL,
     funds_of,
+    only_funds_of,
     prepare_databases,
     release_sessions,
     reset_user,
@@ -154,32 +155,9 @@ def test_reconcile_decides_on_the_balance_now_not_a_copy_the_caller_holds():
 
 @pytest.fixture
 def only_this_account():
-    """Leave USER as the only funds row while a test rebases every account.
-
-    A capital change applies to every funds row in the database, and the test
-    database is shared with the rest of the suite, so the other rows are set
-    aside for the test and put back exactly as they were afterwards.
-    """
-    from database.sandbox_db import SandboxFunds, db_session
-
-    columns = [c.name for c in SandboxFunds.__table__.columns]
-    saved = [
-        dict(row._mapping)
-        for row in db_session.execute(
-            SandboxFunds.__table__.select().where(SandboxFunds.user_id != USER)
-        ).all()
-    ]
-    SandboxFunds.query.filter(SandboxFunds.user_id != USER).delete()
-    db_session.commit()
-    db_session.remove()
-    try:
+    """Leave USER as the only funds row while a test rebases every account."""
+    with only_funds_of(USER):
         yield
-    finally:
-        release_sessions()
-        for row in saved:
-            db_session.execute(SandboxFunds.__table__.insert().values({c: row[c] for c in columns}))
-        db_session.commit()
-        db_session.remove()
 
 
 def test_rebasing_the_capital_keeps_a_block_committed_while_it_runs(monkeypatch, only_this_account):
