@@ -78,16 +78,20 @@ did:**
 - Action Center: an approved order that a restart or crash cut off while it was
   being sent is shown as not confirmed, with a note that it may or may not have
   reached the broker and to check the broker's order book before placing it
-  again. OpenAlgo never sends it again, and the page offers no way to.
+  again. OpenAlgo never sends it again, and the page offers no way to. An order
+  still being sent is shown as Sending, with no note; only one still unanswered
+  two minutes after its approval, longer than any send takes, is shown as not
+  confirmed. The All Orders tab lists every order, not only the pending ones.
 - Each browser tab keeps one live update connection, shared by every page in
   it. The Action Center, WhatsApp and Historify pages used to open a second
   one, and Historify showed every order alert twice while it was open.
 - A sandbox GTT leg whose position has another order in progress fires on the
   next tick instead of holding up every other tick until that order finishes.
 - The system report shows the web server, the one `.env` asks for, the request
-  threads and where the market data proxy runs. The admin Diagnostics page
-  shows the same details in a Web server card, in plain words, and its uptime
-  in hours and days.
+  threads, where the market data proxy runs and whether it is running. The
+  admin Diagnostics page shows the same details in a Web server card, in plain
+  words, and its uptime in hours and days. Threads free counts the request
+  threads that are idle, and none while requests are waiting.
 - The option chain, Greeks, IV, OI, max pain, volatility surface, straddle,
   GEX and Strategy Builder tools, the Arbitrage spread order and the portfolio
   tearsheet download show the server's own sentence when a request is refused
@@ -109,18 +113,26 @@ did:**
   requests answer as soon as the broker has sent everything they read, instead
   of always waiting a fixed time. The answers are the same; they come sooner.
 - Pocketful: other requests no longer queue behind the market data feed while
-  it connects.
+  it connects. A quote asked for after the feed dropped is answered from a new
+  packet, never from one left behind by an earlier request.
 - OpenScript: Stop reports "closed and stopped" only when the run confirms that
   its position was closed. A run that crashed, or was stopped before its
   closing order filled, is still marked stopped, and Stop now says it could not
   confirm the close and asks you to check your positions. A run started before
   this update cannot confirm, so its first Stop afterwards says so even when it
-  did close.
+  did close. Before it measures what it holds, Stop now cancels every order of
+  the run still working at the broker and counts the fills that came of them,
+  so an entry that filled a moment before Stop is closed, and a resting limit
+  or stop order cannot fill after the run has gone. If an order will not
+  finish, the run keeps running and says which order to check. Two Stops at
+  the same moment no longer lose each other's confirmation.
 - `install/update.sh` updates an instance made by `install-multi.sh` when run
   from inside it, and restarts that instance's service. It used to treat such
   an instance as a development checkout and never stopped or started its
   service. A server that also has a single install at `/var/python/openalgo`
-  keeps updating that one, as before.
+  keeps updating that one, as before. Run from another OpenAlgo checkout, such
+  as a development clone on the same server, it updates that checkout and
+  leaves every instance and its service alone, as before.
 
 **Going back to an older release.** A service switched to the launcher starts
 through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
