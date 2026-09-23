@@ -28,9 +28,10 @@ expires. So when the worker is told to stop, the wrapper also calls
 connections, and closes the Engine.IO sessions so their long-polls return at
 once. Browsers reconnect by themselves once the server is back.
 
-The drain is added only when the worker still owns its SIGTERM handler. If the
-app installed its own stop handler while loading (the market data proxy does,
-in some modes), that handler is left exactly as it is.
+The drain runs after the SIGTERM handler that is in place when the worker has
+loaded the app, which is called first and unchanged. If that handler ends the
+process by itself (the market data proxy's does when it runs inside the
+worker), the drain never runs and the stop is what it was before.
 
 **Nothing here may fail a worker.** Every hook body is wrapped, and anything
 unexpected is logged through gunicorn's own logger and ignored.
@@ -82,19 +83,18 @@ def _shutdown_runtime(worker):
 
 
 def _install_drain(worker):
-    """Wrap the worker's SIGTERM handler so a stop also drains connections."""
+    """Run the drain after whatever SIGTERM handler the worker has.
+
+    The handler in place is called first and unchanged: gunicorn's own, or one
+    the app chained in front of it while loading (the ngrok cleanup does, and
+    then calls gunicorn's). If that handler ends the process itself, as the
+    market data proxy's does when it runs inside the worker, the drain never
+    runs and the stop is exactly what it was before.
+    """
     import signal
 
-    own = getattr(worker, "handle_exit", None)
-    if own is None:
-        return
-    if signal.getsignal(signal.SIGTERM) != own:
-        _log(
-            worker,
-            "info",
-            "OpenAlgo handles its own stop signal in this process, so the gunicorn "
-            "drain hooks are not used.",
-        )
+    current = signal.getsignal(signal.SIGTERM)
+    if not callable(current):
         return
 
     # Resolved now, in normal context, so the signal handler does no imports.
@@ -104,7 +104,7 @@ def _install_drain(worker):
         begin_drain = None
 
     def _on_term(sig, frame):
-        own(sig, frame)
+        current(sig, frame)
         if begin_drain is not None:
             try:
                 begin_drain()
