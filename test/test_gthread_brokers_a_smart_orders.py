@@ -389,7 +389,7 @@ for name in ("dhan", "aliceblue", "flattrade"):
         return str(module._get_cached_positions(args[-1])["qty"])
 
     module.place_order_api = place_order_api
-    module.get_positions = lambda auth, book=book: dict(book)
+    module.get_positions = lambda auth, book=book, **_kwargs: dict(book)
     # A placeholder book is a successful read here; the plugin's check of a
     # real reply is pinned per broker in test_position_read_failure.py.
     module._position_book_ok = lambda _data: True
