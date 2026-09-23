@@ -110,13 +110,15 @@ detect_uv() {
 
 # Find server deployments installed via install.sh
 #
-# Two layouts are supported:
+# Three layouts are supported:
 #   1. Simple (current install.sh)   /var/python/openalgo, service "openalgo"
 #   2. Legacy multi-deploy           /var/python/openalgo-flask/<deploy>/openalgo,
-#                                    service "openalgo-<deploy>" (still produced
-#                                    by install/install-multi.sh)
+#                                    service "openalgo-<deploy>"
+#   3. install/install-multi.sh      /var/python/openalgo-flask/openalgoN,
+#                                    service "openalgoN" (see find_multi_instances)
 # We try the simple layout first because it's unambiguous; only fall back
-# to scanning the legacy parent dir when the simple path is absent.
+# to scanning the legacy parent dir when the simple path is absent, and to
+# install-multi.sh instances when neither is found.
 SIMPLE_PATH="/var/python/openalgo"
 DEPLOY_BASE="/var/python/openalgo-flask"
 SERVER_MODE=false
@@ -180,6 +182,91 @@ if [ "$SERVER_MODE" = false ] && [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
     SERVICE_NAME="openalgo-$SELECTED_DEPLOY"
 
     log_message "\nUpdating deployment: $SELECTED_DEPLOY" "$BLUE"
+    log_message "Path: $OPENALGO_PATH" "$BLUE"
+    log_message "Service: $SERVICE_NAME" "$BLUE"
+fi
+
+# Instances made by install/install-multi.sh
+#
+# install-multi.sh clones each instance straight into its own folder under
+# $DEPLOY_BASE (openalgo1, openalgo2, ...), with its Python environment in
+# <folder>/venv and a systemd service named after the folder. Neither layout
+# above matches that, so the updater used to fall through to local development
+# mode and update the instance as root, with no service restart. An instance is
+# a checkout (.git, app.py, .env and venv) whose service file's
+# WorkingDirectory is that folder, the same test the web server switch script
+# uses to find OpenAlgo services. Only looked for when neither layout above was
+# found, so those behave exactly as before.
+MULTI_SYSTEMD_DIR="/etc/systemd/system"
+
+find_multi_instances() {
+    local dir name unit workdir
+    [ -d "$DEPLOY_BASE" ] || return 0
+    for dir in "$DEPLOY_BASE"/*/; do
+        dir="${dir%/}"
+        [ -d "$dir/.git" ] && [ -f "$dir/app.py" ] && [ -f "$dir/.env" ] || continue
+        [ -x "$dir/venv/bin/python" ] || continue
+        name="$(basename "$dir")"
+        unit="$MULTI_SYSTEMD_DIR/$name.service"
+        [ -f "$unit" ] || continue
+        workdir="$(tr -d '\r' < "$unit" | grep -E '^[[:space:]]*WorkingDirectory=' | tail -n 1 \
+            | sed -E 's/^[[:space:]]*WorkingDirectory=//')"
+        [ "${workdir%/}" = "$dir" ] || continue
+        printf '%s\n' "$name"
+    done
+}
+
+if [ "$SERVER_MODE" = false ]; then
+    MULTI_INSTANCES=($(find_multi_instances))
+fi
+
+if [ "$SERVER_MODE" = false ] && [ ${#MULTI_INSTANCES[@]} -gt 0 ]; then
+    SERVER_MODE=true
+    log_message "Found ${#MULTI_INSTANCES[@]} OpenAlgo instance(s) made by install-multi.sh:" "$GREEN"
+    for i in "${!MULTI_INSTANCES[@]}"; do
+        log_message "  $((i+1)). ${MULTI_INSTANCES[$i]}" "$BLUE"
+    done
+
+    # The instance this updater belongs to, else the one it was run from.
+    SELECTED_DEPLOY=""
+    for here in "$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)" "$(pwd -P)"; do
+        for name in "${MULTI_INSTANCES[@]}"; do
+            instance_dir="$(cd "$DEPLOY_BASE/$name" 2>/dev/null && pwd -P)"
+            case "$here/" in
+                "$instance_dir"/*) SELECTED_DEPLOY="$name"; break 2 ;;
+            esac
+        done
+    done
+
+    if [ -n "$SELECTED_DEPLOY" ]; then
+        log_message "\nSelected the instance this updater was run from: $SELECTED_DEPLOY" "$GREEN"
+    elif [ ${#MULTI_INSTANCES[@]} -eq 1 ]; then
+        SELECTED_DEPLOY="${MULTI_INSTANCES[0]}"
+        log_message "\nAuto-selected: $SELECTED_DEPLOY" "$GREEN"
+    else
+        echo ""
+        while true; do
+            if ! read -p "Select instance to update (1-${#MULTI_INSTANCES[@]}): " choice; then
+                log_message "\nNo instance was chosen, so nothing was changed. Run the updater from inside the instance you want to update, for example:" "$RED"
+                log_message "  cd $DEPLOY_BASE/${MULTI_INSTANCES[0]} && sudo bash install/update.sh" "$YELLOW"
+                exit 1
+            fi
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#MULTI_INSTANCES[@]} ]; then
+                SELECTED_DEPLOY="${MULTI_INSTANCES[$((choice-1))]}"
+                break
+            else
+                log_message "Invalid choice. Please enter a number between 1 and ${#MULTI_INSTANCES[@]}." "$RED"
+            fi
+        done
+    fi
+
+    # Derive paths from the instance folder (install-multi.sh layout)
+    BASE_PATH="$DEPLOY_BASE/$SELECTED_DEPLOY"
+    OPENALGO_PATH="$BASE_PATH"
+    VENV_PATH="$BASE_PATH/venv"
+    SERVICE_NAME="$SELECTED_DEPLOY"
+
+    log_message "\nUpdating instance: $SELECTED_DEPLOY" "$BLUE"
     log_message "Path: $OPENALGO_PATH" "$BLUE"
     log_message "Service: $SERVICE_NAME" "$BLUE"
 fi
