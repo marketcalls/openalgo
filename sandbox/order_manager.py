@@ -788,13 +788,16 @@ class OrderManager:
             if order.order_status in ("open", "trigger pending"):
                 try:
                     from sandbox.websocket_execution_engine import (
-                        get_websocket_execution_engine,
                         is_websocket_execution_engine_running,
+                        peek_websocket_execution_engine,
                     )
 
                     if is_websocket_execution_engine_running():
-                        ws_engine = get_websocket_execution_engine()
-                        ws_engine.notify_order_placed(order)
+                        # peek: an engine stopped since the check is not
+                        # recreated just to be told about this order.
+                        ws_engine = peek_websocket_execution_engine()
+                        if ws_engine is not None:
+                            ws_engine.notify_order_placed(order)
                 except Exception as e:
                     logger.debug(f"WebSocket execution engine notification skipped: {e}")
 

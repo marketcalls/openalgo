@@ -243,9 +243,10 @@ def _notify_position_feed_closed(user_id, symbol, exchange):
     release a subscription costs a few stray ticks, never correctness.
     """
     try:
-        from sandbox.websocket_execution_engine import get_websocket_execution_engine
+        from sandbox.websocket_execution_engine import peek_websocket_execution_engine
 
-        engine = get_websocket_execution_engine()
+        # peek: settling a position must never create an engine.
+        engine = peek_websocket_execution_engine()
         if engine is not None:
             engine.notify_position_closed(user_id, symbol, exchange)
     except Exception:

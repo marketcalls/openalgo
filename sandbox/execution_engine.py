@@ -820,6 +820,7 @@ class ExecutionEngine:
         # each compute old + its own delta, and last-write-wins -- silently
         # losing one increment. The lock is released even when the function
         # raises or rolls back its transaction.
+        feed_change = None
         self._position_lock.acquire()
         try:
             fund_manager = FundManager(order.user_id)
@@ -1094,33 +1095,10 @@ class ExecutionEngine:
             # has open quantity (subscribe so MarketDataService stays warm and
             # the MTM loop reads ticks instead of REST) or it just went flat
             # (release the subscription). Never allowed to break a fill.
-            try:
-                from sandbox.websocket_execution_engine import (
-                    get_websocket_execution_engine,
-                )
-
-                ws_engine = get_websocket_execution_engine()
-                if ws_engine is not None:
-                    has_open = (
-                        SandboxPositions.query.filter_by(
-                            user_id=order.user_id,
-                            symbol=order.symbol,
-                            exchange=order.exchange,
-                        )
-                        .filter(SandboxPositions.quantity != 0)
-                        .count()
-                        > 0
-                    )
-                    if has_open:
-                        ws_engine.notify_position_opened(
-                            order.user_id, order.symbol, order.exchange
-                        )
-                    else:
-                        ws_engine.notify_position_closed(
-                            order.user_id, order.symbol, order.exchange
-                        )
-            except Exception:
-                logger.debug("Position feed notify failed (non-fatal)", exc_info=True)
+            # Decided here, sent after the lock is released: a subscribe can
+            # wait many seconds on the feed, and every other sandbox fill in
+            # the process would wait behind it.
+            feed_change = self._position_feed_change(order)
 
             # Validate margin consistency after position update
             is_consistent, discrepancy = validate_margin_consistency(order.user_id)
@@ -1138,6 +1116,50 @@ class ExecutionEngine:
             raise
         finally:
             self._position_lock.release()
+            if feed_change is not None:
+                self._apply_position_feed_change(order, *feed_change)
+
+    @staticmethod
+    def _position_feed_change(order):
+        """Work out, from the committed book, which feed notice this fill needs.
+
+        Returns:
+            ``(engine, has_open)`` when a running websocket engine exists, else
+            None. Never raises: the feed is an enhancement, not part of a fill.
+        """
+        try:
+            from sandbox.websocket_execution_engine import peek_websocket_execution_engine
+
+            # peek, not get: a fill must never create an engine, least of all
+            # while the engine is being stopped.
+            ws_engine = peek_websocket_execution_engine()
+            if ws_engine is None:
+                return None
+            has_open = (
+                SandboxPositions.query.filter_by(
+                    user_id=order.user_id,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                )
+                .filter(SandboxPositions.quantity != 0)
+                .count()
+                > 0
+            )
+            return ws_engine, has_open
+        except Exception:
+            logger.debug("Position feed notify failed (non-fatal)", exc_info=True)
+            return None
+
+    @staticmethod
+    def _apply_position_feed_change(order, ws_engine, has_open):
+        """Send the feed notice decided under the lock. Never raises."""
+        try:
+            if has_open:
+                ws_engine.notify_position_opened(order.user_id, order.symbol, order.exchange)
+            else:
+                ws_engine.notify_position_closed(order.user_id, order.symbol, order.exchange)
+        except Exception:
+            logger.debug("Position feed notify failed (non-fatal)", exc_info=True)
 
     def _calculate_realized_pnl(
         self, old_quantity, avg_price, close_quantity, close_price, contract_value=1.0
