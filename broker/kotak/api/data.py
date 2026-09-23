@@ -121,6 +121,22 @@ def _history_earliest_start() -> pd.Timestamp:
     return today - pd.DateOffset(years=HISTORY_MAX_LOOKBACK_YEARS) + timedelta(days=1)
 
 
+def _as_float(value, default: float = 0.0) -> float:
+    """Neo sends every field as a string, and an absent one as None."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value, default: int = 0) -> int:
+    """As _as_float, via float: a quantity can arrive as "16131960.0000"."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _history_retry_delay(headers, attempt: int) -> float:
     """Prefer the server's own guidance. Neo sends none, so back off."""
     value = headers.get("Retry-After") or headers.get("retry-after")
@@ -418,8 +434,12 @@ class BrokerData:
                 logger.debug(
                     f"DEPTH API - Index candidates for {symbol}: {candidates}"
                 )
+                # "all", not "depth": Neo's filters are strict subsets, and the
+                # depth one returns the book alone -- no ltp, ohlc, volume or oi.
+                # "all" carries the identical book plus those fields, in the same
+                # single request, so the narrower filter only loses data.
                 response, query = self._query_index_with_candidates(
-                    kotak_exchange, candidates, "depth"
+                    kotak_exchange, candidates, "all"
                 )
                 if response is None:
                     logger.warning(
@@ -449,8 +469,9 @@ class BrokerData:
                 query = f"{kotak_exchange}|{psymbol}"
                 logger.debug(f"DEPTH API - Query: {query}")
 
-                # Make API request with depth filter (index branch already fetched response)
-                response = self._make_quotes_request(query, "depth")
+                # "all" for the reason given in the index branch above (index
+                # branch already fetched its own response).
+                response = self._make_quotes_request(query, "all")
 
             if response and isinstance(response, list) and len(response) > 0:
                 target_quote = response[0]
@@ -499,14 +520,32 @@ class BrokerData:
                 while len(asks) < 5:
                     asks.append({"price": 0, "quantity": 0})
 
-                total_buy_qty = sum(bid["quantity"] for bid in bids if bid["quantity"] > 0)
-                total_sell_qty = sum(ask["quantity"] for ask in asks if ask["quantity"] > 0)
+                # Neo reports a whole-book total on cash rows -- RELIANCE came back
+                # at 634710 against 2616 across the five visible levels -- but
+                # leaves it 0 on F&O, where the visible levels are all there is to
+                # add up. Prefer the broker's figure, fall back to the sum, so an
+                # unpopulated field never reads as an empty book.
+                level_buy_qty = sum(bid["quantity"] for bid in bids if bid["quantity"] > 0)
+                level_sell_qty = sum(ask["quantity"] for ask in asks if ask["quantity"] > 0)
+                total_buy_qty = _as_int(target_quote.get("total_buy")) or level_buy_qty
+                total_sell_qty = _as_int(target_quote.get("total_sell")) or level_sell_qty
+
+                ohlc_data = target_quote.get("ohlc") or {}
 
                 result = {
                     "bids": bids,
                     "asks": asks,
                     "totalbuyqty": total_buy_qty,
                     "totalsellqty": total_sell_qty,
+                    "ltp": _as_float(target_quote.get("ltp")),
+                    "ltq": _as_int(target_quote.get("last_traded_quantity")),
+                    "open": _as_float(ohlc_data.get("open")),
+                    "high": _as_float(ohlc_data.get("high")),
+                    "low": _as_float(ohlc_data.get("low")),
+                    # Neo's ohlc.close is the previous close, not the last price.
+                    "prev_close": _as_float(ohlc_data.get("close")),
+                    "volume": _as_int(target_quote.get("last_volume")),
+                    "oi": _as_int(target_quote.get("open_int")),
                 }
 
                 logger.debug(f"DEPTH API - Final result: {result}")
@@ -772,12 +811,24 @@ class BrokerData:
         }
 
     def _get_default_depth(self):
-        """Return default depth structure"""
+        """Return default depth structure.
+
+        Carries every key the success path does. A caller that reads depth["ltp"]
+        must not raise KeyError merely because the quote could not be fetched.
+        """
         return {
             "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
             "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
             "totalbuyqty": 0,
             "totalsellqty": 0,
+            "ltp": 0.0,
+            "ltq": 0,
+            "open": 0.0,
+            "high": 0.0,
+            "low": 0.0,
+            "prev_close": 0.0,
+            "volume": 0,
+            "oi": 0,
         }
 
     def _history_segment(self, symbol: str, exchange: str) -> str:
