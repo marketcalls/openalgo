@@ -12,7 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@/test/test-utils'
+import { fireEvent, render, screen, waitFor, within } from '@/test/test-utils'
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 
@@ -28,16 +28,29 @@ vi.mock('@/components/socket/SocketProvider', () => ({
   useSocketContext: () => ({ playAlertSound: () => {}, socket: null }),
 }))
 
-import ActionCenterPage from './ActionCenter'
+import ActionCenterPage, { SEND_SETTLE_MS } from './ActionCenter'
 
 type Row = {
   id: number
   symbol: string
   status: 'pending' | 'approved' | 'rejected'
   broker_status: string | null
+  /** Seconds since approval, as the server measures it when the list is read. */
+  approved_age_seconds?: number | null | (() => number)
 }
 
-function order({ id, symbol, status, broker_status }: Row) {
+/** Long past any send: an order still claimed this old was cut off. */
+const LONG_AGO = 600
+
+function order({ id, symbol, status, broker_status, approved_age_seconds }: Row) {
+  const age =
+    typeof approved_age_seconds === 'function'
+      ? approved_age_seconds()
+      : approved_age_seconds === undefined
+        ? status === 'approved'
+          ? LONG_AGO
+          : null
+        : approved_age_seconds
   return {
     id,
     strategy: 'TV Alerts',
@@ -54,11 +67,14 @@ function order({ id, symbol, status, broker_status }: Row) {
     raw_order_data: { symbol, exchange: 'NSE', action: 'BUY', quantity: 10 },
     broker_order_id: null,
     broker_status,
+    approved_age_seconds: age,
   }
 }
 
 function respondWith(rows: Row[]) {
-  http.get.mockResolvedValue({
+  // Built on every request, so an age given as a function grows as the
+  // server's would.
+  http.get.mockImplementation(async () => ({
     data: {
       status: 'success',
       data: {
@@ -72,7 +88,7 @@ function respondWith(rows: Row[]) {
         },
       },
     },
-  })
+  }))
 }
 
 function rowOf(symbol: string) {
@@ -150,3 +166,79 @@ describe('Action Center: an order whose send was not confirmed', () => {
     expect(screen.queryByText('Not confirmed')).not.toBeInTheDocument()
   })
 })
+
+describe('Action Center: an order that is still being sent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('shows a send still under way as sending, with no notice to check the order book', async () => {
+    // Approved three seconds ago and waiting on the broker: under gthread the
+    // broker's rate limit can hold it for ten seconds before the call is made.
+    respondWith([
+      {
+        id: 1,
+        symbol: 'SBIN',
+        status: 'approved',
+        broker_status: 'submitting',
+        approved_age_seconds: 3,
+      },
+    ])
+    render(<ActionCenterPage />)
+
+    expect(await within(await findRow('SBIN')).findByText('Sending')).toBeInTheDocument()
+    expect(screen.queryByText(NOTICE_TITLE)).not.toBeInTheDocument()
+    expect(screen.queryByText('Not confirmed')).not.toBeInTheDocument()
+  })
+
+  it('shows a send as not confirmed once no send could still be running', async () => {
+    const approvedAt = Date.now() - (SEND_SETTLE_MS - 300)
+    respondWith([
+      {
+        id: 1,
+        symbol: 'SBIN',
+        status: 'approved',
+        broker_status: 'submitting',
+        approved_age_seconds: () => (Date.now() - approvedAt) / 1000,
+      },
+    ])
+    render(<ActionCenterPage />)
+
+    expect(await within(await findRow('SBIN')).findByText('Sending')).toBeInTheDocument()
+    expect(screen.queryByText(NOTICE_TITLE)).not.toBeInTheDocument()
+
+    expect(await screen.findByText(NOTICE_TITLE, {}, { timeout: 3000 })).toBeInTheDocument()
+    expect(within(rowOf('SBIN')).getByText('Not confirmed')).toBeInTheDocument()
+    expect(within(rowOf('SBIN')).queryByText('Sending')).not.toBeInTheDocument()
+  })
+})
+
+describe('Action Center: the All Orders tab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('asks for every order, not only the pending ones', async () => {
+    respondWith([{ id: 1, symbol: 'SBIN', status: 'approved', broker_status: 'submitting' }])
+    render(<ActionCenterPage />)
+    await screen.findByText('SBIN')
+    expect(http.get).toHaveBeenLastCalledWith('/action-center/api/data?status=pending')
+
+    const allTab = screen.getByRole('tab', { name: 'All Orders' })
+    fireEvent.mouseDown(allTab)
+    fireEvent.click(allTab)
+
+    await waitFor(() =>
+      expect(http.get).toHaveBeenLastCalledWith('/action-center/api/data?status=all')
+    )
+  })
+})
+
+async function findRow(symbol: string) {
+  const cell = await screen.findByText(symbol)
+  const row = cell.closest('tr')
+  if (!row) throw new Error(`no row for ${symbol}`)
+  return row as HTMLElement
+}

@@ -62,6 +62,11 @@ interface PendingOrder {
   /** What the broker said once the order was sent, e.g. open, complete, rejected. */
   broker_status?: string | null
   broker_order_id?: string | null
+  /**
+   * Seconds since the order was approved, measured by the server when this
+   * list was read. Its send begins at approval. Null while it is pending.
+   */
+  approved_age_seconds?: number | null
 }
 
 /**
@@ -69,16 +74,43 @@ interface PendingOrder {
  * no broker answer recorded for (SUBMITTING in database/action_center_db.py).
  *
  * It is written just before the order goes to the broker and replaced by the
- * broker's answer as soon as there is one, which also refreshes this page. An
- * order that stays in it was cut off mid-send, by a restart or a crash, so it
- * may or may not be at the broker. OpenAlgo never sends such an order again on
- * its own, and this page offers no way to: only the broker's order book can say
- * whether it arrived.
+ * broker's answer as soon as there is one, which also refreshes this page. So
+ * a young one is a send still under way: waiting for its turn at the broker,
+ * then for the broker's answer. An order that stays in it past any send was
+ * cut off mid-send, by a restart or a crash, so it may or may not be at the
+ * broker. OpenAlgo never sends such an order again on its own, and this page
+ * offers no way to: only the broker's order book can say whether it arrived.
  */
 const SENDING_NOT_CONFIRMED = 'submitting'
 
-function isSendNotConfirmed(order: PendingOrder): boolean {
+/**
+ * How long a send can take before it can only have been cut off: the wait for
+ * the broker's rate limit, the broker call and the order status call after it,
+ * with room to spare. Telling a trader to check the order book any sooner can
+ * send them to place by hand an order OpenAlgo is still sending.
+ */
+export const SEND_SETTLE_MS = 120_000
+
+/** When this order's send began, on this page's clock, or null if unknown. */
+function sendStartedAt(order: PendingOrder, readAt: number): number | null {
+  const age = order.approved_age_seconds
+  if (typeof age !== 'number' || !Number.isFinite(age)) return null
+  return readAt - age * 1000
+}
+
+function isClaimed(order: PendingOrder): boolean {
   return order.status === 'approved' && order.broker_status === SENDING_NOT_CONFIRMED
+}
+
+/** An approved order whose send is still under way. */
+function isSending(order: PendingOrder, readAt: number, now: number): boolean {
+  const started = sendStartedAt(order, readAt)
+  return isClaimed(order) && started !== null && now - started < SEND_SETTLE_MS
+}
+
+/** An approved order whose send was cut off, so nobody knows if it arrived. */
+function isSendNotConfirmed(order: PendingOrder, readAt: number, now: number): boolean {
+  return isClaimed(order) && !isSending(order, readAt, now)
 }
 
 interface OrderStats {
@@ -112,6 +144,9 @@ export default function ActionCenterPage() {
     'pending'
   )
   const [expandedOrders, setExpandedOrders] = useState<Set<number>>(new Set())
+  // When the list was read, and the clock the send states are judged by.
+  const [readAt, setReadAt] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now())
 
   // Confirmation dialogs
   const [orderToDelete, setOrderToDelete] = useState<PendingOrder | null>(null)
@@ -126,12 +161,16 @@ export default function ActionCenterPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const statusParam = activeFilter === 'all' ? '' : activeFilter
+      // Always named, "all" included: the server reads a missing status as
+      // pending, so All Orders used to list only the pending ones.
       const response = await webClient.get<ActionCenterResponse>(
-        `/action-center/api/data${statusParam ? `?status=${statusParam}` : ''}`
+        `/action-center/api/data?status=${activeFilter}`
       )
 
       if (response.data.status === 'success') {
+        const read = Date.now()
+        setReadAt(read)
+        setNow(read)
         setOrders(Array.isArray(response.data.data.orders) ? response.data.data.orders : [])
         setStats(
           response.data.data.statistics || {
@@ -154,6 +193,29 @@ export default function ActionCenterPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // A send still under way either finishes, which refreshes this page through
+  // pending_order_updated, or outlives SEND_SETTLE_MS. Look again at that
+  // moment, so an order that was cut off is shown as not confirmed.
+  useEffect(() => {
+    let next: number | null = null
+    for (const order of orders) {
+      if (!isSending(order, readAt, now)) continue
+      const started = sendStartedAt(order, readAt)
+      if (started === null) continue
+      const settles = started + SEND_SETTLE_MS
+      if (next === null || settles < next) next = settles
+    }
+    if (next === null) return
+    const timer = window.setTimeout(
+      () => {
+        setNow(Date.now())
+        fetchData()
+      },
+      Math.max(0, next - Date.now()) + 50
+    )
+    return () => window.clearTimeout(timer)
+  }, [orders, readAt, now, fetchData])
 
   // Alert sound for newly queued orders
   useEffect(() => {
@@ -609,7 +671,13 @@ export default function ActionCenterPage() {
                               )}
                             </Button>
 
-                            {isSendNotConfirmed(order) && (
+                            {isSending(order, readAt, now) && (
+                              <Badge variant="outline" className="h-8">
+                                Sending
+                              </Badge>
+                            )}
+
+                            {isSendNotConfirmed(order, readAt, now) && (
                               <Badge
                                 variant="outline"
                                 className="h-8 border-amber-500 text-amber-700 dark:text-amber-400"
@@ -662,7 +730,7 @@ export default function ActionCenterPage() {
 
                       {/* An order cut off while it was being sent: say so, and
                           say what to check, because nothing will resend it. */}
-                      {isSendNotConfirmed(order) && (
+                      {isSendNotConfirmed(order, readAt, now) && (
                         <TableRow>
                           <TableCell colSpan={10} className="p-2">
                             <Alert variant="warning">
