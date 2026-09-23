@@ -1,6 +1,8 @@
+import concurrent.futures
 import json
 import threading
 import time
+from contextlib import nullcontext
 from datetime import timedelta
 
 import pandas as pd
@@ -12,12 +14,30 @@ from broker.nubra.api.baseurl import (
     get_url,
 )
 from database.token_db import get_br_symbol, get_token
+from utils import runtime
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
 from .nubrawebsocket import NubraWebSocket
 
 logger = get_logger(__name__)
+
+# Workers for the quote fan-out when no WebSocket is available.
+_QUOTE_FANOUT_WORKERS = 5
+
+
+def _quote_fanout_pool():
+    """The executor for one quote fan-out, as a context manager.
+
+    Under eventlet and the dev server this is a pool of its own per call,
+    exactly as before. Under the gthread worker, where those would be new real
+    OS threads on every request, it is one process-wide pool of the same size,
+    which the ``with`` block must not shut down.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("nubra-quotes", _QUOTE_FANOUT_WORKERS))
+    return concurrent.futures.ThreadPoolExecutor(max_workers=_QUOTE_FANOUT_WORKERS)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
@@ -629,7 +649,7 @@ class BrokerData:
                 logger.warning(f"Failed to fetch quote for {symbol}: {e}")
                 return {"symbol": symbol, "exchange": exchange, "error": str(e)}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with _quote_fanout_pool() as executor:
             future_to_symbol = {executor.submit(fetch_single_quote, item): item for item in symbols}
             for future in concurrent.futures.as_completed(future_to_symbol):
                 try:
