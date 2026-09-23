@@ -18,6 +18,7 @@ from database.auth_db import get_auth_token, get_user_id, verify_api_key
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.smart_order_guard import PositionBookCache
 
 logger = get_logger(__name__)
 
@@ -110,9 +111,10 @@ _symbol_locks_lock = threading.Lock()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
@@ -126,25 +128,12 @@ def _get_symbol_lock(symbol, exchange, product):
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(auth, lambda: get_positions(auth))
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 
