@@ -169,6 +169,9 @@ def _save(state: dict[str, Any]) -> None:
         os.replace(temporary, COMMAND_FILE)
     except OSError:
         _said(f"Could not save the OpenScript commands to {COMMAND_FILE}")
+    finally:
+        # Gone already after a successful rename. On any failure it is a file
+        # of this write alone that nothing will come back for.
         try:
             Path(temporary).unlink(missing_ok=True)
         except OSError:

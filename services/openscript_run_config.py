@@ -559,9 +559,12 @@ def _save(configs: dict[str, dict]) -> tuple[bool, str]:
         os.replace(temporary, CONFIG_FILE)
     except OSError:
         logger.exception("Could not save the OpenScript run settings to %s", CONFIG_FILE)
+        return False, "These run settings could not be saved on this server"
+    finally:
+        # Gone already after a successful rename. On any failure it is a file
+        # of this write alone that nothing will come back for.
         try:
             Path(temporary).unlink(missing_ok=True)
         except OSError:
             logger.debug("The half written run settings at %s could not be removed", temporary)
-        return False, "These run settings could not be saved on this server"
     return True, ""

@@ -147,6 +147,9 @@ def _save(state: dict[str, Any]) -> None:
         os.replace(temporary, STATE_FILE)
     except OSError:
         logger.exception("Could not save the OpenScript running state to %s", STATE_FILE)
+    finally:
+        # Gone already after a successful rename. On any failure it is a file
+        # of this write alone that nothing will come back for.
         try:
             Path(temporary).unlink(missing_ok=True)
         except OSError:
