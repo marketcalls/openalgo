@@ -77,6 +77,11 @@ IST = pytz.timezone("Asia/Kolkata")
 #: volume so an upgrade leaves a trader's settings alone.
 CONFIG_FILE = Path("strategies") / "openscript_run_configs.json"
 
+#: The two sides a run's orders can have gone to, in the words the strategy
+#: module's own column uses. A deployment remembers which one its run started
+#: on, because its books are read from there. See ``record_run_mode``.
+RUN_MODES = ("live", "sandbox")
+
 #: The three products this platform sends. Restated here rather than imported
 #: because the program that runs a script checks the same list from inside its
 #: own process, and a value this file stored but that one refuses would be a run
@@ -484,6 +489,11 @@ def write_run_config(
         "inputs": settings,
         "updated_at": _ist_now().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
+    # The side this deployment last traded on is not a setting and survives
+    # an edit that keeps the deployment. Its orders are still where they went,
+    # and a trader changing a parameter between runs still wants to read them.
+    if stays and held.get("mode") in RUN_MODES:
+        entry["mode"] = held["mode"]
 
     with _WRITE_LOCK:
         stored = all_run_configs()
@@ -493,6 +503,44 @@ def write_run_config(
     if not saved:
         return False, why
     return True, f"{script} will run on {symbol} {exchange} at {interval}"
+
+
+def record_run_mode(name: str, mode: str) -> bool:
+    """Remember the side a deployment's run started on. True once it is saved.
+
+    **Its books are read from here once the run has stopped**, because the
+    orders it placed went where the platform sent them when they were placed,
+    and the platform's analyzer setting may say something else by the time
+    anybody looks. A deployment with no settings saved, which is a run started
+    with an instrument passed straight in, has nowhere to keep it; its books
+    follow the platform's setting once it stops, as they always did.
+
+    Not a setting: nothing a trader sends reaches it, and ``write_run_config``
+    carries it across an edit that keeps the deployment.
+    """
+    if mode not in RUN_MODES or not is_deployment_id(name):
+        return False
+    with _WRITE_LOCK:
+        stored = all_run_configs()
+        entry = stored.get(name)
+        if entry is None:
+            return False
+        if entry.get("mode") == mode:
+            return True
+        entry["mode"] = mode
+        saved, _ = _save(stored)
+    return saved
+
+
+def run_mode_of(name: str) -> str:
+    """The side a deployment's run last started on, or an empty string.
+
+    Only one of the two words is ever answered. A file edited by hand to say
+    anything else answers nothing, and the caller falls back to the platform's
+    setting rather than reading a book from a side nobody named.
+    """
+    mode = (read_run_config(name) or {}).get("mode")
+    return mode if mode in RUN_MODES else ""
 
 
 def delete_run_config(name: str) -> tuple[bool, str]:

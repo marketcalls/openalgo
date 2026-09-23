@@ -42,9 +42,19 @@
  */
 
 import { apiClient } from '@/api/client'
-import { compileSource, type EditorDiagnostic } from './openscriptFiles'
+import { foldBacktest } from './backtestFold'
 import { runOnWorker, workersAvailable } from './backtestWorker'
-import type { BacktestMessage, BacktestReply } from './backtestWorkerProtocol'
+import type {
+  BacktestMessage,
+  BacktestReply,
+  RunInstrument,
+  RunStop,
+} from './backtestWorkerProtocol'
+import { factsFor, type InstrumentFacts } from './instrumentFacts'
+import { compileSource, type EditorDiagnostic } from './openscriptFiles'
+import { languageInterval } from './openscriptIntervals'
+
+export type { RunInstrument, RunStop } from './backtestWorkerProtocol'
 
 /**
  * The most bars a run may cover before it is refused.
@@ -145,6 +155,15 @@ export interface BacktestOutcome {
   /** How long the engine itself took, which is what the ceiling is about. */
   ranMs?: number
   contract?: Contract
+  /** What the engine was told about the instrument beside the contract. */
+  instrument?: RunInstrument
+  /**
+   * The diagnostic that stopped the run on a bar, when one did.
+   *
+   * The figures still describe the run up to that bar, which is a report of
+   * part of the range. Without this beside them they read as the whole of it.
+   */
+  stopped?: RunStop
   /**
    * The compiled program this run was of.
    *
@@ -158,20 +177,9 @@ function refused(problem: string): BacktestOutcome {
   return { ok: false, problem }
 }
 
-/**
- * The instrument's own facts, or sensible stand-ins with that fact recorded.
- *
- * A failure here is not a failure of the run. An instrument the platform has no
- * row for is still one a trader may want to test against, so the run goes ahead
- * on stated defaults and the panel says which.
- */
-export async function contractFor(
-  symbol: string,
-  exchange: string,
-  apiKey: string,
-  signal?: AbortSignal
-): Promise<Contract> {
-  const fallback: Contract = {
+/** The stated stand-ins, marked as stand-ins. */
+function fallbackContract(symbol: string, exchange: string): Contract {
+  return {
     currency: 'INR',
     symbol,
     exchange,
@@ -181,6 +189,26 @@ export async function contractFor(
     digits: 2,
     usedFallback: true,
   }
+}
+
+/**
+ * The instrument's own facts, or sensible stand-ins with that fact recorded.
+ *
+ * A failure here is not a failure of the run. An instrument the platform has no
+ * row for is still one a trader may want to test against, so the run goes ahead
+ * on stated defaults and the panel says which.
+ *
+ * `runBacktest` asks this only when the instrument facts route could not answer
+ * at all. Both read the same master contract row, so asking here as well when
+ * that route did answer would be the same lookup made twice.
+ */
+export async function contractFor(
+  symbol: string,
+  exchange: string,
+  apiKey: string,
+  signal?: AbortSignal
+): Promise<Contract> {
+  const fallback = fallbackContract(symbol, exchange)
 
   try {
     const res = await apiClient.post<{
@@ -198,6 +226,94 @@ export async function contractFor(
     return { ...fallback, tickSize: tick, lotSize: lot, usedFallback: false }
   } catch {
     return fallback
+  }
+}
+
+/**
+ * The contract, from the instrument facts the run has already fetched.
+ *
+ * The facts route reads the master contract row through the same lookup as
+ * `/symbol`, so a fact it left out is one that lookup has no usable value for,
+ * and asking `/symbol` again would get the same nothing. A size it did state is
+ * kept and only the missing one stands in, with the stand-in recorded.
+ */
+export function contractFromFacts(
+  symbol: string,
+  exchange: string,
+  facts: InstrumentFacts
+): Contract {
+  const fallback = fallbackContract(symbol, exchange)
+  const tick = facts.tickSize
+  const lot = facts.lotSize
+  return {
+    ...fallback,
+    tickSize: tick ?? fallback.tickSize,
+    lotSize: lot ?? fallback.lotSize,
+    usedFallback: tick === undefined || lot === undefined,
+  }
+}
+
+/**
+ * The chart's interval as the engine spells it, or nothing it could read.
+ *
+ * The two spell a day differently. This platform's intervals, and the chart's,
+ * write a day, a week and a month as a bare `D`, `W` and `M`, while the engine
+ * reads `stdlib.md` 15.2's count and unit, `1D`, `1W`, `1M`, and has no
+ * spelling for a bare letter. Minutes and hours are already written the
+ * engine's way. Seconds are not: `host-interface.md` 4.1 takes an interval in
+ * 15.2's grammar, which has no unit finer than a minute and against which the
+ * engine checks every `req.timeframe` read, so a seconds chart states no
+ * interval rather than one outside it, and its interval facts are absent
+ * rather than half read.
+ *
+ * The spelling itself is `languageInterval`'s, the same one the settings
+ * dialog stores an interval input in, so a chart and a setting can never
+ * disagree about what `D` means.
+ */
+export function engineInterval(interval: string): string | undefined {
+  return languageInterval(interval) ?? undefined
+}
+
+/**
+ * What the engine is told about the instrument beside the contract.
+ *
+ * **The interval comes from the chart and the rest from the platform.** The
+ * zone and the session are the market calendar's, which an admin can edit, and
+ * none of them is written here: an exchange the calendar does not hold states
+ * no session, which the engine reads as absent, and that is the honest answer.
+ *
+ * **The regular session, never today's.** A backtest is history, and the
+ * engine holds one window for the whole run, so a special day's window would
+ * put every other day of the range outside the session.
+ *
+ * **A session never goes without its zone.** A session is wall clock, and the
+ * engine refuses one with no zone to read it in at load (OS6012), which would
+ * stop the whole run over a fact meant to be optional.
+ */
+export function runInstrumentFrom(
+  interval: string,
+  facts: InstrumentFacts | undefined
+): RunInstrument {
+  const code = engineInterval(interval)
+  const zone = facts?.timezone
+  const session = zone ? facts?.session : undefined
+  return {
+    ...(code === undefined ? {} : { interval: code }),
+    ...(zone ? { timezone: zone } : {}),
+    // Copied as plain data, because this crosses to a worker and the helper's
+    // own records are frozen.
+    ...(session === undefined
+      ? {}
+      : {
+          session: {
+            start: session.start,
+            end: session.end,
+            ...(session.days === undefined ? {} : { days: [...session.days] }),
+          },
+        }),
+    ...(facts?.instrumentType === undefined ? {} : { instrumentType: facts.instrumentType }),
+    ...(facts?.hasVolume === undefined ? {} : { hasVolume: facts.hasVolume }),
+    ...(facts?.hasOpenInterest === undefined ? {} : { hasOpenInterest: facts.hasOpenInterest }),
   }
 }
 
@@ -228,6 +344,12 @@ export function barsFromHistory(rows: readonly HistoryRow[]): EngineBar[] {
  * compile should say so before a trader waits for history, and because the
  * program is what the run is of. Then the bars, then the instrument, then the
  * engine.
+ *
+ * **The instrument is one lookup.** The facts route answers the contract, the
+ * zone, the session and the rest together, and it is asked while the history
+ * is being fetched, since neither waits on the other. `/symbol` is asked only
+ * when that route could not answer at all, so that the money is still priced
+ * on the stored tick and lot size when the session facts are what is missing.
  */
 export async function runBacktest(request: BacktestRequest): Promise<BacktestOutcome> {
   const compiled = await compileSource(request.file, request.source)
@@ -240,6 +362,9 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
       'This script is a study. Only a strategy places orders, so only a strategy has a backtest.'
     )
   }
+
+  // Never rejects: a failure is an absence, which the lines below handle.
+  const factsPending = factsFor(request.symbol, request.exchange)
 
   let rows: HistoryRow[]
   try {
@@ -274,7 +399,11 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
   }
 
   const bars = barsFromHistory(rows)
-  const contract = await contractFor(request.symbol, request.exchange, request.apiKey, request.signal)
+  const facts = await factsPending
+  const contract = facts
+    ? contractFromFacts(request.symbol, request.exchange, facts)
+    : await contractFor(request.symbol, request.exchange, request.apiKey, request.signal)
+  const instrument = runInstrumentFrom(request.interval, facts)
 
   let program: unknown
   try {
@@ -283,7 +412,7 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
     return refused('The compiled strategy could not be read back.')
   }
 
-  const facts = {
+  const priced = {
     currency: contract.currency,
     symbol: contract.symbol,
     exchange: contract.exchange,
@@ -294,7 +423,7 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
   }
   const inputs = (request.inputs ?? {}) as Record<string, unknown>
 
-  const folded = await fold({ program, bars, contract: facts, inputs }, request.signal)
+  const folded = await fold({ program, bars, contract: priced, inputs, instrument }, request.signal)
   if (folded === null) return refused('This run was stopped.')
 
   // A run can be refused before its first bar: a cost model stated twice, a
@@ -314,6 +443,8 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
     barCount: bars.length,
     ranMs: folded.ranMs,
     contract,
+    instrument,
+    ...(folded.stopped ? { stopped: folded.stopped } : {}),
     program,
   }
 }
@@ -352,54 +483,8 @@ async function fold(
   }
 
   if (signal?.aborted) return null
-  return runInline(message)
-}
-
-/**
- * The engine on this thread, which freezes the page for as long as it takes.
- *
- * Kept because it is the fallback, and separate because it is the one place
- * that has to be read with the cost in mind. See the module note for what that
- * cost is at each size.
- */
-async function runInline(message: BacktestMessage): Promise<BacktestReply> {
-  try {
-    const engine = await import('openalgo-script')
-    const settings = engine.settingsFor(message.contract)
-    const inputs = message.inputs as typeof settings.inputs
-
-    const started = performance.now()
-    const out = engine.backtest(
-      message.program as Parameters<typeof engine.backtest>[0],
-      message.bars as Parameters<typeof engine.backtest>[1],
-      { ...settings, inputs },
-      {}
-    )
-    const ranMs = performance.now() - started
-
-    if (!out.ok) {
-      return { ok: false, code: out.diagnostic.code, message: out.diagnostic.message }
-    }
-
-    const report = out.record.report
-    return {
-      ok: true,
-      ranMs,
-      report: {
-        summary: report.summary as unknown as Record<string, unknown>,
-        trades: report.trades as unknown as Record<string, unknown>[],
-        equity: report.equity as unknown as Record<string, unknown>[],
-        markers: report.markers as unknown as Record<string, unknown>[],
-      },
-    }
-  } catch (unreachable) {
-    return {
-      ok: false,
-      code: '',
-      message:
-        unreachable instanceof Error
-          ? unreachable.message
-          : 'The engine could not run this program.',
-    }
-  }
+  // The same function the worker calls, so this thread states exactly what a
+  // worker would have. It freezes the page for as long as it takes; see the
+  // module note for what that cost is at each size.
+  return foldBacktest(message)
 }

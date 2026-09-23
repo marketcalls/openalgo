@@ -1352,21 +1352,26 @@ def intervals():
 def _mode_for(filename):
     """Which book to read: the run's own side, never the platform's toggle.
 
-    A run that is up is read from the side it is trading on. One that has
-    stopped is read from the side it last traded on, which the run settings
-    remember, because its orders are still the answer to what it did. With
-    neither, the platform's current setting is all that is left, and a strategy
-    that never ran has an empty book either way.
+    A run that is up is read from the side it started on, which the service
+    noted when it started it. One that has stopped is read from the side it
+    last traded on, which the run settings remember, because its orders are
+    still the answer to what it did. With neither, the platform's current
+    setting is all that is left, and a strategy that never ran has an empty
+    book either way.
+
+    Only the two words are taken. Anything else is not a side, and reading the
+    live book because a value was not "sandbox" would be choosing a side
+    nobody named.
     """
-    from services.openscript_run_config import read_run_config
+    from services.openscript_run_config import RUN_MODES, run_mode_of
 
     held = status_of(filename)
-    if held and held.get("mode"):
+    if held and held.get("mode") in RUN_MODES:
         return str(held["mode"])
 
-    saved = read_run_config(filename) or {}
-    if saved.get("mode"):
-        return str(saved["mode"])
+    recorded = run_mode_of(filename)
+    if recorded:
+        return recorded
 
     try:
         from database.settings_db import get_analyze_mode
