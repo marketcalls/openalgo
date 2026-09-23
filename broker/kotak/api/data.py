@@ -53,6 +53,34 @@ HISTORY_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "oi"]
 HISTORY_RATE_LIMIT_PER_SEC = 1
 HISTORY_MIN_INTERVAL = 1.0 / HISTORY_RATE_LIMIT_PER_SEC
 
+# The quotes endpoint refuses on CONCURRENCY, not on rate. Probed 2026-09-23
+# against nse_cm|Nifty 50: 20 back-to-back sequential requests with no gap at all
+# ran 20/20, and every sequential pacing from a 0.10s gap upward ran 14/14, so
+# there is no sustained-rate ceiling worth pacing against. Simultaneous requests
+# are what it rejects -- 2, 3 and 4 in flight were clean, 6 drew one HTTP 429
+# ("too many request received"), and 8 lost 14 of 24. So this is a gate on
+# requests in flight, not a delay between them: a delay would tax the sequential
+# case that already works while still letting a burst through.
+#
+# Unhandled, a 429 here returned None from _make_quotes_request, and with NIFTY
+# carrying a single index candidate there was no second attempt: get_quotes
+# returned None, quotes_service turned that into HTTP 500 "Failed to fetch
+# quotes", and the option services reported "Failed to fetch LTP for NIFTY"
+# (QA OS-12, OS-13). Hence the retry as well as the gate.
+QUOTES_MAX_INFLIGHT = 4
+QUOTES_MAX_RETRIES = 3
+QUOTES_BASE_BACKOFF = 0.5
+
+# No timeout was passed here at all, so a slow response inherited the shared
+# client's 120s -- a market-data call that hangs a page for two minutes. A quote
+# is worthless long before then.
+QUOTES_TIMEOUT = 15.0
+
+# Module level, not on BrokerData: services build a fresh handler per request,
+# so a gate held on the instance would admit one caller each and gate nothing.
+_quotes_gate = threading.Semaphore(QUOTES_MAX_INFLIGHT)
+
+
 # Neo refuses a fromdate five years or older with a 400 that fails the whole
 # pull. Probed 2026-09-21: today-1825d (2021-09-22) was served, today-1826d
 # (2021-09-21, five years to the day) was refused, so the earliest accepted
@@ -135,6 +163,17 @@ def _as_int(value, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _quotes_retry_delay(headers, attempt: int) -> float:
+    """Back off 0.5s, 1s, 2s. Neo sends no Retry-After, but honour one if it does."""
+    value = headers.get("Retry-After") or headers.get("retry-after")
+    if value:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    return QUOTES_BASE_BACKOFF * (2**attempt)
 
 
 def _history_retry_delay(headers, attempt: int) -> float:
@@ -245,7 +284,27 @@ class BrokerData:
             logger.info(f"QUOTES API - Making request to: {url}")
             logger.debug(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
 
-            response = client.get(url, headers=headers)
+            # A 429 retries the same request rather than falling through to the
+            # caller. The gate is taken per attempt and released before the
+            # backoff sleep: holding a slot while doing nothing would idle a
+            # quarter of the budget for the length of the wait.
+            for attempt in range(QUOTES_MAX_RETRIES + 1):
+                with _quotes_gate:
+                    response = client.get(url, headers=headers, timeout=QUOTES_TIMEOUT)
+                if response.status_code != 429:
+                    break
+                if attempt == QUOTES_MAX_RETRIES:
+                    logger.warning(
+                        f"QUOTES API - Rate limited after {QUOTES_MAX_RETRIES} retries: {url}"
+                    )
+                    break
+                delay = _quotes_retry_delay(response.headers, attempt)
+                logger.info(
+                    f"QUOTES API - 429 for {query}, retry "
+                    f"{attempt + 1}/{QUOTES_MAX_RETRIES} in {delay:.2f}s"
+                )
+                time.sleep(delay)
+
             logger.info(f"QUOTES API - Response status: {response.status_code} for {url}")
 
             if response.status_code == 200:
