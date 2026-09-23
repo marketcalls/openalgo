@@ -48,6 +48,12 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+    says_no_positions,
+)
 
 logger = get_logger(__name__)
 
@@ -832,13 +838,18 @@ def get_trade_book(auth):
         }, 500
 
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Get current positions for the user using direct API calls to Groww API
     Uses the /v1/positions/user endpoint as documented
 
     Args:
         auth (str): Authentication token
+        strict (bool): Report a CASH segment that could not be read as an
+            error instead of an empty book, which is what the smart order needs.
+            An FNO read that fails is still left out, as before: this code has
+            always expected it to fail on some accounts, and refusing every
+            smart order on an account without F&O would be the wrong trade.
 
     Returns:
         tuple: (positions data, status code)
@@ -879,6 +890,7 @@ def get_positions(auth):
 
         # Parse the response
         all_positions = []
+        failures = []
 
         try:
             # Parse CASH segment response
@@ -1070,6 +1082,10 @@ def get_positions(auth):
                             "realised": 0,  # Not provided in response
                         }
                         all_positions.append(transformed_position)
+            elif not says_no_positions(response_data):
+                failures.append(
+                    f"CASH segment: HTTP {response_obj.status_code}, {str(response_data)[:200]}"
+                )
 
             # Now try to get FNO segment positions
             try:
@@ -1259,6 +1275,10 @@ def get_positions(auth):
                 # Don't fail if FNO segment request fails
                 logger.warning(f"Error fetching FNO positions: {fno_error}")
 
+            if strict and failures:
+                logger.error(f"Groww position book incomplete: {'; '.join(failures)}")
+                return {"status": "error", "message": "; ".join(failures), "data": []}, 502
+
             # Create formatted response
             formatted_response = {
                 "status": "success",
@@ -1438,6 +1458,15 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """get_positions returns (payload, http status); with strict=True the payload
+    says "success" only when the CASH segment was read."""
+    payload = positions_data
+    if isinstance(positions_data, tuple) and positions_data:
+        payload = positions_data[0]
+    return isinstance(payload, dict) and payload.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -1447,7 +1476,9 @@ def _get_cached_positions(auth):
             return cached["data"]
 
     # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    positions_data = read_position_book(
+        "groww", lambda: get_positions(auth, strict=True), _position_book_ok
+    )
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -1902,6 +1933,7 @@ def direct_place_order(
         return {"status": "error", "message": str(e)}
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Place a smart order with position management using direct API implementation
@@ -2102,6 +2134,8 @@ def place_smartorder_api(data, auth):
             }
             return None, response, None
 
+    except PositionReadError:
+        raise
     except Exception as e:
         logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}

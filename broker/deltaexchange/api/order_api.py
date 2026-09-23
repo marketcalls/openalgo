@@ -23,6 +23,11 @@ from broker.deltaexchange.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 
 logger = get_logger(__name__)
 
@@ -241,7 +246,7 @@ def get_trade_book(auth):
 # Positions / holdings
 # ---------------------------------------------------------------------------
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Fetch all open positions — both derivatives (margined) and spot (wallet).
 
@@ -249,8 +254,13 @@ def get_positions(auth):
     Spot holdings come from GET /v2/wallet/balances — non-INR assets with
     a non-zero balance are synthesised into position-like dicts so they
     appear in the OpenAlgo position book alongside derivative positions.
+
+    A half that cannot be read is logged and left out, which is right for the
+    position book. The smart order passes strict=True, because a missing half
+    reads as flat there: it then raises PositionReadError instead.
     """
     positions = []
+    failures = []
 
     # 1. Derivative positions (perpetual futures, options)
     try:
@@ -260,8 +270,10 @@ def get_positions(auth):
             positions.extend(result.get("result", []))
         else:
             logger.warning(f"[DeltaExchange] get_positions/margined unexpected: {result}")
+            failures.append(f"positions/margined: {str(result)[:200]}")
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in get_positions/margined: {e}")
+        failures.append(f"positions/margined: {e}")
 
     # 2. Spot holdings from wallet balances
     try:
@@ -291,8 +303,15 @@ def get_positions(auth):
                     "unrealized_pnl": "0",
                     "_is_spot": True,  # Internal flag for downstream mapping
                 })
+        else:
+            logger.warning(f"[DeltaExchange] get_positions/wallet unexpected: {wallet_result}")
+            failures.append(f"wallet/balances: {str(wallet_result)[:200]}")
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception fetching spot wallet positions: {e}")
+        failures.append(f"wallet/balances: {e}")
+
+    if strict and failures:
+        raise PositionReadError("deltaexchange", "; ".join(failures))
 
     return positions
 
@@ -324,6 +343,11 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """get_positions(strict=True) returns a list, or raises when a read failed."""
+    return isinstance(positions_data, list)
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -333,7 +357,9 @@ def _get_cached_positions(auth):
             return cached["data"]
 
     # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    positions_data = read_position_book(
+        "deltaexchange", lambda: get_positions(auth, strict=True), _position_book_ok
+    )
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -510,6 +536,7 @@ def place_bracket_order_api(data, auth):
     return place_order_api(data, auth)
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Smart order: adjusts position to reach the desired position_size.

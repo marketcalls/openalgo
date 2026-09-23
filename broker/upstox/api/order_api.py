@@ -21,6 +21,11 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 
 logger = get_logger(__name__)
 
@@ -184,6 +189,11 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """Upstox wraps a position book it read as {"status": "success", ...}."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -193,7 +203,7 @@ def _get_cached_positions(auth):
             return cached["data"]
 
     # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    positions_data = read_position_book("upstox", lambda: get_positions(auth), _position_book_ok)
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -236,6 +246,8 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             logger.error(f"Failed to get positions: {positions_data.get('message')}")
 
         return net_qty
+    except PositionReadError:
+        raise
     except Exception:
         logger.exception(f"Error getting open position for {tradingsymbol}")
         return "0"
@@ -379,6 +391,7 @@ def place_order_api(data, auth):
         return _ErrorResponse(500), {"status": "error", "message": str(e)}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Places a smart order by comparing the desired position size with the current open position.
@@ -426,6 +439,8 @@ def place_smartorder_api(data, auth):
             _invalidate_position_cache(auth)
             return res, response, orderid
 
+    except PositionReadError:
+        raise
     except Exception as e:
         logger.exception("Unexpected error in place_smartorder_api")
         return None, {"status": "error", "message": str(e)}, None

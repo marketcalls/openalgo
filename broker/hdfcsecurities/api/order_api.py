@@ -37,6 +37,11 @@ from broker.hdfcsecurities.mapping.transform_data import (
 )
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 
 logger = get_logger(__name__)
 
@@ -187,6 +192,16 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """HDFC Securities wraps a book it read as {"status": "success", "data": ...}.
+
+    An expired token answers {"error": ...} with no status at all.
+    """
+    if not isinstance(positions_data, dict) or positions_data.get("error"):
+        return False
+    return positions_data.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     with _position_cache_lock:
         cached = _position_cache.get(auth)
@@ -194,7 +209,9 @@ def _get_cached_positions(auth):
             logger.debug("Position book served from cache")
             return cached["data"]
 
-    positions_data = get_positions(auth)
+    positions_data = read_position_book(
+        "hdfcsecurities", lambda: get_positions(auth), _position_book_ok
+    )
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -294,6 +311,7 @@ def place_order_api(data, auth):
     return response, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """Reconcile the live position to data['position_size'] and place the
     difference order. Same algorithm as the Zerodha reference."""
@@ -363,6 +381,8 @@ def place_smartorder_api(data, auth):
             }
             return res, response_data, orderid
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"
         logger.exception(error_msg)
