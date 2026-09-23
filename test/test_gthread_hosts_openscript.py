@@ -563,7 +563,9 @@ def test_each_write_uses_a_temporary_file_of_its_own(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", spy)
     run_id = deployment_id("t.oscript", "SBIN", "NSE", "1m")
     commands.ask(run_id)
-    commands.ask(run_id)
+    # A second run, since asking the same run twice in one second changes
+    # nothing and is not written at all.
+    commands.ask(deployment_id("t.oscript", "INFY", "NSE", "1m"))
     running.mark_running(run_id, 1)
     running.mark_running(run_id, 1)
     run_config.write_run_config("t.oscript", "SBIN", "NSE", "1m")

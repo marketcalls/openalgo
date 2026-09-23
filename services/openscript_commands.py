@@ -47,7 +47,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -95,6 +98,43 @@ def _now() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
+#: How often a read that the file system refused is tried before it counts as
+#: unreadable. On Windows a read can be refused while another process renames
+#: its write into place, which lasts a moment.
+_READ_TRIES = 3
+_READ_RETRY_SECONDS = 0.02
+
+
+def _read_entries() -> dict[str, Any] | None:
+    """The stored entries as they are on disk, ``{}`` when there is no file.
+
+    None when the file is there and could not be read, which is not the same
+    as it holding nothing: a change made from that would write every other
+    run's instruction away. A file that reads but does not parse is corrupt
+    rather than busy, since every write lands through a rename, and answers
+    ``{}`` so the next change writes a good one over it.
+    """
+    text = ""
+    for attempt in range(_READ_TRIES):
+        try:
+            text = COMMAND_FILE.read_text(encoding="utf-8")
+            break
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            if attempt + 1 == _READ_TRIES:
+                _said(f"Could not read the OpenScript commands at {COMMAND_FILE}")
+                return None
+            time.sleep(_READ_RETRY_SECONDS)
+
+    try:
+        stored = json.loads(text)
+    except ValueError:
+        _said(f"The OpenScript commands at {COMMAND_FILE} do not read as JSON")
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
 def all_commands() -> dict[str, dict[str, Any]]:
     """Every instruction outstanding, by deployment id.
 
@@ -103,23 +143,11 @@ def all_commands() -> dict[str, dict[str, Any]]:
     nothing able to stop it, which is worse than one that misses an instruction
     and says so on the next wake.
     """
-    try:
-        text = COMMAND_FILE.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except OSError:
-        _said(f"Could not read the OpenScript commands at {COMMAND_FILE}")
-        return {}
+    return _recognised(_read_entries() or {})
 
-    try:
-        stored = json.loads(text)
-    except ValueError:
-        _said(f"The OpenScript commands at {COMMAND_FILE} do not read as JSON")
-        return {}
 
-    if not isinstance(stored, dict):
-        return {}
-
+def _recognised(stored: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The instructions among the stored entries that this module wrote."""
     out: dict[str, dict[str, Any]] = {}
     for name, entry in stored.items():
         if not isinstance(name, str) or not isinstance(entry, dict):
@@ -172,16 +200,113 @@ def close_confirmed(run_id: str) -> bool:
     return command_for(run_id) == CLOSED
 
 
+#: How long a change waits for another process to finish its own, and how
+#: often it looks. A change takes milliseconds, so this is only ever reached by
+#: a process that is stuck, and then the change goes ahead as it always did.
+_LOCK_WAIT_SECONDS = 2.0
+_LOCK_POLL_SECONDS = 0.01
+
+if os.name == "nt":
+    import msvcrt
+
+    def _try_lock(handle) -> bool:
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def _unlock(handle) -> None:
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+
+else:
+    import fcntl
+
+    def _try_lock(handle) -> bool:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+
+    def _unlock(handle) -> None:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+
+
+@contextmanager
+def _across_processes() -> Iterator[bool]:
+    """Hold the lock every process takes around a change to the file.
+
+    The platform and every run change this file, each from its own process, and
+    a change is a read, an edit and a write: two that overlap each write what
+    they read, and one of the two edits is lost. A lost ``closed`` reports a
+    Stop that worked as unconfirmed, and a lost ``close`` leaves a Stop waiting
+    out its whole timeout.
+
+    The lock is a sidecar file, taken without blocking and asked for again
+    every few milliseconds, so a wait here never holds up anything else in the
+    process that waits. The operating system releases it when the process
+    holding it ends, so a run killed during a change cannot leave it held.
+
+    Yields:
+        True while it is held. False when it could not be taken in time; the
+        change then goes ahead without it, as every change did before.
+    """
+    handle = None
+    held = False
+    try:
+        path = COMMAND_FILE.with_name(f"{COMMAND_FILE.name}.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+b")  # noqa: SIM115 - closed below, whatever happens
+        until = time.monotonic() + _LOCK_WAIT_SECONDS
+        while True:
+            held = _try_lock(handle)
+            if held or time.monotonic() >= until:
+                break
+            time.sleep(_LOCK_POLL_SECONDS)
+    except OSError:
+        held = False
+    try:
+        yield held
+    finally:
+        if handle is not None:
+            if held:
+                _unlock(handle)
+            handle.close()
+
+
 def _change(edit) -> None:
     """Read, change and write the file, all at once or not at all.
+
+    Held under a lock every process takes (``_across_processes``), so a change
+    made by one process is never written over by another that read the file
+    before it. A file that is there and could not be read is left alone rather
+    than replaced by one holding nothing, and a change that changes nothing is
+    not written.
 
     Nothing raises. This is bookkeeping beside the act: a stop that worked must
     not be reported as a failure because a note about it could not be written.
     """
     try:
-        with _WRITE_LOCK:
-            held = {name: dict(entry) for name, entry in all_commands().items()}
+        with _WRITE_LOCK, _across_processes() as locked:
+            if not locked:
+                _said(f"Changing {COMMAND_FILE} without the lock another process holds")
+            stored = _read_entries()
+            if stored is None:
+                return
+            held = {name: dict(entry) for name, entry in _recognised(stored).items()}
+            before = json.dumps(held, sort_keys=True, default=str)
             edit(held)
+            if json.dumps(held, sort_keys=True, default=str) == before:
+                return
             _save(held)
     except Exception:
         _said("Could not record an OpenScript command")

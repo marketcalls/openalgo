@@ -509,3 +509,115 @@ def test_an_order_that_cannot_be_read_leaves_the_run_running():
     assert session.flatten(wait_seconds=0.2) is False
 
     assert broker.placed == []
+
+
+# ---------------------------------------------------------------------------
+# The instruction file is changed by several processes at once
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_WRITER = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import services.openscript_commands as commands
+commands.COMMAND_FILE = Path(sys.argv[2])
+start, action, run_id, rounds = float(sys.argv[3]), sys.argv[4], sys.argv[5], int(sys.argv[6])
+while time.time() < start:
+    pass
+for _ in range(rounds):
+    if action == "closed":
+        commands.record_closed(run_id)
+    else:
+        commands.ask(run_id)
+        commands.clear(run_id)
+"""
+
+
+def _writers(command_file, jobs, rounds=1):
+    """Start one process per (action, run) at the same instant, and wait for all."""
+    import subprocess
+    import sys
+    import time
+
+    start = time.time() + 2.0
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _WRITER,
+                str(REPO_ROOT),
+                str(command_file),
+                str(start),
+                action,
+                run_id,
+                str(rounds),
+            ],
+            cwd=str(command_file.parent),
+        )
+        for action, run_id in jobs
+    ]
+    for proc in procs:
+        assert proc.wait(timeout=60) == 0
+
+
+def _runs(count):
+    return [deployment_id("turn.oscript", f"OTHER{i}", "EXCH1", "1m") for i in range(count)]
+
+
+def test_closes_confirmed_at_the_same_instant_are_all_kept(quiet):
+    """THE ONE THAT REPORTED A STOP THAT WORKED AS UNCONFIRMED.
+
+    Every run writes its ``closed`` from its own process. Two that read the file
+    before either wrote each wrote back what they read plus their own change, so
+    one of the two was lost: measured, one in every round when started together.
+    """
+    runs = _runs(3)
+    for _ in range(2):
+        for run in runs:
+            commands.ask(run)
+
+        _writers(quiet / "commands.json", [("closed", run) for run in runs])
+
+        assert all(commands.close_confirmed(run) for run in runs), commands.all_commands()
+        for run in runs:
+            commands.clear(run)
+
+
+def test_changes_from_other_processes_never_lose_an_outstanding_close(quiet):
+    """A lost ``close`` leaves a Stop waiting out its whole timeout."""
+    waiting = RUN
+    commands.ask(waiting)
+
+    _writers(quiet / "commands.json", [("churn", run) for run in _runs(3)], rounds=20)
+
+    assert commands.command_for(waiting) == commands.CLOSE
+
+
+def test_a_file_that_could_not_be_read_is_not_written_over(quiet, monkeypatch):
+    """Read as holding nothing, the change wrote every other run's instruction away."""
+    other = deployment_id("turn.oscript", "SYM9", "EXCH1", "1m")
+    commands.ask(other)
+    real_read_text = Path.read_text
+
+    def refused(self, *args, **kwargs):
+        if self == commands.COMMAND_FILE:
+            raise PermissionError("in use by another process")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", refused)
+    monkeypatch.setattr(commands, "_READ_RETRY_SECONDS", 0.0)
+    commands.ask(RUN)
+    monkeypatch.setattr(Path, "read_text", real_read_text)
+
+    assert commands.command_for(other) == commands.CLOSE, "an unrelated instruction was wiped"
+
+
+def test_a_change_that_changes_nothing_is_not_written(quiet):
+    """Every write is a moment another process can be refused a read."""
+    commands.record_closed(RUN)
+    commands.clear(RUN)
+
+    assert not (quiet / "commands.json").exists()
