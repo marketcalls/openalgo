@@ -172,11 +172,63 @@ def resolve(raw: str | None, eventlet_available: bool) -> tuple[str, str, list[s
     return effective, requested, warnings
 
 
-def thread_limit_warnings(threads: int) -> list[str]:
+def pids_max_files(
+    proc_cgroup: str = "/proc/self/cgroup", cgroup_root: str = "/sys/fs/cgroup"
+) -> list[str]:
+    """Every pids.max file that can limit this process, nearest first.
+
+    A systemd service's TasksMax lives in its own cgroup, for example
+    /sys/fs/cgroup/system.slice/openalgo.service/pids.max, and a slice's limit
+    in the folders above it. Only a container with its own cgroup namespace
+    sees its limit at the root. So the process's own cgroup is read from
+    /proc/self/cgroup and every folder from it up to the root is checked, with
+    the two root files kept for cgroup v1 and container namespaces.
+
+    Args:
+        proc_cgroup: The process's cgroup membership file.
+        cgroup_root: Where the cgroup file system is mounted.
+
+    Returns:
+        Candidate file paths; the caller skips the ones that do not exist.
+    """
+    candidates: list[str] = []
+    try:
+        with open(proc_cgroup, encoding="ascii") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        hierarchy, controllers, path = parts
+        if hierarchy == "0" and controllers == "":
+            base = cgroup_root  # cgroup v2, one unified hierarchy
+        elif "pids" in controllers.split(","):
+            base = os.path.join(cgroup_root, "pids")  # cgroup v1 pids controller
+        else:
+            continue
+        segments = [segment for segment in path.split("/") if segment]
+        for depth in range(len(segments), -1, -1):
+            candidates.append(os.path.join(base, *segments[:depth], "pids.max"))
+    for fallback in (
+        os.path.join(cgroup_root, "pids.max"),
+        os.path.join(cgroup_root, "pids", "pids.max"),
+    ):
+        if fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
+
+
+def thread_limit_warnings(
+    threads: int, proc_cgroup: str = "/proc/self/cgroup", cgroup_root: str = "/sys/fs/cgroup"
+) -> list[str]:
     """Warn when the operating system would not let the worker start its threads.
 
     Args:
         threads: The number of request threads the launcher will start.
+        proc_cgroup: The process's cgroup membership file (tests only).
+        cgroup_root: Where the cgroup file system is mounted (tests only).
 
     Returns:
         Plain sentences, empty when the limits are comfortably above what
@@ -196,19 +248,21 @@ def thread_limit_warnings(threads: int) -> list[str]:
             )
     except (ImportError, OSError, ValueError):
         pass
-    for path in ("/sys/fs/cgroup/pids.max", "/sys/fs/cgroup/pids/pids.max"):
+    limits = []
+    for path in pids_max_files(proc_cgroup, cgroup_root):
         try:
             with open(path, encoding="ascii") as handle:
                 text = handle.read().strip()
         except OSError:
             continue
-        if text.isdigit() and int(text) < needed:
-            notes.append(
-                f"This service may run at most {text} tasks, and the gthread web server "
-                f"needs about {needed}. Raise TasksMax in the service file, or the "
-                "container's pids limit, or switch back to eventlet."
-            )
-        break
+        if text.isdigit():
+            limits.append(int(text))
+    if limits and min(limits) < needed:
+        notes.append(
+            f"This service may run at most {min(limits)} tasks, and the gthread web server "
+            f"needs about {needed}. Raise TasksMax in the service file, or the "
+            "container's pids limit, or switch back to eventlet."
+        )
     return notes
 
 

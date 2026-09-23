@@ -238,6 +238,80 @@ def _registered_hooks(early: bool) -> list[_Hook]:
         return [hook for hook in _hooks if hook.early is early]
 
 
+#: The early hooks' threads, once :func:`begin_early_shutdown` has started them
+#: at the stop signal. shutdown_runtime then waits for these instead of
+#: running the early hooks again. An empty list means shutdown_runtime got
+#: there first and runs them itself.
+_early_started: list[tuple[_Hook, threading.Thread, float]] | None = None
+
+
+def _call_hook(hook: _Hook) -> None:
+    try:
+        hook.fn()
+    except Exception:
+        logger.exception(f"Shutdown hook {hook.name} failed; continuing teardown")
+
+
+def begin_early_shutdown() -> bool:
+    """Start the early hooks now, side by side, and return without waiting.
+
+    Under the gthread worker the launcher's stop drain calls this as soon as
+    the worker is told to stop. gunicorn gives a stopping worker one graceful
+    window for everything: open requests first, then ``worker_exit``, which is
+    where shutdown_runtime ran the early hooks one after another. On Docker the
+    window is 7 seconds, so a slow request, or one strategy using its grace
+    period, left the OpenScript runs no time at all, and the kill that ends the
+    window skipped them. Started here they stop beside the open requests and
+    beside each other, and shutdown_runtime only waits for them.
+
+    Idempotent, and does nothing once shutdown_runtime has begun.
+
+    Returns:
+        True when this call started them.
+    """
+    global _early_started
+
+    with _hooks_lock:
+        if _early_started is not None or _shutdown_done:
+            return False
+        started = []
+        now = time.monotonic()
+        for hook in _hooks:
+            if not hook.early:
+                continue
+            thread = threading.Thread(
+                target=_call_hook, args=(hook,), name=f"shutdown-{hook.name}", daemon=True
+            )
+            thread.start()
+            started.append((hook, thread, now + hook.budget_s))
+        _early_started = started
+    return True
+
+
+def _take_early_started() -> list[tuple[_Hook, threading.Thread, float]] | None:
+    """The hooks begin_early_shutdown started, or None; later calls start nothing."""
+    global _early_started
+
+    with _hooks_lock:
+        started = _early_started
+        if started is None:
+            _early_started = []
+        return started or None
+
+
+def _wait_for_early_hooks(
+    started: list[tuple[_Hook, threading.Thread, float]], deadline: float
+) -> None:
+    """Wait for hooks already running, each within its own budget and the deadline."""
+    for hook, thread, hook_deadline in started:
+        thread.join(max(0.0, min(hook_deadline, deadline) - time.monotonic()))
+        if thread.is_alive():
+            logger.warning(
+                f"Shutdown hook {hook.name} did not finish within its time "
+                "budget; continuing teardown without it"
+            )
+
+
 def _run_hooks(hooks: list[_Hook], deadline: float) -> None:
     """Run each hook within its budget and within the overall deadline.
 
@@ -340,7 +414,11 @@ def shutdown_runtime() -> None:
     except Exception:
         logger.exception("Could not signal streams to stop; continuing teardown")
 
-    _run_hooks(_registered_hooks(early=True), deadline)
+    early_started = _take_early_started()
+    if early_started is None:
+        _run_hooks(_registered_hooks(early=True), deadline)
+    else:
+        _wait_for_early_hooks(early_started, deadline)
 
     def _late_hooks() -> None:
         _run_late_hooks(deadline)

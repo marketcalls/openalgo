@@ -153,10 +153,11 @@ On Railway or another platform that sets environment variables for you, set
 `OPENALGO_WORKER_CLASS=gthread` there instead.
 
 **Stopping.** Docker gives a container 10 seconds to stop before it forces
-it. On gthread OpenAlgo gives open requests 7 of those seconds to finish, so
-a normal `docker compose down` or restart fits. Leave `stop_grace_period` at
-its default or longer; do not shorten it below 10 seconds. A longer value is
-harmless but does not give requests more time.
+it. On gthread OpenAlgo uses 7 of those seconds: open requests get that long
+to finish, and your running Python strategies and OpenScript runs are told to
+stop at the same moment, side by side, so a strategy that handles the stop
+signal gets its chance to clean up. Leave `stop_grace_period` at its default
+or longer; do not shorten it below 10 seconds.
 
 ## Check that it works
 
@@ -183,10 +184,12 @@ harmless but does not give requests more time.
    .venv/bin/python scripts/gthread_broker_smoke.py --url https://your-openalgo-domain --repeat 3 --parallel 4
    ```
 
-   It asks for your API key rather than taking it on the command line. Add
-   `--order-check` only if OpenAlgo is in analyzer (sandbox) mode: it then
-   places one small LIMIT buy far below the market in the sandbox and cancels
-   it. In live mode it refuses.
+   It asks for your API key rather than taking it on the command line. Log
+   in to OpenAlgo and your broker first: after about 03:00 IST the broker
+   session has expired and every call fails. Add `--order-check` only if
+   OpenAlgo is in analyzer (sandbox) mode: it then places one small LIMIT buy
+   far below the market in the sandbox (CNC on NSE and BSE, NRML elsewhere, so
+   it works at any hour) and cancels it. In live mode it refuses.
 
 4. **The next trading day.** Keep an eye on the system report and on
    `log/errors.jsonl`. If the report says almost every request slot is busy,
@@ -203,7 +206,17 @@ harmless but does not give requests more time.
   or set `OPENALGO_WORKER_CLASS = 'eventlet'` in `.env` and run
   `sudo systemctl restart openalgo`.
 - **Put the original service file back entirely:**
-  `sudo bash install/switch-worker.sh --restore`.
+  `sudo bash install/switch-worker.sh --restore`. It also sets
+  `OPENALGO_WORKER_CLASS = 'eventlet'` in `.env` if it asked for gthread, so
+  the next update does not switch the service over again.
+- **Going back to an older OpenAlgo release.** A switched service starts
+  OpenAlgo through `install/openalgo-gunicorn.sh`, which older releases do not
+  have. Before you check out a release older than this one, run
+  `sudo bash install/switch-worker.sh --restore` first, while the script is
+  still there. Otherwise the service cannot start after the rollback. If that
+  has already happened, copy back the saved file named in the comment just
+  above the service file's `ExecStart` line (`<file>.pre-launcher-<date>`),
+  then run `sudo systemctl daemon-reload` and restart the service.
 - **Docker:** set `OPENALGO_WORKER_CLASS = 'eventlet'` in `.env` (or delete
   the line) and recreate the container.
 

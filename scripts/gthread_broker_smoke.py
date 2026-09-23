@@ -149,6 +149,21 @@ def in_analyzer_mode(client: Client) -> tuple[bool, str]:
     return False, "OpenAlgo is in live mode"
 
 
+#: Exchanges whose orders are delivery (CNC) rather than carry-forward (NRML).
+EQUITY_EXCHANGES = frozenset({"NSE", "BSE"})
+
+
+def order_check_product(exchange: str) -> str:
+    """The product the order check uses: never MIS.
+
+    The sandbox refuses a new MIS order after its exchange's square-off time
+    and before 09:00 IST, which is the whole window a switch is allowed in, so
+    an MIS check could only ever fail right after switching. CNC on an equity
+    exchange and NRML on any other are accepted at any hour.
+    """
+    return "CNC" if str(exchange).upper() in EQUITY_EXCHANGES else "NRML"
+
+
 def order_check(client: Client, symbol: str, exchange: str) -> tuple[list[dict], int]:
     """Place and cancel one far-from-market LIMIT order, in analyzer mode only."""
     rows: list[dict] = []
@@ -192,12 +207,15 @@ def order_check(client: Client, symbol: str, exchange: str) -> tuple[list[dict],
             "action": "BUY",
             "quantity": 1,
             "pricetype": "LIMIT",
-            "product": "MIS",
+            "product": order_check_product(exchange),
             "price": price,
         },
     )
     orderid = data.get("orderid")
-    went_live = data.get("mode") not in (None, "analyze")
+    # Only an answer that says it came from the sandbox counts as one. A live
+    # order's answer carries no mode at all, so anything else is treated as
+    # having reached the broker.
+    went_live = ok and data.get("mode") != "analyze"
     if went_live:
         # Analyzer mode was switched off in the moment between the check and
         # the order. Cancel it straight away and say so plainly.

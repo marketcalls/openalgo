@@ -610,7 +610,7 @@ switch_one() {
 }
 
 restore_one() {
-    local unit="$1" service backup workdir old_cmd bind expected
+    local unit="$1" service backup workdir old_cmd bind expected env_worker env_differs
     service="$(basename "$unit" .service)"
     backup="$(ls -1 "$unit".pre-launcher-* 2>/dev/null | sort | tail -n 1)"
     say ""
@@ -623,14 +623,31 @@ restore_one() {
     parse_gunicorn_command "$old_cmd"
     bind="$OLD_BIND"
     expected="$OLD_WORKER"
+    workdir="$(unit_value "$backup" WorkingDirectory)"
+    workdir="${workdir%/}"
+    # .env goes back too. Left asking for gthread, the next update.sh would
+    # move this service straight back onto the launcher the operator has just
+    # backed out of. Only a .env that asks for something else is touched.
+    env_worker="eventlet"
+    [ "$OLD_WORKER" = "gthread" ] && env_worker="gthread"
+    env_differs=0
+    if [ -n "$workdir" ] && [ -f "$workdir/.env" ] \
+        && [ "$(requested_worker "$workdir" "$OLD_VENV")" != "$env_worker" ]; then
+        env_differs=1
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
         say "  Would put back $backup and restart on the ${expected:-previous} web server."
+        [ "$env_differs" -eq 1 ] && say "  Would set OPENALGO_WORKER_CLASS = '$env_worker' in $workdir/.env"
         return 0
     fi
     refuse_during_trading_day || return 3
     confirm "  Put back $backup and restart $service now?" || { say "  Nothing changed."; return 3; }
     as_root cp -p "$unit" "$unit.launcher-$TIMESTAMP"
     as_root cp -p "$backup" "$unit"
+    if [ "$env_differs" -eq 1 ] && ! set_env_worker "$workdir" "$OLD_VENV" "$env_worker"; then
+        warn "  Set OPENALGO_WORKER_CLASS = '$env_worker' in $workdir/.env by hand, or the"
+        warn "  next update will switch $service back to the gthread web server."
+    fi
     if restart_and_check "$service" "$bind" "$expected"; then
         say "  Put back $backup. OpenAlgo is running on the ${expected:-previous} web server."
         return 0

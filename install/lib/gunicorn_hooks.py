@@ -136,6 +136,8 @@ def _schedule_connection_drain(worker):
 
 def _drain_connections(worker):
     """Runs on the gthread main loop once the worker has been told to stop."""
+    _begin_early_shutdown(worker)
+
     # Idle keep-alive and not-yet-readable connections: give them an expiry in
     # the past, so the shutdown loop closes them now instead of after
     # --keep-alive seconds.
@@ -160,6 +162,26 @@ def _drain_connections(worker):
         ).start()
     except Exception as error:
         _log(worker, "warning", f"OpenAlgo could not close browser sessions at stop: {error}")
+
+
+def _begin_early_shutdown(worker):
+    """Start stopping strategies now, beside the open requests.
+
+    gunicorn gives a stopping worker one graceful window: it waits for open
+    requests and only then runs ``worker_exit``, and it kills the worker when
+    the window ends. Stopping the Python strategies and OpenScript runs only
+    from ``worker_exit`` left them whatever the requests had not used, which on
+    Docker's 7 seconds could be nothing. gthread only; ``worker_exit`` still
+    waits for them.
+    """
+    try:
+        from utils import runtime
+        from utils.shutdown import begin_early_shutdown
+
+        if runtime.gthread_active():
+            begin_early_shutdown()
+    except Exception as error:
+        _log(worker, "warning", f"OpenAlgo could not start stopping strategies early: {error}")
 
 
 def _engineio_sessions(worker):
