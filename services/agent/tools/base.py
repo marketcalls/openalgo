@@ -70,8 +70,9 @@ not: service code takes green primitives (the sandbox fund and position locks,
 the event bus lock, the Socket.IO queues), and a real thread that waits on one
 while a greenlet holds it is blocked forever. So a tool reaches service code
 through ``utils.real_threading.run_on_hub``, which runs the call on the hub
-under eventlet and simply makes it everywhere else; ``OrdersToolkit`` does so
-for its preparation and its dispatch. Do not introduce a green primitive here.
+under eventlet and simply makes it everywhere else. :meth:`OpenAlgoToolkit.
+service_call` does so for every read, and ``OrdersToolkit`` for its preparation
+and its dispatch. Do not introduce a green primitive here.
 See CLAUDE.md, "Nothing may block or be blocked across the eventlet boundary".
 """
 
@@ -91,6 +92,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from utils import real_threading
 from utils.logging import get_logger
 
 try:
@@ -695,6 +697,61 @@ class AuditScope:
 # ---------------------------------------------------------------------------
 
 
+#: Seconds a tool waits for a service read handed to the hub under eventlet.
+#: Everywhere else the read runs inline and this does not apply.
+AGENT_SERVICE_TIMEOUT_SECONDS = 60.0
+
+#: What the model is told when the web server could not run a read in time.
+SERVICE_BUSY_MESSAGE = (
+    "{label} could not run because the web server was too busy to take it. "
+    "Nothing was changed. Try the tool again in a moment."
+)
+
+
+class _HubTimeout(TimeoutError):
+    """The hub did not finish a service read within its allowance."""
+
+
+def call_service(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Call a service function where the web app's own code runs.
+
+    Under eventlet the agent's thread is a real OS thread and the service layer
+    takes green locks, so the call is run on the hub; everywhere else it is
+    simply made, on the caller's thread, exactly as before.
+
+    Args:
+        fn: The service function.
+        *args: Its positional arguments.
+        **kwargs: Its keyword arguments, passed through untouched (a service
+            keyword named ``timeout`` included).
+
+    Returns:
+        Whatever ``fn`` returned.
+
+    Raises:
+        real_threading.HubQueueFull: The hub already had too much waiting.
+        _HubTimeout: The hub did not finish the call in time.
+        Exception: Whatever ``fn`` raised.
+    """
+    outcome: dict[str, Any] = {}
+
+    def call() -> None:
+        # Never raises, so a TimeoutError out of run_on_hub is always its own
+        # wait running out and never one the service raised.
+        try:
+            outcome["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 - re-raised below, on the caller
+            outcome["error"] = exc
+
+    try:
+        real_threading.run_on_hub(call, timeout=AGENT_SERVICE_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise _HubTimeout(str(exc)) from exc
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
+
+
 class OpenAlgoToolkit(Toolkit):
     """Base class for every agent toolkit.
 
@@ -934,9 +991,12 @@ class OpenAlgoToolkit(Toolkit):
         call_kwargs = self._with_api_key(fn, args, kwargs)
 
         try:
-            result = fn(*args, **call_kwargs)
+            result = call_service(fn, *args, **call_kwargs)
         except RetryAgentRun:
             raise
+        except (real_threading.HubQueueFull, _HubTimeout) as exc:
+            logger.warning("Agent toolkit %s: %s could not run in time", type(self).__name__, label)
+            raise RetryAgentRun(SERVICE_BUSY_MESSAGE.format(label=label)) from exc
         except Exception as exc:
             logger.exception("Agent toolkit %s: %s raised", type(self).__name__, label)
             raise RetryAgentRun(
