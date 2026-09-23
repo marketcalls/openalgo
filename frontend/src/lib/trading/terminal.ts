@@ -3278,6 +3278,56 @@ export class TradingTerminal {
 
   }
 
+  /**
+   * Register just what `ids` need, so a saved layout can be restored now.
+   *
+   * loadIndicators is the whole catalogue, which the picker needs and a restore
+   * does not. With a folder of hundreds of user modules, waiting for all of them
+   * held every saved indicator, built-in ones included, back for seconds on each
+   * reload. A restore needs the built-in tier, the user modules that provide the
+   * ids it holds (the loader knows which from what those modules registered on
+   * earlier loads), and the OpenScript studies only when the layout holds one.
+   * The rest of the catalogue follows in the background: see
+   * completeIndicatorCatalogue.
+   */
+  private async loadIndicatorsFor(ids: readonly string[]): Promise<void> {
+    if (!this.indicatorsLoaded) {
+      await import('openalgo-charts/indicators')
+      this.indicatorsLoaded = true
+    }
+    if (ids.length === 0) return
+
+    const { ensureCustomIndicators } = await import('./customIndicators')
+    const custom = await ensureCustomIndicators(ids, {
+      onProblem: (message) => this.toast(message, 'err'),
+    })
+    for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    if (ids.some((id) => fileForScriptId(id) !== null)) {
+      const { loadOpenScriptStudies } = await import('./openscriptStudies')
+      const studies = await loadOpenScriptStudies()
+      for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+    }
+  }
+
+  /**
+   * Load the whole catalogue once the chart is on screen, so the picker opens
+   * without waiting. Run when the browser is idle so it never competes with the
+   * first paint of the chart, and never awaited: its problems are reported by
+   * loadIndicators itself, the same toasts the picker would have raised.
+   */
+  private completeIndicatorCatalogue(): void {
+    if (this.destroyed) return
+    const run = () => {
+      if (!this.destroyed) void this.loadIndicators().catch(() => {})
+    }
+    // Called on the global itself: a browser refuses requestIdleCallback detached
+    // from window with an illegal invocation.
+    const host = globalThis as { requestIdleCallback?: (cb: () => void) => number }
+    if (typeof host.requestIdleCallback === 'function') host.requestIdleCallback(run)
+    else setTimeout(run, 0)
+  }
+
   /** Restore sources before the evaluator validates their saved identities. */
   private async restoreChartContent(chart: ChartInstance): Promise<void> {
     if (this.activeIndicators.length) await this.applyIndicators()
@@ -3286,6 +3336,8 @@ export class TradingTerminal {
     if (this.destroyed || chart !== this.chart) return
     chart.setAlertState(this.alertJson)
     this.attachAlerts(chart)
+    // The restore needed only its own studies; the picker needs everything.
+    this.completeIndicatorCatalogue()
   }
 
   private attachAlerts(chart: ChartInstance): void {
@@ -3708,7 +3760,7 @@ export class TradingTerminal {
     if (!chart) return
     this.restoringIndicatorsOn = chart
     try {
-      await this.loadIndicators()
+      await this.loadIndicatorsFor(this.activeIndicators.map((record) => record.indicatorId))
       if (this.destroyed || !this.chart || this.chart !== chart) return
       // Re-adding walks the tracked list, so a sync mid-loop would read a
       // half-applied chart and truncate it.
@@ -6417,7 +6469,10 @@ export class TradingTerminal {
     this.availableIntervals = groups.flatMap((group) => group.items)
     if (this.initialWorkspacePane) {
       const pane = this.initialWorkspacePane
-      await this.loadIndicators()
+      // Only what this pane holds: the validation below reads the registry for
+      // the pane's own studies, and the rest of the catalogue follows once the
+      // chart is up.
+      await this.loadIndicatorsFor((pane.chart.indicators ?? []).map((study) => study.indicatorId))
       this.assertWorkspacePreparation()
       validateWorkspacePaneSupport(pane, {
         chartTypes: new Set(Object.keys(CHART_TYPES)),

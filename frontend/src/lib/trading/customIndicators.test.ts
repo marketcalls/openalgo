@@ -10,9 +10,14 @@
  */
 
 import { hasIndicator } from 'openalgo-charts'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { calcOutputError, descriptorErrors, loadCustomIndicators } from './customIndicators'
+import {
+  calcOutputError,
+  descriptorErrors,
+  ensureCustomIndicators,
+  loadCustomIndicators,
+} from './customIndicators'
 
 function mockIndex(body: unknown, ok = true) {
   const fetchMock = vi.fn(async () => ({ ok, json: async () => body }) as unknown as Response)
@@ -140,6 +145,166 @@ describe('loadCustomIndicators', () => {
     expect(fetchMock).toHaveBeenCalledWith('/custom-indicators/index.json', {
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
+    })
+  })
+})
+
+/**
+ * A folder of hundreds of modules.
+ *
+ * Imported one after another, 500 files held every saved indicator back for
+ * about three seconds on each reload. These pin the three things that fixed it:
+ * the fetches overlap, the order that decides which module wins an id does not
+ * change, and a restore imports only the files its layout uses.
+ */
+describe('loading at scale', () => {
+  const MANIFEST = 'openalgo.customIndicators.manifest.v1'
+  type Registrar = { registerIndicator: (descriptor: unknown) => void }
+
+  function descriptor(id: string) {
+    return {
+      id,
+      name: id,
+      placement: 'onchart',
+      inputs: [],
+      plots: [{ key: 'close', type: 'line' }],
+      calc: (bars: { close: number }[]) => ({ close: bars.map((bar) => bar.close) }),
+    }
+  }
+
+  function moduleRegistering(...ids: string[]) {
+    return {
+      default: ({ registerIndicator }: Registrar) => {
+        for (const id of ids) registerIndicator(descriptor(id))
+      },
+    }
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('fetches modules in parallel rather than one after another', async () => {
+    let started = 0
+    const release: (() => void)[] = []
+    for (const name of ['par-a', 'par-b', 'par-c']) {
+      vi.doMock(`/custom-indicators/${name}.js?v=1`, async () => {
+        started += 1
+        await new Promise<void>((resolve) => release.push(resolve))
+        return moduleRegistering(`${name}-id`)
+      })
+    }
+    mockIndex([
+      { file: 'par-a.js', mtime: 1 },
+      { file: 'par-b.js', mtime: 1 },
+      { file: 'par-c.js', mtime: 1 },
+    ])
+    const load = loadCustomIndicators()
+    // Sequential loading would start the second fetch only after the first
+    // module arrived, so this would never reach three.
+    await vi.waitFor(() => expect(started).toBe(3))
+    for (const go of release) go()
+    expect((await load).loaded).toEqual(['par-a.js', 'par-b.js', 'par-c.js'])
+  })
+
+  it('still registers in index order when later files arrive first', async () => {
+    const order: string[] = []
+    const arrive: Record<string, () => void> = {}
+    for (const name of ['order-a', 'order-b', 'order-c']) {
+      const gate = new Promise<void>((resolve) => {
+        arrive[name] = resolve
+      })
+      vi.doMock(`/custom-indicators/${name}.js?v=1`, async () => {
+        await gate
+        return {
+          default: ({ registerIndicator }: Registrar) => {
+            order.push(name)
+            registerIndicator(descriptor(`${name}-id`))
+          },
+        }
+      })
+    }
+    mockIndex([
+      { file: 'order-a.js', mtime: 1 },
+      { file: 'order-b.js', mtime: 1 },
+      { file: 'order-c.js', mtime: 1 },
+    ])
+    const load = loadCustomIndicators()
+    await vi.waitFor(() => expect(Object.keys(arrive)).toHaveLength(3))
+    arrive['order-c']()
+    arrive['order-b']()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    arrive['order-a']()
+    await load
+    // Order is what decides which of two modules registering one id wins.
+    expect(order).toEqual(['order-a', 'order-b', 'order-c'])
+  })
+
+  it('restores from the manifest without importing modules the layout does not use', async () => {
+    const imported: string[] = []
+    for (const name of ['lazy-used', 'lazy-other']) {
+      vi.doMock(`/custom-indicators/${name}.js?v=3`, () => {
+        imported.push(name)
+        return moduleRegistering(`${name}-id`)
+      })
+    }
+    localStorage.setItem(
+      MANIFEST,
+      JSON.stringify({ 'lazy-used.js@3': ['lazy-used-id'], 'lazy-other.js@3': ['lazy-other-id'] })
+    )
+    mockIndex([
+      { file: 'lazy-other.js', mtime: 3 },
+      { file: 'lazy-used.js', mtime: 3 },
+    ])
+
+    const res = await ensureCustomIndicators(['lazy-used-id'])
+
+    expect(res.loaded).toEqual(['lazy-used.js'])
+    expect(imported).toEqual(['lazy-used'])
+    expect(hasIndicator('lazy-used-id')).toBe(true)
+    expect(hasIndicator('lazy-other-id')).toBe(false)
+  })
+
+  it('imports nothing for a layout of built-in indicators', async () => {
+    const { registeredIndicators } = await import('openalgo-charts')
+    await import('openalgo-charts/indicators')
+    const builtin = registeredIndicators()[0].id
+    const imported: string[] = []
+    vi.doMock('/custom-indicators/lazy-unused.js?v=4', () => {
+      imported.push('lazy-unused')
+      return moduleRegistering('lazy-unused-id')
+    })
+    localStorage.setItem(MANIFEST, JSON.stringify({ 'lazy-unused.js@4': ['lazy-unused-id'] }))
+    mockIndex([{ file: 'lazy-unused.js', mtime: 4 }])
+
+    await ensureCustomIndicators([builtin])
+
+    expect(imported).toEqual([])
+  })
+
+  it('falls back to the full load when a saved indicator may be in a file it has not seen', async () => {
+    // A new or edited file is not in the manifest yet, so it may be the one
+    // that registers what the layout holds. Restoring without it would drop
+    // that indicator from the chart.
+    vi.doMock('/custom-indicators/lazy-new.js?v=5', () => moduleRegistering('lazy-new-id'))
+    mockIndex([{ file: 'lazy-new.js', mtime: 5 }])
+
+    await ensureCustomIndicators(['lazy-new-id'])
+
+    expect(hasIndicator('lazy-new-id')).toBe(true)
+  })
+
+  it('remembers which ids each module registers, and forgets removed modules', async () => {
+    localStorage.setItem(MANIFEST, JSON.stringify({ 'gone.js@1': ['gone-id'] }))
+    vi.doMock('/custom-indicators/remembered.js?v=6', () =>
+      moduleRegistering('remembered-a', 'remembered-b')
+    )
+    mockIndex([{ file: 'remembered.js', mtime: 6 }])
+
+    await loadCustomIndicators()
+
+    expect(JSON.parse(localStorage.getItem(MANIFEST) ?? '{}')).toEqual({
+      'remembered.js@6': ['remembered-a', 'remembered-b'],
     })
   })
 })

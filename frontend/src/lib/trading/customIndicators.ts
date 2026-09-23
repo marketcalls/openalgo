@@ -243,11 +243,247 @@ function guardCalc(
 }
 
 /**
+ * Imports in flight at once.
+ *
+ * Every module used to be imported one after the other, each waiting for the
+ * previous file's round trip. That was invisible with a handful of files and
+ * cost a second or more per few hundred: a folder of 500 held every saved
+ * indicator back for three seconds on each reload. The browser keeps a small
+ * number of connections per origin anyway, so a few more than that is enough to
+ * keep the pipe full without flooding the server.
+ */
+const CONCURRENCY = 8
+
+/**
+ * Where the loader remembers which indicator ids each module registers.
+ *
+ * Keyed by `file@mtime`, so an edited file is a new key and nothing stale is
+ * trusted. It is learned from the modules themselves as they register, never
+ * parsed out of their source, and it is what lets a chart restore without
+ * importing every module first: a saved layout names indicator ids, and this
+ * says which files provide them.
+ */
+const MANIFEST_KEY = 'openalgo.customIndicators.manifest.v1'
+
+type Manifest = Record<string, string[]>
+
+function readManifest(): Manifest {
+  try {
+    const raw = localStorage.getItem(MANIFEST_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+    const out: Manifest = {}
+    for (const [key, ids] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(ids) && ids.every((id) => typeof id === 'string')) out[key] = ids
+    }
+    return out
+  } catch {
+    // Private mode, a full quota or a corrupted entry. The manifest is only an
+    // accelerator: without it the loader imports everything, as it always did.
+    return {}
+  }
+}
+
+function writeManifest(manifest: Manifest): void {
+  try {
+    localStorage.setItem(MANIFEST_KEY, JSON.stringify(manifest))
+  } catch {
+    /* See readManifest: losing the accelerator is never an error. */
+  }
+}
+
+const keyOf = (mod: CustomModule) => `${mod.file}@${mod.mtime}`
+const urlOf = (mod: CustomModule) =>
+  `/custom-indicators/${encodeURIComponent(mod.file)}?v=${mod.mtime}`
+
+/** Ids each module registered during this page's life, by `file@mtime`. */
+const learned: Manifest = {}
+
+let active = 0
+const waiting: (() => void)[] = []
+
+/**
+ * Run `task` once fewer than CONCURRENCY imports are in flight.
+ *
+ * A finishing task hands its slot straight to the next one waiting rather than
+ * freeing it, so a new caller can never slip in between and push the count past
+ * the limit.
+ */
+async function limited<T>(task: () => Promise<T>): Promise<T> {
+  if (active >= CONCURRENCY) await new Promise<void>((resolve) => waiting.push(resolve))
+  else active += 1
+  try {
+    return await task()
+  } finally {
+    const next = waiting.shift()
+    if (next) next()
+    else active -= 1
+  }
+}
+
+/** One module's import, started at most once per `file@mtime`. */
+const imports = new Map<string, Promise<unknown>>()
+
+function importOnce(mod: CustomModule): Promise<unknown> {
+  const key = keyOf(mod)
+  let pending = imports.get(key)
+  if (!pending) {
+    pending = limited(() => import(/* @vite-ignore */ urlOf(mod)))
+    // Observed here so a failure nobody has awaited yet is not reported as an
+    // unhandled rejection; registerOnce turns it into the module's error.
+    pending.catch(() => {})
+    imports.set(key, pending)
+  }
+  return pending
+}
+
+type Outcome = { file: string; error?: string }
+
+/**
+ * One module's registration, at most once per `file@mtime`.
+ *
+ * `processed` marks the module as claimed the moment its registration starts,
+ * which is what keeps a restore and a picker opening at the same moment from
+ * importing, registering and reporting the same file twice.
+ */
+const registrations = new Map<string, Promise<Outcome>>()
+
+interface LoaderEnv {
+  core: typeof import('openalgo-charts')
+  api: Record<string, unknown>
+}
+
+let envPromise: Promise<LoaderEnv> | null = null
+
+function loaderEnv(): Promise<LoaderEnv> {
+  if (!envPromise) {
+    envPromise = (async () => {
+      // The whole surface of both tiers, so a user module can reach `sma`,
+      // `rma`, `highest`, `sourceValues`, the timezone helpers and
+      // `createTier2Indicator` without importing anything itself.
+      const core = await import('openalgo-charts')
+      const api = { ...core, ...(await import('openalgo-charts/indicators')) }
+      // After the tier import so every built-in has registered, and before the
+      // first user module runs so the snapshot holds built-ins only.
+      if (builtinIds === null) {
+        builtinIds = new Set(core.registeredIndicators().map((d) => d.id))
+      }
+      return { core, api }
+    })()
+    envPromise.catch(() => {
+      envPromise = null
+    })
+  }
+  return envPromise
+}
+
+function registerOnce(mod: CustomModule, onProblem: ProblemReporter): Promise<Outcome> {
+  const key = keyOf(mod)
+  const existing = registrations.get(key)
+  if (existing) return existing
+
+  processed.add(key)
+  const outcome = (async (): Promise<Outcome> => {
+    try {
+      const [{ core, api }, loaded] = await Promise.all([loaderEnv(), importOnce(mod)])
+      const register = (loaded as { default?: unknown }).default
+      if (typeof register !== 'function') {
+        throw new Error('module has no default-exported function')
+      }
+
+      // Registration is intercepted so a descriptor is checked before it can
+      // reach the catalogue, and so `calc` can be wrapped on the way through.
+      const ids: string[] = []
+      await register({
+        ...api,
+        registerIndicator: (descriptor: Record<string, unknown>) => {
+          if (typeof descriptor !== 'object' || descriptor === null) {
+            throw new Error('registerIndicator needs a descriptor object')
+          }
+          const problems = descriptorErrors(descriptor)
+          if (problems.length > 0) throw new Error(problems.join('; '))
+          // A warning, not an error: overriding a built-in is allowed on
+          // purpose, and refusing would break a file that has been doing it
+          // deliberately since before the id existed upstream.
+          const id = descriptor.id
+          if (typeof id === 'string' && builtinIds?.has(id)) {
+            onProblem(
+              `${mod.file}: id "${id}" replaces the built-in indicator of the same name for the whole app. Rename it unless that override is intended.`
+            )
+          }
+          if (typeof id === 'string') ids.push(id)
+          core.registerIndicator(guardCalc(descriptor, mod.file, onProblem) as never)
+        },
+      })
+      if (ids.length === 0) throw new Error('module never called registerIndicator')
+      learned[key] = ids
+      return { file: mod.file }
+    } catch (e) {
+      return { file: mod.file, error: messageOf(e) }
+    }
+  })()
+  registrations.set(key, outcome)
+  return outcome
+}
+
+/**
+ * Register `mods` in the order given, fetching them in parallel.
+ *
+ * Every import is started up front, within the concurrency limit, and the
+ * registrations then run one at a time in index order. Order is the only thing
+ * that decides which of two modules registering the same id wins, so fetching
+ * in parallel must not change it: the last one in the index still wins, exactly
+ * as it did when everything was loaded in sequence.
+ *
+ * A module another call already claimed is awaited, so this resolves only once
+ * everything it was asked for is registered, but it is not reported again.
+ */
+async function registerInOrder(
+  mods: CustomModule[],
+  onProblem: ProblemReporter,
+  result: CustomIndicatorLoad
+): Promise<void> {
+  const claimed = new Set(mods.filter((m) => registrations.has(keyOf(m))).map(keyOf))
+  for (const mod of mods) void importOnce(mod)
+  for (const mod of mods) {
+    const outcome = await registerOnce(mod, onProblem)
+    if (claimed.has(keyOf(mod))) continue
+    if (outcome.error === undefined) result.loaded.push(outcome.file)
+    else result.errors.push({ file: outcome.file, message: outcome.error })
+  }
+}
+
+/** The server's module list, or null when there is none to read. */
+async function readIndex(): Promise<CustomModule[] | null> {
+  try {
+    // Without the Accept header an expired session answers with a 302 to the
+    // login page, which fetch follows to a 200 of HTML. Asking for JSON gets a
+    // straight 401 instead, so a logged-out chart fails fast rather than trying
+    // to parse a login page as a module index.
+    const res = await fetch(INDEX_URL, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) return null
+    const body: unknown = await res.json()
+    return isModuleList(body) ? body : null
+  } catch {
+    // No route, no network, no session. Nothing to load is a normal state here,
+    // not a failure worth showing anyone.
+    return null
+  }
+}
+
+/**
  * Fetch, import and run every user module that has not been seen yet.
  *
  * Never throws. A missing folder, a logged-out session and a syntax error in one
  * user file all have to leave the other 105 indicators working, so the index is
  * treated as optional and each module is isolated from the next.
+ *
+ * This is the complete load the picker needs. A chart restoring a saved layout
+ * does not have to wait for it: see ensureCustomIndicators.
  */
 export function loadCustomIndicators(
   opts: { onProblem?: ProblemReporter } = {}
@@ -268,80 +504,85 @@ async function importCustomIndicators(
   const result: CustomIndicatorLoad = { loaded: [], errors: [] }
   const onProblem = opts.onProblem ?? (() => {})
 
-  let modules: CustomModule[]
-  try {
-    // Without the Accept header an expired session answers with a 302 to the
-    // login page, which fetch follows to a 200 of HTML. Asking for JSON gets a
-    // straight 401 instead, so a logged-out chart fails fast rather than trying
-    // to parse a login page as a module index.
-    const res = await fetch(INDEX_URL, {
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
-    })
-    if (!res.ok) return result
-    const body: unknown = await res.json()
-    if (!isModuleList(body)) return result
-    modules = body
-  } catch {
-    // No route, no network, no session. Nothing to load is a normal state here,
-    // not a failure worth showing anyone.
+  const modules = await readIndex()
+  if (!modules) return result
+
+  const fresh = modules.filter((m) => !processed.has(keyOf(m)))
+  // Claimed by a restore that is still registering: awaited so this returns only
+  // once the whole registry is ready, as every caller of the full load expects.
+  const inFlight = modules.filter((m) => processed.has(keyOf(m)) && registrations.has(keyOf(m)))
+  if (fresh.length === 0) {
+    await Promise.all(inFlight.map((m) => registrations.get(keyOf(m))))
     return result
   }
 
-  const fresh = modules.filter((m) => !processed.has(`${m.file}@${m.mtime}`))
-  if (fresh.length === 0) return result
+  // Every module in index order: the claimed ones resolve at once and are not
+  // reported again, and the fresh ones register in the order that decides which
+  // of two modules sharing an id wins.
+  await registerInOrder(modules, onProblem, result)
+  rememberManifest(modules)
+  return result
+}
 
-  // The whole surface of both tiers, so a user module can reach `sma`, `rma`,
-  // `highest`, `sourceValues`, the timezone helpers and `createTier2Indicator`
-  // without importing anything itself.
-  const core = await import('openalgo-charts')
-  const api = { ...core, ...(await import('openalgo-charts/indicators')) }
+/**
+ * Register just the modules that provide `ids`, so a chart can restore now.
+ *
+ * A saved layout names the indicators it holds, and the manifest this loader
+ * learned on earlier loads says which file registers each of them. Only those
+ * files are imported here, typically none or a few, and the chart restores
+ * without waiting for the rest of a folder that may hold hundreds. The caller
+ * runs the full load afterwards, in the background, for the picker.
+ *
+ * Built-in ids need nothing, unless a module overrides one, in which case that
+ * module is loaded so the override is what the chart restores. When an id cannot
+ * be placed and some modules are new or edited since the manifest was learned,
+ * one of them may be the one that registers it, so this falls back to the full
+ * load rather than restoring a chart with that indicator missing.
+ */
+export async function ensureCustomIndicators(
+  ids: readonly string[],
+  opts: { onProblem?: ProblemReporter } = {}
+): Promise<CustomIndicatorLoad> {
+  const result: CustomIndicatorLoad = { loaded: [], errors: [] }
+  if (ids.length === 0) return result
+  const onProblem = opts.onProblem ?? (() => {})
 
-  // After the tier import so every built-in has registered, and before the first
-  // user module runs so the snapshot holds built-ins only.
-  if (builtinIds === null) {
-    builtinIds = new Set(core.registeredIndicators().map((d) => d.id))
-  }
+  const modules = await readIndex()
+  if (!modules || modules.length === 0) return result
 
-  for (const mod of fresh) {
-    processed.add(`${mod.file}@${mod.mtime}`)
-    try {
-      const url = `/custom-indicators/${encodeURIComponent(mod.file)}?v=${mod.mtime}`
-      const loaded: unknown = await import(/* @vite-ignore */ url)
-      const register = (loaded as { default?: unknown }).default
-      if (typeof register !== 'function') {
-        throw new Error('module has no default-exported function')
-      }
-
-      // Registration is intercepted so a descriptor is checked before it can
-      // reach the catalogue, and so `calc` can be wrapped on the way through.
-      let registeredAny = false
-      await register({
-        ...api,
-        registerIndicator: (descriptor: Record<string, unknown>) => {
-          if (typeof descriptor !== 'object' || descriptor === null) {
-            throw new Error('registerIndicator needs a descriptor object')
-          }
-          const problems = descriptorErrors(descriptor)
-          if (problems.length > 0) throw new Error(problems.join('; '))
-          // A warning, not an error: overriding a built-in is allowed on
-          // purpose, and refusing would break a file that has been doing it
-          // deliberately since before the id existed upstream.
-          const id = descriptor.id
-          if (typeof id === 'string' && builtinIds?.has(id)) {
-            onProblem(
-              `${mod.file}: id "${id}" replaces the built-in indicator of the same name for the whole app. Rename it unless that override is intended.`
-            )
-          }
-          registeredAny = true
-          core.registerIndicator(guardCalc(descriptor, mod.file, onProblem) as never)
-        },
-      })
-      if (!registeredAny) throw new Error('module never called registerIndicator')
-      result.loaded.push(mod.file)
-    } catch (e) {
-      result.errors.push({ file: mod.file, message: messageOf(e) })
+  const manifest = { ...readManifest(), ...learned }
+  const wanted = new Set(ids)
+  const needed: CustomModule[] = []
+  const placed = new Set<string>()
+  let unknown = false
+  for (const mod of modules) {
+    const provides = manifest[keyOf(mod)]
+    if (!provides) {
+      if (!registrations.has(keyOf(mod))) unknown = true
+      continue
+    }
+    if (provides.some((id) => wanted.has(id))) {
+      needed.push(mod)
+      for (const id of provides) placed.add(id)
     }
   }
+
+  const { core } = await loaderEnv()
+  const unplaced = ids.some((id) => !placed.has(id) && !core.hasIndicator(id))
+  if (unplaced && unknown) return loadCustomIndicators(opts)
+
+  await registerInOrder(needed, onProblem, result)
   return result
+}
+
+/** Keep the manifest to the modules the server lists now, with what they register. */
+function rememberManifest(modules: CustomModule[]): void {
+  const previous = readManifest()
+  const next: Manifest = {}
+  for (const mod of modules) {
+    const key = keyOf(mod)
+    const ids = learned[key] ?? previous[key]
+    if (ids) next[key] = ids
+  }
+  writeManifest(next)
 }
