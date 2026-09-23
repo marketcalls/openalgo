@@ -1154,41 +1154,16 @@ def toggle_analyzer_mode_session():
         return jsonify({"status": "error", "message": "Broker not connected"}), 401
 
     try:
-        from database.settings_db import get_analyze_mode, set_analyze_mode
+        from services.analyzer_service import MODE_BUSY_MESSAGE, apply_analyze_mode
+        from utils.keyed_locks import LockBusy
 
-        # Get current mode and toggle it
-        current_mode = get_analyze_mode()
-        new_mode = not current_mode
-
-        # Set the new mode
-        set_analyze_mode(new_mode)
-
-        # Start/stop execution engine and squareoff scheduler based on mode
-        from sandbox.execution_thread import start_execution_engine, stop_execution_engine
-        from sandbox.squareoff_thread import start_squareoff_scheduler, stop_squareoff_scheduler
-
-        if new_mode:
-            # Analyzer mode ON - start both threads
-            start_execution_engine()
-            start_squareoff_scheduler()
-
-            # Run catch-up settlement for any missed settlements while app was stopped
-            from sandbox.position_manager import catchup_missed_settlements
-
-            try:
-                catchup_missed_settlements()
-                logger.info("Catch-up settlement check completed")
-            except Exception as e:
-                logger.exception(f"Error in catch-up settlement: {e}")
-
-            logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
-        else:
-            # Analyzer mode OFF - stop both threads
-            stop_execution_engine()
-            stop_squareoff_scheduler()
-            logger.info(
-                "Analyzer mode disabled - Execution engine and square-off scheduler stopped"
-            )
+        # Toggle the current mode and start or stop the execution engine and
+        # square-off scheduler to match, as one step: the current mode is read
+        # under the same lock, so two clicks cannot both toggle from one value.
+        try:
+            new_mode = apply_analyze_mode(toggle=True)
+        except LockBusy:
+            return jsonify({"status": "error", "message": MODE_BUSY_MESSAGE}), 409
 
         return jsonify(
             {
