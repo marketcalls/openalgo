@@ -4590,6 +4590,15 @@ def execute_node_chain(
             )
 
 
+def _already_running(workflow_id: int) -> dict:
+    logger.warning(f"Workflow {workflow_id} is already running")
+    return {
+        "status": "error",
+        "message": "Workflow is already running",
+        "already_running": True,
+    }
+
+
 def execute_workflow(
     workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
 ) -> dict:
@@ -4601,137 +4610,252 @@ def execute_workflow(
     # whole workflow again the moment the winner finished, duplicating every
     # order instead of returning already_running.
     if not lock.acquire(blocking=False):
-        logger.warning(f"Workflow {workflow_id} is already running")
-        return {
-            "status": "error",
-            "message": "Workflow is already running",
-            "already_running": True,
-        }
+        return _already_running(workflow_id)
 
     try:
-        workflow = get_workflow(workflow_id)
-        if not workflow:
-            return {"status": "error", "message": "Workflow not found"}
-
-        # Every trigger converges here - schedules, price alerts, order updates,
-        # webhooks and Run Now - so this is the only place that can guarantee an
-        # incomplete graph never reaches the broker. Guarding the HTTP routes
-        # alone left the background triggers unchecked, and saving deliberately
-        # accepts a half-built graph. Checked before the execution record exists,
-        # so a rejected run is not logged as one that started.
-        from services.flow_workflow_validator import validate_workflow
-
-        validation_errors = validate_workflow(
-            {
-                "name": workflow.name,
-                "nodes": workflow.nodes or [],
-                "edges": workflow.edges or [],
-            },
-            strict=True,
-        )
-        if validation_errors:
-            message = validation_errors[0]["message"]
-            logger.error(
-                f"Workflow {workflow_id} ({workflow.name}) is not runnable: {message}"
-            )
-            return {
-                "status": "error",
-                "message": f"Workflow cannot be executed: {message}",
-                "errors": validation_errors,
-            }
-
-        execution = create_execution(workflow_id, status="running")
-        if not execution:
-            return {"status": "error", "message": "Failed to create execution record"}
-
-        logs = []
-        context = WorkflowContext(workflow_id=workflow_id)
-
-        if webhook_data:
-            context.set_variable("webhook", webhook_data)
-            logger.info(f"Webhook data injected: {webhook_data}")
-
-        try:
-            if not api_key:
-                raise Exception("API key required for workflow execution")
-
-            client = get_flow_client(api_key)
-            executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
-            logger.info(f"Starting workflow: {workflow.name}")
-            executor.log(f"Starting workflow: {workflow.name}")
-
-            nodes = workflow.nodes or []
-            edges = workflow.edges or []
-
-            # Find trigger node
-            trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
-            start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
-            if not start_node:
-                raise Exception("No trigger node found")
-
-            # Build edge maps
-            edge_map: dict[str, list[dict]] = {}
-            incoming_edge_map: dict[str, list[dict]] = {}
-            for edge in edges:
-                source = edge["source"]
-                target = edge["target"]
-                if source not in edge_map:
-                    edge_map[source] = []
-                edge_map[source].append(edge)
-                if target not in incoming_edge_map:
-                    incoming_edge_map[target] = []
-                incoming_edge_map[target].append(edge)
-
-            visited_count: dict[str, int] = {}
-
-            execute_node_chain(
-                start_node["id"],
-                nodes,
-                edge_map,
-                incoming_edge_map,
-                executor,
-                context,
-                visited_count,
-                depth=0,
-            )
-
-            if executor.errors:
-                summary = "; ".join(f"{e['type']}: {e['message']}" for e in executor.errors)
-                update_execution_status(execution.id, "failed", error=summary, logs=logs)
-                return {
-                    "status": "error",
-                    "message": (
-                        f"{len(executor.errors)} node(s) failed: {summary}"
-                    ),
-                    "execution_id": execution.id,
-                    "errors": executor.errors,
-                    "logs": logs,
-                }
-
-            update_execution_status(execution.id, "completed", logs=logs)
-            return {
-                "status": "success",
-                "message": "Workflow executed successfully",
-                "execution_id": execution.id,
-                "logs": logs,
-            }
-
-        except Exception as e:
-            logger.exception(f"Workflow execution failed: {e}")
-            logs.append(
-                {
-                    "time": datetime.now().isoformat(),
-                    "message": f"Error: {str(e)}",
-                    "level": "error",
-                }
-            )
-            update_execution_status(execution.id, "failed", error=str(e), logs=logs)
-            return {
-                "status": "error",
-                "message": str(e),
-                "execution_id": execution.id,
-                "logs": logs,
-            }
-
+        return _execute_workflow_locked(workflow_id, webhook_data, api_key)
     finally:
         lock.release()
+
+
+# === Workflows that wait, under the gthread worker ===
+#
+# A Delay node sleeps up to DELAY_MAX_SECONDS and a Wait Until node up to
+# WAIT_UNTIL_MAX_SECONDS, and a webhook or Run Now executes the workflow on the
+# request that triggered it. Under eventlet a sleeping greenlet costs nothing.
+# Under the gthread worker it holds one of a fixed number of request threads for
+# minutes, and a handful of waiting workflows starve every other request, order
+# routes included. So under gthread (and only there) a workflow that contains
+# such a node runs on a small shared pool instead, and the trigger is answered
+# at once. Scheduler, price-alert and order-update triggers already run on
+# pools of their own and are unchanged.
+
+#: Workflows that may be waiting at once on the shared pool. A module constant,
+#: not a setting: the gthread worker adds exactly one configuration key.
+FLOW_WAITING_WORKERS = 4
+
+#: The node types that sleep inside the run.
+WAITING_NODE_TYPES = frozenset({"delay", "waitUntil"})
+
+#: What the caller reads when every waiting slot is taken.
+FLOW_WAITING_BUSY_MESSAGE = (
+    "Too many workflows are waiting on a Delay or Wait Until step right now, so "
+    "this one was not started. Try again shortly."
+)
+
+#: What the caller reads when the workflow was started in the background.
+FLOW_STARTED_IN_BACKGROUND_MESSAGE = (
+    "Workflow started. It waits on a Delay or Wait Until step, so it finishes in "
+    "the background; its result appears in the workflow's execution history."
+)
+
+# Held from the moment a waiting workflow is accepted until it finishes, so the
+# pool's queue can never hold more than it can run. Taken by request threads
+# and released by pool threads; only used under gthread, where both are real.
+_waiting_slots = threading.BoundedSemaphore(FLOW_WAITING_WORKERS)
+
+
+def workflow_waits(nodes: list[dict] | None) -> bool:
+    """Whether a workflow's graph contains a Delay or Wait Until node."""
+    return any(
+        isinstance(node, dict) and node.get("type") in WAITING_NODE_TYPES for node in (nodes or [])
+    )
+
+
+def start_workflow_in_background(
+    workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
+) -> dict:
+    """Start a workflow that waits on the shared pool and return at once.
+
+    Used under the gthread worker only (see the note above). The workflow's
+    lock is taken here, on the caller's thread, so a second trigger still gets
+    ``already_running`` straight away, and it is handed to the pool thread,
+    which releases it when the run ends.
+
+    Returns:
+        ``{"status": "accepted", "accepted": True, ...}`` once started;
+        ``already_running`` as execute_workflow reports it; or
+        ``{"status": "error", "busy": True, ...}`` when every waiting slot is
+        taken, in which case nothing was started.
+    """
+    from utils.shared_executors import get_executor
+
+    lock = get_workflow_lock(workflow_id)
+    if not lock.acquire(blocking=False):
+        return _already_running(workflow_id)
+    if not _waiting_slots.acquire(blocking=False):
+        lock.release()
+        logger.warning(f"Workflow {workflow_id} not started: every waiting slot is taken")
+        return {"status": "error", "message": FLOW_WAITING_BUSY_MESSAGE, "busy": True}
+    try:
+        get_executor("flow-waiting", FLOW_WAITING_WORKERS).submit(
+            _run_waiting_workflow, lock, workflow_id, webhook_data, api_key
+        )
+    except Exception:
+        _waiting_slots.release()
+        lock.release()
+        logger.exception(f"Workflow {workflow_id} could not be started in the background")
+        return {
+            "status": "error",
+            "message": "The workflow could not be started. Try again shortly.",
+        }
+    logger.info(f"Workflow {workflow_id} started in the background (it waits)")
+    return {
+        "status": "accepted",
+        "message": FLOW_STARTED_IN_BACKGROUND_MESSAGE,
+        "accepted": True,
+    }
+
+
+def _run_waiting_workflow(
+    lock: threading.Lock,
+    workflow_id: int,
+    webhook_data: dict[str, Any] | None,
+    api_key: str | None,
+) -> None:
+    """Run one accepted workflow on the pool, then give back its lock and slot."""
+    try:
+        result = _execute_workflow_locked(workflow_id, webhook_data, api_key)
+        if isinstance(result, dict) and result.get("status") != "success":
+            logger.warning(f"Background workflow {workflow_id} ended: {result.get('message')}")
+    except Exception:
+        logger.exception(f"Background workflow {workflow_id} failed")
+    finally:
+        lock.release()
+        _waiting_slots.release()
+        # A pool thread has no Flask teardown to release its sessions.
+        try:
+            from utils.db_sessions import remove_all_scoped_sessions
+
+            remove_all_scoped_sessions()
+        except Exception:
+            logger.exception("Could not release sessions after a background workflow")
+
+
+def _execute_workflow_locked(
+    workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
+) -> dict:
+    """The body of execute_workflow. The caller holds the workflow's lock."""
+    workflow = get_workflow(workflow_id)
+    if not workflow:
+        return {"status": "error", "message": "Workflow not found"}
+
+    # Every trigger converges here - schedules, price alerts, order updates,
+    # webhooks and Run Now - so this is the only place that can guarantee an
+    # incomplete graph never reaches the broker. Guarding the HTTP routes
+    # alone left the background triggers unchecked, and saving deliberately
+    # accepts a half-built graph. Checked before the execution record exists,
+    # so a rejected run is not logged as one that started.
+    from services.flow_workflow_validator import validate_workflow
+
+    validation_errors = validate_workflow(
+        {
+            "name": workflow.name,
+            "nodes": workflow.nodes or [],
+            "edges": workflow.edges or [],
+        },
+        strict=True,
+    )
+    if validation_errors:
+        message = validation_errors[0]["message"]
+        logger.error(
+            f"Workflow {workflow_id} ({workflow.name}) is not runnable: {message}"
+        )
+        return {
+            "status": "error",
+            "message": f"Workflow cannot be executed: {message}",
+            "errors": validation_errors,
+        }
+
+    execution = create_execution(workflow_id, status="running")
+    if not execution:
+        return {"status": "error", "message": "Failed to create execution record"}
+
+    logs = []
+    context = WorkflowContext(workflow_id=workflow_id)
+
+    if webhook_data:
+        context.set_variable("webhook", webhook_data)
+        logger.info(f"Webhook data injected: {webhook_data}")
+
+    try:
+        if not api_key:
+            raise Exception("API key required for workflow execution")
+
+        client = get_flow_client(api_key)
+        executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
+        logger.info(f"Starting workflow: {workflow.name}")
+        executor.log(f"Starting workflow: {workflow.name}")
+
+        nodes = workflow.nodes or []
+        edges = workflow.edges or []
+
+        # Find trigger node
+        trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
+        start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
+        if not start_node:
+            raise Exception("No trigger node found")
+
+        # Build edge maps
+        edge_map: dict[str, list[dict]] = {}
+        incoming_edge_map: dict[str, list[dict]] = {}
+        for edge in edges:
+            source = edge["source"]
+            target = edge["target"]
+            if source not in edge_map:
+                edge_map[source] = []
+            edge_map[source].append(edge)
+            if target not in incoming_edge_map:
+                incoming_edge_map[target] = []
+            incoming_edge_map[target].append(edge)
+
+        visited_count: dict[str, int] = {}
+
+        execute_node_chain(
+            start_node["id"],
+            nodes,
+            edge_map,
+            incoming_edge_map,
+            executor,
+            context,
+            visited_count,
+            depth=0,
+        )
+
+        if executor.errors:
+            summary = "; ".join(f"{e['type']}: {e['message']}" for e in executor.errors)
+            update_execution_status(execution.id, "failed", error=summary, logs=logs)
+            return {
+                "status": "error",
+                "message": (
+                    f"{len(executor.errors)} node(s) failed: {summary}"
+                ),
+                "execution_id": execution.id,
+                "errors": executor.errors,
+                "logs": logs,
+            }
+
+        update_execution_status(execution.id, "completed", logs=logs)
+        return {
+            "status": "success",
+            "message": "Workflow executed successfully",
+            "execution_id": execution.id,
+            "logs": logs,
+        }
+
+    except Exception as e:
+        logger.exception(f"Workflow execution failed: {e}")
+        logs.append(
+            {
+                "time": datetime.now().isoformat(),
+                "message": f"Error: {str(e)}",
+                "level": "error",
+            }
+        )
+        update_execution_status(execution.id, "failed", error=str(e), logs=logs)
+        return {
+            "status": "error",
+            "message": str(e),
+            "execution_id": execution.id,
+            "logs": logs,
+        }
