@@ -17,7 +17,7 @@ as before, so a server with either of them sees no change.
 
 The whole updater runs here, against a fake server: real git checkouts of a
 local origin, and small scripts on PATH standing in for sudo, systemctl, uv,
-nginx and chown that record every call. The fixed paths in the script
+nginx, chown and npm that record every call. The fixed paths in the script
 (/var/python, the systemd folder, the nginx folder) are rewritten to folders
 under the test's own temporary directory. Linux only.
 """
@@ -76,6 +76,11 @@ exit 0
 """,
     "chown": r"""#!/bin/bash
 echo "chown $*" >> "$SHIM_STATE/calls.log"
+exit 0
+""",
+    # Development mode builds the frontend when dist/ is missing.
+    "npm": r"""#!/bin/bash
+echo "npm $*" >> "$SHIM_STATE/calls.log"
 exit 0
 """,
 }

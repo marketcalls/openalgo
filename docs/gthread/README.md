@@ -128,8 +128,24 @@ At the end it tells you how many request threads the gthread instances use
 together (64 each). If your server limits processes or tasks, the launcher
 writes a warning into each instance's log when the limit is too low.
 
-The updater does not find these instances by itself (it never has). Update
-them as you do today, then run the switch script for each one.
+**Updating later.** Run the updater from inside the instance you want to
+update, once per instance, one after another:
+
+```bash
+cd /var/python/openalgo-flask/openalgo1
+sudo bash install/update.sh
+```
+
+It updates that instance and restarts its service. If that instance's `.env`
+asks for gthread and its service does not use the launcher yet, it switches it
+at the end, exactly as on a single install. Run from anywhere else, it updates
+the only instance if there is one, and otherwise asks which.
+
+One exception: on a server that also has a single install at
+`/var/python/openalgo` (or an older multi-deploy layout under
+`/var/python/openalgo-flask/<name>/openalgo`), the updater updates that one,
+wherever you run it from, as it always has. Update the instances on such a
+server as you do today, then run the switch script for each one.
 
 ## Switch on Docker
 
@@ -168,7 +184,8 @@ shutdown timeout to 45 seconds if it has one.
 **Stopping.** On gthread, a stop gives open requests up to 30 seconds to
 finish, and your running Python strategies and OpenScript runs are told to
 stop at the same moment, side by side, so a strategy that handles the stop
-signal gets its chance to clean up. Docker, though, forces a container to stop
+signal gets its chance to clean up. Once OpenAlgo has finished, the market
+data service is stopped too, within 5 seconds. Docker, though, forces a container to stop
 10 seconds after asking it to, unless `stop_grace_period` says otherwise.
 Without step 2 a stop cuts that cleanup short. Setting it to 45 seconds does
 not make a normal stop slower: the container still stops as soon as OpenAlgo
@@ -253,7 +270,9 @@ has finished. On eventlet you can leave the line in place; it does no harm.
 - **Where the market data service runs** is shown in the system report as
   *Market data proxy*. On Ubuntu it runs as a separate process started by the
   web server, on gthread as on eventlet; if it stops, gthread starts it again
-  after a short wait. On Docker the container starts it on its own.
+  after a short wait. On Docker the container starts it on its own and, on
+  gthread, starts it again if it stops (after 1 second, then longer if it
+  keeps stopping, up to 30 seconds); the container log says when it does.
 - **The development server is not affected.** `uv run app.py` (including on
   Windows) ignores this setting; it only applies to gunicorn installs.
 
