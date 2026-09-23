@@ -30,6 +30,27 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+#: A child reads no .env. utils.config calls load_dotenv(override=True) at
+#: import, which would replace the isolated settings a test passes the child
+#: with the installation's own; test/conftest.py does the same in this process.
+NO_DOTENV = (
+    "import dotenv\n"
+    "dotenv.load_dotenv = lambda *args, **kwargs: False\n"
+    "dotenv.main.load_dotenv = dotenv.load_dotenv\n"
+)
+
+
+def _no_dotenv(script: str) -> str:
+    """Put NO_DOTENV into a child script, after eventlet's patch if it has one."""
+    script = textwrap.dedent(script)
+    marker = "eventlet.monkey_patch()\n"
+    if marker in script:
+        head, tail = script.split(marker, 1)
+        return head + marker + NO_DOTENV + tail
+    return NO_DOTENV + script
+
+
 #: Importing a broker's streaming client first runs its package __init__, which
 #: imports the adapter and through it websocket_proxy, which imports every
 #: adapter again. The app imports websocket_proxy at startup, so it never meets
@@ -129,7 +150,7 @@ def _run_under_eventlet(module_name, class_name, defect):
         defect=defect,
     )
     proc = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
+        [sys.executable, "-c", _no_dotenv(script)],
         capture_output=True,
         text=True,
         timeout=60,

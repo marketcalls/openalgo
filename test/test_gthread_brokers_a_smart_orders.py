@@ -341,3 +341,94 @@ def test_outside_gthread_a_waiter_waits_past_the_bound(broker, not_gthread, monk
     assert res is None and orderid is None
     assert data["status"] == "success"
     assert fake.orders == [("BUY", 5)]
+
+
+# --- under a real eventlet hub ------------------------------------------------
+
+EVENTLET_SCRIPT = """
+import eventlet
+eventlet.monkey_patch()
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: False
+dotenv.main.load_dotenv = dotenv.load_dotenv
+
+import importlib
+from types import SimpleNamespace
+
+from utils import runtime
+from utils.smart_order_guard import SymbolLocks
+
+assert runtime.worker_class() == "eventlet" and not runtime.gthread_active()
+results = {}
+for name in ("dhan", "aliceblue", "flattrade"):
+    module = importlib.import_module(f"broker.{name}.api.order_api")
+    # A bound far shorter than the hold: under eventlet it must not apply.
+    if name == "aliceblue":
+        module.SMART_ORDER_LOCK_WAIT_SECONDS = 0.1
+    else:
+        module._symbol_locks = SymbolLocks(max_wait=0.1, name="test")
+    book = {"qty": 0}
+    orders = []
+
+    def place_order_api(data, auth, book=book, orders=orders):
+        eventlet.sleep(0.5)  # the broker round trip, yielding to the hub
+        book["qty"] += int(float(data["quantity"]))
+        orders.append(data["action"])
+        return SimpleNamespace(status=200, status_code=200), {"status": "success"}, "1"
+
+    def get_open_position(*args, module=module):
+        return str(module._get_cached_positions(args[-1])["qty"])
+
+    module.place_order_api = place_order_api
+    module.get_positions = lambda auth, book=book: dict(book)
+    module.get_open_position = get_open_position
+    order = {
+        "symbol": "SBIN", "exchange": "NSE", "product": "MIS", "action": "BUY",
+        "quantity": "5", "position_size": "5", "pricetype": "MARKET", "price": "0",
+    }
+    first = eventlet.spawn(module.place_smartorder_api, dict(order), "tok")
+    eventlet.sleep(0.05)
+    second = eventlet.spawn(module.place_smartorder_api, dict(order), "tok")
+    outcomes = [first.wait(), second.wait()]
+    statuses = [getattr(res, "status", None) for res, _data, _oid in outcomes]
+    results[name] = (orders, statuses)
+
+for name, (orders, statuses) in results.items():
+    assert orders == ["BUY"], (name, orders)
+    assert 429 not in statuses, (name, statuses)
+print("OK")
+"""
+
+
+@pytest.mark.skipif(
+    __import__("importlib.util").util.find_spec("eventlet") is None,
+    reason="eventlet is installed by the production installer, not on Windows dev",
+)
+def test_under_real_eventlet_a_waiter_waits_past_any_bound(tmp_path):
+    """The production default: green waiters queue as they always did."""
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    db = tmp_path / "db"
+    db.mkdir()
+    env = dict(os.environ)
+    env.update(
+        {
+            "DATABASE_URL": f"sqlite:///{(db / 'openalgo.db').as_posix()}",
+            "LOG_DIR": str(tmp_path / "log"),
+            "BROKER_API_KEY": "client:::key:::secret",
+            "PYTHONPATH": str(repo),
+        }
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(EVENTLET_SCRIPT)],
+        cwd=str(repo),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert "OK" in proc.stdout, proc.stdout[-2000:] + proc.stderr[-4000:]

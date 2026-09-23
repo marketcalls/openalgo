@@ -42,6 +42,28 @@ from utils import runtime
 os.environ.setdefault("BROKER_API_KEY", "client:::key:::secret")
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+#: A child reads no .env. utils.config calls load_dotenv(override=True) at
+#: import, which would replace the isolated settings a test passes the child
+#: with the installation's own; test/conftest.py does the same in this process.
+NO_DOTENV = (
+    "import dotenv\n"
+    "dotenv.load_dotenv = lambda *args, **kwargs: False\n"
+    "dotenv.main.load_dotenv = dotenv.load_dotenv\n"
+)
+
+
+def _no_dotenv(script: str) -> str:
+    """Put NO_DOTENV into a child script, after eventlet's patch if it has one."""
+    script = textwrap.dedent(script)
+    marker = "eventlet.monkey_patch()\n"
+    if marker in script:
+        head, tail = script.split(marker, 1)
+        return head + marker + NO_DOTENV + tail
+    return NO_DOTENV + script
+
+
 BOUND = bp.BROKER_MAX_QUEUE_WAIT_SECONDS
 
 
@@ -442,7 +464,7 @@ def test_under_real_eventlet_a_far_slot_is_still_waited(tmp_path):
     print("OK")
     """
     proc = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
+        [sys.executable, "-c", _no_dotenv(script)],
         cwd=str(REPO),
         env=env,
         capture_output=True,
