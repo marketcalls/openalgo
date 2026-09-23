@@ -9,6 +9,7 @@ import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, check_queue_wait
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -47,6 +48,16 @@ def _apply_rate_limit(category: str) -> None:
     Thread/greenlet-safe: the next allowed slot is *reserved* while holding the
     lock, so concurrent callers queue in order instead of all firing at once and
     tripping a 403. Under eventlet, ``time.sleep`` yields the greenlet.
+
+    The queue has no end: a burst, or a few rejections each pushing the
+    shared slot forward (``_penalize_rate_limit``), books callers seconds
+    apart. Under the gthread worker every queued caller holds a request
+    thread, so one whose slot is further away than
+    ``utils.broker_backpressure.max_queue_wait("data")`` is refused before it
+    books anything. Under eventlet and the dev server there is no bound.
+
+    Raises:
+        BrokerBusyError: Under gthread, when the slot is too far away.
     """
     interval = HISTORY_MIN_INTERVAL if category == "history" else QUOTE_MIN_INTERVAL
     sleep_for = 0.0
@@ -55,6 +66,8 @@ def _apply_rate_limit(category: str) -> None:
         earliest = _last_call_ts[category] + interval
         if now < earliest:
             sleep_for = earliest - now
+            # Refused before the slot is reserved, so it delays nobody behind it.
+            check_queue_wait(sleep_for, "data")
             _last_call_ts[category] = earliest
         else:
             _last_call_ts[category] = now
@@ -237,6 +250,8 @@ class BrokerData:
                 "oi": int(quote.get("opnInterest", 0)),
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
@@ -282,6 +297,8 @@ class BrokerData:
                 # Single batch processing
                 return self._process_quotes_batch(symbols)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -533,6 +550,8 @@ class BrokerData:
                             "POST",
                             payload,
                         )
+                    except BrokerBusyError:
+                        raise
                     except Exception as chunk_error:
                         msg = str(chunk_error).lower()
                         if "rate limit" in msg and chunk_attempt < 3:
@@ -649,6 +668,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Debug - Error: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
@@ -735,6 +756,8 @@ class BrokerData:
                         current_start = current_end + timedelta(days=1)
                         continue
 
+                except BrokerBusyError:
+                    raise
                 except Exception as chunk_error:
                     logger.error(f"Debug - Error fetching OI chunk: {str(chunk_error)}")
                     current_start = current_end + timedelta(days=1)
@@ -781,6 +804,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Debug - Error fetching OI data: {str(e)}")
             # Return empty DataFrame on error
@@ -863,5 +888,7 @@ class BrokerData:
                 "totalsellqty": quote.get("totSellQuan", 0),
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")

@@ -3,7 +3,7 @@ import json
 import os
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime, timedelta
 
 import httpx
@@ -15,23 +15,24 @@ from broker.flattrade.api.rate_limit import (
     rate_limit_retry_delay,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
-
-# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
-# asyncio.run() cannot be called under eventlet's monkey-patched event loop
-def _is_eventlet_patched():
-    # utils.runtime answers without importing eventlet. Importing it here just
-    # to ask put it into sys.modules under the gthread worker, which flipped
-    # every later "eventlet in sys.modules" check in the process.
-    from utils.runtime import is_monkey_patched
-
-    return is_monkey_patched("socket")
-
-USE_ASYNC = not _is_eventlet_patched()
+# Which quote fan-out this process uses. asyncio.run() cannot run under
+# eventlet's monkey-patched loop, so production has always taken the thread
+# pool path; only the dev server takes the asyncio one. The gthread worker
+# stays on the thread pool too: production must not switch to a path it has
+# never run. utils.runtime answers both questions without importing eventlet.
+USE_ASYNC = not (runtime.is_monkey_patched() or runtime.gthread_active())
 
 logger = get_logger(__name__)
+
+#: Threads in the shared quote pool. Matches the multiquote batch size, which is
+#: the most one request fans out at a time.
+QUOTE_POOL_SIZE = 10
 
 # Request pacing for Flattrade data APIs (issue #1663).
 #
@@ -162,6 +163,8 @@ class BrokerData:
                 "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
@@ -461,34 +464,37 @@ class BrokerData:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
-            # ThreadPoolExecutor approach (works in any context)
+            # Thread pool approach (works in any context). One pool for the
+            # process, not one per call: under the gthread worker a per-call
+            # pool started real OS threads for every batch of every request.
+            # DATA_LIMITER, not the pool size, owns the pacing.
             results = []
-            with ThreadPoolExecutor(max_workers=40) as executor:
-                future_to_symbol = {
-                    executor.submit(
-                        self._fetch_single_quote_sync,
-                        item["symbol"],
-                        item["exchange"],
-                        item["api_exchange"],
-                        item["token"],
-                        api_key,
-                    ): item
-                    for item in prepared_symbols
-                }
+            executor = get_executor("flattrade-quotes", QUOTE_POOL_SIZE)
+            future_to_symbol = {
+                executor.submit(
+                    self._fetch_single_quote_sync,
+                    item["symbol"],
+                    item["exchange"],
+                    item["api_exchange"],
+                    item["token"],
+                    api_key,
+                ): item
+                for item in prepared_symbols
+            }
 
-                for future in as_completed(future_to_symbol):
-                    try:
-                        result = future.result()
-                        results.append(result)
-                    except Exception as e:
-                        item = future_to_symbol[future]
-                        results.append(
-                            {
-                                "symbol": item["symbol"],
-                                "exchange": item["exchange"],
-                                "error": str(e),
-                            }
-                        )
+            for future in as_completed(future_to_symbol):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    item = future_to_symbol[future]
+                    results.append(
+                        {
+                            "symbol": item["symbol"],
+                            "exchange": item["exchange"],
+                            "error": str(e),
+                        }
+                    )
 
         elapsed = time.time() - start_time
         logger.debug(
@@ -566,6 +572,8 @@ class BrokerData:
                 "oi": int(response.get("oi", 0)),  # Open Interest
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
@@ -637,6 +645,8 @@ class BrokerData:
                         "/PiConnectAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
@@ -784,6 +794,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}")
 

@@ -656,32 +656,37 @@ class BrokerData:
                 expiry, strike, lotsize, tick_size
             Sorted by (instrumenttype, expiry, strike).
         """
-        from broker.deltaexchange.database.master_contract_db import SymToken
+        from broker.deltaexchange.database.master_contract_db import SymToken, db_session
 
         try:
-            query = SymToken.query.filter(
-                SymToken.exchange == exchange,
-                SymToken.instrumenttype.in_(["CE", "PE"]),
-                SymToken.symbol.ilike(f"{underlying}%"),
-            )
-            if expiry:
-                query = query.filter(SymToken.expiry == expiry.upper())
+            # Closed on the way out, which the query property never was: a
+            # pooled thread outside a request never reaches the app's
+            # teardown, and would keep this thread's session, and its SQLite
+            # connection, checked out for good.
+            with db_session() as session:
+                query = session.query(SymToken).filter(
+                    SymToken.exchange == exchange,
+                    SymToken.instrumenttype.in_(["CE", "PE"]),
+                    SymToken.symbol.ilike(f"{underlying}%"),
+                )
+                if expiry:
+                    query = query.filter(SymToken.expiry == expiry.upper())
 
-            rows = query.all()
+                rows = query.all()
 
-            result = [
-                {
-                    "symbol":         r.symbol,
-                    "brsymbol":       r.brsymbol,
-                    "token":          r.token,
-                    "instrumenttype": r.instrumenttype,
-                    "expiry":         r.expiry,
-                    "strike":         r.strike,
-                    "lotsize":        r.lotsize,
-                    "tick_size":      r.tick_size,
-                }
-                for r in rows
-            ]
+                result = [
+                    {
+                        "symbol":         r.symbol,
+                        "brsymbol":       r.brsymbol,
+                        "token":          r.token,
+                        "instrumenttype": r.instrumenttype,
+                        "expiry":         r.expiry,
+                        "strike":         r.strike,
+                        "lotsize":        r.lotsize,
+                        "tick_size":      r.tick_size,
+                    }
+                    for r in rows
+                ]
 
             # Sort: CE before PE, then chronologically by expiry, then by strike price.
             # Raw DD-MON-YY strings cannot be sorted alphabetically (month abbreviations

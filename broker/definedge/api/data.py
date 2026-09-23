@@ -1,7 +1,5 @@
 import asyncio
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 import httpx
@@ -10,22 +8,24 @@ import pandas as pd
 from broker.definedge.api.baseurl import DATA_URL, get_url
 from broker.definedge.api.rate_limiter import MIN_INTERVAL, rate_limited_request
 from database.token_db import get_br_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
+from utils.thread_safe_cache import LockedTTLCache
 
-
-# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
-# asyncio.run() cannot be called under eventlet's monkey-patched event loop
-def _is_eventlet_patched():
-    # utils.runtime answers without importing eventlet. Importing it here just
-    # to ask put it into sys.modules under the gthread worker, which flipped
-    # every later "eventlet in sys.modules" check in the process.
-    from utils.runtime import is_monkey_patched
-
-    return is_monkey_patched("socket")
-
-USE_ASYNC = not _is_eventlet_patched()
+# Which quote fan-out this process uses. asyncio.run() cannot run under
+# eventlet's monkey-patched loop, so production has always taken the thread
+# pool path; only the dev server takes the asyncio one. The gthread worker
+# stays on the thread pool too: production must not switch to a path it has
+# never run. utils.runtime answers both questions without importing eventlet.
+USE_ASYNC = not (runtime.is_monkey_patched() or runtime.gthread_active())
 
 logger = get_logger(__name__)
+
+# Threads in the shared pool for quotes and OI backfill. The per-call pools it
+# replaces were capped at the same ten; pacing is rate_limiter's job.
+QUOTE_POOL_SIZE = 10
 
 
 def authenticate_broker(api_token, api_secret, otp):
@@ -87,6 +87,8 @@ def get_quotes(symbol, exchange, auth_token):
 
         return response.json()
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error getting quotes: {e}")
         return {"status": "error", "message": str(e)}
@@ -99,9 +101,12 @@ def get_quotes(symbol, exchange, auth_token):
 # For REST consumers (option chain, OI tracker, multiquotes) we backfill OI
 # from the last minute candle of the history API, cached briefly per token.
 _DERIVATIVE_EXCHANGES = {"NFO", "BFO", "MCX", "CDS", "BCD"}
-_oi_cache = {}  # {(segment, token): (oi, monotonic_ts)}
-_oi_cache_lock = threading.Lock()
 _OI_CACHE_TTL = 60.0  # seconds
+# Most tokens whose OI is remembered at once. An option chain is a few hundred
+# tokens, and the worker never restarts, so entries expire and are evicted
+# rather than accumulating one per contract ever quoted.
+_OI_CACHE_MAXSIZE = 4096
+_oi_cache = LockedTTLCache(maxsize=_OI_CACHE_MAXSIZE, ttl=_OI_CACHE_TTL)  # {(segment, token): oi}
 
 # History chunks are retried on transient failures - dropping one silently
 # removes up to a full chunk (30 days of 1m candles) from the series.
@@ -129,10 +134,9 @@ def fetch_latest_oi(segment, token, api_session_key):
 
     Returns 0 if OI cannot be determined (equity tokens, API errors, no data).
     """
-    with _oi_cache_lock:
-        cached = _oi_cache.get((segment, token))
-        if cached and time.monotonic() - cached[1] < _OI_CACHE_TTL:
-            return cached[0]
+    cached = _oi_cache.get((segment, token))
+    if cached is not None:
+        return cached
 
     oi = 0
     try:
@@ -155,11 +159,16 @@ def fetch_latest_oi(segment, token, api_session_key):
                 last_row = text.rsplit("\n", 1)[-1].split(",")
                 if len(last_row) >= 7:
                     oi = int(float(last_row[6]))
+    except BrokerBusyError:
+        # Refused by the rate limiter (gthread only): the quote stands with an
+        # OI of 0, as for any failure here, but nothing is cached, so the next
+        # refresh asks again instead of showing 0 for a minute.
+        logger.debug(f"OI backfill for {segment}/{token} refused by the rate limiter")
+        return 0
     except Exception as e:
         logger.debug(f"OI backfill failed for {segment}/{token}: {e}")
 
-    with _oi_cache_lock:
-        _oi_cache[(segment, token)] = (oi, time.monotonic())
+    _oi_cache[(segment, token)] = oi
     return oi
 
 
@@ -305,6 +314,8 @@ class BrokerData:
                 "oi": oi,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_quotes: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -346,6 +357,8 @@ class BrokerData:
             else:
                 return self._process_quotes_batch(symbols)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -567,20 +580,23 @@ class BrokerData:
                 self._process_quotes_batch_async(prepared_symbols, api_session_key)
             )
         else:
-            # ThreadPoolExecutor approach
-            with ThreadPoolExecutor(max_workers=min(len(prepared_symbols), 10)) as executor:
-                futures = [
-                    executor.submit(
-                        self._fetch_single_quote_sync,
-                        item["symbol"],
-                        item["exchange"],
-                        item["api_exchange"],
-                        item["token"],
-                        api_session_key,
-                    )
-                    for item in prepared_symbols
-                ]
-                results = [f.result() for f in futures]
+            # Thread pool approach, through rate_limited_request's shared pacing
+            # and 429 retry. One pool for the process, not one per call: under
+            # the gthread worker a per-call pool started real OS threads for
+            # every batch of every request.
+            executor = get_executor("definedge-quotes", QUOTE_POOL_SIZE)
+            futures = [
+                executor.submit(
+                    self._fetch_single_quote_sync,
+                    item["symbol"],
+                    item["exchange"],
+                    item["api_exchange"],
+                    item["token"],
+                    api_session_key,
+                )
+                for item in prepared_symbols
+            ]
+            results = [f.result() for f in futures]
 
         # Step 3: Backfill OI for derivative symbols (quotes API carries no OI).
         # fetch_latest_oi caches per token, so repeated chain refreshes are cheap.
@@ -591,22 +607,22 @@ class BrokerData:
             if r.get("data") is not None and r.get("exchange") in _DERIVATIVE_EXCHANGES
         ]
         if oi_targets:
-            with ThreadPoolExecutor(max_workers=min(len(oi_targets), 10)) as executor:
-                oi_futures = {
-                    executor.submit(
-                        fetch_latest_oi,
-                        token_map[r["symbol"]]["api_exchange"],
-                        token_map[r["symbol"]]["token"],
-                        api_session_key,
-                    ): r
-                    for r in oi_targets
-                    if r["symbol"] in token_map
-                }
-                for future, result in oi_futures.items():
-                    try:
-                        result["data"]["oi"] = future.result()
-                    except Exception as e:
-                        logger.debug(f"OI backfill failed for {result['symbol']}: {e}")
+            executor = get_executor("definedge-quotes", QUOTE_POOL_SIZE)
+            oi_futures = {
+                executor.submit(
+                    fetch_latest_oi,
+                    token_map[r["symbol"]]["api_exchange"],
+                    token_map[r["symbol"]]["token"],
+                    api_session_key,
+                ): r
+                for r in oi_targets
+                if r["symbol"] in token_map
+            }
+            for future, result in oi_futures.items():
+                try:
+                    result["data"]["oi"] = future.result()
+                except Exception as e:
+                    logger.debug(f"OI backfill failed for {result['symbol']}: {e}")
 
         return skipped_symbols + results
 
@@ -773,6 +789,8 @@ class BrokerData:
                                 and response.status_code not in _TRANSIENT_4XX
                             ):
                                 break
+                        except BrokerBusyError:
+                            raise
                         except Exception as request_error:
                             response = None
                             fetch_error = str(request_error)
@@ -1094,6 +1112,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.warning(f"Debug - Definedge historical data error: {str(e)}")
             # Return empty DataFrame instead of raising exception to prevent system crashes
@@ -1176,6 +1196,8 @@ class BrokerData:
                 "totalsellqty": totalsellqty,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}")
             raise Exception(f"Error fetching market depth: {str(e)}")

@@ -13,8 +13,10 @@ from broker.definedge.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, BusyResponse, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -49,6 +51,12 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
         return response_data
 
+    except BrokerBusyError:
+        # Refused by the rate limiter under the gthread worker and never
+        # sent. Folded into a Not_Ok body it would read as an empty position
+        # book: a smart order would size itself against no position, and
+        # close_all_positions would answer "No Open Positions Found".
+        raise
     except Exception as e:
         logger.error(f"Error during API request: {str(e)}")
         return {"stat": "Not_Ok", "emsg": f"Error: {str(e)}"}
@@ -85,46 +93,38 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="definedge smart orders")
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(auth, lambda: get_positions(auth))
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 
@@ -227,7 +227,9 @@ def place_order_api(data, auth):
 
         # Make the API request
         url = get_url("/placeorder")
-        response = rate_limited_request(client, "POST", url, json=newdata, headers=headers)
+        response = rate_limited_request(
+            client, "POST", url, json=newdata, headers=headers, wait_kind="order"
+        )
 
         # Log the raw response
         logger.debug(f"Definedge API Response Status: {response.status_code}")
@@ -270,6 +272,9 @@ def place_order_api(data, auth):
 
         return response, response_data, orderid
 
+    except BrokerBusyError as busy:
+        # Refused before it was sent (gthread only), so nothing reached the broker.
+        return busy_response(str(busy))
     except httpx.HTTPStatusError as he:
         logger.error(f"HTTP Status Error during place order: {he}")
         logger.error(f"Response status: {he.response.status_code}")
@@ -313,11 +318,21 @@ def place_smartorder_api(data, auth):
         # Per-symbol lock: serialize smart orders per symbol
         symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        with symbol_lock:
+        with symbol_lock as acquired:
+            if not acquired:
+                return SymbolLocks.busy(symbol)
             position_size = int(data.get("position_size", "0"))
 
-            # Get current open position for the symbol
-            current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
+            # Get current open position for the symbol. A position read the
+            # rate limiter refused (gthread only) fails the smart order: sizing
+            # it against a book that was never fetched could repeat or reverse
+            # a fill.
+            try:
+                current_position = int(
+                    get_open_position(symbol, exchange, map_product_type(product), auth)
+                )
+            except BrokerBusyError as busy:
+                return busy_response(str(busy))
 
             logger.debug("=== SMART ORDER EXECUTION ===")
             logger.debug(f"Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
@@ -402,7 +417,12 @@ def close_all_positions(current_api_key, auth):
 
     # Fetch the current open positions
     logger.debug("Fetching current open positions...")
-    positions_response = get_positions(auth)
+    try:
+        positions_response = get_positions(auth)
+    except BrokerBusyError as busy:
+        # Refused under the gthread worker: the book was never read, so
+        # this must not be reported as "No Open Positions Found".
+        return {"status": "error", "message": str(busy)}, 429
 
     # Log the raw response for debugging
     logger.debug(
@@ -471,6 +491,7 @@ def close_all_positions(current_api_key, auth):
     # Track results
     closed_positions = []
     failed_positions = []
+    refused = 0
 
     # Loop through each position to close
     for position in positions_to_close:
@@ -519,6 +540,8 @@ def close_all_positions(current_api_key, auth):
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
+            if isinstance(res, BusyResponse):
+                refused += 1
 
             if orderid:
                 closed_positions.append(
@@ -549,6 +572,20 @@ def close_all_positions(current_api_key, auth):
     if failed_positions:
         logger.error(f"Failed positions: {failed_positions}")
 
+    if refused:
+        # Only under the gthread worker, where an order whose turn is too
+        # far away is refused rather than sent late. Reporting success here
+        # would leave those positions open with nothing watching them.
+        return {
+            "status": "error",
+            "message": (
+                f"{refused} of {len(positions_to_close)} open positions were not squared "
+                "off, because Definedge was being sent requests faster than it allows "
+                "and their turn was too far away. Check your positions and square off "
+                "the rest again."
+            ),
+        }, 429
+
     # Return success even if some positions failed to close
     return {"message": "All Open Positions SquaredOff", "status": "success"}, 200
 
@@ -574,7 +611,7 @@ def cancel_order(orderid, auth):
         logger.debug(f"Making GET request to: {url}")
 
         # Make the GET request
-        response = rate_limited_request(client, "GET", url, headers=headers)
+        response = rate_limited_request(client, "GET", url, headers=headers, wait_kind="order")
 
         # Log the raw response
         logger.debug(f"Definedge Cancel API Response Status: {response.status_code}")
@@ -612,6 +649,8 @@ def cancel_order(orderid, auth):
                 "message": error_msg,
             }, response.status_code if response.status_code != 200 else 400
 
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     except httpx.HTTPStatusError as he:
         logger.error(f"HTTP Status Error during cancel order: {he}")
         logger.error(f"Response status: {he.response.status_code}")
@@ -652,9 +691,13 @@ def modify_order(data, auth):
     logger.debug(f"Final JSON payload being sent: {payload}")
 
     # Make the request using the shared client
-    response = rate_limited_request(
-        client, "POST", get_url("/modify"), headers=headers, content=payload
-    )
+    try:
+        response = rate_limited_request(
+            client, "POST", get_url("/modify"), headers=headers, content=payload,
+            wait_kind="order",
+        )
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
