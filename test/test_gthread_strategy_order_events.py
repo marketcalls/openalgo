@@ -148,11 +148,13 @@ def _race(unacknowledged_order, broker_order_id, *, replay_before_stash):
     real_lookup = store.get_order_by_broker_id
     worker_missed = threading.Event()
     recorded = threading.Event()
-    worker_ident: list[int] = []
+    # The worker's Thread object, not its ident: a finished thread's ident is
+    # reused, and the recorder can start after the worker has already ended.
+    worker_thread_ref: list[threading.Thread] = []
     worker_lookups = []
 
     def lookup(order_id):
-        if not worker_ident or threading.get_ident() != worker_ident[0]:
+        if not worker_thread_ref or threading.current_thread() is not worker_thread_ref[0]:
             return real_lookup(order_id)
         worker_lookups.append(order_id)
         if len(worker_lookups) == 1:
@@ -168,7 +170,7 @@ def _race(unacknowledged_order, broker_order_id, *, replay_before_stash):
         return real_lookup(order_id)
 
     def worker():
-        worker_ident.append(threading.get_ident())
+        worker_thread_ref.append(threading.current_thread())
         order_events._apply_update(broker_order_id, _fill(broker_order_id))
 
     def recorder():
