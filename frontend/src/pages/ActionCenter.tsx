@@ -14,8 +14,9 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { io, type Socket } from 'socket.io-client'
 import { webClient } from '@/api/client'
+import { useSocketContext } from '@/components/socket/SocketProvider'
+import { useKeepReconnecting } from '@/components/socket/useKeepReconnecting'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -98,8 +99,8 @@ export default function ActionCenterPage() {
   const [isRejecting, setIsRejecting] = useState<number | null>(null)
   const [isApprovingAll, setIsApprovingAll] = useState(false)
 
-  // Socket ref for realtime updates
-  const socketRef = useRef<Socket | null>(null)
+  // The app-wide Socket.IO connection, for realtime updates
+  const { socket } = useSocketContext()
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const fetchData = useCallback(async () => {
@@ -133,26 +134,20 @@ export default function ActionCenterPage() {
     fetchData()
   }, [fetchData])
 
-  // Socket connection for realtime order updates
+  // Alert sound for newly queued orders
   useEffect(() => {
-    // Create audio element for alert sounds
     audioRef.current = new Audio('/sounds/alert.mp3')
     audioRef.current.preload = 'auto'
+  }, [])
 
-    // Connect to socket server
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
-    })
-
-    const socket = socketRef.current
+  // Realtime order updates, on the app-wide connection SocketProvider owns.
+  // This page used to open a second connection of its own, which the server had
+  // to keep waiting alongside the first for as long as the page was open.
+  useEffect(() => {
+    if (!socket) return
 
     // Listen for new pending orders (semi-auto mode)
-    socket.on('pending_order_created', (data: { api_type: string; message: string }) => {
+    const onCreated = (data: { api_type: string; message: string }) => {
       const { shouldShowToast, shouldPlaySound } = useAlertStore.getState()
 
       // Play alert sound if enabled
@@ -167,18 +162,30 @@ export default function ActionCenterPage() {
 
       // Refresh data to show new order (always do this regardless of toast settings)
       fetchData()
-    })
+    }
 
     // Listen for order updates (approved, rejected, deleted)
-    socket.on('pending_order_updated', () => {
+    const onUpdated = () => {
       // Refresh data
       fetchData()
-    })
-
-    return () => {
-      socket.disconnect()
     }
-  }, [fetchData])
+
+    socket.on('pending_order_created', onCreated)
+    socket.on('pending_order_updated', onUpdated)
+
+    // Remove only this page's handlers: the connection is shared with the rest
+    // of the app and stays open.
+    return () => {
+      socket.off('pending_order_created', onCreated)
+      socket.off('pending_order_updated', onUpdated)
+    }
+  }, [socket, fetchData])
+
+  // The connection this page used to own never stopped trying to reconnect, so
+  // a trader waiting here for orders to approve got them again after a server
+  // restart of any length. The shared connection gives up after five attempts;
+  // keep it trying while this page is open.
+  useKeepReconnecting(socket)
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
