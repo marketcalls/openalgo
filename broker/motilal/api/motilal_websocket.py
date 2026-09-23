@@ -1157,13 +1157,22 @@ class MotilalWebSocket:
     def _resubscribe(self):
         """
         Resubscribes to all previously subscribed scrips and indices after reconnection.
+
+        Runs on the reader thread while request threads may be registering and
+        unregistering on the same pooled socket, so it iterates a copy taken
+        under the lock. Iterating the live dict raised "dictionary changed size
+        during iteration" on the first concurrent change, and every scrip after
+        that point was never resubscribed. register_scrip and register_index take
+        the lock themselves, and it is not reentrant, so it is not held here.
         """
-        logger.debug(
-            f"Resubscribing to {len(self.subscribed_scrips)} scrips and {len(self.subscribed_indices)} indices"
-        )
+        with self.lock:
+            scrips = list(self.subscribed_scrips.values())
+            indices = list(self.subscribed_indices)
+
+        logger.debug(f"Resubscribing to {len(scrips)} scrips and {len(indices)} indices")
 
         # Resubscribe to scrips
-        for full_key, scrip_info in self.subscribed_scrips.items():
+        for scrip_info in scrips:
             self.register_scrip(
                 scrip_info["exchange"],
                 scrip_info["exchange_type"],
@@ -1172,7 +1181,7 @@ class MotilalWebSocket:
             )
 
         # Resubscribe to indices
-        for exchange in self.subscribed_indices:
+        for exchange in indices:
             self.register_index(exchange)
 
     def _start_heartbeat(self):
