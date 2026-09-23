@@ -1394,6 +1394,7 @@ def _runtime_info():
         "thread_budget": None,
         "streams": None,
         "websocket_proxy_mode": None,
+        "http_pool": None,
         "active_threads": None,
         "notes": [],
     }
@@ -1427,6 +1428,13 @@ def _runtime_info():
         pass
     try:
         info["websocket_proxy_mode"] = _proxy_mode_hint()
+    except Exception:
+        pass
+    try:
+        from utils.httpx_client import get_pool_stats
+
+        # None until the shared broker HTTP client has been built.
+        info["http_pool"] = get_pool_stats()
     except Exception:
         pass
     info["active_threads"] = _threading.active_count()

@@ -317,6 +317,21 @@ def update_config():
 @limiter.limit(API_RATE_LIMIT)
 def reset_config():
     """Reset sandbox configuration to defaults and clear all sandbox data"""
+    from services.analyzer_service import MODE_BUSY_MESSAGE, mode_transition
+    from utils.keyed_locks import LockBusy
+
+    try:
+        # Held for the whole reset, so a mode change cannot land between the
+        # engines being paused and started again and leave them disagreeing
+        # with the mode. The wait is unbounded except under gthread.
+        with mode_transition():
+            return _reset_config_locked()
+    except LockBusy:
+        return jsonify({"status": "error", "message": MODE_BUSY_MESSAGE}), 409
+
+
+def _reset_config_locked():
+    """The body of :func:`reset_config`, run under the analyzer mode lock."""
     try:
         user_id = session.get("user")
 

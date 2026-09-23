@@ -39,13 +39,17 @@ class WebSocketExecutionEngine:
         self._subscriber_id: str | None = None
         self._running = False
         # A REAL lock, not eventlet's green semaphore. _on_market_data()
-        # takes it on the websocket client's asyncio loop thread (a real OS
-        # thread) while notify_order_placed(), notify_position_opened() and
-        # the rest take it from greenlets on the request path. Contended
-        # across that boundary a green semaphore wedges the loop thread for
-        # good, which stops every tick this engine needs to trigger pending
-        # SL, LIMIT and GTT orders. Both sections it guards only copy out of
-        # a dict; the database work deliberately happens after the release.
+        # takes it on the websocket client's dispatch thread, which drains the
+        # client's queue: a greenlet under eventlet, and a real OS thread under
+        # the gthread worker and the dev server, running truly in parallel
+        # with requests there. notify_order_placed(), notify_position_opened()
+        # and the rest take it from request threads (greenlets under
+        # eventlet). A real lock is correct on every side of that boundary,
+        # where a green one taken from a real thread would wedge it for good
+        # and stop every tick this engine needs to trigger pending SL, LIMIT
+        # and GTT orders. Both sections it guards only copy out of a dict; the
+        # database work deliberately happens after the release, because a
+        # greenlet that waits on a real lock blocks the whole eventlet hub.
         self._lock = _real_threading.Lock()
 
         # Index of pending orders by symbol key (exchange:symbol)

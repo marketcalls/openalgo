@@ -2,6 +2,7 @@ import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
+from services.broker_busy import BrokerBusyError, broker_busy_result
 from utils.logging import get_logger
 
 # Initialize logger
@@ -140,6 +141,10 @@ def get_positionbook_with_auth(
         formatted_positions = format_position_data(positions_data)
 
         return True, {"status": "success", "data": formatted_positions}, 200
+    except BrokerBusyError as e:
+        # Raised only under the gthread worker, when the broker's rate limit
+        # would have kept this request waiting too long.
+        return broker_busy_result(e, "Positions request")
     except Exception as e:
         logger.exception(f"Error processing positions data: {e}")
         return False, {"status": "error", "message": str(e)}, 500

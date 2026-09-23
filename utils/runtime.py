@@ -289,7 +289,13 @@ def gthread_pool_stats() -> dict[str, int | None] | None:
     try:
         stats["busy"] = len(worker.futures)
     except Exception:
-        pass
+        # gunicorn 25 dropped ThreadWorker.futures. The pool itself still
+        # knows: every spawned thread that is not waiting on its idle
+        # semaphore is running a request.
+        try:
+            stats["busy"] = max(0, len(pool._threads) - int(pool._idle_semaphore._value))
+        except Exception:
+            pass
     try:
         stats["waiting"] = pool._work_queue.qsize()
     except Exception:

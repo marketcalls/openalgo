@@ -27,6 +27,8 @@ MODULES = [
     "services/websocket_client.py",
     "services/agent/tools/base.py",
     "services/agent/tools/orders.py",
+    "sandbox/execution_engine.py",
+    "sandbox/websocket_execution_engine.py",
 ]
 
 #: Sentences that stated eventlet as the only runtime, or were simply wrong.
@@ -40,6 +42,7 @@ RETIRED = [
     "which is safe from either world",
     "_on_tick() and _on_auth() are invoked on the",
     "socketio.start_background_task`` rather",
+    "takes it on the websocket client's asyncio loop thread",
 ]
 
 
@@ -53,6 +56,13 @@ def test_a_module_that_talks_about_greenlets_also_names_gthread(rel):
     if "greenlet" not in text.lower():
         pytest.skip("no threading note about greenlets")
     assert "gthread" in text, f"{rel} explains its locking for eventlet only"
+
+
+@pytest.mark.parametrize("rel", ["sandbox/execution_engine.py"])
+def test_a_module_that_talks_about_the_eventlet_hub_also_names_gthread(rel):
+    text = _source(rel)
+    assert "eventlet" in text
+    assert "gthread" in text, f"{rel} explains its yielding for eventlet only"
 
 
 @pytest.mark.parametrize("rel", MODULES)

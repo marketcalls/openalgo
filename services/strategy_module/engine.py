@@ -33,6 +33,7 @@ from database import strategy_module_db as store
 from services.strategy_module import order_dispatch, risk_adapter, session, state
 from services.strategy_module.audit_messages import leg_close_requested_message
 from services.strategy_module.symbol_resolver import resolve_leg
+from utils import real_threading
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -124,6 +125,30 @@ def _emit(strategy_id: int, user_id: str, kind: str, message: str, **fields: Any
 #: authorisation returns or the run ends.
 _unactionable_runs: set[int] = set()
 
+#: Guards the test-and-add and test-and-remove on ``_unactionable_runs``, so
+#: two stops (or a stop and a tick) racing on one run send its critical alert
+#: once. A real lock over set work only: the engine is reached from green
+#: threads and, under eventlet, from real ones, and nothing here waits.
+_unactionable_lock = real_threading.Lock()
+
+
+def _claim_unactionable(run_id: int) -> bool:
+    """Record ``run_id`` as unable to act. True only for the caller that added it."""
+    with _unactionable_lock:
+        if run_id in _unactionable_runs:
+            return False
+        _unactionable_runs.add(run_id)
+        return True
+
+
+def _release_unactionable(run_id: int) -> bool:
+    """Forget ``run_id``. True only for the caller that removed it."""
+    with _unactionable_lock:
+        if run_id not in _unactionable_runs:
+            return False
+        _unactionable_runs.discard(run_id)
+        return True
+
 
 def _note_unactionable(
     strategy_id: int, user_id: str, run_id: int, leg_exits: list, stop_reason: str | None
@@ -146,9 +171,8 @@ def _note_unactionable(
     """
     if not (leg_exits or stop_reason):
         return
-    if run_id in _unactionable_runs:
+    if not _claim_unactionable(run_id):
         return
-    _unactionable_runs.add(run_id)
     logger.warning("Run %s has risk to act on but no broker session; positions left open", run_id)
     _emit(
         strategy_id,
@@ -163,9 +187,8 @@ def _note_unactionable(
 
 def _note_actionable_again(strategy_id: int, user_id: str, run_id: int) -> None:
     """Record that a run can act again, having previously been unable to."""
-    if run_id not in _unactionable_runs:
+    if not _release_unactionable(run_id):
         return
-    _unactionable_runs.discard(run_id)
     _emit(
         strategy_id,
         user_id,
@@ -1629,8 +1652,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
                 "exits": [],
             }
 
-        if run_id not in _unactionable_runs:
-            _unactionable_runs.add(run_id)
+        if _claim_unactionable(run_id):
             _emit(
                 strategy_id,
                 user_id,
@@ -1960,7 +1982,7 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
         except Exception:
             logger.exception("Could not push the terminal frame for run %s", run_id)
     finally:
-        _unactionable_runs.discard(run_id)
+        _release_unactionable(run_id)
         # Cleanup belongs only to the transactional winner, even when an
         # optional event/broadcast fails afterwards.
         _unsubscribe_run(run_id)

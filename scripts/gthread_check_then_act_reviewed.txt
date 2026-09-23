@@ -33,7 +33,3 @@ utils/logging.py::SensitiveDataFilter.filter::record.stack_info  # benign: each 
 upgrade/migrate_smtp_simple.py::setup_unicode_output::sys.stdout  # benign: a one-shot command line migration, single threaded
 
 # --- Real races, fixes owned elsewhere --------------------------------------
-utils/httpx_client.py::get_httpx_client::_httpx_client  # pending core: two first requests can each build a shared HTTP client, leaking one (use utils.lazy.LazyInit)
-database/token_db_enhanced.py::get_cache::_cache_instance  # pending core: two first lookups can each build the symbol cache, and one keeps a half-loaded copy (use utils.lazy.LazyInit)
-broker/dhan/api/gtt_api.py::_get_client::_dhan_gtt_client  # pending brokers_a: two first GTT calls can each open an HTTP client, leaking one (use utils.lazy.LazyInit)
-services/strategy_module/engine.py::stop_run::_unactionable_runs  # pending trading: two stops at once can each send the same critical "stop remains pending" alert (claim the run id under a lock)

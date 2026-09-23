@@ -72,6 +72,18 @@ BOT_BUSY_MESSAGE = "The bot is still starting or stopping. Check its status in a
 #: exit, which takes up to about ten seconds.
 STRATEGY_CALL_TIMEOUT_SECONDS = 60.0
 
+#: Seconds the bot waits for a mode change run on the web server's own loop
+#: under eventlet. The change stops or starts the sandbox execution engine and
+#: square-off scheduler, and turning sandbox on also runs the settlement
+#: catch-up, so it gets the same allowance as a strategy stop.
+MODE_CHANGE_TIMEOUT_SECONDS = 60.0
+
+#: What the trader reads when the mode change did not finish in that time.
+MODE_CHANGE_SLOW_MESSAGE = (
+    "The mode change is taking longer than expected. "
+    "Check the mode in OpenAlgo before trying again."
+)
+
 #: Seconds between reconnect attempts' stop checks while backing off.
 _BACKOFF_STEP_SECONDS = 1.0
 
@@ -2692,11 +2704,29 @@ class TelegramBotService:
         # Handle mode toggle
         if callback_data in ("mode_live", "mode_analyze"):
             try:
-                from database.settings_db import get_analyze_mode, set_analyze_mode
+                from services.analyzer_service import MODE_BUSY_MESSAGE, apply_analyze_mode
+                from utils.keyed_locks import LockBusy
 
-                new_mode = callback_data == "mode_analyze"
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, set_analyze_mode, new_mode)
+                requested = callback_data == "mode_analyze"
+                # The same one step the web toggle takes: write the mode and
+                # start or stop the sandbox engine and square-off to match, under
+                # the analyzer mode lock. Writing the mode alone left sandbox
+                # mode with no engine, so its SL and LIMIT orders never filled.
+                # The lock is green under eventlet and this is a real thread, so
+                # the call runs on the hub there (see _in_app_world).
+                try:
+                    new_mode = await self._in_app_world(
+                        apply_analyze_mode, requested, timeout=MODE_CHANGE_TIMEOUT_SECONDS
+                    )
+                except LockBusy:
+                    await query.edit_message_text(MODE_BUSY_MESSAGE)
+                    log_command(user.id, callback_data, chat_id)
+                    return
+                except TimeoutError:
+                    logger.warning("Telegram mode change did not finish in time")
+                    await query.edit_message_text(MODE_CHANGE_SLOW_MESSAGE)
+                    log_command(user.id, callback_data, chat_id)
+                    return
 
                 # Sync mode to frontend via SocketIO. This runs on the bot's real
                 # thread, so the emit goes through the helper that hands it to

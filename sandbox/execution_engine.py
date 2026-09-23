@@ -207,6 +207,8 @@ class ExecutionEngine:
                 # Yield to the hub periodically. Under gunicorn's eventlet
                 # worker this loop shares one green thread with request
                 # handling, so a long backlog must not hold it uninterrupted.
+                # Under the gthread worker and the dev server this is a real
+                # thread, and the sleep only gives up the GIL for a moment.
                 if position % self.order_rate_limit == 0:
                     time.sleep(0)
 
