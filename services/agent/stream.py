@@ -111,7 +111,7 @@ from services.agent.frames import (
     sse,
 )
 from services.agent.safety.audit import redact
-from utils import real_threading
+from utils import real_threading, runtime, stream_registry
 from utils.db_sessions import remove_all_scoped_sessions
 from utils.logging import get_logger
 
@@ -171,6 +171,24 @@ BACKPRESSURE_WAIT_SECONDS = 0.1
 #: Yield to the hub every this many frames during a fast burst. Writing to the
 #: socket usually yields on its own, but only once the send buffer fills.
 YIELD_EVERY_FRAMES = 64
+
+#: The longest one streamed turn may run under the gthread worker, where it
+#: holds a pool thread from first byte to last. A turn still running then is
+#: cancelled and ends with :data:`TURN_TOO_LONG_MESSAGE`; the partial answer is
+#: kept. Under eventlet and on the development server a turn has no limit, as
+#: before.
+MAX_TURN_SECONDS = 900.0
+
+#: What a turn cut off by :data:`MAX_TURN_SECONDS` ends with.
+TURN_TOO_LONG_MESSAGE = (
+    "This answer ran longer than OpenAlgo allows for one reply, so it was stopped. "
+    "Send a follow-up to continue from here."
+)
+
+#: What a turn cut off because the server is shutting down ends with.
+SERVER_STOPPING_MESSAGE = (
+    "OpenAlgo is restarting, so this answer was stopped. Send it again in a minute."
+)
 
 #: Sentinel put on the queue by the producer's `finally`. Its arrival is the
 #: only thing that ends the green loop normally.
@@ -1274,6 +1292,25 @@ def _producer(
             logger.exception("Could not signal the end of the agent stream")
 
 
+def _ending_message(deadline: float | None) -> str | None:
+    """Why a turn must end now, or None while it may go on.
+
+    Args:
+        deadline: The monotonic time the turn may run until, or None for no
+            limit (every runtime but the gthread worker).
+
+    Returns:
+        :data:`SERVER_STOPPING_MESSAGE` once the server is shutting down (in
+        every runtime), :data:`TURN_TOO_LONG_MESSAGE` past the deadline, else
+        None.
+    """
+    if stream_registry.should_stop():
+        return SERVER_STOPPING_MESSAGE
+    if deadline is not None and time.monotonic() >= deadline:
+        return TURN_TOO_LONG_MESSAGE
+    return None
+
+
 def _pump(
     agent: Any,
     make_iterator: Callable[[], Iterator[Any]],
@@ -1299,6 +1336,7 @@ def _pump(
     queue = real_threading.Queue(maxsize=QUEUE_MAXSIZE)
     stop = real_threading.Event()
     handle = _RunHandle()
+    deadline = time.monotonic() + MAX_TURN_SECONDS if runtime.gthread_active() else None
 
     thread = real_threading.Thread(
         target=_producer,
@@ -1309,6 +1347,7 @@ def _pump(
     thread.start()
 
     client_gone = False
+    cut_short = False
     written = 0
     try:
         # Flush the response head before the model has said anything, so the
@@ -1318,6 +1357,17 @@ def _pump(
         last_write = time.monotonic()
 
         while True:
+            ending = _ending_message(deadline)
+            if ending is not None and not handle.finished:
+                # Ended here rather than by the producer, so the client still
+                # gets a reason and a terminal frame; the finally below cancels
+                # the run, exactly as for a client that left. A run that has
+                # already finished is drained to its own end instead.
+                cut_short = True
+                yield sse(Error(message=ending, kind=ErrorKind.INTERNAL))
+                yield sse(Done(reason=DoneReason.INCOMPLETE))
+                break
+
             # Read liveness first. If the thread is already gone and the queue
             # then reads empty, nothing further can arrive; the other order
             # would let the sentinel land in the gap and be dropped.
@@ -1353,9 +1403,10 @@ def _pump(
         raise
     finally:
         stop.set()
-        if client_gone and not handle.finished:
+        if (client_gone or cut_short) and not handle.finished:
             logger.info(
-                "Agent stream client disconnected; cancelling run %s",
+                "Agent stream %s; cancelling run %s",
+                "client disconnected" if client_gone else "reached its end",
                 handle.run_id or "unknown",
             )
             request_cancel(agent, handle.run_id)
