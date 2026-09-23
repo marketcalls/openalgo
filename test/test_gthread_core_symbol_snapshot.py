@@ -8,10 +8,12 @@ loaded so far, which the option chain presents as complete; and a freeze
 quantity read in the gap came back 0, "no limit known", so an order above the
 freeze quantity went out unsplit and the exchange rejected it.
 
-Now each load builds a new generation aside and publishes it in one
-assignment. These tests drive a writer reloading between two different
-universes while readers loop, and require every answer to be all of one
-universe or all of the other.
+Now each load publishes its generation in one assignment. Under the gthread
+worker it is built aside while readers keep the previous one; these tests drive
+a writer reloading between two different universes while readers loop, and
+require every answer to be all of one universe or all of the other. Everywhere
+else the previous generation is unpublished before the build, as the in-place
+clear used to, so eventlet keeps main's memory profile (review core-01).
 """
 
 from __future__ import annotations
@@ -86,7 +88,12 @@ def fresh_cache(monkeypatch):
     return cache
 
 
-def test_readers_never_see_a_half_built_universe(fresh_cache, monkeypatch):
+@pytest.fixture
+def gthread(monkeypatch):
+    monkeypatch.setattr(tde.runtime, "gthread_active", lambda: True)
+
+
+def test_readers_never_see_a_half_built_universe(fresh_cache, gthread, monkeypatch):
     query = FakeSymTokenQuery([_rows(EXPIRIES_A), _rows(EXPIRIES_B)])
     monkeypatch.setattr(symbol_module.SymToken, "query", query)
     assert fresh_cache.load_all_symbols("zerodha") is True
@@ -134,7 +141,9 @@ def test_readers_never_see_a_half_built_universe(fresh_cache, monkeypatch):
     assert partial == [], partial[:3]
 
 
-def test_a_reader_during_a_reload_gets_the_whole_previous_universe(fresh_cache, monkeypatch):
+def test_a_reader_during_a_reload_gets_the_whole_previous_universe(
+    fresh_cache, gthread, monkeypatch
+):
     """Pause a reload half way through and read: the answer is the old universe.
 
     Before the fix the reload had already cleared the indexes, so the reader
@@ -262,6 +271,60 @@ def _reads_of_snap(node) -> int:
         and sub.value.id == "self"
         and isinstance(sub.ctx, ast.Load)
     )
+
+
+class _WatchingQuery:
+    """Records whether the previous generation was still published during the query."""
+
+    def __init__(self, cache, rows):
+        self.cache = cache
+        self.rows = rows
+        self.loaded_during_query = []
+
+    def all(self):
+        self.loaded_during_query.append(self.cache.cache_loaded)
+        return self.rows
+
+
+def test_outside_gthread_the_previous_generation_is_dropped_before_the_build(
+    fresh_cache, monkeypatch
+):
+    """Review core-01: holding both generations raised the peak on every eventlet install."""
+    monkeypatch.setattr(tde.runtime, "gthread_active", lambda: False)
+    monkeypatch.setattr(symbol_module.SymToken, "query", FakeSymTokenQuery([_rows(EXPIRIES_A)]))
+    assert fresh_cache.load_all_symbols("zerodha") is True
+    timing = fresh_cache.next_reset_time
+
+    watching = _WatchingQuery(fresh_cache, _rows(EXPIRIES_B))
+    monkeypatch.setattr(symbol_module.SymToken, "query", watching)
+    assert fresh_cache.load_all_symbols("zerodha") is True
+
+    assert watching.loaded_during_query == [False]
+    full_b = sorted(EXPIRIES_B, key=lambda e: time.strptime(e, "%d-%b-%y"))
+    assert tde.get_distinct_expiries_cached("NFO", "NIFTY") == full_b
+
+    # A failed reload still leaves the cache empty with its session timing.
+    class Broken:
+        def all(self):
+            raise RuntimeError("database gone")
+
+    monkeypatch.setattr(symbol_module.SymToken, "query", Broken())
+    assert fresh_cache.load_all_symbols("zerodha") is False
+    assert fresh_cache.cache_loaded is False and fresh_cache.next_reset_time is not None
+    assert timing is not None
+
+
+def test_under_gthread_the_previous_generation_serves_during_the_build(
+    fresh_cache, gthread, monkeypatch
+):
+    monkeypatch.setattr(symbol_module.SymToken, "query", FakeSymTokenQuery([_rows(EXPIRIES_A)]))
+    assert fresh_cache.load_all_symbols("zerodha") is True
+
+    watching = _WatchingQuery(fresh_cache, _rows(EXPIRIES_B))
+    monkeypatch.setattr(symbol_module.SymToken, "query", watching)
+    assert fresh_cache.load_all_symbols("zerodha") is True
+
+    assert watching.loaded_during_query == [True]
 
 
 def test_no_cache_method_reads_the_snapshot_twice():

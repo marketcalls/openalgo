@@ -13,6 +13,7 @@ from services.orderbook_service import get_orderbook
 from services.place_smart_order_service import place_smart_order
 from services.positionbook_service import get_positionbook
 from services.tradebook_service import get_tradebook
+from utils import runtime
 from utils.latency_monitor import track_latency
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -992,7 +993,10 @@ def action_center():
 
 
 #: What the operator reads when another screen approved or rejected the order
-#: first. Approval is compare-and-set, so the second request is refused.
+#: first. Approval is compare-and-set, so the second request is refused. Under
+#: the gthread worker only: eventlet and the development server answer as they
+#: always have ("Failed to approve order", 400), because gthread is opt-in and an
+#: install that has not chosen it sees no change.
 ACTION_CENTER_ALREADY_HANDLED_MESSAGE = (
     "This order was already approved or rejected. Check the Action Center."
 )
@@ -1025,13 +1029,18 @@ def approve_pending_order_route(order_id):
     from extensions import socketio
     from services.pending_order_execution_service import (
         ALREADY_SUBMITTING_STATUS,
+        RETURNED_TO_PENDING,
         execute_approved_order,
     )
 
     # Approve the order
     success = approve_pending_order(order_id, login_username, login_username)
 
-    if not success and _pending_order_already_handled(order_id, login_username):
+    if (
+        not success
+        and runtime.gthread_active()
+        and _pending_order_already_handled(order_id, login_username)
+    ):
         # Another request approved or rejected it first. Nothing was sent by
         # this one, and nothing must be: the winner owns the order.
         return jsonify({"status": "error", "message": ACTION_CENTER_ALREADY_HANDLED_MESSAGE}), 409
@@ -1046,6 +1055,17 @@ def approve_pending_order_route(order_id):
             return jsonify(
                 {"status": "error", "message": response_data.get("message")}
             ), ALREADY_SUBMITTING_STATUS
+
+        if not exec_success and response_data.get(RETURNED_TO_PENDING):
+            # Never sent, and back in the pending list to approve again. Not
+            # "approved but failed": the page refreshes and shows it pending.
+            socketio.emit(
+                "pending_order_updated",
+                {"action": "returned", "order_id": order_id, "user_id": login_username},
+            )
+            return jsonify(
+                {"status": "error", "message": response_data.get("message")}
+            ), status_code
 
         # Emit socket event to notify about order approval
         socketio.emit(
@@ -1152,6 +1172,10 @@ def approve_all_pending_orders():
         execute_approved_order,
     )
 
+    # The already-handled reporting below is gthread only. Eventlet and the
+    # development server answer exactly as they always have.
+    gthread = runtime.gthread_active()
+
     # Get all pending orders for this user
     pending_orders = get_pending_orders(login_username, status="pending")
 
@@ -1172,7 +1196,7 @@ def approve_all_pending_orders():
         success = approve_pending_order(order.id, login_username, login_username)
 
         if not success:
-            if _pending_order_already_handled(order.id, login_username):
+            if gthread and _pending_order_already_handled(order.id, login_username):
                 already_handled.append(order.id)
             continue
 
@@ -1183,7 +1207,7 @@ def approve_all_pending_orders():
 
         if exec_success:
             executed_count += 1
-        elif status_code == ALREADY_SUBMITTING_STATUS:
+        elif gthread and status_code == ALREADY_SUBMITTING_STATUS:
             already_handled.append(order.id)
         else:
             failed_executions.append(
@@ -1197,7 +1221,7 @@ def approve_all_pending_orders():
     )
 
     # Prepare response message
-    if approved_count == 0 and already_handled:
+    if gthread and approved_count == 0 and already_handled:
         message = (
             "These orders were already approved or rejected from another screen, so "
             "none were sent again. Check the Action Center."
@@ -1206,7 +1230,7 @@ def approve_all_pending_orders():
     elif approved_count == executed_count:
         message = f"Successfully approved and executed all {approved_count} orders"
         status = "success"
-    elif not failed_executions:
+    elif gthread and not failed_executions:
         message = f"Approved {approved_count} orders. {executed_count} executed successfully"
         status = "success"
     elif executed_count > 0:
@@ -1216,23 +1240,23 @@ def approve_all_pending_orders():
         message = f"Approved {approved_count} orders but all executions failed"
         status = "error"
 
-    if already_handled and approved_count:
+    if gthread and already_handled and approved_count:
         count = len(already_handled)
         message += (
             f". {count} {'order was' if count == 1 else 'orders were'} already handled "
             "from another screen and not sent again"
         )
 
-    return jsonify(
-        {
-            "status": status,
-            "message": message,
-            "approved_count": approved_count,
-            "executed_count": executed_count,
-            "failed_executions": failed_executions,
-            "already_handled": already_handled,
-        }
-    ), 200
+    result = {
+        "status": status,
+        "message": message,
+        "approved_count": approved_count,
+        "executed_count": executed_count,
+        "failed_executions": failed_executions,
+    }
+    if gthread:
+        result["already_handled"] = already_handled
+    return jsonify(result), 200
 
 
 @orders_bp.route("/action-center/api/data")

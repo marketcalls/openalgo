@@ -29,6 +29,7 @@ Limiters use it in one of three ways:
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from utils import runtime
@@ -64,6 +65,7 @@ class BrokerBusyError(Exception):
     def __init__(self, message: str | None = None, retry_after: float | None = None):
         super().__init__(message or BROKER_BUSY_MESSAGE)
         self.retry_after = retry_after
+        _note_refusal()
 
 
 #: The same class under the name the rate-limiter partition asked for.
@@ -80,9 +82,48 @@ class BusyResponse:
     def __init__(self, status: int = 429):
         self.status = status
         self.status_code = status
+        _note_refusal()
 
     def __repr__(self) -> str:
         return f"BusyResponse({self.status})"
+
+
+# -- Knowing that a call was refused before it was sent -----------------------
+#
+# A service answers a refusal with HTTP 429 and a sentence, but so does a broker
+# that throttled a request it may already have accepted, and only the first
+# proves that nothing reached the broker. A caller that must know which (the
+# Action Center, to offer an order back for approval) records refusals on its
+# own thread while it calls the service. Refusals happen only under gthread.
+
+_refusals = threading.local()
+
+
+def _note_refusal() -> None:
+    counter = getattr(_refusals, "counter", None)
+    if counter is not None:
+        counter[0] += 1
+
+
+class RefusalRecorder:
+    """Counts the refusals made on the calling thread between start and stop."""
+
+    def __init__(self) -> None:
+        self._counter = [0]
+        self._outer = None
+
+    def start(self) -> RefusalRecorder:
+        self._outer = getattr(_refusals, "counter", None)
+        _refusals.counter = self._counter
+        return self
+
+    def stop(self) -> None:
+        _refusals.counter = self._outer
+
+    @property
+    def refused(self) -> bool:
+        """True when a request was refused before it was sent."""
+        return self._counter[0] > 0
 
 
 def _check_kind(kind: str) -> str:
@@ -164,6 +205,7 @@ __all__ = [
     "BrokerBusyError",
     "BusyResponse",
     "RateLimitBusy",
+    "RefusalRecorder",
     "acquire_bounded",
     "busy_response",
     "cap_server_delay",

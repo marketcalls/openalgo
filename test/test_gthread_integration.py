@@ -69,10 +69,15 @@ def test_the_telegram_toggle_brings_the_sandbox_engine_in_line(telegram, monkeyp
 
     The web toggle writes the mode and starts or stops the sandbox execution
     engine and square-off scheduler as one step under the analyzer mode lock.
-    The Telegram buttons only wrote the mode.
+    The Telegram buttons only wrote the mode. Under gthread they now take the
+    same step; eventlet and the dev server keep writing the mode only (see the
+    next test).
     """
     from database import settings_db
     from services import analyzer_service
+    from utils import runtime
+
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
 
     stored = {"mode": False}
     reconciled: list[tuple] = []
@@ -103,9 +108,37 @@ def test_the_telegram_toggle_brings_the_sandbox_engine_in_line(telegram, monkeyp
     assert "Live Mode" in query.edits[-1]
 
 
+def test_outside_gthread_the_telegram_toggle_writes_the_mode_only(telegram, monkeypatch):
+    """Review eventlet-neutrality-03: an install still on eventlet sees no change."""
+    from database import settings_db
+    from services import analyzer_service
+    from utils import runtime
+
+    monkeypatch.setattr(runtime, "gthread_active", lambda: False)
+    stored = {"mode": False}
+    monkeypatch.setattr(
+        settings_db, "set_analyze_mode", lambda mode: stored.update(mode=bool(mode))
+    )
+
+    def not_called(*args, **kwargs):
+        raise AssertionError("the sandbox engine was touched outside gthread")
+
+    monkeypatch.setattr(analyzer_service, "apply_analyze_mode", not_called)
+    monkeypatch.setattr(analyzer_service, "_reconcile_sandbox", not_called)
+
+    query = _press(telegram, "mode_analyze")
+
+    assert stored["mode"] is True
+    assert "Analyze Mode" in query.edits[-1]
+    assert telegram.emits == [("app_mode_changed", {"analyze_mode": True})]
+
+
 def test_a_telegram_toggle_behind_a_stuck_change_says_so(telegram, monkeypatch):
     from services import analyzer_service
+    from utils import runtime
     from utils.keyed_locks import LockBusy
+
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
 
     def busy(*_args, **_kwargs):
         raise LockBusy("analyze_mode", name="analyzer-mode", timeout=30)
@@ -135,6 +168,7 @@ def test_the_telegram_toggle_reaches_the_mode_lock_through_the_app_world():
     toggle = toggle[: toggle.index("return\n")]
     assert "set_analyze_mode" not in toggle
     assert "self._in_app_world(" in toggle and "apply_analyze_mode" in toggle
+    assert "_write_analyze_mode_only" in toggle
 
 
 # ---------------------------------------------------------------------------

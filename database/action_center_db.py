@@ -268,10 +268,17 @@ def reject_pending_order(order_id, reason, rejected_by, user_id):
 
 
 #: broker_status while an approved order is on its way to the broker. Written
-#: by claim_pending_order_for_execution before the broker call; readers show it
-#: as in flight. An order left in it by a crash must never be resent
-#: automatically: the operator checks the broker's order book.
+#: by claim_pending_order_for_execution before the broker call, and replaced by
+#: a final status on every path that returns. An order left in it by a crash
+#: must never be resent automatically: the operator checks the broker's order
+#: book. It is stored and returned by the Action Center API, but the Action
+#: Center page does not show broker_status yet, so such a row looks like any
+#: other approved order there.
 SUBMITTING = "submitting"
+
+#: broker_status of an approved smart order that needed no order, because the
+#: position already matched. Final, like any other broker status.
+NO_ACTION = "no_action"
 
 
 def claim_pending_order_for_execution(order_id):
@@ -286,7 +293,10 @@ def claim_pending_order_for_execution(order_id):
         order_id: Pending order ID
 
     Returns:
-        bool: True if this call claimed the order, False otherwise
+        True if this call claimed the order, False if it is not approved or
+        another request already claimed it, and None if the database could not
+        answer. None means nothing was claimed and nothing was sent; it must
+        not be read as "already on its way".
     """
     try:
         updated = PendingOrder.query.filter(
@@ -306,6 +316,59 @@ def claim_pending_order_for_execution(order_id):
 
     except Exception as e:
         logger.exception(f"Error claiming order for execution: {e}")
+        db_session.rollback()
+        return None
+
+
+def return_approved_order_to_pending(order_id, broker_status=None):
+    """
+    Put an approved order that was never sent back in the pending list.
+
+    For an approval whose order provably never reached the broker (the claim
+    could not be written, or the broker pacer refused it before sending), so
+    the operator can approve it again. One conditional UPDATE: it applies only
+    while the order is approved with the given broker status, so it can never
+    reopen an order another request has since sent or finished.
+
+    Args:
+        order_id: Pending order ID
+        broker_status: The broker status the order must still have: None for
+            an order whose claim was never written, SUBMITTING for one this
+            request claimed.
+
+    Returns:
+        bool: True if the order is pending again, False otherwise
+    """
+    try:
+        condition = (
+            PendingOrder.broker_status.is_(None)
+            if broker_status is None
+            else PendingOrder.broker_status == broker_status
+        )
+        updated = PendingOrder.query.filter(
+            PendingOrder.id == order_id,
+            PendingOrder.status == "approved",
+            condition,
+        ).update(
+            {
+                PendingOrder.status: "pending",
+                PendingOrder.broker_status: None,
+                PendingOrder.broker_order_id: None,
+                PendingOrder.approved_by: None,
+                PendingOrder.approved_at: None,
+                PendingOrder.approved_at_ist: None,
+            },
+            synchronize_session=False,
+        )
+        db_session.commit()
+        if updated == 1:
+            logger.info(f"Pending order {order_id} was not sent and is pending again")
+            return True
+        logger.warning(f"Could not put order {order_id} back in the pending list")
+        return False
+
+    except Exception as e:
+        logger.exception(f"Error putting order {order_id} back in the pending list: {e}")
         db_session.rollback()
         return False
 

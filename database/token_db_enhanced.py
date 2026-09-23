@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 
+from utils import runtime
 from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
 from utils.logging import get_logger
 
@@ -437,15 +438,29 @@ class BrokerSymbolCache:
         Load all symbols for the active broker into memory
         This is called once after master contract download
 
-        The new generation is built aside and published in one assignment, so
-        readers keep the previous one until it is complete. As before, a load
-        that finds no symbols or fails leaves the cache empty, and callers
-        fall back to the database.
+        The new generation is always published in one assignment, so no reader
+        ever sees a half-built index. As before, a load that finds no symbols
+        or fails leaves the cache empty, and callers fall back to the database.
+
+        Under the gthread worker the previous generation stays published while
+        the next is built, because readers run during the build and the
+        database they would fall back to is itself half written during a
+        master contract download. That holds two generations at once for the
+        length of the build. Everywhere else the previous one is unpublished
+        first, as the in-place clear used to, so a reload never needs more
+        memory than main did: under eventlet the build never yields to a
+        reader, and on the development server a reader falls back to the
+        database exactly as before.
         """
         with self._load_lock:
             # Read once: the failure paths below carry its session timing
             # forward, as the in-place clear used to.
             previous = self._snap
+            if not runtime.gthread_active():
+                # Drop the only other reference too, so the old generation can
+                # be freed before the new one is built.
+                previous = _unloaded(previous)
+                self._snap = previous
             try:
                 from database.symbol import SymToken
 

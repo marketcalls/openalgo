@@ -10,7 +10,8 @@ worker the two requests run in parallel.
 Approval is now compare-and-set (``database.action_center_db``), and execution
 claims the order (broker_status ``submitting``) before anything is sent. The
 routes report a lost approval or a lost claim as what it is, not as an
-execution failure.
+execution failure. That reporting is gthread only: eventlet and the development
+server answer a lost approval as they always have (review strategy-08).
 """
 
 import threading
@@ -253,8 +254,15 @@ def client(new_client):
     return new_client()
 
 
+@pytest.fixture
+def gthread(monkeypatch):
+    from utils import runtime
+
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
+
+
 def test_racing_approve_clicks_send_one_order_and_say_why_the_rest_did_not(
-    new_client, broker, emitted
+    new_client, broker, emitted, gthread
 ):
     order_id = _pending()
     url = f"/action-center/approve/{order_id}"
@@ -280,7 +288,7 @@ def test_racing_approve_clicks_send_one_order_and_say_why_the_rest_did_not(
     assert len(approved_events) == 1
 
 
-def test_approving_an_order_that_is_already_handled_is_a_conflict(client, broker):
+def test_approving_an_order_that_is_already_handled_is_a_conflict(client, broker, gthread):
     order_id = _pending()
     assert action_center_db.approve_pending_order(order_id, USER, USER)
 
@@ -298,7 +306,7 @@ def test_approving_an_unknown_order_still_fails_as_before(client, broker):
     assert response.get_json() == {"status": "error", "message": "Failed to approve order"}
 
 
-def test_approve_all_reports_orders_another_screen_took(client, broker, monkeypatch):
+def test_approve_all_reports_orders_another_screen_took(client, broker, monkeypatch, gthread):
     first = _pending(symbol="SBIN")
     second = _pending(symbol="INFY")
     real_approve = action_center_db.approve_pending_order
@@ -335,5 +343,18 @@ def test_approve_all_without_contention_reads_as_before(client, broker):
 
     assert body["status"] == "success"
     assert body["message"] == "Successfully approved and executed all 2 orders"
-    assert body["already_handled"] == []
+    # This process is the development server: the response has main's shape.
+    assert "already_handled" not in body
     assert len(broker) == 2
+
+
+def test_outside_gthread_an_already_handled_order_fails_as_before(client, broker):
+    """Review strategy-08 / eventlet-neutrality-06: main's 400 and sentence."""
+    order_id = _pending()
+    assert action_center_db.approve_pending_order(order_id, USER, USER)
+
+    response = client.post(f"/action-center/approve/{order_id}")
+
+    assert response.status_code == 400
+    assert response.get_json() == {"status": "error", "message": "Failed to approve order"}
+    assert broker == []

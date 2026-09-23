@@ -90,3 +90,43 @@ def test_chartink_restores_nothing_and_schedulers_keep_their_defaults():
             """
         )
     )
+
+
+def test_symbol_reload_drops_the_previous_generation_first():
+    """core-01: two symbol universes at once raised the peak on every install."""
+    _ok(
+        run(
+            """
+            import database.symbol as symbol_module
+            import database.token_db_enhanced as tde
+
+            def rows(expiry):
+                return [
+                    SimpleNamespace(symbol=f"NIFTY{expiry}{i}CE", brsymbol=f"B{i}", name="NIFTY",
+                                    exchange="NFO", brexchange="NFO", token=f"{expiry}{i}",
+                                    expiry=expiry, strike=float(i), lotsize=50,
+                                    instrumenttype="OPTIDX", tick_size=0.05)
+                    for i in range(50)
+                ]
+
+            cache = tde.BrokerSymbolCache()
+            seen = []
+
+            class Query:
+                def __init__(self, expiry):
+                    self.expiry = expiry
+
+                def all(self):
+                    seen.append(cache.cache_loaded)
+                    return rows(self.expiry)
+
+            symbol_module.SymToken.query = Query("30-DEC-27")
+            assert cache.load_all_symbols("zerodha") is True
+            symbol_module.SymToken.query = Query("27-JAN-28")
+            assert cache.load_all_symbols("zerodha") is True
+            assert seen == [False, False], seen
+            assert cache.cache_loaded and cache.next_reset_time is not None
+            print("PASSED")
+            """
+        )
+    )

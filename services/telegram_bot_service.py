@@ -84,6 +84,14 @@ MODE_CHANGE_SLOW_MESSAGE = (
     "Check the mode in OpenAlgo before trying again."
 )
 
+
+def _write_analyze_mode_only(requested: bool) -> bool:
+    """The Telegram mode buttons outside gthread: write the mode and nothing else."""
+    from database.settings_db import set_analyze_mode
+
+    set_analyze_mode(requested)
+    return requested
+
 #: Seconds between reconnect attempts' stop checks while backing off.
 _BACKOFF_STEP_SECONDS = 1.0
 
@@ -2705,18 +2713,25 @@ class TelegramBotService:
         if callback_data in ("mode_live", "mode_analyze"):
             try:
                 from services.analyzer_service import MODE_BUSY_MESSAGE, apply_analyze_mode
+                from utils import runtime
                 from utils.keyed_locks import LockBusy
 
                 requested = callback_data == "mode_analyze"
-                # The same one step the web toggle takes: write the mode and
-                # start or stop the sandbox engine and square-off to match, under
-                # the analyzer mode lock. Writing the mode alone left sandbox
-                # mode with no engine, so its SL and LIMIT orders never filled.
-                # The lock is green under eventlet and this is a real thread, so
-                # the call runs on the hub there (see _in_app_world).
+                # Under gthread, the same one step the web toggle takes: write
+                # the mode and start or stop the sandbox engine and square-off
+                # to match, under the analyzer mode lock. Writing the mode alone
+                # left sandbox mode with no engine, so its SL and LIMIT orders
+                # never filled. Under eventlet and the dev server the button
+                # writes the mode only, as it always has: gthread is opt-in, and
+                # an install that has not chosen it sees no change in what the
+                # sandbox does. Either way the call runs where the web app's
+                # code runs (on the hub under eventlet, see _in_app_world).
+                change = (
+                    apply_analyze_mode if runtime.gthread_active() else _write_analyze_mode_only
+                )
                 try:
                     new_mode = await self._in_app_world(
-                        apply_analyze_mode, requested, timeout=MODE_CHANGE_TIMEOUT_SECONDS
+                        change, requested, timeout=MODE_CHANGE_TIMEOUT_SECONDS
                     )
                 except LockBusy:
                     await query.edit_message_text(MODE_BUSY_MESSAGE)
