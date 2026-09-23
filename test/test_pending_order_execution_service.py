@@ -274,8 +274,8 @@ def test_queue_order_remains_successful_when_notification_fails(monkeypatch):
         lambda user_id, api_type, order_data: 73,
     )
     monkeypatch.setattr(
-        order_router_service.socketio,
-        "start_background_task",
+        order_router_service,
+        "emit_from_any_thread",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("socket unavailable")),
     )
 
