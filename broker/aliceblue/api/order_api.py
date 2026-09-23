@@ -21,9 +21,14 @@ from broker.aliceblue.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-from utils.smart_order_guard import POSITION_BOOK_TTL_SECONDS
+from utils.smart_order_guard import (
+    POSITION_BOOK_TTL_SECONDS,
+    SMART_ORDER_LOCK_WAIT_SECONDS,
+    SymbolLocks,
+)
 from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
@@ -239,6 +244,23 @@ def _get_symbol_lock(symbol, exchange, product):
         return lock
 
 
+def _acquire_symbol_lock(lock):
+    """Take a symbol lock, giving up after the smart-order bound under gthread.
+
+    Under the gthread worker a smart order queued behind a slow broker call
+    would hold a request thread for the whole wait, so it waits at most
+    SMART_ORDER_LOCK_WAIT_SECONDS, as utils.smart_order_guard.SymbolLocks does
+    for every other broker. Under eventlet and the dev server it waits as long
+    as it takes, exactly as ``with lock:`` did.
+
+    Returns:
+        True once held; False when the bound ran out and nothing was taken.
+    """
+    if not runtime.gthread_active():
+        return lock.acquire()
+    return lock.acquire(timeout=SMART_ORDER_LOCK_WAIT_SECONDS)
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     return _position_cache.get_or_load(auth, lambda: get_positions(auth))
@@ -353,8 +375,10 @@ def place_smartorder_api(data, auth):
     product = data.get("product")
     # Per-symbol lock: serialize smart orders per symbol
     symbol_lock = _get_symbol_lock(symbol, exchange, product)
+    if not _acquire_symbol_lock(symbol_lock):
+        return SymbolLocks.busy(symbol)
 
-    with symbol_lock:
+    try:
         position_size = int(data.get("position_size", "0"))
 
         # Get current open position for the symbol
@@ -419,6 +443,8 @@ def place_smartorder_api(data, auth):
             _invalidate_position_cache(AUTH_TOKEN)
 
             return res, response, orderid
+    finally:
+        symbol_lock.release()
 
 
     # ─── Close all positions ──────────────────────────────────────────────────────
