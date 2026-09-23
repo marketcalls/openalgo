@@ -68,12 +68,18 @@ SCOPED_SESSION_MODULES = [
 #: Modules registered at runtime by register_scoped_session().
 _registered: list[tuple[str, str]] = []
 
-#: Broker master-contract modules found in sys.modules, and the sys.modules
-#: size they were found at. Scanning every module name on every request would
-#: cost a few thousand string checks per teardown; importing only ever adds
-#: modules, so the scan is repeated only when the count changes.
-_broker_modules: tuple[str, ...] = ()
-_broker_scan_size = -1
+#: The last scan for broker master-contract modules, as one tuple:
+#: (signature of sys.modules taken before the scan, the names found). Scanning
+#: every module name on every request would cost a few thousand string checks
+#: per teardown, so the scan is repeated only when the signature changes.
+#:
+#: One global, replaced in a single assignment, because two request threads
+#: can rescan at once: with the list and its signature in two globals, one
+#: thread's older list could be stored under the other's newer signature and
+#: then be reused until sys.modules changed again, skipping a broker's
+#: session on every pooled thread. The signature is taken before the scan, so
+#: whatever is stored was scanned no earlier than its signature says.
+_broker_scan: tuple[tuple[int, str | None] | None, tuple[str, ...]] = (None, ())
 
 _BROKER_PREFIX = "broker."
 _BROKER_SUFFIX = ".database.master_contract_db"
@@ -95,13 +101,28 @@ def register_scoped_session(module_name: str, attr: str = "db_session") -> None:
     _registered.append(entry)
 
 
+def _modules_signature() -> tuple[int, str | None] | None:
+    """A cheap fingerprint of sys.modules: its size and its newest name.
+
+    A new module is inserted at the end of sys.modules, so an import changes
+    the newest name even when a removal elsewhere keeps the size the same.
+    None when it cannot be read, which forces a rescan.
+    """
+    try:
+        return len(sys.modules), next(reversed(sys.modules), None)
+    except RuntimeError:
+        # Another thread changed sys.modules mid-read.
+        return None
+
+
 def _broker_master_contract_modules() -> tuple[str, ...]:
     """Names of loaded ``broker.<name>.database.master_contract_db`` modules."""
-    global _broker_modules, _broker_scan_size
+    global _broker_scan
 
-    size = len(sys.modules)
-    if size == _broker_scan_size:
-        return _broker_modules
+    signature = _modules_signature()
+    cached_signature, cached = _broker_scan
+    if signature is not None and signature == cached_signature:
+        return cached
     found = tuple(
         name
         for name in list(sys.modules)
@@ -109,8 +130,7 @@ def _broker_master_contract_modules() -> tuple[str, ...]:
         and name.endswith(_BROKER_SUFFIX)
         and name.count(".") == 3
     )
-    _broker_modules = found
-    _broker_scan_size = size
+    _broker_scan = (signature, found)
     return found
 
 

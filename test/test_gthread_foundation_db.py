@@ -119,6 +119,93 @@ def test_registered_sessions_and_the_cleanup_helpers(tmp_path, monkeypatch):
     engine.dispose()
 
 
+_FAKE_BROKER_MODULE = "broker.fakebroker.database.master_contract_db"
+
+
+def _forget_broker_scan(monkeypatch):
+    # Both spellings of the cache, so the test says the same thing of either.
+    monkeypatch.setattr(db_sessions, "_broker_scan", (None, ()), raising=False)
+    monkeypatch.setattr(db_sessions, "_broker_modules", (), raising=False)
+    monkeypatch.setattr(db_sessions, "_broker_scan_size", -1, raising=False)
+
+
+def test_two_rescans_at_once_cannot_store_a_stale_broker_list(monkeypatch):
+    """The scan result and what it was scanned against are stored together.
+
+    Thread A scans before a login imports a broker module and thread B after.
+    A is held just before its store and B just before its last store, then A
+    finishes and B finishes. Stored as two globals, that left A's list (no
+    broker) under B's newer sys.modules size, and every later sweep reused it,
+    keeping that broker's session open on every pooled request thread.
+    """
+    import inspect
+    import re
+
+    _forget_broker_scan(monkeypatch)
+    monkeypatch.delitem(sys.modules, _FAKE_BROKER_MODULE, raising=False)
+    func = db_sessions._broker_master_contract_modules
+    lines, first = inspect.getsourcelines(func)
+    stores = [
+        first + offset for offset, line in enumerate(lines) if re.match(r"\s*_broker_\w+\s*=", line)
+    ]
+    assert stores, "no store to a module-level cache found in the scan"
+
+    def gated(stop_line, reached, go):
+        def tracer(frame, event, _arg):
+            if frame.f_code is not func.__code__:
+                return None
+
+            def local(frame, event, _arg):
+                if event == "line" and frame.f_lineno == stop_line:
+                    reached.set()
+                    go.wait(10)
+                return local
+
+            return local
+
+        def run():
+            sys.settrace(tracer)
+            try:
+                func()
+            finally:
+                sys.settrace(None)
+
+        return threading.Thread(target=run, daemon=True)
+
+    a_reached, a_go = threading.Event(), threading.Event()
+    b_reached, b_go = threading.Event(), threading.Event()
+    thread_a = gated(min(stores), a_reached, a_go)
+    thread_b = gated(max(stores), b_reached, b_go)
+    try:
+        thread_a.start()
+        assert a_reached.wait(10)
+        monkeypatch.setitem(sys.modules, _FAKE_BROKER_MODULE, types.ModuleType("fake"))
+        thread_b.start()
+        assert b_reached.wait(10)
+        a_go.set()
+        thread_a.join(10)
+        b_go.set()
+        thread_b.join(10)
+    finally:
+        a_go.set()
+        b_go.set()
+    assert not thread_a.is_alive() and not thread_b.is_alive()
+    assert _FAKE_BROKER_MODULE in db_sessions._broker_master_contract_modules()
+
+
+def test_a_removal_and_an_import_that_keep_the_size_still_rescan(monkeypatch):
+    _forget_broker_scan(monkeypatch)
+    monkeypatch.delitem(sys.modules, _FAKE_BROKER_MODULE, raising=False)
+    monkeypatch.setitem(sys.modules, "openalgo_test_placeholder", types.ModuleType("p"))
+    assert _FAKE_BROKER_MODULE not in db_sessions._broker_master_contract_modules()
+
+    size = len(sys.modules)
+    monkeypatch.delitem(sys.modules, "openalgo_test_placeholder")
+    monkeypatch.setitem(sys.modules, _FAKE_BROKER_MODULE, types.ModuleType("fake"))
+    assert len(sys.modules) == size
+    assert _FAKE_BROKER_MODULE in db_sessions._broker_master_contract_modules()
+
+
 def test_a_module_that_was_never_imported_is_not_imported_to_clean_it(monkeypatch):
     monkeypatch.setattr(db_sessions, "_registered", [("openalgo_never_imported_module", "s")])
     db_sessions.remove_all_scoped_sessions()
