@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import Plot from '@/lib/Plot2D'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -143,9 +144,9 @@ export default function MaxPain() {
       } else {
         showToast.error(response.message || 'Failed to calculate Max Pain')
       }
-    } catch {
+    } catch (error) {
       if (requestIdRef.current !== requestId) return
-      showToast.error('Failed to calculate Max Pain')
+      showToast.error(serverSentence(error, 'Failed to calculate Max Pain'))
     } finally {
       if (requestIdRef.current === requestId) setIsLoading(false)
     }
