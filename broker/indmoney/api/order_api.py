@@ -307,18 +307,19 @@ def _enrich_positions_with_ltp(positions, auth):
 
 
 
-class _PartialPositionBook(PositionReadError):
-    """Some of the four position queries failed.
+class _PositionRows(list):
+    """The rows of a strict read, and the query segments that could not be read.
 
-    Carries the rows that were read and the segments that were not, so a smart
-    order in a segment that was read in full can still go ahead: an account
-    without F&O should not lose its equity smart orders to a derivative query.
+    A list, so it passes the smart order's success check and is cached like any
+    other book. A smart order in a segment that was read in full goes ahead on
+    these rows, and one in a failed segment is refused (get_open_position): an
+    account without F&O keeps its equity smart orders, and they share one
+    cached book instead of each paying for all four queries again.
     """
 
-    def __init__(self, rows, failed_segments, detail):
-        super().__init__("indmoney", detail)
-        self.rows = rows
-        self.failed_segments = failed_segments
+    def __init__(self, rows, failed_segments=()):
+        super().__init__(rows)
+        self.failed_segments = frozenset(failed_segments)
 
 
 # The query segment that holds each exchange's positions.
@@ -342,9 +343,11 @@ def get_positions(auth, include_ltp=True, strict=False):
         include_ltp: Attach live prices so the position book can show market
             value and MTM. Skipped on the smart-order path, which only needs
             net quantity and should not pay for an extra quote round trip.
-        strict: Raise _PartialPositionBook when a query fails, instead of
-            leaving its rows out. The position book leaves them out; the smart
-            order passes True, because a missing row reads as flat.
+        strict: Report a query that failed instead of leaving its rows out.
+            The position book leaves them out; the smart order passes True,
+            because a missing row reads as flat. The rows come back as a
+            _PositionRows naming the segments that failed, and a read in which
+            no segment worked raises PositionReadError.
     """
     try:
         all_positions = []
@@ -402,7 +405,13 @@ def get_positions(auth, include_ltp=True, strict=False):
                     all_positions.append(pos)
 
         if failed_segments:
-            raise _PartialPositionBook(all_positions, failed_segments, "; ".join(failures))
+            detail = "; ".join(failures)
+            if failed_segments >= set(_SEGMENT_BY_EXCHANGE.values()):
+                raise PositionReadError("indmoney", detail)
+            logger.warning(
+                f"IndMoney position read incomplete, {sorted(failed_segments)} not read: {detail}"
+            )
+            return _PositionRows(all_positions, failed_segments)
 
         if include_ltp and all_positions:
             _enrich_positions_with_ltp(all_positions, auth)
@@ -516,15 +525,17 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     # converting to broker symbol format for the fallback name match.
     target_token = str(get_token(tradingsymbol, exchange) or "")
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-    try:
-        positions_response = _get_cached_positions(auth)
-    except _PartialPositionBook as partial:
-        # Only the other segment failed. This one was read in full, so its rows
-        # are the whole answer for this symbol.
+    positions_response = _get_cached_positions(auth)
+    failed_segments = getattr(positions_response, "failed_segments", frozenset())
+    if failed_segments:
+        # Only the other segment failed when this one was read in full, so its
+        # rows are the whole answer for this symbol. A symbol in a failed
+        # segment, or in one this read does not cover, has no answer at all.
         segment = _SEGMENT_BY_EXCHANGE.get(str(exchange).upper())
-        if segment is None or segment in partial.failed_segments:
-            raise
-        positions_response = partial.rows
+        if segment is None or segment in failed_segments:
+            raise PositionReadError(
+                "indmoney", f"the {sorted(failed_segments)} position query failed"
+            )
     net_qty = "0"
     # logger.debug(f"Positions response: {positions_response}")
 

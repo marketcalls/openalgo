@@ -170,8 +170,17 @@ def get_trade_book(auth):
     return [normalize_trade(trade) for trade in result]
 
 
-def get_positions(auth):
-    """Fetch positions from V2 API and normalize to old field names."""
+def get_positions(auth, strict=False):
+    """Fetch positions from V2 API and normalize to old field names.
+
+    Args:
+        auth: The AliceBlue session token.
+        strict: Read AliceBlue's answer by its published meaning, which the
+            smart order needs. "Failed to retrieve the position book" is the
+            text of EC919, a read that failed, so it is an error here, the
+            same as the bare code. The Positions page and close all (strict
+            False) keep reading it as an empty book, as they always have.
+    """
     response = get_api_response("/open-api/od/v1/positions", auth)
     result = _extract_result(response)
 
@@ -182,7 +191,8 @@ def get_positions(auth):
         # is empty, even when the HTTP error text reads "404 Not Found".
         if isinstance(msg, str) and msg.startswith(_REQUEST_FAILURE_PREFIXES):
             return {"stat": "Not_Ok", "emsg": msg}
-        if "No position" in msg or "not found" in msg.lower() or "Failed to retrieve" in msg:
+        failed_to_retrieve = "Failed to retrieve" in msg and not strict
+        if "No position" in msg or "not found" in msg.lower() or failed_to_retrieve:
             logger.debug(f"No positions found: {msg}")
             return []
         return {"stat": "Not_Ok", "emsg": msg or "Failed to fetch positions"}
@@ -293,7 +303,9 @@ def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     return _position_cache.get_or_load(
         auth,
-        lambda: read_position_book("aliceblue", lambda: get_positions(auth), _position_book_ok),
+        lambda: read_position_book(
+            "aliceblue", lambda: get_positions(auth, strict=True), _position_book_ok
+        ),
     )
 
 

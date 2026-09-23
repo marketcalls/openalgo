@@ -839,6 +839,28 @@ def get_trade_book(auth):
         }, 500
 
 
+def _fno_read_failure(response):
+    """Say why the FNO position read failed, or return None when it worked.
+
+    A SUCCESS answer is a read, whatever it holds, as it is for CASH, and so is
+    an answer whose message says the book is empty. Anything else is a failure.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if response.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
+        return None
+    if says_no_positions(body, ("error.message", "message")):
+        return None
+    shown = body if body is not None else response.text
+    return f"FNO segment: HTTP {response.status_code}, {str(shown)[:200]}"
+
+
+# The query segment that holds each exchange's positions.
+_SEGMENT_BY_EXCHANGE = {"NSE": "CASH", "BSE": "CASH", "NFO": "FNO", "BFO": "FNO"}
+
+
 def get_positions(auth, strict=False):
     """
     Get current positions for the user using direct API calls to Groww API
@@ -848,9 +870,11 @@ def get_positions(auth, strict=False):
         auth (str): Authentication token
         strict (bool): Report a CASH segment that could not be read as an
             error instead of an empty book, which is what the smart order needs.
-            An FNO read that fails is still left out, as before: this code has
+            An FNO read that fails does not fail the whole read: this code has
             always expected it to fail on some accounts, and refusing every
             smart order on an account without F&O would be the wrong trade.
+            The CASH rows come back with "failed_segments": ["FNO"], so a smart
+            order in NFO or BFO is refused while one in NSE or BSE goes ahead.
 
     Returns:
         tuple: (positions data, status code)
@@ -1089,11 +1113,13 @@ def get_positions(auth, strict=False):
                 )
 
             # Now try to get FNO segment positions
+            fno_failure = None
             try:
                 params["segment"] = "FNO"
                 logger.debug(f"Fetching FNO positions with params: {params}")
 
                 fno_response = client.get(positions_url, params=params, headers=headers, timeout=30)
+                fno_failure = _fno_read_failure(fno_response)
 
                 if fno_response.status_code == 200:
                     fno_data = fno_response.json()
@@ -1275,6 +1301,7 @@ def get_positions(auth, strict=False):
             except Exception as fno_error:
                 # Don't fail if FNO segment request fails
                 logger.warning(f"Error fetching FNO positions: {fno_error}")
+                fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
 
             if strict and failures:
                 logger.error(f"Groww position book incomplete: {'; '.join(failures)}")
@@ -1287,6 +1314,9 @@ def get_positions(auth, strict=False):
                 "data": all_positions,
                 "raw_response": response_data,  # Include the CASH segment response
             }
+            if strict and fno_failure:
+                logger.warning(f"Groww FNO positions not read: {fno_failure}")
+                formatted_response["failed_segments"] = ["FNO"]
 
             logger.debug(f"Successfully processed {len(all_positions)} total positions")
             return formatted_response, 200
@@ -1507,6 +1537,17 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
     net_qty = "0"
+
+    # A strict read that could not read FNO still holds the whole CASH book. A
+    # symbol in FNO, or in a segment this read does not cover, has no answer.
+    payload = positions_data
+    if isinstance(positions_data, tuple) and positions_data:
+        payload = positions_data[0]
+    failed_segments = payload.get("failed_segments") if isinstance(payload, dict) else None
+    if failed_segments:
+        segment = _SEGMENT_BY_EXCHANGE.get(str(exchange).upper())
+        if segment is None or segment in failed_segments:
+            raise PositionReadError("groww", f"the {failed_segments} position read failed")
 
     # Check if we received positions data in expected format
     # Handle both direct list format and dictionary with data field

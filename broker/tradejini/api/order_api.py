@@ -370,12 +370,15 @@ def get_trade_book(auth):
         return []
 
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Get list of positions using Tradejini API.
 
     Args:
         auth (str): Authentication token
+        strict (bool): Fail the whole read when a row cannot be transformed,
+            instead of leaving that row out. The smart order passes True,
+            because a row left out reads as a flat position.
 
     Returns:
         dict: Positions data in OpenAlgo format
@@ -494,6 +497,11 @@ def get_positions(auth):
 
                 except Exception as e:
                     logger.error(f"Error transforming position: {str(e)}", exc_info=True)
+                    if strict:
+                        return {
+                            "status": "error",
+                            "message": f"A position row could not be read: {e}",
+                        }
                     continue
 
             # Return in OpenAlgo format - same pattern as orderbook and tradebook
@@ -698,7 +706,9 @@ def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     return _POSITION_BOOK.get(
         auth,
-        lambda: read_position_book("tradejini", lambda: get_positions(auth), _position_book_ok),
+        lambda: read_position_book(
+            "tradejini", lambda: get_positions(auth, strict=True), _position_book_ok
+        ),
     )
 
 
@@ -755,7 +765,21 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
                 pos_symbol = str(position.get("symbol", "")).upper().strip()
                 pos_exch = str(position.get("exchange", "")).upper().strip()
-                pos_qty = int(float(position.get("quantity", 0)))
+                try:
+                    pos_qty = int(float(position.get("quantity", 0)))
+                except (TypeError, ValueError) as exc:
+                    if pos_exch == exchange and pos_symbol == tradingsymbol:
+                        # The row for this very symbol cannot be read, so its
+                        # position is unknown, not flat.
+                        raise PositionReadError(
+                            "tradejini",
+                            f"quantity {position.get('quantity')!r} of {pos_symbol}: {exc}",
+                        ) from exc
+                    logger.warning(
+                        f"get_open_position - Skipping {pos_symbol} on {pos_exch}: "
+                        f"quantity {position.get('quantity')!r} is not a number"
+                    )
+                    continue
 
                 logger.debug(
                     f"get_open_position - Checking OpenAlgo position: {pos_symbol} on {pos_exch}, qty: {pos_qty}"
@@ -869,8 +893,11 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     except PositionReadError:
         raise
     except Exception as e:
+        # The book was read, but something in it could not be: the position
+        # is unknown, and reading it as flat would size the order against
+        # nothing.
         logger.exception(f"get_open_position - Exception: {str(e)}")
-        return "0"
+        raise PositionReadError("tradejini", f"{type(e).__name__}: {e}") from e
 
 
 def place_order_api(data, auth):
