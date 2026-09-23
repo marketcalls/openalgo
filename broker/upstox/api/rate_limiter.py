@@ -60,11 +60,13 @@ omissions are a decision on record rather than a gap:
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
 from collections import deque
 
+from utils.broker_backpressure import BrokerBusyError, max_queue_wait
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -73,6 +75,29 @@ logger = get_logger(__name__)
 # constrain any future slot, so they are purged on every reservation -- which is
 # what keeps the deque bounded (see SlidingWindowLimiter.reserve).
 LONGEST_WINDOW = 1800.0
+
+
+def describe_wait(seconds: float) -> str:
+    """A wait in words a trader reads: "12 seconds", "4 minutes"."""
+    if seconds < 90:
+        whole = max(1, math.ceil(seconds))
+        return f"{whole} second" if whole == 1 else f"{whole} seconds"
+    minutes = math.ceil(seconds / 60)
+    return f"{minutes} minutes"
+
+
+def busy_error(wait: float, kind: str) -> BrokerBusyError:
+    """The refusal for a request whose slot would come ``wait`` seconds from now.
+
+    Only raised under the gthread worker (see SlidingWindowLimiter.reserve).
+    """
+    what = "This order was not sent" if kind == "order" else "This request was not sent"
+    return BrokerBusyError(
+        "Upstox allows only so many requests each second, minute and half hour, "
+        f"and OpenAlgo has already used that allowance for now. {what}. "
+        f"Try again in about {describe_wait(wait)}.",
+        retry_after=wait,
+    )
 
 
 def _env_int(name: str, default: int, ceiling: int) -> int:
@@ -133,6 +158,14 @@ class SlidingWindowLimiter:
     reserved into the future -- a few thousand floats at the published 2000,
     and it shrinks again the moment traffic stops. There is no path that
     appends without first purging.
+
+    How far ahead a slot may be booked. Under eventlet and the dev server there
+    is no limit: once the 30-minute window is full the next caller sleeps until
+    a slot frees up, which can be many minutes, and that is unchanged. Under the
+    gthread worker each such sleep would hold one of a fixed number of request
+    threads, so a caller whose slot is further away than
+    ``utils.broker_backpressure.max_queue_wait(kind)`` is refused with
+    BrokerBusyError instead, and books nothing, so it delays nobody after it.
     """
 
     def __init__(
@@ -141,11 +174,14 @@ class SlidingWindowLimiter:
         max_per_second: int,
         max_per_minute: int,
         max_per_30min: int,
+        kind: str = "data",
     ):
         self.name = name
         self.max_per_second = max_per_second
         self.max_per_minute = max_per_minute
         self.max_per_30min = max_per_30min
+        # "order" or "data": which ceiling bounds a wait under gthread.
+        self.kind = kind
         self._lock = threading.Lock()
         self._reserved: deque[float] = deque()
 
@@ -162,7 +198,13 @@ class SlidingWindowLimiter:
         """Reserve the earliest slot satisfying all three windows.
 
         Returns the seconds the caller must sleep before issuing its request.
+
+        Raises:
+            BrokerBusyError: Only under the gthread worker, when the slot is
+                further away than the ceiling for this limiter's kind. Nothing
+                is booked.
         """
+        ceiling = max_queue_wait(self.kind)
         with self._lock:
             now = time.time()
             # Purge first, always: entries older than the longest window cannot
@@ -175,8 +217,19 @@ class SlidingWindowLimiter:
                 if len(self._reserved) >= cap:
                     slot = max(slot, self._reserved[-cap] + span)
 
-            self._reserved.append(slot)
-            return slot - now
+            wait = slot - now
+            if ceiling is not None and wait > ceiling:
+                refused = True
+            else:
+                refused = False
+                self._reserved.append(slot)
+        if refused:
+            logger.warning(
+                f"Rate limiting ({self.name}): refused a request whose turn was "
+                f"{wait:.1f}s away (limit {ceiling:.0f}s under gthread)"
+            )
+            raise busy_error(wait, self.kind)
+        return wait
 
     def acquire(self) -> None:
         """Block until this caller's reserved slot arrives.
@@ -219,6 +272,7 @@ ORDER_LIMITER = SlidingWindowLimiter(
     max_per_second=_env_int("UPSTOX_ORDER_MAX_PER_SECOND", 8, ceiling=50),
     max_per_minute=_env_int("UPSTOX_ORDER_MAX_PER_MINUTE", 475, ceiling=500),
     max_per_30min=_env_int("UPSTOX_ORDER_MAX_PER_30MIN", 1900, ceiling=2000),
+    kind="order",
 )
 
 STANDARD_LIMITER = SlidingWindowLimiter(

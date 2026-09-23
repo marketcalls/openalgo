@@ -17,6 +17,7 @@ from broker.iiflcapital.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, busy_response, cap_server_delay
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -95,7 +96,16 @@ def _request(
     client = get_httpx_client()
     url = f"{BASE_URL}{endpoint}"
 
-    apply_rate_limit()
+    kind = "data" if method == "GET" else "order"
+    try:
+        apply_rate_limit(kind)
+    except BrokerBusyError as exc:
+        if kind == "data":
+            raise
+        # An order write refused by the pacer (gthread only): nothing was sent.
+        # Answered like a broker refusal so every write path reports it as one.
+        refused = SimpleNamespace(status_code=429, status=429, headers={}, text="")
+        return refused, {"status": "error", "message": str(exc)}
 
     if method == "GET":
         response = client.get(url, headers=_headers(auth), params=params)
@@ -115,13 +125,15 @@ def _request(
 
     message = data.get("message") if isinstance(data, dict) else None
     if is_rate_limited(response.status_code, message) and _retry_count < MAX_RETRIES:
-        delay = retry_delay_from_headers(response.headers, _retry_count)
-        logger.warning(
-            f"IIFL Capital order API rate limited on {endpoint}. Retrying in "
-            f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
-        )
-        time.sleep(delay)
-        return _request(endpoint, auth, method, payload, params, _retry_count + 1)
+        # Under gthread a delay past the ceiling is not slept out.
+        delay = cap_server_delay(retry_delay_from_headers(response.headers, _retry_count), kind)
+        if delay is not None:
+            logger.warning(
+                f"IIFL Capital order API rate limited on {endpoint}. Retrying in "
+                f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return _request(endpoint, auth, method, payload, params, _retry_count + 1)
 
     return response, data
 
@@ -328,7 +340,12 @@ def place_smartorder_api(data, auth):
     product = data.get("product")
 
     position_size = int(float(data.get("position_size", 0) or 0))
-    current_position = int(float(get_open_position(symbol, exchange, product, auth) or 0))
+    try:
+        current_position = int(float(get_open_position(symbol, exchange, product, auth) or 0))
+    except BrokerBusyError as exc:
+        # The position read was refused by the pacer (gthread only), so there
+        # is no position to size an order against. Nothing was sent.
+        return busy_response(str(exc))
 
     if position_size == current_position:
         if int(float(data.get("quantity", 0) or 0)) == 0:

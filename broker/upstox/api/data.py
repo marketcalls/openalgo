@@ -15,6 +15,7 @@ from broker.upstox.api.rate_limiter import (
     retry_delay_from_headers,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils.broker_backpressure import cap_server_delay
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -70,8 +71,13 @@ def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
     # Reactive handling: the proactive pacer is an estimate, Upstox's clock is
     # the truth. These are all read-only endpoints, so retrying is safe.
     if is_rate_limited(response.status_code, body):
-        if retry_count < MAX_RETRIES:
-            delay = retry_delay_from_headers(response.headers, retry_count)
+        # Under gthread a delay past the data ceiling is not slept out.
+        delay = (
+            cap_server_delay(retry_delay_from_headers(response.headers, retry_count), "data")
+            if retry_count < MAX_RETRIES
+            else None
+        )
+        if delay is not None:
             logger.warning(
                 f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
                 f"(attempt {retry_count + 1}/{MAX_RETRIES})"
@@ -79,7 +85,7 @@ def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
             time.sleep(delay)
             return get_api_response(endpoint, auth, method, payload, retry_count + 1)
         logger.warning(
-            f"Upstox rate limit still hit after {MAX_RETRIES} retries on {endpoint}; giving up"
+            f"Upstox rate limit still hit on {endpoint} after {retry_count} retries; giving up"
         )
 
     if body is None:

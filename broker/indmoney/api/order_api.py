@@ -18,6 +18,7 @@ from broker.indmoney.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
@@ -106,6 +107,11 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
         logger.debug(f"Response data: {response_data}")
         return response_data
 
+    except BrokerBusyError:
+        # Refused by the pacer before anything was sent (gthread only). Raised
+        # rather than returned as an error body, so a position read that was
+        # never made cannot be taken for an empty position book.
+        raise
     except Exception as e:
         # Handle connection or parsing errors
         logger.exception(f"Error in API request to {url}: {e}")
@@ -362,6 +368,9 @@ def get_positions(auth, include_ltp=True):
         logger.debug(f"Fetched {len(all_positions)} total positions (all segments and products)")
         return all_positions
 
+    except BrokerBusyError:
+        # Returning [] here would read as "no open positions".
+        raise
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
         return []
@@ -571,7 +580,11 @@ def place_order_api(data, auth):
     client = get_httpx_client()
 
     url = get_url(endpoint)
-    res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    try:
+        res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    except BrokerBusyError as exc:
+        # Refused by the pacer before anything was sent (gthread only).
+        return busy_response(str(exc))
 
     try:
         response_data = json.loads(res.text)
@@ -631,9 +644,13 @@ def place_smartorder_api(data, auth):
         position_size = int(data.get("position_size", "0"))
 
         # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-        )
+        try:
+            current_position = int(
+                get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            )
+        except BrokerBusyError as exc:
+            # The position read was refused by the pacer (gthread only).
+            return busy_response(str(exc))
 
         logger.debug(f"position_size : {position_size}")
         logger.debug(f"Open Position : {current_position}")
@@ -807,7 +824,12 @@ def cancel_order(orderid, auth):
 
     # Make the POST request to cancel order using httpx
     url = get_url(endpoint)
-    res = rate_limited_request(client, "POST", url, headers=headers, content=json.dumps(payload))
+    try:
+        res = rate_limited_request(
+            client, "POST", url, headers=headers, content=json.dumps(payload)
+        )
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
 
     # Parse the response
     data = json.loads(res.text)
@@ -871,7 +893,10 @@ def modify_order(data, auth):
     url = get_url("/smart/order/modify" if is_smart else "/order/modify")
 
     # Make the POST request using httpx
-    res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    try:
+        res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
 
     # Parse the response
     data = json.loads(res.text)

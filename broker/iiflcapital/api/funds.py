@@ -7,6 +7,7 @@ from broker.iiflcapital.api.rate_limiter import (
     retry_delay_from_headers,
 )
 from broker.iiflcapital.baseurl import BASE_URL
+from utils.broker_backpressure import cap_server_delay
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -66,13 +67,15 @@ def _fetch_limits(client, endpoint, auth_token, _retry_count: int = 0):
     logger.debug(f"IIFL Capital limits API raw response [{endpoint}]: {response.text}")
 
     if is_rate_limited(response.status_code, response.text) and _retry_count < MAX_RETRIES:
-        delay = retry_delay_from_headers(response.headers, _retry_count)
-        logger.warning(
-            f"IIFL Capital limits API rate limited on {endpoint}. Retrying in "
-            f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
-        )
-        time.sleep(delay)
-        return _fetch_limits(client, endpoint, auth_token, _retry_count + 1)
+        # Under gthread a delay past the data ceiling is not slept out.
+        delay = cap_server_delay(retry_delay_from_headers(response.headers, _retry_count), "data")
+        if delay is not None:
+            logger.warning(
+                f"IIFL Capital limits API rate limited on {endpoint}. Retrying in "
+                f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return _fetch_limits(client, endpoint, auth_token, _retry_count + 1)
 
     if response.status_code != 200:
         return {}

@@ -19,6 +19,7 @@ from broker.upstox.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, busy_response, cap_server_delay
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
@@ -119,8 +120,13 @@ def get_api_response(
         # so a mutation surfaces the error and lets the caller decide. The
         # proactive pacer is what is meant to keep mutations out of this branch.
         if is_rate_limited(e.response.status_code):
+            delay = None
             if category == "standard" and retry_count < MAX_RETRIES:
-                delay = retry_delay_from_headers(e.response.headers, retry_count)
+                # Under gthread a delay past the data ceiling is not slept out.
+                delay = cap_server_delay(
+                    retry_delay_from_headers(e.response.headers, retry_count), "data"
+                )
+            if delay is not None:
                 logger.warning(
                     f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
                     f"(attempt {retry_count + 1}/{MAX_RETRIES})"
@@ -231,6 +237,10 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             logger.error(f"Failed to get positions: {positions_data.get('message')}")
 
         return net_qty
+    except BrokerBusyError:
+        # A refused read says nothing about the position. Reading it as flat
+        # would send an order sized against a position that may be open.
+        raise
     except Exception:
         logger.exception(f"Error getting open position for {tradingsymbol}")
         return "0"
@@ -364,6 +374,9 @@ def place_order_api(data, auth):
             logger.error(f"Failed to place order: {error_msg} | Response: {response_data}")
             return response, response_data, None
 
+    except BrokerBusyError as exc:
+        # Refused by the pacer before anything was sent (gthread only).
+        return busy_response(str(exc))
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error placing order: {e.response.text}")
         # Preserve the .status contract expected by place_order_service.py
@@ -425,6 +438,10 @@ def place_smartorder_api(data, auth):
             _invalidate_position_cache(auth)
             return res, response, orderid
 
+    except BrokerBusyError as exc:
+        # The position read or the order was refused by the pacer (gthread
+        # only), so nothing was sent.
+        return busy_response(str(exc))
     except Exception as e:
         logger.exception("Unexpected error in place_smartorder_api")
         return None, {"status": "error", "message": str(e)}, None
@@ -501,6 +518,8 @@ def cancel_order(orderid, auth):
             )
             return {"status": "error", "message": error_msg}, 400
 
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
     except Exception as e:
         logger.exception(f"Unexpected error canceling order {orderid}")
         return {"status": "error", "message": str(e)}, 500
@@ -533,6 +552,8 @@ def modify_order(data, auth):
             logger.error(f"Failed to modify order: {error_msg} | Response: {response_data}")
             return {"status": "error", "message": error_msg}, 400
 
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
     except Exception as e:
         logger.exception("Unexpected error modifying order")
         return {"status": "error", "message": str(e)}, 500

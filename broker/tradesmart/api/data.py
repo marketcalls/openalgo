@@ -16,6 +16,7 @@ from broker.tradesmart.api.rate_limiter import (
     retry_delay,
 )
 from database.token_db import get_br_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -464,6 +465,9 @@ class BrokerData:
                     f"Error from TradeSmart API: {response.get('emsg', 'Unknown error')}"
                 )
             return self._quote_dict(response)
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}") from e
 
@@ -633,6 +637,9 @@ class BrokerData:
                 "volume": int(float(response.get("v", 0))),
                 "oi": int(float(response.get("oi", 0))),
             }
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}") from e
 
@@ -792,6 +799,9 @@ class BrokerData:
             df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
             return df
 
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}") from e
 

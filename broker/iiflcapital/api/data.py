@@ -14,6 +14,7 @@ from broker.iiflcapital.api.rate_limiter import (
 from broker.iiflcapital.baseurl import BASE_URL
 from broker.iiflcapital.streaming.iiflcapital_mapping import supports_open_interest
 from database.token_db import get_brexchange, get_token
+from utils.broker_backpressure import BrokerBusyError, cap_server_delay
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -470,7 +471,7 @@ class BrokerData:
             "Accept": "application/json",
         }
 
-        apply_rate_limit()
+        apply_rate_limit("data")
 
         response = client.post(f"{BASE_URL}{endpoint}", headers=headers, json=payload)
         try:
@@ -492,13 +493,17 @@ class BrokerData:
             ) or f"Request failed with HTTP {response.status_code}"
 
             if is_rate_limited(response.status_code, message) and _retry_count < MAX_RETRIES:
-                delay = retry_delay_from_headers(response.headers, _retry_count)
-                logger.warning(
-                    f"IIFL Capital data API rate limited on {endpoint}. Retrying in "
-                    f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+                # Under gthread a delay past the data ceiling is not slept out.
+                delay = cap_server_delay(
+                    retry_delay_from_headers(response.headers, _retry_count), "data"
                 )
-                time.sleep(delay)
-                return self._post(endpoint, payload, _retry_count + 1)
+                if delay is not None:
+                    logger.warning(
+                        f"IIFL Capital data API rate limited on {endpoint}. Retrying in "
+                        f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+                    )
+                    time.sleep(delay)
+                    return self._post(endpoint, payload, _retry_count + 1)
 
             raise Exception(message)
 
@@ -523,6 +528,14 @@ class BrokerData:
         """
         try:
             response = self._post("/marketdata/openinterest", instrument)
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only). Still best effort, but said
+            # out loud: a 0 here is "not fetched", not "no open interest".
+            logger.warning(
+                f"IIFL open interest for {instrument} was not fetched: too many IIFL "
+                "requests were already waiting. It shows as 0 until the next refresh."
+            )
+            return 0
         except Exception as exc:
             logger.debug(f"IIFL OI fetch failed for {instrument}: {exc}")
             return 0
