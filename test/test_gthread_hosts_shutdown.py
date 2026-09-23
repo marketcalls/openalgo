@@ -70,7 +70,7 @@ def test_begin_shutdown_stops_everything_and_refuses_new_starts(host, monkeypatc
     stopped = []
     lock = threading.Lock()
 
-    def fake_stop(strategy_id):
+    def fake_stop(strategy_id, keep_record=False):
         time.sleep(0.3)  # each stop takes a while; together they must overlap
         with lock:
             stopped.append(strategy_id)
@@ -98,7 +98,7 @@ def test_a_strategy_that_outlives_the_budget_is_killed(host, monkeypatch):
     child = FakeChild(3_100_000)
     ps.RUNNING_STRATEGIES["stuck"] = {"process": child, "pid": child.pid}
 
-    def hanging_stop(strategy_id):
+    def hanging_stop(strategy_id, keep_record=False):
         time.sleep(2)
         return False, "Failed to stop"
 

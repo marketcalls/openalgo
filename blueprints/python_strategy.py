@@ -105,6 +105,12 @@ _PERSISTED_GENERATION = 0
 # the others, which would then outlive this worker.
 _SHUTTING_DOWN = threading.Event()
 
+# Set by begin_shutdown (the gthread worker's early hook). From then on every
+# stop keeps the strategy's saved "running" record, including the atexit
+# cleanup that may still run after it, so the next server start restores what
+# was running. Never set under eventlet or on the development server.
+_SHUTDOWN_KEEPS_RECORDS = threading.Event()
+
 # Serialises the restore passes (startup, every login's master contract hook,
 # the check-contracts route). Two passes at once both saw a strategy as not
 # running; one restarted it and the other, refused with "already running",
@@ -972,7 +978,7 @@ def start_strategy_process(strategy_id):
             return False, f"Failed to start strategy: {str(e)}"
 
 
-def stop_strategy_process(strategy_id):
+def stop_strategy_process(strategy_id, keep_record=False):
     """Stop a running strategy process - cross-platform implementation.
 
     Waiting for the process to die happens **outside** PROCESS_LOCK. The lock
@@ -992,6 +998,13 @@ def stop_strategy_process(strategy_id):
     Callers must not hold PROCESS_LOCK. It is reentrant, so doing so does not
     deadlock, it silently reinstates the very stall this function exists to
     avoid.
+
+    Args:
+        strategy_id: The strategy to stop.
+        keep_record: Stop the process but leave its saved config saying it
+            was running, so the next server start restores it. Only the
+            shutdown hook passes this: a server stopping is not the trader
+            stopping the strategy.
     """
     # --- Claim, under the lock -------------------------------------------------
     with PROCESS_LOCK:
@@ -1029,13 +1042,14 @@ def stop_strategy_process(strategy_id):
             if check_process_status(orphan_pid):
                 return False, f"Failed to stop strategy PID {orphan_pid}"
 
-            with PROCESS_LOCK:
-                config = STRATEGY_CONFIGS.get(strategy_id)
-                if config is not None:
-                    config["is_running"] = False
-                    config["pid"] = None
-                    config["last_stopped"] = get_ist_time().isoformat()
-                    save_configs()
+            if not keep_record:
+                with PROCESS_LOCK:
+                    config = STRATEGY_CONFIGS.get(strategy_id)
+                    if config is not None:
+                        config["is_running"] = False
+                        config["pid"] = None
+                        config["last_stopped"] = get_ist_time().isoformat()
+                        save_configs()
             return True, "Strategy stopped"
 
         process = strategy_info.get("process")
@@ -1075,7 +1089,7 @@ def stop_strategy_process(strategy_id):
         ist_now = get_ist_time()
         status = status_message = None
         with PROCESS_LOCK:
-            config = STRATEGY_CONFIGS.get(strategy_id)
+            config = None if keep_record else STRATEGY_CONFIGS.get(strategy_id)
             if config is not None:
                 config["is_running"] = False
                 config["last_stopped"] = ist_now.isoformat()
@@ -3444,9 +3458,13 @@ def cleanup_on_exit():
     with PROCESS_LOCK:
         _SHUTTING_DOWN.set()
         strategy_ids = list(RUNNING_STRATEGIES.keys())
+    keep_record = _SHUTDOWN_KEEPS_RECORDS.is_set()
     for strategy_id in strategy_ids:
         try:
-            stop_strategy_process(strategy_id)
+            if keep_record:
+                stop_strategy_process(strategy_id, keep_record=True)
+            else:
+                stop_strategy_process(strategy_id)
         except Exception:
             pass
     logger.info("Cleanup complete")
@@ -3471,14 +3489,17 @@ def begin_shutdown(budget_s: float = _SHUTDOWN_STOP_BUDGET_SECONDS) -> list[str]
     no job can start one behind this, and the live status streams are told to
     end. The strategies are then stopped side by side rather than one after the
     other, each by the ordinary stop, and whatever is still alive when the
-    budget runs out is killed with its whole process tree. Safe to call more
-    than once; the atexit cleanup stays registered as the backstop.
+    budget runs out is killed with its whole process tree. Each keeps its saved
+    "running" record, so the server that starts next restores it, as it does
+    after an eventlet restart. Safe to call more than once; the atexit cleanup
+    stays registered as the backstop.
 
     Returns:
         The ids of the strategies that had to be killed.
     """
     with PROCESS_LOCK:
         _SHUTTING_DOWN.set()
+        _SHUTDOWN_KEEPS_RECORDS.set()
         running = {sid: dict(info) for sid, info in RUNNING_STRATEGIES.items()}
 
     try:
@@ -3520,9 +3541,16 @@ def begin_shutdown(budget_s: float = _SHUTDOWN_STOP_BUDGET_SECONDS) -> list[str]
 
 
 def _stop_for_shutdown(strategy_id: str) -> None:
-    """One strategy's stop during shutdown. Never raises."""
+    """One strategy's stop during shutdown. Never raises.
+
+    The saved config keeps saying the strategy is running, so the server that
+    starts next restores it, exactly as it does after an eventlet restart
+    (whose signal handler exits before any cleanup writes the config).
+    Recording it as stopped left it off after every restart, with its
+    positions unmanaged, until its next scheduled start or a manual Start.
+    """
     try:
-        stop_strategy_process(strategy_id)
+        stop_strategy_process(strategy_id, keep_record=True)
     except Exception:
         logger.exception(f"Could not stop strategy {strategy_id} during shutdown")
 
