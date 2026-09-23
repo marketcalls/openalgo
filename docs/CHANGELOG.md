@@ -22,14 +22,24 @@ fix, live in [docs/releases](releases/).
   read your open position from your broker, so no order was sent. Check your
   positions and try again.", with your broker's name in it. An empty position
   book is still read as flat, and a read that works places exactly the order
-  it placed before. This covers `/api/v1/placesmartorder` and everything that
-  calls it (TradingView and other alerts, Flow, Python strategies), and the
-  close button on the Positions page. Sandbox mode is not affected: it reads
-  positions from the sandbox. Not changed by this fix: on CompositEdge,
-  5 Paisa (XTS), IIFL, Wisdom Capital and Groww the smart order reads every
-  position as flat even when the read works, so on those brokers do not rely
-  on a smart order to adjust or close a position you already hold until that
-  is fixed separately. Nothing to do after pulling.
+  it placed before. An error from the broker is read as an empty book only
+  on brokers that answer an empty book with an error message, and only from
+  that message: on Dhan, Zerodha, Upstox, Angel One and Fyers, among others,
+  an error always refuses. On IndMoney and Groww, an F&O read that
+  fails refuses F&O smart orders while equity smart orders go ahead. On
+  Alice Blue, "Failed to retrieve the position book" now refuses, the same as
+  its code EC919. This covers `/api/v1/placesmartorder` and everything that
+  calls it (TradingView and other alerts, the order nodes in Flow that place
+  a smart order, Python strategies), and the close button on the Positions
+  page. Sandbox mode is not affected: it reads positions from the sandbox.
+  Not changed by this fix: a check that only reads your position and places
+  nothing (`/api/v1/openposition`, and the Open Position and Position Check
+  nodes in Flow) still reads a failed read as no position on most brokers, so
+  do not let such a check decide an order while your broker is not answering.
+  On CompositEdge, 5 Paisa (XTS), IIFL, Wisdom Capital and Groww the smart
+  order reads every position as flat even when the read works, so on those
+  brokers do not rely on a smart order to adjust or close a position you
+  already hold until that is fixed separately. Nothing to do after pulling.
 
 - **Ubuntu installs on 2.0.2.6 could not run OpenScript strategies or the
   agent.** `requirements-nginx.txt`, which `install.sh`, `install-multi.sh` and

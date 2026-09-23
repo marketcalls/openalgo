@@ -13,7 +13,8 @@ This module is the one place that tells the two apart:
 
 - ``read_position_book`` runs a broker's position-book fetch and raises
   ``PositionReadError`` unless the broker's own success check passes, or the
-  response is the broker's way of saying the book is empty.
+  broker is one that answers an empty book with an error envelope and the
+  message field of this response says the book is empty.
 - ``refuse_smart_order_on_read_failure`` wraps a broker's
   ``place_smartorder_api`` so that the error becomes a refusal: no order, and a
   sentence a trader can act on.
@@ -74,10 +75,7 @@ BROKER_DISPLAY_NAMES = {
     "zerodha": "Zerodha",
 }
 
-# Several brokers answer an empty position book with their error envelope and
-# a message rather than an empty list (the Noren family says "no data"). Those
-# answers are a successful read of nothing, and have to stay flat exactly as
-# before; reading them as failures would refuse every entry from a flat account.
+# Phrases brokers use in the message of an answer that means "no positions".
 _EMPTY_BOOK_MARKERS = (
     "no data",
     "nodata",
@@ -93,9 +91,62 @@ _EMPTY_BOOK_MARKERS = (
     "positions not found",
 )
 
-# A one-line "no data" answer is short. Anything longer is not treated as one,
+# A one-line "no data" message is short. Anything longer is not treated as one,
 # so a large error page that happens to contain the words cannot pass.
 _EMPTY_BOOK_MAX_CHARS = 2000
+
+# The fields that carry a broker's message, as dotted paths into the response.
+# Only these are read for an empty-book phrase; the rest of the body never is,
+# so an error whose other fields happen to contain "no data" cannot pass.
+MESSAGE_FIELDS = (
+    "emsg",
+    "message",
+    "msg",
+    "errorMessage",
+    "statusMessage",
+    "errMsg",
+    "description",
+    "s",
+    "error",
+    "error.message",
+    "error.msg",
+)
+
+# The brokers whose empty position book can come back as their error envelope
+# with a message, rather than as a success with an empty list, and the fields
+# that carry that message. A broker listed here keeps its empty book flat, as
+# before. A broker not listed has an empty book that its own success check
+# already accepts (a bare [] for Dhan, a success envelope for Zerodha, Upstox,
+# Angel, Fyers and the XTS family), so for it an error envelope is always a
+# failed read, whatever its message says. Dhan's DH-907 ("unable to fetch data
+# due to incorrect parameters or no data present") is one of those: its empty
+# position book is [], and a flat account's Positions page could not render
+# the error envelope if it were not.
+#
+# The Noren family (Flattrade, Shoonya, Zebu, TradeSmart) answers an empty book
+# with {"stat": "Not_Ok", "emsg": "no data"}. The others are listed because
+# nothing yet shows which shape their empty book takes, and refusing every
+# entry from a flat account on a guess would be the wrong trade. Remove one
+# only once its empty book has been seen on a real account.
+EMPTY_BOOK_MESSAGE_FIELDS: dict[str, tuple[str, ...]] = {
+    "flattrade": ("emsg",),
+    "shoonya": ("emsg",),
+    "zebu": ("emsg",),
+    "tradesmart": ("emsg",),
+    "arrow": ("message",),
+    "definedge": ("message", "emsg"),
+    "firstock": ("error.message", "message"),
+    "fivepaisa": ("head.statusDescription", "body.Message"),
+    "hdfcsecurities": ("message", "error"),
+    "hdfcsky": ("message", "error"),
+    "iiflcapital": ("message",),
+    "kotak": ("emsg", "errMsg", "message"),
+    "motilal": ("message",),
+    "mstock": ("message",),
+    "nubra": ("message", "error"),
+    "paytm": ("message",),
+    "samco": ("statusMessage",),
+}
 
 _PREVIEW_CHARS = 300
 
@@ -140,30 +191,52 @@ def _preview(response: Any) -> str:
     return text if len(text) <= _PREVIEW_CHARS else f"{text[:_PREVIEW_CHARS]}..."
 
 
-def says_no_positions(response: Any) -> bool:
-    """True when a response that is not a success envelope means "no positions".
+def _field(response: Any, path: str) -> Any:
+    value = response
+    for part in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def says_no_positions(response: Any, fields: tuple[str, ...] = MESSAGE_FIELDS) -> bool:
+    """True when the message of a response that is not a success means "no positions".
 
     Args:
         response: The position-book response, in whatever shape the broker
             plugin returns it.
+        fields: The dotted paths of the fields that carry the broker's
+            message. Only these are read, never the rest of the body.
 
     Returns:
-        bool: True when the text of a short response carries one of the phrases
-        brokers use for an empty book.
+        bool: True when one of those fields is a short string carrying one of
+        the phrases brokers use for an empty book.
     """
-    if response is None:
+    if not isinstance(response, dict):
         return False
-    text = _as_text(response)
-    if len(text) > _EMPTY_BOOK_MAX_CHARS:
-        return False
-    text = text.lower()
-    return any(marker in text for marker in _EMPTY_BOOK_MARKERS)
+    for path in fields:
+        value = _field(response, path)
+        if not isinstance(value, str) or len(value) > _EMPTY_BOOK_MAX_CHARS:
+            continue
+        text = value.lower()
+        if any(marker in text for marker in _EMPTY_BOOK_MARKERS):
+            return True
+    return False
+
+
+def _empty_book_check(broker: str) -> Callable[[Any], bool] | None:
+    fields = EMPTY_BOOK_MESSAGE_FIELDS.get(broker)
+    if fields is None:
+        return None
+    return lambda response: says_no_positions(response, fields)
 
 
 def read_position_book(
     broker: str,
     fetch: Callable[[], Any],
     is_ok: Callable[[Any], bool],
+    is_empty: Callable[[Any], bool] | None = None,
 ) -> Any:
     """Fetch a broker's position book for a smart order, or raise.
 
@@ -172,6 +245,10 @@ def read_position_book(
         fetch: Takes no arguments and returns the position book as the plugin
             reads it. Anything it raises is a failed read.
         is_ok: The broker's own test for a successful response.
+        is_empty: The broker's test for an error envelope that means the book
+            is empty. Defaults to the message check registered for the broker
+            in ``EMPTY_BOOK_MESSAGE_FIELDS``. A broker with none has no such
+            answer, so a response its ``is_ok`` rejects is always a failure.
 
     Returns:
         The response from ``fetch``, unchanged, when it is a successful read or
@@ -198,9 +275,17 @@ def read_position_book(
     if ok:
         return response
 
-    if says_no_positions(response):
-        logger.debug(f"{name} reported an empty position book: {_preview(response)}")
-        return response
+    if is_empty is None:
+        is_empty = _empty_book_check(broker)
+    if is_empty is not None:
+        try:
+            empty = bool(is_empty(response))
+        except Exception:
+            logger.exception(f"{name} position book response could not be checked")
+            empty = False
+        if empty:
+            logger.debug(f"{name} reported an empty position book: {_preview(response)}")
+            return response
 
     detail = _preview(response)
     logger.error(f"{name} position book read failed, smart order refused. Response: {detail}")

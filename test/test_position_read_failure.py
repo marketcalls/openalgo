@@ -32,6 +32,7 @@ import pytest
 
 import utils.httpx_client as httpx_client
 from utils.position_read import (
+    EMPTY_BOOK_MESSAGE_FIELDS,
     PositionReadError,
     position_read_failed_message,
     read_position_book,
@@ -826,10 +827,13 @@ def test_aliceblue_404_is_not_an_empty_book(harness):
         # AliceBlue's documented codes decide by meaning: EC920 is "No positions
         # found for this user", EC919 is "Failed to retrieve the position book".
         ("EC920", [("SELL", abs(TARGET))]),
+        ("No positions found for this user.", [("SELL", abs(TARGET))]),
         ("EC919", []),
-        # get_positions has always read this prose as the V2 API's empty-book
-        # answer. Kept as it was: see the PR notes.
-        ("Failed to retrieve the position book", [("SELL", abs(TARGET))]),
+        # The prose is the text of EC919, so it is decided the same way as the
+        # bare code: a read that failed. It used to be read as an empty book,
+        # and with +10 held an exit then closed nothing.
+        ("Failed to retrieve the position book.", []),
+        ("EC919: Failed to retrieve the position book.", []),
     ],
 )
 def test_aliceblue_codes_by_meaning(harness, message, placed):
@@ -839,6 +843,115 @@ def test_aliceblue_codes_by_meaning(harness, message, placed):
     h.smart_order()
 
     assert h.orders == placed
+
+
+def test_aliceblue_failed_to_retrieve_refuses_an_exit(harness):
+    h = harness("aliceblue", "held")
+    h.serve(
+        lambda url: httpx.Response(
+            200, json={"status": "Not_Ok", "message": "Failed to retrieve the position book."}
+        )
+    )
+
+    res, data, orderid = h.smart_order(position_size=0, quantity=0)
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message("aliceblue")
+
+
+def test_aliceblue_positions_page_keeps_its_reading_of_the_prose(harness):
+    """Only the smart order reads the prose strictly; the Positions page and
+    close all keep showing it as an empty book, as they always have."""
+    h = harness("aliceblue", "held")
+    h.serve(
+        lambda url: httpx.Response(
+            200, json={"status": "Not_Ok", "message": "Failed to retrieve the position book."}
+        )
+    )
+
+    assert h.module.get_positions("token") == []
+    assert h.module.get_positions("token", strict=True) == {
+        "stat": "Not_Ok",
+        "emsg": "Failed to retrieve the position book.",
+    }
+
+
+DHAN_DH907 = {
+    "errorType": "Data_Error",
+    "errorCode": "DH-907",
+    "errorMessage": (
+        "System is unable to fetch data due to incorrect parameters or no data present."
+    ),
+}
+
+
+@pytest.mark.parametrize("broker", ["dhan", "dhan_sandbox"])
+def test_dhan_dh907_is_a_failed_read_not_an_empty_book(harness, broker):
+    """Dhan's empty book is a bare []. Its DH-907 envelope says "no data present",
+    and matching that phrase used to read the envelope as flat: with +10 held a
+    flip to -5 sold 5 instead of 15, and an exit closed nothing."""
+    h = harness(broker, "held")
+    h.serve(lambda url: httpx.Response(200, json=DHAN_DH907))
+
+    res, data, orderid = h.smart_order()
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message(broker)
+
+    res, data, orderid = h.smart_order(position_size=0, quantity=0)
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message(broker)
+    assert len(h.position_reads()) == 2, "a failed read must not be cached"
+
+
+@pytest.mark.parametrize(
+    ("broker", "envelope"),
+    [
+        ("zerodha", {"status": "error", "message": "No data available", "error_type": "General"}),
+        ("fyers", {"s": "error", "code": -99, "message": "No data found"}),
+        ("angel", {"status": False, "message": "No Data", "errorcode": "AB2001", "data": None}),
+        ("upstox", {"status": "error", "errors": [{"message": "No data"}]}),
+        ("ibulls", {"type": "error", "code": "e-portfolio-0001", "description": "No data"}),
+    ],
+)
+def test_error_envelope_saying_no_data_refuses_where_the_empty_book_is_a_success(
+    harness, broker, envelope
+):
+    """These brokers answer an empty book with a success envelope, which their own
+    check already accepts, so an error envelope is a failed read whatever it says."""
+    assert broker not in EMPTY_BOOK_MESSAGE_FIELDS
+    h = harness(broker, "held")
+    h.serve(lambda url: httpx.Response(200, json=envelope))
+
+    res, data, orderid = h.smart_order()
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message(broker)
+
+
+@pytest.mark.parametrize("broker", ["flattrade", "shoonya", "zebu", "tradesmart"])
+def test_noren_empty_book_is_read_from_its_message_only(harness, broker):
+    """The Noren family's empty book is {"stat": "Not_Ok", "emsg": "no data"}. A
+    failure that only mentions "no data" outside emsg is still a failure."""
+    h = harness(broker, "held")
+    h.serve(
+        lambda url: httpx.Response(
+            200,
+            json={
+                "stat": "Not_Ok",
+                "emsg": "Session Expired :  Invalid Session Key",
+                "request_time": "no data",
+            },
+        )
+    )
+
+    res, data, orderid = h.smart_order()
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message(broker)
+
+
+def test_every_broker_with_an_empty_book_message_exists():
+    assert set(EMPTY_BOOK_MESSAGE_FIELDS) <= set(BROKERS)
 
 
 def test_delta_exchange_wallet_failure_refuses(harness):
@@ -890,6 +1003,26 @@ def test_indmoney_derivative_order_refuses_on_a_failed_derivative_query(harness)
     assert data["message"] == position_read_failed_message("indmoney")
 
 
+def test_indmoney_book_with_a_failed_derivative_query_is_cached(harness):
+    """An account without F&O reads its book once per second, as before, instead of
+    paying for all four queries on every equity smart order."""
+    h = harness("indmoney", "held")
+    h.serve(_indmoney_derivative_queries_fail)
+
+    for _ in range(5):
+        res, data, orderid = h.smart_order(position_size=HELD, quantity=abs(TARGET))
+        assert data["status"] == "success"
+
+    assert h.orders == []
+    assert len(h.position_reads()) == 4, "one read of the four queries, then the cached book"
+
+    # A derivative order in the same second is still refused from that book.
+    h.spec = replace(SPECS["indmoney"], exchange="NFO")
+    res, data, orderid = h.smart_order()
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message("indmoney")
+
+
 def test_groww_cash_order_survives_a_failed_fno_query(harness):
     """Groww's own code expects the FNO read to fail on some accounts; only a
     failed CASH read refuses."""
@@ -905,6 +1038,114 @@ def test_groww_cash_order_survives_a_failed_fno_query(harness):
     h.smart_order()
 
     assert h.orders == [("SELL", abs(TARGET))]
+
+
+def _groww_fno_fails(kind):
+    def respond(url):
+        if "segment=FNO" in url:
+            if kind == "exception":
+                raise httpx.ConnectError("connection refused")
+            if kind == "http_error":
+                return httpx.Response(500, text="<html>502 Bad Gateway</html>")
+            return httpx.Response(401, json={"status": "FAILURE", "error": {"code": "GA005"}})
+        return httpx.Response(200, json={"status": "SUCCESS", "payload": {"positions": []}})
+
+    return respond
+
+
+@pytest.mark.parametrize("kind", ["error_status", "http_error", "exception"])
+@pytest.mark.parametrize("exchange", ["NFO", "BFO"])
+def test_groww_fno_order_refuses_on_a_failed_fno_query(harness, kind, exchange):
+    """A failed FNO read used to come back as a successful book with no FNO rows,
+    so an F&O smart order would read the position as flat."""
+    h = harness("groww", "held")
+    h.serve(_groww_fno_fails(kind))
+    h.spec = replace(SPECS["groww"], exchange=exchange)
+
+    res, data, orderid = h.smart_order()
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message("groww")
+
+
+def test_groww_empty_fno_book_is_not_a_failure(harness):
+    h = harness("groww", "empty")
+    h.spec = replace(SPECS["groww"], exchange="NFO")
+
+    h.smart_order()
+
+    assert h.orders == [("SELL", abs(TARGET))]
+
+
+def _tradejini_row(symbol, qty, avg=0):
+    sym_id = f"EQT_{symbol}_EQ_NSE"
+    return {
+        "netQty": qty,
+        "symId": sym_id,
+        "product": "intraday",
+        "netAvgPrice": avg,
+        "sym": {"id": sym_id, "symbol": symbol, "exchange": "NSE"},
+    }
+
+
+def _tradejini_book(rows, monkeypatch, h):
+    monkeypatch.setattr(
+        h.module, "get_oa_symbol", lambda sym, exchange: sym.split("_")[1] if "_" in sym else sym
+    )
+    h.serve(lambda url: httpx.Response(200, json={"s": "ok", "d": rows}))
+
+
+def test_tradejini_malformed_row_of_another_symbol_is_skipped(harness, monkeypatch):
+    """A row that cannot be read no longer turns every symbol flat: with INFY's
+    quantity missing ahead of SBIN +10, a flip to -5 sold 5 instead of 15."""
+    h = harness("tradejini", "held")
+    _tradejini_book([_tradejini_row("INFY", None), _tradejini_row("SBIN", HELD)], monkeypatch, h)
+
+    h.smart_order()
+
+    assert h.orders == [("SELL", HELD - TARGET)]
+
+
+def test_tradejini_malformed_row_of_this_symbol_refuses(harness, monkeypatch):
+    h = harness("tradejini", "held")
+    _tradejini_book([_tradejini_row("SBIN", None)], monkeypatch, h)
+
+    res, data, orderid = h.smart_order()
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message("tradejini")
+
+
+def test_tradejini_row_that_cannot_be_transformed_refuses(harness, monkeypatch):
+    """get_positions used to drop such a row, which read that symbol as flat."""
+    h = harness("tradejini", "held")
+    _tradejini_book([_tradejini_row("SBIN", HELD, avg=None)], monkeypatch, h)
+
+    res, data, orderid = h.smart_order()
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message("tradejini")
+    # The Positions page keeps leaving the row out, as before.
+    assert h.module.get_positions("token") == {"status": "success", "data": []}
+
+
+def test_tradejini_unexpected_error_after_the_read_refuses(harness, monkeypatch):
+    h = harness("tradejini", "held")
+    monkeypatch.setattr(
+        h.module,
+        "_get_cached_positions",
+        lambda auth: {"status": "success", "data": [_Exploding()]},
+    )
+
+    res, data, orderid = h.smart_order()
+
+    assert h.orders == []
+    assert data["message"] == position_read_failed_message("tradejini")
+
+
+class _Exploding(dict):
+    def get(self, *args, **kwargs):
+        raise RuntimeError("row cannot be read")
 
 
 def test_position_book_page_still_shows_an_empty_book_on_failure(harness):
@@ -1009,6 +1250,44 @@ def test_read_position_book_raises_on_an_exception():
         read_position_book("zerodha", fetch, lambda d: True)
     assert str(exc.value) == position_read_failed_message("zerodha")
     assert "ValueError: boom" in exc.value.detail
+
+
+def test_says_no_positions_reads_only_the_message_fields():
+    # The phrase outside a message field: a failure, not an empty book.
+    assert not says_no_positions({"status": "error", "message": "Busy", "detail": "no data"})
+    assert not says_no_positions({"stat": "Not_Ok", "emsg": "Invalid session"}, ("message",))
+    # Only the named fields count.
+    assert says_no_positions({"stat": "Not_Ok", "emsg": "no data"}, ("emsg",))
+    assert not says_no_positions({"stat": "Not_Ok", "emsg": "no data"}, ("message",))
+    # A nested message.
+    assert says_no_positions(
+        {"status": "failed", "error": {"message": "No Data"}}, ("error.message",)
+    )
+    # A long message is not a one-line "no data" answer.
+    assert not says_no_positions({"emsg": "no data " * 500}, ("emsg",))
+
+
+def test_read_position_book_uses_the_empty_book_check_only_where_registered():
+    envelope = {"stat": "Not_Ok", "emsg": "no data"}
+    assert read_position_book("shoonya", lambda: envelope, lambda d: False) is envelope
+    with pytest.raises(PositionReadError):
+        read_position_book("zerodha", lambda: envelope, lambda d: False)
+    with pytest.raises(PositionReadError):
+        read_position_book("dhan", lambda: DHAN_DH907, lambda d: isinstance(d, list))
+
+
+def test_read_position_book_takes_an_explicit_empty_book_check():
+    envelope = {"status": "error", "message": "nothing here"}
+    assert (
+        read_position_book("zerodha", lambda: envelope, lambda d: False, is_empty=lambda d: True)
+        is envelope
+    )
+
+    def broken(data):
+        raise KeyError("x")
+
+    with pytest.raises(PositionReadError):
+        read_position_book("shoonya", lambda: envelope, lambda d: False, is_empty=broken)
 
 
 def test_read_position_book_raises_when_the_check_fails_or_raises():
