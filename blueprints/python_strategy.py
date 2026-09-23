@@ -256,7 +256,17 @@ IS_LINUX = OS_TYPE == "linux"
 #: still start, and a late stop is far better than a skipped one. Five minutes
 #: bounds how late either may be, so a start and a stop cannot both fire late
 #: together unless they are scheduled within five minutes of each other.
+#:
+#: Applied under the gthread worker only. The eventlet worker and the
+#: development server keep APScheduler's defaults, as before: gthread is opt-in,
+#: and an install that has not chosen it must see no change in when a scheduled
+#: start, stop or square-off runs.
 SCHEDULER_JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
+
+
+def scheduler_job_defaults() -> dict:
+    """The job defaults this runtime's scheduler is built with."""
+    return dict(SCHEDULER_JOB_DEFAULTS) if runtime.gthread_active() else {}
 
 
 # The callables the scheduler runs. Each releases the scoped sessions its job
@@ -297,7 +307,7 @@ def init_scheduler():
     global SCHEDULER
     if SCHEDULER is None:
         SCHEDULER = BackgroundScheduler(
-            daemon=True, timezone=IST, job_defaults=dict(SCHEDULER_JOB_DEFAULTS)
+            daemon=True, timezone=IST, job_defaults=scheduler_job_defaults()
         )
         SCHEDULER.start()
         logger.debug(f"Scheduler initialized with IST timezone on {OS_TYPE}")

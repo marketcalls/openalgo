@@ -56,14 +56,24 @@ STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 
 chartink_bp = Blueprint("chartink_bp", __name__, url_prefix="/chartink")
 
-# Initialize scheduler for time-based controls. The misfire grace is explicit:
-# APScheduler's own is one second, so a square-off that reached a worker thread
-# a little late was skipped with only a "was missed" line in the log, leaving
-# the intraday position open. A late square-off is far better than none, and
-# five minutes bounds how late it may be.
+# Initialize scheduler for time-based controls. Under the gthread worker the
+# misfire grace is explicit: APScheduler's own is one second, so a square-off
+# that reached a worker thread a little late was skipped with only a "was
+# missed" line in the log, leaving the intraday position open. A late square-off
+# is far better than none, and five minutes bounds how late it may be. The
+# eventlet worker and the development server keep APScheduler's defaults, as
+# before: gthread is opt-in, and an install that has not chosen it must see no
+# change in when its jobs run.
 SCHEDULER_JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
+
+
+def scheduler_job_defaults() -> dict:
+    """The job defaults this runtime's scheduler is built with."""
+    return dict(SCHEDULER_JOB_DEFAULTS) if runtime.gthread_active() else {}
+
+
 scheduler = BackgroundScheduler(
-    timezone=pytz.timezone("Asia/Kolkata"), job_defaults=dict(SCHEDULER_JOB_DEFAULTS)
+    timezone=pytz.timezone("Asia/Kolkata"), job_defaults=scheduler_job_defaults()
 )
 scheduler.start()
 
@@ -314,10 +324,15 @@ def _add_squareoff_job(strategy_id, squareoff_time) -> bool:
 # added when a strategy was created. So after any restart of the server no
 # intraday Chartink strategy was squared off at its square-off time any more,
 # however long ago it was created. restore_squareoff_jobs puts back the job of
-# every intraday strategy that has a square-off time, the same set a server that
-# had never restarted would hold. It runs once, from a scheduled attempt shortly
-# after startup (retried until the database answers) and, should that not have
-# happened yet, from the first request to any Chartink route.
+# every active intraday strategy that has a square-off time. It runs once, from
+# a scheduled attempt shortly after startup (retried until the database
+# answers) and, should that not have happened yet, from the first request to any
+# Chartink route.
+#
+# Only under the gthread worker. Putting the jobs back sends real closing orders
+# that an eventlet install has never sent after a restart, and gthread is opt-in:
+# an install that has not chosen it must see no change. Under eventlet and on the
+# development server nothing here is booked and nothing is restored.
 
 #: Seconds after startup before the first attempt, then between attempts.
 _SQUAREOFF_RESTORE_DELAY_SECONDS = 30
@@ -332,18 +347,24 @@ _squareoffs_restored = False
 
 
 def restore_squareoff_jobs() -> bool:
-    """Put back the square-off job of every intraday strategy. True once done.
+    """Put back the square-off job of every active intraday strategy. True once done.
 
-    A strategy that already has its job (created since this server started) is
-    left as it is. Nothing is decided on the strategy being active: a strategy
-    turned off keeps its square-off, exactly as it does without a restart, so a
-    position it opened while it was on is still closed at its time.
+    Does nothing outside the gthread worker (see the note above). A strategy
+    that already has its job (created since this server started) is left as it
+    is. A strategy that is turned off gets no job: a square-off closes the whole
+    net position in each mapped symbol, including one the trader opened by hand
+    or through another strategy, so a restart must never start closing positions
+    in the name of a strategy the trader turned off. Turning it back on puts its
+    square-off back (see _restore_squareoff_on_activation).
 
     Returns:
-        True when the jobs are in place (now or by an earlier call), False when
-        the strategies could not be read yet and a later call should try again.
+        True when the jobs are in place (now or by an earlier call), or when this
+        runtime does not restore them. False when the strategies could not be
+        read yet and a later call should try again.
     """
     global _squareoffs_restored
+    if not runtime.gthread_active():
+        return True
     if _squareoffs_restored:
         return True
     with _squareoff_restore_lock:
@@ -369,6 +390,8 @@ def restore_squareoff_jobs() -> bool:
         restored = 0
         for strategy in strategies:
             if not strategy.is_intraday or not strategy.squareoff_time:
+                continue
+            if not strategy.is_active:
                 continue
             if scheduler.get_job(f"squareoff_{strategy.id}") is not None:
                 continue
@@ -407,24 +430,42 @@ def _restore_squareoffs_on_schedule(attempt=1):
         logger.exception("Could not schedule another attempt to restore Chartink square-offs")
 
 
+def _restore_squareoff_on_activation(strategy) -> None:
+    """Under gthread, give a strategy that was turned back on its square-off job.
+
+    The restore skips strategies that were off at startup, so without this a
+    strategy turned on after a restart would never be squared off. A strategy
+    turned off keeps its job, as it always has on a server that never restarted.
+    """
+    if not runtime.gthread_active():
+        return
+    if not strategy or not strategy.is_active:
+        return
+    if not strategy.is_intraday or not strategy.squareoff_time:
+        return
+    if scheduler.get_job(f"squareoff_{strategy.id}") is None:
+        _add_squareoff_job(strategy.id, strategy.squareoff_time)
+
+
 @chartink_bp.before_request
 def _ensure_squareoffs_restored():
     """The fallback: the first Chartink request after startup restores them."""
-    if not _squareoffs_restored:
+    if not _squareoffs_restored and runtime.gthread_active():
         restore_squareoff_jobs()
 
 
-try:
-    scheduler.add_job(
-        _restore_squareoffs_on_schedule,
-        "date",
-        run_date=datetime.now(pytz.timezone("Asia/Kolkata"))
-        + timedelta(seconds=_SQUAREOFF_RESTORE_DELAY_SECONDS),
-        id=_SQUAREOFF_RESTORE_JOB_ID,
-        replace_existing=True,
-    )
-except Exception:
-    logger.exception("Could not schedule the restore of Chartink square-off times")
+if runtime.gthread_active():
+    try:
+        scheduler.add_job(
+            _restore_squareoffs_on_schedule,
+            "date",
+            run_date=datetime.now(pytz.timezone("Asia/Kolkata"))
+            + timedelta(seconds=_SQUAREOFF_RESTORE_DELAY_SECONDS),
+            id=_SQUAREOFF_RESTORE_JOB_ID,
+            replace_existing=True,
+        )
+    except Exception:
+        logger.exception("Could not schedule the restore of Chartink square-off times")
 
 
 @releases_scoped_sessions
@@ -763,6 +804,7 @@ def toggle_strategy_route(strategy_id):
     try:
         strategy = toggle_strategy(strategy_id)
         if strategy:
+            _restore_squareoff_on_activation(strategy)
             status = "activated" if strategy.is_active else "deactivated"
             flash(f"Strategy {status} successfully", "success")
         else:
@@ -962,6 +1004,7 @@ def api_toggle_strategy(strategy_id):
     try:
         updated_strategy = toggle_strategy(strategy_id)
         if updated_strategy:
+            _restore_squareoff_on_activation(updated_strategy)
             return jsonify({"status": "success", "data": {"is_active": updated_strategy.is_active}})
         else:
             return jsonify({"status": "error", "message": "Failed to toggle strategy"}), 500

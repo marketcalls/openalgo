@@ -10,8 +10,12 @@ Under eventlet and on the development server it posts exactly as before.
 
 hosts-14. A square-off job was only ever added when a strategy was created,
 and the scheduler keeps its jobs in memory, so after any restart no intraday
-Chartink strategy was squared off at its square-off time. They are now put back
-once after startup, the same set a server that never restarted would hold.
+Chartink strategy was squared off at its square-off time. Under the gthread
+worker they are now put back once after startup, for every intraday strategy
+that is turned on. A strategy that is off gets none, because a square-off
+closes the whole net position in each mapped symbol. Under eventlet and on the
+development server nothing is restored, exactly as before (review
+eventlet-neutrality-01 and hosts-messaging-02).
 """
 
 import threading
@@ -158,6 +162,7 @@ def _strategy(sid, intraday=True, squareoff="15:12", active=True):
 
 @pytest.fixture
 def restore(monkeypatch):
+    monkeypatch.setattr(chartink.runtime, "gthread_active", lambda: True)
     scheduler = FakeScheduler()
     strategies = [_strategy(1), _strategy(2, squareoff="14:05", active=False), _strategy(3, False)]
     reads = []
@@ -193,11 +198,31 @@ def test_restore_puts_back_one_squareoff_per_intraday_strategy(restore):
 
     assert results == [True, True]
     assert len(reads) == 1, "the strategies were read by more than one restore"
-    assert sorted(scheduler.jobs) == ["squareoff_1", "squareoff_2"]
+    # Strategy 2 is turned off: a restart never revives its square-off.
+    assert sorted(scheduler.jobs) == ["squareoff_1"]
     job = scheduler.jobs["squareoff_1"]
     assert (job.hour, job.minute, job.args) == (15, 12, [1])
-    # A strategy that is turned off keeps its square-off, as without a restart.
-    assert (scheduler.jobs["squareoff_2"].hour, scheduler.jobs["squareoff_2"].minute) == (14, 5)
+
+
+def test_turning_a_strategy_back_on_restores_its_squareoff(restore):
+    scheduler, _ = restore
+    chartink.restore_squareoff_jobs()
+    assert "squareoff_2" not in scheduler.jobs
+
+    chartink._restore_squareoff_on_activation(_strategy(2, squareoff="14:05", active=True))
+
+    job = scheduler.jobs["squareoff_2"]
+    assert (job.hour, job.minute, job.args) == (14, 5, [2])
+
+
+def test_nothing_is_restored_outside_gthread(restore, monkeypatch):
+    scheduler, reads = restore
+    monkeypatch.setattr(chartink.runtime, "gthread_active", lambda: False)
+
+    assert chartink.restore_squareoff_jobs() is True
+    chartink._restore_squareoff_on_activation(_strategy(1))
+
+    assert scheduler.jobs == {} and reads == []
 
 
 def test_a_job_created_since_startup_is_left_alone(restore):
@@ -247,6 +272,7 @@ def test_the_first_chartink_request_restores_when_the_scheduled_attempt_has_not(
     assert "squareoff_1" in scheduler.jobs
 
 
-def test_startup_books_the_restore():
-    job = chartink.scheduler.get_job(chartink._SQUAREOFF_RESTORE_JOB_ID)
-    assert job is not None or chartink._squareoffs_restored
+def test_startup_books_no_restore_outside_gthread():
+    """This process is the development server: nothing is booked at import."""
+    assert not chartink.runtime.gthread_active()
+    assert chartink.scheduler.get_job(chartink._SQUAREOFF_RESTORE_JOB_ID) is None

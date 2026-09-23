@@ -11,7 +11,9 @@ hosts-22. Neither the strategy host's scheduler (which the OpenScript runner
 shares) nor Chartink's set a misfire grace, so APScheduler's one second
 applied: with more jobs due on one minute than executor threads, the rest
 reached a thread late and were skipped with only a "was missed" warning, a stop
-or a square-off included. Both now allow five minutes.
+or a square-off included. Under the gthread worker both now allow five minutes;
+eventlet and the development server keep APScheduler's defaults, as before
+(review eventlet-neutrality-04).
 """
 
 import ast
@@ -128,11 +130,23 @@ def test_every_scheduled_callable_releases_sessions(module):
     )
 
 
-def test_both_schedulers_allow_a_late_job_to_run():
+def test_under_gthread_both_schedulers_allow_a_late_job_to_run(monkeypatch):
+    for module in (ps, chartink):
+        monkeypatch.setattr(module.runtime, "gthread_active", lambda: True)
+        defaults = module.scheduler_job_defaults()
+        assert defaults["misfire_grace_time"] >= 60
+        assert defaults["coalesce"] is True
+        assert defaults["max_instances"] == 1
+
+
+def test_outside_gthread_both_schedulers_keep_apschedulers_defaults():
+    """This process is the development server, as the schedulers were built."""
+    assert not ps.runtime.gthread_active()
+    for module in (ps, chartink):
+        assert module.scheduler_job_defaults() == {}
     for scheduler in (ps.SCHEDULER, chartink.scheduler):
-        assert scheduler._job_defaults["misfire_grace_time"] >= 60
-        assert scheduler._job_defaults["coalesce"] is True
-        assert scheduler._job_defaults["max_instances"] == 1
+        if scheduler is not None:
+            assert scheduler._job_defaults["misfire_grace_time"] == 1
 
 
 def _run_five_simultaneous_jobs(job_defaults) -> int:
