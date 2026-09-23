@@ -78,7 +78,14 @@ did:**
 - A sandbox GTT leg whose position has another order in progress fires on the
   next tick instead of holding up every other tick until that order finishes.
 - The system report shows the web server, the one `.env` asks for, the request
-  threads and where the market data proxy runs.
+  threads and where the market data proxy runs. The admin Diagnostics page
+  shows the same details in a Web server card, in plain words, and its uptime
+  in hours and days.
+- The option chain, Greeks, IV, OI, max pain, volatility surface, straddle,
+  GEX and Strategy Builder tools, the Arbitrage spread order and the portfolio
+  tearsheet download show the server's own sentence when a request is refused
+  because the broker is busy or a limit was reached, instead of a generic
+  error or a status code. Every other failure shows what it showed before.
 - On a stop, the server waits up to 15 seconds for the market data proxy
   process to exit before it exits itself, instead of leaving it to systemd.
 - Saving broker credentials refuses a value containing a line break (HTTP 400)
@@ -114,11 +121,10 @@ through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
 revision; it puts the saved service file back and sets `.env` back to eventlet.
 
 **Still not modelled.** The sandbox margin reconcile does not count margin held
-by open and trigger-pending orders (unchanged from before). The `/tools` pages
-show their generic error text for a busy broker under gthread; API clients get
-the full sentence. The Action Center page does not yet show an order left
-"submitting" by a crash mid-send any differently from one that reached the
-broker; check the broker's order book after a crash.
+by open and trigger-pending orders (unchanged from before). The Action Center
+page does not yet show an order left "submitting" by a crash mid-send any
+differently from one that reached the broker; check the broker's order book
+after a crash.
 
 ### Fixed
 
