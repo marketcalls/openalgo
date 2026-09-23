@@ -140,9 +140,21 @@ export function webServerRows(runtime: SystemRuntime): RuntimeRow[] {
     if (pool && isNumber(pool.waiting)) {
       add('Requests waiting', pool.waiting === 0 ? 'None' : String(pool.waiting))
     }
+    // Free means idle: every thread not running a request, and none at all
+    // while requests are queued for one. The budget's headroom is not that: it
+    // leaves out only streams and browser sessions, so beside a busy pool it
+    // reads as room that is not there. It is shown, under its own name, only
+    // when the pool itself could not be read.
     const budget = runtime.thread_budget
-    if (budget && isNumber(budget.headroom)) {
-      add('Threads free', `${Math.max(0, budget.headroom)} of ${threads}`)
+    if (pool && isNumber(pool.busy)) {
+      const queued = isNumber(pool.waiting) && pool.waiting > 0
+      const idle = queued ? 0 : Math.max(0, threads - pool.busy)
+      add('Threads free', `${idle} of ${threads}`)
+    } else if (budget && isNumber(budget.headroom)) {
+      add(
+        'Threads not held by streams or browser sessions',
+        `${Math.max(0, budget.headroom)} of ${threads}`
+      )
     }
   }
 

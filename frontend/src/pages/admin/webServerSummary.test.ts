@@ -65,7 +65,7 @@ describe('webServerRows on gthread through the launcher', () => {
   it('shows the pool and the time a stop gives open requests', () => {
     expect(rows['Request threads busy']).toBe('0 of 64')
     expect(rows['Requests waiting']).toBe('None')
-    expect(rows['Threads free']).toBe('63 of 64')
+    expect(rows['Threads free']).toBe('64 of 64')
     expect(rows['Time to finish requests on stop']).toBe('30 seconds')
   })
 
@@ -73,7 +73,9 @@ describe('webServerRows on gthread through the launcher', () => {
     const busy = asMap(GTHREAD_BUSY)
     expect(busy['Request threads busy']).toBe('60 of 64')
     expect(busy['Requests waiting']).toBe('3')
-    expect(busy['Threads free']).toBe('46 of 64')
+    // Requests are queued, so no thread is free, whatever the budget's
+    // headroom (46 here) says: it only leaves out streams and browser sessions.
+    expect(busy['Threads free']).toBe('0 of 64')
     expect(busy['Broker connections']).toBe('4 open, 3 idle, up to 100')
     expect(webServerNotes(GTHREAD_BUSY)).toEqual([BUSY_NOTE])
   })
@@ -84,6 +86,25 @@ describe('webServerRows on gthread through the launcher', () => {
       thread_budget: { threads: 64, streams: 60, socketio: 10, headroom: -6 },
     }
     expect(asMap(over)['Threads free']).toBe('0 of 64')
+    const counted = {
+      ...GTHREAD_BUSY,
+      thread_pool: { spawned: 64, busy: 70, waiting: 0, open_connections: 70 },
+    }
+    expect(asMap(counted)['Threads free']).toBe('0 of 64')
+  })
+
+  it('counts idle threads as free, never the budget headroom', () => {
+    const rows = asMap({
+      ...GTHREAD_BUSY,
+      thread_pool: { spawned: 64, busy: 20, waiting: 0, open_connections: 30 },
+    })
+    expect(rows['Threads free']).toBe('44 of 64')
+  })
+
+  it('names the headroom for what it is when the pool could not be read', () => {
+    const rows = asMap({ ...GTHREAD_BUSY, thread_pool: null })
+    expect(rows).not.toHaveProperty('Threads free')
+    expect(rows['Threads not held by streams or browser sessions']).toBe('46 of 64')
   })
 })
 
