@@ -5,6 +5,7 @@ Optimized for zero-config deployment with configurable session reset time (SESSI
 
 import heapq
 import re
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -136,299 +137,418 @@ class SymbolData:
     contract_value: float | None = None  # Contract multiplier (e.g. 0.001 for BTCUSD.P)
 
 
+@dataclass(frozen=True)
+class _SymbolSnapshot:
+    """One complete generation of the symbol cache, never modified once published.
+
+    The cache used to be a set of dicts cleared and refilled in place. A
+    reload then ran while readers iterated them: under the gthread worker a
+    search could raise "dictionary changed size during iteration", or return
+    the half of an expiry list loaded so far, which the option chain, IV and
+    GEX pages presented as complete. Under eventlet the rebuild never yielded,
+    so nobody saw it half done.
+
+    Now a load builds a new snapshot off to the side and publishes it with one
+    reference assignment, which is atomic in every runtime. A reader binds the
+    snapshot once per call and sees either the whole old universe or the whole
+    new one. Sets are frozensets and per-exchange lists are tuples, so nothing
+    reachable from a published snapshot can change under a reader.
+    """
+
+    symbols: dict[str, SymbolData] = field(default_factory=dict)
+    by_symbol_exchange: dict[tuple[str, str], SymbolData] = field(default_factory=dict)
+    by_token_exchange: dict[tuple[str, str], SymbolData] = field(default_factory=dict)
+    by_brsymbol_exchange: dict[tuple[str, str], SymbolData] = field(default_factory=dict)
+    by_token: dict[str, SymbolData] = field(default_factory=dict)
+    by_exchange: dict[str, tuple[SymbolData, ...]] = field(default_factory=dict)
+    expiries_by_exchange: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Options-only: underlyings that have at least one CE/PE row. Used by
+    # option-chain / IV-chart / GEX dropdowns where futures-only commodities
+    # would be dead-ends.
+    underlyings_by_exchange: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Tradable: union of options-bearing underlyings AND underlyings with at
+    # least one non-expired FUT row. Used by the generic /search/token UI
+    # where MCX commodities like NATURALGASMINI / LEADMINI / COPPER (FUT-only)
+    # are legitimate trade-able instruments.
+    tradable_underlyings_by_exchange: dict[str, frozenset[str]] = field(default_factory=dict)
+    expiries_by_exchange_underlying: dict[tuple[str, str], frozenset[str]] = field(
+        default_factory=dict
+    )
+    cache_loaded: bool = False
+    active_broker: str | None = None
+    session_start: datetime | None = None
+    next_reset_time: datetime | None = None
+
+    def is_valid(self) -> bool:
+        """True when this snapshot is loaded and still inside its session."""
+        if not self.cache_loaded or not self.next_reset_time:
+            return False
+        now_ist = datetime.now(pytz.timezone("Asia/Kolkata"))
+        return now_ist < self.next_reset_time
+
+
+def _unloaded(previous: _SymbolSnapshot) -> _SymbolSnapshot:
+    """An empty, unloaded snapshot that keeps the previous session timing.
+
+    Clearing used to empty the indexes and drop the loaded flag but leave the
+    session start and reset time in place, and the cache status still reports
+    them, so they are carried over.
+    """
+    return _SymbolSnapshot(
+        session_start=previous.session_start,
+        next_reset_time=previous.next_reset_time,
+    )
+
+
+def _session_timing() -> tuple[datetime, datetime]:
+    """(session start, next reset) from SESSION_EXPIRY_TIME, in IST."""
+    import os
+
+    now_ist = datetime.now(pytz.timezone("Asia/Kolkata"))
+
+    # Get session expiry time from environment (default to 3:00 if not set)
+    expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+    try:
+        hour, minute = map(int, expiry_time.split(":"))
+    except ValueError:
+        logger.warning(f"Invalid SESSION_EXPIRY_TIME format: {expiry_time}. Using default 03:00")
+        hour, minute = 3, 0
+
+    # Calculate next expiry time
+    next_reset = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_ist >= next_reset:
+        next_reset += timedelta(days=1)
+
+    logger.debug(f"Cache valid until: {next_reset} (Session expiry: {expiry_time})")
+    return now_ist, next_reset
+
+
+def _build_snapshot(symbols, broker: str) -> _SymbolSnapshot:
+    """Build a complete, loaded snapshot from SymToken rows. Pure: no shared state."""
+    by_symbol_exchange: dict[tuple[str, str], SymbolData] = {}
+    by_token_exchange: dict[tuple[str, str], SymbolData] = {}
+    by_brsymbol_exchange: dict[tuple[str, str], SymbolData] = {}
+    by_token: dict[str, SymbolData] = {}
+    primary: dict[str, SymbolData] = {}
+    by_exchange: dict[str, list[SymbolData]] = defaultdict(list)
+    expiries_by_exchange: dict[str, set[str]] = defaultdict(set)
+    underlyings_by_exchange: dict[str, set[str]] = defaultdict(set)
+    tradable_underlyings_by_exchange: dict[str, set[str]] = defaultdict(set)
+    expiries_by_exchange_underlying: dict[tuple[str, str], set[str]] = defaultdict(set)
+
+    # Today (IST) for the live-future check on the tradable underlyings index.
+    # Computed once per cache load — cache invalidates at the daily session
+    # reset (3 AM IST default), so a fresh `today` is picked up each day.
+    ist_today = datetime.now(pytz.timezone("Asia/Kolkata")).date()
+    # Tiny memo for repeated expiry strings (~thousands of FUT rows share
+    # a few dozen distinct dates); strptime is cheap but not free.
+    _expiry_date_cache: dict[str, "datetime.date | None"] = {}
+
+    def _exp_to_date(exp_str):
+        if not exp_str:
+            return None
+        cached = _expiry_date_cache.get(exp_str)
+        if cached is not None or exp_str in _expiry_date_cache:
+            return cached
+        parsed = None
+        for fmt in ("%d-%b-%y", "%d-%b-%Y"):
+            try:
+                parsed = datetime.strptime(exp_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        _expiry_date_cache[exp_str] = parsed
+        return parsed
+
+    # Build in-memory structures
+    for sym in symbols:
+        # Extract underlying from OpenAlgo symbol format for FNO exchanges
+        underlying = None
+        if sym.exchange in FNO_EXCHANGES:
+            underlying = extract_underlying_from_symbol(sym.symbol, sym.exchange)
+
+        # Create lightweight data object
+        symbol_data = SymbolData(
+            symbol=sym.symbol,
+            brsymbol=sym.brsymbol,
+            name=sym.name,
+            exchange=sym.exchange,
+            brexchange=sym.brexchange,
+            token=sym.token,
+            expiry=sym.expiry,
+            strike=sym.strike,
+            lotsize=sym.lotsize,
+            instrumenttype=sym.instrumenttype,
+            tick_size=sym.tick_size,
+            underlying=underlying,
+            contract_value=getattr(sym, "contract_value", None),
+        )
+
+        # Store in primary dict
+        primary[sym.token] = symbol_data
+
+        # Build indexes
+        by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
+        by_token_exchange[(sym.token, sym.exchange)] = symbol_data
+        by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
+        by_token[sym.token] = symbol_data
+
+        # Build FNO filter indexes for O(1) lookups
+        by_exchange[sym.exchange].append(symbol_data)
+        if sym.expiry:
+            expiries_by_exchange[sym.exchange].add(sym.expiry)
+            # Use extracted underlying for index (more reliable than broker's name field)
+            if underlying:
+                expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
+        # Use extracted underlying for underlyings index.
+        # `underlyings_by_exchange` is options-only — option-chain/IV-chart
+        # dropdowns must not show futures-only commodities (dead-ends).
+        # `tradable_underlyings_by_exchange` is the union (options OR live
+        # futures) — used by the generic search/token UI where every
+        # tradable contract should be discoverable.
+        sym_upper = sym.symbol.upper()
+        if underlying:
+            if sym_upper.endswith("CE") or sym_upper.endswith("PE"):
+                underlyings_by_exchange[sym.exchange].add(underlying)
+                tradable_underlyings_by_exchange[sym.exchange].add(underlying)
+            elif sym_upper.endswith("FUT"):
+                exp_date = _exp_to_date(sym.expiry)
+                if exp_date and exp_date >= ist_today:
+                    tradable_underlyings_by_exchange[sym.exchange].add(underlying)
+
+    session_start, next_reset = _session_timing()
+    return _SymbolSnapshot(
+        symbols=primary,
+        by_symbol_exchange=by_symbol_exchange,
+        by_token_exchange=by_token_exchange,
+        by_brsymbol_exchange=by_brsymbol_exchange,
+        by_token=by_token,
+        by_exchange={k: tuple(v) for k, v in by_exchange.items()},
+        expiries_by_exchange={k: frozenset(v) for k, v in expiries_by_exchange.items()},
+        underlyings_by_exchange={k: frozenset(v) for k, v in underlyings_by_exchange.items()},
+        tradable_underlyings_by_exchange={
+            k: frozenset(v) for k, v in tradable_underlyings_by_exchange.items()
+        },
+        expiries_by_exchange_underlying={
+            k: frozenset(v) for k, v in expiries_by_exchange_underlying.items()
+        },
+        cache_loaded=True,
+        active_broker=broker,
+        session_start=session_start,
+        next_reset_time=next_reset,
+    )
+
+
 class BrokerSymbolCache:
     """
     High-performance in-memory cache for broker symbols
     Designed to handle 100,000+ symbols with minimal memory footprint
+
+    The data lives in one immutable :class:`_SymbolSnapshot`, replaced whole by
+    each load. **Bind it once per call** (``snap = self._snap``) and use only
+    that object: reading ``self._snap`` twice in one call can mix two
+    generations. The attributes below (``symbols``, ``by_exchange``,
+    ``cache_loaded`` and the rest) read the current snapshot, for callers that
+    only need one of them.
     """
 
     def __init__(self):
-        # Active broker context
-        self.active_broker: str | None = None
-        self.cache_loaded: bool = False
+        self._snap = _SymbolSnapshot()
+        # Serialises loads, which span database I/O: two loads that overlapped
+        # (the boot restore and a login's download hook) used to interleave
+        # their clears and fills into one set of dicts. A plain stdlib lock:
+        # green under eventlet, where the load does green-safe database work,
+        # and real under gthread. Readers never take it.
+        self._load_lock = threading.Lock()
 
-        # Primary storage - all symbols in memory
-        self.symbols: dict[str, SymbolData] = {}
-
-        # Multi-index maps for O(1) lookups
-        self.by_symbol_exchange: dict[tuple[str, str], SymbolData] = {}
-        self.by_token_exchange: dict[tuple[str, str], SymbolData] = {}
-        self.by_brsymbol_exchange: dict[tuple[str, str], SymbolData] = {}
-        self.by_token: dict[str, SymbolData] = {}
-
-        # Pre-computed indexes for FNO filter performance (O(1) lookups)
-        self.by_exchange: dict[str, list[SymbolData]] = defaultdict(list)
-        self.expiries_by_exchange: dict[str, set[str]] = defaultdict(set)
-        # Options-only: underlyings that have at least one CE/PE row. Used by
-        # option-chain / IV-chart / GEX dropdowns where futures-only commodities
-        # would be dead-ends.
-        self.underlyings_by_exchange: dict[str, set[str]] = defaultdict(set)
-        # Tradable: union of options-bearing underlyings AND underlyings with at
-        # least one non-expired FUT row. Used by the generic /search/token UI
-        # where MCX commodities like NATURALGASMINI / LEADMINI / COPPER (FUT-only)
-        # are legitimate trade-able instruments.
-        self.tradable_underlyings_by_exchange: dict[str, set[str]] = defaultdict(set)
-        self.expiries_by_exchange_underlying: dict[tuple[str, str], set[str]] = defaultdict(set)
-
-        # Cache statistics
+        # Cache statistics. The counters are approximate under concurrency,
+        # which is all a hit-rate display needs.
         self.stats = CacheStats()
 
-        # Session management
-        self.session_start: datetime | None = None
-        self.next_reset_time: datetime | None = None
-
         logger.debug("BrokerSymbolCache initialized")
+
+    # -- The current snapshot, attribute by attribute ------------------------
+
+    @property
+    def symbols(self) -> dict[str, SymbolData]:
+        return self._snap.symbols
+
+    @property
+    def by_symbol_exchange(self) -> dict[tuple[str, str], SymbolData]:
+        return self._snap.by_symbol_exchange
+
+    @property
+    def by_token_exchange(self) -> dict[tuple[str, str], SymbolData]:
+        return self._snap.by_token_exchange
+
+    @property
+    def by_brsymbol_exchange(self) -> dict[tuple[str, str], SymbolData]:
+        return self._snap.by_brsymbol_exchange
+
+    @property
+    def by_token(self) -> dict[str, SymbolData]:
+        return self._snap.by_token
+
+    @property
+    def by_exchange(self) -> dict[str, tuple[SymbolData, ...]]:
+        return self._snap.by_exchange
+
+    @property
+    def expiries_by_exchange(self) -> dict[str, frozenset[str]]:
+        return self._snap.expiries_by_exchange
+
+    @property
+    def underlyings_by_exchange(self) -> dict[str, frozenset[str]]:
+        return self._snap.underlyings_by_exchange
+
+    @property
+    def tradable_underlyings_by_exchange(self) -> dict[str, frozenset[str]]:
+        return self._snap.tradable_underlyings_by_exchange
+
+    @property
+    def expiries_by_exchange_underlying(self) -> dict[tuple[str, str], frozenset[str]]:
+        return self._snap.expiries_by_exchange_underlying
+
+    @property
+    def cache_loaded(self) -> bool:
+        return self._snap.cache_loaded
+
+    @property
+    def active_broker(self) -> str | None:
+        return self._snap.active_broker
+
+    @property
+    def session_start(self) -> datetime | None:
+        return self._snap.session_start
+
+    @property
+    def next_reset_time(self) -> datetime | None:
+        return self._snap.next_reset_time
+
+    def valid_snapshot(self) -> _SymbolSnapshot | None:
+        """The current snapshot if it is loaded and inside its session, else None."""
+        snap = self._snap
+        return snap if snap.is_valid() else None
+
+    # -- Loading ---------------------------------------------------------------
 
     def load_all_symbols(self, broker: str) -> bool:
         """
         Load all symbols for the active broker into memory
         This is called once after master contract download
+
+        The new generation is built aside and published in one assignment, so
+        readers keep the previous one until it is complete. As before, a load
+        that finds no symbols or fails leaves the cache empty, and callers
+        fall back to the database.
         """
-        try:
-            from database.symbol import SymToken
+        with self._load_lock:
+            # Read once: the failure paths below carry its session timing
+            # forward, as the in-place clear used to.
+            previous = self._snap
+            try:
+                from database.symbol import SymToken
 
-            start_time = time.time()
-            logger.debug(f"Loading all symbols for broker: {broker}")
+                start_time = time.time()
+                logger.debug(f"Loading all symbols for broker: {broker}")
 
-            # Clear existing cache
-            self.clear_cache()
+                # Query all symbols from database
+                symbols = SymToken.query.all()
 
-            # Query all symbols from database
-            symbols = SymToken.query.all()
+                if not symbols:
+                    self._snap = _unloaded(previous)
+                    logger.warning(f"No symbols found in database for broker: {broker}")
+                    return False
 
-            if not symbols:
-                logger.warning(f"No symbols found in database for broker: {broker}")
-                return False
+                snap = _build_snapshot(symbols, broker)
+                self._snap = snap
 
-            # Today (IST) for the live-future check on the tradable underlyings index.
-            # Computed once per cache load — cache invalidates at the daily session
-            # reset (3 AM IST default), so a fresh `today` is picked up each day.
-            ist_today = datetime.now(pytz.timezone("Asia/Kolkata")).date()
-            # Tiny memo for repeated expiry strings (~thousands of FUT rows share
-            # a few dozen distinct dates); strptime is cheap but not free.
-            _expiry_date_cache: dict[str, "datetime.date | None"] = {}
+                # Update cache metadata
+                self.stats.total_symbols = len(symbols)
+                self.stats.cache_loads += 1
+                self.stats.last_loaded = datetime.now(pytz.timezone("Asia/Kolkata"))
 
-            def _exp_to_date(exp_str):
-                if not exp_str:
-                    return None
-                cached = _expiry_date_cache.get(exp_str)
-                if cached is not None or exp_str in _expiry_date_cache:
-                    return cached
-                parsed = None
-                for fmt in ("%d-%b-%y", "%d-%b-%Y"):
-                    try:
-                        parsed = datetime.strptime(exp_str, fmt).date()
-                        break
-                    except ValueError:
-                        continue
-                _expiry_date_cache[exp_str] = parsed
-                return parsed
+                # Calculate memory usage (rough estimate)
+                self.stats.memory_usage_mb = (
+                    len(snap.symbols) * 500  # ~500 bytes per symbol
+                ) / (1024 * 1024)
 
-            # Build in-memory structures
-            for sym in symbols:
-                # Extract underlying from OpenAlgo symbol format for FNO exchanges
-                underlying = None
-                if sym.exchange in FNO_EXCHANGES:
-                    underlying = extract_underlying_from_symbol(sym.symbol, sym.exchange)
-
-                # Create lightweight data object
-                symbol_data = SymbolData(
-                    symbol=sym.symbol,
-                    brsymbol=sym.brsymbol,
-                    name=sym.name,
-                    exchange=sym.exchange,
-                    brexchange=sym.brexchange,
-                    token=sym.token,
-                    expiry=sym.expiry,
-                    strike=sym.strike,
-                    lotsize=sym.lotsize,
-                    instrumenttype=sym.instrumenttype,
-                    tick_size=sym.tick_size,
-                    underlying=underlying,
-                    contract_value=getattr(sym, 'contract_value', None),
+                load_time = time.time() - start_time
+                logger.debug(
+                    f"Successfully loaded {self.stats.total_symbols} symbols "
+                    f"in {load_time:.2f} seconds. "
+                    f"Memory usage: {self.stats.memory_usage_mb:.2f} MB"
                 )
+                return True
 
-                # Store in primary dict
-                self.symbols[sym.token] = symbol_data
-
-                # Build indexes
-                self.by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
-                self.by_token_exchange[(sym.token, sym.exchange)] = symbol_data
-                self.by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
-                self.by_token[sym.token] = symbol_data
-
-                # Build FNO filter indexes for O(1) lookups
-                self.by_exchange[sym.exchange].append(symbol_data)
-                if sym.expiry:
-                    self.expiries_by_exchange[sym.exchange].add(sym.expiry)
-                    # Use extracted underlying for index (more reliable than broker's name field)
-                    if underlying:
-                        self.expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
-                # Use extracted underlying for underlyings index.
-                # `underlyings_by_exchange` is options-only — option-chain/IV-chart
-                # dropdowns must not show futures-only commodities (dead-ends).
-                # `tradable_underlyings_by_exchange` is the union (options OR live
-                # futures) — used by the generic search/token UI where every
-                # tradable contract should be discoverable.
-                sym_upper = sym.symbol.upper()
-                if underlying:
-                    if sym_upper.endswith("CE") or sym_upper.endswith("PE"):
-                        self.underlyings_by_exchange[sym.exchange].add(underlying)
-                        self.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
-                    elif sym_upper.endswith("FUT"):
-                        exp_date = _exp_to_date(sym.expiry)
-                        if exp_date and exp_date >= ist_today:
-                            self.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
-
-            # Update cache metadata
-            self.active_broker = broker
-            self.cache_loaded = True
-            self.stats.total_symbols = len(symbols)
-            self.stats.cache_loads += 1
-            self.stats.last_loaded = datetime.now(pytz.timezone("Asia/Kolkata"))
-
-            # Calculate memory usage (rough estimate)
-            self.stats.memory_usage_mb = (
-                len(self.symbols) * 500  # ~500 bytes per symbol
-            ) / (1024 * 1024)
-
-            load_time = time.time() - start_time
-            logger.debug(
-                f"Successfully loaded {self.stats.total_symbols} symbols "
-                f"in {load_time:.2f} seconds. "
-                f"Memory usage: {self.stats.memory_usage_mb:.2f} MB"
-            )
-
-            # Set session timing
-            self._set_session_timing()
-
-            return True
-
-        except Exception as e:
-            logger.exception(f"Error loading symbols into cache: {e}")
-            return False
-
-    def _set_session_timing(self):
-        """Set session start and next reset time from SESSION_EXPIRY_TIME env variable"""
-        import os
-
-        now_ist = datetime.now(pytz.timezone("Asia/Kolkata"))
-        self.session_start = now_ist
-
-        # Get session expiry time from environment (default to 3:00 if not set)
-        expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-        try:
-            hour, minute = map(int, expiry_time.split(":"))
-        except ValueError:
-            logger.warning(
-                f"Invalid SESSION_EXPIRY_TIME format: {expiry_time}. Using default 03:00"
-            )
-            hour, minute = 3, 0
-
-        # Calculate next expiry time
-        next_reset = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now_ist >= next_reset:
-            next_reset += timedelta(days=1)
-
-        self.next_reset_time = next_reset
-        logger.debug(f"Cache valid until: {self.next_reset_time} (Session expiry: {expiry_time})")
+            except Exception as e:
+                self._snap = _unloaded(previous)
+                logger.exception(f"Error loading symbols into cache: {e}")
+                return False
 
     def is_cache_valid(self) -> bool:
         """Check if cache is still valid (before session expiry reset)"""
-        if not self.cache_loaded or not self.next_reset_time:
-            return False
+        return self._snap.is_valid()
 
-        now_ist = datetime.now(pytz.timezone("Asia/Kolkata"))
-        return now_ist < self.next_reset_time
+    # -- Lookups: each binds the snapshot once ---------------------------------
+
+    def _lookup(self, index: dict, key) -> SymbolData | None:
+        """One O(1) lookup in an index the caller took from one snapshot."""
+        found = index.get(key)
+        if found is None:
+            self.stats.misses += 1
+        else:
+            self.stats.hits += 1
+        return found
 
     def get_token(self, symbol: str, exchange: str) -> str | None:
         """Get token for symbol and exchange - O(1) lookup"""
-        self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key].token
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
+        found = self._lookup(self._snap.by_symbol_exchange, (symbol, exchange))
+        return found.token if found is not None else None
 
     def get_symbol(self, token: str, exchange: str) -> str | None:
         """Get symbol for token and exchange - O(1) lookup"""
-        self.stats.hits += 1
-        key = (token, exchange)
-        if key in self.by_token_exchange:
-            return self.by_token_exchange[key].symbol
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
+        found = self._lookup(self._snap.by_token_exchange, (token, exchange))
+        return found.symbol if found is not None else None
 
     def get_br_symbol(self, symbol: str, exchange: str) -> str | None:
         """Get broker symbol for symbol and exchange - O(1) lookup"""
-        self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key].brsymbol
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
+        found = self._lookup(self._snap.by_symbol_exchange, (symbol, exchange))
+        return found.brsymbol if found is not None else None
 
     def get_oa_symbol(self, brsymbol: str, exchange: str) -> str | None:
         """Get OpenAlgo symbol for broker symbol and exchange - O(1) lookup"""
-        self.stats.hits += 1
-        key = (brsymbol, exchange)
-        if key in self.by_brsymbol_exchange:
-            return self.by_brsymbol_exchange[key].symbol
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
+        found = self._lookup(self._snap.by_brsymbol_exchange, (brsymbol, exchange))
+        return found.symbol if found is not None else None
 
     def get_brexchange(self, symbol: str, exchange: str) -> str | None:
         """Get broker exchange for symbol and exchange - O(1) lookup"""
-        self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key].brexchange
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
+        found = self._lookup(self._snap.by_symbol_exchange, (symbol, exchange))
+        return found.brexchange if found is not None else None
 
     def get_symbol_info(self, symbol: str, exchange: str) -> SymbolData | None:
         """Get full symbol data for symbol and exchange - O(1) lookup"""
-        self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key]
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
+        return self._lookup(self._snap.by_symbol_exchange, (symbol, exchange))
 
     def get_symbol_data(self, token: str) -> SymbolData | None:
         """Get complete symbol data by token - O(1) lookup"""
-        self.stats.hits += 1
-        if token in self.by_token:
-            return self.by_token[token]
+        return self._lookup(self._snap.by_token, token)
 
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
-
-    def get_tokens_bulk(self, symbol_exchange_pairs: list[tuple[str, str]]) -> list[str | None]:
+    def get_tokens_bulk(
+        self, symbol_exchange_pairs: list[tuple[str, str]], snap: _SymbolSnapshot | None = None
+    ) -> list[str | None]:
         """
         Bulk retrieve tokens for multiple symbol-exchange pairs
         Optimized for performance with single pass
         """
+        index = (snap or self._snap).by_symbol_exchange
         self.stats.bulk_queries += 1
         results = []
 
         for symbol, exchange in symbol_exchange_pairs:
-            key = (symbol, exchange)
-            if key in self.by_symbol_exchange:
-                results.append(self.by_symbol_exchange[key].token)
+            found = index.get((symbol, exchange))
+            if found is not None:
+                results.append(found.token)
                 self.stats.hits += 1
             else:
                 results.append(None)
@@ -436,17 +556,20 @@ class BrokerSymbolCache:
 
         return results
 
-    def get_symbols_bulk(self, token_exchange_pairs: list[tuple[str, str]]) -> list[str | None]:
+    def get_symbols_bulk(
+        self, token_exchange_pairs: list[tuple[str, str]], snap: _SymbolSnapshot | None = None
+    ) -> list[str | None]:
         """
         Bulk retrieve symbols for multiple token-exchange pairs
         """
+        index = (snap or self._snap).by_token_exchange
         self.stats.bulk_queries += 1
         results = []
 
         for token, exchange in token_exchange_pairs:
-            key = (token, exchange)
-            if key in self.by_token_exchange:
-                results.append(self.by_token_exchange[key].symbol)
+            found = index.get((token, exchange))
+            if found is not None:
+                results.append(found.symbol)
                 self.stats.hits += 1
             else:
                 results.append(None)
@@ -455,7 +578,11 @@ class BrokerSymbolCache:
         return results
 
     def search_symbols(
-        self, query: str, exchange: str | None = None, limit: int = 10000
+        self,
+        query: str,
+        exchange: str | None = None,
+        limit: int = 10000,
+        snap: _SymbolSnapshot | None = None,
     ) -> list[SymbolData]:
         """
         Search symbols by partial match with multi-term support.
@@ -473,6 +600,7 @@ class BrokerSymbolCache:
         the closest matches instead fixes that for every segment, not just
         indices, without hardcoding any exchange.
         """
+        snap = snap or self._snap
         # Split query into terms
         query_upper = query.strip().upper()
         terms = [term.strip().upper() for term in query.split() if term.strip()]
@@ -488,10 +616,11 @@ class BrokerSymbolCache:
                 pass
 
         # Use exchange index if available - significantly faster
-        if exchange and exchange in self.by_exchange:
-            symbols_to_search = self.by_exchange[exchange]
+        exchange_rows = snap.by_exchange.get(exchange) if exchange else None
+        if exchange_rows is not None:
+            symbols_to_search = exchange_rows
         else:
-            symbols_to_search = self.symbols.values()
+            symbols_to_search = snap.symbols.values()
 
         # (score, length, symbol, tie-break sequence, row) — 0 = exact symbol
         # match, 1 = symbol starts with the query, 2 = query is a substring of
@@ -555,6 +684,7 @@ class BrokerSymbolCache:
         strike_max: float | None = None,
         underlying: str | None = None,
         limit: int = 10000,
+        snap: _SymbolSnapshot | None = None,
     ) -> list[SymbolData]:
         """
         FNO-specific search with advanced filters - in-memory cache search
@@ -569,10 +699,12 @@ class BrokerSymbolCache:
             strike_max: Maximum strike price
             underlying: Underlying symbol name (e.g., "NIFTY")
             limit: Maximum results to return
+            snap: The snapshot to search; the current one when omitted.
 
         Returns:
             List of matching SymbolData objects
         """
+        snap = snap or self._snap
         matches = []
         query_upper = query.upper() if query else None
         underlying_upper = underlying.strip().upper() if underlying else None
@@ -593,11 +725,12 @@ class BrokerSymbolCache:
                         pass
 
         # Use exchange index if available - significantly faster for FNO searches
-        if exchange and exchange in self.by_exchange:
-            symbols_to_search = self.by_exchange[exchange]
+        exchange_rows = snap.by_exchange.get(exchange) if exchange else None
+        if exchange_rows is not None:
+            symbols_to_search = exchange_rows
         else:
             # Fallback to all symbols if no exchange filter
-            symbols_to_search = self.symbols.values()
+            symbols_to_search = snap.symbols.values()
 
         for symbol_data in symbols_to_search:
             # Underlying filter (use extracted underlying from OpenAlgo symbol format)
@@ -694,59 +827,53 @@ class BrokerSymbolCache:
 
     def clear_cache(self):
         """Clear all cached data"""
-        self.symbols.clear()
-        self.by_symbol_exchange.clear()
-        self.by_token_exchange.clear()
-        self.by_brsymbol_exchange.clear()
-        self.by_token.clear()
-        # Clear FNO filter indexes
-        self.by_exchange.clear()
-        self.expiries_by_exchange.clear()
-        self.underlyings_by_exchange.clear()
-        self.tradable_underlyings_by_exchange.clear()
-        self.expiries_by_exchange_underlying.clear()
-        self.cache_loaded = False
-        self.active_broker = None
+        # One assignment: a reader holding the previous snapshot finishes with
+        # it, and the next reader sees an empty, unloaded cache.
+        self._snap = _unloaded(self._snap)
         logger.debug("Cache cleared")
 
     def get_cache_info(self) -> dict:
         """Get cache information for monitoring"""
+        snap = self._snap
         return {
-            "active_broker": self.active_broker,
-            "cache_loaded": self.cache_loaded,
+            "active_broker": snap.active_broker,
+            "cache_loaded": snap.cache_loaded,
             "total_symbols": self.stats.total_symbols,
-            "cache_valid": self.is_cache_valid(),
-            "session_start": self.session_start.isoformat() if self.session_start else None,
-            "next_reset": self.next_reset_time.isoformat() if self.next_reset_time else None,
+            "cache_valid": snap.is_valid(),
+            "session_start": snap.session_start.isoformat() if snap.session_start else None,
+            "next_reset": snap.next_reset_time.isoformat() if snap.next_reset_time else None,
             "stats": self.stats.to_dict(),
         }
 
 
-# Global cache instance (singleton pattern)
-_cache_instance: BrokerSymbolCache | None = None
+# Global cache instance (singleton pattern). Built at import rather than on
+# first use: two cold callers used to be able to build one each, and a load
+# could then fill an instance that readers never saw.
+_cache_instance: BrokerSymbolCache = BrokerSymbolCache()
 
 
 def get_cache() -> BrokerSymbolCache:
-    """Get or create the global cache instance"""
-    global _cache_instance
-    if _cache_instance is None:
-        _cache_instance = BrokerSymbolCache()
+    """Get the global cache instance"""
     return _cache_instance
 
 
 # Public API - Drop-in replacement for existing token_db functions
+#
+# Each function binds one valid snapshot (or None) and uses only that, so a
+# reload landing mid-call cannot mix two generations.
 def get_token(symbol: str, exchange: str) -> str | None:
     """
     Get token for a given symbol and exchange
     First checks cache, falls back to database if needed
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
     # Check if cache is loaded and valid
-    if cache.cache_loaded and cache.is_cache_valid():
-        result = cache.get_token(symbol, exchange)
-        if result is not None:
-            return result
+    if snap is not None:
+        found = cache._lookup(snap.by_symbol_exchange, (symbol, exchange))
+        if found is not None:
+            return found.token
 
     # Fallback to database query
     cache.stats.db_queries += 1
@@ -758,11 +885,12 @@ def get_symbol(token: str, exchange: str) -> str | None:
     Get symbol for a given token and exchange
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        result = cache.get_symbol(token, exchange)
-        if result is not None:
-            return result
+    if snap is not None:
+        found = cache._lookup(snap.by_token_exchange, (token, exchange))
+        if found is not None:
+            return found.symbol
 
     cache.stats.db_queries += 1
     return get_symbol_dbquery(token, exchange)
@@ -773,11 +901,12 @@ def get_br_symbol(symbol: str, exchange: str) -> str | None:
     Get broker symbol for a given symbol and exchange
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        result = cache.get_br_symbol(symbol, exchange)
-        if result is not None:
-            return result
+    if snap is not None:
+        found = cache._lookup(snap.by_symbol_exchange, (symbol, exchange))
+        if found is not None:
+            return found.brsymbol
 
     cache.stats.db_queries += 1
     return get_br_symbol_dbquery(symbol, exchange)
@@ -788,11 +917,12 @@ def get_oa_symbol(brsymbol: str, exchange: str) -> str | None:
     Get OpenAlgo symbol for a given broker symbol and exchange
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        result = cache.get_oa_symbol(brsymbol, exchange)
-        if result is not None:
-            return result
+    if snap is not None:
+        found = cache._lookup(snap.by_brsymbol_exchange, (brsymbol, exchange))
+        if found is not None:
+            return found.symbol
 
     cache.stats.db_queries += 1
     return get_oa_symbol_dbquery(brsymbol, exchange)
@@ -803,11 +933,12 @@ def get_brexchange(symbol: str, exchange: str) -> str | None:
     Get broker exchange for a given symbol and exchange
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        result = cache.get_brexchange(symbol, exchange)
-        if result is not None:
-            return result
+    if snap is not None:
+        found = cache._lookup(snap.by_symbol_exchange, (symbol, exchange))
+        if found is not None:
+            return found.brexchange
 
     cache.stats.db_queries += 1
     return get_brexchange_dbquery(symbol, exchange)
@@ -820,11 +951,12 @@ def get_symbol_info(symbol: str, exchange: str) -> SymbolData | None:
     First checks cache, falls back to database if needed
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        result = cache.get_symbol_info(symbol, exchange)
-        if result is not None:
-            return result
+    if snap is not None:
+        found = cache._lookup(snap.by_symbol_exchange, (symbol, exchange))
+        if found is not None:
+            return found
 
     cache.stats.db_queries += 1
     return get_symbol_info_dbquery(symbol, exchange)
@@ -972,9 +1104,10 @@ def get_cache_stats() -> dict:
 def get_tokens_bulk(symbol_exchange_pairs: list[tuple[str, str]]) -> list[str | None]:
     """Bulk retrieve tokens - optimized for performance"""
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        return cache.get_tokens_bulk(symbol_exchange_pairs)
+    if snap is not None:
+        return cache.get_tokens_bulk(symbol_exchange_pairs, snap=snap)
 
     # Fallback to individual queries
     results = []
@@ -987,9 +1120,10 @@ def get_tokens_bulk(symbol_exchange_pairs: list[tuple[str, str]]) -> list[str | 
 def get_symbols_bulk(token_exchange_pairs: list[tuple[str, str]]) -> list[str | None]:
     """Bulk retrieve symbols - optimized for performance"""
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        return cache.get_symbols_bulk(token_exchange_pairs)
+    if snap is not None:
+        return cache.get_symbols_bulk(token_exchange_pairs, snap=snap)
 
     # Fallback to individual queries
     results = []
@@ -1006,9 +1140,10 @@ def search_symbols(query: str, exchange: str | None = None, limit: int = 10000) 
     Returns list of symbol dictionaries
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
-        results = cache.search_symbols(query, exchange, limit)
+    if snap is not None:
+        results = cache.search_symbols(query, exchange, limit, snap=snap)
         return [
             {
                 "symbol": s.symbol,
@@ -1074,11 +1209,12 @@ def fno_search_symbols(
         List of symbol dictionaries with all fields
     """
     cache = get_cache()
+    snap = cache.valid_snapshot()
 
     # Import freeze qty function
     from database.qty_freeze_db import get_freeze_qty_for_option
 
-    if cache.cache_loaded and cache.is_cache_valid():
+    if snap is not None:
         results = cache.fno_search_symbols(
             query=query,
             exchange=exchange,
@@ -1088,6 +1224,7 @@ def fno_search_symbols(
             strike_max=strike_max,
             underlying=underlying,
             limit=limit,
+            snap=snap,
         )
         return [
             {
@@ -1154,7 +1291,8 @@ def get_distinct_expiries_cached(
             exchange=exchange, underlying=underlying, instrumenttype=instrumenttype
         )
 
-    if cache.cache_loaded and cache.is_cache_valid():
+    snap = cache.valid_snapshot()
+    if snap is not None:
         from datetime import datetime
 
         # Use pre-computed indexes for O(1) lookup instead of iterating all symbols
@@ -1162,14 +1300,16 @@ def get_distinct_expiries_cached(
 
         if exchange and underlying_upper:
             # Use the combined index for exchange + underlying
-            expiries = cache.expiries_by_exchange_underlying.get((exchange, underlying_upper), set())
+            expiries = snap.expiries_by_exchange_underlying.get(
+                (exchange, underlying_upper), frozenset()
+            )
         elif exchange:
             # Use the exchange-only index
-            expiries = cache.expiries_by_exchange.get(exchange, set())
+            expiries = snap.expiries_by_exchange.get(exchange, frozenset())
         else:
             # No filter - combine all expiries (rare case)
             expiries = set()
-            for exp_set in cache.expiries_by_exchange.values():
+            for exp_set in snap.expiries_by_exchange.values():
                 expiries.update(exp_set)
 
         # Sort expiries chronologically and drop already-expired dates so
@@ -1216,14 +1356,17 @@ def get_distinct_underlyings_cached(
             are dead ends.
     """
     cache = get_cache()
-    index = (
-        cache.tradable_underlyings_by_exchange if include_futures else cache.underlyings_by_exchange
-    )
+    snap = cache.valid_snapshot()
 
-    if cache.cache_loaded and cache.is_cache_valid():
+    if snap is not None:
+        index = (
+            snap.tradable_underlyings_by_exchange
+            if include_futures
+            else snap.underlyings_by_exchange
+        )
         # Use pre-computed index for O(1) lookup instead of iterating all symbols
         if exchange:
-            underlyings = index.get(exchange, set())
+            underlyings = index.get(exchange, frozenset())
         else:
             # No filter - combine all underlyings (rare case)
             underlyings = set()

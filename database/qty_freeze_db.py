@@ -14,6 +14,7 @@ without an entry return 0, meaning no limit is known and none is enforced.
 
 import csv
 import os
+import threading
 
 from sqlalchemy import Column, Index, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -39,8 +40,19 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # In-memory cache for freeze quantities - always warm
+#
+# Published whole: a load builds a new dict and rebinds this name in one
+# assignment, and readers bind it once per call. The dict used to be cleared
+# and refilled in place, so under the gthread worker a reader could land in
+# the gap and get 0 ("no limit known") for an underlying that has one, and
+# the order then went out unsplit above the exchange's freeze quantity.
 _freeze_qty_cache: dict[str, int] = {}
 _cache_loaded: bool = False
+
+# Serialises loads, including the lazy first one, which several threads can
+# reach at once at boot. A plain stdlib lock (green under eventlet), because
+# the load does database I/O. Readers never take it.
+_load_lock = threading.Lock()
 
 
 class QtyFreeze(Base):
@@ -132,26 +144,43 @@ def load_freeze_qty_cache() -> bool:
     Returns:
         True if successful, False otherwise
     """
+    with _load_lock:
+        return _load_freeze_qty_cache_locked()
+
+
+def _load_freeze_qty_cache_locked() -> bool:
+    """The load behind load_freeze_qty_cache. Call with ``_load_lock`` held."""
     global _freeze_qty_cache, _cache_loaded
 
     try:
-        _freeze_qty_cache.clear()
-
         # Load all entries from database
         entries = QtyFreeze.query.all()
 
+        fresh: dict[str, int] = {}
         for entry in entries:
             # Cache key: "EXCHANGE:SYMBOL" (e.g., "NFO:NIFTY")
             cache_key = f"{entry.exchange}:{entry.symbol}"
-            _freeze_qty_cache[cache_key] = entry.freeze_qty
+            fresh[cache_key] = entry.freeze_qty
 
+        _freeze_qty_cache = fresh
         _cache_loaded = True
-        logger.debug(f"Loaded {len(_freeze_qty_cache)} freeze quantities into cache")
+        logger.debug(f"Loaded {len(fresh)} freeze quantities into cache")
         return True
 
     except Exception as e:
+        # As before, a failed load leaves the cache empty rather than stale.
+        _freeze_qty_cache = {}
         logger.exception(f"Error loading freeze qty cache: {e}")
         return False
+
+
+def _ensure_loaded() -> None:
+    """Load the cache once, however many threads arrive cold at the same time."""
+    if _cache_loaded:
+        return
+    with _load_lock:
+        if not _cache_loaded:
+            _load_freeze_qty_cache_locked()
 
 
 def get_freeze_qty(symbol: str, exchange: str) -> int:
@@ -177,19 +206,12 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     Returns:
         Freeze quantity, or 0 when none is configured.
     """
-    global _cache_loaded
-
     # Ensure cache is loaded
-    if not _cache_loaded:
-        load_freeze_qty_cache()
+    _ensure_loaded()
 
-    # Look up the configured entry for this exchange+symbol.
-    cache_key = f"{exchange}:{symbol}"
-    if cache_key in _freeze_qty_cache:
-        return _freeze_qty_cache[cache_key]
-
-    # Not configured. 0, never 1 -- see the note above.
-    return 0
+    # Look up the configured entry for this exchange+symbol, in one bound dict.
+    # Not configured: 0, never 1 -- see the note above.
+    return _freeze_qty_cache.get(f"{exchange}:{symbol}", 0)
 
 
 def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
@@ -248,20 +270,18 @@ def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:
     Returns:
         Dictionary of symbol -> freeze_qty
     """
-    global _cache_loaded
-
-    if not _cache_loaded:
-        load_freeze_qty_cache()
+    _ensure_loaded()
+    cache = _freeze_qty_cache
 
     if exchange:
         prefix = f"{exchange}:"
         return {
             key.replace(prefix, ""): value
-            for key, value in _freeze_qty_cache.items()
+            for key, value in cache.items()
             if key.startswith(prefix)
         }
 
-    return dict(_freeze_qty_cache)
+    return dict(cache)
 
 
 def ensure_qty_freeze_tables_exists():
