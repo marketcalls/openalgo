@@ -18,6 +18,7 @@ from datetime import time as dt_time
 from decimal import Decimal
 
 import pytz
+from sqlalchemy import update
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -186,6 +187,52 @@ EXCHANGE_CLOSE_TIMES = {
     "NCDEX": dt_time(17, 0),
 }
 DEFAULT_CLOSE_TIME = dt_time(15, 30)
+
+
+def claim_position_for_settlement(position, observed_quantity, *conditions) -> bool:
+    """Take a position row for settlement, if it still holds ``observed_quantity``.
+
+    Expiry settlement runs from the position book (every view), from the
+    square-off job's minute sweep and from the start-up catch-up, each on
+    positions it loaded itself. Two of them could settle the same position,
+    each releasing its margin and booking its P&L. The claim is a no-op UPDATE
+    matched on the quantity that was read: it starts this session's write
+    transaction, so no other settler (or fill) can change the row until the
+    caller commits, and a caller that loses finds the row already moved and
+    leaves it alone. On success the position is re-read, so the settlement is
+    computed from the row as it stands.
+
+    Nothing is committed here; the caller commits the settlement, the funds
+    change and the claim together, or rolls all of them back.
+
+    Args:
+        position: The SandboxPositions row to settle.
+        observed_quantity: The quantity the caller decided to settle.
+        *conditions: Further predicates the row must still meet, re-checked
+            under the claim (the catch-up passes its session-boundary test).
+
+    Returns:
+        True if this caller now owns the row's settlement.
+    """
+    result = db_session.execute(
+        update(SandboxPositions)
+        .where(
+            SandboxPositions.id == position.id,
+            SandboxPositions.quantity == observed_quantity,
+            *conditions,
+        )
+        # Assigning both columns to themselves changes nothing, not even the
+        # updated_at the ORM would otherwise stamp.
+        .values(
+            quantity=SandboxPositions.quantity,
+            updated_at=SandboxPositions.updated_at,
+        ),
+        execution_options={"synchronize_session": False},
+    )
+    if result.rowcount != 1:
+        return False
+    db_session.refresh(position)
+    return True
 
 
 def _notify_position_feed_closed(user_id, symbol, exchange):
@@ -376,6 +423,15 @@ class PositionManager:
         """
         from decimal import Decimal
 
+        # Claim the row before any money moves; see claim_position_for_settlement.
+        if not claim_position_for_settlement(position, position.quantity):
+            db_session.rollback()
+            logger.info(
+                f"Expired position {position.symbol} was settled or changed elsewhere; "
+                "leaving it to that settlement"
+            )
+            return
+
         symbol = position.symbol
         quantity = position.quantity
         avg_price = Decimal(str(position.average_price))
@@ -406,12 +462,22 @@ class PositionManager:
             f"total_realized={total_realized_pnl}, margin_to_release={margin_blocked}"
         )
 
-        # Release margin and update funds
-        self.fund_manager.release_margin(
-            amount=margin_blocked,
-            realized_pnl=close_pnl,
-            description=f"Expired contract settlement: {symbol}",
-        )
+        # Release margin and update funds, in the same commit as the position:
+        # releasing in one commit and closing in the next let a second settler
+        # arriving in between release it again.
+        try:
+            self.fund_manager.stage_release_margin(
+                amount=margin_blocked,
+                realized_pnl=close_pnl,
+                description=f"Expired contract settlement: {symbol}",
+            )
+        except Exception:
+            db_session.rollback()
+            logger.exception(
+                f"Could not release margin for expired {symbol}; it stays open and is "
+                "settled on the next pass"
+            )
+            return
 
         # Get expiry date for hiding the position
         expiry_date = get_contract_expiry(symbol, position.exchange)
@@ -465,9 +531,7 @@ class PositionManager:
             # updated_at is stored in the database's clock (UTC on SQLite),
             # so the boundary must be resolved in UTC too — see
             # last_session_expiry_utc().
-            last_session_expiry = last_session_expiry_utc(
-                session_expiry_str, datetime.now(IST)
-            )
+            last_session_expiry = last_session_expiry_utc(session_expiry_str, datetime.now(IST))
             today = datetime.now(UTC).date()
 
             # Get all positions (including zero quantity ones from current session)
@@ -584,9 +648,15 @@ class PositionManager:
                 pos_cv = _cv_map.get(position.symbol, 1.0)
                 pos_cv_dec = Decimal(str(pos_cv))
                 if position.quantity != 0:
-                    investment = abs(Decimal(str(position.average_price)) * Decimal(str(position.quantity)) * pos_cv_dec)
+                    investment = abs(
+                        Decimal(str(position.average_price))
+                        * Decimal(str(position.quantity))
+                        * pos_cv_dec
+                    )
                     if investment > 0:
-                        calculated_pnl_percent = (position_total_pnl_today / investment) * Decimal("100")
+                        calculated_pnl_percent = (position_total_pnl_today / investment) * Decimal(
+                            "100"
+                        )
                     else:
                         calculated_pnl_percent = Decimal("0.00")
                     display_avg_price = float(position.average_price)
@@ -606,7 +676,9 @@ class PositionManager:
                         "pnl": float(
                             position_total_pnl_today
                         ),  # Today's total P&L (realized + unrealized)
-                        "pnlpercent": float(calculated_pnl_percent),  # Fixed: use pnlpercent (no underscore) to match frontend
+                        "pnlpercent": float(
+                            calculated_pnl_percent
+                        ),  # Fixed: use pnlpercent (no underscore) to match frontend
                         "unrealized_pnl": float(unrealized_pnl),  # Unrealized only (for reference)
                         "today_realized_pnl": float(today_realized),
                         "total_pnl_today": float(position_total_pnl_today),
@@ -717,7 +789,9 @@ class PositionManager:
                     s for s in missing_symbols if s not in quote_cache or quote_cache[s] is None
                 ]
                 if still_missing:
-                    logger.debug(f"{len(still_missing)} symbols not available via multiquotes, waiting for WebSocket data")
+                    logger.debug(
+                        f"{len(still_missing)} symbols not available via multiquotes, waiting for WebSocket data"
+                    )
             else:
                 logger.debug(f"Positions MTM: All {ws_count} symbols from WebSocket (no API calls)")
 
@@ -1146,11 +1220,10 @@ class PositionManager:
                 if position.product == "MIS":
                     # Auto square-off MIS positions at market close
                     # Create a reverse order to square off
-                    action = "SELL" if position.quantity > 0 else "BUY"
                     quantity = abs(position.quantity)
 
                     # Use last traded price or average price for square-off
-                    price = float(position.average_price) if position.average_price else 0
+                    float(position.average_price) if position.average_price else 0
 
                     # Update position to closed
                     position.quantity = 0
@@ -1243,7 +1316,7 @@ def update_all_positions_mtm():
             logger.debug("No positions to update")
             return
 
-        users = set(p.user_id for p in positions)
+        users = {p.user_id for p in positions}
         logger.info(f"Updating MTM for {len(positions)} positions across {len(users)} users")
 
         for user_id in users:
@@ -1271,7 +1344,7 @@ def process_all_users_settlement():
             logger.info("No positions to settle")
             return
 
-        users = set(p.user_id for p in positions)
+        users = {p.user_id for p in positions}
         logger.debug(f"Processing T+1 settlement for {len(users)} users at midnight")
 
         for user_id in users:
@@ -1362,6 +1435,16 @@ def cleanup_expired_contracts():
 
                 for position in positions:
                     try:
+                        # Claim the row before any money moves; a view of the
+                        # position book or another sweep may be settling it.
+                        if not claim_position_for_settlement(position, position.quantity):
+                            db_session.rollback()
+                            logger.info(
+                                f"Expired contract {position.symbol} was settled or changed "
+                                "elsewhere; skipping"
+                            )
+                            continue
+
                         symbol = position.symbol
                         quantity = position.quantity
                         avg_price = Decimal(str(position.average_price))
@@ -1386,8 +1469,9 @@ def cleanup_expired_contracts():
                             f"margin_to_release={margin_blocked}"
                         )
 
-                        # Release margin and update funds
-                        fund_manager.release_margin(
+                        # Release margin and update funds, committed with the
+                        # position below rather than on its own.
+                        fund_manager.stage_release_margin(
                             amount=margin_blocked,
                             realized_pnl=close_pnl,
                             description=f"Expired contract cleanup: {symbol}",
@@ -1427,7 +1511,9 @@ def cleanup_expired_contracts():
 
                     except Exception as e:
                         db_session.rollback()
-                        logger.exception(f"Error cleaning up expired position {position.symbol}: {e}")
+                        logger.exception(
+                            f"Error cleaning up expired position {position.symbol}: {e}"
+                        )
                         continue
 
             except Exception as e:
@@ -1474,7 +1560,7 @@ def catchup_missed_settlements():
 
         logger.info(f"Found {len(cnc_positions)} CNC positions that need catch-up settlement")
 
-        users = set(p.user_id for p in cnc_positions)
+        users = {p.user_id for p in cnc_positions}
 
         for user_id in users:
             try:
