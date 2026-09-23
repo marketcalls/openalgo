@@ -92,9 +92,7 @@ jobs:
           - python-version: "3.12"
             worker: gthread
             mode: systemd
-            # The proxy runs inside the worker under gthread until
-            # websocket_proxy/app_integration.py honours WEBSOCKET_PROXY_MODE.
-            proxy: any
+            proxy: child
             stop-within: 45
           - python-version: "3.12"
             worker: gthread
@@ -105,7 +103,7 @@ jobs:
           - python-version: "3.14"
             worker: gthread
             mode: systemd
-            proxy: any
+            proxy: child
             stop-within: 45
     steps:
       - uses: actions/checkout@v6

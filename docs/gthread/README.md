@@ -222,10 +222,48 @@ harmless but does not give requests more time.
 - **Stopping takes a little longer.** gthread lets open requests finish before
   it stops: up to 30 seconds on Ubuntu and 7 seconds on Docker.
 - **Where the market data service runs** is shown in the system report as
-  *Market data proxy*. On gthread it currently runs inside the web server
-  process; on eventlet it runs as a separate process.
+  *Market data proxy*. On Ubuntu it runs as a separate process started by the
+  web server, on gthread as on eventlet; if it stops, gthread starts it again
+  after a short wait. On Docker the container starts it on its own.
 - **The development server is not affected.** `uv run app.py` (including on
   Windows) ignores this setting; it only applies to gunicorn installs.
+
+## What gthread refuses that eventlet waits for
+
+Under eventlet a request that cannot go ahead yet simply waits, however long
+that takes, while everything else waits behind it. gthread has a fixed number
+of request threads, so a few kinds of waiting are cut short instead, and the
+request is answered with a sentence saying what happened and when to try
+again. None of these is a setting, and none of them happens on eventlet.
+
+- **A busy broker.** When a broker's rate limit would keep a request waiting
+  more than about 10 seconds, the request is refused (HTTP 429) and nothing is
+  sent to the broker. A smart order refused this way places nothing.
+- **Two orders for the same symbol at once.** A smart order, or a sandbox
+  order, that waits more than 30 seconds for another one on the same symbol to
+  finish is refused with a sentence asking you to try again. Check your
+  positions first.
+- **Changing between live and sandbox mode.** A change that waits more than 30
+  seconds for another change still in progress is refused (HTTP 409), and so is
+  a sandbox reset behind one. A sandbox reset also stops the sandbox engines for
+  the moment it takes and starts them again.
+- **Reloading or clearing the symbol cache** while the master contract is still
+  downloading is refused (HTTP 409) until the download finishes.
+- **Flow workflows with a Delay or Wait Until node** run in the background and
+  answer at once (HTTP 202). At most four can be waiting at the same time; the
+  next is refused (HTTP 429).
+- **Python strategy live log views.** At most eight windows stream at once;
+  the next is told to wait (HTTP 503). An open view reconnects by itself every
+  ten minutes.
+- **Remote MCP and the agent.** At most four remote MCP streams stay open, each
+  for up to five minutes, and at most eight MCP tool calls run at once. At most
+  six agent chats stream at once, and one turn ends after 15 minutes.
+- **OI Profile** spends at most 60 seconds fetching the day's open interest
+  changes; if it runs out of time, the page says how many contracts it covered.
+- **Email.** A mail server that does not answer within 20 seconds is reported
+  as unreachable.
+- **Sandbox square-off.** A square-off sweep that is still busy after 120
+  seconds is picked up again by the next minute's check.
 
 ## Brokers verified on gthread
 

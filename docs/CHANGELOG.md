@@ -8,6 +8,65 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Optional gthread web server
+
+OpenAlgo can now run under gunicorn's gthread worker, which gives every request
+its own thread from a fixed pool of 64, instead of eventlet. **eventlet stays
+the default.** An install that does not add `OPENALGO_WORKER_CLASS = 'gthread'`
+to `.env` keeps its service file, nginx configuration and dependencies exactly
+as they are, and an update does not switch anything. How to switch, check that
+it works and switch back: [docs/gthread/README.md](gthread/README.md).
+
+- **Ubuntu:** after 23:30 IST, `sudo bash install/switch-worker.sh --to gthread`.
+  The script backs up the service file, checks the result and puts the old one
+  back if OpenAlgo does not come up. It refuses to restart during the trading
+  day unless given `--force`.
+- **Docker:** set the line in `.env` and recreate the container.
+- `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
+
+**What gthread refuses that eventlet waits for.** A request that would wait too
+long is answered with a sentence instead: a broker rate limit that would hold a
+request more than about 10 seconds (HTTP 429, nothing sent), a second order on
+the same symbol still waiting after 30 seconds, a live and sandbox mode change
+still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
+(Python strategy log views, remote MCP, agent chats). Flow workflows with a
+Delay or Wait Until node answer at once (HTTP 202) and run in the background,
+at most four at a time. The full list is in the guide above. None of this
+happens on eventlet.
+
+**Changes on every install, eventlet included:**
+
+- The Telegram live and sandbox mode buttons now start or stop the sandbox
+  engine and square-off, as the web toggle does. Before, switching to sandbox
+  mode from Telegram left sandbox SL and LIMIT orders waiting forever.
+- Action Center: approving an order another screen already approved or
+  rejected answers 409 "This order was already approved or rejected. Check the
+  Action Center." instead of 400. Approve-all responses gain `already_handled`.
+- The in-process market data client keeps reconnecting after a drop instead of
+  giving up on the fifth.
+- Saving broker credentials refuses a value containing a line break (HTTP 400)
+  instead of writing it into `.env` as two lines.
+- IIFL: an order write answered with a rate limit or "try after some time" is
+  no longer sent a second time, and a cancel or modify whose failure came back
+  inside an HTTP 200 is now reported as a failure.
+- Jainam XTS and Wisdom: the order book, trade book, positions and holdings no
+  longer fail on a server whose Python has no Tk.
+- Chartink intraday square-off jobs are restored after a restart.
+- Scheduled starts and stops of Python strategies, OpenScript runs and Chartink
+  square-offs still run when they reach a thread up to five minutes late,
+  instead of being skipped after one second.
+- A master contract reload clears the cached option strikes, and an empty
+  strike lookup is no longer cached.
+- Many races that could double a sandbox fill, a settlement or an alert are
+  closed. When requests do not overlap, the outcome is exactly as before.
+- Removed `services/telegram_bot_service_fixed.py` and
+  `services/telegram_bot_service_v2.py`, which nothing imported.
+
+**Still not modelled.** The sandbox margin reconcile does not count margin held
+by open and trigger-pending orders (unchanged from before). The `/tools` pages
+show their generic error text for a busy broker under gthread; API clients get
+the full sentence.
+
 ## [2.0.2.6] - 2026-09-23
 
 ### OpenScript and Chart Alerts Release
