@@ -20,6 +20,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytz
+from sqlalchemy import update
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,6 +39,58 @@ from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Order statuses in which an order still rests and can be filled, cancelled
+#: or modified. Every transition out of them is a conditional UPDATE on this
+#: set, so exactly one of a fill, a cancel and a trigger release wins an order.
+PENDING_ORDER_STATUSES = ("open", "trigger pending")
+
+
+def claim_order_fill(order, execution_price, now):
+    """Mark an order complete if, and only if, it is still pending.
+
+    The fill decision used to be a check (no trade exists yet) followed by an
+    insert and a status write made on the caller's in-memory object. The
+    websocket dispatch thread, the polling engine, its fallback thread and a
+    request placing a marketable order can all reach the same order, and two
+    of them could both pass the check and both insert a trade: one order,
+    filled twice, with the position and margin doubled. The order row is now
+    the claim: one conditional UPDATE, which SQLite serialises, and only the
+    caller whose UPDATE matched the pending row goes on to write the trade.
+
+    Nothing is committed here. The UPDATE starts this session's write
+    transaction, so nothing else can change the row until the caller commits
+    or rolls back.
+
+    Args:
+        order: The SandboxOrders row being filled.
+        execution_price: The fill price.
+        now: The timestamp to record.
+
+    Returns:
+        True if this caller owns the fill.
+    """
+    result = db_session.execute(
+        update(SandboxOrders)
+        .where(
+            SandboxOrders.id == order.id,
+            SandboxOrders.order_status.in_(PENDING_ORDER_STATUSES),
+        )
+        .values(
+            order_status="complete",
+            average_price=execution_price,
+            filled_quantity=SandboxOrders.quantity,
+            pending_quantity=0,
+            update_timestamp=now,
+        ),
+        execution_options={"synchronize_session": False},
+    )
+    return result.rowcount == 1
+
+
+def _order_terms(order):
+    """What a fill decision was evaluated against, to detect a modify in between."""
+    return (order.quantity, order.price, order.trigger_price, order.price_type, order.action)
 
 
 def quote_looks_stale(quote) -> bool:
@@ -304,8 +357,19 @@ class ExecutionEngine:
         return quote_cache
 
     def _publish_fill_event(
-        self, orderid, tradeid, symbol, exchange, action, quantity, price, product, strategy,
-        user_id=None, pricetype="", trigger_price=0.0,
+        self,
+        orderid,
+        tradeid,
+        symbol,
+        exchange,
+        action,
+        quantity,
+        price,
+        product,
+        strategy,
+        user_id=None,
+        pricetype="",
+        trigger_price=0.0,
     ):
         """Emit SandboxOrderFilledEvent so the analyzer-mode UI auto-refreshes,
         and OrderUpdateEvent so the real-time order-update channel (socketio +
@@ -379,11 +443,23 @@ class ExecutionEngine:
                 )
                 # Update order status to complete if it's still open (race condition cleanup)
                 if order.order_status == "open":
-                    order.order_status = "complete"
-                    order.average_price = existing_trade.price
-                    order.filled_quantity = order.quantity
-                    order.pending_quantity = 0
-                    order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+                    # Conditional, so two engines that both find the orphan
+                    # trade complete the order (and announce the fill) once.
+                    cleaned = db_session.execute(
+                        update(SandboxOrders)
+                        .where(SandboxOrders.id == order.id, SandboxOrders.order_status == "open")
+                        .values(
+                            order_status="complete",
+                            average_price=existing_trade.price,
+                            filled_quantity=SandboxOrders.quantity,
+                            pending_quantity=0,
+                            update_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
+                        ),
+                        execution_options={"synchronize_session": False},
+                    )
+                    if cleaned.rowcount != 1:
+                        db_session.rollback()
+                        return
                     db_session.commit()
                     logger.info(
                         f"Updated order {order.orderid} status to complete (was in race condition)"
@@ -548,8 +624,27 @@ class ExecutionEngine:
                 f"(trigger={order.trigger_price}) but limit {order.price} not yet "
                 f"satisfiable - now resting open in the regular book"
             )
-            order.order_status = "open"
-            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+            # Only from "trigger pending": written from a stale copy, this used
+            # to put back "open" on an order another thread had just filled or
+            # cancelled.
+            released = db_session.execute(
+                update(SandboxOrders)
+                .where(
+                    SandboxOrders.id == order.id,
+                    SandboxOrders.order_status == "trigger pending",
+                )
+                .values(
+                    order_status="open",
+                    update_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            if released.rowcount != 1:
+                db_session.rollback()
+                logger.info(
+                    f"SL order {order.orderid} left the Stop-Loss book elsewhere; not reopening it"
+                )
+                return
             db_session.commit()
             self._publish_order_update_event(order, order_status="open")
 
@@ -559,7 +654,12 @@ class ExecutionEngine:
     def _execute_order(self, order, execution_price):
         """
         Execute an order - create trade, update positions, release/adjust margin
+
+        The fill is claimed on the order row first (see claim_order_fill), so an
+        order another thread has already filled, or a user has cancelled, is
+        left alone instead of being filled a second time.
         """
+        fill_committed = False
         try:
             logger.info(
                 f"Executing order {order.orderid}: {order.symbol} {order.action} {order.quantity} @ {execution_price}"
@@ -567,6 +667,30 @@ class ExecutionEngine:
 
             # Generate trade ID
             tradeid = self._generate_trade_id()
+
+            evaluated_terms = _order_terms(order)
+            if not claim_order_fill(
+                order, execution_price, datetime.now(pytz.timezone("Asia/Kolkata"))
+            ):
+                db_session.rollback()
+                logger.info(
+                    f"Order {order.orderid} is no longer open (filled or cancelled "
+                    "elsewhere); not filling it again"
+                )
+                return
+
+            # The claim holds the write lock, so this is the row as it will be
+            # committed. A modify that landed after the fill was decided would
+            # otherwise fill new terms at a price chosen for the old ones:
+            # undo the claim and let the next tick decide again.
+            db_session.refresh(order)
+            if _order_terms(order) != evaluated_terms:
+                db_session.rollback()
+                logger.info(
+                    f"Order {order.orderid} was modified while its fill was being "
+                    "decided; re-evaluating on the next price"
+                )
+                return
 
             # Create trade record
             trade = SandboxTrades(
@@ -585,14 +709,8 @@ class ExecutionEngine:
 
             db_session.add(trade)
 
-            # Update order status
-            order.order_status = "complete"
-            order.average_price = execution_price
-            order.filled_quantity = order.quantity
-            order.pending_quantity = 0
-            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
-
             db_session.commit()
+            fill_committed = True
 
             # Update position
             self._update_position(order, execution_price)
@@ -625,10 +743,31 @@ class ExecutionEngine:
             # Mark order as rejected
             rejection_reason = f"Execution error: {str(e)}"
             try:
-                order.order_status = "rejected"
-                order.rejection_reason = rejection_reason
-                order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
-                db_session.commit()
+                if fill_committed:
+                    # This call owns the row: it committed the fill itself.
+                    order.order_status = "rejected"
+                    order.rejection_reason = rejection_reason
+                    order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+                    db_session.commit()
+                else:
+                    # Only while still pending: another thread may have filled
+                    # or cancelled it, and that outcome must stand.
+                    rejected = db_session.execute(
+                        update(SandboxOrders)
+                        .where(
+                            SandboxOrders.id == order.id,
+                            SandboxOrders.order_status.in_(PENDING_ORDER_STATUSES),
+                        )
+                        .values(
+                            order_status="rejected",
+                            rejection_reason=rejection_reason,
+                            update_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
+                        ),
+                        execution_options={"synchronize_session": False},
+                    )
+                    db_session.commit()
+                    if rejected.rowcount != 1:
+                        return
             except Exception:
                 db_session.rollback()
 
@@ -769,9 +908,17 @@ class ExecutionEngine:
                     # Position closed completely
                     # Calculate realized P&L
                     _sym_cv_info = get_symbol_info(order.symbol, order.exchange)
-                    _cv = float(_sym_cv_info.contract_value) if _sym_cv_info and _sym_cv_info.contract_value else 1.0
+                    _cv = (
+                        float(_sym_cv_info.contract_value)
+                        if _sym_cv_info and _sym_cv_info.contract_value
+                        else 1.0
+                    )
                     realized_pnl = self._calculate_realized_pnl(
-                        old_quantity, position.average_price, abs(new_quantity), execution_price, contract_value=_cv
+                        old_quantity,
+                        position.average_price,
+                        abs(new_quantity),
+                        execution_price,
+                        contract_value=_cv,
                     )
 
                     # Release the EXACT margin that was stored in the position
@@ -847,9 +994,17 @@ class ExecutionEngine:
 
                     # Calculate realized P&L for reduced portion
                     _sym_cv_info = get_symbol_info(order.symbol, order.exchange)
-                    _cv = float(_sym_cv_info.contract_value) if _sym_cv_info and _sym_cv_info.contract_value else 1.0
+                    _cv = (
+                        float(_sym_cv_info.contract_value)
+                        if _sym_cv_info and _sym_cv_info.contract_value
+                        else 1.0
+                    )
                     realized_pnl = self._calculate_realized_pnl(
-                        old_quantity, position.average_price, reduced_quantity, execution_price, contract_value=_cv
+                        old_quantity,
+                        position.average_price,
+                        reduced_quantity,
+                        execution_price,
+                        contract_value=_cv,
                     )
 
                     # Add realized P&L to accumulated realized P&L (all-time)
@@ -984,7 +1139,9 @@ class ExecutionEngine:
         finally:
             self._position_lock.release()
 
-    def _calculate_realized_pnl(self, old_quantity, avg_price, close_quantity, close_price, contract_value=1.0):
+    def _calculate_realized_pnl(
+        self, old_quantity, avg_price, close_quantity, close_price, contract_value=1.0
+    ):
         """Calculate realized P&L for closed positions, multiplied by contract_value (e.g. 0.01 for ETHUSD.P)."""
         try:
             avg_price = Decimal(str(avg_price))
@@ -1024,7 +1181,7 @@ if __name__ == "__main__":
     logger.info("Starting Sandbox Execution Engine")
 
     # Get check interval from config
-    from database.sandbox_db import init_db
+    from database.sandbox_db import get_config, init_db
 
     init_db()
 
