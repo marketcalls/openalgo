@@ -22,7 +22,7 @@ const backtest = vi.fn()
 const settingsFor = vi.fn((contract: unknown) => ({ contract, inputs: {} }))
 vi.mock('openalgo-script', () => ({
   backtest: (...args: unknown[]) => backtest(...args),
-  settingsFor: (...args: unknown[]) => settingsFor(...args),
+  settingsFor: (contract: unknown) => settingsFor(contract),
 }))
 
 const runOnWorker = vi.fn()
@@ -32,7 +32,24 @@ vi.mock('./backtestWorker', () => ({
   workersAvailable: () => workersAvailable(),
 }))
 
+const factsFor = vi.fn()
+vi.mock('./instrumentFacts', () => ({
+  factsFor: (...args: unknown[]) => factsFor(...args),
+}))
+
 const { runBacktest } = await import('./backtestRun')
+
+/** What the facts route answers, frozen as the helper caches it. */
+const FACTS = Object.freeze({
+  exchange: 'XX',
+  timezone: 'Asia/Kolkata',
+  tickSize: 0.05,
+  lotSize: 1,
+  instrumentType: 'equity',
+  hasVolume: true,
+  hasOpenInterest: false,
+  session: Object.freeze({ start: '09:00', end: '17:00', days: Object.freeze([1, 2, 3, 4, 5]) }),
+})
 
 function row(at: number) {
   return {
@@ -67,6 +84,7 @@ function aReport(netProfit = 10) {
 beforeEach(() => {
   vi.clearAllMocks()
   workersAvailable.mockReturnValue(true)
+  factsFor.mockResolvedValue(undefined)
   compileSource.mockResolvedValue({
     ok: true,
     kind: 'strategy',
@@ -218,5 +236,60 @@ describe('what is handed across', () => {
     runOnWorker.mockResolvedValue({ ok: true, ranMs: 421, report: aReport() })
 
     expect((await runBacktest(aRequest())).ranMs).toBe(421)
+  })
+
+  it('sends the instrument facts, and a frozen answer still survives the copy', async () => {
+    // The worker decides nothing, so the facts have to be in the message. The
+    // helper freezes what it caches; a clone of a frozen record works, and this
+    // holds that to staying true of what is actually sent.
+    factsFor.mockResolvedValue(FACTS)
+    runOnWorker.mockResolvedValue({ ok: true, ranMs: 1, report: aReport(), stopped: null })
+
+    await runBacktest(aRequest({ interval: 'D' }))
+
+    const sent = runOnWorker.mock.calls[0][0] as { instrument: Record<string, unknown> }
+    expect(sent.instrument).toEqual(
+      expect.objectContaining({
+        interval: '1D',
+        timezone: 'Asia/Kolkata',
+        session: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
+        hasVolume: true,
+      })
+    )
+    expect(() => structuredClone(sent)).not.toThrow()
+  })
+})
+
+describe('both threads state the same instrument', () => {
+  it('hands the engine on the page exactly what it would have sent the worker', async () => {
+    // THE DRIFT. The two paths were two copies of the engine call, and neither
+    // stated the instrument. One call now serves both, and this holds it there:
+    // a fact added on one side and not the other is a report that depends on
+    // which thread happened to run it.
+    factsFor.mockResolvedValue(FACTS)
+    runOnWorker.mockResolvedValue({ ok: true, ranMs: 1, report: aReport(), stopped: null })
+    await runBacktest(aRequest({ interval: '5m' }))
+    const sent = runOnWorker.mock.calls[0][0] as { instrument: unknown }
+
+    workersAvailable.mockReturnValue(false)
+    backtest.mockReturnValue({ ok: true, record: { report: aReport(), diagnostics: [] } })
+    await runBacktest(aRequest({ interval: '5m' }))
+
+    expect(backtest.mock.calls[0][3]).toEqual({ instrument: sent.instrument })
+    expect(sent.instrument).toEqual(
+      expect.objectContaining({ interval: '5m', timezone: 'Asia/Kolkata' })
+    )
+  })
+
+  it('falls back to the page with the same facts when the worker will not start', async () => {
+    factsFor.mockResolvedValue(FACTS)
+    runOnWorker.mockRejectedValue(new Error('refused by policy'))
+    backtest.mockReturnValue({ ok: true, record: { report: aReport(), diagnostics: [] } })
+
+    await runBacktest(aRequest({ interval: '5m' }))
+
+    const sent = runOnWorker.mock.calls[0][0] as { instrument: unknown }
+    expect(sent.instrument).toEqual(expect.objectContaining({ interval: '5m', hasVolume: true }))
+    expect(backtest.mock.calls[0][3]).toEqual({ instrument: sent.instrument })
   })
 })

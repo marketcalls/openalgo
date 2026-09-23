@@ -588,7 +588,10 @@ describe('selected candle readout', () => {
     host.warnIfStarved(state.chart.addIndicator('open-interest', {}))
     expect(toast).not.toHaveBeenCalled()
     host.warnIfStarved(state.chart.addIndicator('sma', { length: 100 }))
-    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/needs more history/), '')
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/has nothing to plot on the 4 bars loaded/),
+      ''
+    )
   })
 
   it('repaints the saved OI readout after asynchronous settings restoration', async () => {

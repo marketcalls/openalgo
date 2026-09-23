@@ -365,6 +365,20 @@ export function fileForScriptId(indicatorId: string): string | null {
 }
 
 /**
+ * Whether a study on the chart is an instance of one of the trader's scripts.
+ *
+ * A settings request names the instance, not the study it was made from, and
+ * the chart names an instance after its study: `<indicator id>-<n>`, the same
+ * name carried through a saved layout. So an instance of a script carries the
+ * prefix its study id does. The settings dialog asks this because a script and
+ * a JavaScript indicator read some settings differently, an interval above all.
+ * `openscriptIntervals.test.ts` holds the naming to the installed chart.
+ */
+export function isScriptInstance(instanceId: string): boolean {
+  return instanceId.startsWith(ID_PREFIX)
+}
+
+/**
  * What a script declares itself to be.
  *
  * A study computes and draws. A strategy does that and also places orders, so

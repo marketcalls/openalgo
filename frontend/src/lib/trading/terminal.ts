@@ -39,6 +39,7 @@ import {
   exportChartDataCsv,
   getIndicator,
   type IPrimitive,
+  indicatorDefaults,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
@@ -186,6 +187,7 @@ import { CHART_TYPES } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
+import { factsFor } from './instrumentFacts'
 import {
   type IntervalData,
   type IntervalGroup,
@@ -202,6 +204,7 @@ import {
   lotInfoText,
 } from './legend'
 import { fileForScriptId } from './openscriptFiles'
+import { loadOpenScriptStudies, SCRIPT_ALERT_EVENT } from './openscriptStudies'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
 import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
 import {
@@ -567,6 +570,8 @@ export interface IndicatorField {
   label: string
   /** Plot title the style inputs belong to, so a form can group them per plot. */
   group?: string
+  /** A line of help a declaration carries, shown under its row. */
+  tooltip?: string
   options?: { label: string; value: unknown }[]
   min?: number
   max?: number
@@ -631,6 +636,9 @@ function toField(f: { key: string; type: string; label?: string; group?: string 
     type: f.type,
     label: f.label ?? f.key,
     group: f.group,
+    // An OpenScript declaration's help text. Dropped here, the dialog's line
+    // of help under the row had nothing to show in the app.
+    tooltip: (f as { tooltip?: string }).tooltip,
     options: (f as { options?: { label: string; value: unknown }[] }).options,
     min: (f as { min?: number }).min,
     max: (f as { max?: number }).max,
@@ -3269,13 +3277,60 @@ export class TradingTerminal {
     // custom loader runs on every call: a script saved from the panel appears
     // on the next picker open rather than after a reload. A script already
     // compiled at its current modification time costs nothing.
-    const { loadOpenScriptStudies } = await import('./openscriptStudies')
     const studies = await loadOpenScriptStudies()
     // A script that will not compile is the one thing a trader cannot discover
     // any other way: there is no build step between saving and running, so this
     // toast is the compiler's only route to the person who wrote the mistake.
     for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+  }
 
+  /**
+   * Register just what `ids` need, so a saved layout can be restored now.
+   *
+   * loadIndicators is the whole catalogue, which the picker needs and a restore
+   * does not. With a folder of hundreds of user modules, waiting for all of them
+   * held every saved indicator, built-in ones included, back for seconds on each
+   * reload. A restore needs the built-in tier, the user modules that provide the
+   * ids it holds (the loader knows which from what those modules registered on
+   * earlier loads), and the OpenScript studies only when the layout holds one.
+   * The rest of the catalogue follows in the background: see
+   * completeIndicatorCatalogue.
+   */
+  private async loadIndicatorsFor(ids: readonly string[]): Promise<void> {
+    if (!this.indicatorsLoaded) {
+      await import('openalgo-charts/indicators')
+      this.indicatorsLoaded = true
+    }
+    if (ids.length === 0) return
+
+    const { ensureCustomIndicators } = await import('./customIndicators')
+    const custom = await ensureCustomIndicators(ids, {
+      onProblem: (message) => this.toast(message, 'err'),
+    })
+    for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    if (ids.some((id) => fileForScriptId(id) !== null)) {
+      const studies = await loadOpenScriptStudies()
+      for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+    }
+  }
+
+  /**
+   * Load the whole catalogue once the chart is on screen, so the picker opens
+   * without waiting. Run when the browser is idle so it never competes with the
+   * first paint of the chart, and never awaited: its problems are reported by
+   * loadIndicators itself, the same toasts the picker would have raised.
+   */
+  private completeIndicatorCatalogue(): void {
+    if (this.destroyed) return
+    const run = () => {
+      if (!this.destroyed) void this.loadIndicators().catch(() => {})
+    }
+    // Called on the global itself: a browser refuses requestIdleCallback detached
+    // from window with an illegal invocation.
+    const host = globalThis as { requestIdleCallback?: (cb: () => void) => number }
+    if (typeof host.requestIdleCallback === 'function') host.requestIdleCallback(run)
+    else setTimeout(run, 0)
   }
 
   /** Restore sources before the evaluator validates their saved identities. */
@@ -3286,6 +3341,8 @@ export class TradingTerminal {
     if (this.destroyed || chart !== this.chart) return
     chart.setAlertState(this.alertJson)
     this.attachAlerts(chart)
+    // The restore needed only its own studies; the picker needs everything.
+    this.completeIndicatorCatalogue()
   }
 
   private attachAlerts(chart: ChartInstance): void {
@@ -3395,6 +3452,13 @@ export class TradingTerminal {
     }
     this.offAlerts.push(chart.on('alert:triggered', deliver))
     this.offAlerts.push(chart.on('indicator:alert', deliver))
+    // A script's alert that waits for its bar to close. The chart judges a
+    // study's alerts once, on a bar's first tick, when such an alert is still
+    // withheld, so it never fired live; the study announces the closed bar
+    // itself (`openscriptStudies.hostedStudy`) and it is delivered like any
+    // other, including being held back while replay or a workspace change owns
+    // the chart.
+    this.offAlerts.push(chart.on(SCRIPT_ALERT_EVENT, deliver))
     this.offAlerts.push(
       chart.on('alert:error', () => {
         this.toast('An alert condition could not be evaluated. Review its source.', 'err')
@@ -3708,7 +3772,7 @@ export class TradingTerminal {
     if (!chart) return
     this.restoringIndicatorsOn = chart
     try {
-      await this.loadIndicators()
+      await this.loadIndicatorsFor(this.activeIndicators.map((record) => record.indicatorId))
       if (this.destroyed || !this.chart || this.chart !== chart) return
       // Re-adding walks the tracked list, so a sync mid-loop would read a
       // half-applied chart and truncate it.
@@ -4302,20 +4366,119 @@ export class TradingTerminal {
     }
   }
 
+  /**
+   * Put a study on the chart, or apply one of the trader's scripts again.
+   *
+   * **A script already on this chart is applied, not added a second time.** The
+   * scripts panel's Apply and the strategy's Apply both land here, and pressing
+   * Apply after an edit is how a trader asks to see the edit; a second copy
+   * beside the first, still running the old code, is not that. The copy on the
+   * chart holds the descriptor it was built from, so a recompute alone would run
+   * the old program again: it is rebuilt from the registry instead, keeping its
+   * instance id, pane, settings and visibility (an alert on one of its plots is
+   * bound to that id). Only a script: a built-in added twice from the picker is
+   * two studies on purpose, three moving averages being the ordinary case.
+   *
+   * A script's session facts arrive after it is first drawn, so the note about
+   * an empty study waits for them rather than describing the study before them.
+   */
   async addIndicatorById(indicatorId: string): Promise<void> {
     await this.loadIndicators()
-    if (!this.chart) return
+    const chart = this.chart
+    if (this.destroyed || !chart) return
+    const script = fileForScriptId(indicatorId) !== null
     try {
-      const inst = this.chart.addIndicator(indicatorId, {})
+      if (
+        script &&
+        this.restoringIndicatorsOn !== chart &&
+        chart.indicators().some((one) => one.indicatorId === indicatorId)
+      ) {
+        await this.reapplyScript(chart, indicatorId)
+        return
+      }
+      const inst = chart.addIndicator(indicatorId, {})
       this.syncIndicators()
-      this.warnIfStarved(inst)
+      if (script) await this.scriptFactsSettled()
+      if (this.chart === chart && chart.indicators().includes(inst)) this.warnIfStarved(inst)
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
   }
 
   /**
-   * Tell the user when an indicator drew nothing because the chart is too short.
+   * Rebuild every copy of a script on this chart from the registered program.
+   *
+   * `restoreState` is the chart's own replace-in-place: it keeps each study's
+   * instance id, order, pane, settings and visibility, which removing a copy and
+   * adding a new one would not. It rebuilds every study on the chart to do it,
+   * and it stops part way if one of them cannot be built, so the edited script
+   * is calculated on this chart's bars first. One that fails is reported and the
+   * chart is left exactly as it was, still drawing the version that worked.
+   */
+  private async reapplyScript(chart: ChartInstance, indicatorId: string): Promise<void> {
+    const refusal = this.studyRefusal(chart, indicatorId)
+    if (refusal !== null) {
+      this.toast(this.cleanError(refusal), 'err')
+      return
+    }
+    const state = chart.getState()
+    this.applyingIndicators = true
+    try {
+      const report = chart.restoreState({
+        version: 1,
+        indicators: parseIndicatorStates(state.indicators ?? []),
+        drawings: this.draw?.toJSON() ?? this.drawJson,
+        alerts: state.alerts ?? this.alertJson,
+      })
+      if (!report.applied) throw new Error('The study could not be applied again')
+    } finally {
+      this.applyingIndicators = false
+      if (!this.destroyed && this.chart === chart) this.syncIndicators()
+    }
+    await this.scriptFactsSettled()
+    if (this.destroyed || this.chart !== chart) return
+    const applied = chart.indicators().find((one) => one.indicatorId === indicatorId)
+    if (applied) this.warnIfStarved(applied)
+  }
+
+  /**
+   * Why the registered study cannot be calculated on this chart, or null.
+   *
+   * Run with each copy's own settings over the chart's own bars, in a store
+   * nothing else holds, which is what the chart would do when it built it.
+   */
+  private studyRefusal(chart: ChartInstance, indicatorId: string): unknown {
+    const descriptor = getIndicator(indicatorId)
+    const bars = chart.primaryBars()
+    const context = chart.getDataContext()
+    const tick = this.tick()
+    const ctx = {
+      barState: { isNew: false, isConfirmed: true, isRealtime: false, lastIndex: bars.length - 1 },
+      symbol: context?.symbol,
+      interval: context?.interval,
+      timezone: chart.timezone(),
+      now: () => Date.now() / 1000,
+      ...(tick > 0 ? { tickSize: tick } : {}),
+    }
+    for (const inst of chart.indicators()) {
+      if (inst.indicatorId !== indicatorId) continue
+      try {
+        descriptor.calc(bars, { ...indicatorDefaults(descriptor), ...inst.settings() }, {}, ctx)
+      } catch (error) {
+        return error
+      }
+    }
+    return null
+  }
+
+  /** Resolves once this chart's instrument facts have arrived or cannot be had. */
+  private async scriptFactsSettled(): Promise<void> {
+    const sym = this.sym
+    if (sym && !sym.synthetic && sym.exchange) await factsFor(sym.symbol, sym.exchange)
+  }
+
+  /**
+   * Tell the user when a study has nothing to plot on the bars loaded.
    *
    * Every indicator needs a warmup before it can print, and a few need a long
    * one: Special K sums rates of change out to 530 bars and only starts at 725,
@@ -4324,6 +4487,17 @@ export class TradingTerminal {
    * an empty pane, which is the correct answer and looks exactly like a broken
    * indicator. Saying so once, at the moment it is added, is the difference.
    *
+   * **It says what is known and no more.** An empty study is not always a short
+   * one: a session study before its session, or one that plots only on the bar
+   * a condition holds, has nothing to draw on a chart of any length. Saying it
+   * needed more history sent the trader loading more for nothing, so the note
+   * states the fact and offers the history only as the thing to try if the
+   * study is one that needs it.
+   *
+   * Only the columns drawn as plots count. A study's values also carry its alert
+   * conditions and its paint, none of them a line, and a study that draws only a
+   * grid or marks has no plot to be empty.
+   *
    * Reading `values()` is safe here: the engine flushes any pending recompute on
    * that call, so this sees the result of the add rather than the frame before.
    */
@@ -4331,10 +4505,13 @@ export class TradingTerminal {
     name: string
     indicatorId: string
     values(): Record<string, unknown>
+    series(plotKey: string): unknown
   }): void {
     const loaded = this.rawBars.length
     if (!loaded) return
-    const cols = Object.values(inst.values()).filter(Array.isArray) as unknown[][]
+    const cols = Object.entries(inst.values())
+      .filter(([key, col]) => Array.isArray(col) && inst.series(key) !== undefined)
+      .map(([, col]) => col as unknown[])
     if (cols.length === 0) return
     const anyFinite = cols.some((col) =>
       col.some((v) => typeof v === 'number' && Number.isFinite(v))
@@ -4357,7 +4534,7 @@ export class TradingTerminal {
       return
     }
     this.toast(
-      `${inst.name} needs more history than the ${loaded} bars loaded, so it has nothing to draw yet. Widen the range or pick a longer interval.`,
+      `${inst.name} has nothing to plot on the ${loaded} bars loaded. If it needs a longer history before it starts, widen the range or pick a longer interval.`,
       ''
     )
   }
@@ -6417,7 +6594,10 @@ export class TradingTerminal {
     this.availableIntervals = groups.flatMap((group) => group.items)
     if (this.initialWorkspacePane) {
       const pane = this.initialWorkspacePane
-      await this.loadIndicators()
+      // Only what this pane holds: the validation below reads the registry for
+      // the pane's own studies, and the rest of the catalogue follows once the
+      // chart is up.
+      await this.loadIndicatorsFor((pane.chart.indicators ?? []).map((study) => study.indicatorId))
       this.assertWorkspacePreparation()
       validateWorkspacePaneSupport(pane, {
         chartTypes: new Set(Object.keys(CHART_TYPES)),
