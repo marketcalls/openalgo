@@ -29,32 +29,54 @@ long is answered with a sentence instead: a broker rate limit that would hold a
 request more than about 10 seconds (HTTP 429, nothing sent), a second order on
 the same symbol still waiting after 30 seconds, a live and sandbox mode change
 still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
-(Python strategy log views, remote MCP, agent chats). Flow workflows with a
-Delay or Wait Until node answer at once (HTTP 202) and run in the background,
-at most four at a time. The full list is in the guide above. None of this
-happens on eventlet.
+(Python strategy log views, remote MCP, agent chats). A Flow workflow whose
+Delay and Wait Until steps add up to more than 10 seconds answers at once (HTTP
+202) and runs in the background, up to 16 waiting on a Delay and 4 on a Wait
+Until at the same time; a refused one is shown in its execution history. The
+full list is in the guide above. None of this happens on eventlet.
+
+**Only under gthread, as eventlet already behaved or as the web page already
+did:**
+
+- Python strategies that were running when the server stopped are started
+  again when it comes back, as after an eventlet restart.
+- The Telegram live and sandbox mode buttons start or stop the sandbox engine
+  and square-off, as the web toggle does.
+- Chartink intraday square-off jobs are put back after a restart, for
+  strategies that are switched on, and scheduled starts, stops and square-offs
+  still run when they reach a thread up to five minutes late.
+- Action Center: approving an order another screen already approved or
+  rejected answers 409 with a sentence, and an order the broker pacer refused
+  before sending goes back to the pending list to be approved again.
+- IIFL: an order write answered with a rate limit is not sent a second time,
+  and a cancel or modify whose failure came back inside an HTTP 200 is reported
+  as a failure.
 
 **Changes on every install, eventlet included:**
 
-- The Telegram live and sandbox mode buttons now start or stop the sandbox
-  engine and square-off, as the web toggle does. Before, switching to sandbox
-  mode from Telegram left sandbox SL and LIMIT orders waiting forever.
-- Action Center: approving an order another screen already approved or
-  rejected answers 409 "This order was already approved or rejected. Check the
-  Action Center." instead of 400. Approve-all responses gain `already_handled`.
-- The in-process market data client keeps reconnecting after a drop instead of
-  giving up on the fifth.
+- The in-process market data client keeps reconnecting after a drop, every 30
+  seconds at most, instead of giving up for good on the fifth; it logs a short
+  warning every ten failed attempts.
+- Telegram: a bot token Telegram rejects is reported in a sentence instead of
+  an HTTP status, a check that gets no readable answer from Telegram counts as
+  failed instead of storing the token unchecked, and Start while the bot is
+  still starting or stopping is refused instead of starting a second copy.
+- Force master contract download while the login download is still running
+  answers 409 with a sentence instead of starting a second download over it.
+  Historify refuses to retry a download that is still running, or was
+  cancelled a moment ago and has not stopped yet.
+- Action Center: an approval whose send could not be recorded is put back in
+  the pending list and the operator is told it was not sent.
+- A sandbox GTT leg whose position has another order in progress fires on the
+  next tick instead of holding up every other tick until that order finishes.
+- The system report shows the web server, the one `.env` asks for, the request
+  threads and where the market data proxy runs.
+- On a stop, the server waits up to 15 seconds for the market data proxy
+  process to exit before it exits itself, instead of leaving it to systemd.
 - Saving broker credentials refuses a value containing a line break (HTTP 400)
   instead of writing it into `.env` as two lines.
-- IIFL: an order write answered with a rate limit or "try after some time" is
-  no longer sent a second time, and a cancel or modify whose failure came back
-  inside an HTTP 200 is now reported as a failure.
 - Jainam XTS and Wisdom: the order book, trade book, positions and holdings no
   longer fail on a server whose Python has no Tk.
-- Chartink intraday square-off jobs are restored after a restart.
-- Scheduled starts and stops of Python strategies, OpenScript runs and Chartink
-  square-offs still run when they reach a thread up to five minutes late,
-  instead of being skipped after one second.
 - A master contract reload clears the cached option strikes, and an empty
   strike lookup is no longer cached.
 - Many races that could double a sandbox fill, a settlement or an alert are
@@ -62,10 +84,17 @@ happens on eventlet.
 - Removed `services/telegram_bot_service_fixed.py` and
   `services/telegram_bot_service_v2.py`, which nothing imported.
 
+**Going back to an older release.** A service switched to the launcher starts
+through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
+`sudo bash install/switch-worker.sh --restore` before checking out an older
+revision; it puts the saved service file back and sets `.env` back to eventlet.
+
 **Still not modelled.** The sandbox margin reconcile does not count margin held
 by open and trigger-pending orders (unchanged from before). The `/tools` pages
 show their generic error text for a busy broker under gthread; API clients get
-the full sentence.
+the full sentence. The Action Center page does not yet show an order left
+"submitting" by a crash mid-send any differently from one that reached the
+broker; check the broker's order book after a crash.
 
 ## [2.0.2.6] - 2026-09-23
 
