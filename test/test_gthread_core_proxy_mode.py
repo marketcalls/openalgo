@@ -226,6 +226,29 @@ def test_gthread_restarts_a_child_that_exits_until_shutdown(monkeypatch, proxy_s
     assert ai.proxy_status()["restarts"] == settled
 
 
+def test_a_restart_that_cannot_launch_is_tried_again(monkeypatch, proxy_state):
+    _speed_up(monkeypatch)
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
+    crashed = FakeProc(pid=1)
+    crashed.returncode = 1
+    healthy = FakeProc(pid=2)
+    launches = [crashed, None, None, healthy]
+
+    def launch():
+        return launches.pop(0) if launches else healthy
+
+    monkeypatch.setattr(ai, "_launch_child", launch)
+    ai._spawn_websocket_subprocess()
+    deadline = time.monotonic() + 30
+    while ai._websocket_subprocess is not healthy and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    # Two launches failed outright; the supervisor kept trying until one ran.
+    assert ai._websocket_subprocess is healthy
+    assert ai.proxy_status()["restarts"] == 3
+    ai._terminate_websocket_subprocess()
+
+
 def test_eventlet_and_the_dev_server_do_not_supervise(monkeypatch, proxy_state):
     _speed_up(monkeypatch)
     monkeypatch.setattr(runtime, "gthread_active", lambda: False)

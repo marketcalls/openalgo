@@ -417,25 +417,27 @@ def _supervise() -> None:
 
     while not _sleep_unless_stopping(SUPERVISOR_POLL_SECONDS):
         proc = _websocket_subprocess
-        if proc is None:
-            continue
-        code = proc.poll()
-        if code is None:
-            if backoff_index and time.monotonic() - started_at >= STABLE_UPTIME_SECONDS:
-                backoff_index = 0
-            continue
+        if proc is not None:
+            code = proc.poll()
+            if code is None:
+                if backoff_index and time.monotonic() - started_at >= STABLE_UPTIME_SECONDS:
+                    backoff_index = 0
+                continue
+        # No child at all means the last restart could not even launch one;
+        # that is retried like an exit, not left alone.
         if _should_stop_supervising():
             return
 
         now = time.monotonic()
         failures = [t for t in failures if now - t < FAILURE_WINDOW_SECONDS]
         failures.append(now)
-        with _state_lock:
-            _last_exit_code = code
-        logger.warning(
-            "Live market data stopped unexpectedly and is being restarted. "
-            "Charts and live prices may pause for a few seconds."
-        )
+        if proc is not None:
+            with _state_lock:
+                _last_exit_code = code
+            logger.warning(
+                "Live market data stopped unexpectedly and is being restarted. "
+                "Charts and live prices may pause for a few seconds."
+            )
 
         # Wait for the old child's ports to be released.
         waited = 0.0
