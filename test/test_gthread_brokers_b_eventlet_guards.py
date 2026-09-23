@@ -185,6 +185,7 @@ def test_under_eventlet_every_guard_takes_the_eventlet_branch(tmp_path):
             with module._quote_pool(5) as pool:
                 assert isinstance(pool, ThreadPoolExecutor)
             assert pool._shutdown, "eventlet keeps a pool of its own per batch"
+        import websocket_proxy  # imports every streaming adapter, as the app does
         for name in {ZERODHA_STREAMING!r}:
             assert importlib.import_module(name)._real_threading is original_threading, name
         print("OK")
