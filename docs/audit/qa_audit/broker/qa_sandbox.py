@@ -891,10 +891,17 @@ def sec_quotes(run: Runner) -> None:
         if "EQ_LIQUID" not in m:
             raise Skip("EQ_LIQUID unresolved")
         s, ex = m["EQ_LIQUID"]
-        q = as_num(run.ok(run.client.quotes(symbol=s, exchange=ex), "quotes")["data"]["ltp"],
-                   "quote ltp")
-        d = as_num(run.ok(run.client.depth(symbol=s, exchange=ex), "depth")["data"]["ltp"],
-                   "depth ltp")
+        qd = run.ok(run.client.quotes(symbol=s, exchange=ex), "quotes")["data"]
+        dd = run.ok(run.client.depth(symbol=s, exchange=ex), "depth")["data"]
+        # Assert the field is there before reading it. Indexing straight into
+        # ["ltp"] turns a broker that omits a documented field into a Python
+        # KeyError reported as a harness ERROR, which hides the real defect -
+        # DP-01 catches the omission, and this check should say so plainly.
+        need("ltp" in qd, f"{s}: /quotes omits the documented field 'ltp'")
+        need("ltp" in dd, f"{s}: /depth omits the documented field 'ltp' - "
+                          f"cannot cross-check price scaling between the two paths")
+        q = as_num(qd["ltp"], "quote ltp")
+        d = as_num(dd["ltp"], "depth ltp")
         need(abs(q - d) / max(q, 1e-9) < 0.02,
              f"{s}: quotes ltp {q} vs depth ltp {d} - price de-scaling differs between paths")
         df = run.client.history(symbol=s, exchange=ex, interval="1m",

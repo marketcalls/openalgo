@@ -116,8 +116,18 @@ def need_2dp(v: Any, where: str) -> float:
 
 
 def need_ohlc(d: dict, where: str) -> None:
+    """Range-check prices against the day's band.
+
+    A contract that has not traded today reports high and low as 0 while
+    still carrying a real ltp from a previous session. Comparing against a
+    [0, 0] band then fails a perfectly correct quote, so the range check is
+    skipped when there is no band to check against - the individual values
+    are still asserted numeric by the caller.
+    """
     lo, hi = as_num(d["low"], f"{where}.low"), as_num(d["high"], f"{where}.high")
     need(lo <= hi, f"{where}: low {lo} > high {hi}")
+    if lo == 0 and hi == 0:
+        return
     for k in ("open", "ltp", "close"):
         if k in d and d[k] not in (None, 0):
             v = as_num(d[k], f"{where}.{k}")
