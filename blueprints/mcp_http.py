@@ -982,7 +982,7 @@ def _run_tool_call(
     )
 
     if outcome != "success":
-        # Do NOT echo the exception back to the client — it can carry SQL
+        # Do NOT echo the exception back to the client: it can carry SQL
         # error messages, internal paths, or function-signature reveals
         # (security review finding H-4). The full detail is in the
         # audit log + log/errors.jsonl for the admin to triage. We
