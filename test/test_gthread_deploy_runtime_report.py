@@ -207,3 +207,45 @@ def test_the_rendered_report_lists_the_web_server(report, monkeypatch):
     assert "**Web server in .env:** gthread" in text
     assert "**Started by launcher:** False" in text
     assert "Note: Your .env asks for the gthread web server" in text
+
+
+def test_the_report_carries_the_proxy_status_when_the_proxy_runs_here(report, monkeypatch):
+    """The card's "Market data proxy status" row read a field the server never
+    sent, so a proxy that had died (subscribe works, no ticks) never showed."""
+    import types
+
+    admin, _runtime, _env = report
+    fake = types.ModuleType("websocket_proxy.app_integration")
+    fake.proxy_status = lambda: {
+        "mode": "subprocess",
+        "pid": 4242,
+        "alive": False,
+        "restarts": 2,
+        "last_exit_code": 1,
+        "last_restart_at": 1_700_000_000.0,
+    }
+    monkeypatch.setitem(sys.modules, "websocket_proxy.app_integration", fake)
+
+    info = admin._runtime_info()
+
+    assert info["websocket_proxy"] == {
+        "mode": "subprocess",
+        "pid": 4242,
+        "alive": False,
+        "restarts": 2,
+        "last_exit_code": 1,
+        "last_restart_at": 1_700_000_000.0,
+    }
+    text = admin._render_report({"runtime": info}, None, None, "md")
+    assert "**Market data proxy running:** False" in text
+    assert "**Market data proxy restarts:** 2" in text
+
+
+def test_the_report_has_no_proxy_status_when_the_proxy_is_elsewhere(report, monkeypatch):
+    admin, _runtime, _env = report
+    monkeypatch.delitem(sys.modules, "websocket_proxy.app_integration", raising=False)
+
+    info = admin._runtime_info()
+
+    assert "websocket_proxy" in info
+    assert info["websocket_proxy"] is None

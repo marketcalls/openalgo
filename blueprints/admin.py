@@ -1293,6 +1293,26 @@ def _proxy_mode_hint():
     return None
 
 
+def _proxy_status():
+    """The market data proxy's own report: running or stopped, and its restarts.
+
+    None when the proxy module was never loaded in this process, for example
+    under Docker where the proxy is its own process. Read from the module the
+    app already imported, never imported here.
+    """
+    import sys as _sys
+
+    module = _sys.modules.get("websocket_proxy.app_integration")
+    status = getattr(module, "proxy_status", None)
+    if not callable(status):
+        return None
+    report = status()
+    if not isinstance(report, dict):
+        return None
+    keys = ("mode", "pid", "alive", "restarts", "last_exit_code", "last_restart_at")
+    return {key: report.get(key) for key in keys}
+
+
 def _requested_worker_now():
     """The web server .env asks for right now: ``eventlet`` or ``gthread``.
 
@@ -1394,6 +1414,7 @@ def _runtime_info():
         "thread_budget": None,
         "streams": None,
         "websocket_proxy_mode": None,
+        "websocket_proxy": None,
         "http_pool": None,
         "active_threads": None,
         "notes": [],
@@ -1428,6 +1449,10 @@ def _runtime_info():
         pass
     try:
         info["websocket_proxy_mode"] = _proxy_mode_hint()
+    except Exception:
+        pass
+    try:
+        info["websocket_proxy"] = _proxy_status()
     except Exception:
         pass
     try:
@@ -1945,6 +1970,10 @@ def _render_report(payload, errors_summary, errors_recent, fmt):
         lines.append(_md_kv("Open streams", budget.get("streams")))
         lines.append(_md_kv("Browser sessions", budget.get("socketio")))
     lines.append(_md_kv("Market data proxy", runtime.get("websocket_proxy_mode")))
+    proxy = runtime.get("websocket_proxy") or {}
+    if isinstance(proxy.get("alive"), bool):
+        lines.append(_md_kv("Market data proxy running", proxy.get("alive")))
+        lines.append(_md_kv("Market data proxy restarts", proxy.get("restarts")))
     lines.append(_md_kv("Process threads", runtime.get("active_threads")))
     for note in runtime.get("notes") or []:
         lines.append(f"{bullet}Note: {note}")
