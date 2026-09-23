@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import {
   type BacktestOutcome,
   MAX_BARS,
+  type RunStop,
   runBacktest,
 } from '@/lib/trading/backtestRun'
 import {
@@ -135,6 +136,42 @@ function percent(value: unknown): string {
 /** A figure that is absent rather than zero is shown as absent, never as 0. */
 function orDash(value: unknown, render: (v: unknown) => string): string {
   return value === null || value === undefined ? '-' : render(value)
+}
+
+/**
+ * A bar's time as the chart would label it: in the instrument's own zone.
+ *
+ * The zone is the one the run read its clock in. Without one, or with one this
+ * browser cannot read, it is this browser's own clock, which is still a time a
+ * trader can find on the chart.
+ */
+function barClock(time: number, zone: string | undefined): string {
+  const shape: Intl.DateTimeFormatOptions = {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }
+  try {
+    return new Intl.DateTimeFormat(undefined, { ...shape, timeZone: zone }).format(time)
+  } catch {
+    return new Intl.DateTimeFormat(undefined, shape).format(time)
+  }
+}
+
+/** Where a stopped run stopped: the bar, counted as a trader counts, and its time. */
+export function stoppedAt(
+  stop: RunStop,
+  barCount: number | undefined,
+  zone: string | undefined
+): string {
+  if (stop.barIndex === null) return 'This run stopped part way through'
+  const bar = (stop.barIndex + 1).toLocaleString()
+  const of = barCount ? ` of ${barCount.toLocaleString()}` : ''
+  const when = stop.barTime === null ? '' : `, ${barClock(stop.barTime, zone)}`
+  return `This run stopped on bar ${bar}${of}${when}`
 }
 
 function Figure({
@@ -655,6 +692,30 @@ export function BacktestPanel({
           </div>
         )}
 
+        {/* A run the script stopped part way. It is not a refusal: the run
+            happened up to that bar and the figures below are of that part, so
+            without this the report reads as the whole range and a strategy that
+            failed on its first order reads as one that never traded. */}
+        {outcome?.stopped && (
+          <div className="flex flex-col gap-1 rounded border border-destructive/40 p-2">
+            <span className="text-[11px] font-medium text-destructive">
+              {stoppedAt(outcome.stopped, outcome.barCount, outcome.instrument?.timezone)}
+            </span>
+            {outcome.stopped.title && (
+              <span className="text-[11px] leading-relaxed">
+                {outcome.stopped.title}.{outcome.stopped.fix ? ` ${outcome.stopped.fix}` : ''}
+              </span>
+            )}
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {outcome.stopped.line}:{outcome.stopped.column} {outcome.stopped.code}
+            </span>
+            <span className="text-[10px] leading-relaxed text-muted-foreground">
+              The figures below are of the run up to that bar. Correct the script and run it again
+              to test the whole range.
+            </span>
+          </div>
+        )}
+
         {quantity.kind !== 'unknown' && (
           <p className="rounded border border-border px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
             <span className="font-medium text-foreground">
@@ -748,6 +809,12 @@ export function BacktestPanel({
                 ? '. This instrument has no stored tick or lot size, so the run used a tick of ' +
                   `${outcome.contract.tickSize} and a lot of ${outcome.contract.lotSize}. Every figure in money rests on those.`
                 : `. Tick ${outcome?.contract?.tickSize}, lot ${outcome?.contract?.lotSize}.`}
+              {/* Said because the absence is otherwise invisible: a session
+                  strategy with no hours to read never trades, and its report
+                  looks like a strategy that found nothing to do. */}
+              {outcome?.instrument && !outcome.instrument.session
+                ? ' No trading hours were available for this instrument, so everything the script reads from its session was empty in this run.'
+                : ''}
             </p>
 
             {Number(summary.openTradeCount) > 0 && (
