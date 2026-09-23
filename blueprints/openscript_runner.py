@@ -841,7 +841,9 @@ def close(filename):
     **A close that did not happen is not reported as one.** The run stays
     running and holding, and the refusal says so and says what to do, because a
     trader told their position was closed when it was not will not look at it
-    again.
+    again. A run that ended without confirming its close (it crashed, or was
+    stopped before its closing order filled) is stopped, and the answer tells
+    the trader to check the position.
     """
     if not _names_something(filename):
         return _refusal(filename)

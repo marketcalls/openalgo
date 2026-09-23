@@ -20,7 +20,10 @@ one the page asks about first. Each test below names the wrong implementation it
 catches.
 """
 
+import importlib.util
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,7 +136,10 @@ def test_stopping_asks_the_run_to_close_and_waits_for_it_to_go():
 
     def ask(run_id, what=commands.CLOSE):
         asked.append(run_id)
-        # What a run does when it has closed what it held.
+        commands.ask(run_id, what)
+        # What a run does when it has closed what it held: it says so, then
+        # leaves.
+        commands.record_closed(run_id)
         child.leaves_on_its_own()
 
     service.ask_to_close = ask
@@ -167,6 +173,46 @@ def test_a_run_that_does_not_close_stays_running_and_says_why():
     assert "Pause" in message, "the refusal does not say what a trader can do instead"
 
 
+def test_a_run_that_leaves_without_confirming_its_close_is_not_reported_closed(monkeypatch):
+    """THE ONE THAT TELLS A TRADER A POSITION IS CLOSED WHEN NOBODY KNOWS.
+
+    A run leaves the same way after closing its position as after being told to
+    stop or crashing, and a run taken over from an earlier worker reports no
+    exit status at all, so its leaving proves nothing. Only its own word that
+    the close is done does. Without it the Stop says so and says what to do.
+    """
+    stopped: list[str] = []
+    monkeypatch.setattr(service, "mark_stopped", stopped.append)
+    child = running(Child(ends_when_asked=False))
+
+    def ask(run_id, what=commands.CLOSE):
+        commands.ask(run_id, what)
+        child.leaves_on_its_own()  # gone, without saying the position is closed
+
+    monkeypatch.setattr(service, "ask_to_close", ask)
+    ok, message = service.stop_run(RUN, close=True)
+
+    assert ok is False
+    assert message == service.CLOSE_UNCONFIRMED_MESSAGE
+    assert "closed and stopped" not in message
+    assert "Check your positions" in message
+    assert RUN not in service.RUNNING_RUNS
+    assert stopped == [RUN], "a Stop that ended the run must still stop the deployment"
+    assert commands.all_commands() == {}
+
+
+def test_the_success_message_is_unchanged_when_the_run_confirms(monkeypatch):
+    child = running(Child(ends_when_asked=False))
+
+    def ask(run_id, what=commands.CLOSE):
+        commands.ask(run_id, what)
+        commands.record_closed(run_id)
+        child.leaves_on_its_own()
+
+    monkeypatch.setattr(service, "ask_to_close", ask)
+    assert service.stop_run(RUN, close=True) == (True, "closed and stopped")
+
+
 def test_an_instruction_that_was_not_carried_out_is_not_left_to_be_retried():
     """Catches a closing order sent on every wake for the rest of the session.
 
@@ -192,6 +238,87 @@ def test_stopping_a_run_that_is_not_running_is_not_reported_as_a_close():
 # ---------------------------------------------------------------------------
 # The instruction file
 # ---------------------------------------------------------------------------
+
+
+def test_a_confirmed_close_is_not_an_instruction():
+    """``closed`` is read by the parent; a run never acts on it."""
+    commands.ask(RUN)
+    commands.record_closed(RUN)
+
+    assert commands.command_for(RUN) == commands.CLOSED
+    assert commands.close_confirmed(RUN) is True
+    assert commands.command_for(RUN) != commands.CLOSE
+
+
+def test_a_close_is_never_written_back_after_the_parent_cleared_it():
+    """A run confirming late must not leave an instruction for its next start."""
+    commands.record_closed(RUN)
+
+    assert commands.all_commands() == {}
+    assert commands.close_confirmed(RUN) is False
+
+
+# ---------------------------------------------------------------------------
+# The run's own side of a close
+# ---------------------------------------------------------------------------
+
+RUNNER_PATH = Path(__file__).resolve().parents[1] / "openscript_host" / "openscript_runner.py"
+
+
+def _child_program():
+    spec = importlib.util.spec_from_file_location("openscript_child_close_under_test", RUNNER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Session:
+    """What the run's loop reads of a session: a close that works, or does not."""
+
+    def __init__(self, flat: bool):
+        self.stopping = False
+        self.options = SimpleNamespace(strategy_name=RUN)
+        self.live = None
+        self._times: list[int] = []
+        self._from_feed: set[int] = set()
+        self.flat = flat
+        self.flattened = 0
+
+    def flatten(self):
+        self.flattened += 1
+        return self.flat
+
+    def cycle(self):
+        return None
+
+
+def _one_wake(child, session):
+    options = SimpleNamespace(cycles=1, poll_seconds=0.0)
+    feed = SimpleNamespace(live=False)
+    return child._loop(session, options, feed, 0)
+
+
+def test_the_run_confirms_a_close_before_it_leaves():
+    child = _child_program()
+    commands.ask(RUN)
+    session = _Session(flat=True)
+
+    code = _one_wake(child, session)
+
+    assert code == child.EXIT_OK and session.flattened == 1
+    assert commands.close_confirmed(RUN) is True
+
+
+def test_the_run_confirms_nothing_when_its_close_did_not_fill():
+    child = _child_program()
+    commands.ask(RUN)
+    session = _Session(flat=False)
+
+    _one_wake(child, session)
+
+    assert session.flattened == 1
+    assert commands.close_confirmed(RUN) is False
+    assert commands.all_commands() == {}, "a close it could not make is left to be retried"
 
 
 def test_an_instruction_survives_the_worker_that_wrote_it(quiet):

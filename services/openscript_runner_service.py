@@ -90,6 +90,7 @@ import pytz
 
 from services.openscript_commands import ask as ask_to_close
 from services.openscript_commands import clear as forget_instruction
+from services.openscript_commands import close_confirmed
 from services.openscript_deployment import deployment_id, is_deployment_id
 from services.openscript_run_config import (
     PRODUCTS,
@@ -200,6 +201,13 @@ SHUTTING_DOWN_MESSAGE = "The server is shutting down, so this strategy was not s
 
 #: What a Pause is told while a Stop is closing the position.
 CLOSING_MESSAGE = "This strategy is closing its position. Wait for it to finish."
+
+#: What a Stop is told when the run has gone but never said its position was
+#: closed: it crashed, or was stopped before its closing order filled.
+CLOSE_UNCONFIRMED_MESSAGE = (
+    "This strategy has stopped, but it could not confirm that its position was closed. "
+    "Check your positions and close anything still open. Its own log says what happened."
+)
 
 #: What removing a deployment is told while its run is up.
 RUNNING_DELETE_REFUSAL = (
@@ -868,6 +876,12 @@ def stop_run(script_or_run_id: str, forget: bool = True, close: bool = False) ->
     the run registered and running, which is the platform's own rule for a stop
     whose exit orders were refused.
 
+    **A close is reported as done only when the run said so.** A run leaves the
+    same way after closing its position as after being told to stop, so its exit
+    proves nothing. It records the close in the instruction file before leaving
+    (see `openscript_commands`); a run that has gone without that answers False
+    with a sentence telling the trader to check the position.
+
     ``forget`` is whether this also means the trader no longer wants the
     deployment running. It does when somebody presses Pause or Stop, and it does
     not when the worker is going down: ending a child on the way out is correct,
@@ -914,8 +928,9 @@ def _stop_run_claimed(run_id: str, forget: bool, close: bool) -> tuple[bool, str
     in progress to finish. The worker going down (not ``forget``) does not: a
     child outlives its parent, so it is ended whatever else is under way.
     """
+    confirmed = True
     if close:
-        gone, why = _close_and_wait(run_id)
+        gone, confirmed, why = _close_and_wait(run_id)
         if not gone:
             return False, why
 
@@ -928,12 +943,18 @@ def _stop_run_claimed(run_id: str, forget: bool, close: bool) -> tuple[bool, str
         held = RUNNING_RUNS.pop(run_id, None)
         if held is None:
             if close:
-                # It closed its position and ended by itself, which the sweep
-                # above has already noticed. That is the whole of what was
-                # asked for, so it is a success and not a missing run.
+                # It ended by itself, which the sweep above has already
+                # noticed. When it said its position was closed, that is the
+                # whole of what was asked for, so it is a success and not a
+                # missing run. Either way the run is over, so it is stopped.
                 if forget:
                     mark_stopped(run_id)
                 forget_instruction(run_id)
+                if not confirmed:
+                    logger.warning(
+                        "The OpenScript run %s ended without confirming its close", run_id
+                    )
+                    return False, CLOSE_UNCONFIRMED_MESSAGE
                 logger.info("Closed and stopped the OpenScript run %s", run_id)
                 return True, "closed and stopped"
             return False, "That run is not running"
@@ -957,6 +978,10 @@ def _stop_run_claimed(run_id: str, forget: bool, close: bool) -> tuple[bool, str
         mark_stopped(run_id)
     forget_instruction(run_id)
 
+    if close and not confirmed:
+        logger.warning("The OpenScript run %s was stopped without confirming its close", run_id)
+        return False, CLOSE_UNCONFIRMED_MESSAGE
+
     what = "closed and stopped" if close else "paused"
     logger.info("The OpenScript run %s was %s", run_id, what)
     return True, f"{held.get('script', run_id)} {what}"
@@ -973,17 +998,22 @@ CLOSE_SECONDS = 25.0
 CLOSE_LOOK = 0.5
 
 
-def _close_and_wait(run_id: str) -> tuple[bool, str]:
-    """Ask a run to close what it holds and leave. True once it has gone.
+def _close_and_wait(run_id: str) -> tuple[bool, bool, str]:
+    """Ask a run to close what it holds and leave.
 
-    Answers False with the reason while it is still there, and leaves it
-    running: a run that did not close is a run still holding a position, and
-    something has to be able to stop it.
+    Returns ``(gone, confirmed, why)``. ``gone`` is True once the process has
+    ended. ``confirmed`` is whether it said, before it left, that its position
+    was closed; a run that crashed or was stopped mid-close leaves without
+    saying so, and ``why`` is then the sentence for the trader.
+
+    While it is still there this answers ``gone`` False with the reason and
+    leaves it running: a run that did not close is a run still holding a
+    position, and something has to be able to stop it.
     """
     with PROCESS_LOCK:
         held = RUNNING_RUNS.get(run_id)
     if held is None:
-        return False, "That run is not running"
+        return False, False, "That run is not running"
 
     ask_to_close(run_id)
 
@@ -992,7 +1022,10 @@ def _close_and_wait(run_id: str) -> tuple[bool, str]:
     while monotonic() < until:
         try:
             if process is not None and process.poll() is not None:
-                return True, ""
+                # Read after the exit, and the run writes it before exiting.
+                if close_confirmed(run_id):
+                    return True, True, ""
+                return True, False, CLOSE_UNCONFIRMED_MESSAGE
         except (OSError, ValueError, AttributeError):
             # A process this worker can no longer read is one it can no longer
             # wait for. Treated as still here, which leaves the run registered.
@@ -1000,11 +1033,12 @@ def _close_and_wait(run_id: str) -> tuple[bool, str]:
         sleep(CLOSE_LOOK)
 
     forget_instruction(run_id)
-    return False, (
+    why = (
         "This strategy did not close its position in time, so it is still running and still "
         "holding it. Its own log says what happened. Deal with the position and stop it again, "
         "or use Pause to end the strategy and keep the position."
     )
+    return False, False, why
 
 
 def _as_run_id(given: str) -> str:

@@ -609,6 +609,23 @@ def _forget_instruction(run_id: str) -> None:
         return
 
 
+def _record_closed(run_id: str) -> None:
+    """Tell the parent the close is done, before this run leaves.
+
+    The parent cannot tell from the exit alone: a run leaves the same way after
+    closing its position as after being told to stop. What it reads instead is
+    this, so a Stop is reported as done only when the position was. Nothing
+    raises: if it cannot be written, the parent says the close could not be
+    confirmed, which is the safe way round to be wrong.
+    """
+    try:
+        from services.openscript_commands import record_closed
+
+        record_closed(run_id)
+    except Exception:  # noqa: BLE001 - the run leaves either way
+        return
+
+
 def _bar_time_text(time_ms: int) -> str:
     """A bar's open instant as a clock time, in this server's own zone.
 
@@ -2165,6 +2182,7 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
         asked = _asked_of(session.options.strategy_name)
         if asked == CLOSE:
             if session.flatten():
+                _record_closed(session.options.strategy_name)
                 say("Stopped, holding nothing.")
                 return EXIT_OK
             # Not flat, so this run stays: something has to be able to stop a
@@ -2243,7 +2261,7 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
             # between the press and the closing order. Read every few seconds
             # rather than on every half second, because this is a file and the
             # ordinary case is that there is nothing in it.
-            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name):
+            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name) == CLOSE:
                 break
 
     say("Stopped.")

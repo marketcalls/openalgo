@@ -310,7 +310,7 @@ def test_a_pause_cannot_cut_short_a_stop_that_is_closing(stores, monkeypatch):
     monkeypatch.setattr(service, "_terminate", terminate_now)
 
     asked = threading.Event()
-    monkeypatch.setattr(service, "ask_to_close", lambda rid: asked.set())
+    monkeypatch.setattr(service, "ask_to_close", lambda rid: (commands.ask(rid), asked.set()))
     closing = {}
     closer = threading.Thread(
         target=lambda: closing.update(result=service.stop_run(run_id, close=True))
@@ -319,13 +319,52 @@ def test_a_pause_cannot_cut_short_a_stop_that_is_closing(stores, monkeypatch):
     assert asked.wait(5)
 
     paused = service.stop_run(run_id)
-    # The run reads the instruction, closes its position and leaves.
+    # The run reads the instruction, closes its position, says so and leaves.
+    commands.record_closed(run_id)
     child.code = 0
     closer.join(5)
 
     assert paused == (False, service.CLOSING_MESSAGE)
     assert child.signals == [], "the pause ended the run before it closed its position"
     assert closing["result"][0] is True
+    assert service.CLOSING_RUNS == set()
+
+
+def test_a_close_cut_short_by_shutdown_is_not_reported_as_closed(stores, monkeypatch):
+    """hosts-18 remainder. The run exits 0 on a stop signal as after a close.
+
+    The worker going down ends a run whatever else is under way, including a
+    Stop that is waiting for its close. The run then leaves without having
+    closed anything, and its exit looks the same as after a close. The Stop
+    must not answer "closed and stopped" for it.
+    """
+    run_id = deployment_id("c.oscript", "SBIN", "NSE", "1m")
+    child = Child()
+    service.RUNNING_RUNS[run_id] = {"process": child, "pid": child.pid, "script": "c.oscript"}
+    monkeypatch.setattr(service, "CLOSE_SECONDS", 5.0)
+    monkeypatch.setattr(service, "CLOSE_LOOK", 0.05)
+    stopped = []
+    monkeypatch.setattr(service, "mark_stopped", stopped.append)
+    monkeypatch.setattr(
+        service, "_terminate", lambda process, pid, **k: process.terminate() or True
+    )
+
+    asked = threading.Event()
+    monkeypatch.setattr(service, "ask_to_close", lambda rid: (commands.ask(rid), asked.set()))
+    closing = {}
+    closer = threading.Thread(
+        target=lambda: closing.update(result=service.stop_run(run_id, close=True))
+    )
+    closer.start()
+    assert asked.wait(5)
+
+    shut = service.stop_run(run_id, forget=False)
+    closer.join(5)
+
+    assert shut[0] is True and child.signals == ["terminate"]
+    assert closing["result"] == (False, service.CLOSE_UNCONFIRMED_MESSAGE)
+    assert stopped == [run_id], "the trader's Stop still stops the deployment"
+    assert commands.all_commands() == {}
     assert service.CLOSING_RUNS == set()
 
 
