@@ -6,11 +6,12 @@ Under eventlet a sleeping greenlet costs nothing. Under the gthread worker it
 holds one of a fixed number of request threads for the whole wait, and a few
 waiting workflows starve every other request, order routes included.
 
-So under gthread, and only there, a workflow containing such a node is started
-on a small shared pool and the trigger is answered at once with 202; when every
-waiting slot is taken it is answered 429 and nothing starts. A workflow with no
-wait, and every workflow under eventlet or the development server, runs on its
-request exactly as before, so TradingView still gets the broker's answer.
+So under gthread, and only there, a workflow that can wait longer than a few
+seconds is started on a shared pool and the trigger is answered at once with
+202; when every waiting slot is taken it is answered 429, nothing starts, and
+the refusal is written to the workflow's history. A workflow with no wait or a
+short one, and every workflow under eventlet or the development server, runs on
+its request exactly as before, so TradingView still gets the broker's answer.
 """
 
 import threading
@@ -27,7 +28,7 @@ import utils.runtime as runtime
 
 WAITING_NODES = [
     {"id": "t", "type": "webhookTrigger", "data": {}},
-    {"id": "d", "type": "delay", "data": {"delayValue": 5}},
+    {"id": "d", "type": "delay", "data": {"delayValue": 60}},
 ]
 PLAIN_NODES = [{"id": "t", "type": "webhookTrigger", "data": {}}]
 
@@ -132,6 +133,8 @@ def test_under_gthread_a_full_pool_refuses_rather_than_queues(
     app, workflows, runs, gthread, monkeypatch
 ):
     monkeypatch.setattr(fes, "_waiting_slots", threading.BoundedSemaphore(1))
+    refused = []
+    monkeypatch.setattr(fes, "_record_refused_run", refused.append)
     workflows["one"] = _workflow(201, WAITING_NODES)
     workflows["two"] = _workflow(202, WAITING_NODES)
 
@@ -143,8 +146,9 @@ def test_under_gthread_a_full_pool_refuses_rather_than_queues(
     assert second["message"] == fes.FLOW_WAITING_BUSY_MESSAGE
     assert _wait_until(lambda: len(runs.started) == 1)
     assert [workflow_id for workflow_id, _ in runs.started] == [201]
-    # The refused workflow's lock was not left taken.
+    # The refused workflow's lock was not left taken, and its history says so.
     assert not fes.get_workflow_lock(202).locked()
+    assert refused == [202]
 
 
 def test_under_gthread_a_workflow_without_a_wait_still_answers_with_its_result(

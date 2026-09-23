@@ -211,23 +211,24 @@ def _execution_status_code(result: dict) -> int:
 def _run_or_start(workflow, **kwargs):
     """Execute a triggered workflow, on this request or, if it waits, on the pool.
 
-    A Delay or Wait Until node sleeps for minutes inside the run. Under the
+    A Delay or Wait Until node can sleep for minutes inside the run. Under the
     gthread worker that would hold one of a fixed number of request threads
-    for the whole wait, so there (and only there) such a workflow is started on
-    the Flow pool and the trigger is answered at once with 202. Under eventlet
-    and the development server a sleeping request costs nothing, and every
-    workflow runs on its request exactly as before, so TradingView still gets
-    the broker's answer. A workflow with no wait always runs on its request.
+    for the whole wait, so there (and only there) a workflow whose waits add up
+    to more than FLOW_INLINE_WAIT_SECONDS is started on a Flow pool and the
+    trigger is answered at once with 202. Under eventlet and the development
+    server a sleeping request costs nothing, and every workflow runs on its
+    request exactly as before, so TradingView still gets the broker's answer.
+    A workflow with no wait, or a short one, always runs on its request.
     """
     from services.flow_executor_service import (
         execute_workflow,
         start_workflow_in_background,
-        workflow_waits,
+        workflow_runs_in_background,
     )
     from utils.runtime import gthread_active
 
-    if gthread_active() and workflow_waits(workflow.nodes):
-        return start_workflow_in_background(workflow.id, **kwargs)
+    if gthread_active() and workflow_runs_in_background(workflow.nodes):
+        return start_workflow_in_background(workflow.id, nodes=workflow.nodes, **kwargs)
     return execute_workflow(workflow.id, **kwargs)
 
 

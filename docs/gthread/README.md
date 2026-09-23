@@ -249,9 +249,13 @@ again. None of these is a setting, and none of them happens on eventlet.
   the moment it takes and starts them again.
 - **Reloading or clearing the symbol cache** while the master contract is still
   downloading is refused (HTTP 409) until the download finishes.
-- **Flow workflows with a Delay or Wait Until node** run in the background and
-  answer at once (HTTP 202). At most four can be waiting at the same time; the
-  next is refused (HTTP 429).
+- **Flow workflows that wait.** A workflow whose Delay and Wait Until steps add
+  up to more than 10 seconds runs in the background and answers at once (HTTP
+  202); a shorter wait runs as before and answers with the result. Up to 16
+  workflows waiting on a Delay, and separately up to 4 waiting on a Wait Until,
+  can be running at the same time. The next one is refused (HTTP 429) without
+  placing any order, and the refusal is shown in that workflow's execution
+  history. Run Now on such a workflow shows it as running in the background.
 - **Python strategy live log views.** At most eight windows stream at once;
   the next is told to wait (HTTP 503). An open view reconnects by itself every
   ten minutes.

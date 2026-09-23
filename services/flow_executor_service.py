@@ -4625,14 +4625,27 @@ def execute_workflow(
 # request that triggered it. Under eventlet a sleeping greenlet costs nothing.
 # Under the gthread worker it holds one of a fixed number of request threads for
 # minutes, and a handful of waiting workflows starve every other request, order
-# routes included. So under gthread (and only there) a workflow that contains
-# such a node runs on a small shared pool instead, and the trigger is answered
-# at once. Scheduler, price-alert and order-update triggers already run on
-# pools of their own and are unchanged.
+# routes included. So under gthread (and only there) a workflow that can wait
+# longer than FLOW_INLINE_WAIT_SECONDS runs on a shared pool instead, and the
+# trigger is answered at once. A shorter wait still runs on its request, as it
+# does everywhere else. Scheduler, price-alert and order-update triggers already
+# run on pools of their own and are unchanged.
+#
+# The constants below are module constants, not settings: the gthread worker
+# adds exactly one configuration key, and its 64 request threads are fixed.
 
-#: Workflows that may be waiting at once on the shared pool. A module constant,
-#: not a setting: the gthread worker adds exactly one configuration key.
-FLOW_WAITING_WORKERS = 4
+#: A workflow whose waits add up to no more than this still runs on its
+#: request: a few seconds of one request thread costs less than a refused
+#: signal, and the caller still gets the broker's answer.
+FLOW_INLINE_WAIT_SECONDS = 10
+
+#: Workflows waiting on Delay nodes that may be running at once in the
+#: background: a quarter of the gthread worker's 64 request threads.
+FLOW_WAITING_WORKERS = 16
+
+#: Workflows with a Wait Until node that may be waiting at once. A pool of their
+#: own, so waits of up to half an hour cannot take every slot from short delays.
+FLOW_WAIT_UNTIL_WORKERS = 4
 
 #: The node types that sleep inside the run.
 WAITING_NODE_TYPES = frozenset({"delay", "waitUntil"})
@@ -4643,16 +4656,23 @@ FLOW_WAITING_BUSY_MESSAGE = (
     "this one was not started. Try again shortly."
 )
 
+#: What the workflow's execution history records for a trigger refused that way.
+FLOW_WAITING_REFUSED_RECORD = (
+    "Not started: too many workflows were already waiting on a Delay or Wait "
+    "Until step, so this trigger was refused and placed no orders."
+)
+
 #: What the caller reads when the workflow was started in the background.
 FLOW_STARTED_IN_BACKGROUND_MESSAGE = (
     "Workflow started. It waits on a Delay or Wait Until step, so it finishes in "
     "the background; its result appears in the workflow's execution history."
 )
 
-# Held from the moment a waiting workflow is accepted until it finishes, so the
+# Held from the moment a waiting workflow is accepted until it finishes, so a
 # pool's queue can never hold more than it can run. Taken by request threads
 # and released by pool threads; only used under gthread, where both are real.
 _waiting_slots = threading.BoundedSemaphore(FLOW_WAITING_WORKERS)
+_wait_until_slots = threading.BoundedSemaphore(FLOW_WAIT_UNTIL_WORKERS)
 
 
 def workflow_waits(nodes: list[dict] | None) -> bool:
@@ -4662,37 +4682,142 @@ def workflow_waits(nodes: list[dict] | None) -> bool:
     )
 
 
+def _delay_node_seconds(node_data: dict) -> float:
+    """How long a Delay node sleeps, worked out as NodeExecutor.execute_delay does."""
+    try:
+        delay_value = node_data.get("delayValue")
+        if delay_value is not None:
+            unit = {"minutes": 60, "hours": 3600}.get(node_data.get("delayUnit", "seconds"), 1)
+            seconds = float(int(delay_value) * unit)
+        else:
+            seconds = int(node_data.get("delayMs", 1000)) / 1000
+    except (TypeError, ValueError):
+        # The node itself would fail on this; count it as long, never as short.
+        return float(NodeExecutor.DELAY_MAX_SECONDS)
+    return max(0.0, min(seconds, float(NodeExecutor.DELAY_MAX_SECONDS)))
+
+
+def _wait_until_node_seconds(node_data: dict, now: datetime) -> float:
+    """How long a Wait Until node would sleep if it ran at ``now``."""
+    target_hour, target_minute, target_second = parse_time_string(
+        node_data.get("targetTime", "09:30"), 9, 30
+    )
+    now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+    target_seconds = target_hour * 3600 + target_minute * 60 + target_second
+    wait = max(0, target_seconds - now_seconds)
+    return float(min(wait, NodeExecutor.WAIT_UNTIL_MAX_SECONDS))
+
+
+def workflow_wait_seconds(
+    nodes: list[dict] | None, now: datetime | None = None
+) -> tuple[float, float]:
+    """The longest a run of this workflow can sleep, from its saved graph.
+
+    Args:
+        nodes: The workflow's nodes.
+        now: The moment to measure Wait Until targets from; defaults to now.
+
+    Returns:
+        ``(delays, wait_until)``: every Delay node added up at its configured
+        length, capped as the node caps it, and the furthest Wait Until target
+        from ``now``. A value that cannot be read counts as the node's maximum,
+        so a doubtful workflow is treated as a long one.
+    """
+    now = now or datetime.now()
+    delays = 0.0
+    wait_until = 0.0
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data") or {}
+        if node.get("type") == "delay":
+            delays += _delay_node_seconds(data)
+        elif node.get("type") == "waitUntil":
+            wait_until = max(wait_until, _wait_until_node_seconds(data, now))
+    return delays, wait_until
+
+
+def workflow_runs_in_background(nodes: list[dict] | None) -> bool:
+    """Whether a triggered workflow can wait too long to hold a gthread request thread."""
+    delays, wait_until = workflow_wait_seconds(nodes)
+    return delays + wait_until > FLOW_INLINE_WAIT_SECONDS
+
+
+def _record_refused_run(workflow_id: int) -> None:
+    """Leave a failed run in the history for a trigger refused before it started.
+
+    Without it the refusal existed only as a log line and the answer to the
+    caller, which for a TradingView or Chartink alert nobody reads.
+    """
+    try:
+        execution = create_execution(workflow_id, status="running")
+        if execution:
+            update_execution_status(
+                execution.id,
+                "failed",
+                error=FLOW_WAITING_REFUSED_RECORD,
+                logs=[
+                    {
+                        "time": datetime.now().isoformat(),
+                        "message": FLOW_WAITING_REFUSED_RECORD,
+                        "level": "error",
+                    }
+                ],
+            )
+    except Exception:
+        logger.exception(f"Could not record the refused run of workflow {workflow_id}")
+
+
 def start_workflow_in_background(
-    workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
+    workflow_id: int,
+    webhook_data: dict[str, Any] | None = None,
+    api_key: str = None,
+    *,
+    nodes: list[dict] | None = None,
 ) -> dict:
-    """Start a workflow that waits on the shared pool and return at once.
+    """Start a workflow that waits on a shared pool and return at once.
 
     Used under the gthread worker only (see the note above). The workflow's
     lock is taken here, on the caller's thread, so a second trigger still gets
     ``already_running`` straight away, and it is handed to the pool thread,
     which releases it when the run ends.
 
+    Args:
+        workflow_id: The workflow to start.
+        webhook_data: The trigger's payload, if any.
+        api_key: The key the run places orders with.
+        nodes: The workflow's nodes. One whose Wait Until still has time to
+            wait goes to the Wait Until pool; any other, and one whose nodes
+            are not given, to the Delay pool.
+
     Returns:
         ``{"status": "accepted", "accepted": True, ...}`` once started;
         ``already_running`` as execute_workflow reports it; or
-        ``{"status": "error", "busy": True, ...}`` when every waiting slot is
-        taken, in which case nothing was started.
+        ``{"status": "error", "busy": True, ...}`` when every slot of its pool
+        is taken, in which case nothing was started and the refusal is written
+        to the workflow's execution history.
     """
     from utils.shared_executors import get_executor
+
+    if nodes is not None and workflow_wait_seconds(nodes)[1] > FLOW_INLINE_WAIT_SECONDS:
+        slots, pool_name, pool_size = _wait_until_slots, "flow-wait-until", FLOW_WAIT_UNTIL_WORKERS
+    else:
+        slots, pool_name, pool_size = _waiting_slots, "flow-waiting", FLOW_WAITING_WORKERS
 
     lock = get_workflow_lock(workflow_id)
     if not lock.acquire(blocking=False):
         return _already_running(workflow_id)
-    if not _waiting_slots.acquire(blocking=False):
+    if not slots.acquire(blocking=False):
         lock.release()
         logger.warning(f"Workflow {workflow_id} not started: every waiting slot is taken")
+        _record_refused_run(workflow_id)
         return {"status": "error", "message": FLOW_WAITING_BUSY_MESSAGE, "busy": True}
     try:
-        get_executor("flow-waiting", FLOW_WAITING_WORKERS).submit(
-            _run_waiting_workflow, lock, workflow_id, webhook_data, api_key
+        get_executor(pool_name, pool_size).submit(
+            _run_waiting_workflow, lock, slots, workflow_id, webhook_data, api_key
         )
     except Exception:
-        _waiting_slots.release()
+        slots.release()
         lock.release()
         logger.exception(f"Workflow {workflow_id} could not be started in the background")
         return {
@@ -4709,6 +4834,7 @@ def start_workflow_in_background(
 
 def _run_waiting_workflow(
     lock: threading.Lock,
+    slots: threading.BoundedSemaphore,
     workflow_id: int,
     webhook_data: dict[str, Any] | None,
     api_key: str | None,
@@ -4722,7 +4848,7 @@ def _run_waiting_workflow(
         logger.exception(f"Background workflow {workflow_id} failed")
     finally:
         lock.release()
-        _waiting_slots.release()
+        slots.release()
         # A pool thread has no Flask teardown to release its sessions.
         try:
             from utils.db_sessions import remove_all_scoped_sessions
