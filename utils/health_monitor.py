@@ -76,6 +76,12 @@ GTHREAD_THREADS_ASSUMED = 64
 GTHREAD_THREAD_WARNING_MARGIN = 80
 GTHREAD_THREAD_CRITICAL_MARGIN = 160
 
+#: Name prefixes of the permanent threads this release added on every runtime:
+#: the event bus's lane for order updates and the eventlet hub worker. Off
+#: gthread they are not counted against the thresholds above, which were set
+#: before they existed.
+UNCOUNTED_OFF_GTHREAD = ("eventbus-critical", "openalgo-hub-worker")
+
 
 def _thread_thresholds() -> tuple[int, int]:
     """(warning, critical) thread counts for this runtime."""
@@ -508,8 +514,20 @@ def get_thread_metrics():
             }
             threads_info.append(thread_info)
 
+        from utils import runtime
+
         thread_count = len(threads_info)
         warning_threshold, critical_threshold = _thread_thresholds()
+        # Judged against the eventlet thresholds without the few permanent
+        # threads this release added to every runtime, so an install that has
+        # not opted in to gthread is warned at the same load as before.
+        uncounted = 0
+        if not runtime.gthread_active():
+            uncounted = sum(
+                1 for info in threads_info if str(info["name"]).startswith(UNCOUNTED_OFF_GTHREAD)
+            )
+        reported_count = thread_count
+        thread_count = thread_count - uncounted
 
         # Determine status
         if thread_count >= critical_threshold or stuck_count > 0:
@@ -541,17 +559,17 @@ def get_thread_metrics():
             HealthAlert.auto_resolve_alerts("thread_count", thread_count, warning_threshold)
 
         result = {
-            "count": thread_count,
+            "count": reported_count,
             "stuck_count": stuck_count,
             "threads": threads_info[:50],  # Limit to first 50 for JSON size
             "status": status,
         }
+        if uncounted:
+            result["uncounted"] = uncounted
         # Under gthread, how much of the request pool long-lived work holds:
         # open streams and browser (Socket.IO) connections each keep a thread.
         # Sampled here, every collection, so the low-headroom warning fires
         # without anyone having to open the admin page.
-        from utils import runtime
-
         if runtime.gthread_active():
             from utils.stream_registry import thread_budget
 

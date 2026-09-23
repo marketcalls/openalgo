@@ -3,7 +3,8 @@ import json
 import os
 import time
 import urllib.parse
-from concurrent.futures import as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 import httpx
@@ -33,6 +34,23 @@ logger = get_logger(__name__)
 #: Threads in the shared quote pool. Matches the multiquote batch size, which is
 #: the most one request fans out at a time.
 QUOTE_POOL_SIZE = 10
+
+#: Workers in the pool each call starts for itself off gthread, as it always has.
+PER_CALL_QUOTE_WORKERS = 40
+
+
+def _quote_pool():
+    """The executor for one quote batch, as a context manager.
+
+    Under the gthread worker it is one process-wide pool, which the ``with``
+    block must not shut down: a pool per call started real OS threads for
+    every batch of every request. Under eventlet and on the development server
+    it is a pool of its own per call, exactly as before, so no threads outlive
+    the call and the health monitor counts what it always counted.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("flattrade-quotes", QUOTE_POOL_SIZE))
+    return ThreadPoolExecutor(max_workers=PER_CALL_QUOTE_WORKERS)
 
 # Request pacing for Flattrade data APIs (issue #1663).
 #
@@ -464,37 +482,35 @@ class BrokerData:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
-            # Thread pool approach (works in any context). One pool for the
-            # process, not one per call: under the gthread worker a per-call
-            # pool started real OS threads for every batch of every request.
+            # Thread pool approach (works in any context); see _quote_pool.
             # DATA_LIMITER, not the pool size, owns the pacing.
             results = []
-            executor = get_executor("flattrade-quotes", QUOTE_POOL_SIZE)
-            future_to_symbol = {
-                executor.submit(
-                    self._fetch_single_quote_sync,
-                    item["symbol"],
-                    item["exchange"],
-                    item["api_exchange"],
-                    item["token"],
-                    api_key,
-                ): item
-                for item in prepared_symbols
-            }
+            with _quote_pool() as executor:
+                future_to_symbol = {
+                    executor.submit(
+                        self._fetch_single_quote_sync,
+                        item["symbol"],
+                        item["exchange"],
+                        item["api_exchange"],
+                        item["token"],
+                        api_key,
+                    ): item
+                    for item in prepared_symbols
+                }
 
-            for future in as_completed(future_to_symbol):
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    item = future_to_symbol[future]
-                    results.append(
-                        {
-                            "symbol": item["symbol"],
-                            "exchange": item["exchange"],
-                            "error": str(e),
-                        }
-                    )
+                for future in as_completed(future_to_symbol):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        item = future_to_symbol[future]
+                        results.append(
+                            {
+                                "symbol": item["symbol"],
+                                "exchange": item["exchange"],
+                                "error": str(e),
+                            }
+                        )
 
         elapsed = time.time() - start_time
         logger.debug(

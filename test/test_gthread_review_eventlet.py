@@ -130,3 +130,46 @@ def test_symbol_reload_drops_the_previous_generation_first():
             """
         )
     )
+
+
+def test_quote_fanouts_leave_no_threads_and_internal_threads_are_not_judged():
+    """eventlet-neutrality-10.
+
+    Flattrade and Definedge fanned quotes out on a shared pool whose threads
+    stay for good, and the health monitor counted them, with the event bus's
+    order-update lane and the hub worker, against eventlet's unchanged
+    thresholds. Off gthread each fan-out has a pool of its own again, as on
+    main, and the two internal threads are not judged.
+    """
+    _ok(
+        run(
+            """
+            from broker.definedge.api import data as definedge_data
+            from broker.flattrade.api import data as flattrade_data
+            from utils import health_monitor as hm
+
+            before = threading.active_count()
+            with flattrade_data._quote_pool() as pool:
+                assert [f.result() for f in [pool.submit(pow, 2, n) for n in range(20)]]
+            with definedge_data._quote_pool(8) as pool:
+                assert [f.result() for f in [pool.submit(pow, 3, n) for n in range(8)]]
+            eventlet.sleep(0.2)
+            assert threading.active_count() == before, (before, threading.active_count())
+
+            names = ["MainThread"] + [f"worker-{i}" for i in range(48)] + [
+                "eventbus-critical_0", "eventbus-critical_1", "openalgo-hub-worker",
+            ]
+            fake = [SimpleNamespace(ident=i, name=n, daemon=True, is_alive=lambda: True)
+                    for i, n in enumerate(names)]
+            threading.enumerate = lambda: fake
+            hm.HealthAlert.create_alert = staticmethod(lambda **k: None)
+            hm.HealthAlert.auto_resolve_alerts = staticmethod(lambda *a, **k: None)
+            metrics = hm.get_thread_metrics()
+            # 52 threads, 3 of them the ones this release added: judged as 49.
+            assert metrics["count"] == 52, metrics["count"]
+            assert metrics["uncounted"] == 3
+            assert metrics["status"] == "pass", metrics["status"]
+            print("PASSED")
+            """
+        )
+    )

@@ -1,5 +1,7 @@
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 import httpx
@@ -26,6 +28,20 @@ logger = get_logger(__name__)
 # Threads in the shared pool for quotes and OI backfill. The per-call pools it
 # replaces were capped at the same ten; pacing is rate_limiter's job.
 QUOTE_POOL_SIZE = 10
+
+
+def _quote_pool(tasks: int):
+    """The executor for one fan-out of ``tasks`` calls, as a context manager.
+
+    Under the gthread worker it is one process-wide pool, which the ``with``
+    block must not shut down: a pool per call started real OS threads for
+    every batch of every request. Under eventlet and on the development server
+    it is a pool of its own per call, sized as before, so no threads outlive
+    the call and the health monitor counts what it always counted.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("definedge-quotes", QUOTE_POOL_SIZE))
+    return ThreadPoolExecutor(max_workers=max(1, min(tasks, QUOTE_POOL_SIZE)))
 
 
 def authenticate_broker(api_token, api_secret, otp):
@@ -581,22 +597,20 @@ class BrokerData:
             )
         else:
             # Thread pool approach, through rate_limited_request's shared pacing
-            # and 429 retry. One pool for the process, not one per call: under
-            # the gthread worker a per-call pool started real OS threads for
-            # every batch of every request.
-            executor = get_executor("definedge-quotes", QUOTE_POOL_SIZE)
-            futures = [
-                executor.submit(
-                    self._fetch_single_quote_sync,
-                    item["symbol"],
-                    item["exchange"],
-                    item["api_exchange"],
-                    item["token"],
-                    api_session_key,
-                )
-                for item in prepared_symbols
-            ]
-            results = [f.result() for f in futures]
+            # and 429 retry; see _quote_pool.
+            with _quote_pool(len(prepared_symbols)) as executor:
+                futures = [
+                    executor.submit(
+                        self._fetch_single_quote_sync,
+                        item["symbol"],
+                        item["exchange"],
+                        item["api_exchange"],
+                        item["token"],
+                        api_session_key,
+                    )
+                    for item in prepared_symbols
+                ]
+                results = [f.result() for f in futures]
 
         # Step 3: Backfill OI for derivative symbols (quotes API carries no OI).
         # fetch_latest_oi caches per token, so repeated chain refreshes are cheap.
@@ -607,22 +621,22 @@ class BrokerData:
             if r.get("data") is not None and r.get("exchange") in _DERIVATIVE_EXCHANGES
         ]
         if oi_targets:
-            executor = get_executor("definedge-quotes", QUOTE_POOL_SIZE)
-            oi_futures = {
-                executor.submit(
-                    fetch_latest_oi,
-                    token_map[r["symbol"]]["api_exchange"],
-                    token_map[r["symbol"]]["token"],
-                    api_session_key,
-                ): r
-                for r in oi_targets
-                if r["symbol"] in token_map
-            }
-            for future, result in oi_futures.items():
-                try:
-                    result["data"]["oi"] = future.result()
-                except Exception as e:
-                    logger.debug(f"OI backfill failed for {result['symbol']}: {e}")
+            with _quote_pool(len(oi_targets)) as executor:
+                oi_futures = {
+                    executor.submit(
+                        fetch_latest_oi,
+                        token_map[r["symbol"]]["api_exchange"],
+                        token_map[r["symbol"]]["token"],
+                        api_session_key,
+                    ): r
+                    for r in oi_targets
+                    if r["symbol"] in token_map
+                }
+                for future, result in oi_futures.items():
+                    try:
+                        result["data"]["oi"] = future.result()
+                    except Exception as e:
+                        logger.debug(f"OI backfill failed for {result['symbol']}: {e}")
 
         return skipped_symbols + results
 

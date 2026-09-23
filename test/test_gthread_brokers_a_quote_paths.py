@@ -206,9 +206,11 @@ def _symbols(count, exchange="NSE"):
     return [{"symbol": f"S{i}", "exchange": exchange} for i in range(count)]
 
 
-def test_definedge_quotes_run_on_one_shared_pool(definedge, monkeypatch):
+def test_under_gthread_definedge_quotes_run_on_one_shared_pool(definedge, monkeypatch):
+    from utils import runtime
     from utils.shared_executors import executor_stats
 
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
     recorder = _Recorder()
     _patch_client(monkeypatch, recorder)
     broker = definedge.BrokerData("key:::susertoken:::token")
@@ -259,11 +261,13 @@ def test_definedge_retries_a_429_instead_of_blanking_the_quote(definedge, monkey
     assert len(recorder.calls) == 2
 
 
-def test_flattrade_quotes_run_on_one_shared_pool(monkeypatch):
+def test_under_gthread_flattrade_quotes_run_on_one_shared_pool(monkeypatch):
     from broker.flattrade.api import data
     from broker.flattrade.api.rate_limit import SlidingWindowLimiter
+    from utils import runtime
     from utils.shared_executors import executor_stats
 
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
     monkeypatch.setattr(data, "USE_ASYNC", False)
     monkeypatch.setattr(data, "get_token", lambda symbol, exchange: f"T{symbol}")
     monkeypatch.setattr(data, "get_br_symbol", lambda symbol, exchange: f"{symbol}-EQ")
@@ -281,6 +285,33 @@ def test_flattrade_quotes_run_on_one_shared_pool(monkeypatch):
     stats = executor_stats()["flattrade-quotes"]
     assert stats["max_workers"] == data.QUOTE_POOL_SIZE
     assert threading.active_count() - before <= data.QUOTE_POOL_SIZE
+
+
+def test_off_gthread_the_quote_fanouts_leave_no_threads_behind(definedge, monkeypatch):
+    """Eventlet and the dev server keep main's pool per call: nothing outlives it."""
+    from broker.flattrade.api import data as flattrade
+    from broker.flattrade.api.rate_limit import SlidingWindowLimiter
+
+    recorder = _Recorder()
+    _patch_client(monkeypatch, recorder)
+    monkeypatch.setattr(flattrade, "USE_ASYNC", False)
+    monkeypatch.setattr(flattrade, "get_token", lambda symbol, exchange: f"T{symbol}")
+    monkeypatch.setattr(flattrade, "get_br_symbol", lambda symbol, exchange: f"{symbol}-EQ")
+    limiter = SlidingWindowLimiter("data", max_per_second=1000, max_per_minute=100000)
+    monkeypatch.setattr(flattrade, "_apply_rate_limit", limiter.acquire)
+    client = httpx.Client(transport=httpx.MockTransport(recorder))
+    monkeypatch.setattr(flattrade, "get_httpx_client", lambda: client)
+
+    before = threading.active_count()
+    results = flattrade.BrokerData("susertoken")._process_quotes_batch(_symbols(10))
+    assert sorted(r["data"]["ltp"] for r in results) == [101.5] * 10
+    results = definedge.BrokerData("key:::susertoken:::token")._process_quotes_batch(_symbols(10))
+    assert [r["data"]["ltp"] for r in results] == [101.5] * 10
+
+    deadline = time.monotonic() + 5
+    while threading.active_count() > before and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert threading.active_count() == before, "a quote fan-out left threads running"
 
 
 # --- the OI cache -----------------------------------------------------------------
