@@ -1252,9 +1252,129 @@ def _hardware_snapshot():
     return snap
 
 
-def _runtime_info():
-    """Python version, eventlet status, WSGI hint, uptime."""
+#: Share of gthread request threads in use at which the report warns.
+_BUSY_WARNING_SHARE = 0.8
+
+
+def _proxy_mode_hint():
+    """Where the market data proxy runs: subprocess, thread, external or None.
+
+    Reads the proxy module's own state rather than re-deriving its rules, so
+    the answer is what actually happened at startup. Never imports anything
+    the app has not already imported.
+    """
     import sys as _sys
+
+    module = _sys.modules.get("websocket_proxy.app_integration")
+    status = getattr(module, "proxy_status", None)
+    if callable(status):
+        try:
+            mode = (status() or {}).get("mode")
+            if mode:
+                return mode
+        except Exception:
+            pass
+    if (
+        Path("/.dockerenv").exists()
+        or os.environ.get("APP_MODE", "").strip().strip("'\"") == "standalone"
+    ):
+        return "external"
+    if module is None:
+        return None
+    try:
+        child = getattr(module, "_websocket_subprocess", None)
+        if child is not None and child.poll() is None:
+            return "subprocess"
+        thread = getattr(module, "_websocket_thread", None)
+        if thread is not None and thread.is_alive():
+            return "thread"
+    except Exception:
+        pass
+    return None
+
+
+def _requested_worker_now():
+    """The web server .env asks for right now: ``eventlet`` or ``gthread``.
+
+    Read from the file rather than from the environment the app started with,
+    so a change made since the last start shows up as pending. A key absent
+    from .env falls back to the process environment, as the launcher does.
+    """
+    raw = None
+    try:
+        from dotenv import dotenv_values
+
+        raw = dotenv_values(_resolve_env_path()).get("OPENALGO_WORKER_CLASS")
+    except Exception:
+        raw = None
+    if raw is None:
+        raw = os.environ.get("OPENALGO_WORKER_CLASS", "")
+    return "gthread" if str(raw).strip().strip("'\"").lower() == "gthread" else "eventlet"
+
+
+def _web_server_notes(info):
+    """Plain sentences for the operator about the web server, or an empty list."""
+    notes = []
+    worker = info.get("worker_class")
+    requested = info.get("requested_worker_class")
+    launcher = info.get("launcher") or {}
+    under_gunicorn = str(info.get("wsgi_hint") or "").startswith("gunicorn-")
+
+    if under_gunicorn and requested == "gthread" and worker != "gthread":
+        if info.get("started_by_launcher"):
+            notes.append(
+                "Your .env asks for the gthread web server, but OpenAlgo was started "
+                "before that change. Restart OpenAlgo after 23:30 IST to apply it."
+            )
+        else:
+            notes.append(
+                "Your .env asks for the gthread web server, but this server still starts "
+                "the eventlet web server because its service has not been switched. After "
+                "23:30 IST run: sudo bash install/switch-worker.sh (Docker: restart the "
+                "container)."
+            )
+    elif under_gunicorn and requested == "eventlet" and worker == "gthread":
+        requested_by_launcher = launcher.get("requested")
+        if (
+            requested_by_launcher in ("eventlet", "default")
+            and launcher.get("effective") == "gthread"
+        ):
+            notes.append(
+                "The eventlet web server is not installed for this OpenAlgo, so it runs on "
+                "gthread. Run the updater to reinstall the dependencies if you want eventlet."
+            )
+        else:
+            notes.append(
+                "Your .env asks for the eventlet web server, but OpenAlgo was started "
+                "before that change. Restart OpenAlgo after 23:30 IST to apply it."
+            )
+
+    pool = info.get("thread_pool") or {}
+    threads = info.get("configured_threads")
+    busy = pool.get("busy")
+    waiting = pool.get("waiting")
+    if worker == "gthread" and threads:
+        crowded = busy is not None and busy >= threads * _BUSY_WARNING_SHARE
+        if crowded or (waiting or 0) > 0:
+            in_use = f"{busy} of {threads}" if busy is not None else f"all {threads}"
+            notes.append(
+                f"Almost every request slot is busy ({in_use}), so new requests can wait. "
+                "Close OpenAlgo tabs you are not using. If this keeps happening during "
+                "trading, go back to eventlet: set OPENALGO_WORKER_CLASS = 'eventlet' in "
+                ".env and restart OpenAlgo after 23:30 IST."
+            )
+    return notes
+
+
+def _runtime_info():
+    """Python version, web server, thread budget, uptime and notes for the operator.
+
+    Everything is read, nothing is imported that the app has not already
+    imported: in particular eventlet is never imported just to ask, because
+    that would put it into sys.modules on a server that does not use it.
+    """
+    import sys as _sys
+    import threading as _threading
 
     info = {
         "python_version": _sys.version.split()[0],
@@ -1262,17 +1382,58 @@ def _runtime_info():
         "eventlet_active": False,
         "wsgi_hint": "flask-dev",
         "process_uptime_seconds": None,
+        "worker_class": None,
+        "requested_worker_class": None,
+        "gunicorn_version": None,
+        "configured_workers": None,
+        "configured_threads": None,
+        "graceful_timeout": None,
+        "launcher": None,
+        "started_by_launcher": None,
+        "thread_pool": None,
+        "thread_budget": None,
+        "streams": None,
+        "websocket_proxy_mode": None,
+        "active_threads": None,
+        "notes": [],
     }
     try:
-        # Never imports eventlet: importing it just to ask would put it into
-        # sys.modules on a server that does not use it.
-        from utils.runtime import is_monkey_patched
+        from utils import runtime
 
-        info["eventlet_active"] = is_monkey_patched("socket")
+        info["eventlet_active"] = runtime.is_monkey_patched("socket")
+        info["worker_class"] = runtime.worker_class()
+        info["requested_worker_class"] = _requested_worker_now()
+        info["configured_threads"] = runtime.configured_threads()
+        info["launcher"] = runtime.launcher_info()
+        registered = runtime.registered_worker() or {}
+        info["configured_workers"] = registered.get("workers")
+        info["graceful_timeout"] = registered.get("graceful_timeout")
+        info["thread_pool"] = runtime.gthread_pool_stats()
+        if runtime.under_gunicorn():
+            info["wsgi_hint"] = f"gunicorn-{info['worker_class']}"
+            info["started_by_launcher"] = info["launcher"] is not None
     except Exception:
         pass
     if info["eventlet_active"]:
         info["wsgi_hint"] = "gunicorn-eventlet"
+    info["gunicorn_version"] = getattr(_sys.modules.get("gunicorn"), "__version__", None)
+
+    try:
+        from utils import stream_registry
+
+        info["thread_budget"] = stream_registry.thread_budget()
+        info["streams"] = stream_registry.snapshot()
+    except Exception:
+        pass
+    try:
+        info["websocket_proxy_mode"] = _proxy_mode_hint()
+    except Exception:
+        pass
+    info["active_threads"] = _threading.active_count()
+    try:
+        info["notes"] = _web_server_notes(info)
+    except Exception:
+        info["notes"] = []
 
     try:
         import psutil
@@ -1762,6 +1923,23 @@ def _render_report(payload, errors_summary, errors_recent, fmt):
     lines.append(_md_kv("Eventlet active", runtime.get("eventlet_active")))
     lines.append(_md_kv("WSGI", runtime.get("wsgi_hint")))
     lines.append(_md_kv("Process uptime (s)", runtime.get("process_uptime_seconds")))
+    lines.append(_md_kv("Web server", runtime.get("worker_class")))
+    lines.append(_md_kv("Web server in .env", runtime.get("requested_worker_class")))
+    lines.append(_md_kv("gunicorn", runtime.get("gunicorn_version")))
+    lines.append(_md_kv("Started by launcher", runtime.get("started_by_launcher")))
+    lines.append(_md_kv("Request threads", runtime.get("configured_threads")))
+    pool = runtime.get("thread_pool") or {}
+    if pool:
+        lines.append(_md_kv("Request threads busy", pool.get("busy")))
+        lines.append(_md_kv("Requests waiting", pool.get("waiting")))
+    budget = runtime.get("thread_budget") or {}
+    if budget:
+        lines.append(_md_kv("Open streams", budget.get("streams")))
+        lines.append(_md_kv("Browser sessions", budget.get("socketio")))
+    lines.append(_md_kv("Market data proxy", runtime.get("websocket_proxy_mode")))
+    lines.append(_md_kv("Process threads", runtime.get("active_threads")))
+    for note in runtime.get("notes") or []:
+        lines.append(f"{bullet}Note: {note}")
     lines.append("")
 
     hw = payload.get("hardware") or {}
@@ -2267,7 +2445,7 @@ def api_mcp_kill_switch():
 
 import re
 
-from utils.env_check import _atomic_replace_text
+from utils.env_check import ENV_WRITE_LOCK, _atomic_replace_text
 
 _ENV_KEY_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)$")
 
@@ -2302,6 +2480,13 @@ def _set_env_value(env_path: Path, key: str, value: str) -> None:
     Persistence goes through ``utils.env_check._atomic_replace_text``
     which falls back to in-place truncate on Docker single-file bind
     mounts (rename(2) over a mountpoint returns EBUSY/EXDEV).
+
+    The read and the write happen under ``utils.env_check.ENV_WRITE_LOCK``,
+    the one lock every .env writer in the process takes. Without it two saves
+    at once (two tabs, or two devices) each read the file, change their own
+    key and write back a copy without the other's change, so one setting is
+    silently reverted. The lock is reentrant, so a caller saving several keys
+    holds it across all of them and they land together.
     """
     if not _ENV_KEY_PATTERN.match(key):
         raise ValueError(f"Refusing to write malformed env key: {key!r}")
@@ -2309,30 +2494,31 @@ def _set_env_value(env_path: Path, key: str, value: str) -> None:
         raise ValueError("Refusing to write env value containing quote/backslash/newline")
 
     new_line = f"{key} = '{value}'\n"
-    if not env_path.exists():
-        raise FileNotFoundError(f".env not found at {env_path}")
+    with ENV_WRITE_LOCK:
+        if not env_path.exists():
+            raise FileNotFoundError(f".env not found at {env_path}")
 
-    text = env_path.read_text()
-    lines = text.splitlines(keepends=True)
-    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
-    found = False
-    for i, line in enumerate(lines):
-        if pattern.match(line):
-            lines[i] = new_line
-            found = True
-            break
+        text = env_path.read_text()
+        lines = text.splitlines(keepends=True)
+        pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+        found = False
+        for i, line in enumerate(lines):
+            if pattern.match(line):
+                lines[i] = new_line
+                found = True
+                break
 
-    if not found:
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] = lines[-1] + "\n"
-        lines.append(new_line)
+        if not found:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] = lines[-1] + "\n"
+            lines.append(new_line)
 
-    # Reuse the rotate_pepper helper: it already handles the Docker single-file
-    # bind-mount case (install-docker.sh maps ./.env:/app/.env, which makes
-    # /app/.env a mountpoint that rename(2) refuses to overwrite — EBUSY/EXDEV)
-    # plus Windows ERROR_ACCESS_DENIED retries. See issue #1337 for the user
-    # report on the admin MCP-settings save path.
-    _atomic_replace_text(str(env_path), "".join(lines))
+        # Reuse the rotate_pepper helper: it already handles the Docker single-file
+        # bind-mount case (install-docker.sh maps ./.env:/app/.env, which makes
+        # /app/.env a mountpoint that rename(2) refuses to overwrite: EBUSY/EXDEV)
+        # plus Windows ERROR_ACCESS_DENIED retries. See issue #1337 for the user
+        # report on the admin MCP-settings save path.
+        _atomic_replace_text(str(env_path), "".join(lines))
 
 
 def _mcp_settings_payload() -> dict:
@@ -2423,20 +2609,27 @@ def api_mcp_settings_put():
         ), 500
 
     try:
-        if "http_enabled" in data:
-            _set_env_value(env_path, "MCP_HTTP_ENABLED", "True" if data["http_enabled"] else "False")
-        if public_url is not None:
-            _set_env_value(env_path, "MCP_PUBLIC_URL", public_url)
-        if "require_approval" in data:
-            _set_env_value(
-                env_path, "MCP_OAUTH_REQUIRE_APPROVAL", "True" if data["require_approval"] else "False"
-            )
-        if "write_scope_enabled" in data:
-            _set_env_value(
-                env_path,
-                "MCP_OAUTH_WRITE_SCOPE_ENABLED",
-                "True" if data["write_scope_enabled"] else "False",
-            )
+        # One hold across every key, so a save from another tab cannot land
+        # between them and this request's settings are written together.
+        with ENV_WRITE_LOCK:
+            if "http_enabled" in data:
+                _set_env_value(
+                    env_path, "MCP_HTTP_ENABLED", "True" if data["http_enabled"] else "False"
+                )
+            if public_url is not None:
+                _set_env_value(env_path, "MCP_PUBLIC_URL", public_url)
+            if "require_approval" in data:
+                _set_env_value(
+                    env_path,
+                    "MCP_OAUTH_REQUIRE_APPROVAL",
+                    "True" if data["require_approval"] else "False",
+                )
+            if "write_scope_enabled" in data:
+                _set_env_value(
+                    env_path,
+                    "MCP_OAUTH_WRITE_SCOPE_ENABLED",
+                    "True" if data["write_scope_enabled"] else "False",
+                )
     except (FileNotFoundError, ValueError, OSError) as e:
         logger.exception(f"[MCP admin] failed to update .env: {e}")
         return jsonify({"status": "error", "message": f"Failed to update .env: {e}"}), 500

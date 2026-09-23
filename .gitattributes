@@ -1,0 +1,7 @@
+# Shell scripts run on Linux servers and inside the Docker image, where a
+# carriage return breaks them ("$'\r': command not found"). Keep them LF even
+# in a Windows checkout with core.autocrlf=true, so an image built from that
+# checkout still starts. The launcher's Python helpers are read by the same
+# scripts, so they are kept LF too.
+*.sh text eol=lf
+install/lib/*.py text eol=lf

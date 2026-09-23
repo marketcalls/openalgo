@@ -327,6 +327,32 @@ trap cleanup SIGTERM SIGINT
 # Use PORT env var if set (Railway/cloud), otherwise default to 5000
 APP_PORT="${PORT:-5000}"
 
+# Web server: eventlet, exactly as below, unless .env (or the container
+# environment) sets OPENALGO_WORKER_CLASS = 'gthread'. Only then does the
+# container start through the launcher. See docs/gthread/README.md.
+OPENALGO_WORKER_REQUESTED="default"
+if [ -f /app/install/lib/resolve_runtime.py ]; then
+    OPENALGO_WORKER_REQUESTED="$(/app/.venv/bin/python /app/install/lib/resolve_runtime.py --env-file "$ENV_FILE" --print requested)" \
+        || OPENALGO_WORKER_REQUESTED="default"
+fi
+if [ "$OPENALGO_WORKER_REQUESTED" = "gthread" ] && [ -f /app/install/openalgo-gunicorn.sh ]; then
+    echo "[OpenAlgo] Starting application on port ${APP_PORT} with gthread..."
+    mkdir -p /tmp/gunicorn_workers
+    # Docker gives a container 10 seconds to stop before killing it, so open
+    # requests get 7 of them to finish. A larger stop_grace_period does not
+    # lengthen this; see docs/gthread/README.md.
+    exec /bin/bash /app/install/openalgo-gunicorn.sh \
+        --app-dir /app \
+        --venv /app/.venv \
+        --env-file "$ENV_FILE" \
+        --bind "0.0.0.0:${APP_PORT}" \
+        --proxy-mode external \
+        --timeout 300 \
+        --graceful-timeout 7 \
+        --worker-tmp-dir /tmp/gunicorn_workers \
+        --log-level warning
+fi
+
 echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
 
 # Create gunicorn worker temp directory (must be inside container, not mounted volume)

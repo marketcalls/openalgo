@@ -1,0 +1,22 @@
+# Reviewed sleeps for scripts/gthread_sleep_gate.py.
+#
+# Format:  path::qualname  # benign|pending <owner>: reason
+#
+# One entry covers the named function. A reviewed sleep is reported and never
+# fails the gate. "benign" means it never holds a request thread, or holds it
+# for a bounded, intended time. "pending" means the thread it holds is a
+# known cost whose fix belongs to the partition named; the entry goes when
+# the fix lands (the gate then reports it as stale). Re-review an entry
+# whenever the function it names changes.
+
+# --- Background threads, never a request thread ---------------------------
+services/broker_keepalive_service.py::_keepalive_loop  # benign: the keepalive thread's own loop
+services/market_data_service.py::MarketDataService._cleanup_loop  # benign: a background cleanup every 5 minutes
+services/whatsapp_bot_service.py::WhatsAppBotService._run_pair  # benign: its own thread during pairing, bounded at 300 s
+
+# --- Streams that hold a request thread while they are open ---------------
+blueprints/mcp_http.py::mcp_sse.gen  # pending messaging: an MCP SSE stream holds a request thread while open; its cap and its end at shutdown belong to messaging
+services/agent/stream.py::_pump  # pending messaging: an agent run's SSE stream holds a request thread while the run lasts; its cap belongs to messaging
+
+# --- Sleeping while holding a lock ----------------------------------------
+broker/pocketful/api/pocketfulwebsocket.py::PocketfulSocket.run_socket  # pending brokers_b: one caller connects while the others wait on the lock for up to about 6 s, holding their request threads
