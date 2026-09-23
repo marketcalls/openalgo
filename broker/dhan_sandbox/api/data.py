@@ -969,8 +969,10 @@ class BrokerData:
 
         quote["ltp"] = round(max(0.05, ltp), 2)
         quote["open"] = round(max(0.05, ltp_center + self._stable_noise(seed_key + "|open", -span, span)), 2)
-        quote["high"] = round(max(quote["ltp"], ltp_center + self._stable_noise(seed_key + "|high", 0, span * 1.8)), 2)
-        quote["low"] = round(max(0.05, min(quote["ltp"], ltp_center - abs(self._stable_noise(seed_key + "|low", 0, span * 1.8)))), 2)
+        # open is drawn independently of ltp, so high and low must bound it too;
+        # the /trading chart rejects the whole history on one malformed candle.
+        quote["high"] = round(max(quote["ltp"], quote["open"], ltp_center + self._stable_noise(seed_key + "|high", 0, span * 1.8)), 2)
+        quote["low"] = round(max(0.05, min(quote["ltp"], quote["open"], ltp_center - abs(self._stable_noise(seed_key + "|low", 0, span * 1.8)))), 2)
 
         if not quote.get("oi"):
             quote["oi"] = max(1000, int(abs(self._stable_noise(seed_key + "|oi", 1000, 100000))))
