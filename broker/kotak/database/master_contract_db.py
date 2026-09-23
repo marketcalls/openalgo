@@ -160,7 +160,12 @@ def process_kotak_nse_csv(path):
     df.loc[df["pGroup"].isin(["EQ", "BE"]), "instrumenttype"] = "EQ"
     df.loc[df["pISIN"].isna(), "exchange"] = "NSE_INDEX"
     df.loc[df["pGroup"].isin(["EQ", "BE"]), "exchange"] = "NSE"
-    df.loc[df["pISIN"].isna(), "instrumenttype"] = "INDEX"
+    # An index carries no ISIN, which is how it is told apart here. It is typed
+    # EQ, not INDEX: instrumenttype is the platform's own four-value vocabulary
+    # -- EQ, FUT, CE, PE -- taken from Kite, which likewise types its INDICES
+    # segment EQ. The exchange column (NSE_INDEX) is what says this is an index,
+    # so an INDEX type here would be a fifth value no consumer knows (QA MC-04).
+    df.loc[df["pISIN"].isna(), "instrumenttype"] = "EQ"
     df.loc[df["pISIN"].isna(), "pGroup"] = ""
 
     filtereddataframe["instrumenttype"] = df["instrumenttype"]
@@ -210,7 +215,8 @@ def process_kotak_bse_csv(path):
 
     df["exchange"] = "BSE"
     df.loc[df["pISIN"].isna(), "exchange"] = "BSE_INDEX"
-    df.loc[df["pISIN"].isna(), "instrumenttype"] = "INDEX"
+    # EQ rather than INDEX, for the reason given in the NSE branch above.
+    df.loc[df["pISIN"].isna(), "instrumenttype"] = "EQ"
     df.loc[df["pISIN"].isna(), "pGroup"] = ""
 
     filtereddataframe["instrumenttype"] = df["instrumenttype"]
@@ -273,7 +279,7 @@ def process_kotak_nfo_csv(path):
     tokensymbols["exchange"] = "NFO"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
@@ -465,7 +471,7 @@ def process_kotak_cds_csv(path):
     tokensymbols["exchange"] = "CDS"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
@@ -504,7 +510,12 @@ def process_kotak_mcx_csv(path):
     tokensymbols["exchange"] = "MCX"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    # Stripped because Kotak pads pOptionType out to two characters and leaves it
+    # blank on the rows that are neither a future nor an option: the MCX spot and
+    # index rows (GOLDCOM, MCXCOPRDEX and the like, all carrying epoch-zero
+    # expiries). Untrimmed, that "  " lands in the table as a fifth instrument
+    # type nothing recognises, where "" already means unclassified (QA MC-04).
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
@@ -543,7 +554,7 @@ def process_kotak_bfo_csv(path):
     tokensymbols["exchange"] = "BFO"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
