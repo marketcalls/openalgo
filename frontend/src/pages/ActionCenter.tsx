@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -58,6 +59,26 @@ interface PendingOrder {
   status: 'pending' | 'approved' | 'rejected'
   created_at_ist: string
   raw_order_data: Record<string, unknown>
+  /** What the broker said once the order was sent, e.g. open, complete, rejected. */
+  broker_status?: string | null
+  broker_order_id?: string | null
+}
+
+/**
+ * The broker_status of an approved order OpenAlgo has started sending and has
+ * no broker answer recorded for (SUBMITTING in database/action_center_db.py).
+ *
+ * It is written just before the order goes to the broker and replaced by the
+ * broker's answer as soon as there is one, which also refreshes this page. An
+ * order that stays in it was cut off mid-send, by a restart or a crash, so it
+ * may or may not be at the broker. OpenAlgo never sends such an order again on
+ * its own, and this page offers no way to: only the broker's order book can say
+ * whether it arrived.
+ */
+const SENDING_NOT_CONFIRMED = 'submitting'
+
+function isSendNotConfirmed(order: PendingOrder): boolean {
+  return order.status === 'approved' && order.broker_status === SENDING_NOT_CONFIRMED
 }
 
 interface OrderStats {
@@ -588,6 +609,15 @@ export default function ActionCenterPage() {
                               )}
                             </Button>
 
+                            {isSendNotConfirmed(order) && (
+                              <Badge
+                                variant="outline"
+                                className="h-8 border-amber-500 text-amber-700 dark:text-amber-400"
+                              >
+                                Not confirmed
+                              </Badge>
+                            )}
+
                             {order.status === 'pending' ? (
                               <>
                                 <Button
@@ -629,6 +659,27 @@ export default function ActionCenterPage() {
                           </div>
                         </TableCell>
                       </TableRow>
+
+                      {/* An order cut off while it was being sent: say so, and
+                          say what to check, because nothing will resend it. */}
+                      {isSendNotConfirmed(order) && (
+                        <TableRow>
+                          <TableCell colSpan={10} className="p-2">
+                            <Alert variant="warning">
+                              <AlertTriangle className="h-4 w-4" />
+                              <AlertTitle>
+                                This order may or may not have reached your broker
+                              </AlertTitle>
+                              <AlertDescription>
+                                OpenAlgo started sending it but has no answer from your broker
+                                recorded, so it cannot tell whether the broker received it. OpenAlgo
+                                will not send it again. Check your broker's order book before you
+                                place this order again.
+                              </AlertDescription>
+                            </Alert>
+                          </TableCell>
+                        </TableRow>
+                      )}
 
                       {/* Expanded Details Row */}
                       {expandedOrders.has(order.id) && (
