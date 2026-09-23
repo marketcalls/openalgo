@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -567,9 +568,9 @@ export default function StraddleChart() {
           setExpiries([])
           setSelectedExpiry('')
         }
-      } catch {
+      } catch (error) {
         if (cancelled) return
-        showToast.error('Failed to fetch expiry dates', 'positions')
+        showToast.error(serverSentence(error, 'Failed to fetch expiry dates'), 'positions')
       }
     }
     fetchExpiries()
@@ -598,8 +599,8 @@ export default function StraddleChart() {
       } else {
         showToast.error(res.message || 'Failed to load straddle data', 'positions')
       }
-    } catch {
-      showToast.error('Failed to fetch straddle data', 'positions')
+    } catch (error) {
+      showToast.error(serverSentence(error, 'Failed to fetch straddle data'), 'positions')
     } finally {
       setIsLoading(false)
     }

@@ -25,6 +25,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import Plot from '@/lib/Plot2D'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -174,9 +175,9 @@ export default function OIRange() {
       } else {
         showToast.error(response.message || 'Failed to fetch OI data')
       }
-    } catch {
+    } catch (error) {
       if (requestIdRef.current !== requestId) return
-      showToast.error('Failed to fetch OI data')
+      showToast.error(serverSentence(error, 'Failed to fetch OI data'))
     } finally {
       if (requestIdRef.current === requestId) setIsLoading(false)
     }

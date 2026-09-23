@@ -37,6 +37,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -615,8 +616,9 @@ export default function CustomStraddle() {
           setExpiries([])
           setSelectedExpiry('')
         }
-      } catch {
-        if (!cancelled) showToast.error('Failed to fetch expiry dates', 'positions')
+      } catch (error) {
+        if (!cancelled)
+          showToast.error(serverSentence(error, 'Failed to fetch expiry dates'), 'positions')
       }
     }
     fetchExpiries()
