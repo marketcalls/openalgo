@@ -198,9 +198,11 @@ def test_upstox_retry_after_past_the_ceiling_is_not_slept_under_gthread(
             return Response()
 
     monkeypatch.setattr(upstox_data, "get_httpx_client", lambda: Client())
-    body = upstox_data.get_api_response("/market-quote/quotes", "tok")
+    # Refused as busy, not handed back as data: an error body read as an empty
+    # book is how a smart order ends up sized as if flat (review brokers-05).
+    with pytest.raises(BrokerBusyError):
+        upstox_data.get_api_response("/market-quote/quotes", "tok")
 
-    assert body["status"] == "error"
     assert len(calls) == 1 and sleeps.calls == []
 
 

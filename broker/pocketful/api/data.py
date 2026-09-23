@@ -187,6 +187,11 @@ class BrokerData:
         try:
             # Get quotes using WebSocket compact market data - no fallbacks
             return self._get_quotes_compact(symbol, exchange)
+        except BrokerBusyError:
+            # Refused by the feed gate before anything was sent (gthread only).
+            # Passed through so the service answers 429 with its sentence; a
+            # 500 here would let an option chain show zero prices as success.
+            raise
         except PocketfulPermissionError as e:
             logger.error(f"Permission error fetching quotes: {str(e)}")
             raise
@@ -443,6 +448,11 @@ class BrokerData:
         try:
             # Get market depth using WebSocket - no fallback to mock data
             return self._get_market_depth_websocket(symbol, exchange)
+        except BrokerBusyError:
+            # Refused by the feed gate before anything was sent (gthread only).
+            # Passed through so the service answers 429 with its sentence; a
+            # 500 here would let an option chain show zero prices as success.
+            raise
         except PocketfulPermissionError as e:
             logger.error(f"Permission error fetching market depth: {str(e)}")
             raise
@@ -747,6 +757,11 @@ class BrokerData:
             else:
                 return self._process_multiquotes_batch(symbols)
 
+        except BrokerBusyError:
+            # Refused by the feed gate before anything was sent (gthread only).
+            # Passed through so the service answers 429 with its sentence; a
+            # 500 here would let an option chain show zero prices as success.
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise PocketfulAPIError(f"Error fetching multiquotes: {e}") from e

@@ -6,16 +6,21 @@ some time". IIFL's generic EC003 error reads "Something went wrong, please try
 after some time", and neither it nor an HTTP 429 proves the order did not
 reach IIFL. So a place, modify or cancel could go out up to four times.
 
-Reads are still retried. Order writes are answered once, with a message
-telling the trader to check the order book before sending again. This does not
-depend on the worker class, so nothing here sets one.
+Reads are still retried. Under the gthread worker order writes are answered
+once, with a message telling the trader to check the order book before sending
+again. The eventlet worker and the development server keep the old behaviour,
+because gthread is opt-in and an install that has not chosen it sees no change;
+the last cases pin that.
 """
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from broker.iiflcapital.api import order_api
+from utils import runtime
 
 EC003 = {"status": "EC003", "message": "Something went wrong, please try after some time"}
 
@@ -57,6 +62,9 @@ class Client:
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setattr(
+        runtime, "_registered", {"worker_class": "gthread", "threads": 64, "pid": os.getpid()}
+    )
     holder = {}
 
     def install(*replies):
@@ -139,3 +147,37 @@ def test_an_ordinary_rejection_passes_through_unchanged(client):
 
     assert fake.calls == ["POST"]
     assert data["message"] == "Insufficient funds"
+
+
+@pytest.fixture
+def dev_client(client, monkeypatch):
+    monkeypatch.setattr(runtime, "_registered", None)
+    assert not runtime.gthread_active()
+    return client
+
+
+def test_outside_gthread_a_throttled_write_is_retried_as_before(dev_client):
+    fake = dev_client(
+        Reply(429, {"message": "Too many requests"}),
+        Reply(200, {"status": "SUCCESS", "result": {"brokerOrderId": "X1"}}),
+    )
+
+    order_api.place_order_api(dict(ORDER), "tok")
+
+    assert fake.calls == ["POST", "POST"]
+
+
+def test_outside_gthread_a_failed_cancel_keeps_the_broker_status(dev_client):
+    dev_client(Reply(200, {"status": "error", "message": "Order already cancelled"}))
+
+    data, status = order_api.cancel_order("ABC123", "tok")
+
+    assert data["status"] == "error" and status == 200
+
+
+def test_under_gthread_a_failed_cancel_answered_200_is_a_failure(client):
+    client(Reply(200, {"status": "error", "message": "Order already cancelled"}))
+
+    data, status = order_api.cancel_order("ABC123", "tok")
+
+    assert data["status"] == "error" and status == 400

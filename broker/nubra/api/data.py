@@ -507,7 +507,9 @@ class BrokerData:
             logger.error(f"REST quote error for {symbol} on {exchange}: {str(e)}")
             return None
 
-    @_feed_gated(on_busy=lambda self, symbols: self._get_multiquotes_sequential(symbols))
+    @_feed_gated(
+        on_busy=lambda self, symbols: self._get_multiquotes_sequential(symbols, use_ws=False)
+    )
     def get_multiquotes(self, symbols: list) -> list:
         """
         Get real-time quotes for multiple symbols using batch WebSocket subscriptions.
@@ -532,7 +534,11 @@ class BrokerData:
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
                 logger.info("WebSocket not available, using REST fallback for multiquotes")
-                return self._get_multiquotes_sequential(symbols)
+                # Under gthread a per-symbol feed attempt would queue at the
+                # feed gate for a socket that is not there; go straight to REST.
+                return self._get_multiquotes_sequential(
+                    symbols, use_ws=not runtime.gthread_active()
+                )
 
             results = []
             failed_symbols = []
@@ -678,20 +684,29 @@ class BrokerData:
                 except Exception:
                     pass
 
-    def _get_multiquotes_sequential(self, symbols: list) -> list:
+    def _get_multiquotes_sequential(self, symbols: list, use_ws: bool = True) -> list:
         """
         Fallback: fetch quotes one-by-one when WebSocket is not available.
         Uses REST API with thread pool for concurrency.
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys.
+            use_ws: False skips the per-symbol feed attempt. The feed gate's
+                refusal passes False (gthread only): each pool worker would
+                otherwise wait the whole ceiling at the same gate again before
+                reaching REST, holding the request far past the bound the gate
+                exists to keep.
         """
         import concurrent.futures
 
         results = []
+        fetch = self.get_quotes if use_ws else self._get_quotes_rest_only
 
         def fetch_single_quote(item):
             symbol = item["symbol"]
             exchange = item["exchange"]
             try:
-                quote_data = self.get_quotes(symbol, exchange)
+                quote_data = fetch(symbol, exchange)
                 return {"symbol": symbol, "exchange": exchange, "data": quote_data}
             except NubraSessionExpired:
                 # Let it out of the worker so the batch fails as a whole rather
@@ -712,6 +727,31 @@ class BrokerData:
                     logger.error(f"Generate quote exception: {e}")
 
         return results
+
+    def _get_quotes_rest_only(self, symbol: str, exchange: str) -> dict:
+        """get_quotes without the feed attempt: REST, then zeros, as get_quotes falls back."""
+        try:
+            if not exchange.endswith("_INDEX"):
+                rest_quote = self._get_quotes_via_rest(symbol, exchange)
+                if rest_quote:
+                    return rest_quote
+            logger.info(f"No quote data available for {symbol} on {exchange}")
+            return {
+                "bid": 0,
+                "ask": 0,
+                "open": 0,
+                "high": 0,
+                "low": 0,
+                "ltp": 0,
+                "prev_close": 0,
+                "volume": 0,
+                "oi": 0,
+            }
+        except NubraSessionExpired:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
+            raise Exception(f"Error fetching quotes: {str(e)}") from e
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """

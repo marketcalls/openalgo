@@ -18,7 +18,7 @@ from broker.indmoney.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_symbol, get_token
-from utils.broker_backpressure import BrokerBusyError, busy_response
+from utils.broker_backpressure import BrokerBusyError, BusyResponse, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
@@ -738,6 +738,8 @@ def close_all_positions(current_api_key, auth):
     if not all_positions:
         return {"message": "No Open Positions Found"}, 200
 
+    refused = 0
+    attempted = 0
     if all_positions:
         # Loop through each position to close
         for position in all_positions:
@@ -787,11 +789,28 @@ def close_all_positions(current_api_key, auth):
             logger.debug(f"Close position payload: {place_order_payload}")
 
             # Place the order to close the position
-            _, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
+            res, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
+            attempted += 1
+            if isinstance(res, BusyResponse):
+                refused += 1
 
             logger.debug(f"Close position response: {api_response}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
+
+    if refused:
+        # Only under the gthread worker, where the order pacer refuses a
+        # square-off whose turn is too far away instead of sending it late.
+        # Reporting success here would leave those positions unwatched.
+        return {
+            "status": "error",
+            "message": (
+                f"{refused} of {attempted} open positions were not squared off, because "
+                "IndMoney allows only a limited number of orders per second and their "
+                "turn was too far away. Check your positions and square off the rest "
+                "again."
+            ),
+        }, 429
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 

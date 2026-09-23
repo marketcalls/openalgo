@@ -568,6 +568,11 @@ class BrokerData:
             else:
                 return self._process_multiquotes_batch(symbols)
 
+        except BrokerBusyError:
+            # Refused by the feed gate before anything was sent (gthread only).
+            # Passed through so the service answers 429 with its sentence; a
+            # 500 here would let an option chain show zero prices as success.
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")

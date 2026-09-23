@@ -19,7 +19,12 @@ from broker.upstox.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
-from utils.broker_backpressure import BrokerBusyError, busy_response, cap_server_delay
+from utils.broker_backpressure import (
+    BrokerBusyError,
+    BusyResponse,
+    busy_response,
+    cap_server_delay,
+)
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
@@ -135,6 +140,14 @@ def get_api_response(
                 return get_api_response(
                     endpoint, auth, method, payload, base_url, retry_count + 1
                 )
+            if category == "standard" and retry_count < MAX_RETRIES:
+                # gthread only (cap_server_delay never answers None elsewhere):
+                # Upstox asked for a wait past the ceiling. Handing its throttle
+                # body back as data would read as an empty book, and an empty
+                # position book sizes a smart order as if flat.
+                raise BrokerBusyError(
+                    retry_after=retry_delay_from_headers(e.response.headers, retry_count)
+                ) from e
             logger.warning(
                 f"Upstox rate limit hit on {endpoint} (category={category}); not retrying"
             )
@@ -458,6 +471,8 @@ def close_all_positions(current_api_key, auth):
             logger.debug("No open positions found to close.")
             return {"message": "No Open Positions Found"}, 200
 
+        refused = 0
+        attempted = 0
         for position in positions_response["data"]:
             if int(position.get("quantity", 0)) == 0:
                 continue
@@ -483,12 +498,33 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
             logger.debug(f"Closing position with payload: {place_order_payload}")
-            _, api_response, _ = place_order_api(place_order_payload, auth)
+            res, api_response, _ = place_order_api(place_order_payload, auth)
+            attempted += 1
+            if isinstance(res, BusyResponse):
+                refused += 1
             logger.debug(f"Close position response for {symbol}: {api_response}")
+
+        if refused:
+            # Only under the gthread worker, where the order window refuses a
+            # square-off whose turn is too far away instead of sending it late.
+            # Reporting success here would leave those positions unwatched.
+            return {
+                "status": "error",
+                "message": (
+                    f"{refused} of {attempted} open positions were not squared off, because "
+                    "Upstox allows only a limited number of orders per minute and their "
+                    "turn was too far away. Check your positions and square off the rest "
+                    "again."
+                ),
+            }, 429
 
         logger.debug("Successfully initiated closing of all open positions.")
         return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
+    except BrokerBusyError:
+        # The positions read was refused (gthread only). The service answers
+        # with the busy sentence; a generic failure would hide why.
+        raise
     except Exception:
         logger.exception("An error occurred while closing all positions.")
         return {"status": "error", "message": "Failed to close all positions"}, 500
@@ -600,6 +636,11 @@ def cancel_all_orders_api(data, auth):
         )
         return canceled_orders, failed_cancellations
 
+    except BrokerBusyError:
+        # The order book read was refused (gthread only), so nothing was
+        # cancelled. Returning two empty lists would report a successful
+        # cancel-all while every open order is still working.
+        raise
     except Exception:
         logger.exception("An error occurred while canceling all orders.")
         return [], []

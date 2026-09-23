@@ -525,6 +525,12 @@ class BrokerData:
                     )
                     time.sleep(delay)
                     return self._post(endpoint, payload, _retry_count + 1)
+                # gthread only (cap_server_delay never answers None elsewhere):
+                # the broker asked for a wait past the ceiling, which is the
+                # busy answer, not a failure of the request.
+                raise BrokerBusyError(
+                    retry_after=retry_delay_from_headers(response.headers, _retry_count)
+                )
 
             raise Exception(message)
 
