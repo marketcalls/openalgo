@@ -24,6 +24,9 @@ from sqlalchemy.pool import NullPool
 
 import database.action_center_db as action_center_db
 import database.auth_db as auth_db
+
+# restx_api before any order service: see test_strategy_module_order_dispatch.py.
+import restx_api  # noqa: F401
 import services.pending_order_execution_service as execution_service
 
 USER = "gthread-action-center-user"
@@ -190,6 +193,22 @@ def test_a_failure_after_the_claim_still_writes_a_final_status(broker, monkeypat
     ok, _body, code = execution_service.execute_approved_order(order_id)
 
     assert not ok and code == 403
+    assert action_center_db.get_pending_order_by_id(order_id).broker_status == "rejected"
+
+
+def test_an_error_after_the_claim_does_not_leave_the_order_in_flight(broker, monkeypatch):
+    order_id = _pending()
+    assert action_center_db.approve_pending_order(order_id, USER, USER)
+
+    def unreachable(user):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(execution_service, "get_api_key_for_tradingview", unreachable)
+
+    ok, _body, code = execution_service.execute_approved_order(order_id)
+
+    assert not ok and code == 500
+    assert broker == []
     assert action_center_db.get_pending_order_by_id(order_id).broker_status == "rejected"
 
 

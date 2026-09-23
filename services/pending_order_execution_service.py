@@ -64,6 +64,7 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
         - Response data (dict)
         - HTTP status code (int)
     """
+    claimed = False
     try:
         # Get the pending order
         pending_order = get_pending_order_by_id(pending_order_id)
@@ -103,21 +104,10 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                 ALREADY_SUBMITTING_STATUS,
             )
 
+        claimed = True
+
         # Parse order data
-        try:
-            order_data = json.loads(pending_order.order_data)
-        except Exception:
-            # Claimed above, so the row must not be left in flight.
-            logger.exception(f"Pending order {pending_order_id} has unreadable order data")
-            update_broker_status(pending_order_id, None, "rejected")
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": "This order's details could not be read, so it was not sent.",
-                },
-                500,
-            )
+        order_data = json.loads(pending_order.order_data)
         api_type = pending_order.api_type
         user_id = pending_order.user_id
 
@@ -332,4 +322,9 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
 
     except Exception as e:
         logger.exception(f"Error in execute_approved_order: {e}")
+        if claimed:
+            # Failed after the claim and before any order was sent (reading
+            # the order or its credentials): the row must not be left reading
+            # as on its way to the broker.
+            update_broker_status(pending_order_id, None, "rejected")
         return False, {"status": "error", "message": f"Failed to execute order: {str(e)}"}, 500
