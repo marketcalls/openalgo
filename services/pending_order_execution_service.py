@@ -3,12 +3,26 @@
 import json
 from typing import Any
 
-from database.action_center_db import get_pending_order_by_id, update_broker_status
+from database.action_center_db import (
+    claim_pending_order_for_execution,
+    get_pending_order_by_id,
+    update_broker_status,
+)
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+#: HTTP status for an approved order that another request is already sending.
+ALREADY_SUBMITTING_STATUS = 409
+
+#: What the operator reads when an approval loses the execution claim.
+ALREADY_SUBMITTING_MESSAGE = (
+    "This order is already being sent to your broker. Check the order book "
+    "before approving it again."
+)
 
 
 def _flatten_execution_results(results: Any) -> list[dict[str, Any]]:
@@ -50,6 +64,7 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
         - Response data (dict)
         - HTTP status code (int)
     """
+    claimed = False
     try:
         # Get the pending order
         pending_order = get_pending_order_by_id(pending_order_id)
@@ -70,6 +85,26 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                 },
                 400,
             )
+
+        # Claim before anything can reach the broker. An approved order is
+        # sent at most once: two approvals racing (a double click, Approve on
+        # one device and Approve All on another) could both pass the status
+        # check above and both place the order. The claim is one conditional
+        # UPDATE that moves broker_status from empty to "submitting", so only
+        # one caller gets True. Every path after it writes a final status, and
+        # an order left in "submitting" (a crash mid-send) is never resent
+        # automatically: the operator checks the broker's order book.
+        if not claim_pending_order_for_execution(pending_order_id):
+            logger.warning(
+                f"Pending order {pending_order_id} is already being executed; not sending it again"
+            )
+            return (
+                False,
+                {"status": "error", "message": ALREADY_SUBMITTING_MESSAGE},
+                ALREADY_SUBMITTING_STATUS,
+            )
+
+        claimed = True
 
         # Parse order data
         order_data = json.loads(pending_order.order_data)
@@ -273,6 +308,13 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
 
             return success, response_data, status_code
 
+        except BrokerBusyError as e:
+            # Refused before it was sent: the broker's request queue was too
+            # long to wait in (only under the gthread worker).
+            logger.warning(f"Pending order {pending_order_id} not sent, broker busy: {e}")
+            update_broker_status(pending_order_id, None, "rejected")
+            return False, {"status": "error", "message": str(e)}, 429
+
         except Exception as e:
             logger.exception(f"Error executing order via service: {e}")
             update_broker_status(pending_order_id, None, "rejected")
@@ -280,4 +322,9 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
 
     except Exception as e:
         logger.exception(f"Error in execute_approved_order: {e}")
+        if claimed:
+            # Failed after the claim and before any order was sent (reading
+            # the order or its credentials): the row must not be left reading
+            # as on its way to the broker.
+            update_broker_status(pending_order_id, None, "rejected")
         return False, {"status": "error", "message": f"Failed to execute order: {str(e)}"}, 500

@@ -63,10 +63,16 @@ approval gate instead of failing loudly.
 Threading
 ---------
 
-A toolkit runs on the agent's real OS thread, never on the eventlet hub. Keep
-that true: call the service layer, which is safe from either world, and do not
-introduce a green primitive here. See CLAUDE.md, "Nothing may block or be
-blocked across the eventlet boundary".
+A toolkit runs on the agent's real OS thread, never on the eventlet hub. Under
+the gthread worker and the development server every thread is real, and the
+service layer may be called from it directly. Under the eventlet worker it may
+not: service code takes green primitives (the sandbox fund and position locks,
+the event bus lock, the Socket.IO queues), and a real thread that waits on one
+while a greenlet holds it is blocked forever. So a tool reaches service code
+through ``utils.real_threading.run_on_hub``, which runs the call on the hub
+under eventlet and simply makes it everywhere else; ``OrdersToolkit`` does so
+for its preparation and its dispatch. Do not introduce a green primitive here.
+See CLAUDE.md, "Nothing may block or be blocked across the eventlet boundary".
 """
 
 from __future__ import annotations

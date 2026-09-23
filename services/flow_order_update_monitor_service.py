@@ -75,7 +75,16 @@ class FlowOrderUpdateMonitor:
         self._initialized = True
         self._watches: dict[int, OrderUpdateWatch] = {}
         self._watches_lock = threading.Lock()
-        bus.subscribe("order.update", self._on_order_update, name="FlowOrderUpdateMonitor")
+        # The critical lane: an order-update trigger is how a workflow reacts to
+        # a fill (placing the stop leg, say), so it must not share the
+        # best-effort lane's cap with alert senders, which sheds callbacks
+        # under a burst.
+        bus.subscribe(
+            "order.update",
+            self._on_order_update,
+            name="FlowOrderUpdateMonitor",
+            critical=True,
+        )
         logger.debug("FlowOrderUpdateMonitor initialized (subscribed to order.update)")
 
     def add_watch(

@@ -59,16 +59,21 @@ concurrent subscribe costs at most one tick, which the next one replaces.
 
 **Consumer side -** :meth:`_run_drain_loop` and :meth:`_run_poll_loop`. Both
 run on plain ``threading.Thread``, which eventlet monkey-patches into green
-threads. That is the point: they touch the state dicts, call the quote service
-over HTTP and invoke the engine's ``notify`` hook, and all of those belong to
-the hub. They read the real queue with ``get_nowait()`` plus a short sleep,
-never a blocking ``get()``, because a greenlet blocking on a real primitive
-stops every other request on the worker.
+threads. That is the point under eventlet: they touch the state dicts, call the
+quote service over HTTP and invoke the engine's ``notify`` hook, and all of
+those belong to the hub. They read the real queue with ``get_nowait()`` plus a
+short sleep, never a blocking ``get()``, because a greenlet blocking on a real
+primitive stops every other request on the worker.
 
-Everything on the consumer side of the queue is therefore green, and the lock
-guarding the state dicts is an ordinary green ``threading.Lock``. It is held
-for in-memory bookkeeping only: the websocket subscribe, the REST fetch and the
-``notify`` callback all happen after it is released.
+Under the gthread worker (and the development server) nothing is patched: the
+consumer threads, the engine and the request handlers are real OS threads that
+run truly in parallel, and the same ``threading.Lock`` excludes for real. It
+is an ordinary ``threading.Lock`` in both runtimes, green under eventlet and
+real otherwise, and it is held for in-memory bookkeeping only: the REST fetch
+and the ``notify`` callback happen after it is released, so no thread waits on
+another's I/O. (``_ws_lock``, which serialises the feed's own websocket calls,
+is the one lock here held across a subscribe; nothing on the tick path takes
+it.)
 """
 
 from __future__ import annotations
@@ -179,8 +184,10 @@ class TickSourceEvent:
 
     ``symbol`` and ``exchange`` are ``None`` for a feed-wide health change (the
     rate-limit degradation flag flipping), which carries ``source`` ``None``.
-    Always delivered on a green thread, after the state lock has been released,
-    so the handler is free to emit over SocketIO or touch the database.
+    Always delivered from the feed's own consumer threads (green under
+    eventlet, real under the gthread worker), never from the websocket loop,
+    and after the state lock has been released, so the handler is free to emit
+    over SocketIO or touch the database.
     """
 
     symbol: str | None
@@ -440,8 +447,11 @@ class RiskTickFeed:
         Lockless on purpose. This is the hottest call in the risk loop; taking
         the state lock here would make every price read queue behind a poll
         cycle's bookkeeping. The dict lookup and the attribute read are each a
-        single atomic operation, and every caller is a greenlet, which cannot be
-        preempted mid-statement anyway.
+        single operation the GIL makes atomic, which is what makes this safe
+        under the gthread worker, where callers are real threads running in
+        parallel with the poll and drain loops. Under eventlet every caller is a
+        greenlet, which cannot be preempted mid-statement anyway. The worst a
+        race can cost is one price that is a tick old.
         """
         state = self._symbols.get(_key(symbol, exchange))
         return None if state is None else state.ltp
@@ -640,9 +650,10 @@ class RiskTickFeed:
         """Age one symbol.
 
         Caller holds the state lock, so this does in-memory bookkeeping only:
-        no logging either, because a log record is a file write and a greenlet
-        holding this lock across one would stall every price read. The
-        transition is logged from :meth:`_emit`, after the release.
+        no logging either, because a log record is a file write, and a thread
+        (or, under eventlet, a greenlet) holding this lock across one would
+        stall every price read. The transition is logged from :meth:`_emit`,
+        after the release.
         """
         if state.source == STALE:
             return None
@@ -897,8 +908,9 @@ class RiskTickFeed:
         """Subscribe LTP for newly tracked symbols; degrade to REST on failure.
 
         Called with no state lock held. The websocket ack can take seconds, and
-        while a greenlet waiting on it yields to the hub, holding the state lock
-        across it would block every price read.
+        holding the state lock across it would block every price read for that
+        long, whether the waiter is a real thread (gthread) or a greenlet that
+        yields to the hub (eventlet).
         """
         symbols = [{"symbol": s, "exchange": e} for s, e in pairs]
         with self._ws_lock:
@@ -958,9 +970,19 @@ class RiskTickFeed:
         self._emit(events)
 
     def _ensure_ws(self):
-        """The shared websocket client, or None. Caller holds ``_ws_lock``."""
-        if self._ws is not None and getattr(self._ws, "connected", True):
-            return self._ws
+        """The shared websocket client, or None. Caller holds ``_ws_lock``.
+
+        A held client is kept while it is ``alive`` (running, loop thread up),
+        even between reconnects, and fetched again once it has stopped for
+        good: get_websocket_client then hands out its replacement. A client
+        without ``alive`` (a test double) falls back to ``connected``.
+        """
+        if self._ws is not None:
+            alive = getattr(self._ws, "alive", None)
+            if alive is None:
+                alive = getattr(self._ws, "connected", True)
+            if alive:
+                return self._ws
         api_key = self._resolve_api_key()
         if not api_key:
             return None
@@ -977,13 +999,22 @@ class RiskTickFeed:
         if client is None:
             return None
         self._ws = client
-        if not self._ws_callbacks_registered:
-            # on_tick is the ONLY thing registered on the feed's own thread, and
-            # all it does is enqueue. _on_auth re-subscribes after a reconnect,
-            # which the client does not do for us.
+        # Checked on the client itself rather than remembered here: a client
+        # that stopped for good is replaced by get_websocket_client, and the
+        # replacement adopts its callbacks, so a remembered flag would either
+        # skip registering on a fresh client or register a second time on one
+        # that already carries them.
+        callbacks = getattr(client, "callbacks", None)
+        if callbacks is None:
+            callbacks = {}
+        # on_tick is the ONLY thing registered on the feed's own thread, and
+        # all it does is enqueue. _on_auth re-subscribes after a reconnect,
+        # which the client does not do for us.
+        if self.on_tick not in callbacks.get("market_data", ()):
             client.register_callback("market_data", self.on_tick)
+        if self._on_auth not in callbacks.get("auth", ()):
             client.register_callback("auth", self._on_auth)
-            self._ws_callbacks_registered = True
+        self._ws_callbacks_registered = True
         return self._ws
 
     def _on_auth(self, data: dict) -> None:
@@ -1047,8 +1078,9 @@ class RiskTickFeed:
         """Hand prices to the risk hook. Green side, always outside every lock.
 
         Outside the lock because the handler evaluates risk and can place an
-        order. A greenlet cannot yield while holding a lock, so calling this
-        from inside one would stall the worker for the length of a broker call.
+        order. Called inside it, every price read and tick for every symbol
+        would wait for the length of a broker call: behind a real thread under
+        the gthread worker, behind a greenlet under eventlet.
         """
         if not prices:
             return

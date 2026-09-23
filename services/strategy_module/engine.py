@@ -14,11 +14,11 @@ hit; it decides what to do about the answer.
 Two orderings in here are load bearing and must not be tidied away.
 
 **Locks are released before orders are placed.** A run's lock guards in-memory
-bookkeeping only. Placing an order reaches the broker over the network, and a
-greenlet holding a lock cannot yield, so dispatching inside the critical
-section would stall the single worker for the length of an HTTP call. The tick
-path therefore evaluates under the lock, collects what it decided, releases,
-and only then dispatches.
+bookkeeping only. Placing an order reaches the broker over the network, and all
+callers wanting the run (real threads under gthread, greenlets under eventlet)
+would wait out that HTTP call on the lock if it were placed inside the critical
+section. The tick path therefore evaluates under the lock, collects what it
+decided, releases, and only then dispatches.
 
 **Entries are placed BUY before SELL.** A spread whose short leg is placed
 first can be rejected for margin it would have had once the long leg existed.
@@ -2017,9 +2017,9 @@ def _session_banked_pnl(strategy: dict[str, Any], run_id: int) -> float | None:
 
     This is the only part of the daily-loss check that can touch the database,
     and a cache miss is a real connection under NullPool. Held inside the run
-    lock it would stall the hub for the length of that query, and a greenlet
-    waiting on the lock cannot yield, so exits and socket work for every other
-    run would wait behind it. The module's own rule is that a critical section
+    lock, every other caller that wants this run (a thread each under gthread,
+    a greenlet each under eventlet) would wait for the length of that query,
+    fills and exits included. The module's own rule is that a critical section
     holds in-memory bookkeeping only; this is how that rule is kept here.
 
     None when the strategy has no limit, which is also the signal to skip the
@@ -2080,8 +2080,8 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
 
     # Read before the lock is taken, never inside it. This is the one input to
     # the tick evaluation that can reach the database, and only on a cache
-    # miss; a query held under the run lock stalls the hub, and a greenlet
-    # waiting on that lock cannot yield. None when the strategy has no daily
+    # miss; a query held under the run lock makes every other caller of this
+    # run wait for it, in either worker. None when the strategy has no daily
     # limit, in which case no read happens at all.
     banked_pnl = _session_banked_pnl(strategy, run_id)
 
