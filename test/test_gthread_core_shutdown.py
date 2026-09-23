@@ -52,20 +52,27 @@ def test_eventlet_and_the_dev_server_start_no_watcher(fresh_drain, monkeypatch):
     assert shutdown._drain_watcher_started is False
 
 
-def test_closing_sessions_asks_engineio_to_disconnect_everyone(monkeypatch):
+def test_closing_sessions_closes_each_one_without_waiting(monkeypatch):
     from extensions import socketio
 
     calls = []
 
+    class FakeSession:
+        def __init__(self, sid):
+            self.sid = sid
+
+        def close(self, wait=True):
+            calls.append((self.sid, wait))
+
     class FakeEio:
-        sockets = {"a": object(), "b": object()}
+        sockets = {"a": FakeSession("a"), "b": FakeSession("b")}
 
         def disconnect(self, sid=None):
-            calls.append(sid)
+            raise AssertionError("disconnect() waits on every session's queue")
 
     monkeypatch.setattr(socketio, "server", type("S", (), {"eio": FakeEio()})(), raising=False)
     assert shutdown.close_socketio_sessions() == 2
-    assert calls == [None]
+    assert calls == [("a", False), ("b", False)]
 
 
 def test_racing_shutdown_callers_run_the_teardown_once(monkeypatch):

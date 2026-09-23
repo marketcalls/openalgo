@@ -379,19 +379,38 @@ def close_socketio_sessions() -> int | None:
     still held when the window closes turns the stop into a kill that skips the
     teardown. Browsers reconnect by themselves once the server is back.
 
+    Each session is closed without waiting, as the launcher's own stop drain
+    does. Engine.IO's ``disconnect()`` closes every session with ``wait=True``,
+    which joins that session's queue; a polling session whose client is not
+    reading (a tab asleep, or one that has already taken its close packet)
+    never finishes it, so this thread would block on the first such session
+    for good and never close the rest.
+
     Returns:
-        How many sessions were open, or None if the server could not be reached.
+        How many sessions were closed, or None if the server could not be reached.
     """
     try:
         from extensions import socketio
 
         eio = socketio.server.eio
-        count = len(eio.sockets)
-        eio.disconnect()
-        return count
+        sessions = []
+        for _attempt in range(3):
+            try:
+                sessions = list(eio.sockets.values())
+                break
+            except RuntimeError:  # the dict changed size while being copied
+                continue
     except Exception:
         logger.exception("Could not close browser connections for shutdown")
         return None
+    closed = 0
+    for session in sessions:
+        try:
+            session.close(wait=False)
+            closed += 1
+        except Exception:
+            logger.debug("Could not close one browser connection for shutdown", exc_info=True)
+    return closed
 
 
 def _watch_for_drain() -> None:
