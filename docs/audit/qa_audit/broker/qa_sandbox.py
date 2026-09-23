@@ -1800,11 +1800,49 @@ def sec_orders(run: Runner) -> None:
                 qty=_lot(run, s2, e2)), endpoint="placeorder", exchange=ex2, symbol=s2,
                 expected="every claimed exchange accepts an order")
 
-    if "OPT_DECIMAL_STRIKE" in m:
+    def decimal_strike_roundtrip():
+        """OD-13 - the claim is that a decimal strike survives the round trip
+        through the orderbook, so read it back and assert it, rather than
+        trusting that an orderid came back.
+
+        Uses LIMIT, not MARKET. A decimal strike lives on single-stock
+        options, which are frequently untraded; a MARKET order there fails
+        for want of a price to fill against, which says nothing about decimal
+        handling. A resting LIMIT order exercises the round trip fully and is
+        what the checklist actually asks for.
+        """
+        if "OPT_DECIMAL_STRIKE" not in m:
+            raise Skip("OPT_DECIMAL_STRIKE unresolved")
         s3, e3 = m["OPT_DECIMAL_STRIKE"]
-        run.check("OD-13", lambda: place("MARKET", "BUY", "NRML", "OD-13",
-                                         symbol=s3, exchange=e3, qty=_lot(run, s3, e3)),
-                  endpoint="placeorder", symbol=s3, expected="decimal strike round-trips")
+        with run.db() as c:
+            row = c.execute("select strike, tick_size from symtoken "
+                            "where symbol=? and exchange=?", (s3, e3)).fetchone()
+        need(row, f"{s3}@{e3} not in symtoken")
+        strike, tick = float(row[0]), float(row[1] or 0.05)
+        need(strike != round(strike), f"{s3}: strike {strike} is not a decimal strike")
+
+        q = run.client.quotes(symbol=s3, exchange=e3)
+        ltp = as_num((q.get("data") or {}).get("ltp", 0), "ltp") \
+            if q.get("status") == "success" else 0.0
+        # Rest far below any plausible price so the order cannot fill.
+        price = round(max(tick, (ltp * 0.5) if ltp else tick), 2)
+        oid = place("LIMIT", "BUY", "NRML", "OD-13", price,
+                    symbol=s3, exchange=e3, qty=_lot(run, s3, e3))
+        time.sleep(1.5)
+        st = run.ok(run.client.orderstatus(order_id=oid, strategy=STRAT),
+                    "orderstatus")["data"]
+        need(st.get("symbol") == s3,
+             f"decimal strike did not round-trip: sent {s3}, orderbook says "
+             f"{st.get('symbol')!r}")
+        run.note_limit("decimal strike under test",
+                       f"{s3} strike={strike} ltp={ltp or 'untraded'}")
+        if not ltp:
+            raise Warn(f"{s3} is untraded (ltp 0) - the symbol round-trips correctly, "
+                       f"but no fill path was exercised")
+
+    run.check("OD-13", decimal_strike_roundtrip, endpoint="placeorder+orderstatus",
+              symbol=str(m.get("OPT_DECIMAL_STRIKE", "")),
+              expected="decimal strike round-trips through the orderbook")
 
     # negative cases
     run.check("OD-15", lambda: run.expect_error(
