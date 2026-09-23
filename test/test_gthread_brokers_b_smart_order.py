@@ -215,8 +215,16 @@ def test_an_exit_after_another_symbols_stale_fetch_still_closes_the_position(plu
     assert fake.book["X"] == 0
 
 
-def test_concurrent_smart_orders_for_one_symbol_place_exactly_one_order(plugin):
-    """Eight alerts for the same target, released together: one order."""
+@pytest.mark.parametrize("gthread", [False, True], ids=["eventlet-or-dev", "gthread"])
+def test_concurrent_smart_orders_for_one_symbol_place_exactly_one_order(
+    plugin, monkeypatch, gthread
+):
+    """Eight alerts for the same target, released together: one order.
+
+    Under gthread the wait for the symbol is bounded, but far above what
+    these orders take, so every alert still waits its turn.
+    """
+    monkeypatch.setattr(runtime, "gthread_active", lambda: gthread)
     fake = plugin.fake
     fake.order_delay = 0.05
     auth = _auth()
@@ -241,3 +249,75 @@ def test_concurrent_smart_orders_for_one_symbol_place_exactly_one_order(plugin):
     assert errors == []
     assert fake.orders == [("SBIN", "BUY", 10)]
     assert fake.book == {"SBIN": 10}
+
+
+# --- brokers_b-02: how long a smart order waits for its symbol -------------
+
+
+def _hold_symbol(plugin, symbol: str = "SBIN"):
+    """Hold the plugin's lock for ``symbol`` from another thread until released."""
+    held = threading.Event()
+    release = threading.Event()
+
+    def holder():
+        with plugin._get_symbol_lock(symbol, "NSE", "MIS") as acquired:
+            assert acquired
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder, daemon=True)
+    thread.start()
+    assert held.wait(5)
+    return thread, release
+
+
+def test_under_gthread_a_smart_order_stops_waiting_and_sends_nothing(plugin, monkeypatch):
+    """A queue of alerts behind one slow broker call must not hold a thread each."""
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
+    monkeypatch.setattr(plugin._SMART_ORDER_LOCKS, "_max_wait", 0.2)
+    holder, release = _hold_symbol(plugin)
+    try:
+        started = time.monotonic()
+        res, data, orderid = plugin.place_smartorder_api(_smart("SBIN", 10), _auth())
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        holder.join(5)
+
+    assert elapsed < 2.0
+    assert res.status == 429 and res.status_code == 429
+    assert data["status"] == "error"
+    assert "SBIN" in data["message"]
+    assert "429" not in data["message"], "a status code is not a message for a trader"
+    assert orderid is None
+    assert plugin.fake.orders == []
+    assert plugin.fake.fetches == 0, "no position read either: the order was never started"
+
+
+def test_outside_gthread_a_smart_order_waits_as_long_as_it_takes(plugin, monkeypatch):
+    """Eventlet and the dev server keep the unbounded wait they always had."""
+    monkeypatch.setattr(plugin._SMART_ORDER_LOCKS, "_max_wait", 0.2)
+    holder, release = _hold_symbol(plugin)
+    thread, result = _in_thread(plugin.place_smartorder_api, _smart("SBIN", 10), _auth())
+    try:
+        time.sleep(0.6)
+        assert thread.is_alive(), "the smart order gave up although gthread is not active"
+        assert plugin.fake.orders == []
+    finally:
+        release.set()
+        holder.join(5)
+    thread.join(5)
+    assert "error" not in result, result.get("error")
+    assert plugin.fake.orders == [("SBIN", "BUY", 10)]
+
+
+# --- gap-05: the lock registry ----------------------------------------------
+
+
+def test_the_lock_registry_forgets_every_symbol_it_served(plugin):
+    """One lock per instrument ever traded used to stay for the life of the worker."""
+    auth = _auth()
+    for index in range(2000):
+        plugin.place_smartorder_api(_smart(f"SYM{index}", 0), auth)
+    assert len(plugin._SMART_ORDER_LOCKS) == 0
+    assert plugin.fake.orders == []

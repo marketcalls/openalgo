@@ -18,7 +18,7 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_symbol_info, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-from utils.smart_order_guard import PositionBookCache
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -253,8 +253,9 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
@@ -265,12 +266,13 @@ _POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
 def _get_cached_positions(auth):
@@ -469,9 +471,9 @@ def place_smartorder_api(data, auth):
     exchange = data.get("exchange")
     product = data.get("product")
     # Per-symbol lock: serialize smart orders per symbol
-    symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-    with symbol_lock:
+    with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+        if not symbol_lock:
+            return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
 
         # Get current open position for the symbol.

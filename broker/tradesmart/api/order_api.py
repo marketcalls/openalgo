@@ -12,7 +12,7 @@ from broker.tradesmart.mapping.transform_data import (
 )
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.logging import get_logger
-from utils.smart_order_guard import PositionBookCache
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -61,10 +61,11 @@ def get_holdings(auth):
 
 
 # --- Per-Symbol Smart Order Lock ---
-# Ensures only one smart order per symbol executes at a time; others queue and
-# execute sequentially, each getting a fresh position book.
-_symbol_locks = {}
-_symbol_locks_lock = threading.Lock()
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
@@ -75,11 +76,13 @@ _POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
 def _get_cached_positions(auth):
@@ -151,9 +154,9 @@ def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
-    symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-    with symbol_lock:
+    with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+        if not symbol_lock:
+            return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
         current_position = int(
             get_open_position(symbol, exchange, map_product_type(product), auth)
