@@ -48,6 +48,20 @@ SYMBOLS = [
         "tick_size": 0.05,
         "contract_value": 1.0,
     },
+    {
+        # BSE, so the square-off tests can make only their own exchange due
+        # and leave any other test's MIS positions in the shared database alone.
+        "symbol": "RELIANCE",
+        "brsymbol": "RELIANCE",
+        "name": "RELIANCE INDUSTRIES",
+        "exchange": "BSE",
+        "brexchange": "BSE",
+        "token": "500325",
+        "lotsize": 1,
+        "instrumenttype": "EQ",
+        "tick_size": 0.05,
+        "contract_value": 1.0,
+    },
 ]
 
 CAPITAL = Decimal("10000000.00")

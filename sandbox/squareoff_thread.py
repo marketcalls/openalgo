@@ -18,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from database.sandbox_db import get_config
+from utils.db_sessions import releases_scoped_sessions
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +43,11 @@ def _schedule_square_off_jobs(scheduler):
 
     som = SquareOffManager()
 
+    # Every job releases its thread's database sessions when it finishes. A
+    # scheduler thread otherwise kept its connection, and the rows it had
+    # loaded, from one run to the next.
+    square_off = releases_scoped_sessions(som.check_and_square_off)
+
     # Get configured times from database
     square_off_configs = {
         "NSE_BSE": get_config("nse_bse_square_off_time", "15:15"),
@@ -61,7 +67,7 @@ def _schedule_square_off_jobs(scheduler):
 
             # Schedule the job
             job = scheduler.add_job(
-                func=som.check_and_square_off,
+                func=square_off,
                 trigger=trigger,
                 id=f"squareoff_{config_name}",
                 name=f"MIS Square-off {config_name}",
@@ -82,7 +88,7 @@ def _schedule_square_off_jobs(scheduler):
     # Note: The check_and_square_off() function is smart - it only squares off
     # positions if current time is past the configured square-off time
     backup_job = scheduler.add_job(
-        func=som.check_and_square_off,
+        func=square_off,
         trigger="interval",
         minutes=1,
         id="squareoff_backup",
@@ -102,7 +108,7 @@ def _schedule_square_off_jobs(scheduler):
         settlement_trigger = CronTrigger(hour=0, minute=0, timezone=IST)
 
         settlement_job = scheduler.add_job(
-            func=process_all_t1_settlements,
+            func=releases_scoped_sessions(process_all_t1_settlements),
             trigger=settlement_trigger,
             id="t1_settlement",
             name="T+1 Settlement (CNC to Holdings)",
@@ -148,7 +154,7 @@ def _schedule_square_off_jobs(scheduler):
             )
 
             reset_job = scheduler.add_job(
-                func=reset_all_user_funds,
+                func=releases_scoped_sessions(reset_all_user_funds),
                 trigger=reset_trigger,
                 id="auto_reset",
                 name=f"Auto-Reset Funds ({reset_day} {reset_time_str})",
@@ -190,9 +196,7 @@ def _schedule_square_off_jobs(scheduler):
                 # holidays, and correctly stays False for special sessions
                 # (e.g. Muhurat trading on a Saturday).
                 if is_market_holiday(today):
-                    logger.debug(
-                        f"Skipping daily P&L snapshot for {today}: not a trading day"
-                    )
+                    logger.debug(f"Skipping daily P&L snapshot for {today}: not a trading day")
                     return
 
                 # Get all users with funds
@@ -267,7 +271,7 @@ def _schedule_square_off_jobs(scheduler):
         snapshot_trigger = CronTrigger(hour=23, minute=59, timezone=IST)
 
         snapshot_job = scheduler.add_job(
-            func=capture_daily_pnl_snapshot,
+            func=releases_scoped_sessions(capture_daily_pnl_snapshot),
             trigger=snapshot_trigger,
             id="daily_pnl_snapshot",
             name="Daily PnL Snapshot (23:59 IST)",
@@ -313,7 +317,7 @@ def _schedule_square_off_jobs(scheduler):
         pnl_reset_trigger = CronTrigger(hour=reset_hour, minute=reset_minute, timezone=IST)
 
         pnl_reset_job = scheduler.add_job(
-            func=reset_daily_pnl,
+            func=releases_scoped_sessions(reset_daily_pnl),
             trigger=pnl_reset_trigger,
             id="daily_pnl_reset",
             name=f"Daily PnL Reset ({session_expiry_str} IST)",
