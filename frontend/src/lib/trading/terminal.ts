@@ -3310,7 +3310,6 @@ export class TradingTerminal {
     for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
 
     if (ids.some((id) => fileForScriptId(id) !== null)) {
-      const { loadOpenScriptStudies } = await import('./openscriptStudies')
       const studies = await loadOpenScriptStudies()
       for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
     }
