@@ -562,7 +562,8 @@ def test_update_during_the_trading_day_explains_and_changes_nothing(box):
     before = unit.read_bytes()
     result = _run_update_block(box, clock="1100")
     assert result.returncode == 0
-    assert "after 23:30 IST" in result.stdout + result.stderr
+    said = " ".join((result.stdout + result.stderr).split())
+    assert "Run it again after 23:30 IST" in said
     assert unit.read_bytes() == before
 
 
