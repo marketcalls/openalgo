@@ -220,15 +220,10 @@ if [ "$SERVER_MODE" = false ]; then
     MULTI_INSTANCES=($(find_multi_instances))
 fi
 
+# The instance this updater belongs to, else the one it was run from.
+SELECTED_DEPLOY=""
+OWN_CHECKOUT=""
 if [ "$SERVER_MODE" = false ] && [ ${#MULTI_INSTANCES[@]} -gt 0 ]; then
-    SERVER_MODE=true
-    log_message "Found ${#MULTI_INSTANCES[@]} OpenAlgo instance(s) made by install-multi.sh:" "$GREEN"
-    for i in "${!MULTI_INSTANCES[@]}"; do
-        log_message "  $((i+1)). ${MULTI_INSTANCES[$i]}" "$BLUE"
-    done
-
-    # The instance this updater belongs to, else the one it was run from.
-    SELECTED_DEPLOY=""
     for here in "$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)" "$(pwd -P)"; do
         for name in "${MULTI_INSTANCES[@]}"; do
             instance_dir="$(cd "$DEPLOY_BASE/$name" 2>/dev/null && pwd -P)"
@@ -236,6 +231,33 @@ if [ "$SERVER_MODE" = false ] && [ ${#MULTI_INSTANCES[@]} -gt 0 ]; then
                 "$instance_dir"/*) SELECTED_DEPLOY="$name"; break 2 ;;
             esac
         done
+    done
+
+    # Run from an OpenAlgo checkout that is none of the instances, such as a
+    # developer clone on the same server: that checkout is the one asked for,
+    # and it is updated in local development mode exactly as before these
+    # instances were recognised. Picking an instance here instead would stop
+    # and restart its service, in the middle of a trading day, for an update
+    # nobody asked it to take.
+    if [ -z "$SELECTED_DEPLOY" ]; then
+        if [ -d ".git" ] && [ -f "app.py" ]; then
+            OWN_CHECKOUT="$(pwd -P)"
+        elif [ -d "$SCRIPT_DIR/../.git" ] && [ -f "$SCRIPT_DIR/../app.py" ]; then
+            OWN_CHECKOUT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+        fi
+    fi
+    if [ -n "$OWN_CHECKOUT" ]; then
+        log_message "This updater was run from $OWN_CHECKOUT, which is not one of the OpenAlgo instances made by install-multi.sh, so that checkout is the one updated and no instance is touched." "$YELLOW"
+        log_message "To update an instance, run the updater from inside it, for example:" "$YELLOW"
+        log_message "  cd $DEPLOY_BASE/${MULTI_INSTANCES[0]} && sudo bash install/update.sh" "$YELLOW"
+    fi
+fi
+
+if [ "$SERVER_MODE" = false ] && [ ${#MULTI_INSTANCES[@]} -gt 0 ] && [ -z "$OWN_CHECKOUT" ]; then
+    SERVER_MODE=true
+    log_message "Found ${#MULTI_INSTANCES[@]} OpenAlgo instance(s) made by install-multi.sh:" "$GREEN"
+    for i in "${!MULTI_INSTANCES[@]}"; do
+        log_message "  $((i+1)). ${MULTI_INSTANCES[$i]}" "$BLUE"
     done
 
     if [ -n "$SELECTED_DEPLOY" ]; then

@@ -398,3 +398,36 @@ def test_a_development_checkout_with_no_server_install_is_as_before(box, tmp_pat
     assert "Detected local development setup" in result.stdout
     assert _systemctl(box) == []
     assert "uv sync" in box.calls("uv ")
+
+
+def test_a_development_clone_beside_one_instance_updates_the_clone(box, tmp_path):
+    """Run from a developer's clone on the same server as a single install-multi.sh
+    instance, the updater picked that instance, stopped its service in the middle
+    of the day and updated it, and left the clone alone. The clone is what was
+    asked for, as it was before instances were recognised."""
+    instance = box.multi(1)
+    before_instance = box.head(instance)
+    dev = box._checkout(tmp_path / "root" / "openalgo-dev")
+    new_head = box.advance()
+
+    result = box.run(dev / "install" / "update.sh", cwd=dev)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Auto-selected" not in result.stdout
+    assert "Detected local development setup" in result.stdout
+    assert _systemctl(box) == [], "the instance's service was stopped for an update of the clone"
+    assert box.head(instance) == before_instance
+    assert box.head(dev) == new_head
+
+
+def test_a_development_clone_beside_several_instances_asks_nothing(box, tmp_path):
+    box.multi(1)
+    box.multi(2)
+    dev = box._checkout(tmp_path / "root" / "openalgo-dev")
+
+    result = box.run(dev / "install" / "update.sh", cwd=dev)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Select instance" not in result.stdout
+    assert "Detected local development setup" in result.stdout
+    assert _systemctl(box) == []
