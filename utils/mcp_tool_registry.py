@@ -30,6 +30,7 @@ Drift check:
 
 from __future__ import annotations
 
+import threading
 from typing import Callable, Iterable
 
 from utils.logging import get_logger
@@ -168,6 +169,15 @@ def list_tools_for_scopes(granted_scopes: Iterable[str]) -> list[str]:
     )
 
 
+#: Serialises the one-time load of mcp/mcpserver.py. Two first MCP requests
+#: arriving together (initialize and tools/list) used to execute the file
+#: twice, replacing sys.modules["openalgo_mcp_server"] under the first and
+#: building duplicate SDK clients and tool registrations. A plain stdlib lock,
+#: green under eventlet: only request code loads the module, and the load is
+#: file I/O and imports, which must not hold a real lock under the hub.
+_mcpserver_load_lock = threading.Lock()
+
+
 def _load_mcpserver_module():
     """Load ``mcp/mcpserver.py`` directly by file path.
 
@@ -175,15 +185,24 @@ def _load_mcpserver_module():
     ``__init__.py``) and the pip-installed ``mcp`` package shadows the
     name in normal imports. To reach our tool definitions we therefore
     resolve the file by path and load it through ``importlib.util``.
-    Cached on the function attribute so repeat calls are free.
+    Cached on the function attribute so repeat calls are free, and loaded
+    by exactly one caller.
     """
-    import importlib.util
-    import os
-    import sys
-
     cached = getattr(_load_mcpserver_module, "_module", None)
     if cached is not None:
         return cached
+    with _mcpserver_load_lock:
+        cached = getattr(_load_mcpserver_module, "_module", None)
+        if cached is not None:
+            return cached
+        return _load_mcpserver_module_locked()
+
+
+def _load_mcpserver_module_locked():
+    """The load behind _load_mcpserver_module. Call with its lock held."""
+    import importlib.util
+    import os
+    import sys
 
     # This file lives at <project>/utils/mcp_tool_registry.py; the MCP
     # entry point lives at <project>/mcp/mcpserver.py. Walk up + over.
