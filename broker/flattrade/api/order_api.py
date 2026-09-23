@@ -20,6 +20,7 @@ from broker.flattrade.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, BusyResponse, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
@@ -180,7 +181,12 @@ def place_order_api(data, auth):
 
     # Order endpoints have their own, four-times-tighter ceiling
     # (10/sec, 40/min) — paced separately from the data window.
-    ORDER_LIMITER.acquire()
+    # Under the gthread worker an order whose turn is too far away is refused,
+    # not sent late; nothing reached the broker, so saying so is exact.
+    try:
+        ORDER_LIMITER.acquire()
+    except BrokerBusyError as busy:
+        return busy_response(str(busy))
     url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
     res = client.post(url, content=payload, headers=headers)
     response_data = res.json()
@@ -217,10 +223,15 @@ def place_smartorder_api(data, auth):
             return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
 
-        # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-        )
+        # Get current open position for the symbol. A position read the rate
+        # limiter refused (gthread only) fails the smart order: sizing it
+        # against a book that was never fetched could repeat or reverse a fill.
+        try:
+            current_position = int(
+                get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            )
+        except BrokerBusyError as busy:
+            return busy_response(str(busy))
 
         logger.debug(f"position_size : {position_size}")
         logger.debug(f"Open Position : {current_position}")
@@ -302,6 +313,8 @@ def close_all_positions(current_api_key, auth):
     if positions_response is None or positions_response[0]["stat"] == "Not_Ok":
         return {"message": "No Open Positions Found"}, 200
 
+    refused = 0
+    attempted = 0
     if positions_response:
         # Loop through each position to close
         for position in positions_response:
@@ -333,12 +346,29 @@ def close_all_positions(current_api_key, auth):
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
+            attempted += 1
+            if isinstance(res, BusyResponse):
+                refused += 1
 
             # logger.debug(f"{res}")
             # logger.debug(f"{response}")
             # logger.debug(f"{orderid}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
+
+    if refused:
+        # Only under the gthread worker, where the order window refuses a
+        # square-off whose turn is too far away instead of sending it late.
+        # Reporting success here would leave those positions unwatched.
+        return {
+            "status": "error",
+            "message": (
+                f"{refused} of {attempted} open positions were not squared off, because "
+                "Flattrade allows only a limited number of orders per minute and "
+                "their turn was too far away. Check your positions and square off "
+                "the rest again."
+            ),
+        }, 429
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -359,7 +389,10 @@ def cancel_order(orderid, auth):
 
     # Order endpoints have their own, four-times-tighter ceiling
     # (10/sec, 40/min) — paced separately from the data window.
-    ORDER_LIMITER.acquire()
+    try:
+        ORDER_LIMITER.acquire()
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     url = "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"
     res = client.post(url, content=payload, headers=headers)
     data = res.json()
@@ -400,7 +433,10 @@ def modify_order(data, auth):
 
     # Order endpoints have their own, four-times-tighter ceiling
     # (10/sec, 40/min) — paced separately from the data window.
-    ORDER_LIMITER.acquire()
+    try:
+        ORDER_LIMITER.acquire()
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     url = "https://piconnect.flattrade.in/PiConnectAPI/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()

@@ -9,6 +9,7 @@ from broker.definedge.api.baseurl import DATA_URL, get_url
 from broker.definedge.api.rate_limiter import MIN_INTERVAL, rate_limited_request
 from database.token_db import get_br_symbol, get_token
 from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
 from utils.shared_executors import get_executor
 from utils.thread_safe_cache import LockedTTLCache
@@ -86,6 +87,8 @@ def get_quotes(symbol, exchange, auth_token):
 
         return response.json()
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error getting quotes: {e}")
         return {"status": "error", "message": str(e)}
@@ -156,6 +159,12 @@ def fetch_latest_oi(segment, token, api_session_key):
                 last_row = text.rsplit("\n", 1)[-1].split(",")
                 if len(last_row) >= 7:
                     oi = int(float(last_row[6]))
+    except BrokerBusyError:
+        # Refused by the rate limiter (gthread only): the quote stands with an
+        # OI of 0, as for any failure here, but nothing is cached, so the next
+        # refresh asks again instead of showing 0 for a minute.
+        logger.debug(f"OI backfill for {segment}/{token} refused by the rate limiter")
+        return 0
     except Exception as e:
         logger.debug(f"OI backfill failed for {segment}/{token}: {e}")
 
@@ -305,6 +314,8 @@ class BrokerData:
                 "oi": oi,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_quotes: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -346,6 +357,8 @@ class BrokerData:
             else:
                 return self._process_quotes_batch(symbols)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -776,6 +789,8 @@ class BrokerData:
                                 and response.status_code not in _TRANSIENT_4XX
                             ):
                                 break
+                        except BrokerBusyError:
+                            raise
                         except Exception as request_error:
                             response = None
                             fetch_error = str(request_error)
@@ -1097,6 +1112,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.warning(f"Debug - Definedge historical data error: {str(e)}")
             # Return empty DataFrame instead of raising exception to prevent system crashes
@@ -1179,6 +1196,8 @@ class BrokerData:
                 "totalsellqty": totalsellqty,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}")
             raise Exception(f"Error fetching market depth: {str(e)}")

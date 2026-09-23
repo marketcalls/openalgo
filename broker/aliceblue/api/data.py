@@ -12,6 +12,7 @@ import pandas as pd
 from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from database.auth_db import Auth
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -948,6 +949,10 @@ class BrokerData:
                 response = client.post(HISTORICAL_API_URL, headers=headers, json=payload, timeout=15)
                 response.raise_for_status()
                 data = response.json()
+            except BrokerBusyError:
+                # Refused by the rate limiter (gthread only) and never sent: say
+                # so, rather than return an empty frame that reads as "no data".
+                raise
             except httpx.HTTPStatusError as http_err:
                 logger.error(f"HTTP Error: {http_err}")
                 logger.error(f"Response body: {http_err.response.text[:500]}")
@@ -1092,6 +1097,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")
             return pd.DataFrame()

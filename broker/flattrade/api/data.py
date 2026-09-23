@@ -16,6 +16,7 @@ from broker.flattrade.api.rate_limit import (
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.shared_executors import get_executor
@@ -162,6 +163,8 @@ class BrokerData:
                 "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
@@ -569,6 +572,8 @@ class BrokerData:
                 "oi": int(response.get("oi", 0)),  # Open Interest
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
@@ -640,6 +645,8 @@ class BrokerData:
                         "/PiConnectAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
@@ -787,6 +794,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}")
 

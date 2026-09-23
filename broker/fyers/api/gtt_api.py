@@ -35,6 +35,7 @@ from broker.fyers.mapping.gtt_data import (
     transform_place_gtt,
 )
 from database.token_db_enhanced import get_symbol_info
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
@@ -85,7 +86,9 @@ def _request(method, path, auth, payload=None, _retry_count=0):
     client = get_httpx_client()
     url = f"{_BASE}{path}"
 
-    apply_rate_limit()
+    # GTT create, modify and cancel are order changes: under the gthread
+    # worker they wait at most the order bound, then are refused unsent.
+    apply_rate_limit("order")
 
     if method == "GET":
         response = client.request("GET", url, headers=_headers(auth))
@@ -95,7 +98,7 @@ def _request(method, path, auth, payload=None, _retry_count=0):
     response.status = response.status_code  # parity with the other order APIs
 
     if response.status_code == 429 and _retry_count < MAX_RETRIES:
-        delay = retry_delay_from_headers(response.headers, _retry_count)
+        delay = retry_delay_from_headers(response.headers, _retry_count, kind="order")
         logger.warning(
             f"Fyers GTT rate limited (429) on {path}. Retrying in {delay:.2f}s "
             f"(attempt {_retry_count + 1}/{MAX_RETRIES})"
@@ -271,6 +274,9 @@ def place_gtt_order(data, auth):
 
         return response, response_data, trigger_id
 
+    except BrokerBusyError as busy:
+        # Refused before it was sent, so nothing reached Fyers.
+        return _FakeResponse(429), {"s": "error", "message": str(busy)}, None
     except httpx.HTTPError as e:
         logger.exception("HTTP error during Fyers GTT placement")
         return _FakeResponse(500), {"s": "error", "message": f"HTTP error: {e}"}, None
@@ -313,6 +319,8 @@ def modify_gtt_order(data, auth):
             "message": response_data.get("message", "Failed to modify GTT"),
         }, response.status_code
 
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     except httpx.HTTPError as e:
         logger.exception("HTTP error during Fyers GTT modification")
         return {"status": "error", "message": f"HTTP error: {e}"}, 500
@@ -350,6 +358,8 @@ def cancel_gtt_order(trigger_id, auth):
             "message": response_data.get("message", "Failed to cancel GTT"),
         }, response.status_code
 
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     except httpx.HTTPError as e:
         logger.exception("HTTP error during Fyers GTT cancellation")
         return {"status": "error", "message": f"HTTP error: {e}"}, 500
@@ -381,6 +391,8 @@ def get_gtt_book(auth, include_history=False):
 
         return {"status": "success", "data": map_gtt_book(raw)}, 200
 
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     except httpx.HTTPError as e:
         logger.exception("HTTP error during Fyers GTT book fetch")
         return {"status": "error", "message": f"HTTP error: {e}"}, 500

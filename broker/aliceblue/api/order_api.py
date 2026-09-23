@@ -22,6 +22,7 @@ from broker.aliceblue.mapping.transform_data import (
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils import runtime
+from utils.broker_backpressure import BrokerBusyError, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.smart_order_guard import (
@@ -86,6 +87,13 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
         return response_data
 
+    except BrokerBusyError:
+        # A request the rate limiter refused under the gthread worker was
+        # never sent. Raise it as is, with its sentence for the trader, rather
+        # than fold it into an error body that reads like a broker failure:
+        # get_positions would turn that into an empty book, and a smart order
+        # would then size itself against no position.
+        raise
     except httpx.HTTPError as e:
         logger.error(f"HTTP error during API request: {str(e)}")
         return {"status": "Error", "message": f"HTTP error: {str(e)}"}
@@ -381,10 +389,15 @@ def place_smartorder_api(data, auth):
     try:
         position_size = int(data.get("position_size", "0"))
 
-        # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, reverse_map_product_type(map_product_type(product)), AUTH_TOKEN)
-        )
+        # Get current open position for the symbol. A position read the rate
+        # limiter refused (gthread only) fails the smart order: sizing it
+        # against a book that was never fetched could repeat or reverse a fill.
+        try:
+            current_position = int(
+                get_open_position(symbol, exchange, reverse_map_product_type(map_product_type(product)), AUTH_TOKEN)
+            )
+        except BrokerBusyError as busy:
+            return busy_response(str(busy))
 
         logger.debug(f"position_size : {position_size}")
         logger.debug(f"Open Position : {current_position}")
