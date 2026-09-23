@@ -50,7 +50,7 @@ APP = textwrap.dedent(
 
     def mark(name):
         with open(os.path.join(os.environ["HOOK_MARKS"], name), "a") as handle:
-            handle.write(f"{time.time()}\\n")
+            handle.write(f"{time.monotonic()}\\n")
 
     app = Flask(__name__)
     socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
@@ -88,7 +88,7 @@ STUB_SHUTDOWN = textwrap.dedent(
 
     def _mark(name):
         with open(os.path.join(os.environ["HOOK_MARKS"], name), "a") as handle:
-            handle.write(f"{time.time()}\\n")
+            handle.write(f"{time.monotonic()}\\n")
 
     def begin_drain():
         _mark("drain")
@@ -201,7 +201,7 @@ class Server:
         return held
 
     def stop(self) -> float:
-        started = time.monotonic()
+        started = self.stopped_at = time.monotonic()
         self.process.send_signal(signal.SIGTERM)
         try:
             self.process.wait(timeout=GRACEFUL + 20)
@@ -212,6 +212,20 @@ class Server:
 
     def marked(self, name: str) -> bool:
         return (self.marks / name).exists()
+
+    def seconds_to(self, name: str) -> float | None:
+        """Seconds from SIGTERM to the first time the worker left mark ``name``.
+
+        CLOCK_MONOTONIC is shared by every process on Linux and, unlike the
+        wall clock, never jumps. gunicorn's arbiter times its graceful window
+        on the wall clock, so on a host whose clock is being stepped (a WSL2
+        VM, a machine catching up with NTP) the arbiter can give up early. The
+        worker's own timeline is what these tests compare.
+        """
+        path = self.marks / name
+        if not path.exists():
+            return None
+        return float(path.read_text().split()[0]) - self.stopped_at
 
 
 def _release(held):
@@ -232,9 +246,11 @@ def test_the_drain_lets_a_gthread_stop_finish_and_clean_up(tmp_path):
     finally:
         _release(held)
     log = server.log.read_text()
-    assert elapsed < GRACEFUL - 3, f"stop took {elapsed:.1f}s\n{log}"
     assert server.marked("drain")
-    assert server.marked("shutdown"), log
+    cleanup = server.seconds_to("shutdown")
+    assert cleanup is not None, f"worker_exit never ran\n{log}"
+    assert cleanup < 3, f"the worker drained in {cleanup:.1f}s\n{log}"
+    assert elapsed < GRACEFUL - 3, f"stop took {elapsed:.1f}s\n{log}"
     assert "Closed 3 browser session" in log
 
 
@@ -248,8 +264,11 @@ def test_without_the_drain_the_same_stop_waits_out_the_window(tmp_path):
         elapsed = server.stop()
     finally:
         _release(held)
-    assert elapsed >= GRACEFUL - 1, (
-        f"the control stopped in {elapsed:.1f}s: the test proves nothing"
+    # Without the drain the worker cannot finish on its own: either the
+    # arbiter kills it (no cleanup at all) or it runs out its whole window.
+    cleanup = server.seconds_to("shutdown")
+    assert cleanup is None or cleanup >= GRACEFUL - 1, (
+        f"the control drained in {cleanup:.1f}s after {elapsed:.1f}s: the test proves nothing"
     )
 
 
@@ -261,7 +280,9 @@ def test_a_handler_the_app_chained_in_front_still_runs_first(tmp_path):
     finally:
         _release(held)
     assert server.marked("app_handler")
-    assert server.marked("drain") and server.marked("shutdown")
+    assert server.marked("drain")
+    cleanup = server.seconds_to("shutdown")
+    assert cleanup is not None and cleanup < 3, cleanup
     assert elapsed < GRACEFUL - 3
 
 

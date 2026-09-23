@@ -134,7 +134,8 @@ def test_start_sh_picks_the_web_server_from_env(tmp_path, env_text, expected):
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     text = _start_text()
-    tail = text[text.index('APP_PORT="${PORT:-5000}"') :].replace("/app/", f"{app}/")
+    # The last assignment: the first one is inside the Railway .env generator.
+    tail = text[text.rindex('APP_PORT="${PORT:-5000}"') :].replace("/app/", f"{app}/")
     program = f'ENV_FILE="{app}/.env"\n{tail}'
     env = {k: v for k, v in os.environ.items() if not k.startswith("OPENALGO_")}
     result = subprocess.run(
