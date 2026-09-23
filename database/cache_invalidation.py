@@ -59,9 +59,8 @@ class CacheInvalidationPublisher:
             # even when the websocket subsystem is disabled.
             from websocket_proxy.connection_manager import SharedZmqPublisher
 
-            publisher = SharedZmqPublisher()
-            if not publisher._connected:
-                publisher.connect()  # idempotent — connects to the proxy SUB once
+            publisher = SharedZmqPublisher.instance()
+            publisher.connect()  # idempotent — connects to the proxy SUB once
 
             topic = f"{CACHE_INVALIDATION_PREFIX}_{cache_type}_{user_id}"
             message = {

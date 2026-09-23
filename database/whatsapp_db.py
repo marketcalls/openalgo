@@ -29,7 +29,6 @@ import os
 from datetime import datetime
 from typing import Any
 
-from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -51,14 +50,15 @@ from sqlalchemy.sql import func
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
 # 30-minute TTL caches — same as telegram_db, reduces DB hits in command paths.
-_wa_user_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
-_wa_username_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
-_wa_preferences_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
-_wa_credentials_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
+_wa_user_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
+_wa_username_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
+_wa_preferences_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
+_wa_credentials_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
 
 # Tables live in the main openalgo.db by default. DATABASE_URL is whatever
 # the operator configured in .env — we never carve out a separate sqlite file.
@@ -467,11 +467,11 @@ def update_bot_config(updates: dict[str, Any]) -> bool:
 
 def _invalidate_user_caches(jid: str | None, username: str | None) -> None:
     if jid:
-        _wa_user_cache.pop(f"jid_{jid}", None)
-        _wa_credentials_cache.pop(f"creds_{jid}", None)
-        _wa_preferences_cache.pop(f"prefs_{jid}", None)
+        _wa_user_cache.invalidate(f"jid_{jid}")
+        _wa_credentials_cache.invalidate(f"creds_{jid}")
+        _wa_preferences_cache.invalidate(f"prefs_{jid}")
     if username:
-        _wa_username_cache.pop(f"username_{username}", None)
+        _wa_username_cache.invalidate(f"username_{username}")
 
 
 def create_or_update_whatsapp_user(
@@ -523,8 +523,12 @@ def create_or_update_whatsapp_user(
 
 def get_whatsapp_user(whatsapp_jid: str) -> dict[str, Any] | None:
     cache_key = f"jid_{whatsapp_jid}"
-    if cache_key in _wa_user_cache:
-        return _wa_user_cache[cache_key]
+    cached = _wa_user_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _wa_user_cache.generation
     try:
         user = (
             db_session.query(WhatsAppUser)
@@ -547,7 +551,7 @@ def get_whatsapp_user(whatsapp_jid: str) -> dict[str, Any] | None:
             "updated_at": user.updated_at,
             "last_command_at": user.last_command_at,
         }
-        _wa_user_cache[cache_key] = result
+        _wa_user_cache.fill(cache_key, result, generation)
         return result
     except Exception:
         logger.exception("Failed to get WhatsApp user")
@@ -558,8 +562,12 @@ def get_whatsapp_user(whatsapp_jid: str) -> dict[str, Any] | None:
 
 def get_whatsapp_user_by_username(username: str) -> dict[str, Any] | None:
     cache_key = f"username_{username}"
-    if cache_key in _wa_username_cache:
-        return _wa_username_cache[cache_key]
+    cached = _wa_username_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _wa_username_cache.generation
     try:
         user = (
             db_session.query(WhatsAppUser)
@@ -581,7 +589,7 @@ def get_whatsapp_user_by_username(username: str) -> dict[str, Any] | None:
             "updated_at": user.updated_at,
             "last_command_at": user.last_command_at,
         }
-        _wa_username_cache[cache_key] = result
+        _wa_username_cache.fill(cache_key, result, generation)
         return result
     except Exception:
         logger.exception("Failed to get WhatsApp user by username")
@@ -593,8 +601,12 @@ def get_whatsapp_user_by_username(username: str) -> dict[str, Any] | None:
 def get_user_credentials(whatsapp_jid: str) -> dict[str, Any] | None:
     """Return decrypted api_key + host_url for command-mode SDK calls."""
     cache_key = f"creds_{whatsapp_jid}"
-    if cache_key in _wa_credentials_cache:
-        return _wa_credentials_cache[cache_key]
+    cached = _wa_credentials_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _wa_credentials_cache.generation
     try:
         user = (
             db_session.query(WhatsAppUser)
@@ -614,7 +626,7 @@ def get_user_credentials(whatsapp_jid: str) -> dict[str, Any] | None:
             "username": user.openalgo_username,
             "broker": user.broker,
         }
-        _wa_credentials_cache[cache_key] = result
+        _wa_credentials_cache.fill(cache_key, result, generation)
         return result
     except Exception:
         logger.exception("Failed to load WhatsApp user credentials")
@@ -679,8 +691,12 @@ def get_all_whatsapp_users(filters: dict | None = None) -> list[dict[str, Any]]:
 
 def get_user_preferences(whatsapp_jid: str) -> dict[str, Any]:
     cache_key = f"prefs_{whatsapp_jid}"
-    if cache_key in _wa_preferences_cache:
-        return _wa_preferences_cache[cache_key]
+    cached = _wa_preferences_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _wa_preferences_cache.generation
     try:
         prefs = (
             db_session.query(WhatsAppUserPreference)
@@ -707,7 +723,7 @@ def get_user_preferences(whatsapp_jid: str) -> dict[str, Any]:
                 "language": prefs.language,
                 "timezone": prefs.timezone,
             }
-        _wa_preferences_cache[cache_key] = result
+        _wa_preferences_cache.fill(cache_key, result, generation)
         return result
     except Exception:
         logger.exception("Failed to get WhatsApp user preferences")
@@ -739,7 +755,7 @@ def update_user_preferences(whatsapp_jid: str, updates: dict[str, Any]) -> bool:
             if key in ALLOWED:
                 setattr(prefs, key, value)
         db_session.commit()
-        _wa_preferences_cache.pop(f"prefs_{whatsapp_jid}", None)
+        _wa_preferences_cache.invalidate(f"prefs_{whatsapp_jid}")
         return True
     except Exception:
         logger.exception("Failed to update WhatsApp user preferences")

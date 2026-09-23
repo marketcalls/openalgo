@@ -66,6 +66,31 @@ WS_CRITICAL_THRESHOLD = int(os.getenv("HEALTH_WS_CRITICAL_THRESHOLD", "20"))
 THREAD_WARNING_THRESHOLD = int(os.getenv("HEALTH_THREAD_WARNING_THRESHOLD", "50"))
 THREAD_CRITICAL_THRESHOLD = int(os.getenv("HEALTH_THREAD_CRITICAL_THRESHOLD", "100"))
 
+# Under the gthread worker the request pool alone is a fixed 64 threads (the
+# launcher's constant), before a single Socket.IO session, the event bus or a
+# scheduler is counted, so the defaults above would report "fail" on a healthy
+# instance and /health/status would answer 503. There the defaults sit this
+# far above the pool instead. Explicit HEALTH_THREAD_* settings always win,
+# and under eventlet and the dev server nothing changes.
+GTHREAD_THREADS_ASSUMED = 64
+GTHREAD_THREAD_WARNING_MARGIN = 80
+GTHREAD_THREAD_CRITICAL_MARGIN = 160
+
+
+def _thread_thresholds() -> tuple[int, int]:
+    """(warning, critical) thread counts for this runtime."""
+    from utils import runtime
+
+    warn, fail = THREAD_WARNING_THRESHOLD, THREAD_CRITICAL_THRESHOLD
+    if not runtime.gthread_active():
+        return warn, fail
+    threads = runtime.configured_threads() or GTHREAD_THREADS_ASSUMED
+    if "HEALTH_THREAD_WARNING_THRESHOLD" not in os.environ:
+        warn = threads + GTHREAD_THREAD_WARNING_MARGIN
+    if "HEALTH_THREAD_CRITICAL_THRESHOLD" not in os.environ:
+        fail = threads + GTHREAD_THREAD_CRITICAL_MARGIN
+    return warn, fail
+
 # Global collector thread
 _collector_thread = None
 _collector_running = False
@@ -484,13 +509,12 @@ def get_thread_metrics():
             threads_info.append(thread_info)
 
         thread_count = len(threads_info)
+        warning_threshold, critical_threshold = _thread_thresholds()
 
         # Determine status
-        if thread_count >= THREAD_CRITICAL_THRESHOLD or stuck_count > 0:
+        if thread_count >= critical_threshold or stuck_count > 0:
             status = "fail"
-            message = (
-                f"Thread count critical: {thread_count} (threshold: {THREAD_CRITICAL_THRESHOLD})"
-            )
+            message = f"Thread count critical: {thread_count} (threshold: {critical_threshold})"
             if stuck_count > 0:
                 message += f", {stuck_count} stuck threads detected"
 
@@ -499,29 +523,40 @@ def get_thread_metrics():
                 severity="fail",
                 metric_name="thread_count",
                 metric_value=thread_count,
-                threshold_value=THREAD_CRITICAL_THRESHOLD,
+                threshold_value=critical_threshold,
                 message=message,
             )
-        elif thread_count >= THREAD_WARNING_THRESHOLD:
+        elif thread_count >= warning_threshold:
             status = "warn"
             HealthAlert.create_alert(
                 alert_type="thread_warn",
                 severity="warn",
                 metric_name="thread_count",
                 metric_value=thread_count,
-                threshold_value=THREAD_WARNING_THRESHOLD,
-                message=f"Thread count elevated: {thread_count} (threshold: {THREAD_WARNING_THRESHOLD})",
+                threshold_value=warning_threshold,
+                message=f"Thread count elevated: {thread_count} (threshold: {warning_threshold})",
             )
         else:
             status = "pass"
-            HealthAlert.auto_resolve_alerts("thread_count", thread_count, THREAD_WARNING_THRESHOLD)
+            HealthAlert.auto_resolve_alerts("thread_count", thread_count, warning_threshold)
 
-        return {
+        result = {
             "count": thread_count,
             "stuck_count": stuck_count,
             "threads": threads_info[:50],  # Limit to first 50 for JSON size
             "status": status,
         }
+        # Under gthread, how much of the request pool long-lived work holds:
+        # open streams and browser (Socket.IO) connections each keep a thread.
+        # Sampled here, every collection, so the low-headroom warning fires
+        # without anyone having to open the admin page.
+        from utils import runtime
+
+        if runtime.gthread_active():
+            from utils.stream_registry import thread_budget
+
+            result["budget"] = thread_budget()
+        return result
     except Exception as e:
         logger.error(f"Error getting thread metrics: {e}")
         return {"count": 0, "stuck_count": 0, "threads": [], "status": "unknown"}

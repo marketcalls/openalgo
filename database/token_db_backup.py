@@ -1,13 +1,12 @@
 # Original token_db.py - Backup copy
-from cachetools import TTLCache
-
 from database.symbol import SymToken  # Import here to avoid circular imports
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 # Define a cache for the tokens, symbols with a max size and a 3600-second TTL
-token_cache = TTLCache(maxsize=1024, ttl=3600)
+token_cache = LockedTTLCache(maxsize=1024, ttl=3600)
 
 
 def get_token(symbol, exchange):

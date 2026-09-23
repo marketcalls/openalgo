@@ -149,9 +149,16 @@ def on_order_update(event) -> None:
 
 
 def register(bus) -> None:
-    """Attach both handlers. Called once during app startup."""
-    bus.subscribe("order.placed", on_order_placed, name="StrategyBookTagger")
-    bus.subscribe("order.update", on_order_update, name="StrategyBookFills")
+    """Attach both handlers. Called once during app startup.
+
+    All three run on the bus's critical lane. The strategy book feeds exit
+    triggers, so a tag or a fill it never saw is a wrong position, and the
+    default lane sheds callbacks under a burst alongside best-effort work such
+    as Telegram and WhatsApp sends. The critical lane has its own workers and
+    its own, larger cap, and logs every callback it cannot take.
+    """
+    bus.subscribe("order.placed", on_order_placed, name="StrategyBookTagger", critical=True)
+    bus.subscribe("order.update", on_order_update, name="StrategyBookFills", critical=True)
     # Batch nodes suppress per-leg order.placed, so their legs are tagged from
     # the single completion event each publishes.
     for topic in (
@@ -160,5 +167,7 @@ def register(bus) -> None:
         "split.completed",
         "options.completed",
     ):
-        bus.subscribe(topic, on_batch_completed, name="StrategyBookBatchTagger")
+        bus.subscribe(
+            topic, on_batch_completed, name="StrategyBookBatchTagger", critical=True
+        )
     logger.debug("Strategy book subscriber registered")

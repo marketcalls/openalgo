@@ -6,7 +6,7 @@ from utils.logging import get_logger
 logger = get_logger("websocket_proxy")
 
 
-def is_port_in_use(host, port, wait_time=0):
+def is_port_in_use(host, port, wait_time=0, log=True):
     """
     Check if a port is already in use on a specific host
 
@@ -14,6 +14,8 @@ def is_port_in_use(host, port, wait_time=0):
         host (str): Hostname to check
         port (int): Port number to check
         wait_time (float): Time to wait for port to be released (for cleanup scenarios)
+        log (bool): Log when the port is busy. The proxy supervisor polls
+            quietly while it waits for a dying child to release its ports.
 
     Returns:
         bool: True if the port is in use, False otherwise
@@ -30,9 +32,10 @@ def is_port_in_use(host, port, wait_time=0):
                     return False
                 except OSError:
                     if attempt == attempts - 1:  # Last attempt
-                        logger.info(
-                            f"Port {port} is still in use on {host} after {wait_time}s wait"
-                        )
+                        if log:
+                            logger.info(
+                                f"Port {port} is still in use on {host} after {wait_time}s wait"
+                            )
                         return True
                     time.sleep(0.1)  # Wait 0.1 second before next attempt
     else:
@@ -45,7 +48,8 @@ def is_port_in_use(host, port, wait_time=0):
                 return False
             except OSError:
                 # Port is in use
-                logger.info(f"Port {port} is already in use on {host}")
+                if log:
+                    logger.info(f"Port {port} is already in use on {host}")
                 return True
 
 

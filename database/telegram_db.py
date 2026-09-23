@@ -8,7 +8,6 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -31,15 +30,16 @@ from sqlalchemy.sql import func
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
 # Telegram caches - 30 minute TTL for user lookups
 # These reduce DB queries significantly for bot message handling
-_telegram_user_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
-_telegram_username_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
-_user_preferences_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
-_user_credentials_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_telegram_user_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_telegram_username_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_user_preferences_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_user_credentials_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
 
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///db/telegram.db")
@@ -217,8 +217,12 @@ def get_telegram_user(telegram_id: int) -> dict | None:
     cache_key = f"user_{telegram_id}"
 
     # Check cache first
-    if cache_key in _telegram_user_cache:
-        return _telegram_user_cache[cache_key]
+    cached = _telegram_user_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _telegram_user_cache.generation
 
     try:
         user = (
@@ -244,7 +248,7 @@ def get_telegram_user(telegram_id: int) -> dict | None:
                 "last_command_at": user.last_command_at,
             }
             # Cache the result
-            _telegram_user_cache[cache_key] = result
+            _telegram_user_cache.fill(cache_key, result, generation)
             return result
         return None
     except Exception as e:
@@ -259,8 +263,12 @@ def get_telegram_user_by_username(username: str) -> dict | None:
     cache_key = f"username_{username}"
 
     # Check cache first
-    if cache_key in _telegram_username_cache:
-        return _telegram_username_cache[cache_key]
+    cached = _telegram_username_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _telegram_username_cache.generation
 
     try:
         user = (
@@ -285,7 +293,7 @@ def get_telegram_user_by_username(username: str) -> dict | None:
                 "last_command_at": user.last_command_at,
             }
             # Cache the result
-            _telegram_username_cache[cache_key] = result
+            _telegram_username_cache.fill(cache_key, result, generation)
             return result
         return None
     except Exception as e:
@@ -352,12 +360,9 @@ def create_or_update_telegram_user(
         user_cache_key = f"user_{telegram_id}"
         username_cache_key = f"username_{username}"
         creds_cache_key = f"creds_{telegram_id}"
-        if user_cache_key in _telegram_user_cache:
-            del _telegram_user_cache[user_cache_key]
-        if username_cache_key in _telegram_username_cache:
-            del _telegram_username_cache[username_cache_key]
-        if creds_cache_key in _user_credentials_cache:
-            del _user_credentials_cache[creds_cache_key]
+        _telegram_user_cache.invalidate(user_cache_key)
+        _telegram_username_cache.invalidate(username_cache_key)
+        _user_credentials_cache.invalidate(creds_cache_key)
 
         return True
 
@@ -386,14 +391,10 @@ def delete_telegram_user(telegram_id: int) -> bool:
             username_cache_key = f"username_{username}"
             creds_cache_key = f"creds_{telegram_id}"
             prefs_cache_key = f"prefs_{telegram_id}"
-            if user_cache_key in _telegram_user_cache:
-                del _telegram_user_cache[user_cache_key]
-            if username_cache_key in _telegram_username_cache:
-                del _telegram_username_cache[username_cache_key]
-            if creds_cache_key in _user_credentials_cache:
-                del _user_credentials_cache[creds_cache_key]
-            if prefs_cache_key in _user_preferences_cache:
-                del _user_preferences_cache[prefs_cache_key]
+            _telegram_user_cache.invalidate(user_cache_key)
+            _telegram_username_cache.invalidate(username_cache_key)
+            _user_credentials_cache.invalidate(creds_cache_key)
+            _user_preferences_cache.invalidate(prefs_cache_key)
 
             return True
 
@@ -650,8 +651,12 @@ def get_user_preferences(telegram_id: int) -> dict:
     cache_key = f"prefs_{telegram_id}"
 
     # Check cache first
-    if cache_key in _user_preferences_cache:
-        return _user_preferences_cache[cache_key]
+    cached = _user_preferences_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _user_preferences_cache.generation
 
     try:
         pref = db_session.query(UserPreference).filter_by(telegram_id=telegram_id).first()
@@ -679,7 +684,7 @@ def get_user_preferences(telegram_id: int) -> dict:
             }
 
         # Cache the result
-        _user_preferences_cache[cache_key] = result
+        _user_preferences_cache.fill(cache_key, result, generation)
         return result
 
     except Exception as e:
@@ -708,8 +713,7 @@ def update_user_preferences(telegram_id: int, preferences: dict) -> bool:
 
         # Invalidate preferences cache
         prefs_cache_key = f"prefs_{telegram_id}"
-        if prefs_cache_key in _user_preferences_cache:
-            del _user_preferences_cache[prefs_cache_key]
+        _user_preferences_cache.invalidate(prefs_cache_key)
 
         return True
 
@@ -816,8 +820,12 @@ def get_user_credentials(telegram_id: int) -> dict | None:
     cache_key = f"creds_{telegram_id}"
 
     # Check cache first
-    if cache_key in _user_credentials_cache:
-        return _user_credentials_cache[cache_key]
+    cached = _user_credentials_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _user_credentials_cache.generation
 
     try:
         user = (
@@ -841,7 +849,7 @@ def get_user_credentials(telegram_id: int) -> dict | None:
                 "broker": user.broker,
             }
             # Cache the result
-            _user_credentials_cache[cache_key] = result
+            _user_credentials_cache.fill(cache_key, result, generation)
             return result
         return None
     except Exception as e:

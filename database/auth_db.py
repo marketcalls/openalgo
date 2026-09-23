@@ -2,10 +2,10 @@
 
 import base64
 import os
+from dataclasses import dataclass
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -26,6 +26,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -141,22 +142,69 @@ def get_session_based_cache_ttl():
         return 300  # Fallback to 5 minutes
 
 
+# The caches below are shared by request threads, the event bus pool,
+# background services and, on the dev server, the websocket proxy's thread.
+# They are LockedTTLCache rather than cachetools' TTLCache because under the
+# gthread worker those really do run at once, and a plain TTLCache is not
+# thread-safe: even its get() is a membership test followed by a subscript.
+#
+# Every reader fills through the generation it read before its database query
+# (_fill below), and every writer clears or invalidates strictly after its
+# commit. A read that started before a re-login, a revoke or an API key
+# rotation therefore cannot put the superseded value back after the writer
+# cleared it; its caller still gets the value it read, which was current when
+# it asked. Under eventlet none of this interleaved, and the outcome of a
+# read that does not race a writer is unchanged.
+
 # Define auth token cache with TTL until session expiry to minimize DB hits
-auth_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+auth_cache = LockedTTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define feed token cache with same TTL
-feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+feed_token_cache = LockedTTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
-broker_cache = TTLCache(maxsize=1024, ttl=3000)
+broker_cache = LockedTTLCache(maxsize=1024, ttl=3000)
 # Define a cache for verified API keys with 24-hour TTL
 # Security: Only caches user_id (not sensitive), invalidated on key regeneration
 # Long TTL is safe because cache is invalidated when keys are regenerated
-verified_api_key_cache = TTLCache(maxsize=1024, ttl=36000)  # 10 hours
+verified_api_key_cache = LockedTTLCache(maxsize=1024, ttl=36000)  # 10 hours
 # Define a cache for invalid API keys with shorter 5-minute TTL (prevent cache poisoning)
-invalid_api_key_cache = TTLCache(maxsize=512, ttl=300)  # 5 minutes
+invalid_api_key_cache = LockedTTLCache(maxsize=512, ttl=300)  # 5 minutes
 # Order mode (auto/semi_auto) is checked on every order request; cache it to
 # avoid a DB query per order. Invalidated by update_order_mode via
 # invalidate_user_cache, so the TTL is only a backstop.
-order_mode_cache = TTLCache(maxsize=128, ttl=60)
+order_mode_cache = LockedTTLCache(maxsize=128, ttl=60)
+
+
+def _generation(cache):
+    """The cache's generation before a load, or None for a plain mapping.
+
+    Tests substitute plain dict subclasses for these caches to stage a race;
+    a mapping without a generation is filled directly, as before.
+    """
+    return getattr(cache, "generation", None)
+
+
+def _fill(cache, key, value, generation) -> None:
+    """Store a loaded value unless the cache was invalidated since ``generation``."""
+    fill = getattr(cache, "fill", None)
+    if fill is not None and generation is not None:
+        fill(key, value, generation)
+    else:
+        cache[key] = value
+
+
+def _invalidate(cache, key) -> bool:
+    """Drop ``key`` so no read that started earlier can store it again.
+
+    Returns:
+        True when the cache held an entry for ``key``.
+    """
+    invalidate = getattr(cache, "invalidate", None)
+    if invalidate is None:
+        return cache.pop(key, MISSING) is not MISSING
+    with cache.lock:
+        held = cache.get(key, MISSING) is not MISSING
+        invalidate(key)
+    return held
 
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
@@ -206,6 +254,48 @@ class Auth(Base):
         Index("idx_auth_user_id", "user_id"),  # Speeds up get_user_id() lookups
         Index("idx_auth_is_revoked", "is_revoked"),  # Speeds up token validity checks
     )
+
+
+@dataclass(frozen=True, slots=True)
+class AuthRecord:
+    """An immutable copy of the ``Auth`` columns the token caches need.
+
+    The token caches used to hold live ``Auth`` instances. An instance belongs
+    to the scoped session of the thread that loaded it: once that session is
+    removed at request teardown, or its commit expires the instance, the next
+    attribute read on another thread either raises DetachedInstanceError or
+    refreshes through a session that is not its own (``flow_db`` lost five
+    minutes of alerts to exactly that). A frozen copy has neither problem.
+    The token fields stay encrypted, as they are in the row.
+    """
+
+    name: str
+    auth: str | None
+    feed_token: str | None
+    broker: str | None
+    user_id: str | None
+    is_revoked: bool
+
+    @classmethod
+    def from_row(cls, row) -> "AuthRecord":
+        """Copy the cached columns out of an ``Auth`` row."""
+        return cls(
+            name=row.name,
+            auth=row.auth,
+            feed_token=row.feed_token,
+            broker=row.broker,
+            user_id=row.user_id,
+            is_revoked=bool(row.is_revoked),
+        )
+
+
+def _as_record(value) -> AuthRecord | None:
+    """Return ``value`` as an AuthRecord, or None when it is not a token record."""
+    if isinstance(value, AuthRecord):
+        return value
+    if isinstance(value, Auth):
+        return AuthRecord.from_row(value)
+    return None
 
 
 class ApiKeys(Base):
@@ -565,6 +655,9 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     # would persist and cause 401 Unauthorized errors after re-login.
     # See GitHub issue #851 for details on this cache key mismatch bug.
     # This is cheap and always safe — do it unconditionally so reads stay correct.
+    # After the commit, never before: clear() also bumps each cache's
+    # generation, so a read that loaded the previous token before this commit
+    # cannot store it again afterwards.
     auth_cache.clear()
     feed_token_cache.clear()
     broker_cache.clear()  # Also clear broker cache to ensure fresh data
@@ -659,30 +752,37 @@ def get_auth_token(name, bypass_cache: bool = False):
         # between a membership test and the delete, and the KeyError would
         # escape as a spurious auth failure.
         auth_cache.pop(cache_key, None)
+        generation = _generation(auth_cache)
         # Query database directly
         auth_obj = get_auth_token_dbquery(name)
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
             # Update cache with fresh data
-            auth_cache[cache_key] = auth_obj
-            return decrypt_token(auth_obj.auth)
+            record = AuthRecord.from_row(auth_obj)
+            _fill(auth_cache, cache_key, record, generation)
+            return decrypt_token(record.auth)
         return None
 
     # Normal cache-first lookup. One get, not a membership test followed by a
     # subscript: between the two the entry can expire or be evicted, and the
     # KeyError surfaces to the caller as an expired broker session.
-    auth_obj = auth_cache.get(cache_key)
-    if auth_obj is not None:
-        if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
-            return decrypt_token(auth_obj.auth)
-        else:
-            auth_cache.pop(cache_key, None)
-            return None
-    else:
-        auth_obj = get_auth_token_dbquery(name)
-        if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
-            auth_cache[cache_key] = auth_obj
-            return decrypt_token(auth_obj.auth)
+    cached = auth_cache.get(cache_key, MISSING)
+    if cached is not MISSING and cached is not None:
+        record = _as_record(cached)
+        if record is not None and not record.is_revoked:
+            return decrypt_token(record.auth)
+        auth_cache.pop(cache_key, None)
         return None
+
+    # Taken before the query: a re-login or revoke that commits while this
+    # read is in flight clears the cache and moves the generation, and the
+    # value read here is then returned but not stored.
+    generation = _generation(auth_cache)
+    auth_obj = get_auth_token_dbquery(name)
+    if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
+        record = AuthRecord.from_row(auth_obj)
+        _fill(auth_cache, cache_key, record, generation)
+        return decrypt_token(record.auth)
+    return None
 
 
 def get_auth_token_fresh(name):
@@ -745,19 +845,21 @@ def get_feed_token(name):
         return None
 
     cache_key = f"feed-{name}"
-    auth_obj = feed_token_cache.get(cache_key)
-    if auth_obj is not None:
-        if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
-            return decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
-        else:
-            feed_token_cache.pop(cache_key, None)
-            return None
-    else:
-        auth_obj = get_feed_token_dbquery(name)
-        if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
-            feed_token_cache[cache_key] = auth_obj
-            return decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
+    cached = feed_token_cache.get(cache_key, MISSING)
+    if cached is not MISSING and cached is not None:
+        record = _as_record(cached)
+        if record is not None and not record.is_revoked:
+            return decrypt_token(record.feed_token) if record.feed_token else None
+        feed_token_cache.pop(cache_key, None)
         return None
+
+    generation = _generation(feed_token_cache)
+    auth_obj = get_feed_token_dbquery(name)
+    if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
+        record = AuthRecord.from_row(auth_obj)
+        _fill(feed_token_cache, cache_key, record, generation)
+        return decrypt_token(record.feed_token) if record.feed_token else None
+    return None
 
 
 def get_feed_token_dbquery(name):
@@ -813,7 +915,9 @@ def invalidate_user_cache(user_id):
     Invalidate all cached data for a user when their credentials change.
     Security: Ensures old API keys/tokens are not usable after regeneration.
     """
-    # Clear all caches that might contain this user's data
+    # Clear all caches that might contain this user's data. Callers run this
+    # after their commit; clear() also bumps each cache's generation, so a
+    # read that loaded the old key, token or mode cannot store it again.
     auth_cache.clear()
     broker_cache.clear()
     feed_token_cache.clear()
@@ -821,6 +925,33 @@ def invalidate_user_cache(user_id):
     invalid_api_key_cache.clear()
     order_mode_cache.clear()
     logger.info(f"Cleared all caches for user_id: {user_id}")
+
+
+def invalidate_user_auth_cache(name) -> list[str]:
+    """Drop one user's cached broker and feed tokens. Never raises.
+
+    For logout, session expiry and a broker rejecting a stale token, which
+    used to test membership and then delete. Another thread can remove the
+    entry between those two steps (a login clearing the whole cache, a TTL
+    lapse), and the KeyError then escaped before the token was revoked.
+    Invalidation also stops a read that is already in flight from storing the
+    token again.
+
+    Args:
+        name: The user whose ``auth-`` and ``feed-`` entries to drop.
+
+    Returns:
+        The names of the caches that held an entry, for logging.
+    """
+    cleared = []
+    try:
+        if _invalidate(auth_cache, f"auth-{name}"):
+            cleared.append("auth_cache")
+        if _invalidate(feed_token_cache, f"feed-{name}"):
+            cleared.append("feed_token_cache")
+    except Exception:
+        logger.exception(f"Could not clear the cached broker session for {name}")
+    return cleared
 
 
 def upsert_api_key(user_id, api_key):
@@ -918,18 +1049,24 @@ def verify_api_key(provided_api_key):
     # Security: Never store plaintext API key in cache
     cache_key = hashlib.sha256(provided_api_key.encode()).hexdigest()
 
-    # Step 1: Check invalid cache first (fast rejection of known bad keys)
-    if cache_key in invalid_api_key_cache:
+    # Step 1: Check invalid cache first (fast rejection of known bad keys).
+    # One get each, never a membership test then a subscript: the entry can
+    # go between the two and the KeyError would reach the order path.
+    if invalid_api_key_cache.get(cache_key, MISSING) is not MISSING:
         logger.debug("API key rejected from invalid cache")
         return None
 
     # Step 2: Check valid cache (fast path for legitimate requests)
-    if cache_key in verified_api_key_cache:
-        user_id = verified_api_key_cache[cache_key]
-        logger.debug(f"API key verified from cache for user_id: {user_id}")
-        return user_id
+    cached_user_id = verified_api_key_cache.get(cache_key, MISSING)
+    if cached_user_id is not MISSING:
+        logger.debug(f"API key verified from cache for user_id: {cached_user_id}")
+        return cached_user_id
 
-    # Step 3: Cache miss - perform expensive Argon2 verification
+    # Step 3: Cache miss - perform expensive Argon2 verification. The
+    # generations are taken before the query, so a key regenerated while this
+    # runs is not cached as valid (or invalid) from the superseded hashes.
+    verified_generation = _generation(verified_api_key_cache)
+    invalid_generation = _generation(invalid_api_key_cache)
     peppered_key = provided_api_key + PEPPER
     try:
         # Query all API keys
@@ -940,7 +1077,7 @@ def verify_api_key(provided_api_key):
             try:
                 ph.verify(api_key_obj.api_key_hash, peppered_key)
                 # Valid key found - cache it
-                verified_api_key_cache[cache_key] = api_key_obj.user_id
+                _fill(verified_api_key_cache, cache_key, api_key_obj.user_id, verified_generation)
                 logger.debug(f"API key verified and cached for user_id: {api_key_obj.user_id}")
                 return api_key_obj.user_id
             except VerifyMismatchError:
@@ -948,7 +1085,7 @@ def verify_api_key(provided_api_key):
 
         # If we reach here, the API key is invalid
         # Cache the invalid result to prevent repeated expensive verifications
-        invalid_api_key_cache[cache_key] = True
+        _fill(invalid_api_key_cache, cache_key, True, invalid_generation)
         logger.debug("Invalid API key cached")
 
         # Track the invalid attempt
@@ -982,10 +1119,12 @@ def get_username_by_apikey(provided_api_key):
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""
     # Check if broker name is in cache
-    if provided_api_key in broker_cache:
-        return broker_cache[provided_api_key]
+    cached_broker = broker_cache.get(provided_api_key, MISSING)
+    if cached_broker is not MISSING:
+        return cached_broker
 
     # Not in cache, need to look it up
+    generation = _generation(broker_cache)
     user_id = verify_api_key(provided_api_key)
 
     if user_id:
@@ -993,7 +1132,7 @@ def get_broker_name(provided_api_key):
             auth_obj = Auth.query.filter_by(name=user_id).first()
             if auth_obj and not auth_obj.is_revoked:
                 # Cache the broker name
-                broker_cache[provided_api_key] = auth_obj.broker
+                _fill(broker_cache, provided_api_key, auth_obj.broker, generation)
                 return auth_obj.broker
             else:
                 logger.warning(f"No valid broker found for user_id '{user_id}'.")
@@ -1049,7 +1188,10 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 # caught, turning a harmless cache miss into a failed request.
                 auth_cache.pop(cache_key, None)
 
-    # Cache miss or revocation check failed - fetch from database
+    # Cache miss or revocation check failed - fetch from database. The
+    # generation is taken first, so a re-login that commits while this read is
+    # in flight stops its (superseded) token from being cached.
+    generation = _generation(auth_cache)
     user_id = verify_api_key(provided_api_key)
 
     if user_id:
@@ -1066,14 +1208,14 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                     result = (decrypted_token, auth_obj.broker)
 
                 # Cache the result
-                auth_cache[cache_key] = result
+                _fill(auth_cache, cache_key, result, generation)
                 logger.debug(f"Auth token cached for user_id: {user_id}")
                 return result
             else:
                 # Cache the negative result to prevent repeated DB queries and log spam
                 # (e.g., orphaned users with revoked sessions polled by background services)
                 negative_result = (None, None, None) if include_feed_token else (None, None)
-                auth_cache[cache_key] = negative_result
+                _fill(auth_cache, cache_key, negative_result, generation)
                 logger.warning(f"No valid auth token or broker found for user_id '{user_id}'. Cached negative result.")
                 return negative_result
         except Exception as e:
@@ -1097,10 +1239,15 @@ def get_order_mode(user_id):
     if cached_mode is not None:
         return cached_mode
 
+    # Taken before the query. update_order_mode commits and then clears this
+    # cache; a read that loaded 'auto' just before an operator switched to
+    # semi_auto must not store it back, or orders would skip the Action
+    # Center until the TTL ran out.
+    generation = _generation(order_mode_cache)
     try:
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
         mode = api_key_obj.order_mode if api_key_obj and api_key_obj.order_mode else "auto"
-        order_mode_cache[user_id] = mode
+        _fill(order_mode_cache, user_id, mode, generation)
         return mode
     except Exception as e:
         logger.exception(f"Error getting order mode for user {user_id}: {e}")
