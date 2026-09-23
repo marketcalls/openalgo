@@ -2161,10 +2161,54 @@ class WebSocketProxy:
                 await aio.sleep(1)
 
 
+#: Set by the app when it starts this process as a supervised child (gthread
+#: worker only): the pid of the worker that owns it.
+PARENT_PID_ENV = "OPENALGO_PROXY_PARENT_PID"
+ORPHAN_CHECK_SECONDS = 1.0
+
+
+def _expected_parent_pid() -> int | None:
+    """The owning worker's pid, when this child should exit once orphaned."""
+    if os.name != "posix":
+        return None
+    raw = os.environ.get(PARENT_PID_ENV, "").strip()
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+async def _exit_when_orphaned(proxy, parent_pid: int) -> None:
+    """Stop the proxy once the worker that started it has gone.
+
+    A worker killed hard (a worker timeout, or SIGKILL after the graceful
+    window) never runs its exit handlers, so nothing terminates this child.
+    Left running it would keep the WebSocket and ZeroMQ ports, and the next
+    worker's child would fail to bind them. When the parent dies the child is
+    re-parented, so a changed parent pid means it is time to go.
+    """
+    warned = False
+    while True:
+        await aio.sleep(ORPHAN_CHECK_SECONDS)
+        if os.getppid() == parent_pid:
+            continue
+        if not warned:
+            warned = True
+            logger.warning(
+                "The OpenAlgo web server that started live market data has "
+                "stopped; stopping this copy so the next one can start."
+            )
+        # Every check, not once: start() sets the flag when it begins, so a
+        # parent that died before that would otherwise be missed.
+        proxy.running = False
+
+
 # Entry point for running the server standalone
 async def main():
     """Main entry point for running the WebSocket proxy server"""
     proxy = None
+    orphan_watch = None
 
     try:
         # Load environment variables
@@ -2176,6 +2220,10 @@ async def main():
 
         # Create and start the WebSocket proxy
         proxy = WebSocketProxy(host=ws_host, port=ws_port)
+
+        parent_pid = _expected_parent_pid()
+        if parent_pid is not None:
+            orphan_watch = aio.create_task(_exit_when_orphaned(proxy, parent_pid))
 
         await proxy.start()
 
@@ -2195,6 +2243,8 @@ async def main():
         logger.exception(f"Server error: {e}")
         raise
     finally:
+        if orphan_watch is not None:
+            orphan_watch.cancel()
         # Always clean up resources
         if proxy:
             try:

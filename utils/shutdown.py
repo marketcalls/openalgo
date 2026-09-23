@@ -365,6 +365,70 @@ def shutdown_runtime() -> None:
             logger.exception(f"Shutdown step {step.__name__} failed; continuing teardown")
 
 
+#: How often the drain watcher looks for a drain request, in seconds.
+DRAIN_WATCH_SECONDS = 0.5
+
+_drain_watcher_started = False
+
+
+def close_socketio_sessions() -> int | None:
+    """End every Socket.IO session, so the threads serving them return.
+
+    Under the gthread worker each open Engine.IO session holds a worker thread
+    for as long as it lives. A graceful stop waits for those threads, so one
+    still held when the window closes turns the stop into a kill that skips the
+    teardown. Browsers reconnect by themselves once the server is back.
+
+    Returns:
+        How many sessions were open, or None if the server could not be reached.
+    """
+    try:
+        from extensions import socketio
+
+        eio = socketio.server.eio
+        count = len(eio.sockets)
+        eio.disconnect()
+        return count
+    except Exception:
+        logger.exception("Could not close browser connections for shutdown")
+        return None
+
+
+def _watch_for_drain() -> None:
+    """Close Socket.IO sessions once a drain is requested. Runs on its own thread."""
+    while not stream_registry.should_stop():
+        time.sleep(DRAIN_WATCH_SECONDS)
+    count = close_socketio_sessions()
+    if count:
+        logger.info(f"Shutting down: closed {count} browser connection(s)")
+
+
+def start_drain_watcher() -> bool:
+    """Under the gthread worker, close Socket.IO sessions when a drain begins.
+
+    :func:`begin_drain` is one assignment, safe from a signal handler, so it
+    cannot close sessions itself; this thread notices the request and does it
+    while gunicorn's graceful window is still open. Idempotent. A no-op under
+    eventlet, where a session costs a greenlet rather than a thread, and on the
+    development server, where nothing drains.
+
+    Returns:
+        True when the watcher is running after the call.
+    """
+    global _drain_watcher_started
+
+    from utils import runtime
+
+    if not runtime.gthread_active():
+        return False
+    with _hooks_lock:
+        if _drain_watcher_started:
+            return True
+        _drain_watcher_started = True
+    threading.Thread(target=_watch_for_drain, name="drain-watcher", daemon=True).start()
+    return True
+
+
 def _handle_signal(signum, _frame):
     """Tear down, then exit with the code a shell expects from a signal.
 
