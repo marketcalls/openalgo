@@ -239,14 +239,12 @@ has finished. On eventlet you can leave the line in place; it does no harm.
 
 - **A fixed budget of 64 request threads per instance.** It is not a
   setting. Most requests take a thread for a moment, but some hold one for as
-  long as they are open: each browser tab keeps two or three live update
-  connections waiting, and each open Python strategy log view, agent chat and
-  remote MCP connection holds one while it is open. Five devices with two
-  tabs each use about 20 to 30. If the system report says almost every
-  request slot is busy, close tabs you are not using; if it keeps happening
-  during trading, switch back to eventlet.
-- **Live update connections per tab.** Each tab currently opens two or three
-  of them. A later release brings that down to one.
+  long as they are open: each browser tab keeps one live update connection
+  waiting, shared by every page in it, and each open Python strategy log view,
+  agent chat and remote MCP connection holds one while it is open. Five
+  devices with two tabs each use about 10, plus one for each of those. If the
+  system report says almost every request slot is busy, close tabs you are not
+  using; if it keeps happening during trading, switch back to eventlet.
 - **Stopping takes a little longer.** gthread lets open requests finish before
   it stops, for up to 30 seconds. On Docker this needs `stop_grace_period: 45s`
   (see [Switch on Docker](#switch-on-docker)).
