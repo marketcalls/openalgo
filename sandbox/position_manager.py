@@ -27,6 +27,7 @@ from database.sandbox_db import SandboxPositions, SandboxTrades, db_session, get
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
+from sandbox.position_locks import holds_position_lock, position_lock  # noqa: F401 (re-exported)
 from sandbox.session_boundary import IST, last_session_expiry_utc
 from services.market_data_service import get_market_data_service
 from services.quotes_service import get_multiquotes, get_quotes
@@ -1047,15 +1048,27 @@ class PositionManager:
 
         return quote_cache
 
+    # Held across the read and the closing order, so a second closer (the
+    # square-off job, a smart order, the user) sees this close before deciding.
+    @holds_position_lock(
+        lambda self, symbol, exchange, product: (self.user_id, exchange, symbol, product)
+    )
     def close_position(self, symbol, exchange, product):
         """
         Close a position (square-off)
         Creates a reverse order to close the position
         """
         try:
-            position = SandboxPositions.query.filter_by(
-                user_id=self.user_id, symbol=symbol, exchange=exchange, product=product
-            ).first()
+            # populate_existing: the square-off sweep calls this while holding
+            # the positions it loaded, and the session would hand that copy
+            # back, however stale, instead of the quantity as it is now.
+            position = (
+                SandboxPositions.query.filter_by(
+                    user_id=self.user_id, symbol=symbol, exchange=exchange, product=product
+                )
+                .populate_existing()
+                .first()
+            )
 
             if not position:
                 return (

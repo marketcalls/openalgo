@@ -27,6 +27,7 @@ from database.sandbox_db import SandboxOrders, SandboxPositions, SandboxTrades, 
 from database.symbol import SymToken
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
+from sandbox.position_locks import holds_position_lock
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 from utils.symbol_utils import is_future, is_option
@@ -39,6 +40,19 @@ logger = get_logger(__name__)
 _PENDING_STATUSES = ("open", "trigger pending")
 
 
+def _order_position(manager, order_data, *args, **kwargs):
+    """The position an order acts on, or None when the order does not name one."""
+    try:
+        symbol = order_data["symbol"]
+        exchange = order_data["exchange"]
+        product = order_data["product"]
+    except (KeyError, TypeError):
+        return None
+    if not symbol or not isinstance(exchange, str) or not isinstance(product, str):
+        return None
+    return (manager.user_id, exchange, symbol, product)
+
+
 class OrderManager:
     """Manages sandbox orders for sandbox mode"""
 
@@ -46,6 +60,10 @@ class OrderManager:
         self.user_id = user_id
         self.fund_manager = FundManager(user_id)
 
+    # Held from the first read of the position (the CNC sell check, the margin
+    # netting) through the order's commit and any immediate fill, so a second
+    # order on the same position decides on what this one left behind.
+    @holds_position_lock(_order_position)
     def place_order(self, order_data, prefetched_quote=None):
         """
         Place a new order in sandbox mode
