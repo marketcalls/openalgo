@@ -197,12 +197,29 @@ def note_run_stopped(strategy_id: int) -> None:
         _cooling_off[strategy_id] = _now()
 
 
-def _cooling_off_remaining(strategy_id: int) -> int:
-    """Whole seconds left on a strategy's cooling-off window, floor 1."""
-    stopped_at = _cooling_off.get(strategy_id)
-    if stopped_at is None:
+def _cooling_off_remaining_locked(strategy_id: int) -> int:
+    """Whole seconds left on a strategy's cooling-off window, floor 1, else 0.
+
+    The caller holds ``_cache_lock``. One subscript, not ``get``: cachetools'
+    ``get`` is a membership test followed by a read, and an entry expiring
+    between the two raises KeyError instead of answering "not cooling off".
+    """
+    try:
+        stopped_at = _cooling_off[strategy_id]
+    except KeyError:
         return 0
     return max(1, int(COOLING_OFF_SECONDS - (_now() - stopped_at)))
+
+
+def _cooling_off_remaining(strategy_id: int) -> int:
+    """Whole seconds left on a strategy's cooling-off window, floor 1, else 0.
+
+    Takes ``_cache_lock``, so it must not be called while holding it. The
+    cache is also written by note_run_stopped from the engine's threads, and
+    under the gthread worker those run in parallel with this read.
+    """
+    with _cache_lock:
+        return _cooling_off_remaining_locked(strategy_id)
 
 
 # ---------------------------------------------------------------------------
@@ -844,10 +861,15 @@ def _handle(
     # 8 and 9. Both windows are read and the claim is written under one lock,
     # so two deliveries arriving together cannot both pass.
     key = (strategy_id, action, mode)
+    cooling_off_remaining = 0
     with _cache_lock:
+        if action == "start":
+            # Read here, under the lock, and never again after it: the window
+            # can expire or be rewritten by another thread once it is released.
+            cooling_off_remaining = _cooling_off_remaining_locked(strategy_id)
         if key in _dedupe:
             refusal = "rejected_dedupe"
-        elif action == "start" and strategy_id in _cooling_off:
+        elif cooling_off_remaining:
             refusal = "rejected_cooling_off"
         else:
             refusal = ""
@@ -876,7 +898,7 @@ def _handle(
         )
 
     if refusal == "rejected_cooling_off":
-        remaining = _cooling_off_remaining(strategy_id)
+        remaining = cooling_off_remaining
         logger.warning("Webhook refused: strategy %s is cooling off", strategy_id)
         event_id = _audit(
             "rejected_cooling_off",
