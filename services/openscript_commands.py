@@ -296,7 +296,10 @@ def _change(edit) -> None:
     not be reported as a failure because a note about it could not be written.
     """
     try:
-        with _WRITE_LOCK, _across_processes() as locked:
+        # The lock between processes is taken first, so its short wait never
+        # holds the one between threads, which it also covers: a second
+        # handle on the lock file in this process waits for the first.
+        with _across_processes() as locked, _WRITE_LOCK:
             if not locked:
                 _said(f"Changing {COMMAND_FILE} without the lock another process holds")
             stored = _read_entries()
