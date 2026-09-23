@@ -293,7 +293,7 @@ bug the matrix exists to catch.
 | MQ-03 | **500 symbols** | All 500 return data, or the response degrades predictably at the broker's documented cap with a clear message. Record the observed cap |
 | MQ-04 | Cap discovery | If the broker publishes no cap, binary-search (1/10/50/100/101/150/...) and record the boundary. Note whether exceeding it fails cleanly or returns an opaque 500 |
 | MQ-05 | **Mixed valid + invalid symbol** | Valid symbols return data; the invalid one returns an `error` field **in its own result row**. The whole request must not fail |
-| MQ-06 | **Mixed valid + invalid exchange** | Same as MQ-05 |
+| MQ-06 | **Mixed valid + invalid exchange** | Not the same as MQ-05. `exchange` is schema-validated with `validate.OneOf(VALID_EXCHANGES)`, so a bad value is rejected before the service runs and the whole request returns a clean 400 naming the offending entry. A *symbol* is not enum-validated, which is why MQ-05 degrades per row and this does not. Assert the 400 is clean and named - never a 500, never a silent partial |
 | MQ-07 | Mixed exchanges including an index | NSE + NFO + `NSE_INDEX` in one request all return data |
 | MQ-08 | Field parity with `/quotes` | Same field names and types as the single-quote endpoint, plus `oi` |
 | MQ-09 | Duplicate symbols in request | Handled without error |
