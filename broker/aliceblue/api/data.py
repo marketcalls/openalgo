@@ -618,14 +618,17 @@ class BrokerData:
             if not success:
                 raise Exception(f"Failed to subscribe to depth for {symbol} on {exchange}")
 
-            # Wait for depth data to arrive
-            time.sleep(2.0)
+            try:
+                # Wait for depth data to arrive
+                time.sleep(2.0)
 
-            # Retrieve depth from WebSocket
-            depth = websocket.get_market_depth(api_exchange, token)
-
-            # Unsubscribe after getting the data
-            websocket.unsubscribe([instrument], is_depth=True)
+                # Retrieve depth from WebSocket
+                depth = websocket.get_market_depth(api_exchange, token)
+            finally:
+                # Unsubscribe after getting the data, on every path: the socket
+                # counts subscribers, and a claim never given back would keep
+                # this instrument subscribed for the life of the socket.
+                websocket.unsubscribe([instrument], is_depth=True)
 
             if not depth:
                 raise Exception(f"No market depth received for {symbol} on {exchange}")

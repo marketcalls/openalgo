@@ -230,3 +230,25 @@ def test_concurrent_quotes_on_one_instrument_all_see_the_tick(pool):
     assert seen == [{"ltp": 1300.5}] * 8
     assert client.subscriptions == {} and client.last_quotes == {}
     assert [m["t"] for m in _sent(client)].count("u") == 1
+
+
+def test_a_depth_request_gives_its_claim_back_even_when_it_fails(pool, monkeypatch):
+    """A claim never given back would keep the instrument subscribed for good."""
+    client = _client()
+    monkeypatch.setattr(data_mod.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(data_mod, "get_br_symbol", lambda symbol, exchange: symbol)
+    monkeypatch.setattr(data_mod, "get_token", lambda symbol, exchange: "2885")
+    broker = data_mod.BrokerData("session-1")
+    monkeypatch.setattr(broker, "get_websocket", lambda force_new=False: client)
+
+    def broken_read(exchange, token):
+        raise RuntimeError("socket closed mid-read")
+
+    monkeypatch.setattr(client, "get_market_depth", broken_read)
+
+    with pytest.raises(Exception, match="socket closed mid-read"):
+        broker.get_depth("RELIANCE", "NSE")
+
+    assert client._subscription_refs == {}
+    assert client.subscriptions == {}
+    assert [m["t"] for m in _sent(client)] == ["d", "u"]
