@@ -471,6 +471,55 @@ def test_run_on_hub_carries_a_real_threads_call_onto_the_hub_promptly():
     assert "OK" in result.stdout, result.stdout + result.stderr
 
 
+def test_an_idle_hub_drainer_leaves_the_hub_alone():
+    """The drainer sleeps until a real thread wakes it, never on a timer.
+
+    start_hub_worker runs at import on every eventlet worker, including the
+    default installs that have no caller for it yet. Polling the queue every
+    20 ms woke the worker's only hub fifty times a second, forever, raising
+    and catching Empty each time. Measured on how often the queue is read
+    while nothing is queued, then on how fast a real thread's call still runs.
+    """
+    result = run(
+        """
+        import utils.real_threading as rt
+
+        reads = []
+        real_get_nowait = rt._hub_queue.get_nowait
+
+        def counting_get_nowait():
+            reads.append(1)
+            return real_get_nowait()
+
+        rt._hub_queue.get_nowait = counting_get_nowait
+        assert rt.start_hub_worker() is True
+        eventlet.sleep(1.0)
+        idle_reads = len(reads)
+
+        out = {}
+
+        def real_thread_side():
+            t0 = time.monotonic()
+            out["value"] = rt.run_on_hub(lambda: 7, timeout=5)
+            out["took"] = time.monotonic() - t0
+            t0 = time.monotonic()
+            out["second"] = rt.run_on_hub(lambda: 8, timeout=5)
+            out["took_second"] = time.monotonic() - t0
+
+        t = _orig.Thread(target=real_thread_side, daemon=True)
+        t.start()
+        assert rt.join(t, timeout=10), "the real thread never finished"
+
+        assert idle_reads <= 1, f"the idle drainer read the queue {idle_reads} times in 1s"
+        assert out["value"] == 7 and out["second"] == 8, out
+        assert out["took"] < 0.5 and out["took_second"] < 0.5, out
+        assert rt.hub_worker_running() is True
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stdout + result.stderr
+
+
 def test_submit_to_hub_and_emit_from_any_thread_leave_the_real_thread_at_once():
     """Fire-and-forget from a real thread, including a Socket.IO emit.
 

@@ -37,6 +37,7 @@ hub itself, they simply call the function.
 """
 
 import queue
+import sys
 import threading
 import time
 
@@ -138,9 +139,8 @@ def join(thread, timeout=None, poll=0.02):
 #: restarts.
 HUB_QUEUE_MAX = 10000
 
-#: How often the green drainer looks for work. Matches the cadence of the
-#: websocket client's own dispatch loop; a call waits at most this long.
-HUB_POLL_SECONDS = 0.02
+#: Bytes read from the wakeup socket per recv() when the drainer wakes.
+_WAKE_READ_BYTES = 4096
 
 _hub_queue = Queue(maxsize=HUB_QUEUE_MAX)
 _hub_state_lock = Lock()
@@ -150,6 +150,15 @@ _hub_worker = None
 #: thread, and a real thread should not reach into its internals to ask.
 _hub_running = False
 _hub_missing_warned = False
+#: The drainer's wakeup: a pair of real, non-blocking sockets, created once by
+#: start_hub_worker and kept for the life of the process. A real thread that
+#: queues a call writes one byte to the write end; the drainer waits for the
+#: read end to become readable, a wait the hub serves like any socket read. So
+#: an idle drainer costs the hub nothing, where polling the queue on a timer
+#: woke the single worker's hub fifty times a second for the life of the worker.
+_hub_wake_reader = None
+_hub_wake_writer = None
+_hub_wake_failed_logged = False
 
 
 class HubQueueFull(RuntimeError):
@@ -203,11 +212,73 @@ def _needs_marshal() -> bool:
     return not on_hub_thread()
 
 
+def _new_wake_pair():
+    """Return a connected pair of real, non-blocking sockets for waking the drainer.
+
+    Real (unpatched) sockets, so a real thread's send() is a plain system call
+    that never reaches the hub, and the drainer's recv() never trampolines.
+    """
+    reader, writer = _runtime.original("socket").socketpair()
+    reader.setblocking(False)
+    writer.setblocking(False)
+    return reader, writer
+
+
+def _wait_readable(sock) -> None:
+    """Park the calling green thread until ``sock`` is readable.
+
+    eventlet's own wait-for-descriptor, found in ``sys.modules`` the way
+    ``utils.runtime.original`` finds the patcher: this runs only under eventlet,
+    where ``eventlet.hubs`` is necessarily loaded, and importing eventlet here
+    would put it into processes that never use it.
+    """
+    sys.modules["eventlet.hubs"].trampoline(sock.fileno(), read=True)
+
+
+def _consume_wakeups(reader) -> bool:
+    """Read every pending wakeup byte. False when the other end has closed."""
+    while True:
+        try:
+            data = reader.recv(_WAKE_READ_BYTES)
+        except (BlockingIOError, InterruptedError):
+            return True
+        if not data:
+            return False
+        if len(data) < _WAKE_READ_BYTES:
+            return True
+
+
+def _wake_hub() -> None:
+    """Wake the drainer after queueing a call. Safe from any thread.
+
+    A full socket buffer means wakeups are already pending, so that is not an
+    error. Any other failure is logged once: the call stays queued, and its
+    caller's own timeout reports it.
+    """
+    global _hub_wake_failed_logged
+
+    writer = _hub_wake_writer
+    if writer is None:
+        return
+    try:
+        writer.send(b"\0")
+    except (BlockingIOError, InterruptedError):
+        pass
+    except OSError:
+        if not _hub_wake_failed_logged:
+            _hub_wake_failed_logged = True
+            _log().exception("Could not wake the web server's main loop for a background call")
+
+
 def _drain_hub_queue() -> None:
     """Run queued calls on the hub. A green thread under eventlet.
 
-    The queue is real, so get_nowait() plus a green sleep is the only safe way
-    to read it; a blocking get() from a green thread would freeze the worker.
+    The queue is real, so a blocking get() from a green thread would freeze
+    the worker. The drainer instead sleeps until a real thread's wakeup byte
+    makes the wakeup socket readable, then reads the queue with get_nowait()
+    until it is empty. The bytes are read before the queue, so a call queued
+    while the queue is being emptied leaves its byte behind and wakes the next
+    wait at once: no call is left waiting for a wakeup that already happened.
 
     Each call runs on a green thread of its own, so one that waits (an order
     placed for the agent, a strategy stopped for the Telegram bot) never holds
@@ -217,18 +288,27 @@ def _drain_hub_queue() -> None:
     """
     global _hub_running
 
+    reader = _hub_wake_reader
     try:
         while True:
-            try:
-                task = _hub_queue.get_nowait()
-            except Empty:
-                time.sleep(HUB_POLL_SECONDS)
-                continue
-            try:
-                # The patched threading.Thread: a green thread on this hub.
-                threading.Thread(target=task, name="openalgo-hub-call", daemon=True).start()
-            except Exception:
-                _log().exception("A call handed to the web server's main loop could not start")
+            _wait_readable(reader)
+            if not _consume_wakeups(reader):
+                _log().error(
+                    "The web server's main loop stopped taking calls from background threads"
+                )
+                return
+            while True:
+                try:
+                    task = _hub_queue.get_nowait()
+                except Empty:
+                    break
+                try:
+                    # The patched threading.Thread: a green thread on this hub.
+                    threading.Thread(target=task, name="openalgo-hub-call", daemon=True).start()
+                except Exception:
+                    _log().exception("A call handed to the web server's main loop could not start")
+    except Exception:
+        _log().exception("The web server's main loop stopped taking calls from background threads")
     finally:
         _hub_running = False
 
@@ -244,19 +324,23 @@ def start_hub_worker() -> bool:
     Returns:
         True when the drainer is running after the call.
     """
-    global _hub_thread_ident, _hub_worker, _hub_running
+    global _hub_thread_ident, _hub_worker, _hub_running, _hub_wake_reader, _hub_wake_writer
 
     if not is_monkey_patched("thread"):
         return False
     with _hub_state_lock:
         if _hub_running:
             return True
+        if _hub_wake_reader is None:
+            # Once per process, before the flag below lets real threads queue.
+            _hub_wake_reader, _hub_wake_writer = _new_wake_pair()
         _hub_thread_ident = _real_get_ident()
         # threading.Thread is the patched one here, so this is a green thread.
         worker = threading.Thread(target=_drain_hub_queue, name="openalgo-hub-worker", daemon=True)
         _hub_worker = worker
-        # Set before start(): a call queued before the drainer's first pass is
-        # simply picked up on that pass, instead of running inline meanwhile.
+        # Set before start(): a call queued before the drainer's first wait
+        # leaves its wakeup byte behind, so that wait returns at once and the
+        # call is picked up, instead of running inline meanwhile.
         _hub_running = True
     try:
         worker.start()
@@ -317,6 +401,7 @@ def run_on_hub(fn, *args, timeout, **kwargs):
         raise HubQueueFull(
             "The web server's main loop is too busy to take this call right now."
         ) from None
+    _wake_hub()
 
     if not done.wait(timeout):
         with state_lock:
@@ -356,6 +441,7 @@ def submit_to_hub(fn, *args, **kwargs) -> None:
         raise HubQueueFull(
             "The web server's main loop is too busy to take this call right now."
         ) from None
+    _wake_hub()
 
 
 __all__ = [
