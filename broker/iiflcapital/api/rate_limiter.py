@@ -151,6 +151,10 @@ def is_rate_limited(status_code: int, message: str = "") -> bool:
     containing a rate-limit or retry hint as retryable -- this substring
     match covers IIFL's generic EC003 "Something went wrong, please try
     after some time" error, the closest documented analogue.
+
+    Retryable means a read may be retried. An order write that gets this
+    answer is never resent (see order_api._request): EC003 can arrive after
+    IIFL accepted the order.
     """
     if status_code == 429:
         return True
