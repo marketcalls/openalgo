@@ -137,11 +137,14 @@ class StandInRun:
 
 
 class StandInIntent:
-    def __init__(self, intent_id, kind="place", side="buy", qty=1.0, tag=""):
+    def __init__(self, intent_id, kind="place", side="buy", qty=1.0, tag="", qty_type="units"):
         self.intent_id = intent_id
         self.kind = kind
         self.side = side
         self.qty = qty
+        # The unit the quantity is counted in, which an engine intent always
+        # states (``host-interface.md`` 7.1).
+        self.qty_type = qty_type
         self.placement = types.SimpleNamespace(
             kind=kind, order_type="market", limit=None, trigger=None, tag=tag
         )
@@ -224,7 +227,18 @@ def stand_in_engine(raw, ledger=None, effects_at=None):
         capabilities=lambda *tags: ("core.1",) + tags,
         utc_time=None,
         session_facts=("session.isFirstBar",),
+        session_first="isSessionFirst",
         readable_zone=READABLE_ZONE,
+        # The one zone a stand-in reads a clock in. The real engine reads every
+        # zone this server's database holds once the host's reader is in place,
+        # and the tests of that run against the real one.
+        knows_zone=lambda zone: zone == READABLE_ZONE,
+        reads_calendar_in=lambda zone: zone == READABLE_ZONE,
+        time_reader=lambda zone: None,
+        join_calendar=lambda serving: True,
+        session_hours=lambda zone, window: window,
+        opening_day=lambda hours, time_ms, zone: None,
+        day_of=lambda text: None,
         # The set the engine keeps of every library call that reads a calendar.
         # A driver that carried its own copy of this list would go stale the day
         # the language gained a call, so it asks the engine, and so does this.
@@ -1029,6 +1043,7 @@ def _an_order(intent_id=1, side="buy"):
         intent_id=intent_id,
         side=side,
         qty=1,
+        qty_type="units",
         placement=types.SimpleNamespace(order_type="market", limit=None, trigger=None),
     )
 

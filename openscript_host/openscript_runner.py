@@ -127,7 +127,9 @@ USAGE
 Environment, as the platform's strategy host already injects it:
 ``OPENALGO_API_KEY``, ``OPENALGO_HOST``, ``STRATEGY_ID``, ``STRATEGY_NAME``.
 ``OPENSCRIPT_ENGINE_PATH`` names the directory holding the engine package where
-it is not already importable.
+it is not already importable. ``OPENSCRIPT_INPUTS`` carries the script's saved
+parameters and ``OPENSCRIPT_INSTRUMENT`` what the platform read about the
+instrument (``Session._record``), both written by the service that starts a run.
 
 Output goes to stdout, which the parent redirects into the per-strategy log the
 platform already keeps. Stopping is a signal: the loop leaves at the next check.
@@ -150,6 +152,7 @@ from pathlib import Path
 if str(Path(__file__).resolve().parent.parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from openscript_host.calendar_reader import CalendarReader  # noqa: E402 - after the path above
 from openscript_host.live_bars import SETTLE_SECONDS as LIVE_BAR_SETTLE  # noqa: E402
 from openscript_host.live_bars import LiveBars  # noqa: E402 - after the path above
 from services.openscript_commands import CLOSE  # noqa: E402 - after the path above
@@ -186,18 +189,49 @@ PRODUCT_FOR = {INTRADAY: "MIS"}
 # reason, which is worth being exact about.
 #
 # ``exit`` and ``order.bracket`` attach a stop and a target to a position that has
-# already been entered. Sent here they would have to become two orders, one on
-# each side, with the second cancelled the moment the first fills. This platform
-# has no single call that does that, and a pair sent without it is a position that
-# can be closed twice: if both fill, the trader is left holding the opposite side
-# of what they wrote.
+# already been entered. **The engine supports both**: it hands over a "bracket"
+# intent carrying the target and the stop, and ``host-interface.md`` 7.1 leaves the
+# host to implement it, with orders resting at the destination or by watching the
+# market itself. **It is this runner's order mapping that cannot.** Resting them
+# would be two orders, one on each side, with the second cancelled the moment the
+# first fills. This platform has no single call that does that, and a pair sent
+# without it is a position that can be closed twice: if both fill, the trader is
+# left holding the opposite side of what they wrote. Watching the market instead
+# means this process deciding, tick by tick, when to send an exit nobody wrote an
+# order for, and that is not built.
 #
-# Building that pairing is not a line of code, it is a decision about somebody's
+# Building either is not a line of code, it is a decision about somebody's
 # money, so this runner refuses a program that calls either, BEFORE the program
 # has started rather than at the bar that calls it. A refusal at the bar would
 # arrive after the entry beside it had already gone out, which is the one outcome
 # worse than not running at all: a position with nothing protecting it.
 UNROUTABLE_CALLS = ("exit", "order.bracket")
+
+# The units a declaration may count a quantity in (``language.md`` 13.3), and the
+# two of the four this runner can turn into an order.
+#
+# The engine hands a quantity over in the unit it was written in and never
+# converts it (``host-interface.md`` 7.1), and the platform's order path takes a
+# count of units: the sandbox checks it is a whole multiple of the contract's lot
+# and a broker that trades in lots divides by it inside its own plugin. So a count
+# of lots is multiplied by the contract's lot size here, once, and nowhere else.
+# A quantity in money or in a share of equity would need a price the order has
+# not filled at and an account balance at the moment it is sent, and sizing from
+# either guess is this runner choosing how much to trade.
+UNITS = "units"
+LOTS = "lots"
+
+# The facts of the instrument record this runner states from what the platform
+# read, by the engine's own names (``host-interface.md`` 4.1). The symbol, the
+# exchange and the interval are the run's own and are stated from its arguments.
+STATED_FACTS = (
+    "timezone",
+    "tickSize",
+    "lotSize",
+    "instrumentType",
+    "hasVolume",
+    "hasOpenInterest",
+)
 
 # The compiled program tag a program that places orders carries, and the word its
 # meta uses for a program that is one. Both are the compiled program format's own
@@ -277,10 +311,20 @@ class Engine:
         if extra and extra not in sys.path:
             sys.path.insert(0, extra)
         try:
+            from openscript import dates as calendar
             from openscript.adapter.serving import Serving
-            from openscript.adapter.sessions import SESSION_FACTS
+            from openscript.adapter.sessions import SESSION_FACTS, SESSION_FIRST, session_from
+            from openscript.adapter.spellings import Malformed
+            from openscript.civil import (
+                MAX_INSTANT,
+                day_number,
+                fields_at,
+                instant_at,
+                whole_instant,
+            )
             from openscript.contracts import Bar, BarState
             from openscript.dates import NAMES as CALENDAR_READS
+            from openscript.hours import standing_in
             from openscript.inputs import utc_time
             from openscript.run import load_text
             from openscript.strategy import (
@@ -291,7 +335,7 @@ class Engine:
                 OrderFrame,
             )
             from openscript.verify import capabilities
-            from openscript.zones import READABLE
+            from openscript.zones import READABLE, named
         except ImportError as missing:
             raise Refusal(
                 "The OpenScript engine is not installed on this server, so nothing can run a "
@@ -311,6 +355,9 @@ class Engine:
         self.capabilities = capabilities
         self.utc_time = utc_time
         self.session_facts = tuple(SESSION_FACTS)
+        #: The name of the bar fact ``session.isFirstBar`` and ``vwap`` read,
+        #: which the engine leaves to whoever drives the bars to state.
+        self.session_first = SESSION_FIRST
         self.readable_zone = READABLE
         #: Every library call that reads a calendar, asked of the engine rather
         #: than listed here. The engine keeps this set precisely so that a caller
@@ -318,6 +365,103 @@ class Engine:
         #: calendar at all" instead of keeping its own copy of the list, which
         #: would go stale the first time the language gained a call.
         self.calendar_reads = frozenset(CALENDAR_READS)
+        self._calendar_rows = calendar.table()
+        self._session_from = session_from
+        self._malformed = Malformed
+        self._standing_in = standing_in
+        self._day_number = day_number
+        #: The reader for every zone but the one the engine holds. See
+        #: ``calendar_reader`` for why the host supplies it and how it is
+        #: checked once it is in place.
+        self.calendar = CalendarReader(
+            calendar, named, READABLE, fields_at, instant_at, whole_instant, MAX_INSTANT
+        )
+
+    # -- the calendar, in the instrument's own zone ---------------------------
+
+    def join_calendar(self, serving) -> bool:
+        """Put the calendar calls into this run's library. True once the seam serves them.
+
+        **The engine implements them and its seam leaves them out.** Every call
+        of ``stdlib.md`` 12.2 and 12.5 is in ``openscript.dates``, with the
+        manifest rows a program is checked against (``dates.table()``), and the
+        seam that joins the library to the machine, ``Serving``, is built from
+        the two halves of ``library/`` alone. So a program calling ``date.hour``
+        or ``session.isIn`` is refused at load, OS6004, in every zone including
+        the one the engine reads.
+
+        **The seam is the host's to wire.** The engine's own guide says the join
+        a host needs lives in the adapter package, beside the conformance
+        adapter, and that a host wiring a library takes it from there. This is
+        that wiring: the calendar's rows are added to the table the seam
+        dispatches from, so the manifest check, the call itself and the refusal
+        naming a missing arity all go through the engine's own code, and a row
+        the seam already holds is left as it is, which is what a later engine
+        that joins them itself will need. It is then checked by asking the seam
+        for every row, so a seam shaped differently answers False and the
+        script is refused by name rather than at load with a code.
+        """
+        held = getattr(serving, "_entries", None)
+        if not isinstance(held, dict):
+            return False
+        for key, row in self._calendar_rows.items():
+            held.setdefault(key, row)
+        return all(serving.entry(name, arity) is not None for name, arity in self._calendar_rows)
+
+    def knows_zone(self, zone) -> bool:
+        """Whether a wall clock can be read in this zone on this server."""
+        return self.calendar.knows(zone)
+
+    def reads_calendar_in(self, zone) -> bool:
+        """Whether a script's own calendar calls answer in this zone, once asked.
+
+        True of UTC, which the engine reads itself, and of any zone this server's
+        database holds once the reader is in place and has been seen to answer.
+        """
+        return self.calendar.install(zone)
+
+    def time_reader(self, zone):
+        """How a written time becomes an instant for a run read in this zone."""
+        if not self.knows_zone(zone):
+            return self.utc_time
+        return self.calendar.time_reader(zone, self.utc_time)
+
+    def session_hours(self, zone, window):
+        """A stated session as the engine's own window, or nothing where none is stated.
+
+        Checked by the engine's own reading of a record (``host-interface.md``
+        4.3), so a window that reading refuses is refused here in its words
+        rather than in a second copy of them. Raises ``ValueError`` saying what is
+        wrong with it.
+        """
+        if window is None:
+            return None
+        try:
+            return self._session_from({"timezone": zone, "session": window})
+        except self._malformed as wrong:
+            raise ValueError(str(wrong)) from wrong
+
+    def opening_day(self, hours, time_ms, zone):
+        """The day the session holding this instant opened on, or nothing when it is outside.
+
+        Read in the instrument's zone and measured with the engine's own window
+        arithmetic, which is the one ``session.isIn`` uses, so the session a
+        script reads and the window it writes cannot disagree about midnight or
+        about which day a list of days is read against.
+        """
+        at = self.calendar.fields_in(time_ms, zone)
+        if at is None:
+            return None
+        standing = self._standing_in(hours, at)
+        return standing.opening_day if standing.inside else None
+
+    def day_of(self, text):
+        """An ISO date as the day number ``opening_day`` answers in, or nothing."""
+        try:
+            year, month, day = (int(part) for part in str(text).split("-"))
+        except ValueError:
+            return None
+        return self._day_number(year, month, day)
 
 
 def program_text(script: str, directory: Path | None = None) -> str:
@@ -379,6 +523,98 @@ def _declared_kind(text: str, script: str) -> str:
             "save it again."
         )
     return meta["kind"]
+
+
+def _calls_in(text: str) -> frozenset:
+    """Every library call a program's own table names, read from a copy of its text.
+
+    The same kind of reading as ``_declared_kind``, and for the same reason: a
+    question is asked of a copy, and the bytes handed to the engine are the
+    file's own. A table that is not there names nothing, and the load that
+    follows refuses the program in its own words.
+    """
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return frozenset()
+    lib = parsed.get("lib") if isinstance(parsed, dict) else None
+    functions = lib.get("functions") if isinstance(lib, dict) else None
+    if not isinstance(functions, list):
+        return frozenset()
+    return frozenset(
+        one["name"] for one in functions if isinstance(one, dict) and isinstance(one.get("name"), str)
+    )
+
+
+# ---------------------------------------------------------------------------
+# The instrument
+# ---------------------------------------------------------------------------
+
+#: The words ``host-interface.md`` 4.1 allows for ``instrumentType``. A word
+#: outside them is left out rather than passed on, which is the record's own
+#: rule for a host with nothing to say.
+INSTRUMENT_TYPES = ("equity", "future", "option", "index", "currency", "commodity", "other")
+
+_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _handed_facts() -> dict | None:
+    """What the platform read about this run's instrument, or nothing.
+
+    The service that starts a run writes it into the environment, as it writes
+    the script's parameters, and writes it even when it has nothing, so a run is
+    never handed another run's facts by an environment it inherited. Nothing
+    here raises: a run with no facts is a run whose record states less, which
+    it says, rather than a run that will not start over a setting.
+    """
+    raw = os.getenv("OPENSCRIPT_INSTRUMENT") or ""
+    if not raw.strip():
+        return None
+    try:
+        given = json.loads(raw)
+    except ValueError:
+        say("The instrument details handed to this run could not be read, so they are left out.")
+        return None
+    if not isinstance(given, dict) or not isinstance(given.get("instrument"), dict):
+        return None
+    return given
+
+
+def _stated_fact(name: str, value):
+    """One fact of the record in the shape 4.1 gives it, or nothing to state.
+
+    A tick and a lot are positive numbers, a zone and a kind are text, and the
+    two volume facts are true or false. Anything else is a fact this runner
+    does not state rather than one it passes on for the engine to trip over.
+    """
+    if value is None:
+        return None
+    if name in ("tickSize", "lotSize"):
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+            return None
+        return int(number) if number.is_integer() else number
+    if name in ("hasVolume", "hasOpenInterest"):
+        return value if isinstance(value, bool) else None
+    if name == "instrumentType":
+        return value if value in INSTRUMENT_TYPES else None
+    return value if isinstance(value, str) and value else None
+
+
+def _hours_text(window: dict) -> str:
+    """A stated session as a sentence says it: ``09:15 to 15:30, Monday to Friday``."""
+    days = [one for one in window.get("days", []) if isinstance(one, int) and 1 <= one <= 7]
+    names = [_WEEKDAY_NAMES[one - 1] for one in days]
+    if len(days) > 2 and days == list(range(days[0], days[0] + len(days))):
+        spoken = f"{names[0]} to {names[-1]}"
+    else:
+        spoken = ", ".join(names)
+    return f"{window.get('start')} to {window.get('end')}, {spoken}"
 
 
 class Candle:
@@ -685,6 +921,19 @@ class Session:
 
         self.ledger = None
         self.product = None
+        #: The contract's lot size, for a declaration that counts in lots, and
+        #: nothing otherwise. See ``LOTS``.
+        self.lot_size = None
+        #: The day the last confirmed bar's session opened on. See ``_opening``.
+        self._last_opening = None
+
+        # The instrument record first, and from what the platform handed this
+        # process rather than from anything it asks: the zone it names is the one
+        # a written time in the settings is read in, and that reading happens at
+        # load. Nothing leaves this process to build it, so a script that will
+        # not run is still refused without a request being made about an
+        # instrument it was never going to trade.
+        self.instrument = self._record(_handed_facts())
 
         # What kind of program this is has to be known before it is loaded,
         # because the library the machine is handed is built around a ledger for a
@@ -701,12 +950,18 @@ class Session:
         if self.trading:
             self.ledger = engine.Ledger()
         served = engine.Serving(self.ledger)
+        # The calendar before the load, because the load is what checks every
+        # call a program makes against the library it is handed. Read from the
+        # same copy of the text as the kind above.
+        self._join_calendar(served, _calls_in(text))
         loaded = engine.load_text(
             text,
             self._settings(),
             served,
             capabilities=engine.capabilities(ORDERS_TAG) if self.trading else engine.capabilities(),
-            read_time=engine.utc_time,
+            # A written time is a wall clock reading in the instrument's zone,
+            # the one on the trader's chart, and never one read as UTC.
+            read_time=engine.time_reader(self.instrument["timezone"]),
         )
         if loaded.diagnostic is not None:
             raise Refusal(self._refusal_text(loaded.diagnostic))
@@ -717,11 +972,12 @@ class Session:
         self.raw = raw
         self._check_readable(raw)
 
-        # The instrument record last, because reading it is the first thing here
-        # that leaves this process. Everything a script can be refused for is
-        # settled above, so a script that will not run is refused without a
-        # request being made about an instrument it was never going to trade.
-        self.instrument = self._instrument()
+        # What the platform did not hand over is asked for last, because asking
+        # is the first thing here that leaves this process. Everything a script
+        # can be refused for without its tick and its lot is settled above.
+        if self._facts is None:
+            self._fill_from_platform()
+        self._say_session()
         if self.trading:
             self._begin_ledger(raw)
 
@@ -785,37 +1041,201 @@ class Session:
 
     # -- what the host states about the instrument --------------------------
 
-    def _instrument(self) -> dict:
+    def _record(self, facts: dict | None) -> dict:
         """The instrument record the engine reads its chart facts from.
 
-        A fact nobody states is absent, which is the engine's own rule, so the
-        optional ones are looked up and simply left out when the lookup does not
-        answer. An absent tick size is a script that cannot round to a tick; a
-        wrong one is a script that rounds to the wrong thing.
+        **Read by the platform, not by this process.** The service that starts a
+        run asks ``services/openscript_instrument_service.py`` for the facts of
+        this instrument, which reads the contract from the master contract and
+        the zone and the session from the market calendar, and hands the answer
+        over in ``OPENSCRIPT_INSTRUMENT``. This process cannot ask for itself: it
+        holds an API key and no session, and it deliberately does not open the
+        platform's database or attach to its logging.
+
+        **A fact nobody states is absent**, which is the engine's own rule, so a
+        fact the platform did not hold is left out rather than defaulted. An
+        absent tick size is a script that cannot round to a tick; a wrong one is
+        a script that rounds to the wrong thing.
+
+        **The session is one window for the whole run** (``host-interface.md``
+        4.4: the record is read once, before bar 0, and a host must not change
+        it). It is the regular window, with the calendar's weekday rule, unless
+        the day this run starts on is a special session in the market calendar,
+        and then it is that day's own window. See ``_opening`` for how the bars
+        of the other days are read on a run started on a special day.
+
+        Nothing was handed over when the platform could not read the facts, or
+        when a run was started by an older service. The record is then what this
+        runner stated before it had them, with no session, and
+        ``_fill_from_platform`` asks the order API for the tick and the lot once
+        the script itself has been checked.
         """
-        record = {
+        record: dict = {
             "symbol": self.options.symbol,
             "exchange": self.options.exchange,
             "interval": self.options.interval,
-            "timezone": self.options.timezone,
-            "hasVolume": True,
-            "hasOpenInterest": False,
         }
+        self._facts = facts
+        #: The regular window, for every day but a special one, as the engine's
+        #: own window; and the special day this run started on, with its window
+        #: and the day number it opens on. Both nothing where none is known.
+        self._regular = None
+        self._special = None
+        #: The two as the calendar stated them, and the special day's date, for
+        #: the line in the log that says which session this run reads.
+        self._regular_window: dict | None = None
+        self._today = ""
+
+        stated = facts["instrument"] if facts is not None else {}
+        for name in STATED_FACTS:
+            value = _stated_fact(name, stated.get(name))
+            if value is not None:
+                record[name] = value
+        record.setdefault("timezone", self.options.timezone)
+        # ``host-interface.md`` 4.2: the one fact a host must state.
+        record.setdefault("hasVolume", True)
+        if facts is None:
+            record.setdefault("hasOpenInterest", False)
+            return record
+
+        zone = record["timezone"]
+        regular = stated.get("session") if isinstance(stated.get("session"), dict) else None
+        today = facts.get("today") if isinstance(facts.get("today"), dict) else {}
+        special = None
+        if today.get("isSpecial") is True and today.get("open") is True:
+            special = today.get("session") if isinstance(today.get("session"), dict) else None
+        if regular is None and special is None:
+            return record
+
+        # A session is wall clock, so one read in a zone this server cannot read
+        # states nothing, and the engine's own rule refuses a record like that
+        # (OS6012). Left out instead, with the reason, so the run goes on and a
+        # script that reads a session fact is refused by name further on.
+        if not self.engine.knows_zone(zone):
+            say(
+                f"The market calendar reads this instrument's session in {zone}, which this "
+                "server cannot read a clock in, so the session is left out."
+            )
+            return record
+        try:
+            self._regular = self.engine.session_hours(zone, regular)
+            if special is not None:
+                day = self.engine.day_of(today.get("date"))
+                hours = self.engine.session_hours(zone, special)
+                if day is not None and hours is not None:
+                    self._special = (hours, day)
+        except ValueError as wrong:
+            self._regular = None
+            self._special = None
+            say(
+                "The trading session the market calendar gave for this instrument could not be "
+                f"read, so it is left out. ({wrong})"
+            )
+            return record
+
+        if self._regular is None and self._special is None:
+            return record
+        chosen = special if self._special is not None else regular
+        record["session"] = {
+            "start": chosen["start"],
+            "end": chosen["end"],
+            "days": list(chosen["days"]),
+        }
+        self._regular_window = regular if self._regular is not None else None
+        self._today = str(today.get("date") or "")
+        return record
+
+    def _fill_from_platform(self) -> None:
+        """The tick and the lot, from the order API, for a run handed no facts.
+
+        The one lookup this process makes about its instrument, and only when
+        the platform handed nothing over. Reported and never fatal: a run without
+        a tick size is a run whose script cannot round to one, which it can test
+        for.
+        """
         try:
             answered = self.client.symbol(
                 symbol=self.options.symbol, exchange=self.options.exchange
             )
         except Exception as unreachable:  # noqa: BLE001 - reported, never fatal
             say(f"The instrument record could not be read, so tick size is absent. ({unreachable})")
-            return record
+            return
 
         data = answered.get("data") if isinstance(answered, dict) else None
         if isinstance(data, dict):
-            if data.get("tick_size") is not None:
-                record["tickSize"] = float(data["tick_size"])
-            if data.get("lotsize") is not None:
-                record["lotSize"] = float(data["lotsize"])
-        return record
+            for name, key in (("tickSize", "tick_size"), ("lotSize", "lotsize")):
+                value = _stated_fact(name, data.get(key))
+                if value is not None:
+                    self.instrument[name] = value
+
+    @property
+    def _sessions_known(self) -> bool:
+        return self._regular is not None or self._special is not None
+
+    def _say_session(self) -> None:
+        """Which trading session this run reads its session facts against, said once."""
+        zone = self.instrument.get("timezone")
+        if self._special is not None:
+            window = self.instrument["session"]
+            other = (
+                f"every other day's against the regular session, {_hours_text(self._regular_window)}"
+                if self._regular_window is not None
+                else "no other day has a session this run knows of"
+            )
+            say(
+                f"Today, {self._today}, is a special session in the market calendar, "
+                f"{window['start']} to {window['end']} in {zone}. Today's bars are read against "
+                f"it and {other}."
+            )
+        elif self._regular_window is not None:
+            say(
+                f"Trading session {_hours_text(self._regular_window)} in {zone}, from the market "
+                "calendar."
+            )
+        elif self._facts is not None:
+            say(
+                f"The market calendar holds no trading session for {self.options.exchange}, so "
+                "every session fact is absent and vwap does not restart."
+            )
+            return
+        else:
+            return
+        say(
+            "This run keeps that session for as long as it runs. A special session on a later "
+            "day is read when the run is started on that day, which a schedule with a stop "
+            "time does by itself."
+        )
+
+    def _opening(self, time_ms: int) -> int | None:
+        """The day the session holding this bar opened on, or nothing outside every session.
+
+        A bar opens a session when it is in one and the last confirmed bar that
+        was in one was in a different one, which is the engine's own rule
+        (``first_bars`` in its session adapter): the engine leaves it to
+        whoever drives the bars to state, and this driver states it in the
+        instrument's zone, which the engine cannot read.
+
+        **Which window a bar is read against.** The special day this run started
+        on is read against that day's own window and every other day against
+        the regular one. The record states one window for the run, and on a run
+        started on a special session that is the special day's, whose day list
+        names that one weekday: read against it alone, every bar of every other
+        day, the history this run is replayed on included, would be outside a
+        session. The regular hours are not a second session on the special day,
+        because the calendar's window for that day is the whole of it.
+        """
+        zone = self.instrument.get("timezone")
+        if self._special is not None:
+            hours, day = self._special
+            opened = self.engine.opening_day(hours, time_ms, zone)
+            if opened == day:
+                return opened
+        if self._regular is None:
+            return None
+        opened = self.engine.opening_day(self._regular, time_ms, zone)
+        if self._special is not None and opened == self._special[1]:
+            return None
+        return opened
 
     def _settings(self) -> dict:
         """The script's own parameters, as the trader saved them.
@@ -857,41 +1277,65 @@ class Session:
             say(f"Running with {', '.join(sorted(named))} set from the saved parameters.")
         return named
 
+    def _join_calendar(self, served, called) -> None:
+        """Serve the calendar calls a program makes, in the instrument's zone, or refuse it.
+
+        Two things stand between a script and a clock, and this host supplies
+        both. The engine's library seam leaves the calendar calls out, so a
+        program calling one is refused at load in every zone
+        (``Engine.join_calendar``). And the engine reads a calendar in UTC alone
+        and leaves every other zone to the host (``calendar_reader``). With both
+        in place a script reading ``date.hour`` or ``session.isIn`` on an
+        instrument read in Asia/Kolkata is answered in Asia/Kolkata.
+
+        **What is still refused is a clock this server cannot read.** The engine
+        answers absence for a zone it cannot read, without raising, and a
+        condition built on absence is never true: the strategy would never trade
+        and nothing would say why, which is the one outcome worse than refusing
+        to start, because the trader sees a run that is going, a log with no
+        complaint in it, and no orders. It is refused here, before the load,
+        so the sentence names the calls rather than a code.
+
+        The calendar reads are not listed here. They are asked of the engine,
+        which keeps the set, so a call added to the language cannot quietly fall
+        outside a copy kept in this file.
+        """
+        reads = sorted(set(called).intersection(self.engine.calendar_reads))
+        if not reads:
+            return
+        zone = self.instrument.get("timezone")
+        if not self.engine.reads_calendar_in(zone):
+            raise Refusal(
+                f"{self.options.script} reads the clock, with {', '.join(reads)}, and this "
+                f"instrument's calendar is {zone}, which this server cannot read a clock in. "
+                "Every one of those calls would come back with no answer and the script would "
+                "never act on one, so it will not be started on a clock it cannot read."
+            )
+        if not self.engine.join_calendar(served):
+            raise Refusal(
+                f"{self.options.script} reads the clock, with {', '.join(reads)}, and the engine "
+                "installed on this server does not answer those calls, so it will not be started. "
+                "Remove them and save it again, or update the engine."
+            )
+
     def _check_readable(self, raw: dict) -> None:
-        """Refuse a program this runner would answer under the wrong calendar.
+        """Refuse a program this runner would answer wrongly, and only that.
 
-        The engine reads a calendar in one zone. An instrument in another is not a
-        detail: a script asking what hour it is, or whether this is the session's
-        first bar, would be answered under a clock that is hours away from the one
-        the trader is looking at. The conformance adapter names exactly these two
-        as unsupported and this refuses them for the same reason.
+        **The order calls first.** ``exit`` and ``order.bracket`` are refused for
+        the reason ``UNROUTABLE_CALLS`` gives, because an entry sent without its
+        protection is the worst thing this file can do.
 
-        A session boundary is refused whatever the zone, because this runner
-        derives none: it states no ``isSessionFirst`` fact, and a script reading
-        one would be answered absence on every bar, which is a silent wrong answer
-        rather than a loud one.
+        **Then a written time**, which is read in the instrument's own zone
+        (``Engine.time_reader``), and refused only where this server cannot read
+        a clock in that zone, for the reason ``_join_calendar`` gives.
 
-        **A calendar read in a zone the engine cannot read is refused for exactly
-        the same reason, and it was the one this file used to miss.** The engine
-        holds offsets for one zone and answers absence for every other, without
-        raising: a script asking what hour a bar opened at, what day of the week
-        it is, or whether the bar sits inside a written window, was handed
-        absence on every bar of every run. A condition built on absence is never
-        true, so the strategy never traded and nothing anywhere said why. That is
-        the single outcome worse than refusing to start, because the trader sees a
-        run that is going, a log with no complaint in it, and no orders.
-
-        The reads are not listed here. They are asked of the engine, which keeps
-        the set, so a call added to the language cannot quietly fall outside a
-        copy kept in this file.
+        **Then the session.** ``session.isFirstBar`` is a fact this driver states
+        on every bar, from the session the market calendar holds for the
+        exchange (see ``_opening``). Where the calendar holds none, or none was
+        handed to this run, every answer would be absence, for the same silent
+        reason, so that script is refused by name.
         """
         called = {one["name"] for one in raw["lib"]["functions"]}
-        wanted = called.intersection(self.engine.session_facts)
-        if wanted:
-            raise Refusal(
-                f"{self.options.script} asks where a trading session begins, which this runner "
-                "does not work out. Remove that and save it again."
-            )
 
         blocked = sorted(called.intersection(UNROUTABLE_CALLS))
         if blocked:
@@ -901,22 +1345,32 @@ class Session:
                 "sending the entry without them would leave a position with nothing protecting "
                 "it, so it will not start this script."
             )
-        if self.options.timezone != self.engine.readable_zone:
-            reads = sorted(called.intersection(self.engine.calendar_reads))
-            if reads:
-                raise Refusal(
-                    f"{self.options.script} reads the clock, with {', '.join(reads)}, and this "
-                    f"instrument's calendar is {self.options.timezone}. This runner can only read "
-                    f"a clock as {self.engine.readable_zone}, so every one of those calls would "
-                    "come back with no answer and the script would never act on one. It will not "
-                    "be started on a clock it cannot read."
+
+        zone = self.instrument.get("timezone")
+        if any(one["kind"] == "time" for one in raw["inputs"]) and not self.engine.knows_zone(zone):
+            raise Refusal(
+                f"{self.options.script} takes a written time, and this instrument's calendar is "
+                f"{zone}, which this server cannot read a clock in. It would read that time under "
+                "the wrong calendar, so it will not run it."
+            )
+
+        wanted = sorted(called.intersection(self.engine.session_facts))
+        if wanted and not self._sessions_known:
+            if self._facts is None:
+                why = (
+                    f"the details of {self.options.symbol} could not be read when this run was "
+                    "started, so its trading session is not known. Start it again in a moment"
                 )
-            if any(one["kind"] == "time" for one in raw["inputs"]):
-                raise Refusal(
-                    f"{self.options.script} takes a written time, and this runner can only read a "
-                    f"clock as {self.engine.readable_zone}. It would answer under the wrong "
-                    "calendar, so it will not run it."
+            else:
+                why = (
+                    f"the market calendar holds no trading session for {self.options.exchange}, "
+                    "so every answer would be empty and the script would never act on one. Run "
+                    "it on an exchange the calendar holds, or remove that and save it again"
                 )
+            raise Refusal(
+                f"{self.options.script} asks where a trading session begins, with "
+                f"{', '.join(wanted)}, and {why}."
+            )
 
     def _begin_ledger(self, raw: dict) -> None:
         """The declaration's own settings, read before the first bar.
@@ -944,16 +1398,20 @@ class Session:
         declared = {name: self.run.declaration(("meta", "strategy", name)) for name in needed}
 
         qty_type = declared["qtyType"]
-        if qty_type != "units":
-            # A quantity counted in anything but units has to be turned into a
-            # number of units before an order can carry it, and the two things
-            # that would do it, the account's capital and the instrument's lot,
-            # are the host's rather than the script's. Sizing an order from a
-            # number nobody wrote is the one mistake here that spends money, so it
-            # is refused instead.
+        if qty_type == LOTS:
+            self.lot_size = self._lot_size()
+        elif qty_type != UNITS:
+            # Money and a share of equity have to be turned into a number of units
+            # before an order can carry them, and what would do it is the price the
+            # order fills at and the account's balance at the moment it is sent,
+            # neither of which this runner has before it sends. Sizing an order
+            # from a guess at either is the one mistake here that spends money, so
+            # it is refused instead. See ``LOTS`` for why a lot is different.
             raise Refusal(
-                f"{self.options.script} sizes its orders by {qty_type}, and this runner only sends "
-                "a quantity the script states in units. Change the declaration and save it again."
+                f"{self.options.script} sizes its orders by {qty_type}, which needs the price an "
+                "order will fill at and the account's balance when it is sent. This runner sends "
+                "a quantity the script states in units or in lots. Change the declaration and "
+                "save it again."
             )
 
         declared_product = str(declared["product"])
@@ -987,6 +1445,52 @@ class Session:
             tick_size=self.instrument.get("tickSize"),
             pyramiding=declared["pyramiding"],
         )
+
+    def _lot_size(self) -> int:
+        """The contract's lot, for a declaration that counts its orders in lots.
+
+        The lot in the record, which is the master contract's: the same number
+        the sandbox holds an order's quantity to and a broker that trades in lots
+        divides by. Refused where there is none, because a count of lots with no
+        lot behind it is an order of a size nobody wrote, and refused where it is
+        not a whole number, because this runner sends whole units and rounding a
+        quantity is choosing how much to trade.
+        """
+        lot = self.instrument.get("lotSize")
+        where = f"{self.options.symbol} on {self.options.exchange}"
+        if lot is None:
+            raise Refusal(
+                f"{self.options.script} sizes its orders in lots, and the lot size of {where} "
+                "is not known on this server, so a count of lots cannot be turned into an "
+                "order. Download the master contract again, then start it again."
+            )
+        if float(lot) != int(lot) or int(lot) <= 0:
+            raise Refusal(
+                f"{self.options.script} sizes its orders in lots, and one lot of {where} is "
+                f"{lot}, so a count of lots does not come to a whole number to send. Size it in "
+                "units instead and save it again."
+            )
+        say(f"Orders are sized in lots of {int(lot)}, from the master contract.")
+        return int(lot)
+
+    def _units(self, intent) -> float | None:
+        """How many units one intent's quantity is, or nothing where it cannot be said.
+
+        **Converted here and nowhere else.** The engine hands a quantity over in
+        the unit it was written in and never converts it (``host-interface.md``
+        7.1), and the order path takes units. So a count of lots is multiplied by
+        the lot once, and a quantity the engine worked out from fills, which it
+        always states in units, is sent as it is: multiplying that one too would
+        close a position the lot size times over.
+        """
+        qty = intent.qty
+        if qty is None:
+            return None
+        if intent.qty_type == UNITS:
+            return qty
+        if intent.qty_type == LOTS and self.lot_size:
+            return qty * self.lot_size
+        return None
 
     # -- the loop -----------------------------------------------------------
 
@@ -1418,16 +1922,29 @@ class Session:
             # executions of a moving bar two different positions to read.
             self._fold()
 
-        self.serving.at_bar(
-            {
-                "high": candle.high,
-                "low": candle.low,
-                "close": candle.close,
-                "previousClose": self._previous_close,
-                "volume": candle.volume,
-            },
-            index == 0,
-        )
+        facts = {
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "previousClose": self._previous_close,
+            "volume": candle.volume,
+            # The bar's own open instant, which ``session.isIn`` reads the
+            # script's window against. Unstated, that call was absent on every
+            # bar whatever the zone.
+            "time": float(candle.time),
+        }
+        # Whether this bar opens a session, stated where a session is known and
+        # left unstated, which is absence, where none is: the engine's own rule
+        # for an instrument whose schedule the host does not hold. Measured
+        # against the last CONFIRMED bar, so every execution of a moving bar
+        # states the same answer and the one that confirms it moves the mark.
+        opened = None
+        if self._sessions_known:
+            opened = self._opening(candle.time)
+            facts[self.engine.session_first] = (
+                opened is not None and opened != self._last_opening
+            )
+        self.serving.at_bar(facts, index == 0)
 
         result = self.run.execute_bar(
             index,
@@ -1471,6 +1988,8 @@ class Session:
         if confirmed_bar:
             self._times.append(candle.time)
             self._previous_close = candle.close
+            if opened is not None:
+                self._last_opening = opened
             if self._moving_at == index:
                 self._moving_at = None
                 self._moving_time = None
@@ -1686,7 +2205,11 @@ class Session:
                     return False
                 if placement.limit is not None or placement.trigger is not None:
                     return False
-                if one.qty is None or one.qty <= 0 or float(one.qty) != int(one.qty):
+                # Compared in units, which is what the order carries: two
+                # intents counted in lots are one order only once both have been
+                # turned into the whole number of units a broker fills.
+                units = self._units(one)
+                if units is None or units <= 0 or float(units) != int(units):
                     return False
             # The instrument and the product are this run's own and are the same
             # for every order it sends, so they are equal by construction.
@@ -1713,7 +2236,7 @@ class Session:
         if len(batch) == 1:
             return self._route(batch[0])
 
-        total = sum(int(one.qty) for one in batch)
+        total = sum(int(self._units(one)) for one in batch)
         sent = self._route(batch[0], quantity=total, covering=batch)
         if not sent:
             # The one order carried all of them, so a refusal refuses all of
@@ -1772,7 +2295,12 @@ class Session:
             self._reject(intent, f"the order type {intent.placement.order_type} is not sent here")
             return False
 
-        quantity = intent.qty if quantity is None else quantity
+        quantity = self._units(intent) if quantity is None else quantity
+        if quantity is None and intent.qty is not None:
+            self._reject(
+                intent, f"a quantity counted in {intent.qty_type} cannot be sent from this runner"
+            )
+            return False
         if quantity is None or quantity <= 0:
             self._reject(intent, "the order had no quantity to send")
             return False
@@ -1856,8 +2384,11 @@ class Session:
                 # What this intent owns of the shared order: everything the
                 # intents before it own, then its own size. The fold hands out a
                 # fill against these in the same order.
-                before = sum(int(each.qty) for each in covering[:at])
-                self._shares[one.intent_id] = (before, int(one.qty))
+                # In units, like the fill it is measured against: the order book
+                # reports what traded as a count of units whatever the script
+                # counted its order in.
+                before = sum(int(self._units(each)) for each in covering[:at])
+                self._shares[one.intent_id] = (before, int(self._units(one)))
 
         if covering is not None and len(covering) > 1:
             say(
@@ -1866,9 +2397,12 @@ class Session:
                 f"Order {order_id}."
             )
         else:
+            counted = ""
+            if intent.qty_type == LOTS and self.lot_size:
+                counted = f" ({intent.qty:g} lots of {self.lot_size})"
             say(
-                f"Sent {intent.side} {int(quantity)} {self.options.symbol} as {price_type} "
-                f"{self.product}. Order {order_id}."
+                f"Sent {intent.side} {int(quantity)} {self.options.symbol}{counted} as "
+                f"{price_type} {self.product}. Order {order_id}."
             )
         return True
 
@@ -2030,7 +2564,7 @@ def parse_arguments(argv):
     parser.add_argument(
         "--timezone",
         default="Asia/Kolkata",
-        help="the zone the instrument's calendar reads in",
+        help="the zone the instrument's calendar reads in, where the platform handed over none",
     )
     parser.add_argument(
         "--product",
