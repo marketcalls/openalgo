@@ -148,3 +148,14 @@ zipp==3.23.1
 # Portfolio analytics for the Portfolio Backtester (metrics + tearsheets).
 # Pure-NumPy kernels -- no Numba, so nothing pins numpy's upper bound.
 openstatz==0.4.1
+
+# The engine that runs a compiled OpenScript strategy on the server. Without it
+# a native install shows the OpenScript editor but cannot run a strategy.
+openscript==0.5.0
+
+# The /agent module and the /trading agent side tab. They are imported only when
+# someone uses the agent, so a missing package does not stop the app starting;
+# it fails the first chat instead.
+litellm==1.99.0
+agno==3.0.5
+ddgs>=9.16.0
