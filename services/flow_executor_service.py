@@ -3718,10 +3718,10 @@ class NodeExecutor:
             # Thread-safe container for captured data
             captured_data = {"data": None}
             # Real, not green: on_market_data() sets this from the websocket
-            # client's asyncio loop thread while this greenlet waits on it.
-            # A green Event set from a real thread never wakes its waiter,
-            # so the node sat out its whole timeout. See
-            # utils/real_threading.
+            # client's thread, not the one waiting on it (a greenlet under
+            # eventlet, a request or pool thread under gthread). A green Event
+            # set from a real thread never wakes its waiter, so the node sat
+            # out its whole timeout. See utils/real_threading.
             data_event = _real_threading.Event()
 
             def on_market_data(data):

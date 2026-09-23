@@ -121,7 +121,9 @@ class WebSocketClient:
         # from a foreign thread raises "greenlet.error: Cannot switch to a
         # different thread" inside the hub and wedges that thread for good
         # (issues #1402, #1473, #1569). So the loop thread only enqueues, and a
-        # green thread does the calling.
+        # green thread does the calling. Under the gthread worker and the dev
+        # server nothing is patched and the dispatcher is a real thread of its
+        # own, so a slow callback still never holds up the loop.
         self._dispatch_queue = _original_threading.Queue(maxsize=self.DISPATCH_QUEUE_MAX)
         self._dispatch_thread = None
         self._dispatch_dropped = 0

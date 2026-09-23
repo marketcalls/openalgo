@@ -16,12 +16,15 @@ the app - a migration, a one-off script, a test collection pass - spins up live
 background work against the operator's database. Importing this module does
 nothing at all.
 
-**The loop is green.** It is a plain ``threading.Thread``, which eventlet
-monkey-patches into a green thread, and that is what it must be: every pass
-touches the run locks in ``state`` and writes through SQLAlchemy, both of which
-belong to the hub. It takes a run's lock only to build the snapshot, which is
-in-memory work, and writes the row after releasing it (see CLAUDE.md, "Nothing
-may block or be blocked across the eventlet boundary").
+**The loop is a plain thread.** It is a ``threading.Thread``: under the
+eventlet worker a green thread, which is what it must be there, because every
+pass touches the run locks in ``state`` and writes through SQLAlchemy, both of
+which belong to the hub. Under the gthread worker and the development server
+it is a real thread running in parallel with the engine and the request
+threads, and the run locks exclude for real. Either way it takes a run's lock
+only to build the snapshot, which is in-memory work, and writes the row after
+releasing it, so no tick or fill ever waits on a checkpoint write (see
+CLAUDE.md, "Nothing may block or be blocked across the eventlet boundary").
 
 **It prunes.** A row per run every few seconds for a trading day is thousands
 of rows per run, in a Gunicorn worker that never restarts. Pruning runs on a

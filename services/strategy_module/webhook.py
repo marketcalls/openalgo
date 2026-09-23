@@ -168,10 +168,13 @@ _dedupe: TTLCache = _new_dedupe_cache()
 #: strategy_id -> when its run stopped.
 _cooling_off: TTLCache = _new_cooling_off_cache()
 
-# Guards the two caches above and nothing else. Under eventlet this is a green
-# lock and under the threaded development server a real one, which is correct
-# in both: the critical sections below are in-memory bookkeeping with no yield
-# point, and no database or engine call is ever made while it is held.
+# Guards the two caches above and nothing else, reads included: cachetools
+# caches are not safe to read while another thread writes them. Under eventlet
+# this is a green lock; under the gthread worker and the development server a
+# real one, and the webhook requests and the engine threads that stop runs
+# (note_run_stopped) truly run in parallel. Correct in both: the critical
+# sections below are in-memory bookkeeping with no yield point, and no database
+# or engine call is ever made while it is held.
 _cache_lock = threading.Lock()
 
 
