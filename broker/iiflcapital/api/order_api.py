@@ -17,12 +17,23 @@ from broker.iiflcapital.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, busy_response, cap_server_delay
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _DIRECT_ORDER_KEYS = {"instrumentId", "exchange", "transactionType", "quantity"}
+
+# What a trader reads when IIFL answers an order write with a throttle or a
+# "try after some time" reply. The write is never sent again automatically: the
+# generic EC003 reply carries that same wording, and neither it nor a 429
+# proves the first request did not reach IIFL.
+_UNCONFIRMED_WRITE_MESSAGE = (
+    "IIFL Capital did not confirm this request and asked for it to be tried again "
+    "later. OpenAlgo did not send it again, because the first one may already have "
+    "reached IIFL Capital. Check the order book before sending it again."
+)
 _SUCCESS_STATUSES = {"success", "ok"}
 _ORDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -89,13 +100,29 @@ def _request(
     It keeps its own request plumbing separate from data.py's _post, but both
     route through the same process-wide pacer (broker.iiflcapital.api.rate_limiter)
     so order and data calls share one clock. On a rate-limit rejection (HTTP
-    429, detected primarily; a generic retry-hint message as fallback) this
-    retries with backoff before returning control to the caller.
+    429, detected primarily; a generic retry-hint message as fallback) a read
+    (GET) is retried with backoff before returning control to the caller.
+
+    An order write (POST, PUT, DELETE) is never retried. A throttle reply to a
+    write cannot be told apart from one sent after IIFL accepted it, and the
+    fallback hint also matches IIFL's generic EC003 "Something went wrong,
+    please try after some time", so a retry could place, modify or cancel twice.
+    The reply is returned with a message telling the trader to check the order
+    book first. The same rule broker/indmoney and broker/upstox apply.
     """
     client = get_httpx_client()
     url = f"{BASE_URL}{endpoint}"
 
-    apply_rate_limit()
+    kind = "data" if method == "GET" else "order"
+    try:
+        apply_rate_limit(kind)
+    except BrokerBusyError as exc:
+        if kind == "data":
+            raise
+        # An order write refused by the pacer (gthread only): nothing was sent.
+        # Answered like a broker refusal so every write path reports it as one.
+        refused = SimpleNamespace(status_code=429, status=429, headers={}, text="")
+        return refused, {"status": "error", "message": str(exc)}
 
     if method == "GET":
         response = client.get(url, headers=_headers(auth), params=params)
@@ -114,14 +141,23 @@ def _request(
         data = {"status": "error", "message": response.text}
 
     message = data.get("message") if isinstance(data, dict) else None
-    if is_rate_limited(response.status_code, message) and _retry_count < MAX_RETRIES:
-        delay = retry_delay_from_headers(response.headers, _retry_count)
+    if method != "GET" and is_rate_limited(response.status_code, message):
         logger.warning(
-            f"IIFL Capital order API rate limited on {endpoint}. Retrying in "
-            f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+            f"IIFL Capital answered {method} {endpoint} with a rate-limit or retry reply "
+            f"(HTTP {response.status_code}: {message!r}). Not resending an order write."
         )
-        time.sleep(delay)
-        return _request(endpoint, auth, method, payload, params, _retry_count + 1)
+        return response, {"status": "error", "message": _UNCONFIRMED_WRITE_MESSAGE}
+
+    if is_rate_limited(response.status_code, message) and _retry_count < MAX_RETRIES:
+        # Under gthread a delay past the ceiling is not slept out.
+        delay = cap_server_delay(retry_delay_from_headers(response.headers, _retry_count), kind)
+        if delay is not None:
+            logger.warning(
+                f"IIFL Capital order API rate limited on {endpoint}. Retrying in "
+                f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return _request(endpoint, auth, method, payload, params, _retry_count + 1)
 
     return response, data
 
@@ -328,7 +364,12 @@ def place_smartorder_api(data, auth):
     product = data.get("product")
 
     position_size = int(float(data.get("position_size", 0) or 0))
-    current_position = int(float(get_open_position(symbol, exchange, product, auth) or 0))
+    try:
+        current_position = int(float(get_open_position(symbol, exchange, product, auth) or 0))
+    except BrokerBusyError as exc:
+        # The position read was refused by the pacer (gthread only), so there
+        # is no position to size an order against. Nothing was sent.
+        return busy_response(str(exc))
 
     if position_size == current_position:
         if int(float(data.get("quantity", 0) or 0)) == 0:
@@ -425,10 +466,12 @@ def cancel_order(orderid, auth):
     if response.status_code == 200 and _ok(response_data):
         return {"status": "success", "orderid": safe_id}, 200
 
+    # An HTTP 200 whose body is not a success is still a failure: the service
+    # layer reads 200 as done, as place_order_api already accounts for.
     return {
         "status": "error",
         "message": _extract_message(response_data, "Failed to cancel order"),
-    }, response.status_code
+    }, response.status_code if response.status_code != 200 else 400
 
 
 def modify_order(data, auth):
@@ -446,10 +489,11 @@ def modify_order(data, auth):
     if response.status_code == 200 and _ok(response_data):
         return {"status": "success", "orderid": safe_id}, 200
 
+    # An HTTP 200 whose body is not a success is still a failure (see cancel_order).
     return {
         "status": "error",
         "message": _extract_message(response_data, "Failed to modify order"),
-    }, response.status_code
+    }, response.status_code if response.status_code != 200 else 400
 
 
 def cancel_all_orders_api(data, auth):

@@ -441,7 +441,14 @@ class IiflCapitalOrderUpdateAdapter:
         mqtt_client.on_message = on_message
         mqtt_client.on_error = on_error
 
+        # disconnect() closes whichever client self._mqtt holds when it runs.
+        # _run_forever checked _shutting_down before the profile request, and
+        # a stop can land while that request is in flight, so check again
+        # under the same lock that stores the client: a stopped adapter must
+        # not open a session nothing will ever close.
         with self._lock:
+            if self._shutting_down:
+                return False
             self._mqtt = mqtt_client
 
         try:
@@ -461,8 +468,20 @@ class IiflCapitalOrderUpdateAdapter:
         # Blocks until the reader thread observes a disconnect (broker drop,
         # our own disconnect() calling mqtt_client.disconnect(), or any
         # socket error) -- mirrors BaseOrderUpdateAdapter._connect_once()'s
-        # run_forever() blocking call for a plain WebSocket.
-        disconnected_event.wait()
+        # run_forever() blocking call for a plain WebSocket. The wait wakes
+        # once a second to see whether the adapter was stopped in a way that
+        # never reached this client (a stop during connect()), and closes the
+        # client itself if so, instead of waiting forever on a session that
+        # would keep publishing duplicate order updates.
+        while not disconnected_event.wait(timeout=1.0):
+            if self._shutting_down:
+                try:
+                    mqtt_client.disconnect()
+                except Exception:
+                    self.logger.debug(
+                        "Error disconnecting IIFL order-update MQTT client", exc_info=True
+                    )
+                break
 
         with self._lock:
             if self._mqtt is mqtt_client:

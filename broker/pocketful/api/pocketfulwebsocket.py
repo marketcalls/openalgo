@@ -34,6 +34,79 @@ dtlmktdata_dict = {}
 cmptmktdata_dict = {}
 snpqtdata_dict = {}
 
+# Instruments that in-flight requests have subscribed, counted per feed mode.
+# data.py drives this one module-level socket from every quote and depth
+# request, so two requests can hold the same instrument at once. Without the
+# count, the first to finish unsubscribed it at the broker and wiped the shared
+# stores, and the other waited out its timeout with no data. Only the last
+# holder now unsubscribes, and only that instrument's data is dropped; when the
+# mode has no holders left the stores are wiped as before.
+_subscribers_lock = threading.Lock()
+_subscribers = {}  # (mode, exchangeCode, instrumentToken) -> holders
+
+# Feed mode -> (per-instrument store, latest-message variable) in this module.
+_MODE_STORES = {
+    "marketdata": ("dtlmktdata_dict", "detailed_marketdata_response"),
+    "compact_marketdata": ("cmptmktdata_dict", "compact_marketdata_response"),
+    "full_snapquote": ("snpqtdata_dict", "snapquote_marketdata_response"),
+}
+
+
+def _subscriber_key(mode, payload):
+    return (mode, str(payload["exchangeCode"]), str(payload["instrumentToken"]))
+
+
+def _claim(mode, payloads):
+    """Count one more holder for each instrument. Pair with _release."""
+    with _subscribers_lock:
+        for payload in payloads:
+            key = _subscriber_key(mode, payload)
+            _subscribers[key] = _subscribers.get(key, 0) + 1
+
+
+def _release(mode, payloads):
+    """Count one holder fewer for each instrument.
+
+    Returns:
+        (released, idle): the payloads nobody holds any more, which are the
+        only ones to unsubscribe at the broker, and whether the mode now has
+        no holders at all. An instrument that was never claimed is released,
+        which is what every unsubscribe did before the count existed.
+    """
+    released = []
+    with _subscribers_lock:
+        for payload in payloads:
+            key = _subscriber_key(mode, payload)
+            holders = _subscribers.get(key, 0)
+            if holders <= 1:
+                _subscribers.pop(key, None)
+                released.append(payload)
+            else:
+                _subscribers[key] = holders - 1
+        idle = not any(key[0] == mode for key in _subscribers)
+    return released, idle
+
+
+def _clear_released(mode, released, idle):
+    """Drop the data left by released instruments; everything once the mode is idle."""
+    store_name, latest_name = _MODE_STORES[mode]
+    module_state = globals()
+    if idle:
+        module_state[latest_name] = {}
+        module_state[store_name] = {}
+        return
+    released_ids = {
+        (str(payload["instrumentToken"]), str(payload["exchangeCode"])) for payload in released
+    }
+    store = module_state[store_name]
+    for token, exchange_code in released_ids:
+        store.pop(f"{token}_{exchange_code}", None)
+    latest = module_state[latest_name]
+    if isinstance(latest, dict) and latest:
+        latest_id = (str(latest.get("instrument_token")), str(latest.get("exchange_code")))
+        if latest_id in released_ids:
+            module_state[latest_name] = {}
+
 
 # WebSocket message handlers
 def on_message(ws, message):
@@ -103,17 +176,27 @@ def on_close(ws, close_status_code=None, close_msg=None):
 
 def on_open(ws):
     logger.info("WebSocket connection established")
-    # Start heartbeat thread
-    hb_thread = threading.Thread(target=heartbeat_thread, args=(ws,))
-    hb_thread.daemon = True
-    hb_thread.start()
+    # Start heartbeat thread, one per socket. It stops once this socket is
+    # replaced or closed (see heartbeat_thread), so a reconnect no longer
+    # leaves the previous heartbeat looping for the life of the worker.
+    if getattr(ws, "_openalgo_heartbeat", None) is None:
+        hb_thread = threading.Thread(
+            target=heartbeat_thread, args=(ws,), name="pocketful-hb", daemon=True
+        )
+        ws._openalgo_heartbeat = hb_thread
+        hb_thread.start()
     global ws_connected
     ws_connected = True
 
 
+def _is_current_socket(client_socket):
+    """True while client_socket is still this module's socket and still running."""
+    return websock is client_socket and getattr(client_socket, "keep_running", True) is not False
+
+
 def heartbeat_thread(client_socket):
     """Send periodic heartbeats to keep the connection alive"""
-    while True:
+    while _is_current_socket(client_socket):
         try:
             if (
                 ws_connected
@@ -130,6 +213,7 @@ def heartbeat_thread(client_socket):
             logger.error(f"Error in heartbeat: {str(e)}")
             time.sleep(5)  # Wait a bit before retrying on error
         time.sleep(8)
+    logger.debug("Heartbeat stopped: its socket was replaced or closed")
 
 
 def get_snapquotedata():
@@ -305,6 +389,7 @@ class PocketfulSocket:
 
     def subscribe_detailed_marketdata(self, detailedmarketdata_payload):
         """Subscribe to detailed market data"""
+        _claim("marketdata", [detailedmarketdata_payload])
         try:
             subscription_pkt = [
                 [
@@ -329,19 +414,19 @@ class PocketfulSocket:
     def unsubscribe_detailed_marketdata(self, detailedmarketdata_payload):
         """Unsubscribe from detailed market data"""
         try:
-            unsubscription_pkt = [
-                [
-                    detailedmarketdata_payload["exchangeCode"],
-                    detailedmarketdata_payload["instrumentToken"],
+            released, idle = _release("marketdata", [detailedmarketdata_payload])
+            if released:
+                unsubscription_pkt = [
+                    [
+                        detailedmarketdata_payload["exchangeCode"],
+                        detailedmarketdata_payload["instrumentToken"],
+                    ]
                 ]
-            ]
-            global websock
-            sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "marketdata"}
-            websock.send(json.dumps(sub_packet))
+                global websock
+                sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "marketdata"}
+                websock.send(json.dumps(sub_packet))
             # Clear data
-            global detailed_marketdata_response, dtlmktdata_dict
-            detailed_marketdata_response = {}
-            dtlmktdata_dict = {}
+            _clear_released("marketdata", released, idle)
             logger.info(f"Unsubscribed from detailed market data: {detailedmarketdata_payload}")
             return True
         except Exception as e:
@@ -351,6 +436,7 @@ class PocketfulSocket:
     def subscribe_compact_marketdata(self, compactmarketdata_payload):
         """Subscribe to compact market data with reconnection support"""
         global websock, ws_connected
+        _claim("compact_marketdata", [compactmarketdata_payload])
 
         # Try to subscribe up to 3 times
         for attempt in range(3):
@@ -398,8 +484,9 @@ class PocketfulSocket:
 
     def unsubscribe_compact_marketdata(self, compactmarketdata_payload):
         """Unsubscribe from compact market data with error handling"""
-        global websock, ws_connected, compact_marketdata_response, cmptmktdata_dict
+        global websock, ws_connected
 
+        released, idle = _release("compact_marketdata", [compactmarketdata_payload])
         try:
             # Only attempt to unsubscribe if we have a connection
             if (
@@ -413,30 +500,32 @@ class PocketfulSocket:
                     "Cannot unsubscribe from compact market data, WebSocket not connected"
                 )
                 # Still clear data even if we can't unsubscribe
-                compact_marketdata_response = {}
-                cmptmktdata_dict = {}
+                _clear_released("compact_marketdata", released, idle)
                 return False
 
-            unsubscription_pkt = [
-                [
-                    compactmarketdata_payload["exchangeCode"],
-                    compactmarketdata_payload["instrumentToken"],
+            if released:
+                unsubscription_pkt = [
+                    [
+                        compactmarketdata_payload["exchangeCode"],
+                        compactmarketdata_payload["instrumentToken"],
+                    ]
                 ]
-            ]
-            sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "compact_marketdata"}
-            websock.send(json.dumps(sub_packet))
+                sub_packet = {
+                    "a": "unsubscribe",
+                    "v": unsubscription_pkt,
+                    "m": "compact_marketdata",
+                }
+                websock.send(json.dumps(sub_packet))
 
             # Clear data
-            compact_marketdata_response = {}
-            cmptmktdata_dict = {}
+            _clear_released("compact_marketdata", released, idle)
 
             logger.info(f"Unsubscribed from compact market data: {compactmarketdata_payload}")
             return True
         except Exception as e:
             logger.error(f"Error unsubscribing from compact market data: {str(e)}")
             # Still clear data even on error
-            compact_marketdata_response = {}
-            cmptmktdata_dict = {}
+            _clear_released("compact_marketdata", released, idle)
             return False
 
     def read_compact_marketdata(self):
@@ -447,6 +536,7 @@ class PocketfulSocket:
     def subscribe_snapquote_data(self, snapquotedata_payload):
         """Subscribe to snapquote data with reconnection support"""
         global websock, ws_connected
+        _claim("full_snapquote", [snapquotedata_payload])
 
         # Try to subscribe up to 3 times
         for attempt in range(3):
@@ -497,8 +587,9 @@ class PocketfulSocket:
 
     def unsubscribe_snapquote_data(self, snapquotedata_payload):
         """Unsubscribe from snapquote data with error handling"""
-        global websock, ws_connected, snapquote_marketdata_response, snpqtdata_dict
+        global websock, ws_connected
 
+        released, idle = _release("full_snapquote", [snapquotedata_payload])
         try:
             # Only attempt to unsubscribe if we have a connection
             if (
@@ -510,31 +601,32 @@ class PocketfulSocket:
             ):
                 logger.warning("Cannot unsubscribe, WebSocket not connected")
                 # Still clear data even if we can't unsubscribe
-                snapquote_marketdata_response = {}
-                snpqtdata_dict = {}
+                _clear_released("full_snapquote", released, idle)
                 return False
 
-            unsubscription_pkt = [
-                [snapquotedata_payload["exchangeCode"], snapquotedata_payload["instrumentToken"]]
-            ]
-            sub_packet = {
-                "a": "unsubscribe",
-                "v": unsubscription_pkt,
-                "m": "full_snapquote",  # Match subscription mode
-            }
-            websock.send(json.dumps(sub_packet))
+            if released:
+                unsubscription_pkt = [
+                    [
+                        snapquotedata_payload["exchangeCode"],
+                        snapquotedata_payload["instrumentToken"],
+                    ]
+                ]
+                sub_packet = {
+                    "a": "unsubscribe",
+                    "v": unsubscription_pkt,
+                    "m": "full_snapquote",  # Match subscription mode
+                }
+                websock.send(json.dumps(sub_packet))
 
             # Clear data
-            snapquote_marketdata_response = {}
-            snpqtdata_dict = {}
+            _clear_released("full_snapquote", released, idle)
 
             logger.info(f"Unsubscribed from snapquote data: {snapquotedata_payload}")
             return True
         except Exception as e:
             logger.error(f"Error unsubscribing from snapquote data: {str(e)}")
             # Still clear data even on error
-            snapquote_marketdata_response = {}
-            snpqtdata_dict = {}
+            _clear_released("full_snapquote", released, idle)
             return False
 
     def read_snapquote_data(self):
@@ -580,6 +672,7 @@ class PocketfulSocket:
 
     def subscribe_multiple_detailed_marketdata(self, detailedmarketdata_payload):
         """Subscribe to multiple detailed market data"""
+        _claim("marketdata", detailedmarketdata_payload)
         try:
             subscription_pkt = []
             for payload in detailedmarketdata_payload:
@@ -600,18 +693,18 @@ class PocketfulSocket:
     def unsubscribe_multiple_detailed_marketdata(self, detailedmarketdata_payload):
         """Unsubscribe from multiple detailed market data"""
         try:
+            released, idle = _release("marketdata", detailedmarketdata_payload)
             unsubscription_pkt = []
-            for payload in detailedmarketdata_payload:
+            for payload in released:
                 pkt = [payload["exchangeCode"], payload["instrumentToken"]]
                 unsubscription_pkt.append(pkt)
 
-            global websock
-            sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "marketdata"}
-            websock.send(json.dumps(sub_packet))
+            if unsubscription_pkt:
+                global websock
+                sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "marketdata"}
+                websock.send(json.dumps(sub_packet))
             # Clear data
-            global detailed_marketdata_response, dtlmktdata_dict
-            detailed_marketdata_response = {}
-            dtlmktdata_dict = {}
+            _clear_released("marketdata", released, idle)
             logger.info(
                 f"Unsubscribed from multiple detailed market data: {detailedmarketdata_payload}"
             )
@@ -627,6 +720,7 @@ class PocketfulSocket:
 
     def subscribe_multiple_compact_marketdata(self, compactmarketdata_payload):
         """Subscribe to multiple compact market data"""
+        _claim("compact_marketdata", compactmarketdata_payload)
         try:
             subscription_pkt = []
             for payload in compactmarketdata_payload:
@@ -645,18 +739,22 @@ class PocketfulSocket:
     def unsubscribe_multiple_compact_marketdata(self, compactmarketdata_payload):
         """Unsubscribe from multiple compact market data"""
         try:
+            released, idle = _release("compact_marketdata", compactmarketdata_payload)
             unsubscription_pkt = []
-            for payload in compactmarketdata_payload:
+            for payload in released:
                 pkt = [payload["exchangeCode"], payload["instrumentToken"]]
                 unsubscription_pkt.append(pkt)
 
-            global websock
-            sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "compact_marketdata"}
-            websock.send(json.dumps(sub_packet))
+            if unsubscription_pkt:
+                global websock
+                sub_packet = {
+                    "a": "unsubscribe",
+                    "v": unsubscription_pkt,
+                    "m": "compact_marketdata",
+                }
+                websock.send(json.dumps(sub_packet))
             # Clear data
-            global compact_marketdata_response, cmptmktdata_dict
-            compact_marketdata_response = {}
-            cmptmktdata_dict = {}
+            _clear_released("compact_marketdata", released, idle)
             logger.info(
                 f"Unsubscribed from multiple compact market data: {compactmarketdata_payload}"
             )
@@ -672,6 +770,7 @@ class PocketfulSocket:
 
     def subscribe_multiple_snapquote_data(self, snapquotedata_payload):
         """Subscribe to multiple snapquote data"""
+        _claim("full_snapquote", snapquotedata_payload)
         try:
             subscription_pkt = []
             for payload in snapquotedata_payload:
@@ -690,18 +789,18 @@ class PocketfulSocket:
     def unsubscribe_multiple_snapquote_data(self, snapquotedata_payload):
         """Unsubscribe from multiple snapquote data"""
         try:
+            released, idle = _release("full_snapquote", snapquotedata_payload)
             unsubscription_pkt = []
-            for payload in snapquotedata_payload:
+            for payload in released:
                 pkt = [payload["exchangeCode"], payload["instrumentToken"]]
                 unsubscription_pkt.append(pkt)
 
-            global websock
-            sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "full_snapquote"}
-            websock.send(json.dumps(sub_packet))
+            if unsubscription_pkt:
+                global websock
+                sub_packet = {"a": "unsubscribe", "v": unsubscription_pkt, "m": "full_snapquote"}
+                websock.send(json.dumps(sub_packet))
             # Clear data
-            global snapquote_marketdata_response, snpqtdata_dict
-            snapquote_marketdata_response = {}
-            snpqtdata_dict = {}
+            _clear_released("full_snapquote", released, idle)
             logger.info(f"Unsubscribed from multiple snapquote data: {snapquotedata_payload}")
             return True
         except Exception as e:

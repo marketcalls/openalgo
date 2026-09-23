@@ -18,8 +18,10 @@ from broker.indmoney.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -105,6 +107,11 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
         logger.debug(f"Response data: {response_data}")
         return response_data
 
+    except BrokerBusyError:
+        # Refused by the pacer before anything was sent (gthread only). Raised
+        # rather than returned as an error body, so a position read that was
+        # never made cannot be taken for an empty position book.
+        raise
     except Exception as e:
         # Handle connection or parsing errors
         logger.exception(f"Error in API request to {url}: {e}")
@@ -361,6 +368,9 @@ def get_positions(auth, include_ltp=True):
         logger.debug(f"Fetched {len(all_positions)} total positions (all segments and products)")
         return all_positions
 
+    except BrokerBusyError:
+        # Returning [] here would read as "no open positions".
+        raise
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
         return []
@@ -382,47 +392,42 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the cache is returned to its
+# own caller but never cached, so the next order cannot read the book from
+# before the previous fill (utils/smart_order_guard.py).
+_POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker. The smart-order path only reads
-    # net quantity, so skip the LTP round trip that the position book needs.
-    positions_data = get_positions(auth, include_ltp=False)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    # The smart-order path only reads net quantity, so skip the LTP round
+    # trip that the position book needs.
+    return _POSITION_BOOK.get(auth, lambda: get_positions(auth, include_ltp=False))
 
 
 def _invalidate_position_cache(auth):
-    """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data.
+
+    Also stops a fetch that started before this order from caching the book
+    it read.
+    """
+    _POSITION_BOOK.invalidate(auth)
 
 
 
@@ -575,7 +580,11 @@ def place_order_api(data, auth):
     client = get_httpx_client()
 
     url = get_url(endpoint)
-    res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    try:
+        res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    except BrokerBusyError as exc:
+        # Refused by the pacer before anything was sent (gthread only).
+        return busy_response(str(exc))
 
     try:
         response_data = json.loads(res.text)
@@ -629,15 +638,19 @@ def place_smartorder_api(data, auth):
     exchange = data.get("exchange")
     product = data.get("product")
     # Per-symbol lock: serialize smart orders per symbol
-    symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-    with symbol_lock:
+    with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+        if not symbol_lock:
+            return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
 
         # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-        )
+        try:
+            current_position = int(
+                get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            )
+        except BrokerBusyError as exc:
+            # The position read was refused by the pacer (gthread only).
+            return busy_response(str(exc))
 
         logger.debug(f"position_size : {position_size}")
         logger.debug(f"Open Position : {current_position}")
@@ -811,7 +824,12 @@ def cancel_order(orderid, auth):
 
     # Make the POST request to cancel order using httpx
     url = get_url(endpoint)
-    res = rate_limited_request(client, "POST", url, headers=headers, content=json.dumps(payload))
+    try:
+        res = rate_limited_request(
+            client, "POST", url, headers=headers, content=json.dumps(payload)
+        )
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
 
     # Parse the response
     data = json.loads(res.text)
@@ -875,7 +893,10 @@ def modify_order(data, auth):
     url = get_url("/smart/order/modify" if is_smart else "/order/modify")
 
     # Make the POST request using httpx
-    res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    try:
+        res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
 
     # Parse the response
     data = json.loads(res.text)
