@@ -3,7 +3,8 @@
 ``start.sh`` is the image's entrypoint. The default path must stay the exact
 eventlet command every Docker install runs today. Only when .env (or the
 container environment) asks for gthread does it start through the launcher,
-with a graceful window that fits Docker's default 10 second stop. Every
+with a 30 second graceful window that the documented stop_grace_period
+covers (Docker's default 10 second stop would not). Every
 script it runs must lose Windows line endings in the image, because an image
 built from a Windows checkout would otherwise not start.
 """
@@ -42,7 +43,7 @@ exec /app/.venv/bin/gunicorn \\
     app:app
 """
 
-DOCKER_STOP_SECONDS = 10
+GUIDE = ROOT / "docs" / "gthread" / "README.md"
 
 
 def _start_text() -> str:
@@ -60,12 +61,15 @@ def test_the_gthread_branch_needs_an_explicit_request():
     assert "--worker-class eventlet" not in text.split(EVENTLET_START)[0]
 
 
-def test_the_gthread_stop_fits_dockers_default_window():
+def test_the_gthread_stop_fits_the_grace_period_the_guide_requires():
     text = _start_text()
     launcher = text[text.index("exec /bin/bash /app/install/openalgo-gunicorn.sh") :]
     launcher = launcher[: launcher.index("\nfi\n")]
     graceful = int(re.search(r"--graceful-timeout (\d+)", launcher).group(1))
-    assert graceful + 2 <= DOCKER_STOP_SECONDS
+    required = re.search(r"stop_grace_period: (\d+)s", GUIDE.read_text(encoding="utf-8"))
+    assert required, "docs/gthread/README.md must tell Docker users which stop_grace_period to set"
+    # The worker's window plus time for the arbiter and the proxy to exit.
+    assert graceful + 10 <= int(required.group(1))
     assert "--proxy-mode external" in launcher
     assert '--env-file "$ENV_FILE"' in launcher
 
@@ -158,5 +162,5 @@ def test_start_sh_picks_the_web_server_from_env(tmp_path, env_text, expected):
     else:
         assert "with gthread..." in result.stdout
         assert "--worker-class gthread --threads 64 --workers 1 --bind 0.0.0.0:5000" in line
-        assert "--graceful-timeout 7" in line
+        assert "--graceful-timeout 30" in line
         assert "-c " in line and "gunicorn_hooks.py" in line

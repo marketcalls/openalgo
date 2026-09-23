@@ -139,7 +139,7 @@ jobs:
             export APP_MODE=standalone
             .venv/bin/python -m websocket_proxy.server > proxy.log 2>&1 &
             bash install/openalgo-gunicorn.sh --venv .venv --bind 127.0.0.1:5099 \
-              --proxy-mode external --timeout 300 --graceful-timeout 7 \
+              --proxy-mode external --timeout 300 --graceful-timeout 30 \
               --worker-tmp-dir /tmp --log-level info > gunicorn.log 2>&1 &
           else
             bash install/openalgo-gunicorn.sh --venv .venv --bind 127.0.0.1:5099 \

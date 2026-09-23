@@ -170,8 +170,8 @@ def _begin_early_shutdown(worker):
     gunicorn gives a stopping worker one graceful window: it waits for open
     requests and only then runs ``worker_exit``, and it kills the worker when
     the window ends. Stopping the Python strategies and OpenScript runs only
-    from ``worker_exit`` left them whatever the requests had not used, which on
-    Docker's 7 seconds could be nothing. gthread only; ``worker_exit`` still
+    from ``worker_exit`` left them whatever the requests had not used, which
+    after a slow request could be nothing. gthread only; ``worker_exit`` still
     waits for them.
     """
     try:

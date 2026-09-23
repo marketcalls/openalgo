@@ -21,7 +21,10 @@ it works and switch back: [docs/gthread/README.md](gthread/README.md).
   The script backs up the service file, checks the result and puts the old one
   back if OpenAlgo does not come up. It refuses to restart during the trading
   day unless given `--force`.
-- **Docker:** set the line in `.env` and recreate the container.
+- **Docker:** set the line in `.env`, add `stop_grace_period: 45s` to the
+  OpenAlgo service in `docker-compose.yaml` (a gthread stop gives open requests
+  and running strategies up to 30 seconds, and Docker would otherwise cut it off
+  at 10), and recreate the container.
 - `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
 
 **What gthread refuses that eventlet waits for.** A request that would wait too

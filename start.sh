@@ -338,9 +338,11 @@ fi
 if [ "$OPENALGO_WORKER_REQUESTED" = "gthread" ] && [ -f /app/install/openalgo-gunicorn.sh ]; then
     echo "[OpenAlgo] Starting application on port ${APP_PORT} with gthread..."
     mkdir -p /tmp/gunicorn_workers
-    # Docker gives a container 10 seconds to stop before killing it, so open
-    # requests get 7 of them to finish. A larger stop_grace_period does not
-    # lengthen this; see docs/gthread/README.md.
+    # A stop gets 30 seconds for open requests, beside the strategies and
+    # OpenScript runs stopping. Docker kills a container 10 seconds after the
+    # stop signal unless docker-compose.yaml sets stop_grace_period, so the
+    # gthread switch steps require stop_grace_period: 45s. See
+    # docs/gthread/README.md.
     exec /bin/bash /app/install/openalgo-gunicorn.sh \
         --app-dir /app \
         --venv /app/.venv \
@@ -348,7 +350,7 @@ if [ "$OPENALGO_WORKER_REQUESTED" = "gthread" ] && [ -f /app/install/openalgo-gu
         --bind "0.0.0.0:${APP_PORT}" \
         --proxy-mode external \
         --timeout 300 \
-        --graceful-timeout 7 \
+        --graceful-timeout 30 \
         --worker-tmp-dir /tmp/gunicorn_workers \
         --log-level warning
 fi

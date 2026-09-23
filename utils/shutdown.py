@@ -258,11 +258,11 @@ def begin_early_shutdown() -> bool:
     Under the gthread worker the launcher's stop drain calls this as soon as
     the worker is told to stop. gunicorn gives a stopping worker one graceful
     window for everything: open requests first, then ``worker_exit``, which is
-    where shutdown_runtime ran the early hooks one after another. On Docker the
-    window is 7 seconds, so a slow request, or one strategy using its grace
-    period, left the OpenScript runs no time at all, and the kill that ends the
-    window skipped them. Started here they stop beside the open requests and
-    beside each other, and shutdown_runtime only waits for them.
+    where shutdown_runtime ran the early hooks one after another. A slow
+    request, or one strategy using its grace period, could leave the
+    OpenScript runs no time at all, and the kill that ends the window skipped
+    them. Started here they stop beside the open requests and beside each
+    other, and shutdown_runtime only waits for them.
 
     Idempotent, and does nothing once shutdown_runtime has begun.
 

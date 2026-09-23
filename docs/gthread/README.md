@@ -140,24 +140,39 @@ them as you do today, then run the switch script for each one.
    OPENALGO_WORKER_CLASS = 'gthread'
    ```
 
-2. After 23:30 IST, restart the container:
+2. In the same `docker-compose.yaml`, give the OpenAlgo service 45 seconds to
+   stop by adding `stop_grace_period` under it (keep your other lines as they
+   are):
+
+   ```yaml
+   services:
+     openalgo:
+       stop_grace_period: 45s
+   ```
+
+   This step is required. See **Stopping** below for why.
+
+3. After 23:30 IST, restart the container:
 
    ```bash
    docker compose up -d --force-recreate
    ```
 
-3. The container log says
+4. The container log says
    `Starting application on port 5000 with gthread...`.
 
 On Railway or another platform that sets environment variables for you, set
-`OPENALGO_WORKER_CLASS=gthread` there instead.
+`OPENALGO_WORKER_CLASS=gthread` there instead, and set the platform's stop or
+shutdown timeout to 45 seconds if it has one.
 
-**Stopping.** Docker gives a container 10 seconds to stop before it forces
-it. On gthread OpenAlgo uses 7 of those seconds: open requests get that long
-to finish, and your running Python strategies and OpenScript runs are told to
+**Stopping.** On gthread, a stop gives open requests up to 30 seconds to
+finish, and your running Python strategies and OpenScript runs are told to
 stop at the same moment, side by side, so a strategy that handles the stop
-signal gets its chance to clean up. Leave `stop_grace_period` at its default
-or longer; do not shorten it below 10 seconds.
+signal gets its chance to clean up. Docker, though, forces a container to stop
+10 seconds after asking it to, unless `stop_grace_period` says otherwise.
+Without step 2 a stop cuts that cleanup short. Setting it to 45 seconds does
+not make a normal stop slower: the container still stops as soon as OpenAlgo
+has finished. On eventlet you can leave the line in place; it does no harm.
 
 ## Check that it works
 
@@ -233,7 +248,8 @@ or longer; do not shorten it below 10 seconds.
 - **Live update connections per tab.** Each tab currently opens two or three
   of them. A later release brings that down to one.
 - **Stopping takes a little longer.** gthread lets open requests finish before
-  it stops: up to 30 seconds on Ubuntu and 7 seconds on Docker.
+  it stops, for up to 30 seconds. On Docker this needs `stop_grace_period: 45s`
+  (see [Switch on Docker](#switch-on-docker)).
 - **Where the market data service runs** is shown in the system report as
   *Market data proxy*. On Ubuntu it runs as a separate process started by the
   web server, on gthread as on eventlet; if it stops, gthread starts it again
