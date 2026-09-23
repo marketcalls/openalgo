@@ -52,6 +52,7 @@ from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from database.token_db import get_br_symbol
 from database.token_db_enhanced import fno_search_symbols
+from services.broker_busy import BrokerBusyError, broker_busy_result, is_broker_busy
 from services.option_greeks_service import (
     calculate_chain_greeks,
     calculate_time_to_expiry,
@@ -379,12 +380,18 @@ def get_option_chain(
             # CRYPTO: look up the canonical perpetual symbol from cache (e.g. BTC -> BTCUSDFUT)
             quote_exchange = exchange.upper()
             _perp = fno_search_symbols(
-                query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+                query=f"{base_symbol}USDFUT",
+                exchange=exchange,
+                instrumenttype=INSTRUMENT_PERPFUT,
+                limit=1,
             )
             if not _perp:
                 return (
                     False,
-                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    {
+                        "status": "error",
+                        "message": f"No perpetual futures found for {base_symbol} on {exchange}",
+                    },
                     404,
                 )
             quote_symbol = _perp[0]["symbol"]
@@ -412,8 +419,7 @@ def get_option_chain(
                 )
             quote_symbol, quote_exchange = resolved
             logger.info(
-                f"{exchange.upper()} has no spot; pricing {base_symbol} against "
-                f"{quote_symbol}"
+                f"{exchange.upper()} has no spot; pricing {base_symbol} against {quote_symbol}"
             )
 
         if exchange.upper() not in CRYPTO_EXCHANGES and exchange.upper() not in NO_SPOT_EXCHANGES:
@@ -438,6 +444,8 @@ def get_option_chain(
                 quote_response = {"data": _q}
                 success = True
                 status_code = 200
+            except BrokerBusyError:
+                raise
             except Exception as _e:
                 return (
                     False,
@@ -542,16 +550,29 @@ def get_option_chain(
                         try:
                             _oq = _dh.get_quotes(_item["symbol"], _item["exchange"])
                             _results.append(
-                                {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
+                                {
+                                    "symbol": _item["symbol"],
+                                    "exchange": _item["exchange"],
+                                    "data": _oq,
+                                }
                             )
+                        except BrokerBusyError:
+                            # Every symbol after this one would be refused too.
+                            raise
                         except Exception as _qe:
                             logger.warning(f"[CRYPTO] Quote error for {_item['symbol']}: {_qe}")
                             _results.append(
-                                {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
+                                {
+                                    "symbol": _item["symbol"],
+                                    "exchange": _item["exchange"],
+                                    "error": str(_qe),
+                                }
                             )
                     quotes_response = {"status": "success", "results": _results}
                     success = True
                     status_code = 200
+                except BrokerBusyError:
+                    raise
                 except Exception as _e:
                     return (
                         False,
@@ -595,6 +616,8 @@ def get_option_chain(
                                         if data:
                                             quotes_map[item["pe"]["symbol"]] = data
                                 used_fast_path = bool(fyers_chain)
+                            except BrokerBusyError:
+                                raise
                             except Exception as _fe:
                                 logger.warning(
                                     f"Fyers fast-path option chain failed, falling back to "
@@ -606,6 +629,11 @@ def get_option_chain(
                     success, quotes_response, status_code = get_multiquotes(
                         symbols=symbols_to_fetch, api_key=api_key
                     )
+                    if not success and is_broker_busy(status_code):
+                        # Refused before reaching the broker (gthread only).
+                        # A chain of zero prices would look like a dead
+                        # market, so say what happened instead.
+                        return False, quotes_response, status_code
 
             # Build the quote lookup map from whichever branch produced results.
             # The Fyers fast path is the only one that fills quotes_map itself;
@@ -717,6 +745,8 @@ def get_option_chain(
             200,
         )
 
+    except BrokerBusyError as e:
+        return broker_busy_result(e, "Option chain request")
     except Exception as e:
         logger.exception(f"Error in get_option_chain: {e}")
         return (

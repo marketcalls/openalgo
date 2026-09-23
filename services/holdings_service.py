@@ -1,7 +1,8 @@
 import importlib
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
+from services.broker_busy import BrokerBusyError, broker_busy_result
 from utils.logging import get_logger
 
 # Initialize logger
@@ -134,6 +135,8 @@ def get_holdings_with_auth(
             },
             200,
         )
+    except BrokerBusyError as e:
+        return broker_busy_result(e, "Holdings request")
     except Exception as e:
         logger.exception(f"Error processing holdings data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
