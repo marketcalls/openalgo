@@ -81,6 +81,24 @@ def position_lock(user_id, exchange, symbol, product) -> Iterator[None]:
         yield
 
 
+@contextmanager
+def try_position_lock(user_id, exchange, symbol, product) -> Iterator[bool]:
+    """Take one sandbox position's lock only if it is free this instant.
+
+    For callers that must never wait on another order: a GTT leg firing on the
+    market-data thread, which delivers every tick to every subscriber. The
+    body runs either way and is told whether it holds the lock; when it does
+    not, it must not do the protected work.
+
+    Yields:
+        True while holding the lock, False when another caller holds it.
+    """
+    with _position_locks.try_hold(
+        position_key(user_id, exchange, symbol, product), timeout=0
+    ) as held:
+        yield held
+
+
 def position_busy_response(symbol) -> tuple[bool, dict, int]:
     """What a caller refused by a busy position lock returns, in the sandbox's shape."""
     return (
@@ -148,4 +166,5 @@ __all__ = [
     "position_key",
     "position_lock",
     "position_wait_seconds",
+    "try_position_lock",
 ]

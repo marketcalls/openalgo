@@ -42,6 +42,7 @@ from database.sandbox_db import (
 )
 from sandbox.fund_manager import FundManager
 from sandbox.order_manager import OrderManager
+from sandbox.position_locks import try_position_lock
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -935,6 +936,26 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         logger.info(f"GTT leg {leg_id} is '{leg.leg_status}', not 'triggering' - not firing")
         return False
 
+    # A leg fires on a market-data tick, on the one thread that delivers ticks
+    # to every subscriber. Waiting there for another order on the same
+    # position (a smart order reading the position book, say) stopped every
+    # tick for as long as that order took. So the position's lock is only
+    # tried: when it is busy the claim is handed back before anything moved,
+    # and the next tick fires the leg. The lock is held from here through the
+    # order, which takes it again (it is reentrant).
+    with try_position_lock(gtt.user_id, gtt.exchange, gtt.symbol, leg.product) as held:
+        if not held:
+            logger.info(
+                f"GTT leg {leg_id}: another order on {gtt.symbol} is in progress; "
+                "firing on the next tick"
+            )
+            _revert_claim(leg_id)
+            return False
+        return _fire_claimed_leg(leg, gtt, leg_id, execution_price)
+
+
+def _fire_claimed_leg(leg, gtt, leg_id: int, execution_price) -> bool:
+    """The body of :func:`fire_leg`, run holding the position's lock."""
     # Take the parent atomically, before any irreversible step. Reading
     # gtt_status here would be check-then-act: a cancel landing between the read
     # and place_order returns success while the order still goes in, and both

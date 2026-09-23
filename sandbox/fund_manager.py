@@ -1005,13 +1005,15 @@ def reconcile_margin(user_id, auto_fix=True):
         tuple: (has_discrepancy: bool, discrepancy_amount: Decimal, message: str)
     """
     try:
+        holds_write_lock = False
         for _attempt in range(_FUNDS_WRITE_ATTEMPTS):
-            outcome = _reconcile_once(user_id, auto_fix)
+            outcome = _reconcile_once(user_id, auto_fix, holds_write_lock)
             if outcome is not None:
                 return outcome
             # Funds moved between the read and the write. The failed write left
-            # this session holding SQLite's write lock, so reading positions,
-            # GTTs and funds again gives the final word.
+            # this session holding SQLite's write lock, so reading funds,
+            # positions and GTTs again gives the final word.
+            holds_write_lock = True
 
         db_session.rollback()
         logger.warning(
@@ -1025,13 +1027,45 @@ def reconcile_margin(user_id, auto_fix=True):
         return False, Decimal("0"), f"Error during reconciliation: {str(e)}"
 
 
-def _reconcile_once(user_id, auto_fix):
+def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
     """One read-compare-write pass of :func:`reconcile_margin`.
+
+    Args:
+        user_id: The account to reconcile.
+        auto_fix: Write the correction, or only report it.
+        holds_write_lock: True for a pass after a lost compare-and-set, which
+            runs inside the transaction that failed write opened.
 
     Returns:
         reconcile_margin's result tuple, or None when the funds row changed
         between the read and the write and the pass must be repeated.
     """
+
+    def settle(result):
+        # A pass after a lost compare-and-set holds SQLite's write lock. One
+        # that ends without writing must close that transaction: the engine
+        # threads that call this never release their sessions, so the lock
+        # would stay with them until something else on that thread commits,
+        # which can be hours, and every other sandbox writer (order placement,
+        # the position book, square-off) fails with "database is locked".
+        if holds_write_lock:
+            db_session.rollback()
+        return result
+
+    # Funds first. Every writer that moves position or GTT margin moves the
+    # funds row in the same commit (settlement, T+1, a GTT reserving or
+    # releasing), so any such commit landing between these reads changes the
+    # funds row after it was read, and the compare-and-set below refuses the
+    # write. Read the other way round, a settlement between the reads moved
+    # both while the funds row still matched its snapshot, and the correction
+    # re-blocked the margin the settlement had just released. A fill that opens
+    # or adds to a position moves margin from its order to the position without
+    # touching funds, and read in this order it cannot make a discrepancy
+    # appear either.
+    snapshot = read_funds_snapshot(user_id)
+    if snapshot is None:
+        return settle((False, Decimal("0"), "No funds record found for user"))
+
     # Calculate total margin blocked across all open positions. populate_existing
     # so the margins are the committed ones, not copies this session loaded
     # earlier (a second pass, a pooled thread).
@@ -1060,23 +1094,19 @@ def _reconcile_once(user_id, auto_fix):
             "Could not total active GTT margin during reconciliation; "
             "skipping reconciliation rather than risk releasing it"
         )
-        return False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"
+        return settle((False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"))
 
     total_position_margin += total_gtt_margin
 
-    # Get current used_margin from funds, fresh from the database: a copy read
-    # earlier would decide the discrepancy on a balance that has since moved.
-    snapshot = read_funds_snapshot(user_id)
-    if snapshot is None:
-        return False, Decimal("0"), "No funds record found for user"
-
+    # used_margin as read above, fresh from the database: a copy read earlier
+    # would decide the discrepancy on a balance that has since moved.
     current_used_margin = Decimal(str(snapshot.values["used_margin"] or 0))
 
     # Calculate discrepancy
     discrepancy = current_used_margin - total_position_margin
 
     if discrepancy == 0:
-        return False, Decimal("0"), "No margin discrepancy detected"
+        return settle((False, Decimal("0"), "No margin discrepancy detected"))
 
     # Log the discrepancy
     logger.warning(
@@ -1086,10 +1116,12 @@ def _reconcile_once(user_id, auto_fix):
     )
 
     if not auto_fix:
-        return (
-            True,
-            discrepancy,
-            f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
+        return settle(
+            (
+                True,
+                discrepancy,
+                f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
+            )
         )
 
     # Fix the discrepancy by adjusting used_margin and available_balance, but
