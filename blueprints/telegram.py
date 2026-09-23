@@ -100,9 +100,9 @@ def start_bot():
             return jsonify({"status": "error", "message": "Bot token not configured"}), 400
 
         # Initialize bot - detect environment and use appropriate method
-        from utils.runtime import is_monkey_patched
+        from services.telegram_bot_service import use_sync_initialization
 
-        if is_monkey_patched():
+        if use_sync_initialization():
             logger.info("Eventlet environment detected - using synchronous initialization")
             # Use synchronous initialization for eventlet
             success, message = telegram_bot_service.initialize_bot_sync(token=config["bot_token"])

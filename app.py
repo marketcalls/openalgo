@@ -995,13 +995,13 @@ def setup_environment(app):
 
             # Auto-start Telegram bot if it was active (after DB tables exist)
             try:
-                from utils.runtime import is_monkey_patched
+                from services.telegram_bot_service import use_sync_initialization
 
                 bot_config = get_bot_config()
                 if bot_config.get("is_active") and bot_config.get("bot_token"):
                     logger.debug("Auto-starting Telegram bot (background)...")
 
-                    if is_monkey_patched():
+                    if use_sync_initialization():
                         success, message = telegram_bot_service.initialize_bot_sync(
                             token=bot_config["bot_token"]
                         )

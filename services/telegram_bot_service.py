@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import functools
+import importlib.util
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.runtime import is_monkey_patched as _is_monkey_patched
 from utils.runtime import original as _original_module
+from utils.runtime import worker_class as _worker_class
 
 # The original threading module, to run the bot in a real OS thread, bypassing
 # eventlet's monkey-patching which causes event loop conflicts. Chosen by
@@ -40,6 +43,47 @@ from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@functools.cache
+def _eventlet_installed() -> bool:
+    """Return True when eventlet can be imported. Never imports it."""
+    try:
+        return importlib.util.find_spec("eventlet") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def use_sync_initialization() -> bool:
+    """Return True when the bot is started through the synchronous path.
+
+    The synchronous path validates the token with plain httpx and runs the bot
+    thread with the eventlet handling; the other path validates it through
+    python-telegram-bot on an asyncio loop. They differ in what a trader sees
+    when validation fails: the synchronous path stores the token and retries
+    on a network error, where the asyncio path refuses with the library's
+    message.
+
+    * The eventlet worker needs the synchronous path, because asyncio cannot
+      run on a green thread.
+    * The development server takes it whenever eventlet is installed in its
+      environment, as every install.sh server's is. The choice used to be
+      ``"eventlet" in sys.modules``, and the websocket proxy's startup probe
+      imported eventlet merely to ask whether it was active, so on such a
+      server the check was always true by the first request. The probe no
+      longer imports it, so that outcome is kept here on purpose, answered by
+      whether eventlet is installed rather than by import order.
+    * The gthread worker runs the bot on real OS threads, where the asyncio
+      path is correct, and takes it whatever is installed.
+
+    Returns:
+        True for the synchronous path, False for the asyncio path.
+    """
+    if _is_monkey_patched():
+        return True
+    if _worker_class() != "dev":
+        return False
+    return _eventlet_installed()
 
 
 class TelegramBotService:
@@ -539,8 +583,8 @@ class TelegramBotService:
 
     def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
         """Synchronous initialization for eventlet environments"""
-        # Check if we're in eventlet environment
-        if _is_monkey_patched():
+        # Check if we're in eventlet environment (see use_sync_initialization)
+        if use_sync_initialization():
             logger.info("Using synchronous initialization for eventlet environment")
             # Use synchronous httpx to validate token
             from utils.httpx_client import get_httpx_client
@@ -590,8 +634,8 @@ class TelegramBotService:
 
     def _run_bot_in_thread(self):
         """Run bot in separate thread with its own isolated event loop"""
-        # Check if eventlet is active
-        if _is_monkey_patched():
+        # Check if eventlet is active (see use_sync_initialization)
+        if use_sync_initialization():
             logger.info("Eventlet detected - using special handling for asyncio")
             # For eventlet, we need to be very careful with asyncio
             import asyncio

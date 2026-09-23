@@ -287,6 +287,59 @@ def test_pool_stats_read_the_registered_worker_best_effort(clean_runtime):
     assert runtime.gthread_pool_stats()["open_connections"] is None
 
 
+def test_the_telegram_start_path_is_the_one_each_runtime_took_before(clean_runtime, monkeypatch):
+    """The Telegram start path does not change on any existing runtime.
+
+    It used to follow ``"eventlet" in sys.modules``. On a development server
+    whose environment holds eventlet (every install.sh server) that was True by
+    the first request, because the websocket proxy's startup probe imported
+    eventlet to ask whether it was active, so the synchronous path ran there.
+    The probe no longer imports eventlet, and asking only "is it patched" moved
+    that server onto the asyncio path, which answers a network failure with a
+    refusal instead of storing the token and retrying.
+    """
+    import services.telegram_bot_service as tg
+
+    monkeypatch.delitem(sys.modules, "eventlet.patcher", raising=False)
+
+    # Development server with eventlet installed: synchronous, as before.
+    monkeypatch.setattr(tg, "_eventlet_installed", lambda: True)
+    assert runtime.worker_class() == "dev"
+    assert tg.use_sync_initialization() is True
+
+    # Development server without eventlet (Windows): asyncio, as before.
+    monkeypatch.setattr(tg, "_eventlet_installed", lambda: False)
+    assert tg.use_sync_initialization() is False
+
+    # The eventlet worker: synchronous, as before.
+    monkeypatch.setitem(sys.modules, "eventlet.patcher", _fake_patcher({"thread", "socket"}))
+    assert tg.use_sync_initialization() is True
+
+    # The gthread worker runs the bot on real threads: asyncio, whatever is installed.
+    monkeypatch.delitem(sys.modules, "eventlet.patcher")
+    monkeypatch.setattr(runtime, "_patched", set())
+    monkeypatch.setattr(tg, "_eventlet_installed", lambda: True)
+    runtime.register_gunicorn_worker(_fake_worker("gunicorn.workers.gthread"))
+    assert tg.use_sync_initialization() is False
+
+
+def test_whether_eventlet_is_installed_is_answered_without_importing_it(tmp_path):
+    result = _run_child(
+        tmp_path,
+        """
+        import sys
+        import services.telegram_bot_service as tg
+
+        from importlib.util import find_spec
+
+        assert tg._eventlet_installed() is (find_spec("eventlet") is not None)
+        assert "eventlet" not in sys.modules
+        print("OK")
+        """,
+    )
+    assert "OK" in result.stdout, result.stdout + result.stderr
+
+
 # --- subprocess proofs --------------------------------------------------------
 
 
@@ -431,9 +484,8 @@ def test_under_a_real_monkey_patch_every_guard_takes_the_eventlet_branch(tmp_pat
         info = admin._runtime_info()
         assert info["eventlet_active"] is True and info["wsgi_hint"] == "gunicorn-eventlet"
 
-        from services.telegram_bot_service import TelegramBotService
-        from utils.runtime import is_monkey_patched
-        assert is_monkey_patched() is True  # the Telegram and app.py guards
+        from services.telegram_bot_service import use_sync_initialization
+        assert use_sync_initialization() is True  # the Telegram and app.py guards
         print("OK")
         """,
     )
