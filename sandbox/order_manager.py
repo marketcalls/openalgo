@@ -18,6 +18,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytz
+from sqlalchemy import update
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +32,11 @@ from utils.logging import get_logger
 from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
+
+#: Statuses an order can still be modified or cancelled from. Both are
+#: conditional UPDATEs on this set, as the engine's fill claim is, so a fill,
+#: a cancel and a modify can never all act on the same resting order.
+_PENDING_STATUSES = ("open", "trigger pending")
 
 
 class OrderManager:
@@ -746,9 +752,7 @@ class OrderManager:
                         else:
                             # MARKET order: process normally (fills at bid/ask or LTP)
                             exec_engine._process_order(order, cached_quote)
-                            logger.info(
-                                f"Market order {orderid} executed immediately"
-                            )
+                            logger.info(f"Market order {orderid} executed immediately")
                     else:
                         logger.warning(
                             f"Could not fetch quote for {symbol} on {exchange}, order remains open"
@@ -824,12 +828,22 @@ class OrderManager:
                     400,
                 )
 
-            # Update order parameters
+            # Work out the new parameters. Nothing is written until all of them
+            # are valid, and then only while the order is still pending.
+            changes = {}
             if "quantity" in new_data:
                 new_quantity = int(new_data["quantity"])
                 # Validate lot size (from cache)
                 symbol_obj = get_symbol_info(order.symbol, order.exchange)
-                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
+                if symbol_obj and order.exchange in [
+                    "NFO",
+                    "BFO",
+                    "CDS",
+                    "BCD",
+                    "MCX",
+                    "NCDEX",
+                    "CRYPTO",
+                ]:
                     lot_size = symbol_obj.lotsize or 1
                     if new_quantity % lot_size != 0:
                         return (
@@ -841,8 +855,8 @@ class OrderManager:
                             },
                             400,
                         )
-                order.quantity = new_quantity
-                order.pending_quantity = new_quantity
+                changes["quantity"] = new_quantity
+                changes["pending_quantity"] = new_quantity
 
             # Only accept the fields that apply to this order's price_type:
             #   MARKET -> none, LIMIT -> price, SL -> price+trigger, SL-M -> trigger
@@ -860,7 +874,7 @@ class OrderManager:
                         },
                         400,
                     )
-                order.price = Decimal(str(new_data["price"]))
+                changes["price"] = Decimal(str(new_data["price"]))
 
             if "trigger_price" in new_data and new_data["trigger_price"]:
                 if not allows_trigger:
@@ -873,9 +887,37 @@ class OrderManager:
                         },
                         400,
                     )
-                order.trigger_price = Decimal(str(new_data["trigger_price"]))
+                changes["trigger_price"] = Decimal(str(new_data["trigger_price"]))
 
-            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+            # Write only what actually changes, as the ORM's flush did, and only
+            # while the order still rests: a fill or cancel that landed since it
+            # was read wins, instead of this write quietly changing the terms of
+            # an order that has already left the book.
+            values = {
+                name: value for name, value in changes.items() if value != getattr(order, name)
+            }
+            values["update_timestamp"] = datetime.now(pytz.timezone("Asia/Kolkata"))
+            modified = db_session.execute(
+                update(SandboxOrders)
+                .where(
+                    SandboxOrders.id == order.id,
+                    SandboxOrders.order_status.in_(_PENDING_STATUSES),
+                )
+                .values(**values),
+                execution_options={"synchronize_session": False},
+            )
+            if modified.rowcount != 1:
+                db_session.rollback()
+                db_session.refresh(order)
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Cannot modify order in {order.order_status} status",
+                        "mode": "analyze",
+                    },
+                    400,
+                )
 
             db_session.commit()
 
@@ -941,9 +983,11 @@ class OrderManager:
                     400,
                 )
 
-            # Update order status
-            order.order_status = "cancelled"
-            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+            # What to release is worked out before the status changes: the
+            # fallback below can fetch a quote, and the cancel itself holds the
+            # database's write lock until it commits.
+            release_amount = None
+            release_note = None
 
             # Release blocked margin using the exact amount that was blocked
             if (
@@ -951,10 +995,8 @@ class OrderManager:
                 and order.margin_blocked
                 and order.margin_blocked > 0
             ):
-                self.fund_manager.release_margin(
-                    order.margin_blocked, 0, f"Order cancelled: {orderid}"
-                )
-                logger.info(
+                release_amount = order.margin_blocked
+                release_note = (
                     f"Released margin ₹{order.margin_blocked} for cancelled order {orderid}"
                 )
             else:
@@ -1010,16 +1052,46 @@ class OrderManager:
                                 order.action,
                             )
                             if margin_blocked:
-                                self.fund_manager.release_margin(
-                                    margin_blocked, 0, f"Order cancelled: {orderid}"
-                                )
-                                logger.info(
-                                    f"Released calculated margin ₹{margin_blocked} for cancelled order {orderid}"
-                                )
+                                release_amount = margin_blocked
+                                release_note = f"Released calculated margin ₹{margin_blocked} for cancelled order {orderid}"
                     else:
-                        logger.info(
-                            f"No margin to release for cancelled order {orderid} ({order.action} {order.product})"
-                        )
+                        release_note = f"No margin to release for cancelled order {orderid} ({order.action} {order.product})"
+
+            # The cancel is one conditional UPDATE: it happens only if the order
+            # still rests. Cancelling from a copy let two cancels (the user and
+            # the square-off job, cancel-all and a single cancel) both release
+            # the margin, and a cancel racing a fill release margin the new
+            # position still held.
+            cancelled = db_session.execute(
+                update(SandboxOrders)
+                .where(
+                    SandboxOrders.id == order.id,
+                    SandboxOrders.order_status.in_(_PENDING_STATUSES),
+                )
+                .values(
+                    order_status="cancelled",
+                    update_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            if cancelled.rowcount != 1:
+                db_session.rollback()
+                db_session.refresh(order)
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Cannot cancel order in {order.order_status} status",
+                        "mode": "analyze",
+                    },
+                    400,
+                )
+
+            # The release commits the cancel and the funds change together.
+            if release_amount is not None:
+                self.fund_manager.release_margin(release_amount, 0, f"Order cancelled: {orderid}")
+            if release_note:
+                logger.info(release_note)
 
             db_session.commit()
 
