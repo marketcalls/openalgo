@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from services.broker_busy import BROKER_BUSY_MESSAGE, BROKER_BUSY_STATUS, is_broker_busy
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
@@ -909,14 +910,14 @@ def get_option_greeks(
 
             if resolved_forward:
                 spot_price = resolved_forward
-                logger.info(
-                    f"Using forward {resolved_forward} for {option_symbol}"
-                )
+                logger.info(f"Using forward {resolved_forward} for {option_symbol}")
                 success = True
             else:
                 # Fetch underlying spot price
                 logger.info(f"Fetching spot price for {spot_symbol} from {spot_exchange}")
-                success, spot_response, status_code = get_quotes(spot_symbol, spot_exchange, api_key)
+                success, spot_response, status_code = get_quotes(
+                    spot_symbol, spot_exchange, api_key
+                )
 
                 if not success:
                     return (
@@ -966,6 +967,17 @@ def get_option_greeks(
         return False, {"status": "error", "message": f"Failed to get option Greeks: {str(e)}"}, 500
 
 
+def _busy_multi_greeks(response: dict[str, Any]) -> tuple[bool, dict[str, Any], int]:
+    """Refuse a whole multi-Greeks request whose prices were refused as busy.
+
+    Only the gthread worker refuses a broker request for waiting too long, and
+    a refusal is immediate, so the trader retries the batch rather than
+    receiving Greeks for some legs and "Option LTP not available" for the rest.
+    """
+    message = (response or {}).get("message") or BROKER_BUSY_MESSAGE
+    return False, {"status": "error", "message": message}, BROKER_BUSY_STATUS
+
+
 def get_multi_option_greeks(
     symbols: list,
     interest_rate: float | None = None,
@@ -1012,14 +1024,18 @@ def get_multi_option_greeks(
         exchange = sym_req.get("exchange")
         try:
             batch_key = idx
-            base_symbol, expiry, strike, opt_type = parse_option_symbol(symbol, exchange, expiry_time)
+            base_symbol, expiry, strike, opt_type = parse_option_symbol(
+                symbol, exchange, expiry_time
+            )
             parsed_symbols[batch_key] = (base_symbol, expiry, strike, opt_type)
 
             # Determine spot symbol/exchange for this option (also the fallback
             # if the synthetic future cannot be computed for an index weekly)
             passed_underlying = sym_req.get("underlying_symbol")
             spot_symbol = passed_underlying or base_symbol
-            spot_exchange = sym_req.get("underlying_exchange") or get_underlying_exchange(base_symbol, exchange)
+            spot_exchange = sym_req.get("underlying_exchange") or get_underlying_exchange(
+                base_symbol, exchange
+            )
             spot_key = (spot_symbol, spot_exchange)
             spot_keys[spot_key] = None  # will be filled with price
             symbol_to_spot_key[batch_key] = spot_key
@@ -1055,8 +1071,12 @@ def get_multi_option_greeks(
                     spot_keys[spot_key] = spot_price
                 else:
                     logger.warning(f"No LTP in spot response for {spot_symbol}")
+            elif is_broker_busy(status_code):
+                return _busy_multi_greeks(spot_response)
             else:
-                logger.warning(f"Failed to fetch spot for {spot_symbol}: {spot_response.get('message')}")
+                logger.warning(
+                    f"Failed to fetch spot for {spot_symbol}: {spot_response.get('message')}"
+                )
         except Exception as e:
             logger.warning(f"Error fetching spot for {spot_symbol}: {e}")
 
@@ -1068,10 +1088,12 @@ def get_multi_option_greeks(
         exchange = sym_req.get("exchange")
         if idx in parsed_symbols and (symbol, exchange) not in seen_quotes:
             seen_quotes.add((symbol, exchange))
-            option_symbols_to_fetch.append({
-                "symbol": symbol,
-                "exchange": exchange,
-            })
+            option_symbols_to_fetch.append(
+                {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                }
+            )
 
     # Fallback exchange per requested symbol. Every broker adapter echoes the
     # requested exchange today, but a result that omitted it would key every
@@ -1090,6 +1112,8 @@ def get_multi_option_greeks(
             mq_success, mq_response, mq_status = get_multiquotes(
                 symbols=option_symbols_to_fetch, api_key=api_key
             )
+            if not mq_success and is_broker_busy(mq_status):
+                return _busy_multi_greeks(mq_response)
             if mq_success and "results" in mq_response:
                 for result in mq_response["results"]:
                     sym = result.get("symbol")
@@ -1182,7 +1206,6 @@ def get_multi_option_greeks(
                 "message": str(e),
             }
 
-
     response = {
         "status": "success" if failed_count == 0 else "partial" if success_count > 0 else "error",
         "data": results,
@@ -1202,8 +1225,7 @@ def get_multi_option_greeks(
                 )
             else:
                 response["message"] = (
-                    f"{failed_count} option Greeks calculation(s) failed: "
-                    f"{'; '.join(messages[:3])}"
+                    f"{failed_count} option Greeks calculation(s) failed: {'; '.join(messages[:3])}"
                 )
 
     logger.info(f"Multi Greeks completed: {success_count}/{len(symbols)} successful")
