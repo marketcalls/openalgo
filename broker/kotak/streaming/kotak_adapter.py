@@ -482,6 +482,20 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "close": parsed_data.get("prev_close", 0.0),
                         }
                     elif mode == 3:
+                        # An index has no order book, so the only thing a depth
+                        # frame can carry for one is its price. Kotak still sends
+                        # a book: subscribing NSE_INDEX:NIFTY returns a snapshot
+                        # of five zero levels, which satisfies has_depth_data
+                        # below. The price rides a separate packet that only
+                        # arrives while the index is ticking, so outside market
+                        # hours the pair produces a frame reading ltp 0.0 over an
+                        # empty ladder -- no information at all, and it overwrote
+                        # the REST spot the option chain had already rendered
+                        # (NIFTY Spot showing 0.00 while Zerodha showed a price).
+                        # Nothing to say is better than saying zero.
+                        if exchange.endswith("_INDEX") and not effective_ltp:
+                            continue
+
                         # Use current depth data or fall back to cached depth
                         # (Kotak sends depth and LTP as separate packets)
                         if has_depth_data:
@@ -494,6 +508,25 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             depth_sell = local_depth_cache.get("sell", [])
                             depth_total_buy = local_depth_cache.get("totalbuyqty", 0)
                             depth_total_sell = local_depth_cache.get("totalsellqty", 0)
+                        elif exchange.endswith("_INDEX") and has_ltp_data:
+                            # An index has no order book, so it never satisfies
+                            # either branch above and used to fall through to the
+                            # `continue` below -- a Depth subscription to NIFTY
+                            # received nothing at all, ever. The option chain
+                            # subscribes its underlying in Depth mode alongside
+                            # the strikes, so the spot never got a tick and the
+                            # page kept the zero it starts with: NIFTY Spot
+                            # rendered from the REST poll and then read 0.00.
+                            #
+                            # Zerodha routes indices through a dedicated
+                            # _transform_index_tick that publishes the price in
+                            # full/Depth mode with no book, which is why the same
+                            # chain shows a spot there. Same thing here: the
+                            # price is real, the ladder is genuinely empty.
+                            depth_buy = []
+                            depth_sell = []
+                            depth_total_buy = 0
+                            depth_total_sell = 0
                         else:
                             continue  # No depth data available at all
 
