@@ -3221,14 +3221,31 @@ def sec_books(run: Runner) -> None:
     run.check("OB-09", ob_vocab, endpoint="orderbook", expected="BUY/SELL and MIS/CNC/NRML")
 
     def ob_empty_shape():
-        """OB-10 - an empty book is a clean success with zeroed statistics."""
+        """OB-10 - an empty book is a clean success with zeroed statistics.
+
+        By the time this section runs the book is full of this run's own
+        orders, so the empty case is tested against the snapshot taken at
+        run start, before anything was placed. The shape assertions still
+        run against the live book either way.
+        """
         d = book("orderbook")
         need(isinstance(d.get("orders"), list), "orders is not an array")
         need(isinstance(d.get("statistics"), dict), "statistics is not an object")
-        if d["orders"]:
-            raise Skip("orderbook is not empty this run - empty-shape case not exercised")
-        for k, v in d["statistics"].items():
-            need(as_num(v, k) == 0, f"empty orderbook but statistics.{k} = {v}")
+
+        snap = run.env.get("orderbook_at_start")
+        if snap is None:
+            raise Skip("no run-start orderbook snapshot was captured")
+        need(isinstance(snap.get("orders"), list),
+             "run-start orders is not an array")
+        need(isinstance(snap.get("statistics"), dict),
+             "run-start statistics is not an object")
+        if snap["orders"]:
+            raise Skip(f"the account already held {len(snap['orders'])} order(s) at run "
+                       f"start, so the empty-book case could not be observed today")
+        for k, v in (snap.get("statistics") or {}).items():
+            need(as_num(v, k) == 0,
+                 f"orderbook was empty at run start but statistics.{k} = {v}")
+        run.note_limit("OB-10 empty-book case", "observed from the run-start snapshot")
 
     run.check("OB-10", ob_empty_shape, endpoint="orderbook",
               expected="empty book returns arrays and zeroed statistics")
@@ -3315,7 +3332,10 @@ def sec_books(run: Runner) -> None:
             need(abs(filled - want) < 1e-6,
                  f"{oid}: partial fills sum to {filled}, order quantity is {want}")
         if not multi:
-            raise Skip("no partially filled orders this run")
+            raise Skip("the sandbox execution engine always fills completely - it "
+                       "sets filled_quantity = quantity and pending_quantity = 0 on "
+                       "every path - so a partial fill cannot occur here. This case "
+                       "is reachable only against a live broker")
 
     run.check("TB-06", tb_partials, endpoint="tradebook",
               expected="partial fills sum to the filled quantity")
@@ -3352,13 +3372,46 @@ def sec_books(run: Runner) -> None:
     run.check("PB-01", pb_present, endpoint="positionbook",
               expected="every traded symbol appears")
 
+    def ensure_open_position():
+        """PB-02/04/05 assert properties of an open position, and the position
+        book is empty here by construction: sec_orders ends with LC-17/LC-18,
+        which square everything off. Skipping three checks because an earlier
+        section tidied up is a harness artefact, not a fact about the broker,
+        so open one deliberately. Teardown squares it off with the rest."""
+        pb = run.ok(run.client.positionbook(), "positionbook")["data"] or []
+        if any(as_num(p.get("quantity", 0), "quantity") != 0 for p in pb):
+            return True
+        if "EQ_CHEAP" not in run.matrix:
+            return False
+        s, ex2 = run.matrix["EQ_CHEAP"]
+        try:
+            r = run.client.placeorder(strategy=STRAT, symbol=s, exchange=ex2,
+                                      action="BUY", price_type="MARKET",
+                                      product="MIS", quantity=1)
+            if r.get("status") != "success":
+                return False
+            run.track_order(r.get("orderid"), s, ex2, "MIS")
+        except Exception:
+            return False
+        time.sleep(2.0)
+        cache.pop("positionbook", None)      # the cached copy predates the fill
+        pb = run.ok(run.client.positionbook(), "positionbook")["data"] or []
+        opened = any(as_num(p.get("quantity", 0), "quantity") != 0 for p in pb)
+        if opened:
+            run.note_limit("position opened for PB checks", f"{s}@{ex2} 1 share")
+        return opened
+
+    have_position = ensure_open_position()
+
     def pb_avg_price():
         d = book("positionbook")
         if not d:
             raise Warn("positionbook empty")
         open_rows = [p for p in d if as_num(p["quantity"], "quantity") != 0]
         if not open_rows:
-            raise Skip("no open positions to assert an entry price against")
+            raise Skip("could not open a position to assert an entry price against"
+                       if not have_position else
+                       "a position was opened but the book reports none")
         for p in open_rows:
             need_keys(p, ["symbol", "exchange", "product", "quantity",
                           "average_price", "ltp", "pnl"], "position row")
@@ -3394,7 +3447,9 @@ def sec_books(run: Runner) -> None:
         d = book("positionbook")
         open_rows = [p for p in (d or []) if as_num(p["quantity"], "quantity") != 0]
         if not open_rows:
-            raise Skip("no open positions")
+            raise Skip("could not open a position to read an ltp from"
+                       if not have_position else
+                       "a position was opened but the book reports none")
         p = open_rows[0]
         lt = need_nonzero(p["ltp"], f"{p['symbol']}.ltp")
         q = run.ok(run.client.quotes(symbol=p["symbol"], exchange=p["exchange"]),
@@ -3423,7 +3478,9 @@ def sec_books(run: Runner) -> None:
                  f"{p['symbol']}: pnl {pnl} vs (ltp {lt} - avg {ap}) x qty {q} = {exp:.2f}")
             checked += 1
         if not checked:
-            raise Skip("no open positions to check pnl arithmetic")
+            raise Skip("could not open a position to check pnl arithmetic"
+                       if not have_position else
+                       "a position was opened but the book reports none")
 
     run.check("PB-05", pb_pnl, endpoint="positionbook",
               expected="pnl == (ltp - average_price) x quantity")
@@ -5387,6 +5444,15 @@ def main() -> int:
     run.env["errlog_start_lines"] = (
         len(_errlog.read_text(encoding="utf-8", errors="replace").splitlines())
         if _errlog.is_file() else 0)
+
+    # Snapshot the orderbook before this run places anything, so OB-10 can
+    # test the empty-book shape against a book that was actually empty.
+    try:
+        _ob0 = run.client.orderbook()
+        if isinstance(_ob0, dict) and _ob0.get("status") == "success":
+            run.env["orderbook_at_start"] = _ob0.get("data") or {}
+    except Exception as _e:
+        print(f"  could not snapshot the run-start orderbook: {_e}")
 
     run.matrix = resolve_matrix(run, run.env["exchanges"])
     print(f"\nSymbol matrix: {len([k for k in run.matrix if not k.startswith('_')])} slots resolved, "
