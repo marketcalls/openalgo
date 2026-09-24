@@ -3029,64 +3029,6 @@ def sec_orders(run: Runner) -> None:
               expected="place -> open -> modify -> cancelled, all visible")
 
 
-
-    run.section("8. Order lifecycle")
-
-    def lifecycle():
-        far = round(ltp * 0.80, 2)
-        oid = place("LIMIT", "BUY", "MIS", "LC-01", far)
-        time.sleep(1.0)
-        run.ok(run.client.modifyorder(order_id=oid, strategy=STRAT, symbol=sym, exchange=ex,
-                                      action="BUY", price_type="LIMIT", product="MIS",
-                                      quantity=1, price=round(far * 0.99, 2)), "modify")
-        time.sleep(1.0)
-        st = run.ok(run.client.orderstatus(order_id=oid, strategy=STRAT), "status")["data"]
-        need(abs(as_num(st["price"], "price") - round(far * 0.99, 2)) < 0.05,
-             f"modify not reflected: price {st['price']}")
-        run.ok(run.client.cancelorder(order_id=oid, strategy=STRAT), "cancel")
-        time.sleep(1.0)
-        st = run.ok(run.client.orderstatus(order_id=oid, strategy=STRAT), "status")["data"]
-        need(st["order_status"] == "cancelled", f"after cancel: {st['order_status']!r}")
-
-    run.check("LC-01", lifecycle, endpoint="modify+cancel+status",
-              expected="place -> modify -> cancel reflected")
-
-    run.check("LC-09", lambda: run.expect_error(
-        run.client.cancelorder(order_id="NOTANORDER123", strategy=STRAT), "unknown orderid"),
-        endpoint="cancelorder", expected="clean error")
-
-    def cancel_all():
-        for _ in range(3):
-            place("LIMIT", "BUY", "MIS", "LC-10", round(ltp * 0.8, 2))
-        time.sleep(1.0)
-        r = run.ok(run.client.cancelallorder(strategy=STRAT), "cancelallorder")
-        need_keys(r, ["canceled_orders", "failed_cancellations"], "cancelallorder")
-        need(isinstance(r["canceled_orders"], list), "canceled_orders not a list")
-        for f in r["failed_cancellations"]:
-            need_keys(f, ["orderid", "reason"], "failed cancellation")
-
-    run.check("LC-10", cancel_all, endpoint="cancelallorder",
-              expected="both arrays present, failures carry reason")
-
-    def close_all():
-        place("MARKET", "BUY", "MIS", "LC-17")
-        time.sleep(1.5)
-        r = run.ok(run.client.closeposition(strategy=STRAT), "closeposition")
-        need(r.get("message"), "no message")
-        time.sleep(1.5)
-        pb = run.ok(run.client.positionbook(), "positionbook")["data"]
-        open_rows = [p for p in pb if int(float(p.get("quantity", 0) or 0)) != 0]
-        need(not open_rows, f"{len(open_rows)} positions still open after closeposition")
-
-    run.check("LC-17", close_all, endpoint="closeposition", expected="flat afterwards")
-
-    run.check("LC-18", lambda: (
-        need(run.ok(run.client.closeposition(strategy=STRAT), "closeposition")
-             .get("message", "").lower().find("no open") >= 0,
-             "expected 'No open positions to close'")
-    ), endpoint="closeposition", expected="clean success when flat")
-
-
 def _lot(run: Runner, sym: str, ex: str) -> int:
     with run.db() as c:
         row = c.execute("select lotsize from symtoken where symbol=? and exchange=?",
