@@ -3357,20 +3357,50 @@ def sec_books(run: Runner) -> None:
 
     # ---------------- positionbook ----------------
     def pb_present():
+        """PB-01 - every traded symbol appears in the position book.
+
+        KNOWN DEFECT, recorded rather than failed at the user's direction.
+        sandbox/position_manager.py:528-536 returns a closed position only
+        when today_realized_pnl is non-zero:
+
+            if position.quantity != 0:            # open: always shown
+                positions.append(position)
+            elif position.today_realized_pnl and position.today_realized_pnl != 0:
+                positions.append(position)        # closed: only if it moved
+
+        The sandbox fills at LTP, so a buy and a sell moments apart fill at
+        the same price, realise exactly zero, and the position disappears -
+        despite having genuinely traded today. docs/api/account-services/
+        positionbook.md states the opposite: "Returns all positions including
+        closed ones (quantity = 0)."
+
+        The preceding line already filters on updated_at >= last_session_expiry,
+        which is what actually guards against stale rows; the P&L test is a
+        lossier second proxy for the same thing. Changing the elif to else
+        would fix it.
+        """
         d = book("positionbook")
         need(isinstance(d, list), f"positionbook data is {type(d).__name__}, expected list")
         if not d:
             raise Warn("positionbook empty")
         tb = book("tradebook")
-        if tb:
-            traded = {(t.get("symbol"), t.get("exchange")) for t in tb}
-            pos = {(p.get("symbol"), p.get("exchange")) for p in d}
-            missing = traded - pos
-            need(not missing,
-                 f"traded but absent from the position book: {sorted(missing)[:4]}")
+        if not tb:
+            return
+        traded = {(t.get("symbol"), t.get("exchange")) for t in tb}
+        pos = {(p.get("symbol"), p.get("exchange")) for p in d}
+        missing = sorted(traded - pos)
+        if missing:
+            run.note_quirk(
+                "Flat closed positions are dropped from the position book",
+                "sandbox/position_manager.py:528-536 returns a closed position only "
+                "when today_realized_pnl != 0, so anything bought and sold at the same "
+                "price vanishes - contradicting positionbook.md, which says closed "
+                "positions are retained with quantity 0")
+            raise Warn(f"{len(missing)} traded symbol(s) absent from the position book "
+                       f"{missing[:4]} - known zero-P&L drop, not a broker defect")
 
     run.check("PB-01", pb_present, endpoint="positionbook",
-              expected="every traded symbol appears")
+              expected="every traded symbol appears; known zero-P&L drop recorded")
 
     def ensure_open_position():
         """PB-02/04/05 assert properties of an open position, and the position
@@ -3506,7 +3536,9 @@ def sec_books(run: Runner) -> None:
             raise Warn("positionbook empty")
         closed = [p for p in d if as_num(p["quantity"], "q") == 0]
         if not closed:
-            raise Skip("no closed positions in the book this run")
+            raise Skip("no closed positions visible - the sandbox drops any whose "
+                       "realized P&L is exactly zero (see PB-01), so only closed "
+                       "positions that actually moved can reach this check")
         for p in closed[:10]:
             as_num(p["pnl"], f"{p['symbol']}.pnl")   # realized P&L must still be reported
 
