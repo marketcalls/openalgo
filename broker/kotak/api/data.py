@@ -247,6 +247,13 @@ class BrokerData:
         canonical name differs per index and is not always derivable from the
         master contract (which often stores just the short ticker). We try
         descriptive variants in priority order and stop at the first hit.
+
+        The SFeed index subscription in broker/kotak/streaming/kotak_adapter.py
+        keeps its own copy of this map, because the streaming path cannot import
+        this module. test_kotak_index_feed_subscription.py compares the two and
+        fails if they drift: a name that resolves here but not there subscribes
+        an index Kotak does not know, which reads as a price that never ticks
+        rather than as an error.
         """
         index_map = {
             "NIFTY": ["Nifty 50"],
@@ -264,8 +271,7 @@ class BrokerData:
             "SENSEX": ["SENSEX"],
             "BANKEX": ["BANKEX"],
         }
-        key = symbol.upper()
-        return index_map.get(key, [symbol])
+        return index_map.get(symbol.upper(), [symbol])
 
     def _make_quotes_request(self, query, filter_name="all"):
         """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""

@@ -136,6 +136,37 @@ def test_a_known_index_price_still_publishes_with_a_zero_book(adapter):
     assert published[-1][1]["ltp"] == pytest.approx(23446.8)
 
 
+def test_an_index_tick_resolves_by_name_when_its_token_is_unknown(adapter):
+    """The live shape, captured off Kotak: the packet names itself.
+
+    Subscribing "nse_cm|Nifty 50" answers with tk 4247863880, a token of
+    Kotak's own choosing rather than the master-contract 26000 the subscription
+    was registered under. Keyed on the token alone the tick matches no
+    subscription and is dropped, which is indistinguishable from the feed never
+    sending one.
+    """
+    published = _wire(adapter, "NSE_INDEX", "NIFTY", "26000", {3})
+    # Registered under the name as well, as the subscribe path does.
+    adapter._kotak_to_openalgo[("nse_cm", "Nifty 50")] = ("NSE_INDEX", "NIFTY")
+    adapter._symbol_modes[("nse_cm", "Nifty 50")] = adapter._symbol_modes[("nse_cm", "26000")]
+
+    adapter._on_data_received(
+        {
+            "tk": "4247863880",
+            "e": "nse_cm",
+            "ts": "Nifty 50",
+            "ltp": 23230.45,
+            "open": 23221.8,
+            "prev_close": 23446.8,
+        }
+    )
+
+    assert published, "an index tick carrying an unknown token must still resolve"
+    topic, data = published[-1]
+    assert topic == "NSE_INDEX_NIFTY_DEPTH"
+    assert data["ltp"] == pytest.approx(23230.45)
+
+
 def test_a_tradeable_symbol_still_needs_a_real_book(adapter):
     # The new branch is gated on the index exchanges, so an equity with no depth
     # must still be skipped rather than publishing an empty ladder.
