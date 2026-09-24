@@ -4753,9 +4753,14 @@ def sec_order_updates(run: Runner, base: list) -> None:
             collect(8.0)
             states = {u.get("order_status") for u in updates
                       if str(u.get("orderid")) == oid}
+            # Record what was observed BEFORE asserting on it. Setting this
+            # after the assertion meant a failing OU-02 threw the observation
+            # away, and SB-07 - which reads it - then skipped claiming the
+            # stream had not run at all. An assertion failing about an
+            # observation must not delete the observation.
+            run.env["ou_states"] = sorted(s for s in states if s)
             need("cancelled" in states,
                  f"cancellation not pushed - states seen for {oid}: {states}")
-            run.env["ou_states"] = sorted(s for s in states if s)
 
         run.check("OU-02", lifecycle_pushed, endpoint="ws.orders",
                   expected="open and cancelled both pushed")
@@ -5340,11 +5345,31 @@ def sec_sandbox_parity(run: Runner) -> None:
               expected="sandbox GTT answers with mode=analyze and margin_blocked")
 
     def sandbox_order_stream():
+        """SB-07 - the sandbox pushes the same order_update shape as live.
+
+        The skip reason has to name which of the three reasons applies, since
+        they call for different responses: the section was switched off, the
+        section ran but the stream produced nothing, or the stream produced
+        something and OU-02 found it incomplete.
+        """
         pushed = run.env.get("ou_states")
         if not pushed:
-            raise Skip("order-update stream not exercised (QA_WS=0 or no updates captured)")
+            if NO_WS:
+                raise Skip("QA_WS=0 - the websocket section did not run")
+            ou = [r for r in run.results if r.id.startswith("OU-")]
+            if not ou:
+                raise Skip("the order-update section did not run")
+            raise Skip(f"the order-update stream ran but pushed no states "
+                       f"({len(ou)} OU checks recorded) - nothing to compare")
         run.note_limit("sandbox order_update states", ", ".join(pushed))
         need(all(s == s.lower() for s in pushed), f"non-lowercase statuses pushed: {pushed}")
+        # A partial lifecycle is worth flagging here even though OU-02 owns
+        # the assertion: SB-07 is about parity, and half a lifecycle cannot
+        # be compared against the live one.
+        missing = {"open", "cancelled"} - set(pushed)
+        if missing:
+            raise Warn(f"only {pushed} pushed - {sorted(missing)} never arrived, so the "
+                       f"sandbox lifecycle cannot be compared against live (see OU-02)")
 
     run.check("SB-07", sandbox_order_stream, endpoint="ws.orders",
               expected="same order_update shape with mode=analyze")
