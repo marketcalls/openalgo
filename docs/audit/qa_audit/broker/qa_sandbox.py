@@ -2693,21 +2693,42 @@ def sec_orders(run: Runner) -> None:
     run.check("LC-02", lc_modify_qty, endpoint="modifyorder", expected="quantity modify honoured")
 
     def lc_modify_pricetype():
+        """LC-03 - changing the price type on modify.
+
+        The docs list Price Type as "Varies | Depends on broker support", so a
+        clean refusal is within spec and must not fail. What must not happen
+        is a silent drop: the modify schema accepts `pricetype`, so a caller
+        can be told success while the order keeps its original type. That is
+        the case worth catching, and it is asserted below.
+        """
+        def pt_of(st):
+            return st.get("pricetype", st.get("price_type"))
+
         oid = rest()
         time.sleep(1.0)
+        before = pt_of(status_of(oid))
         p = round(ltp * 0.80, 2)
-        run.ok(run.client.modifyorder(order_id=oid, strategy=STRAT, symbol=sym, exchange=ex,
-                                      action="BUY", price_type="SL", product="MIS",
-                                      quantity=1, price=p,
-                                      trigger_price=round(p * 1.01, 2)), "modify to SL")
+        r = run.client.modifyorder(order_id=oid, strategy=STRAT, symbol=sym, exchange=ex,
+                                   action="BUY", price_type="SL", product="MIS",
+                                   quantity=1, price=p,
+                                   trigger_price=round(p * 1.01, 2))
+        if r.get("status") != "success":
+            msg = run.expect_error(r, "modify LIMIT -> SL")
+            run.note_limit("modify price-type change", f"refused: {msg[:70]}")
+            raise Skip("this build does not support changing price type on modify - "
+                       "documented as broker-dependent, refused cleanly")
         time.sleep(1.5)
         st = status_of(oid)
-        need(st["pricetype"] == "SL", f"pricetype not changed: {st['pricetype']!r}")
+        after = pt_of(st)
+        need(after == "SL",
+             f"modify reported success but the price type is still {after!r} "
+             f"(was {before!r}) - the pricetype field was accepted and silently "
+             f"dropped, so a caller is told a change applied that did not")
         need(as_num(st["trigger_price"], "trigger_price") != 0,
              "converted to SL but trigger_price is 0")
 
     run.check("LC-03", lc_modify_pricetype, endpoint="modifyorder",
-              expected="LIMIT -> SL honoured with trigger")
+              expected="LIMIT -> SL honoured, or refused cleanly - never silently dropped")
 
     def lc_modify_complete():
         oid = place("MARKET", "BUY", "MIS", "LC-04")
@@ -2806,6 +2827,18 @@ def sec_orders(run: Runner) -> None:
               expected="both arrays present, summary counts match")
 
     def lc_cancel_all_triggers():
+        """LC-11 - SL and SL-M resting orders must be cancelled too.
+
+        KNOWN DEFECT, recorded rather than failed at the user's direction.
+        The canonical status is "trigger pending" with a space, written that
+        way in 22 places across sandbox/. services/sandbox_service.py filters
+        cancel-all on "trigger_pending" with an underscore, so the filter
+        never matches and every SL/SL-M order survives. A one-token mismatch;
+        the fix belongs in that filter, not here.
+
+        The risk is worth stating plainly: a caller who runs cancelallorder
+        expecting a flat book still has stop-losses armed.
+        """
         place("SL-M", "BUY", "MIS", "LC-11", 0, round(ltp * 1.25, 2))
         place("SL", "BUY", "MIS", "LC-11", round(ltp * 0.8, 2), round(ltp * 0.81, 2))
         time.sleep(1.5)
@@ -2813,12 +2846,18 @@ def sec_orders(run: Runner) -> None:
         time.sleep(1.5)
         left = [o for o in (run.ok(run.client.orderbook(), "orderbook")["data"].get("orders") or [])
                 if o.get("order_status") == "trigger pending"]
-        need(not left,
-             f"{len(left)} trigger-pending orders survived cancelallorder: "
-             f"{[o['orderid'] for o in left][:3]}")
+        if left:
+            run.note_quirk(
+                "cancelallorder does not cancel trigger-pending orders",
+                "services/sandbox_service.py filters on 'trigger_pending' (underscore) "
+                "while the status is written 'trigger pending' (space) in 22 places "
+                "across sandbox/, so the filter never matches")
+            raise Warn(f"{len(left)} trigger-pending order(s) survived cancelallorder "
+                       f"{[o['orderid'] for o in left][:3]} - known filter mismatch, "
+                       f"stop-losses remain armed after a cancel-all")
 
     run.check("LC-11", lc_cancel_all_triggers, endpoint="cancelallorder",
-              expected="SL/SL-M resting orders are included")
+              expected="SL/SL-M included; known filter mismatch recorded")
 
     def lc_cancel_all_empty():
         run.client.cancelallorder(strategy=STRAT)
@@ -2831,19 +2870,37 @@ def sec_orders(run: Runner) -> None:
               expected="clean success with empty arrays")
 
     def lc_orderstatus_states():
+        """LC-13 - full field set, and it agrees with the orderbook.
+
+        /orderstatus names the price type `price_type`, while /orderbook and
+        the docs use `pricetype`. Accepted here as the endpoint's convention
+        at the user's direction, so either spelling satisfies the field-set
+        check - but the divergence is recorded, because a caller reading both
+        endpoints has to handle two names for one field.
+        """
         d = run.ok(run.client.orderbook(), "orderbook")["data"].get("orders") or []
         need(d, "orderbook empty - no orders to query")
-        checked = set()
+        checked, spellings = set(), set()
         for o in d[:12]:
             st = status_of(o["orderid"])
             need_keys(st, ["orderid", "symbol", "exchange", "action", "quantity", "price",
-                           "trigger_price", "pricetype", "product", "order_status",
+                           "trigger_price", "product", "order_status",
                            "timestamp"], "orderstatus")
+            pt = next((k for k in ("pricetype", "price_type") if k in st), None)
+            need(pt, "orderstatus carries neither 'pricetype' nor 'price_type'")
+            spellings.add(pt)
+            need(st[pt] in ("MARKET", "LIMIT", "SL", "SL-M"),
+                 f"{o['orderid']}: {pt}={st[pt]!r} is not an OpenAlgo price type")
             need(st["order_status"] == o["order_status"],
                  f"{o['orderid']}: /orderstatus says {st['order_status']!r} but the "
                  f"orderbook says {o['order_status']!r}")
             checked.add(st["order_status"])
         run.note_limit("orderstatus states queried", ", ".join(sorted(checked)))
+        if spellings == {"price_type"}:
+            run.note_quirk("Price-type field name differs by endpoint",
+                           "/orderstatus returns 'price_type' while /orderbook and "
+                           "docs/api use 'pricetype' - accepted as this endpoint's "
+                           "convention; callers reading both must handle both names")
 
     run.check("LC-13", lc_orderstatus_states, endpoint="orderstatus",
               expected="full field set, agrees with the orderbook")
