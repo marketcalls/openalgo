@@ -116,8 +116,18 @@ def need_2dp(v: Any, where: str) -> float:
 
 
 def need_ohlc(d: dict, where: str) -> None:
+    """Range-check prices against the day's band.
+
+    A contract that has not traded today reports high and low as 0 while
+    still carrying a real ltp from a previous session. Comparing against a
+    [0, 0] band then fails a perfectly correct quote, so the range check is
+    skipped when there is no band to check against - the individual values
+    are still asserted numeric by the caller.
+    """
     lo, hi = as_num(d["low"], f"{where}.low"), as_num(d["high"], f"{where}.high")
     need(lo <= hi, f"{where}: low {lo} > high {hi}")
+    if lo == 0 and hi == 0:
+        return
     for k in ("open", "ltp", "close"):
         if k in d and d[k] not in (None, 0):
             v = as_num(d[k], f"{where}.{k}")
@@ -410,12 +420,56 @@ def resolve_matrix(run: Runner, exchanges: list[str]) -> dict:
 
     # decimal-strike option, straight from the master
     def decimal_strike():
-        with run.db() as c:
-            row = c.execute(
-                "select symbol, exchange from symtoken "
-                "where instrumenttype in ('CE','PE') and strike != round(strike) limit 1"
-            ).fetchone()
-        return tuple(row) if row else None
+        """A decimal strike that has actually traded today.
+
+        Two earlier attempts at this were wrong in instructive ways. An
+        unordered `limit 1` returned whatever row SQLite reached first, which
+        was a far-dated contract. Ordering by expiry fixed the date but not
+        the liquidity, and the tiebreak that preferred an index underlying was
+        a no-op: index strikes are whole numbers at 50 and 100-point
+        intervals, so decimal strikes exist only on single stocks.
+
+        symtoken carries no OI or volume, so liquidity cannot be read from it.
+        The only reliable signal is the quote itself, so probe a bounded
+        number of nearest-expiry candidates and take the first with a live
+        price. Falling back to the nearest expiry keeps the slot resolvable
+        when nothing has traded - the caller records that it is untraded.
+        """
+        with sqlite3.connect(
+                str(Path(__file__).resolve().parents[4] / "db" / "openalgo.db")) as c:
+            rows = c.execute(
+                "select symbol, exchange, expiry, name from symtoken "
+                "where instrumenttype in ('CE','PE') and strike != round(strike) "
+                "and expiry != ''").fetchall()
+        if not rows:
+            return None
+        months = {m: i for i, m in enumerate(
+            ("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+             "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+
+        def when(r):
+            try:
+                d, mo, y = r[2].split("-")
+                return (int(y), months.get(mo.upper(), 13), int(d))
+            except Exception:
+                return (99, 99, 99)
+
+        rows.sort(key=when)
+        probe = int(os.getenv("QA_DECIMAL_PROBE", "12"))
+        for sym, exch, _exp, _name in rows[:probe]:
+            try:
+                q = run.client.quotes(symbol=sym, exchange=exch)
+            except Exception:
+                continue
+            if q.get("status") != "success":
+                continue
+            d = q.get("data") or {}
+            try:
+                if float(d.get("ltp") or 0) > 0:
+                    return (sym, exch)
+            except (TypeError, ValueError):
+                continue
+        return (rows[0][0], rows[0][1])
 
     try_slot("OPT_DECIMAL_STRIKE", decimal_strike)
     return m

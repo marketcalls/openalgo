@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -91,6 +92,23 @@ def post(path: str, payload: dict) -> dict:
 # ==========================================================================
 # 2. master contract
 # ==========================================================================
+def _master_status_row(run: Runner) -> dict | None:
+    """The active broker's row from master_contract_status.
+
+    The table is keyed by broker and carries broker, status, message,
+    last_updated, total_symbols, is_ready, last_download_time, download_date,
+    exchange_stats and download_duration_seconds. There is no
+    column - selecting one raises, and swallowing that in a bare except
+    reports a schema mismatch as a missing table.
+    """
+    broker = run.env.get("broker") or ""
+    with run.db() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute("select * from master_contract_status where broker=?",
+                        (broker,)).fetchone()
+    return dict(row) if row else None
+
+
 def sec_master(run: Runner) -> None:
     run.section("2. Master contract")
     ex_list = run.env["exchanges"]
@@ -253,13 +271,45 @@ def sec_master(run: Runner) -> None:
                 "select count(*) from symtoken where instrumenttype in ('FUT','CE','PE') "
                 "and (lotsize is null or lotsize <= 0)"
             ).fetchone()[0]
-            varies = c.execute(
-                "select count(*) from (select name, exchange from symtoken "
-                "where instrumenttype='FUT' group by name, exchange "
-                "having count(distinct lotsize) > 1)"
-            ).fetchone()[0]
+            varying = c.execute(
+                "select name, exchange from symtoken where instrumenttype='FUT' "
+                "group by name, exchange having count(distinct lotsize) > 1"
+            ).fetchall()
         need(n == 0, f"{n} derivative rows with null/zero lotsize")
-        need(varies == 0, f"{varies} underlyings whose FUT lotsize varies by expiry")
+
+        # A lot size that differs across expiries is NOT automatically wrong.
+        # Exchanges revise lot sizes, and a revision applies to newly listed
+        # far contracts while the near ones keep the old lot - MCXBULLDEX
+        # currently runs 30 on Sep/Oct and 15 on Nov/Dec. What would be a
+        # parser bug is a lot that flips back and forth across the expiry
+        # sequence, so assert monotonicity rather than uniformity.
+        months = {m: i for i, m in enumerate(
+            ("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+             "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+        revised, broken = [], []
+        for nm, exch in varying:
+            with run.db() as c:
+                rows = c.execute(
+                    "select expiry, lotsize from symtoken where name=? and exchange=? "
+                    "and instrumenttype='FUT'", (nm, exch)).fetchall()
+            seq = []
+            for exp, lot in rows:
+                try:
+                    d, mo, y = exp.split("-")
+                    seq.append(((int(y), months.get(mo.upper(), 13), int(d)), int(lot)))
+                except Exception:
+                    continue
+            seq.sort()
+            lots_in_order = [lot for _, lot in seq]
+            # one clean step from an old lot to a new one == a revision
+            steps = sum(1 for a, b in zip(lots_in_order, lots_in_order[1:], strict=False) if a != b)
+            (revised if steps <= 1 else broken).append(
+                f"{nm}@{exch}: {'->'.join(str(x) for x in dict.fromkeys(lots_in_order))}")
+        need(not broken,
+             f"FUT lot size flips back and forth across the expiry sequence, which a "
+             f"revision cannot produce: {broken[:4]}")
+        if revised:
+            run.note_limit("lot-size revisions in flight", "; ".join(revised[:6]))
         if "MCX" in ex_list:
             with run.db() as c:
                 vals = {r[0] for r in c.execute(
@@ -303,22 +353,48 @@ def sec_master(run: Runner) -> None:
                   expected="rows returned, schema + count match symtoken")
 
     def mc_download_status():
-        """MC-01 - the master contract downloaded successfully today."""
+        """MC-01 - the master contract downloaded successfully, for THIS broker.
+
+        The table is keyed by broker, not by exchange: one row per broker,
+        carrying status, is_ready, total_symbols, download_date and an
+        exchange_stats JSON blob of per-exchange counts. Selecting an
+        `exchange` column raises, so the row must be read by broker.
+        """
+        row = _master_status_row(run)
+        need(row, f"no master_contract_status row for broker {run.env['broker']!r} - "
+                  f"the download has never run for it")
+        need(str(row["status"]).lower() == "success",
+             f"master contract status is {row['status']!r}: {row.get('message')}")
+        need(int(row.get("is_ready") or 0) == 1,
+             f"master contract is not ready (is_ready={row.get('is_ready')})")
+
+        total = int(row.get("total_symbols") or 0)
         with run.db() as c:
-            try:
-                rows = c.execute(
-                    "select exchange, status, last_updated from master_contract_status"
-                ).fetchall()
-            except Exception:
-                raise Skip("master_contract_status table not present in this build") from None
-        need(rows, "master_contract_status is empty - the download never ran")
-        bad = [(e, s) for e, s, _ in rows if str(s).lower() != "success"]
-        need(not bad, f"master contract not successful for: {bad[:5]}")
-        stamps = [t for _, _, t in rows if t]
-        run.note_limit("master contract last_updated", str(max(stamps)) if stamps else "unknown")
+            actual = c.execute("select count(*) from symtoken").fetchone()[0]
+        need(total > 0, "total_symbols is 0")
+        need(abs(total - actual) <= max(50, total * 0.02),
+             f"master contract reports {total} symbols but symtoken holds {actual} - "
+             f"a partial or interrupted load")
+
+        stats = {}
+        try:
+            stats = json.loads(row.get("exchange_stats") or "{}")
+        except Exception:
+            pass
+        run.note_limit("master contract download",
+                       f"{row.get('download_date')} in "
+                       f"{row.get('download_duration_seconds')}s, {total} symbols")
+        if stats:
+            run.note_limit("master contract exchange_stats", json.dumps(stats))
+            with run.db() as c:
+                live = dict(c.execute(
+                    "select exchange, count(*) from symtoken group by exchange"))
+            drift = [f"{e}: reported {n} vs {live.get(e, 0)} in symtoken"
+                     for e, n in stats.items() if abs(n - live.get(e, 0)) > max(5, n * 0.02)]
+            need(not drift, f"exchange_stats disagrees with symtoken: {drift[:4]}")
 
     run.check("MC-01", mc_download_status, endpoint="master_contract_status",
-              expected="status=success for every exchange")
+              expected="success, ready, counts agree with symtoken")
 
     def mc_symbol_construction():
         """MC-06 - sample the OpenAlgo symbol shape per segment."""
@@ -891,10 +967,17 @@ def sec_quotes(run: Runner) -> None:
         if "EQ_LIQUID" not in m:
             raise Skip("EQ_LIQUID unresolved")
         s, ex = m["EQ_LIQUID"]
-        q = as_num(run.ok(run.client.quotes(symbol=s, exchange=ex), "quotes")["data"]["ltp"],
-                   "quote ltp")
-        d = as_num(run.ok(run.client.depth(symbol=s, exchange=ex), "depth")["data"]["ltp"],
-                   "depth ltp")
+        qd = run.ok(run.client.quotes(symbol=s, exchange=ex), "quotes")["data"]
+        dd = run.ok(run.client.depth(symbol=s, exchange=ex), "depth")["data"]
+        # Assert the field is there before reading it. Indexing straight into
+        # ["ltp"] turns a broker that omits a documented field into a Python
+        # KeyError reported as a harness ERROR, which hides the real defect -
+        # DP-01 catches the omission, and this check should say so plainly.
+        need("ltp" in qd, f"{s}: /quotes omits the documented field 'ltp'")
+        need("ltp" in dd, f"{s}: /depth omits the documented field 'ltp' - "
+                          f"cannot cross-check price scaling between the two paths")
+        q = as_num(qd["ltp"], "quote ltp")
+        d = as_num(dd["ltp"], "depth ltp")
         need(abs(q - d) / max(q, 1e-9) < 0.02,
              f"{s}: quotes ltp {q} vs depth ltp {d} - price de-scaling differs between paths")
         df = run.client.history(symbol=s, exchange=ex, interval="1m",
@@ -1062,7 +1145,17 @@ def sec_quotes(run: Runner) -> None:
     run.check("MQ-07", mq_mixed, endpoint="multiquotes", expected="mixed exchanges + index")
 
     def mq_bad_exchange():
-        """MQ-06 - a wrong exchange must not sink the valid rows either."""
+        """MQ-06 - an invalid exchange is rejected for the whole request, and
+        that is correct.
+
+        `exchange` carries validate.OneOf(VALID_EXCHANGES) in the Marshmallow
+        schema (restx_api/data_schemas.py), so a bad value never reaches the
+        service. That differs from MQ-05, where an invalid *symbol* is not
+        enum-validated and is resolved per row, which is why that one degrades
+        gracefully and this one does not. What matters here is that the
+        rejection is clean and names the offending entry - not a 500, and not
+        a silent partial.
+        """
         if "EQ_LIQUID" not in m:
             raise Skip("EQ_LIQUID unresolved")
         good = m["EQ_LIQUID"][0]
@@ -1070,15 +1163,21 @@ def sec_quotes(run: Runner) -> None:
             {"symbol": good, "exchange": "NSE"},
             {"symbol": good, "exchange": "NOTANEXCHANGE"},
         ])
-        need(r.get("status") == "success",
-             f"whole request failed because of one bad exchange: {r.get('message')}")
-        res = r.get("results") or []
-        need(len(res) == 2, f"expected 2 result rows, got {len(res)}")
-        ok_row = next((x for x in res if x.get("exchange") == "NSE"), {})
-        need((ok_row.get("data") or {}).get("ltp"), "valid exchange returned no data")
+        if r.get("status") == "success":
+            res = r.get("results") or []
+            need(len(res) == 2, f"accepted the bad exchange but returned {len(res)} rows")
+            ok_row = next((x for x in res if x.get("exchange") == "NSE"), {})
+            need((ok_row.get("data") or {}).get("ltp"), "valid exchange returned no data")
+            run.note_quirk("Invalid exchange in multiquotes",
+                           "isolated per row rather than rejected by schema validation")
+            return
+        msg = run.expect_error(r, "invalid exchange in a multiquote batch")
+        need("exchange" in msg.lower(),
+             f"rejection does not name the offending field: {msg[:120]}")
+        run.note_limit("multiquotes invalid exchange", f"whole-request 400: {msg[:70]}")
 
     run.check("MQ-06", mq_bad_exchange, endpoint="multiquotes",
-              expected="invalid exchange isolated to its own row")
+              expected="clean 400 naming the bad exchange (schema-validated)")
 
     def mq_parity():
         """MQ-08 - the batch payload must match the single-quote contract."""
@@ -1750,14 +1849,47 @@ def sec_orders(run: Runner) -> None:
         run.track_order(r["orderid"], s, e, product)
         return r["orderid"]
 
+    def stock_cnc(shares: int) -> bool:
+        """CNC is delivery: selling requires shares already held. Without them
+        every CNC SELL is refused - correctly - and the matrix records four
+        failures that say nothing about order handling. Buy the inventory the
+        SELL arms need before they run, rather than testing an impossible
+        order. This is defect A-11 from the gap analysis, which the old
+        test_broker.py hit the same way."""
+        try:
+            r = run.client.placeorder(strategy=STRAT, symbol=sym, exchange=ex,
+                                      action="BUY", price_type="MARKET",
+                                      product="CNC", quantity=shares)
+            if r.get("status") != "success":
+                return False
+            run.track_order(r.get("orderid"), sym, ex, "CNC")
+        except Exception:
+            return False
+        time.sleep(2.0)
+        st = run.client.orderstatus(order_id=r["orderid"], strategy=STRAT)
+        filled = ((st.get("data") or {}).get("order_status") == "complete")
+        run.note_limit("CNC inventory for the SELL arms",
+                       f"{shares} share(s) of {sym}: "
+                       f"{'filled' if filled else 'not filled'}")
+        return filled
+
     # OD-01/07/08/09 - action x pricetype x product
     for product in ("MIS", "CNC"):
+        if product == "CNC":
+            # One share per SELL price type, since each is placed separately.
+            held = stock_cnc(4)
         for pt in ("MARKET", "LIMIT", "SL", "SL-M"):
             for action in ("BUY", "SELL"):
                 far = round(ltp * (0.80 if action == "BUY" else 1.20), 2)
                 price = 0 if pt in ("MARKET", "SL-M") else far
                 trig = round(far * (1.01 if action == "BUY" else 0.99), 2) if pt in ("SL", "SL-M") else 0
                 cid = f"OD-01.{product}.{pt}.{action}"
+                if product == "CNC" and action == "SELL" and not held:
+                    run.record(cid, SKIP,
+                               "could not establish a CNC holding to sell against - "
+                               "the delivery sell is untestable without inventory",
+                               endpoint="placeorder", exchange=ex, symbol=sym)
+                    continue
                 run.check(cid, lambda pt=pt, a=action, p=product, pr=price, t=trig, c=cid:
                           place(pt, a, p, c, pr, t),
                           endpoint="placeorder", exchange=ex, symbol=sym,
@@ -1791,20 +1923,71 @@ def sec_orders(run: Runner) -> None:
                   endpoint="placeorder", exchange=oe, symbol=os_,
                   expected="MPP emulation on a near-zero-premium option")
 
+    # BSE is cash equity, so it has no FUT_* slot. Mapping every exchange to
+    # one meant no BSE order was ever placed, which in turn made OB-05 fail
+    # for want of a BSE row in the orderbook - an artefact of this loop, not
+    # a broker defect.
     for ex2 in run.env["exchanges"]:
-        slot = f"FUT_{ex2}"
-        if slot in m:
-            s2, e2 = m[slot]
-            run.check(f"OD-11.{ex2}", lambda s2=s2, e2=e2: place(
-                "MARKET", "BUY", "NRML", "OD-11", symbol=s2, exchange=e2,
-                qty=_lot(run, s2, e2)), endpoint="placeorder", exchange=ex2, symbol=s2,
-                expected="every claimed exchange accepts an order")
+        if ex2 in INDEX_EXCHANGES:
+            continue
+        # Cash exchanges have no FUT_* slot. Mapping them to one is what made
+        # BSE and NSE skip for a missing FUT_BSE / FUT_NSE that can never
+        # exist - the slot is wrong, not the instrument.
+        slot = {"NSE": "EQ_CHEAP", "BSE": "EQ_BSE"}.get(ex2, f"FUT_{ex2}")
+        if slot not in m:
+            run.record(f"OD-11.{ex2}", SKIP, f"{slot} unresolved - no instrument to order",
+                       endpoint="placeorder", exchange=ex2)
+            continue
+        s2, e2 = m[slot]
+        product = "CNC" if ex2 in ("NSE", "BSE") else "NRML"
+        run.check(f"OD-11.{ex2}", lambda s2=s2, e2=e2, p=product: place(
+            "MARKET", "BUY", p, "OD-11", symbol=s2, exchange=e2,
+            qty=_lot(run, s2, e2)), endpoint="placeorder", exchange=ex2, symbol=s2,
+            expected="every claimed exchange accepts an order")
 
-    if "OPT_DECIMAL_STRIKE" in m:
+    def decimal_strike_roundtrip():
+        """OD-13 - the claim is that a decimal strike survives the round trip
+        through the orderbook, so read it back and assert it, rather than
+        trusting that an orderid came back.
+
+        Uses LIMIT, not MARKET. A decimal strike lives on single-stock
+        options, which are frequently untraded; a MARKET order there fails
+        for want of a price to fill against, which says nothing about decimal
+        handling. A resting LIMIT order exercises the round trip fully and is
+        what the checklist actually asks for.
+        """
+        if "OPT_DECIMAL_STRIKE" not in m:
+            raise Skip("OPT_DECIMAL_STRIKE unresolved")
         s3, e3 = m["OPT_DECIMAL_STRIKE"]
-        run.check("OD-13", lambda: place("MARKET", "BUY", "NRML", "OD-13",
-                                         symbol=s3, exchange=e3, qty=_lot(run, s3, e3)),
-                  endpoint="placeorder", symbol=s3, expected="decimal strike round-trips")
+        with run.db() as c:
+            row = c.execute("select strike, tick_size from symtoken "
+                            "where symbol=? and exchange=?", (s3, e3)).fetchone()
+        need(row, f"{s3}@{e3} not in symtoken")
+        strike, tick = float(row[0]), float(row[1] or 0.05)
+        need(strike != round(strike), f"{s3}: strike {strike} is not a decimal strike")
+
+        q = run.client.quotes(symbol=s3, exchange=e3)
+        ltp = as_num((q.get("data") or {}).get("ltp", 0), "ltp") \
+            if q.get("status") == "success" else 0.0
+        # Rest far below any plausible price so the order cannot fill.
+        price = round(max(tick, (ltp * 0.5) if ltp else tick), 2)
+        oid = place("LIMIT", "BUY", "NRML", "OD-13", price,
+                    symbol=s3, exchange=e3, qty=_lot(run, s3, e3))
+        time.sleep(1.5)
+        st = run.ok(run.client.orderstatus(order_id=oid, strategy=STRAT),
+                    "orderstatus")["data"]
+        need(st.get("symbol") == s3,
+             f"decimal strike did not round-trip: sent {s3}, orderbook says "
+             f"{st.get('symbol')!r}")
+        run.note_limit("decimal strike under test",
+                       f"{s3} strike={strike} ltp={ltp or 'untraded'}")
+        if not ltp:
+            raise Warn(f"{s3} is untraded (ltp 0) - the symbol round-trips correctly, "
+                       f"but no fill path was exercised")
+
+    run.check("OD-13", decimal_strike_roundtrip, endpoint="placeorder+orderstatus",
+              symbol=str(m.get("OPT_DECIMAL_STRIKE", "")),
+              expected="decimal strike round-trips through the orderbook")
 
     # negative cases
     run.check("OD-15", lambda: run.expect_error(
@@ -2257,25 +2440,46 @@ def sec_orders(run: Runner) -> None:
         run.track_order(r.get("orderid"), r.get("symbol", ""), r.get("exchange", "NFO"), "NRML")
         return r
 
+    # The freeze limit is a quantity; an order is a whole number of lots. The
+    # exchange revises the two independently, so the freeze quantity is not
+    # generally a lot multiple - NIFTY is 1800 against a lot of 65, which is
+    # 27.69 lots. Testing "quantity == freeze" therefore asks for an order
+    # that cannot be placed at all, and the lot-size rejection that follows
+    # says nothing about freeze handling. Work in lot-aligned boundaries.
+    at_limit = (fz // lot) * lot          # largest orderable qty at or below freeze
+    above = at_limit + lot                # smallest orderable qty above freeze
+    need(at_limit > 0, f"freeze {fz} is smaller than one lot of {lot}")
+    run.note_limit("freeze boundary (lot-aligned)",
+                   f"freeze={fz} lot={lot} -> at/below={at_limit} ({at_limit//lot} lots), "
+                   f"above={above} ({above//lot} lots)")
+
     run.check("FZ-01", lambda: oorder(lot), endpoint="optionsorder",
-              expected=f"qty {lot} below freeze {fz} accepted")
-    run.check("FZ-02", lambda: oorder(fz), endpoint="optionsorder",
-              expected=f"qty == freeze {fz}, behaviour recorded")
+              expected=f"one lot ({lot}) well below freeze {fz} accepted")
+    run.check("FZ-02", lambda: oorder(at_limit), endpoint="optionsorder",
+              expected=f"{at_limit} - the largest lot multiple at or below freeze {fz}")
 
     def above_freeze():
-        q = fz + lot
+        """FZ-03 - a lot-aligned quantity ABOVE the freeze limit. It must be
+        refused for exceeding the freeze, or transparently auto-split; what it
+        must not do is fail for some unrelated reason that merely looks like a
+        freeze rejection."""
         try:
-            r = oorder(q)
+            r = oorder(above)
             run.note_quirk("Quantity above freeze without splitsize",
-                           f"accepted/auto-split at qty {q}: orderid {r.get('orderid')}")
+                           f"accepted or auto-split at qty {above}: "
+                           f"orderid {r.get('orderid')}")
         except AssertionError as e:
-            need("freeze" in str(e).lower() or "quantity" in str(e).lower(),
+            msg = str(e).lower()
+            need("multiples of lot" not in msg,
+                 f"rejected for lot alignment, not the freeze limit - {above} is "
+                 f"{above // lot} lots, so this is a harness arithmetic error: {e}")
+            need("freeze" in msg or "quantity" in msg,
                  f"rejection does not name the freeze limit: {e}")
 
     run.check("FZ-03", above_freeze, endpoint="optionsorder",
-              expected="clean rejection or auto-split, never silent")
-    run.check("FZ-04", lambda: oorder(fz + lot, splitsize=fz), endpoint="optionsorder",
-              expected="split into children at or below the freeze limit")
+              expected=f"{above} exceeds freeze {fz} - refused or auto-split, never silent")
+    run.check("FZ-04", lambda: oorder(above, splitsize=at_limit), endpoint="optionsorder",
+              expected=f"split into children of at most {at_limit}, each a whole lot")
 
     def fz_echo():
         r = oorder(lot)
@@ -2416,17 +2620,30 @@ def sec_orders(run: Runner) -> None:
               expected="BUY legs precede SELL legs")
 
     def leg_freeze():
-        """MO-05 - freeze rules apply per leg exactly as for a single option."""
+        """MO-05 - freeze rules apply per leg exactly as for a single option.
+
+        Lot-aligned like FZ-02/03: the freeze quantity is not generally a
+        multiple of the lot, so sending it verbatim asks for an unplaceable
+        order and the lot-size rejection that follows proves nothing about
+        freeze handling.
+        """
+        at_limit = (fz // lot) * lot
+        above = at_limit + lot
+        need(at_limit > 0, f"freeze {fz} is smaller than one lot of {lot}")
         r = multi([L("OTM40", "CE", "BUY", qty=lot),
-                   L("OTM40", "PE", "BUY", qty=fz)])
+                   L("OTM40", "PE", "BUY", qty=at_limit)])
         res = r.get("results") or []
         need(len(res) == 2, f"expected 2 legs, got {len(res)}")
         try:
-            over = multi([L("OTM40", "CE", "BUY", qty=fz + lot)])
+            over = multi([L("OTM40", "CE", "BUY", qty=above)])
             run.note_quirk("Multi-order leg above freeze",
-                           f"accepted at qty {fz + lot}: {over.get('results')}")
+                           f"accepted at qty {above}: {over.get('results')}")
         except AssertionError as e:
-            need("freeze" in str(e).lower() or "quantity" in str(e).lower(),
+            msg = str(e).lower()
+            need("multiples of lot" not in msg,
+                 f"leg rejected for lot alignment, not the freeze limit - {above} is "
+                 f"{above // lot} lots, so this is a harness arithmetic error: {e}")
+            need("freeze" in msg or "quantity" in msg,
                  f"over-freeze leg rejected with an unrelated message: {e}")
 
     run.check("MO-05", leg_freeze, endpoint="optionsmultiorder",
@@ -2512,21 +2729,42 @@ def sec_orders(run: Runner) -> None:
     run.check("LC-02", lc_modify_qty, endpoint="modifyorder", expected="quantity modify honoured")
 
     def lc_modify_pricetype():
+        """LC-03 - changing the price type on modify.
+
+        The docs list Price Type as "Varies | Depends on broker support", so a
+        clean refusal is within spec and must not fail. What must not happen
+        is a silent drop: the modify schema accepts `pricetype`, so a caller
+        can be told success while the order keeps its original type. That is
+        the case worth catching, and it is asserted below.
+        """
+        def pt_of(st):
+            return st.get("pricetype", st.get("price_type"))
+
         oid = rest()
         time.sleep(1.0)
+        before = pt_of(status_of(oid))
         p = round(ltp * 0.80, 2)
-        run.ok(run.client.modifyorder(order_id=oid, strategy=STRAT, symbol=sym, exchange=ex,
-                                      action="BUY", price_type="SL", product="MIS",
-                                      quantity=1, price=p,
-                                      trigger_price=round(p * 1.01, 2)), "modify to SL")
+        r = run.client.modifyorder(order_id=oid, strategy=STRAT, symbol=sym, exchange=ex,
+                                   action="BUY", price_type="SL", product="MIS",
+                                   quantity=1, price=p,
+                                   trigger_price=round(p * 1.01, 2))
+        if r.get("status") != "success":
+            msg = run.expect_error(r, "modify LIMIT -> SL")
+            run.note_limit("modify price-type change", f"refused: {msg[:70]}")
+            raise Skip("this build does not support changing price type on modify - "
+                       "documented as broker-dependent, refused cleanly")
         time.sleep(1.5)
         st = status_of(oid)
-        need(st["pricetype"] == "SL", f"pricetype not changed: {st['pricetype']!r}")
+        after = pt_of(st)
+        need(after == "SL",
+             f"modify reported success but the price type is still {after!r} "
+             f"(was {before!r}) - the pricetype field was accepted and silently "
+             f"dropped, so a caller is told a change applied that did not")
         need(as_num(st["trigger_price"], "trigger_price") != 0,
              "converted to SL but trigger_price is 0")
 
     run.check("LC-03", lc_modify_pricetype, endpoint="modifyorder",
-              expected="LIMIT -> SL honoured with trigger")
+              expected="LIMIT -> SL honoured, or refused cleanly - never silently dropped")
 
     def lc_modify_complete():
         oid = place("MARKET", "BUY", "MIS", "LC-04")
@@ -2625,6 +2863,18 @@ def sec_orders(run: Runner) -> None:
               expected="both arrays present, summary counts match")
 
     def lc_cancel_all_triggers():
+        """LC-11 - SL and SL-M resting orders must be cancelled too.
+
+        KNOWN DEFECT, recorded rather than failed at the user's direction.
+        The canonical status is "trigger pending" with a space, written that
+        way in 22 places across sandbox/. services/sandbox_service.py filters
+        cancel-all on "trigger_pending" with an underscore, so the filter
+        never matches and every SL/SL-M order survives. A one-token mismatch;
+        the fix belongs in that filter, not here.
+
+        The risk is worth stating plainly: a caller who runs cancelallorder
+        expecting a flat book still has stop-losses armed.
+        """
         place("SL-M", "BUY", "MIS", "LC-11", 0, round(ltp * 1.25, 2))
         place("SL", "BUY", "MIS", "LC-11", round(ltp * 0.8, 2), round(ltp * 0.81, 2))
         time.sleep(1.5)
@@ -2632,12 +2882,18 @@ def sec_orders(run: Runner) -> None:
         time.sleep(1.5)
         left = [o for o in (run.ok(run.client.orderbook(), "orderbook")["data"].get("orders") or [])
                 if o.get("order_status") == "trigger pending"]
-        need(not left,
-             f"{len(left)} trigger-pending orders survived cancelallorder: "
-             f"{[o['orderid'] for o in left][:3]}")
+        if left:
+            run.note_quirk(
+                "cancelallorder does not cancel trigger-pending orders",
+                "services/sandbox_service.py filters on 'trigger_pending' (underscore) "
+                "while the status is written 'trigger pending' (space) in 22 places "
+                "across sandbox/, so the filter never matches")
+            raise Warn(f"{len(left)} trigger-pending order(s) survived cancelallorder "
+                       f"{[o['orderid'] for o in left][:3]} - known filter mismatch, "
+                       f"stop-losses remain armed after a cancel-all")
 
     run.check("LC-11", lc_cancel_all_triggers, endpoint="cancelallorder",
-              expected="SL/SL-M resting orders are included")
+              expected="SL/SL-M included; known filter mismatch recorded")
 
     def lc_cancel_all_empty():
         run.client.cancelallorder(strategy=STRAT)
@@ -2650,19 +2906,37 @@ def sec_orders(run: Runner) -> None:
               expected="clean success with empty arrays")
 
     def lc_orderstatus_states():
+        """LC-13 - full field set, and it agrees with the orderbook.
+
+        /orderstatus names the price type `price_type`, while /orderbook and
+        the docs use `pricetype`. Accepted here as the endpoint's convention
+        at the user's direction, so either spelling satisfies the field-set
+        check - but the divergence is recorded, because a caller reading both
+        endpoints has to handle two names for one field.
+        """
         d = run.ok(run.client.orderbook(), "orderbook")["data"].get("orders") or []
         need(d, "orderbook empty - no orders to query")
-        checked = set()
+        checked, spellings = set(), set()
         for o in d[:12]:
             st = status_of(o["orderid"])
             need_keys(st, ["orderid", "symbol", "exchange", "action", "quantity", "price",
-                           "trigger_price", "pricetype", "product", "order_status",
+                           "trigger_price", "product", "order_status",
                            "timestamp"], "orderstatus")
+            pt = next((k for k in ("pricetype", "price_type") if k in st), None)
+            need(pt, "orderstatus carries neither 'pricetype' nor 'price_type'")
+            spellings.add(pt)
+            need(st[pt] in ("MARKET", "LIMIT", "SL", "SL-M"),
+                 f"{o['orderid']}: {pt}={st[pt]!r} is not an OpenAlgo price type")
             need(st["order_status"] == o["order_status"],
                  f"{o['orderid']}: /orderstatus says {st['order_status']!r} but the "
                  f"orderbook says {o['order_status']!r}")
             checked.add(st["order_status"])
         run.note_limit("orderstatus states queried", ", ".join(sorted(checked)))
+        if spellings == {"price_type"}:
+            run.note_quirk("Price-type field name differs by endpoint",
+                           "/orderstatus returns 'price_type' while /orderbook and "
+                           "docs/api use 'pricetype' - accepted as this endpoint's "
+                           "convention; callers reading both must handle both names")
 
     run.check("LC-13", lc_orderstatus_states, endpoint="orderstatus",
               expected="full field set, agrees with the orderbook")
@@ -2714,9 +2988,22 @@ def sec_orders(run: Runner) -> None:
     run.check("LC-17", lc_close_all, endpoint="closeposition", expected="account flat afterwards")
 
     def lc_close_none():
+        """The contract is a clean success that closed nothing. The exact
+        wording is not the contract - "No open positions to close" and
+        "Closed 0 positions" both say it - so assert the outcome (status
+        success, nothing closed, book still flat) rather than the phrasing."""
         r = run.ok(run.client.closeposition(strategy=STRAT), "closeposition when flat")
-        need("no open" in str(r.get("message", "")).lower(),
-             f"expected 'No open positions to close', got {r.get('message')!r}")
+        msg = str(r.get("message", ""))
+        need(msg, "closeposition returned no message")
+        closed_none = ("no open" in msg.lower()
+                       or re.search(r"\b0\b", msg) is not None)
+        need(closed_none,
+             f"expected a message saying nothing was closed, got {msg!r}")
+        pb = run.ok(run.client.positionbook(), "positionbook")["data"]
+        left = [p for p in pb if as_num(p.get("quantity", 0), "quantity") != 0]
+        need(not left, f"closeposition reported nothing to close but {len(left)} "
+                       f"position(s) are still open")
+        run.note_limit("closeposition when flat", msg[:70])
 
     run.check("LC-18", lc_close_none, endpoint="closeposition",
               expected="clean success when already flat")
@@ -2776,64 +3063,6 @@ def sec_orders(run: Runner) -> None:
 
     run.check("LC-20", lc_full_trace, endpoint="place+modify+cancel+orderbook",
               expected="place -> open -> modify -> cancelled, all visible")
-
-
-
-    run.section("8. Order lifecycle")
-
-    def lifecycle():
-        far = round(ltp * 0.80, 2)
-        oid = place("LIMIT", "BUY", "MIS", "LC-01", far)
-        time.sleep(1.0)
-        run.ok(run.client.modifyorder(order_id=oid, strategy=STRAT, symbol=sym, exchange=ex,
-                                      action="BUY", price_type="LIMIT", product="MIS",
-                                      quantity=1, price=round(far * 0.99, 2)), "modify")
-        time.sleep(1.0)
-        st = run.ok(run.client.orderstatus(order_id=oid, strategy=STRAT), "status")["data"]
-        need(abs(as_num(st["price"], "price") - round(far * 0.99, 2)) < 0.05,
-             f"modify not reflected: price {st['price']}")
-        run.ok(run.client.cancelorder(order_id=oid, strategy=STRAT), "cancel")
-        time.sleep(1.0)
-        st = run.ok(run.client.orderstatus(order_id=oid, strategy=STRAT), "status")["data"]
-        need(st["order_status"] == "cancelled", f"after cancel: {st['order_status']!r}")
-
-    run.check("LC-01", lifecycle, endpoint="modify+cancel+status",
-              expected="place -> modify -> cancel reflected")
-
-    run.check("LC-09", lambda: run.expect_error(
-        run.client.cancelorder(order_id="NOTANORDER123", strategy=STRAT), "unknown orderid"),
-        endpoint="cancelorder", expected="clean error")
-
-    def cancel_all():
-        for _ in range(3):
-            place("LIMIT", "BUY", "MIS", "LC-10", round(ltp * 0.8, 2))
-        time.sleep(1.0)
-        r = run.ok(run.client.cancelallorder(strategy=STRAT), "cancelallorder")
-        need_keys(r, ["canceled_orders", "failed_cancellations"], "cancelallorder")
-        need(isinstance(r["canceled_orders"], list), "canceled_orders not a list")
-        for f in r["failed_cancellations"]:
-            need_keys(f, ["orderid", "reason"], "failed cancellation")
-
-    run.check("LC-10", cancel_all, endpoint="cancelallorder",
-              expected="both arrays present, failures carry reason")
-
-    def close_all():
-        place("MARKET", "BUY", "MIS", "LC-17")
-        time.sleep(1.5)
-        r = run.ok(run.client.closeposition(strategy=STRAT), "closeposition")
-        need(r.get("message"), "no message")
-        time.sleep(1.5)
-        pb = run.ok(run.client.positionbook(), "positionbook")["data"]
-        open_rows = [p for p in pb if int(float(p.get("quantity", 0) or 0)) != 0]
-        need(not open_rows, f"{len(open_rows)} positions still open after closeposition")
-
-    run.check("LC-17", close_all, endpoint="closeposition", expected="flat afterwards")
-
-    run.check("LC-18", lambda: (
-        need(run.ok(run.client.closeposition(strategy=STRAT), "closeposition")
-             .get("message", "").lower().find("no open") >= 0,
-             "expected 'No open positions to close'")
-    ), endpoint="closeposition", expected="clean success when flat")
 
 
 def _lot(run: Runner, sym: str, ex: str) -> int:
@@ -3028,14 +3257,31 @@ def sec_books(run: Runner) -> None:
     run.check("OB-09", ob_vocab, endpoint="orderbook", expected="BUY/SELL and MIS/CNC/NRML")
 
     def ob_empty_shape():
-        """OB-10 - an empty book is a clean success with zeroed statistics."""
+        """OB-10 - an empty book is a clean success with zeroed statistics.
+
+        By the time this section runs the book is full of this run's own
+        orders, so the empty case is tested against the snapshot taken at
+        run start, before anything was placed. The shape assertions still
+        run against the live book either way.
+        """
         d = book("orderbook")
         need(isinstance(d.get("orders"), list), "orders is not an array")
         need(isinstance(d.get("statistics"), dict), "statistics is not an object")
-        if d["orders"]:
-            raise Skip("orderbook is not empty this run - empty-shape case not exercised")
-        for k, v in d["statistics"].items():
-            need(as_num(v, k) == 0, f"empty orderbook but statistics.{k} = {v}")
+
+        snap = run.env.get("orderbook_at_start")
+        if snap is None:
+            raise Skip("no run-start orderbook snapshot was captured")
+        need(isinstance(snap.get("orders"), list),
+             "run-start orders is not an array")
+        need(isinstance(snap.get("statistics"), dict),
+             "run-start statistics is not an object")
+        if snap["orders"]:
+            raise Skip(f"the account already held {len(snap['orders'])} order(s) at run "
+                       f"start, so the empty-book case could not be observed today")
+        for k, v in (snap.get("statistics") or {}).items():
+            need(as_num(v, k) == 0,
+                 f"orderbook was empty at run start but statistics.{k} = {v}")
+        run.note_limit("OB-10 empty-book case", "observed from the run-start snapshot")
 
     run.check("OB-10", ob_empty_shape, endpoint="orderbook",
               expected="empty book returns arrays and zeroed statistics")
@@ -3122,7 +3368,10 @@ def sec_books(run: Runner) -> None:
             need(abs(filled - want) < 1e-6,
                  f"{oid}: partial fills sum to {filled}, order quantity is {want}")
         if not multi:
-            raise Skip("no partially filled orders this run")
+            raise Skip("the sandbox execution engine always fills completely - it "
+                       "sets filled_quantity = quantity and pending_quantity = 0 on "
+                       "every path - so a partial fill cannot occur here. This case "
+                       "is reachable only against a live broker")
 
     run.check("TB-06", tb_partials, endpoint="tradebook",
               expected="partial fills sum to the filled quantity")
@@ -3144,20 +3393,81 @@ def sec_books(run: Runner) -> None:
 
     # ---------------- positionbook ----------------
     def pb_present():
+        """PB-01 - every traded symbol appears in the position book.
+
+        KNOWN DEFECT, recorded rather than failed at the user's direction.
+        sandbox/position_manager.py:528-536 returns a closed position only
+        when today_realized_pnl is non-zero:
+
+            if position.quantity != 0:            # open: always shown
+                positions.append(position)
+            elif position.today_realized_pnl and position.today_realized_pnl != 0:
+                positions.append(position)        # closed: only if it moved
+
+        The sandbox fills at LTP, so a buy and a sell moments apart fill at
+        the same price, realise exactly zero, and the position disappears -
+        despite having genuinely traded today. docs/api/account-services/
+        positionbook.md states the opposite: "Returns all positions including
+        closed ones (quantity = 0)."
+
+        The preceding line already filters on updated_at >= last_session_expiry,
+        which is what actually guards against stale rows; the P&L test is a
+        lossier second proxy for the same thing. Changing the elif to else
+        would fix it.
+        """
         d = book("positionbook")
         need(isinstance(d, list), f"positionbook data is {type(d).__name__}, expected list")
         if not d:
             raise Warn("positionbook empty")
         tb = book("tradebook")
-        if tb:
-            traded = {(t.get("symbol"), t.get("exchange")) for t in tb}
-            pos = {(p.get("symbol"), p.get("exchange")) for p in d}
-            missing = traded - pos
-            need(not missing,
-                 f"traded but absent from the position book: {sorted(missing)[:4]}")
+        if not tb:
+            return
+        traded = {(t.get("symbol"), t.get("exchange")) for t in tb}
+        pos = {(p.get("symbol"), p.get("exchange")) for p in d}
+        missing = sorted(traded - pos)
+        if missing:
+            run.note_quirk(
+                "Flat closed positions are dropped from the position book",
+                "sandbox/position_manager.py:528-536 returns a closed position only "
+                "when today_realized_pnl != 0, so anything bought and sold at the same "
+                "price vanishes - contradicting positionbook.md, which says closed "
+                "positions are retained with quantity 0")
+            raise Warn(f"{len(missing)} traded symbol(s) absent from the position book "
+                       f"{missing[:4]} - known zero-P&L drop, not a broker defect")
 
     run.check("PB-01", pb_present, endpoint="positionbook",
-              expected="every traded symbol appears")
+              expected="every traded symbol appears; known zero-P&L drop recorded")
+
+    def ensure_open_position():
+        """PB-02/04/05 assert properties of an open position, and the position
+        book is empty here by construction: sec_orders ends with LC-17/LC-18,
+        which square everything off. Skipping three checks because an earlier
+        section tidied up is a harness artefact, not a fact about the broker,
+        so open one deliberately. Teardown squares it off with the rest."""
+        pb = run.ok(run.client.positionbook(), "positionbook")["data"] or []
+        if any(as_num(p.get("quantity", 0), "quantity") != 0 for p in pb):
+            return True
+        if "EQ_CHEAP" not in run.matrix:
+            return False
+        s, ex2 = run.matrix["EQ_CHEAP"]
+        try:
+            r = run.client.placeorder(strategy=STRAT, symbol=s, exchange=ex2,
+                                      action="BUY", price_type="MARKET",
+                                      product="MIS", quantity=1)
+            if r.get("status") != "success":
+                return False
+            run.track_order(r.get("orderid"), s, ex2, "MIS")
+        except Exception:
+            return False
+        time.sleep(2.0)
+        cache.pop("positionbook", None)      # the cached copy predates the fill
+        pb = run.ok(run.client.positionbook(), "positionbook")["data"] or []
+        opened = any(as_num(p.get("quantity", 0), "quantity") != 0 for p in pb)
+        if opened:
+            run.note_limit("position opened for PB checks", f"{s}@{ex2} 1 share")
+        return opened
+
+    have_position = ensure_open_position()
 
     def pb_avg_price():
         d = book("positionbook")
@@ -3165,7 +3475,9 @@ def sec_books(run: Runner) -> None:
             raise Warn("positionbook empty")
         open_rows = [p for p in d if as_num(p["quantity"], "quantity") != 0]
         if not open_rows:
-            raise Skip("no open positions to assert an entry price against")
+            raise Skip("could not open a position to assert an entry price against"
+                       if not have_position else
+                       "a position was opened but the book reports none")
         for p in open_rows:
             need_keys(p, ["symbol", "exchange", "product", "quantity",
                           "average_price", "ltp", "pnl"], "position row")
@@ -3201,7 +3513,9 @@ def sec_books(run: Runner) -> None:
         d = book("positionbook")
         open_rows = [p for p in (d or []) if as_num(p["quantity"], "quantity") != 0]
         if not open_rows:
-            raise Skip("no open positions")
+            raise Skip("could not open a position to read an ltp from"
+                       if not have_position else
+                       "a position was opened but the book reports none")
         p = open_rows[0]
         lt = need_nonzero(p["ltp"], f"{p['symbol']}.ltp")
         q = run.ok(run.client.quotes(symbol=p["symbol"], exchange=p["exchange"]),
@@ -3230,7 +3544,9 @@ def sec_books(run: Runner) -> None:
                  f"{p['symbol']}: pnl {pnl} vs (ltp {lt} - avg {ap}) x qty {q} = {exp:.2f}")
             checked += 1
         if not checked:
-            raise Skip("no open positions to check pnl arithmetic")
+            raise Skip("could not open a position to check pnl arithmetic"
+                       if not have_position else
+                       "a position was opened but the book reports none")
 
     run.check("PB-05", pb_pnl, endpoint="positionbook",
               expected="pnl == (ltp - average_price) x quantity")
@@ -3256,7 +3572,9 @@ def sec_books(run: Runner) -> None:
             raise Warn("positionbook empty")
         closed = [p for p in d if as_num(p["quantity"], "q") == 0]
         if not closed:
-            raise Skip("no closed positions in the book this run")
+            raise Skip("no closed positions visible - the sandbox drops any whose "
+                       "realized P&L is exactly zero (see PB-01), so only closed "
+                       "positions that actually moved can reach this check")
         for p in closed[:10]:
             as_num(p["pnl"], f"{p['symbol']}.pnl")   # realized P&L must still be reported
 
@@ -4274,13 +4592,28 @@ def sec_websocket(run: Runner) -> None:
         run.check("WS-20", unsub_all_modes, endpoint="ws.unsubscribe", expected="all streams stop")
 
         def unsub_unknown():
+            """The hard requirement is that the proxy answers and does not
+            crash. Whether a never-subscribed symbol lands under `failed` or
+            is treated as idempotently successful is a proxy design choice -
+            every broker behaves the same way here because it is decided above
+            the adapter - so record which it is rather than failing on it."""
             ack = unsubscribe("LTP", [{"symbol": "ZZNOTREAL99", "exchange": "NSE"}])
             need(ack is not None, "no acknowledgement for an unknown unsubscribe")
             failed = ack.get("failed") or []
-            need(failed, "unsubscribing a never-subscribed symbol reported no failure")
+            ok = ack.get("successful") or []
+            if failed:
+                need(str(failed[0].get("message", "") or failed[0]),
+                     "failed entry carries no message")
+                run.note_limit("unsubscribe unknown symbol", "reported under failed")
+                return
+            run.note_quirk("Unsubscribe of a never-subscribed symbol",
+                           f"treated as idempotent success (successful={len(ok)}, "
+                           f"failed=0) rather than reported as failed")
+            raise Warn("never-subscribed unsubscribe returns success rather than a "
+                       "failed entry - proxy-level behaviour, identical on every broker")
 
         run.check("WS-21", unsub_unknown, endpoint="ws.unsubscribe",
-                  expected="listed under failed, no crash")
+                  expected="acknowledged without crashing; disposition recorded")
 
         def mode_switch():
             for mode, want in (("LTP", 1), ("Quote", 2), ("Depth", 3)):
@@ -4456,19 +4789,34 @@ def sec_order_updates(run: Runner, base: list) -> None:
                   expected="OpenAlgo symbol, not broker tradingsymbol")
 
         def quantities():
+            """filled + pending must equal quantity, but only where the pair
+            has been populated. A freshly placed order can carry 0/0 before
+            the broker has reported any progress, and asserting on that reads
+            as a reconciliation failure when nothing has happened yet. Assert
+            on updates where either field is populated; record the all-zero
+            case, which is the same on every broker and so sits above the
+            adapter."""
             need(updates, "no order updates collected")
-            checked = 0
+            checked, unpopulated = 0, []
             for u in updates:
                 if "filled_quantity" not in u or "pending_quantity" not in u:
                     continue
                 q = as_num(u["quantity"], "quantity")
                 f = as_num(u["filled_quantity"], "filled_quantity")
                 p = as_num(u["pending_quantity"], "pending_quantity")
+                if f == 0 and p == 0 and q != 0:
+                    unpopulated.append(f"{u.get('orderid')}({u.get('order_status')})")
+                    continue
                 need(abs((f + p) - q) < 1e-6,
                      f"{u['orderid']}: filled {f} + pending {p} != quantity {q}")
                 checked += 1
+            if unpopulated:
+                run.note_quirk("order_update with filled=0 and pending=0",
+                               f"{len(unpopulated)} update(s) carry neither quantity: "
+                               f"{unpopulated[:4]}")
             if not checked:
-                raise Warn("no update carried filled/pending quantities")
+                raise Warn("no update carried populated filled/pending quantities"
+                           + (f" - {len(unpopulated)} left both at 0" if unpopulated else ""))
 
         run.check("OU-05", quantities, endpoint="ws.orders",
                   expected="filled + pending reconcile with quantity")
@@ -5103,31 +5451,30 @@ def main() -> int:
     run.check("PRE-03", token_valid, endpoint="funds", expected="authenticated, non-403")
 
     def master_fresh():
-        """PRE-04 - master contract downloaded successfully, and today."""
-        with run.db() as c:
-            try:
-                rows = c.execute(
-                    "select exchange, status, last_updated from master_contract_status"
-                ).fetchall()
-            except Exception:
-                rows = []
-        if not rows:
+        """PRE-04 - the master contract for THIS broker downloaded today.
+
+        One row per broker, so the active broker's row is the only one that
+        matters: another broker's stale row says nothing about this run.
+        """
+        row = _master_status_row(run)
+        if row is None:
             with run.db() as c:
                 n = c.execute("select count(*) from symtoken").fetchone()[0]
             need(n > 0, "symtoken is empty - the master contract has never downloaded")
-            raise Warn(f"no master_contract_status table; symtoken holds {n} rows")
-        bad = [(e, s) for e, s, _ in rows if str(s).lower() != "success"]
-        need(not bad, f"master contract not successful for {bad[:4]}")
-        stamps = [str(t) for _, _, t in rows if t]
-        if stamps:
-            newest = max(stamps)
-            run.env["master_contract_updated"] = newest
-            need(str(date.today()) in newest,
-                 f"master contract last updated {newest}, not today - re-download before "
-                 f"trusting symbol-level results")
+            raise Warn(f"no master_contract_status row for {run.env['broker']!r}; "
+                       f"symtoken holds {n} rows")
+        need(str(row["status"]).lower() == "success",
+             f"master contract status is {row['status']!r}: {row.get('message')}")
+        need(int(row.get("is_ready") or 0) == 1,
+             f"master contract not ready (is_ready={row.get('is_ready')})")
+        when = str(row.get("download_date") or row.get("last_updated") or "")
+        run.env["master_contract_updated"] = when
+        need(str(date.today()) in when,
+             f"master contract for {run.env['broker']} last downloaded {when}, not today - "
+             f"re-download before trusting symbol-level results")
 
     run.check("PRE-04", master_fresh, endpoint="master_contract_status",
-              expected="success for every exchange, dated today")
+              expected="this broker's download succeeded and is dated today")
 
     def market_open():
         """PRE-05 - skip-with-reason outside a session, never fail."""
@@ -5165,6 +5512,15 @@ def main() -> int:
     run.env["errlog_start_lines"] = (
         len(_errlog.read_text(encoding="utf-8", errors="replace").splitlines())
         if _errlog.is_file() else 0)
+
+    # Snapshot the orderbook before this run places anything, so OB-10 can
+    # test the empty-book shape against a book that was actually empty.
+    try:
+        _ob0 = run.client.orderbook()
+        if isinstance(_ob0, dict) and _ob0.get("status") == "success":
+            run.env["orderbook_at_start"] = _ob0.get("data") or {}
+    except Exception as _e:
+        print(f"  could not snapshot the run-start orderbook: {_e}")
 
     run.matrix = resolve_matrix(run, run.env["exchanges"])
     print(f"\nSymbol matrix: {len([k for k in run.matrix if not k.startswith('_')])} slots resolved, "
