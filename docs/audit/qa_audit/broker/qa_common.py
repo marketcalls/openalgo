@@ -244,7 +244,11 @@ class Runner:
         """UNI-02/03 - status is exactly success, errors carry a message."""
         need(isinstance(resp, dict), f"{where}: {type(resp).__name__} not dict")
         st = resp.get("status")
-        need(st in ("success", "error"), f"{where}: status={st!r}")
+        # "partial" is a documented third value, not a stray one: the
+        # multi-item endpoints use it when some items succeeded and some
+        # failed, and the websocket subscribe ack uses it for the same
+        # reason. Rejecting it would fail a correct response.
+        need(st in ("success", "error", "partial"), f"{where}: status={st!r}")
         if st == "error":
             msg = str(resp.get("message", ""))
             need(bool(msg), f"{where}: error without message")

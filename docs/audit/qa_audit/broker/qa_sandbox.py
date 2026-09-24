@@ -1775,24 +1775,42 @@ def sec_options(run: Runner) -> None:
     run.check("OS-15", multigreeks, endpoint="multioptiongreeks", expected="per-symbol batch")
 
     def multigreeks_invalid():
-        """A bad leg must not sink the valid ones - per-row status, not a
-        whole-request rejection."""
+        """A bad leg must not sink the valid ones.
+
+        A mixed batch returns status "partial", not "success" - the service
+        computes it as success / partial / error from the per-leg counts, and
+        "partial" is exactly the right answer when some legs worked and some
+        did not. Demanding "success" here reported correct isolation as a
+        whole-batch failure. What the check should assert is the isolation
+        itself: both rows present, the good one resolved, the bad one carrying
+        an error and a message, and a summary that counts them.
+        """
         good = osym("ATM", "CE")["symbol"]
         r = post("multioptiongreeks", {"symbols": [
             {"symbol": good, "exchange": "NFO"},
             {"symbol": "ZZNOTREAL99", "exchange": "NFO"}]})
-        need(r.get("status") == "success",
-             f"batch failed entirely on one bad symbol: {r.get('message')}")
+        need(r.get("status") in ("success", "partial"),
+             f"one bad leg sank the whole batch: status={r.get('status')!r} "
+             f"{str(r.get('message'))[:110]}")
         rows = r.get("data") or []
         need(len(rows) == 2, f"expected 2 result rows, got {len(rows)}")
         by = {x.get("symbol"): x for x in rows}
-        need(by.get(good, {}).get("status") == "success", "valid leg did not resolve")
+        need(by.get(good, {}).get("status") == "success",
+             f"valid leg did not resolve: {by.get(good)}")
         bad = by.get("ZZNOTREAL99", {})
         need(bad.get("status") != "success", "invalid leg reported success")
         need(str(bad.get("message", "")), "failing leg carries no message")
+        summary = r.get("summary") or {}
+        if summary:
+            need(int(as_num(summary.get("total", 0), "summary.total")) == 2
+                 and int(as_num(summary.get("success", 0), "summary.success")) == 1
+                 and int(as_num(summary.get("failed", 0), "summary.failed")) == 1,
+                 f"summary does not match the rows: {summary}")
+        run.note_limit("multioptiongreeks mixed batch",
+                       f"status={r.get('status')} summary={summary}")
 
     run.check("OS-15b", multigreeks_invalid, endpoint="multioptiongreeks",
-              expected="invalid leg isolated to its own row")
+              expected="invalid leg isolated; batch reports partial with a summary")
 
     def synth(u="NIFTY", idx_ex="NSE_INDEX", exp=None):
         """The documented key is `synthetic_future_price`, at the top level."""
@@ -5082,8 +5100,9 @@ def sec_universal(run: Runner) -> None:
     run.check("UNI-01", enforced("HTTP status matches the scenario",
                                  "run.ok() / run.expect_error() on every call"),
               endpoint="-", expected="enforced globally")
-    run.check("UNI-02", enforced("status is exactly success or error",
-                                 "Runner.ok() rejects any other value"),
+    run.check("UNI-02", enforced("status is success, error, or partial",
+                                 "Runner.ok() rejects any other value; partial is "
+                                 "documented for multi-item results"),
               endpoint="-", expected="enforced globally")
     run.check("UNI-03", enforced("errors carry a message and leak no traceback",
                                  "Runner.ok() / expect_error()"),
