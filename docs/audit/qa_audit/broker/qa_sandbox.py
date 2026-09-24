@@ -1849,14 +1849,47 @@ def sec_orders(run: Runner) -> None:
         run.track_order(r["orderid"], s, e, product)
         return r["orderid"]
 
+    def stock_cnc(shares: int) -> bool:
+        """CNC is delivery: selling requires shares already held. Without them
+        every CNC SELL is refused - correctly - and the matrix records four
+        failures that say nothing about order handling. Buy the inventory the
+        SELL arms need before they run, rather than testing an impossible
+        order. This is defect A-11 from the gap analysis, which the old
+        test_broker.py hit the same way."""
+        try:
+            r = run.client.placeorder(strategy=STRAT, symbol=sym, exchange=ex,
+                                      action="BUY", price_type="MARKET",
+                                      product="CNC", quantity=shares)
+            if r.get("status") != "success":
+                return False
+            run.track_order(r.get("orderid"), sym, ex, "CNC")
+        except Exception:
+            return False
+        time.sleep(2.0)
+        st = run.client.orderstatus(order_id=r["orderid"], strategy=STRAT)
+        filled = ((st.get("data") or {}).get("order_status") == "complete")
+        run.note_limit("CNC inventory for the SELL arms",
+                       f"{shares} share(s) of {sym}: "
+                       f"{'filled' if filled else 'not filled'}")
+        return filled
+
     # OD-01/07/08/09 - action x pricetype x product
     for product in ("MIS", "CNC"):
+        if product == "CNC":
+            # One share per SELL price type, since each is placed separately.
+            held = stock_cnc(4)
         for pt in ("MARKET", "LIMIT", "SL", "SL-M"):
             for action in ("BUY", "SELL"):
                 far = round(ltp * (0.80 if action == "BUY" else 1.20), 2)
                 price = 0 if pt in ("MARKET", "SL-M") else far
                 trig = round(far * (1.01 if action == "BUY" else 0.99), 2) if pt in ("SL", "SL-M") else 0
                 cid = f"OD-01.{product}.{pt}.{action}"
+                if product == "CNC" and action == "SELL" and not held:
+                    run.record(cid, SKIP,
+                               "could not establish a CNC holding to sell against - "
+                               "the delivery sell is untestable without inventory",
+                               endpoint="placeorder", exchange=ex, symbol=sym)
+                    continue
                 run.check(cid, lambda pt=pt, a=action, p=product, pr=price, t=trig, c=cid:
                           place(pt, a, p, c, pr, t),
                           endpoint="placeorder", exchange=ex, symbol=sym,
