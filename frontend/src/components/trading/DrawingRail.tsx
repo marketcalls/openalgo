@@ -4,7 +4,7 @@
  * Purely additive: the pane's existing trading controls (symbol, timeframe,
  * chart type, product, qty, right-click order entry) are untouched. A group
  * button opens a flyout of its tools; a plain click re-arms the last tool used
- * in that group, which is what makes a 40-tool set usable from eight buttons.
+ * in that group, keeping the expanded catalogue reachable from compact groups.
  */
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -25,6 +25,7 @@ interface Props {
   onRedo(): void
   onRemove(all: boolean): void
   onMagnet(on: boolean): void
+  onStay(on: boolean): void
   /**
    * Where to portal the flyouts. Menus default to `document.body`, which is
    * invisible while the pane is in the Fullscreen API's top layer — so in full
@@ -57,6 +58,7 @@ export function DrawingRail({
   onRedo,
   onRemove,
   onMagnet,
+  onStay,
   portalHost,
   onShortcut,
 }: Props) {
@@ -230,6 +232,23 @@ export function DrawingRail({
           <span className="h-[18px] w-[18px]">{drawToolIcon('magnet')}</span>
         </button>
         <RailTip text="Magnet: snap to O/H/L/C" />
+      </div>
+      {/*
+        The tier disarms a tool once it has drawn, so three trend lines are
+        three trips to the rail. This latches the armed tool instead, and the
+        cursor button is still one press away.
+      */}
+      <div className="group relative">
+        <button
+          type="button"
+          aria-label="Keep tool selected"
+          aria-pressed={stats.stay}
+          onClick={() => onStay(!stats.stay)}
+          className={cn(btn, stats.stay && on)}
+        >
+          <span className="h-[18px] w-[18px]">{drawToolIcon('lock')}</span>
+        </button>
+        <RailTip text="Keep the tool selected after drawing" />
       </div>
       <div className="group relative">
         <button

@@ -66,6 +66,9 @@ jobs:
             test/test_option_symbol_service_validation.py \
             test/test_dockerignore_secret_inputs.py \
             --deselect test/test_dockerignore_secret_inputs.py::test_docker_build_context_excludes_secret_inputs \
+            test/test_graceful_shutdown.py \
+            test/test_flattrade_data_silence_watchdog.py \
+            test/test_requirements_parity.py \
             -v --timeout=60
 
   # Docker build-context guard: the .dockerignore rules that keep Kubernetes
@@ -101,6 +104,58 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
+
+  # The chart-indicator skill documents the openalgo-charts build that /trading
+  # actually pins, so a version bump that leaves the skill behind fails here.
+  # Both checks existed and nothing ran them: the export index sat on 1.8.1 while
+  # the app shipped 2.1.5, so 26 exports were missing from the reference and the
+  # count it advertised was wrong by 26.
+  chart-indicator-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: export index matches the pinned openalgo-charts
+        run: node .claude/skills/chart-indicator/generate-api-index.mjs --check
+      - name: every export and capability is documented and demonstrated
+        run: node .claude/skills/chart-indicator/coverage.mjs
+      - name: drawing menu metadata matches the pinned package
+        run: node frontend/scripts/generate-drawing-tools.mjs --check
+
+  # The openscript skill documents the openalgo-script compiler that /trading
+  # actually pins, and the same reasoning applies: a version bump that leaves the
+  # skill behind leaves an author reading a page about a compiler that is no
+  # longer installed.
+  #
+  # The third check is the one specific to this skill. Its pitfalls page teaches
+  # by naming diagnostic codes, and an author trusts a code. Two of the claims on
+  # the first draft were wrong: a stateful call in a branch is a warning rather
+  # than a refusal, so "the compiler will catch it" was false, and the fix the
+  # page offered for a conditional fill used a colour that does not exist. Both
+  # were found by compiling the page's own snippets, which is what runs here.
+  openscript-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: name reference matches the pinned openalgo-script
+        run: node .claude/skills/openscript/generate-reference.mjs --check
+      - name: every name is described, every planned name is marked, every shape is demonstrated
+        run: node .claude/skills/openscript/coverage.mjs
+      - name: every diagnostic code the pitfalls page names behaves as it says
+        run: node .claude/skills/openscript/check-pitfalls.mjs
 
   # Frontend build (includes TypeScript check)
   # Matrixed across the LTS majors declared in frontend/package.json engines.
@@ -268,7 +323,7 @@ jobs:
 
       - name: Login to Docker Hub
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.5.2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -374,7 +429,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.5.2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

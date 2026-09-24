@@ -46,6 +46,7 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
 - **`chart-indicator`** — building a custom indicator for the `/trading` chart. These are plain JavaScript descriptors on `openalgo-charts`, unrelated to the Python `openalgo.ta` indicators used from strategies and scanners.
+- **`openscript`**: writing a study or strategy in OpenScript, the language compiled by `openalgo-script` and run from `strategies/openscript/`. A third unrelated thing called an indicator: not the JavaScript chart descriptors above, and not `openalgo.ta`.
 
 ## Security and Deployment Model
 
@@ -278,9 +279,63 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 (`frontend/src/lib/trading/customIndicators.ts`).
 
 - **Never bundle them.** `frontend/dist/` is built by CI from what is committed, so a bundled indicator would need committing first and the next `git pull` would erase it. Runtime loading keeps them outside the build: no Node.js, no rebuild, untouched by upgrades.
-- **They register after the built-ins**, so a custom id that collides with one of the 102 built-ins overrides it.
+- **They register after the built-ins**, so a custom id that collides with one of the 105 built-ins overrides it.
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
+
+### Bumping openalgo-charts also updates the chart-indicator skill
+
+The skill documents a specific build. `reference/api.md` carries the full export
+index and `pitfalls.md` carries the built-in ids a custom module can shadow, so
+a version bump that touches neither leaves the skill describing a library that
+is no longer installed. **Upgrading the pin and updating the skill are one
+change, not two.**
+
+```sh
+cd frontend && npm install openalgo-charts@<version> --save-exact
+node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
+node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
+```
+
+Then read the upstream changelog for the range you skipped and update the prose
+by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
+after* table in `api.md`, and the id-collision list in `pitfalls.md` if the
+registry grew. The generator only owns the export index; nothing generates the
+teaching.
+
+The `chart-indicator-skill` CI job runs both checks, so a stale skill fails the
+build. It exists because both scripts were already in the repo and nothing ran
+them: the index sat on 1.8.1 advertising "337 names" while `/trading` shipped
+2.1.5 with 363, and the eleven studies added in 1.8.3 were absent from the
+reference an indicator author reads.
+
+### Bumping openalgo-script also updates the openscript skill
+
+The same rule as the chart above, for the same reason: `reference/library.md`
+carries all 350 names with their warmups and marks the 95 that are **planned and
+not implemented**, so a bump that leaves it behind has an author reading a page
+about a compiler that is no longer installed. The marking is the part that
+matters most, because reaching for a planned name is refused at the call with
+`OS2020` and nothing warns first.
+
+```sh
+cd frontend && npm install openalgo-script@<version> --save-exact
+node .claude/skills/openscript/generate-reference.mjs    # rewrites the name table
+node .claude/skills/openscript/coverage.mjs              # must print COVERAGE COMPLETE
+node .claude/skills/openscript/check-pitfalls.mjs        # must print PITFALLS VERIFIED
+```
+
+The third is specific to this skill. `reference/pitfalls.md` teaches by naming
+diagnostic codes, and an author trusts a code; the script compiles both halves
+of every entry, so the wrong spelling must still produce the code named and the
+fix offered must still come out clean. It also holds the page and the script to
+the same set of codes, so neither drifts alone.
+
+The `openscript-skill` CI job runs all three. The generator owns the name table
+and nothing generates the teaching: after a bump, read the upstream changelog
+and update the prose in `SKILL.md`, `pitfalls.md` and `strategies.md` by hand,
+particularly wherever they say a name is planned. A version that implements one
+turns three pages stale at once.
 
 Two built-in pages exercise the streaming stack end to end: **`/websocket/test`**
 (market data; `/20`, `/30`, `/50` variants request those depth levels) and
@@ -292,6 +347,38 @@ verify a broker feed rather than writing a throwaway client.
 The reason to still register a route in `blueprints/react_app.py` is that
 unregistered paths hit `Error404Tracker` for *unauthenticated* visitors and
 count toward an IP ban.
+
+### Adding a page: the three registrations
+
+A new page is not done until all three are present. Miss the second and the
+page works until someone opens a bookmark while logged out; miss the third and
+nobody finds it.
+
+1. **The route, in `frontend/src/App.tsx`** — a `lazy()` import plus a `<Route>`
+   inside the right layout wrapper. `Layout` is the standard sidebar shell;
+   `FullWidthLayout` is for canvas-style pages like the Flow editor.
+
+2. **The same path, in `blueprints/react_app.py`** — a view that only calls
+   `serve_react_app()`:
+
+   ```python
+   @react_bp.route("/agent", strict_slashes=False)
+   def react_agent():
+       return serve_react_app()
+   ```
+
+   It serves nothing different. It exists so a direct hit or a refresh on that
+   path is a *known* route rather than a 404 counted against the visitor's IP.
+   Register every path the page owns, including its parameterised children.
+
+3. **The nav entry, in `frontend/src/config/navigation.ts`** — usually
+   `profileMenuItems`. Entries are shown unfiltered; the filtering in
+   `useProfileMenuItems.ts` is for **broker capabilities** (Leverage, Holdings),
+   not for whether a feature has been configured yet. A feature that needs
+   setup shows its own setup screen on the page, as Telegram and WhatsApp do.
+
+Add the nav entry in the same change as the route. A menu item pointing at a
+path that does not resolve is worse than no menu item.
 
 ## Symbol Format
 
@@ -348,6 +435,51 @@ open files". Preventing one at creation is far cheaper than hunting it later:
 After a change touching any of these, run the **`fd-audit`** skill before calling
 it done.
 
+**Every message a user reads is written for a trader, not a developer.** The
+people running this are traders self-hosting a platform. They cannot act on a
+status code, a protocol name or the internals of a request, and showing them one
+is not neutral: it reads as a fault they caused, and sends them looking through
+their own settings for something that was never wrong.
+
+- **Name the cause and the next action.** "Your OpenAI account has no credits
+  left. Add credits under billing." Not "HTTP 500", not "invalid_offer", not
+  "SDP parse failed". If there is no action, say who is fixing it and that
+  waiting is the whole of it.
+- **Never put a status code, an exception class, a protocol term or an endpoint
+  in front of a user.** `logger.exception()` already keeps the technical detail
+  where it belongs, which is `log/errors.jsonl`.
+- **Do not guess the cause in the message.** A confidently wrong message is
+  worse than a vague one: it sends someone to the wrong place with conviction.
+  Where a symptom has more than one cause, lead with the one the operator can
+  check themselves. A provider that answers an exhausted balance with a bare
+  500 taught this the expensive way.
+- **The audience is the same on every surface.** A spoken error is heard by
+  someone who cannot see a log, so it has to be a sentence, not a code.
+
+**The words this platform uses for its own ideas, and the words it never uses.**
+Two of these have already been fixed once. A word that comes back costs the
+rename again, so they are written down rather than remembered.
+
+- **Sandbox mode** and **analyzer mode**, never "paper trading" or "virtual
+  trading". The database is `sandbox.db`, the blueprint is `blueprints/sandbox.py`,
+  the endpoints are `/api/v1/sandbox/*`, and the strategy module's own column
+  reads `RUN_MODES = ("live", "sandbox")`. Release 2.0.1.0 renamed the display
+  strings to match the schema; the two words above are the result, and a third
+  term invented in a document, a comment or a commit message undoes it. Three
+  words for two ideas is how somebody ships a strategy believing it is safe.
+- **Never "arm", "armed" or "arming" anywhere a trader reads.** Not a label, a
+  button, a toggle, a toast, a tooltip, an empty state or a status badge. It
+  reads as a military or machine term rather than a trading one. Say what a
+  trader would say: an alert is **Active** or **Stopped**, a toggle is **on** or
+  **off**, a destination is **Live** or **Sandbox**. Internal identifiers,
+  storage keys and library state names are not covered, because nobody trading
+  reads those; the moment one reaches a screen it is.
+- **A specification's internal vocabulary is not this platform's vocabulary.**
+  Where OpenAlgo hosts another project, that project's spec may use a word for
+  its own purposes, and it stays in the spec. OpenScript's `stdlib.md` says
+  "paper" for the simulated destination and "arming" for the act of switching a
+  strategy to live; on a screen here those are **Sandbox** and **Live**.
+
 **Database access** goes through the SQLAlchemy ORM, not raw SQL.
 
 **Schema changes need a migration script, not just a startup hook.** Users
@@ -380,9 +512,96 @@ component files, TanStack Query for server state.
 
 **Commits.** Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`.
 
+**Nothing is published without a changelog entry, and the entry is part of the
+publish rather than a follow-up.** Whatever is going out (a platform release, a
+version bump, a package pushed to a registry) carries its own stanza in
+`docs/CHANGELOG.md` before it leaves, written for somebody deciding whether to
+upgrade rather than for whoever wrote it. The **`version-bump`** skill owns the
+procedure and the exact paths.
+
+A consumer reads the changelog at the one moment it matters to them, and they
+read it once. "Various fixes" answers nothing, and a version with no entry tells
+them to diff two tags, which they will not do: they will simply not upgrade. An
+entry written after the publish is an entry written for nobody, because the
+people who needed it have already decided.
+
+Say what a reader has to act on: what changed, what it breaks, what is now
+refused that used to be accepted, and what is still not modelled. A limitation
+somebody finds inside a report they had already believed cost more than it would
+have cost to write it down.
+
 **No icons or emojis anywhere** — source, comments, log messages, commit
 messages, PR descriptions, changelogs, release notes, or any generated text
 including drafts for Discord or Telegram. Use plain text labels.
+
+### The ChatGPT subscription model list is ours to maintain
+
+The `chatgpt/` provider authenticates with a ChatGPT Plus or Pro plan by OAuth
+device flow instead of an API key, and it reaches **Codex**, not the ChatGPT web
+app. Everything about the agent's provider catalogue is read live from LiteLLM
+precisely so a package bump brings new models with it. This provider is the one
+exception, and it needs a person.
+
+**The symptom, if you do not know this.** LiteLLM's registry carries ten
+`chatgpt/*` entries, newest `gpt-5.4`, while the backend serves more. A model
+absent from that registry has no `mode`, so LiteLLM routes it through the
+chat-completions bridge instead of `/v1/responses`. The request never reaches
+the API: it lands on a Cloudflare interstitial and returns
+`403 Enable JavaScript and cookies to continue`. That reads like a network
+problem, an account problem or a bot block, and is none of them. Registering the
+entry with `mode: responses` is the entire fix.
+
+**The distinction that makes a candidate testable.** The backend refuses a model
+it does not serve in plain words:
+
+```
+{"detail":"The 'gpt-5.6' model is not supported when using Codex with a ChatGPT account."}
+```
+
+So a clean 400 naming the model means **not available**; a 403 HTML page means
+**not registered**, and is your bug, not OpenAI's. Anything else, read it.
+
+**Adding a model.** `services/agent/chatgpt_models.py` holds the supplement,
+registered into LiteLLM by `catalog._build()` and by `builder.build_model()`.
+Both are needed: a run resolving a stored row never touches the catalogue. It is
+deliberately NOT done in `chatgpt_oauth.ensure_ready()`, which runs inside a
+request and must import no LiteLLM and do no network work -- a hook placed there
+was caught by `test_the_gate_does_no_network_work`. To add a name, verify it
+first against a real
+subscription rather than guessing, because the set is not derivable from a
+pattern -- `gpt-5.6` is refused while `gpt-5.6-sol`, `-luna` and `-terra` all
+work:
+
+```python
+litellm.register_model({"chatgpt/<name>": {"litellm_provider": "chatgpt", "mode": "responses"}})
+litellm.responses(model="chatgpt/<name>", input=[{"role": "user", "content": "ok"}], stream=True)
+```
+
+Then add it to `SUPPLEMENTAL` with its context window.
+
+**Three rules for that file.**
+
+- **Never write cost keys.** A plan turn has no per-token price, and
+  `catalog.estimate_cost` returning None is what makes the usage badge report
+  tokens and no cost. Reporting `$0.00` claims the turn was free when it
+  consumed plan quota; falling back to the API price is worse.
+- **Never overwrite a LiteLLM entry, and test the provider, not the name.**
+  Eight of these models share a bare name with an OpenAI API model, so
+  `"gpt-5.6-sol" in litellm.model_cost` is True because of *OpenAI's* entry. A
+  guard written that way skips every model it exists to add. Match on
+  `litellm_provider == "chatgpt"`.
+- **Fail quietly.** The supplement is a convenience; a LiteLLM whose registry
+  has a different shape should cost these models, not a working agent.
+
+**Availability is per plan, not per provider.** These are the models the backend
+serves; which a given account may use is between the operator and OpenAI. The
+catalogue is advisory, and the model test on the config page is what answers for
+one account. That test **streams**, deliberately: LiteLLM's non-streaming reader
+for this provider raises `Unknown items in responses API response: []` on a
+reply that streams back perfectly (upstream #26179, open; its fix #27562 was
+closed unmerged), and the agent only ever runs `stream=True` anyway.
+
+Delete the file when LiteLLM ships these names. Its entries win automatically.
 
 ## Frontend build
 

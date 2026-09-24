@@ -25,6 +25,9 @@ strategy_chart_bp = Blueprint("strategy_chart_bp", __name__, url_prefix="/")
 
 STRATEGY_CHART_LIMIT = os.getenv("STRATEGY_CHART_LIMIT", "30 per minute")
 
+# Upper bound for the `days` lookback. The UI offers at most ten.
+MAX_DAYS = 30
+
 
 @strategy_chart_bp.route("/strategybuilder/api/strategy-chart", methods=["POST"])
 @cross_origin()
@@ -61,6 +64,16 @@ def strategy_chart_data():
             days = int(data.get("days", 3))
         except (TypeError, ValueError):
             days = 3
+        # Clamped, because `days` sizes a calendar window as `days * 3 + 2` and
+        # every request fans out into one broker call per leg. The control that
+        # feeds it only ever offered single digits; an unbounded value from a
+        # crafted body would turn one click into years of history per leg.
+        days = max(1, min(days, MAX_DAYS))
+        # An explicit window, sent by a chart paging older history. Counting
+        # back from today cannot express "the fortnight before what I already
+        # have", which is what scrolling left asks for.
+        start_date = (data.get("start_date") or "").strip() or None
+        end_date = (data.get("end_date") or "").strip() or None
         legs = data.get("legs") or []
 
         if not underlying or not exchange:
@@ -81,6 +94,8 @@ def strategy_chart_data():
             days=days,
             underlying_symbol=underlying_symbol,
             underlying_exchange=underlying_exchange,
+            start_date=start_date,
+            end_date=end_date,
         )
         return jsonify(response), status_code
 
@@ -124,6 +139,16 @@ def multi_strike_oi_data():
             days = int(data.get("days", 3))
         except (TypeError, ValueError):
             days = 3
+        # Clamped, because `days` sizes a calendar window as `days * 3 + 2` and
+        # every request fans out into one broker call per leg. The control that
+        # feeds it only ever offered single digits; an unbounded value from a
+        # crafted body would turn one click into years of history per leg.
+        days = max(1, min(days, MAX_DAYS))
+        # An explicit window, sent by a chart paging older history. Counting
+        # back from today cannot express "the fortnight before what I already
+        # have", which is what scrolling left asks for.
+        start_date = (data.get("start_date") or "").strip() or None
+        end_date = (data.get("end_date") or "").strip() or None
         legs = data.get("legs") or []
 
         if not underlying or not exchange:
@@ -144,6 +169,8 @@ def multi_strike_oi_data():
             days=days,
             underlying_symbol=underlying_symbol,
             underlying_exchange=underlying_exchange,
+            start_date=start_date,
+            end_date=end_date,
         )
         return jsonify(response), status_code
 

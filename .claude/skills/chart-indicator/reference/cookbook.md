@@ -250,36 +250,113 @@ inputs: [
   { key: 'mode',    type: 'select',  label: 'Mode',    default: 'fast', group: 'Periods',
     options: [{ label: 'Fast', value: 'fast' }, { label: 'Slow', value: 'slow' }] },
 
-  // The four semantic types. The first three are strings you parse yourself.
-  { key: 'window',  type: 'session',   label: 'Session',   default: '0915-1015', group: 'Instrument' },
-  { key: 'tf',      type: 'timeframe', label: 'Timeframe', default: '5m', group: 'Instrument' },
-  { key: 'sym',     type: 'symbol',    label: 'Symbol',    default: '', group: 'Instrument' },
-  // These two are numbers a host may also resolve from a chart click.
-  { key: 'anchor',  type: 'price',     label: 'Anchor Price', default: 0, group: 'Instrument' },
-  { key: 'from',    type: 'time',      label: 'Anchor Time',  default: 0, group: 'Instrument' },
 ]
 ```
 
-Do **not** add an input for the tick size: `ctx.tickSize` carries it.
+**Those six are all there are.** There is no `session`, `timeframe`, `symbol`,
+`price`, `time` or `enum` type, and asking for one is worse than an error: the
+dialog switches on `input.type` with no default case, so an unknown type is
+dropped in silence. The default still applies and the study computes correctly,
+while the control never renders and the user cannot change it.
+
+Express the same intent with the six that exist:
+
+```js
+inputs: [
+  // A session or a timeframe you parse yourself is a text box...
+  { key: 'window', type: 'text', label: 'Session', default: '0915-1015', group: 'Instrument',
+    tooltip: 'Start and end in HHMM, exchange time. Parsed with parseSessionSpec.' },
+  // ...and one with a fixed set of choices is a select, which is also what a
+  // reference `input.timeframe(..., options=[...])` really is.
+  { key: 'tf', type: 'select', label: 'Timeframe', default: 'D', group: 'Instrument',
+    options: [{ label: 'Day', value: 'D' }, { label: 'Week', value: 'W' }, { label: 'Month', value: 'M' }] },
+  // A price or a time anchor is a number. Nothing resolves it from a chart click.
+  { key: 'anchor', type: 'number', label: 'Anchor Price', default: 0, group: 'Instrument' },
+]
+```
+
+Do **not** add an input for the tick size: `ctx.tickSize` carries it. Do not add
+one for the symbol either: `ctx.symbol` carries it when the host has set a data
+context, and an indicator cannot fetch another instrument's bars anyway without
+a Tier-2 provider.
 
 ---
 
-## Gradient fills
+## Help text on an input (2.2.1)
 
-A fill is flat by default. `gradient` grades it between two prices, which is
-what makes a band read as a scale rather than a block:
+Every input variant takes `tooltip`. The dialog draws a focusable `?` after the
+label; the core ignores the field.
+
+```js
+inputs: [
+  { key: 'length', type: 'number', label: 'Length', default: 20, min: 2 },
+  { key: 'per', type: 'number', label: 'Days per bar unit', default: 1, min: 1,
+    tooltip: 'Calendar days each bar covers: 1 for intraday and daily, 7 for weekly and above.' },
+  { key: 'smooth', type: 'boolean', label: 'Smooth', default: false,
+    tooltip: 'Runs the result through a 3-bar average before plotting.' },
+]
+```
+
+A label has to stay short enough for a dense panel, which leaves nowhere to say
+what a parameter does. Put the sentence here, not in a parenthetical that
+stretches every row. An empty string draws no mark.
+
+---
+
+## Labelling a plot's axis (2.2.1)
+
+`priceFormat` sets the axis and crosshair formatting of the scale a plot maps to:
+
+```js
+plots: [
+  { key: 'hv', type: 'line', title: 'HV', priceFormat: { type: 'percent' } },
+  { key: 'cum', type: 'line', title: 'Cumulative', priceFormat: { type: 'volume' } },
+  { key: 'r', type: 'line', title: 'Ratio',
+    priceFormat: { type: 'custom', formatter: (v) => v.toFixed(3) + 'x' } },
+]
+```
+
+`percent` suffixes the value and does **not** scale it: a study returning 0..100
+reads `62.24%`, one returning a 0..1 fraction reads `0.62%`. Multiplying inside
+`calc` to make the axis read better changes the plotted value, and the legend,
+the crosshair and every downstream calculation with it. Keep the value, label it.
+
+Like `style.precision`, this belongs to the price **scale**, not the series, so
+set it on a plot that owns its pane. On an `'onchart'` plot it reformats the
+instrument's own axis.
+
+---
+
+## Fills are flat, and a descriptor cannot grade one
 
 ```js
 fills: [
   { between: ['upper', 'lower'], colorUpKey: 'bandColor', colorDownKey: 'bandColor', opacity: 0.12 },
-  { between: ['hi', 'lo'],
-    gradient: { topValue: 70, bottomValue: 30, topColor: '#ef5350', bottomColor: '#26a69a' },
-    opacity: 0.2 },
 ]
 ```
 
-Omit `topValue` and `bottomValue` and the gradient spans the filled region
-itself instead of being anchored in price.
+`IndicatorFillSpec` has exactly six fields: `between`, `colorUp`, `colorDown`,
+`colorUpKey`, `colorDownKey` and `opacity`. **There is no `gradient` field.**
+
+The engine does implement a vertical gradient, but one layer down, on
+`IndicatorFillOptions.gradient` of the `IndicatorFill` primitive, and no
+descriptor path passes one: the runtime builds the band from those six keys and
+nothing else. A `gradient` key on a fill spec is ignored silently.
+
+If you genuinely need a graded band, the escape hatch is `attach`, which can
+construct the primitive directly:
+
+```js
+attach(ctx) {
+  const fill = new IndicatorFill({ colorUp: '#ef5350', colorDown: '#26a69a',
+    gradient: { topValue: 70, bottomValue: 30, topColor: '#ef5350', bottomColor: '#26a69a' } })
+  ctx.addPrimitive(fill)
+  return () => ctx.removePrimitive(fill)
+}
+```
+
+That means owning the point list and the teardown yourself, which `fills` does
+for you. Prefer the flat band unless the grade is the point of the study.
 
 ---
 

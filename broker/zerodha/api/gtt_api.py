@@ -9,6 +9,7 @@ from broker.zerodha.mapping.gtt_data import (
     transform_modify_gtt,
     transform_place_gtt,
 )
+from broker.zerodha.mapping.mcx_contract_size import McxQuantityError
 from database.token_db_enhanced import get_symbol_info
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -123,6 +124,31 @@ def _apply_mpp_if_market(data, last_price):
     )
 
 
+class _RejectedResponse:
+    """A response for a request that never reached Kite. Mirrors _FakeResponse."""
+
+    status_code = 400
+    status = 400
+    text = ""
+
+
+def _quantity_rejected_place(exc):
+    """place_gtt_order's shape: (response, data, trigger_id)."""
+    return _RejectedResponse(), {"status": "error", "message": str(exc)}, None
+
+
+def _quantity_rejected_modify(exc):
+    """modify_gtt_order's shape: (data, status_code).
+
+    Deliberately not the same as the place shape. The two functions return
+    different arities -- place hands back a response object the service reads
+    `.status` from, modify hands back a status code directly -- and returning
+    the wrong one raises a ValueError inside the service, which its blanket
+    handler turns into the same generic 500 this exists to avoid.
+    """
+    return {"status": "error", "message": str(exc)}, 400
+
+
 def place_gtt_order(data, auth):
     """Create a GTT on Zerodha. Returns (response, response_dict, trigger_id).
 
@@ -145,7 +171,16 @@ def place_gtt_order(data, auth):
 
     _apply_mpp_if_market(data, data.get("last_price"))
 
-    transformed = transform_place_gtt(data)
+    try:
+        transformed = transform_place_gtt(data)
+    except McxQuantityError as exc:
+        # A GTT becomes a real order when it fires, so it carries the same
+        # contract-count rules. Refusing it here with the reason beats the
+        # service layer's blanket handler, which reports an internal error.
+        logger.info(f"Rejected GTT before sending to Kite: {exc}")
+        return _quantity_rejected_place(exc)
+
+
     body = _encode_gtt_payload(transformed)
     logger.info(f"Zerodha place_gtt payload: type={transformed['type']}, body={body}")
 
@@ -183,7 +218,13 @@ def modify_gtt_order(data, auth):
 
     _apply_mpp_if_market(data, data.get("last_price"))
 
-    transformed = transform_modify_gtt(data)
+    try:
+        transformed = transform_modify_gtt(data)
+    except McxQuantityError as exc:
+        logger.info(f"Rejected GTT modify before sending to Kite: {exc}")
+        return _quantity_rejected_modify(exc)
+
+
     body = _encode_gtt_payload(transformed)
     logger.info(f"Zerodha modify_gtt payload ({trigger_id}): {body}")
 
@@ -232,7 +273,7 @@ def cancel_gtt_order(trigger_id, auth):
     }, response.status_code
 
 
-def get_gtt_book(auth):
+def get_gtt_book(auth, include_history=False):
     """List all GTTs for the user. Returns (response_dict, status_code).
 
     The returned dict has ``status`` and ``data`` where ``data`` is a list of
@@ -253,4 +294,4 @@ def get_gtt_book(auth):
             "message": raw.get("message", "Failed to fetch GTT book"),
         }, response.status_code
 
-    return {"status": "success", "data": map_gtt_book(raw)}, 200
+    return {"status": "success", "data": map_gtt_book(raw, include_history=include_history)}, 200

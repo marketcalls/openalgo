@@ -14,8 +14,8 @@ not inferred from the type declarations.
   placement: 'onchart' | 'pane', // required
   inputs: IndicatorInput[],      // required (use [] for none)
   plots: IndicatorPlot[],        // required, at least one
-  fills?: IndicatorFillSpec[],
-  calc(bars, settings, store, ctx?): IndicatorValues,   // required
+  fills?: IndicatorFillSpec[],           // each may carry overlay: true (2.4.0)
+  calc(bars, settings, store, ctx?): IndicatorValues,   // required; a throw is reported, not fatal (2.4.0)
   calcTail?(bars, settings, fromIndex, previous, store, ctx?),
   markers?({ bars, values, settings }),
   draws?({ bars, values, settings }),          // 1.7.1
@@ -81,8 +81,7 @@ them through its own `IndicatorHost`. Always guard.
 | --- | --- |
 | `line` | `from`, `to`, plus `extendLeft` / `extendRight` |
 | `box` | `from`, `to`, `fillColor`, `opacity`, `text` |
-| `label` | `at`, `text` (splits on `
-`), `align` |
+| `label` | `at`, `text` (splits on `\n`), `align` |
 | `polyline` | `points[]`, `closed`, `fillColor` |
 
 Anchors are **times, not indices**: paging history in shifts every index, so an
@@ -133,13 +132,41 @@ title, message, time, index }`.
 
 `ctx.emit(event, payload)` on the attach context covers the imperative case.
 
+The development candidate also exports `AlertController` for trader-created
+price, study-plot, drawing and named candle conditions. These use
+`alert:triggered`, whose delivery fields `alertId`, `title`, `message`, `time`
+and `index` match the descriptor event above. The terminal displays both locally;
+neither event places an order. A trader alert defaults to `onBarClose` and
+`once`. Descriptor alerts retain their existing timing contract.
+
+Saved chart studies carry `instanceId` so plot alerts restore to the same study.
+An indicator template deliberately drops this identity when creating a new
+instance. Custom hosts must restore drawings before their alerts and retain
+unrelated alert/drawing documents when applying a partial chart restore.
+
+The context-menu target identifies a clicked study plot with `instanceId` and
+`plotKey`. Legend targets omit `plotKey`. Use the clicked logical index to seed
+its reading, and keep absent readings unavailable rather than substituting zero.
+Named workspace alert lifecycle snapshots are isolated by account and pane and
+merged only onto matching saved definitions before evaluation resumes. This
+preserves a fired once-only record when workspace autosave is off; it does not
+implicitly save new alert definitions or changed conditions.
+
 ## Bars
 
 ```js
 { time: number,   // UTC SECONDS, not milliseconds
   open: number, high: number, low: number, close: number,
-  volume?: number }
+  volume?: number,
+  oi?: number }
 ```
+
+`oi` is a level, not a flow. When folding bars, retain the latest defined
+reading in the bucket and never sum readings. Zero is a real value; absence
+means unavailable. Instrument capability is separate from per-bar availability:
+`chart.hasOpenInterest` is true for a supported instrument, false for an
+unsupported one, and undefined when metadata is unknown. A supported instrument
+can still have no reading on its forming candle.
 
 `volume` is genuinely optional. Index series carry none, so guard any divide by
 it.
@@ -197,9 +224,32 @@ which is exactly what a warmup gap should do.
 | `text` | text box | |
 | `select` | dropdown | `options: [{ label, value }]` |
 | `source` | price-source dropdown | default must be a valid source |
+| `interval` | timeframe select (2.4.0) | a code the engine can bucket by; `''` means the chart's own interval |
+| `time` | wall-clock text (2.4.0) | `YYYY-MM-DD HH:MM` in the chart zone; `zonedStringToUtcSeconds` makes a bar time |
 
 Every input needs `key`, `type`, `label`, `default`. Valid sources: `open`,
 `high`, `low`, `close`, `hl2`, `hlc3`, `ohlc4`, `volume`.
+
+**Those eight are the whole union** (six before 2.4.0). There is no `session`,
+`symbol`, `price` or `enum` input type. A renderer switches on `input.type`
+with no default case, so an unrecognised type is dropped in silence: the
+default still applies and the study computes correctly, while the control never
+appears and the user cannot change it. A session is a `text` input you parse
+yourself; a fixed set of choices is a `select`. `/trading`'s own dialog
+whitelists input types, so `interval` and `time` reach it only once it lists
+them; on an older host they are dropped the same silent way.
+
+Any input may also carry `tooltip` (2.2.1), help text the dialog renders as a
+focusable `?` beside the label. A label has to stay short enough for a dense
+panel, so put the explanation here rather than in a parenthetical:
+
+```js
+{ key: 'per', type: 'number', label: 'Days per bar unit', default: 1, min: 1,
+  tooltip: 'Calendar days each bar covers: 1 for intraday and daily, 7 for weekly and above.' }
+```
+
+An empty string draws nothing, which is the difference between no help and a
+mark with nothing behind it.
 
 A cleared text or number field arrives as `''`, not as the default. Always
 coerce: `Math.max(2, Math.floor(Number(settings.length) || 20))`.
@@ -214,8 +264,11 @@ coerce: `Math.max(2, Math.floor(Number(settings.length) || 20))`.
   title: 'MA',               // legend label
   style: { color: '#4f8cff', lineWidth: 2, lineStyle: 'dashed' },
   priceScaleId: 'right',     // own axis if you name a different one
+  priceFormat: { type: 'percent' },  // 2.2.1: axis/crosshair format for this plot's scale
+  offset: 26,                // 2.4.0: paint the column 26 bars to the right (a displaced cloud)
   colorKey: 'lineColor',     // optional: an input key holding the colour
-  colorBy({ value, index, values, settings }) { return '#ef5350' } }
+  colorBy({ value, index, values, settings }) { return '#ef5350' },
+  colorParts({ value, index, values, settings }) { return { body: '#ef535080', wick: '#ef5350' } } }  // 2.4.0, candle plots
 ```
 
 Single-column plot types: `line`, `line-markers`, `step`, `area`, `histogram`,
@@ -297,14 +350,35 @@ puts it above with the tail pointing down. Plate text colour is automatic.
 ## Levels, range, table
 
 ```js
-levels: (settings) => [{ price: 70, title: '70', color: '#ef5350', dashed: true }]
+levels: (settings) => [{ price: 70, title: '70', color: '#ef5350', lineStyle: 'dotted', lineWidth: 1 }]
 range:  (settings) => ({ min: 0, max: 100 })     // or null
-table:  (ctx) => ({ rows: [['VWAP', '123.45'], ['Side', 'Above']] })   // or null
+table:  (ctx) => ({
+  rows: [
+    [{ text: 'VWAP', bold: true }, { text: '123.45', align: 'right' }],
+    [{ text: 'Side' }, { text: 'Above', bgColor: '#26a69a' }],   // textColor derives from bgColor
+  ],
+  options: { position: 'top-right', cellWidth: [64, 80], cellHeight: 18, fontSize: 11 },
+})   // or null
 ```
 
+A level's `lineStyle` is `'solid' | 'dashed' | 'dotted'` (a Pine `hline` with
+`line.style_dotted` maps directly); `dashed: true` is the older two-state form
+and `lineStyle` wins when both are given.
+
 `range` applies only when the indicator created its own pane; two indicators
-sharing a pane would otherwise fight over it. `table` is for things that are not
-a value per bar, such as a scoreboard or a seasonality matrix.
+sharing a pane would otherwise fight over it. It is a fixed range, so navigation
+and the automatic-range animation added in 2.1.8 leave it authoritative.
+
+`table` is for things that are not a value per bar, such as a scoreboard or a
+seasonality matrix. Its `options` are the whole `ChartTableOptions` geometry:
+`position` (nine keywords, `top-left` through `bottom-right`), `margin`,
+`cellWidth` (a number or a per-column array), `cellHeight`, `widthPercent` /
+`heightPercent` to stretch to a share of the plot, `rowWeights`, `fontSize`
+(a number, or `'auto'` from 2.4.0 to fit each cell), `borderColor`,
+`borderWidth` and `background`. Each cell is a `TableCell` with `text`,
+`bgColor`, `textColor`, `align`, `fontSize` and `bold`. So a source's dashboard
+position, size, text size and per-cell colours all port; what does not exist is
+a cell tooltip.
 
 ## calcTail
 

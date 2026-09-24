@@ -1,0 +1,54 @@
+version 1
+
+// A LONG ENTRY WITH A STOP AND A TARGET, SIZED FROM THE RISK.
+//
+// THE SIZING IS COMPUTED HERE RATHER THAN CALLED. `order.qtyForRisk(risk,
+// entry, stop)` is in the library and is PLANNED: reaching for it is OS2020,
+// which is the compiler telling you the name is real and the call is not.
+// There are ninety five such names, all marked in `reference/library.md`, and
+// this is the one most likely to be reached for by accident because it reads
+// exactly like the call you want.
+//
+// What it would compute is one division, so it is written out:
+//
+//     units = risk / (entry - stop)
+//
+// and `floor` takes it down to a whole number, because a fractional quantity is
+// not an order anybody can send. `max(1, ...)` keeps a wide stop from sizing
+// the trade to zero units, which is a position that is not there at all.
+//
+// `order.bracket` attaches the stop and the target to the entry AS DISTANCES,
+// in the instrument's own price units (`stdlib.md` 17.5). Not as prices: there
+// is no `stop` or `target` argument on this call, and writing one is OS3002.
+// The distance spelling is what `profit` and `loss` mean.
+//
+// Attaching them at the entry rather than on a later bar is the point. A
+// strategy that enters and then waits for the next bar to send its stop is a
+// strategy holding an unprotected position in between, and the bar that gaps is
+// the bar it happens on.
+
+atrLen = input(14, "ATR length", min = 1, max = 200)
+stopMult = input(2.0, "Stop, in ATRs", min = 0.1, max = 10)
+targetMult = input(3.0, "Target, in ATRs", min = 0.1, max = 20)
+risk = input(2000, "Risk per trade", min = 1)
+
+strategy("Risk sized breakout", overlay = true, qty = 1)
+
+span = atr(atrLen)
+priorHigh = highest(high, 20)
+
+plot(priorHigh, "20 bar high", orange)
+
+// `priorHigh[1]` is the high BEFORE this bar. Comparing against `priorHigh`
+// itself cannot break out: this bar's high is already in it.
+//
+// Absent during warmup, and a comparison against an absent value is absent
+// rather than false, so this cannot fire before `atr` and `highest` have run.
+broke = close > priorHigh[1]
+
+if broke and pos.isFlat
+    stopDistance = span * stopMult
+    targetDistance = span * targetMult
+    units = max(1, floor(risk / stopDistance))
+    buy(qty = units, tag = "Break")
+    order.bracket("Break", loss = stopDistance, profit = targetDistance)

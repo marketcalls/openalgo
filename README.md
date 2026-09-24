@@ -5,7 +5,7 @@
 [![PyPI Downloads](https://static.pepy.tech/badge/openalgo)](https://pepy.tech/projects/openalgo)
 [![PyPI Downloads](https://static.pepy.tech/badge/openalgo/month)](https://pepy.tech/projects/openalgo)
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/openalgoHQ)](https://twitter.com/openalgoHQ)
-[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCw7eVneIEyiTApy4RtxrJsQ)](https://www.youtube.com/@openalgo)
+[![YouTube: Subscribe](https://img.shields.io/badge/YouTube-Subscribe-FF0000)](https://www.youtube.com/@openalgo)
 [![Discord](https://img.shields.io/discord/1219847221055455263)](https://discord.com/invite/UPh7QPsNhP)
 
 </div>
@@ -16,13 +16,14 @@ OpenAlgo is a free, open source, self-hosted **trading platform**, not just a br
 
 OpenAlgo is no longer just "an API layer in front of your broker." Today it combines four trading surfaces in one self-hosted instance, sharing the active broker session, market-data infrastructure, and six operational data stores across the journey from idea to testing and live execution.
 
-## Four Ways to Trade with OpenAlgo
+## Five Ways to Trade with OpenAlgo
 
 | Surface | Route | Who it's for |
 | --- | --- | --- |
 | **Unified Broker API** | `/api/v1/` | External platforms: TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One contract across 36 plugins, with optional operations varying by adapter. |
 | **Python Strategy Host** | `/python` | Traders who code: paste any Python script into the in-browser CodeMirror editor, schedule it on IST start/stop times, run multiple strategies in parallel with process isolation, watch real-time logs. No external server, no Docker, no cron. |
 | **Flow: No-Code Strategy Builder** | `/flow` | Traders who don't code: drag-and-drop nodes for market data, indicators, conditions, order execution, and notifications. Webhook triggers for TradingView and external signals built in. JSON import/export for sharing strategies. |
+| **AI Agent** | `/agent` | Traders who would rather ask: a chat that reads your own market data through OpenAlgo's services, draws charts and payoff diagrams, computes indicators, marks up the `/trading` chart from a right-side panel, and can place orders only with your explicit approval on every single one. Bring your own model from any LiteLLM provider, or a ChatGPT Plus or Pro subscription, or run it locally against Ollama. |
 | **Options Trading Suite** | `/tools` | Options traders: twelve built-in analytical tools (Strategy Builder with payoff diagrams & live Greeks, Option Chain, IV Smile, Max Pain, Vol Surface, GEX dashboard, OI Tracker, OI Profile, Straddle Chart, Straddle PnL simulator, Option Greeks history). Each one streams from your connected broker. |
 
 Order workflows from the REST API, hosted strategies, and Flow can use Analyzer Mode before live execution. Analytics pages, dashboards, PnL tracking, latency monitoring, notifications, and MCP reuse the same application services where their specific capabilities apply.
@@ -169,6 +170,15 @@ Direct webhook integration for scanner alerts:
 - Bulk symbol configuration via CSV
 - Real-time strategy monitoring
 
+### AI Agent (`/agent`)
+A built-in LLM agent, on the full page and as a right-side panel on the `/trading` chart:
+- Reads quotes, depth, history, option chains and Greeks through OpenAlgo's own services, never a third-party data feed
+- Draws candles with the charting library, option analytics with Plotly, and marks levels, trendlines and zones onto your chart
+- Computes 127 indicators with the Rust-backed `openalgo.ta`, and generates Python strategies using the OpenAlgo SDK
+- **Every order pauses for your approval**, showing the exact arguments before anything is sent, with the risk limits applied after you approve
+- Any provider LiteLLM supports, a ChatGPT Plus or Pro subscription over OAuth, or a local model through Ollama
+- Keys are encrypted in your own database and never written to a configuration file
+
 ### AI-Powered Trading (MCP Server)
 Connect AI assistants for natural language trading:
 - Compatible with Claude Desktop, Cursor, Windsurf, ChatGPT
@@ -252,6 +262,8 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 - **ZeroMQ** - High-performance message bus
 - **Argon2-CFFI** - Password hashing
 - **Cryptography** - Fernet encryption for tokens
+- **Agno** - Agentic framework for the `/agent` reasoning loop and tool calling
+- **LiteLLM** - LLM-agnostic provider layer the agent calls every model through
 
 ### Frontend
 - **React 19** - UI library
@@ -374,7 +386,10 @@ We welcome contributions! To contribute:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
+3. Commit your changes using [Conventional Commits](CONTRIBUTING.md#commit-messages), for example:
+   ```bash
+   git commit -m "feat: add amazing feature"
+   ```
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
@@ -397,6 +412,12 @@ OpenAlgo is built upon the shoulders of giants. We extend our gratitude to all t
 - **[Flask](https://flask.palletsprojects.com)** - BSD License - Python web microframework
 - **[React](https://react.dev)** - MIT License - UI library for building user interfaces
 - **[SQLAlchemy](https://www.sqlalchemy.org)** - MIT License - Python SQL toolkit and ORM
+
+### AI & Agent Frameworks
+The AI Agent at `/agent` is deliberately LLM-agnostic. The agent loop and the provider layer are separate pieces, so moving between model vendors, or to a local model, is a configuration change rather than a code change. Both of these projects are what make that possible.
+
+- **[Agno](https://github.com/agno-agi/agno)** - Apache 2.0 - Agentic framework behind the `/agent` reasoning loop, tool calling, session persistence and image attachments
+- **[LiteLLM](https://litellm.ai)** - MIT License - Unified model layer giving one interface across every supported provider, plus the model catalogue and per-model metadata the agent's provider picker is built from
 
 ### UI Components & Styling
 - **[shadcn/ui](https://ui.shadcn.com)** - MIT License - Beautifully designed components built with Radix UI and Tailwind CSS

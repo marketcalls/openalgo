@@ -23,7 +23,7 @@ from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource, fields
 
 from database.auth_db import verify_api_key
-from database.whatsapp_db import get_whatsapp_user_by_username
+from database.whatsapp_db import get_bot_config, get_whatsapp_user_by_username
 from limiter import limiter
 from services.whatsapp_alert_service import alert_executor, whatsapp_alert_service
 from services.whatsapp_bot_service import (
@@ -73,6 +73,25 @@ def _resolve_api_key(data: dict | None = None) -> str | None:
     if data is None:
         data = {}
     return data.get("apikey") or request.headers.get("X-API-KEY") or request.args.get("apikey")
+
+
+def _is_paired_owner(username: str) -> bool:
+    """Whether this username is the operator who paired the device.
+
+    Read from ``whatsapp_config``, which records ``owner_username`` at pair
+    time, rather than from the linked-users table, which is a different fact:
+    that table says who has messaged the bot, and the operator of a single
+    user install has no reason to have done so.
+    """
+    if not username:
+        return False
+    try:
+        config = get_bot_config() or {}
+    except Exception:
+        logger.exception("Could not read the WhatsApp bot config")
+        return False
+    owner = (config.get("owner_username") or "").strip()
+    return bool(owner) and owner.casefold() == str(username).strip().casefold()
 
 
 def _auth_or_401(data: dict | None = None):
@@ -200,7 +219,30 @@ class WhatsAppNotify(Resource):
             targets = [phone_to_jid(digits)]
         elif data.get("username"):
             user = get_whatsapp_user_by_username(data["username"])
-            if not user:
+            if user:
+                targets = [user["whatsapp_jid"]]
+            elif _is_paired_owner(data["username"]):
+                # The operator who paired this device, asking for themselves.
+                #
+                # OpenAlgo is single user, and the rest of this bot already
+                # treats the paired operator as the identity: the command
+                # handlers look their api_key up from the owner recorded at
+                # pair time precisely "so the operator never has to /link or
+                # paste credentials from the phone"
+                # (whatsapp_bot_service._sdk_client_for_owner).
+                #
+                # This route did not follow that rule. It resolved a username
+                # only through the linked-users table, which is filled by a
+                # phone sending /link, so an operator who had paired their
+                # device and never messaged the bot was told their own
+                # username was "not found or not linked" while the /whatsapp
+                # page showed the device paired. A chart alert asking for the
+                # logged-in user hit exactly that.
+                #
+                # An empty target list is the self recipient, the same one
+                # "self": true uses.
+                targets = []
+            else:
                 return make_response(
                     jsonify(
                         {
@@ -210,7 +252,6 @@ class WhatsAppNotify(Resource):
                     ),
                     404,
                 )
-            targets = [user["whatsapp_jid"]]
         else:
             return make_response(
                 jsonify(
@@ -233,13 +274,55 @@ class WhatsAppNotify(Resource):
                 caption=caption,
                 filename=filename,
             )
+            # **A send that reached nobody is not a success.**
+            #
+            # This answered "status": "success" whatever the report said, so
+            # "Delivered to 0, failed 1" went back under the same status as a
+            # message that arrived. Every caller keys on the status: the chart
+            # alert in /trading records the channel as accepted and the trader
+            # is told the alert went out, which is the one outcome worse than a
+            # refusal. The failure text is already written for a trader, so it
+            # is carried up as the message rather than summarised away.
+            delivered = len(report["sent"])
+            refused = len(report["failed"])
+            if delivered == 0 and refused > 0:
+                first = report["failed"][0]
+                said = first.get("error") if isinstance(first, dict) else None
+                return make_response(
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": said or "The message could not be delivered.",
+                            "data": report,
+                        }
+                    ),
+                    # **200, deliberately, and this is the compatibility line.**
+                    #
+                    # The lie worth fixing is the `status` field: a report of
+                    # "Delivered to 0, failed 1" came back as "success", and
+                    # every caller branches on that, including the chart alert
+                    # in /trading which then recorded the channel as accepted.
+                    # That field is now truthful.
+                    #
+                    # The HTTP code is left alone. This endpoint is public and
+                    # has a large installed base of callers nobody here can
+                    # survey, and a code they have never seen from this path is
+                    # a new failure mode for anything that raises on non-2xx or
+                    # retries on 5xx. Those callers were mishandling a wrong
+                    # `status`; they should not also have to handle a new
+                    # transport error to keep working. The request itself was
+                    # accepted and processed, which is what 200 says, and what
+                    # happened to it is in the body, which is where this API
+                    # puts every other outcome.
+                    200,
+                )
             return make_response(
                 jsonify(
                     {
+                        # Some arrived and some did not: still a success for the
+                        # ones that did, and the report names the rest.
                         "status": "success",
-                        "message": (
-                            f"Delivered to {len(report['sent'])}, failed {len(report['failed'])}"
-                        ),
+                        "message": f"Delivered to {delivered}, failed {refused}",
                         "data": report,
                     }
                 ),

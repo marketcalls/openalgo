@@ -36,6 +36,7 @@ SCOPED_SESSION_MODULES = [
     ("database.flow_db", "db_session"),
     ("database.scalping_db", "db_session"),
     ("database.watchlist_db", "db_session"),
+    ("database.alert_log_db", "db_session"),
     ("database.leverage_db", "db_session"),
     ("database.strategy_portfolio_db", "db_session"),
     ("database.market_calendar_db", "db_session"),
@@ -45,6 +46,7 @@ SCOPED_SESSION_MODULES = [
     ("database.strategy_module_db", "db_session"),
     ("database.oauth_db", "db_session"),
     ("database.whatsapp_db", "db_session"),
+    ("database.agent_db", "db_session"),
 ]
 
 

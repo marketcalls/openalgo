@@ -902,7 +902,24 @@ class WhatsAppBotService:
                     elif cfg_jid:
                         ret = self._wa.send(cfg_jid, text or "")  # explicit owner JID
                     else:
-                        ret = self._wa.send(text or "")  # single-arg fallback
+                        # The documented route-to-owner form, and it is a real
+                        # path rather than a last resort.
+                        #
+                        # The comment above this block was written against wars
+                        # 0.1.3. The installed library is 0.1.4, whose `send`
+                        # documents `wa.send("Hello there")  # text -> owner`
+                        # as one of its calling shapes and raises ValueError
+                        # when no owner is configured, so a failure here is
+                        # loud rather than silent. It is how the playground
+                        # delivers today with no captured JID on this install.
+                        #
+                        # Attempted rather than refused, because refusing it
+                        # blocks the only self-send an install has before its
+                        # first inbound message: `own_jid` is captured from an
+                        # is_from_me message, and wars 0.1.4 exposes no
+                        # attribute to ask for it, so pairing alone never
+                        # fills it in.
+                        ret = self._wa.send(text or "")
                 elif media_kwargs:
                     ret = self._wa.send(jid, **media_kwargs)
                     if document and (text or caption):

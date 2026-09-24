@@ -35,12 +35,29 @@ class MockResizeObserver {
 }
 window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
 
-// Mock IntersectionObserver
-window.IntersectionObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+// Mock IntersectionObserver.
+//
+// A real class, for exactly the reason ResizeObserver above is one: a
+// vi.fn().mockImplementation() cannot be called with `new`, so any component
+// that observes an element to find out whether it is on screen died on
+// "is not a constructor" inside its mount effect, before the assertion ran.
+//
+// It never reports, which means a component that gates behaviour on visibility
+// keeps whatever it assumed on mount. Those components assume visible, because
+// a real observer reports the current state on its first callback and no
+// observer at all must not leave a card mute forever.
+class MockIntersectionObserver {
+  readonly root = null
+  readonly rootMargin = ''
+  readonly thresholds: number[] = []
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return []
+  }
+}
+window.IntersectionObserver = MockIntersectionObserver as unknown as typeof IntersectionObserver
 
 // Mock scrollTo
 window.scrollTo = vi.fn()

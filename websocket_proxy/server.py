@@ -1224,7 +1224,13 @@ class WebSocketProxy:
         # Get subscription parameters
         symbols = data.get("symbols") or []  # Handle array of symbols
         raw_mode = data.get("mode", "Quote")  # Accepts 1/2/3 or LTP/Quote/Depth (any case)
-        depth_level = data.get("depth", 5)  # Default to 5 levels
+        # The chart library sent the level as "depth_level" through 2.0.0 and
+        # the proxy never read it, so accept either key before defaulting to 5.
+        depth_level = data.get("depth")
+        if depth_level is None:
+            depth_level = data.get("depth_level")
+        if depth_level is None:
+            depth_level = 5
         # Optional request_id (issue #1376): when the client supplies one, we
         # echo it back in the response so the client can correlate this ack
         # with the originating request and learn per-symbol success/failure

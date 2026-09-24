@@ -1,6 +1,8 @@
 import json
+import threading
 import time
 import urllib.parse
+from datetime import timedelta
 
 import httpx
 import pandas as pd
@@ -11,13 +13,188 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Neo serves historical data for these four segments only. cde_fo (CDS) and
+# mcx_fo (MCX) are quote-only, even though the plugin trades them.
+HISTORY_SEGMENTS = {"nse_cm", "nse_fo", "bse_cm", "bse_fo"}
+
+# Widest span the backend accepts in one request, keyed by Neo interval. A wider
+# request is rejected outright rather than truncated, so the fetch loop chunks
+# to these and stitches the pieces back together.
+HISTORY_CHUNK_DAYS = {
+    "1min": 30,
+    "3min": 30,
+    "5min": 30,
+    "10min": 60,
+    "15min": 60,
+    "30min": 90,
+    "60min": 90,
+    "D": 180,
+    "W": 180,
+}
+
+# A Neo candle is a positional row already in the OpenAlgo column order.
+HISTORY_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "oi"]
+
+# Measured, not published, and re-measured because it moved. Neo documents no
+# historical rate limit. Probed 2026-09-06 it absorbed roughly five requests a
+# second and sustained a 0.5s gap 10/10, which is what the 4/sec below was set
+# against. Re-probed 2026-09-21 that no longer holds: a 0.25s gap got 5/10, a
+# 0.5s gap 6/10, a 0.75s gap 11/12, and only a 1.0s gap ran clean, 20/20 over
+# 23s. A single request after an idle still passes, and a quotes call right
+# before one does not disturb it, so this is the historical endpoint's own
+# sustained ceiling rather than a burst or a shared budget.
+#
+# Pacing at the measured ceiling costs no wall clock. At 4/sec roughly half the
+# requests came back 429 and each cost a 1s backoff plus a wasted round trip, so
+# a chunk averaged about a second either way -- the difference was a log full of
+# warnings and retry budget burnt before a long pull finished. Two years of 1
+# minute data is ~25 sequential chunks, so this is the knob that decides whether
+# such a pull completes or dies half way.
+HISTORY_RATE_LIMIT_PER_SEC = 1
+HISTORY_MIN_INTERVAL = 1.0 / HISTORY_RATE_LIMIT_PER_SEC
+
+# The quotes endpoint refuses on CONCURRENCY, not on rate. Probed 2026-09-23
+# against nse_cm|Nifty 50: 20 back-to-back sequential requests with no gap at all
+# ran 20/20, and every sequential pacing from a 0.10s gap upward ran 14/14, so
+# there is no sustained-rate ceiling worth pacing against. Simultaneous requests
+# are what it rejects -- 2, 3 and 4 in flight were clean, 6 drew one HTTP 429
+# ("too many request received"), and 8 lost 14 of 24. So this is a gate on
+# requests in flight, not a delay between them: a delay would tax the sequential
+# case that already works while still letting a burst through.
+#
+# Unhandled, a 429 here returned None from _make_quotes_request, and with NIFTY
+# carrying a single index candidate there was no second attempt: get_quotes
+# returned None, quotes_service turned that into HTTP 500 "Failed to fetch
+# quotes", and the option services reported "Failed to fetch LTP for NIFTY"
+# (QA OS-12, OS-13). Hence the retry as well as the gate.
+QUOTES_MAX_INFLIGHT = 4
+QUOTES_MAX_RETRIES = 3
+QUOTES_BASE_BACKOFF = 0.5
+
+# No timeout was passed here at all, so a slow response inherited the shared
+# client's 120s -- a market-data call that hangs a page for two minutes. A quote
+# is worthless long before then.
+QUOTES_TIMEOUT = 15.0
+
+# Module level, not on BrokerData: services build a fresh handler per request,
+# so a gate held on the instance would admit one caller each and gate nothing.
+_quotes_gate = threading.Semaphore(QUOTES_MAX_INFLIGHT)
+
+
+# Neo refuses a fromdate five years or older with a 400 that fails the whole
+# pull. Probed 2026-09-21: today-1825d (2021-09-22) was served, today-1826d
+# (2021-09-21, five years to the day) was refused, so the earliest accepted
+# fromdate is five years back plus one day. The chart's weekly lookback asks
+# for exactly 1825 days, which lands on that last allowed date, so an IST/UTC
+# rounding difference or a clock crossing midnight mid-request is enough to
+# push it over. Clamped rather than forwarded, so a wide request returns the
+# history that does exist.
+HISTORY_MAX_LOOKBACK_YEARS = 5
+
+# Neo sends no Retry-After, so a 429 backs off exponentially: 1s, 2s, 4s, 8s.
+HISTORY_MAX_RETRIES = 4
+HISTORY_BASE_BACKOFF = 1.0
+
+# Module level, never on BrokerData. Services build a fresh instance per request
+# (see services/history_service.py), so pacing state held on the instance is
+# reset away every call and throttles nothing across concurrent requests.
+_history_rate_lock = threading.Lock()
+_history_last_call = 0.0
+
+
+def _history_pace():
+    """Reserve the next historical request slot.
+
+    Reserved inside the lock so concurrent callers cannot claim the same slot,
+    slept outside it so waiters do not block one another.
+    """
+    global _history_last_call
+    with _history_rate_lock:
+        now = time.time()
+        wait = max(0.0, _history_last_call + HISTORY_MIN_INTERVAL - now)
+        _history_last_call = now + wait
+    if wait > 0:
+        time.sleep(wait)
+
+
+# Neo reports a range holding no candles as a 400 fault rather than an empty
+# success, so these have to be told apart from a real failure by their text. A
+# pull whose last chunk lands on a weekend, a holiday, or today before the open
+# is the ordinary case, not an error.
+# Both observed live: "No data found" for a weekend, and the longer
+# "Data not available ... Market has not yet opened" for today before the open.
+# "Invalid neosymbol" is deliberately absent, being a real error.
+_NO_DATA_MARKERS = (
+    "no data found",
+    "data not available",
+    "no data is available",
+    "market has not yet opened",
+)
+
+
+def _is_no_data_fault(message: str) -> bool:
+    """True when Neo is saying the range is empty, not that the request is bad."""
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in _NO_DATA_MARKERS)
+
+
+def _history_earliest_start() -> pd.Timestamp:
+    """Earliest fromdate Neo will accept, as a naive IST-dated timestamp.
+
+    Anchored on the IST date because that is the clock Neo measures its own
+    five years against; anchoring on UTC would read a day early for the five
+    and a half hours after IST midnight.
+    """
+    today = pd.Timestamp.now(tz="Asia/Kolkata").normalize().tz_localize(None)
+    return today - pd.DateOffset(years=HISTORY_MAX_LOOKBACK_YEARS) + timedelta(days=1)
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    """Neo sends every field as a string, and an absent one as None."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value, default: int = 0) -> int:
+    """As _as_float, via float: a quantity can arrive as "16131960.0000"."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _quotes_retry_delay(headers, attempt: int) -> float:
+    """Back off 0.5s, 1s, 2s. Neo sends no Retry-After, but honour one if it does."""
+    value = headers.get("Retry-After") or headers.get("retry-after")
+    if value:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    return QUOTES_BASE_BACKOFF * (2**attempt)
+
+
+def _history_retry_delay(headers, attempt: int) -> float:
+    """Prefer the server's own guidance. Neo sends none, so back off."""
+    value = headers.get("Retry-After") or headers.get("retry-after")
+    if value:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    return HISTORY_BASE_BACKOFF * (2**attempt)
+
 
 class BrokerData:
     def __init__(self, auth_token):
-        # Updated for Neo API v2: session_token:::session_sid:::base_url:::access_token
+        # Neo API v2: session_token:::session_sid:::base_url:::access_token, with
+        # an optional 5th data_center part on tokens issued since streaming
+        # needed it. Take the first four so both lengths parse.
         self.session_token, self.session_sid, self.base_url, self.access_token = auth_token.split(
             ":::"
-        )
+        )[:4]
 
         # baseUrl is mandatory; it comes from MPIN validation. Raise if missing.
         if not self.base_url or not self.base_url.startswith("http"):
@@ -30,9 +207,24 @@ class BrokerData:
         self.last_quote_error = None
         logger.info(f"Using quotes baseUrl: {self.quotes_base_url}")
 
-        # Define empty timeframe map since Kotak Neo doesn't support historical data
-        self.timeframe_map = {}
-        logger.warning("Kotak Neo does not support historical data intervals")
+        # OpenAlgo interval -> Neo interval. "60m" is an accepted alias for "1h":
+        # intervals_service drops it from what it advertises because it is not a
+        # canonical interval, but it keeps working as input.
+        self.timeframe_map = {
+            # Minutes
+            "1m": "1min",
+            "3m": "3min",
+            "5m": "5min",
+            "10m": "10min",
+            "15m": "15min",
+            "30m": "30min",
+            # Hours
+            "1h": "60min",
+            "60m": "60min",
+            # Daily and weekly
+            "D": "D",
+            "W": "W",
+        }
 
     def _get_kotak_exchange(self, exchange):
         """Map OpenAlgo exchange to Kotak exchange segment"""
@@ -55,6 +247,13 @@ class BrokerData:
         canonical name differs per index and is not always derivable from the
         master contract (which often stores just the short ticker). We try
         descriptive variants in priority order and stop at the first hit.
+
+        The SFeed index subscription in broker/kotak/streaming/kotak_adapter.py
+        keeps its own copy of this map, because the streaming path cannot import
+        this module. test_kotak_index_feed_subscription.py compares the two and
+        fails if they drift: a name that resolves here but not there subscribes
+        an index Kotak does not know, which reads as a price that never ticks
+        rather than as an error.
         """
         index_map = {
             "NIFTY": ["Nifty 50"],
@@ -72,8 +271,7 @@ class BrokerData:
             "SENSEX": ["SENSEX"],
             "BANKEX": ["BANKEX"],
         }
-        key = symbol.upper()
-        return index_map.get(key, [symbol])
+        return index_map.get(symbol.upper(), [symbol])
 
     def _make_quotes_request(self, query, filter_name="all"):
         """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
@@ -92,7 +290,27 @@ class BrokerData:
             logger.info(f"QUOTES API - Making request to: {url}")
             logger.debug(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
 
-            response = client.get(url, headers=headers)
+            # A 429 retries the same request rather than falling through to the
+            # caller. The gate is taken per attempt and released before the
+            # backoff sleep: holding a slot while doing nothing would idle a
+            # quarter of the budget for the length of the wait.
+            for attempt in range(QUOTES_MAX_RETRIES + 1):
+                with _quotes_gate:
+                    response = client.get(url, headers=headers, timeout=QUOTES_TIMEOUT)
+                if response.status_code != 429:
+                    break
+                if attempt == QUOTES_MAX_RETRIES:
+                    logger.warning(
+                        f"QUOTES API - Rate limited after {QUOTES_MAX_RETRIES} retries: {url}"
+                    )
+                    break
+                delay = _quotes_retry_delay(response.headers, attempt)
+                logger.info(
+                    f"QUOTES API - 429 for {query}, retry "
+                    f"{attempt + 1}/{QUOTES_MAX_RETRIES} in {delay:.2f}s"
+                )
+                time.sleep(delay)
+
             logger.info(f"QUOTES API - Response status: {response.status_code} for {url}")
 
             if response.status_code == 200:
@@ -281,8 +499,12 @@ class BrokerData:
                 logger.debug(
                     f"DEPTH API - Index candidates for {symbol}: {candidates}"
                 )
+                # "all", not "depth": Neo's filters are strict subsets, and the
+                # depth one returns the book alone -- no ltp, ohlc, volume or oi.
+                # "all" carries the identical book plus those fields, in the same
+                # single request, so the narrower filter only loses data.
                 response, query = self._query_index_with_candidates(
-                    kotak_exchange, candidates, "depth"
+                    kotak_exchange, candidates, "all"
                 )
                 if response is None:
                     logger.warning(
@@ -312,8 +534,9 @@ class BrokerData:
                 query = f"{kotak_exchange}|{psymbol}"
                 logger.debug(f"DEPTH API - Query: {query}")
 
-                # Make API request with depth filter (index branch already fetched response)
-                response = self._make_quotes_request(query, "depth")
+                # "all" for the reason given in the index branch above (index
+                # branch already fetched its own response).
+                response = self._make_quotes_request(query, "all")
 
             if response and isinstance(response, list) and len(response) > 0:
                 target_quote = response[0]
@@ -362,14 +585,32 @@ class BrokerData:
                 while len(asks) < 5:
                     asks.append({"price": 0, "quantity": 0})
 
-                total_buy_qty = sum(bid["quantity"] for bid in bids if bid["quantity"] > 0)
-                total_sell_qty = sum(ask["quantity"] for ask in asks if ask["quantity"] > 0)
+                # Neo reports a whole-book total on cash rows -- RELIANCE came back
+                # at 634710 against 2616 across the five visible levels -- but
+                # leaves it 0 on F&O, where the visible levels are all there is to
+                # add up. Prefer the broker's figure, fall back to the sum, so an
+                # unpopulated field never reads as an empty book.
+                level_buy_qty = sum(bid["quantity"] for bid in bids if bid["quantity"] > 0)
+                level_sell_qty = sum(ask["quantity"] for ask in asks if ask["quantity"] > 0)
+                total_buy_qty = _as_int(target_quote.get("total_buy")) or level_buy_qty
+                total_sell_qty = _as_int(target_quote.get("total_sell")) or level_sell_qty
+
+                ohlc_data = target_quote.get("ohlc") or {}
 
                 result = {
                     "bids": bids,
                     "asks": asks,
                     "totalbuyqty": total_buy_qty,
                     "totalsellqty": total_sell_qty,
+                    "ltp": _as_float(target_quote.get("ltp")),
+                    "ltq": _as_int(target_quote.get("last_traded_quantity")),
+                    "open": _as_float(ohlc_data.get("open")),
+                    "high": _as_float(ohlc_data.get("high")),
+                    "low": _as_float(ohlc_data.get("low")),
+                    # Neo's ohlc.close is the previous close, not the last price.
+                    "prev_close": _as_float(ohlc_data.get("close")),
+                    "volume": _as_int(target_quote.get("last_volume")),
+                    "oi": _as_int(target_quote.get("open_int")),
                 }
 
                 logger.debug(f"DEPTH API - Final result: {result}")
@@ -395,10 +636,11 @@ class BrokerData:
         try:
             # Kotak Neo's quotes endpoint rejects a request carrying 50 symbols with
             # HTTP 400 "Please set the Neo symbol max value to 50.", so the effective
-            # server-side cap is below 50 even though the docs state no limit at all.
-            # Observed against the live endpoint: 42 symbols returns 200, 50 returns
-            # 400, so the cap sits somewhere in 42-49. 25 keeps a wide margin; URL
-            # length is not the constraint (25 entries is roughly 350 characters).
+            # server-side cap is below the 50 the docs claim (documented 2026-09-01;
+            # before that they stated no limit at all). Observed against the live
+            # endpoint: 42 symbols returns 200, 50 returns 400, so the cap sits
+            # somewhere in 42-49. 25 keeps a wide margin; URL length is not the
+            # constraint (25 entries is roughly 350 characters).
             BATCH_SIZE = 25
             RATE_LIMIT_DELAY = 0.2  # 5 requests/sec = 125 symbols/sec (under 500 limit)
 
@@ -634,31 +876,373 @@ class BrokerData:
         }
 
     def _get_default_depth(self):
-        """Return default depth structure"""
+        """Return default depth structure.
+
+        Carries every key the success path does. A caller that reads depth["ltp"]
+        must not raise KeyError merely because the quote could not be fetched.
+        """
         return {
             "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
             "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
             "totalbuyqty": 0,
             "totalsellqty": 0,
+            "ltp": 0.0,
+            "ltq": 0,
+            "open": 0.0,
+            "high": 0.0,
+            "low": 0.0,
+            "prev_close": 0.0,
+            "volume": 0,
+            "oi": 0,
         }
+
+    def _history_segment(self, symbol: str, exchange: str) -> str:
+        """Resolve the Neo exchange segment the historical endpoint expects.
+
+        The master contract is not consistent about brexchange: cash rows store
+        an OpenAlgo code ("NSE"), F&O rows store pExchSeg, which is already in
+        Neo form ("nse_fo"). Both shapes reach here, so map what maps and take
+        the rest as given.
+        """
+        brexchange = get_brexchange(symbol, exchange)
+        segment = None
+        if brexchange:
+            segment = self._get_kotak_exchange(brexchange) or brexchange
+        if not segment:
+            segment = self._get_kotak_exchange(exchange)
+        if not segment:
+            raise Exception(f"Unsupported exchange for historical data: {exchange}")
+
+        if segment not in HISTORY_SEGMENTS:
+            raise Exception(
+                f"Kotak Neo serves historical data for NSE, BSE, NFO, BFO, NSE_INDEX and "
+                f"BSE_INDEX only. {exchange} (segment {segment}) is quote-only."
+            )
+        return segment
+
+    def _history_neosymbols(self, symbol: str, exchange: str, segment: str) -> list:
+        """Candidate neosymbol keys for the historical endpoint, best first.
+
+        The endpoint documents `<segment>|<instrument_token>`, and the master
+        contract carries a pSymbol for index rows as well as tradable ones, so
+        the token is always tried first. An index additionally falls back to the
+        descriptive Neo names `get_quotes` relies on, because the index name is
+        the one key the scrip master has been seen to disagree with the feed on.
+        """
+        candidates = []
+
+        token = get_token(symbol, exchange)
+        if token:
+            candidates.append(f"{segment}|{token}")
+
+        if "INDEX" in exchange.upper():
+            for name in self._get_index_symbol_candidates(symbol):
+                # The historical endpoint matches names case-sensitively and does
+                # not always agree with the quotes endpoint: INDIAVIX answers to
+                # "India VIX" for quotes but only to "INDIA VIX" here. Trying the
+                # upper-case form as well costs nothing when the first one hits.
+                for variant in (name, name.upper()):
+                    key = f"{segment}|{variant}"
+                    if key not in candidates:
+                        candidates.append(key)
+
+        if not candidates:
+            raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
+        return candidates
+
+    def _fetch_history_chunk(self, neosymbol, resolution, chunk_start, chunk_end) -> list:
+        """One historical request. Returns the candle rows, or raises."""
+        client = get_httpx_client()
+
+        params = {
+            "neosymbol": neosymbol,
+            "fromdate": chunk_start.strftime("%Y-%m-%d"),
+            "todate": chunk_end.strftime("%Y-%m-%d"),
+            "interval": resolution,
+        }
+        # Neo takes the pipe literally, and leaving it unescaped keeps the URL
+        # readable in the logs and identical to the documented example.
+        url = (
+            f"{self.base_url}/market-data/1.0/historical/details"
+            f"?{urllib.parse.urlencode(params, safe='|')}"
+        )
+        headers = {"Authorization": self.access_token, "Content-Type": "application/json"}
+
+        logger.debug(
+            f"HISTORY API - Requesting {neosymbol} {resolution} "
+            f"{params['fromdate']} to {params['todate']}"
+        )
+
+        # A 429 retries this same request. Letting it fall through to the next
+        # neosymbol candidate would spend another slot on the very quota that is
+        # already exhausted, and would blame the symbol for a pacing problem.
+        for attempt in range(HISTORY_MAX_RETRIES + 1):
+            _history_pace()
+            response = client.get(url, headers=headers, timeout=60)
+            if response.status_code != 429:
+                break
+            if attempt == HISTORY_MAX_RETRIES:
+                raise Exception(
+                    f"Rate limited by Neo for {neosymbol} after "
+                    f"{HISTORY_MAX_RETRIES} retries: {response.text[:200]}"
+                )
+            delay = _history_retry_delay(response.headers, attempt)
+            logger.warning(
+                f"HISTORY API - 429 for {neosymbol}, retry "
+                f"{attempt + 1}/{HISTORY_MAX_RETRIES} in {delay:.1f}s"
+            )
+            time.sleep(delay)
+
+        try:
+            payload = json.loads(response.text)
+        except ValueError as exc:
+            raise Exception(
+                f"HTTP {response.status_code} for {neosymbol}, non-JSON body: {response.text[:300]}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise Exception(f"Unexpected payload for {neosymbol}: {response.text[:300]}")
+
+        fault = payload.get("fault") or {}
+        message = str(fault.get("message") or payload.get("emsg") or "")
+
+        # An empty range arrives as a 400 fault. Reported as an error it would
+        # abort a whole multi-chunk pull whose last chunk merely landed on a
+        # Sunday, so it is answered with no candles instead.
+        if _is_no_data_fault(message):
+            logger.info(
+                f"HISTORY API - No data for {neosymbol} "
+                f"{params['fromdate']}..{params['todate']}: {message[:120]}"
+            )
+            return []
+
+        if response.status_code != 200:
+            raise Exception(
+                f"HTTP {response.status_code} for {neosymbol}: {message or response.text[:300]}"
+            )
+        if str(payload.get("status", "")).lower() != "success":
+            raise Exception(f"Neo error for {neosymbol}: {message or response.text[:300]}")
+
+        return (payload.get("data") or {}).get("candles") or []
+
+    @staticmethod
+    def _repair_candles(df: pd.DataFrame, exchange: str, symbol: str, interval: str) -> pd.DataFrame:
+        """Make every candle satisfy low <= open, close <= high with volume >= 0.
+
+        Neo breaks that invariant on some opening candles: it aggregates the
+        high and the low from the continuous session while taking the open from
+        the pre-open auction print, so a gap-up open lands outside its own bar
+        (observed on NSE RELIANCE 2026-09-04 09:15, o=1304.1 with l=1306.3, and
+        2026-09-10 09:15, o=1278.5 with l=1278.7). Chart clients validate the
+        invariant and reject the whole series over one such bar, which is what
+        made Kotak intraday charts fail to load while daily ones worked.
+
+        The same clients reject a negative volume, and Neo produces those too:
+        on 2026-08-03 the closing candle came back at -2,800,171 for NSE TCS and
+        -7,799,031 for NSE INFY, the same minute market-wide, against a day that
+        really traded 3,036,839 shares of TCS. Since the longer intervals look
+        further back, that one minute is what still broke 10m through 1h after
+        the wick repair while 1m through 5m, whose lookback stops short of it,
+        had started working.
+
+        The open and the close are prices that actually traded, so the wick is
+        widened to cover them rather than the open being edited to fit, and a
+        volume that cannot be true is zeroed rather than costing the bar its
+        prices. Rows still missing an OHLC value after coercion are dropped: a
+        NaN reaches the client as an invalid candle too, and there is no honest
+        repair.
+        """
+        ohlc = ["open", "high", "low", "close"]
+
+        usable = df[ohlc].notna().all(axis=1)
+        if not usable.all():
+            logger.warning(
+                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing "
+                f"OHLC for {exchange}:{symbol} {interval}"
+            )
+            df = df[usable].reset_index(drop=True)
+            if df.empty:
+                return df
+
+        high = df[ohlc].max(axis=1)
+        low = df[ohlc].min(axis=1)
+        broken = (high != df["high"]) | (low != df["low"])
+        if broken.any():
+            logger.info(
+                f"HISTORY API - Widened {int(broken.sum())} candle(s) whose high/low "
+                f"excluded their own open/close for {exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df["high"] = high
+            df["low"] = low
+
+        negative = df["volume"] < 0
+        if negative.any():
+            logger.warning(
+                f"HISTORY API - Zeroing {int(negative.sum())} negative volume(s) for "
+                f"{exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df.loc[negative, "volume"] = 0
+        return df
+
+    @staticmethod
+    def _normalize_candles(candles: list) -> list:
+        """Pad each positional row out to the full seven column contract.
+
+        Neo documents `[timestamp, open, high, low, close, volume, oi]` but does
+        not populate oi in phase one, so a row can arrive short. Padding here
+        keeps the frame rectangular instead of letting pandas invent NaN columns.
+        """
+        rows = []
+        for candle in candles:
+            if not isinstance(candle, (list, tuple)) or len(candle) < 5:
+                logger.warning(f"HISTORY API - Skipping malformed candle row: {candle}")
+                continue
+            row = list(candle[:7])
+            row.extend([0] * (7 - len(row)))
+            rows.append(row)
+        return rows
 
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
-        """Placeholder for historical data - not supported by Kotak Neo"""
-        empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        logger.warning("Kotak Neo does not support historical data")
-        return empty_df
+        """Historical OHLCV candles from the Neo market-data API.
+
+        Args:
+            symbol: OpenAlgo trading symbol
+            exchange: OpenAlgo exchange (NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX)
+            interval: OpenAlgo interval, a key of self.timeframe_map
+            start_date: Start date, YYYY-MM-DD
+            end_date: End date, YYYY-MM-DD
+
+        Returns:
+            pd.DataFrame of [timestamp, open, high, low, close, volume, oi] with
+            timestamp in epoch seconds.
+        """
+        try:
+            resolution = self.timeframe_map.get(interval)
+            if not resolution:
+                supported = ", ".join(sorted(self.timeframe_map))
+                raise Exception(f"Unsupported timeframe: {interval}. Supported: {supported}")
+
+            segment = self._history_segment(symbol, exchange)
+            candidates = self._history_neosymbols(symbol, exchange, segment)
+
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            if start > end:
+                raise Exception(f"start_date {start_date} is after end_date {end_date}")
+
+            earliest = _history_earliest_start()
+            if end < earliest:
+                logger.info(
+                    f"HISTORY API - {exchange}:{symbol} {interval} requested entirely before "
+                    f"Neo's {HISTORY_MAX_LOOKBACK_YEARS} year horizon ({earliest.date()})"
+                )
+                return pd.DataFrame(columns=HISTORY_COLUMNS)
+            if start < earliest:
+                logger.info(
+                    f"HISTORY API - Clamping start for {exchange}:{symbol} {interval} from "
+                    f"{start.date()} to Neo's earliest served date {earliest.date()}"
+                )
+                start = earliest
+
+            chunk_days = HISTORY_CHUNK_DAYS[resolution]
+            resolved = None
+            dfs = []
+            current_start = start
+
+            while current_start <= end:
+                current_end = min(current_start + timedelta(days=chunk_days - 1), end)
+
+                # Once a candidate has actually produced candles, stay on it.
+                attempts = [resolved] if resolved else candidates
+                candles = None
+                errors = []
+                for neosymbol in attempts:
+                    try:
+                        result = self._fetch_history_chunk(
+                            neosymbol, resolution, current_start, current_end
+                        )
+                    except Exception as exc:
+                        errors.append(f"{neosymbol}: {exc}")
+                        continue
+                    candles = result
+                    if result:
+                        resolved = neosymbol
+                        break
+
+                if candles is None:
+                    # Every candidate failed. Skipping the chunk would leave a
+                    # hole that reads as a market holiday rather than an error,
+                    # so surface it instead of returning a short series.
+                    raise Exception(
+                        f"Historical request failed for {exchange}:{symbol} "
+                        f"{current_start.date()} to {current_end.date()} - " + "; ".join(errors)
+                    )
+
+                rows = self._normalize_candles(candles)
+                if rows:
+                    dfs.append(pd.DataFrame(rows, columns=HISTORY_COLUMNS))
+
+                current_start = current_end + timedelta(days=1)
+
+            if not dfs:
+                logger.info(f"HISTORY API - No candles for {exchange}:{symbol} {interval}")
+                return pd.DataFrame(columns=HISTORY_COLUMNS)
+
+            final_df = pd.concat(dfs, ignore_index=True)
+
+            # Neo stamps every candle ISO 8601 carrying the +0530 offset, so
+            # parsing as UTC already yields the true epoch, which is what an
+            # intraday bar wants. A daily or weekly candle is a date rather than
+            # an instant, and the platform expects those on IST midnight, which
+            # is the +5:30 shift Zerodha applies for the same reason.
+            final_df["timestamp"] = pd.to_datetime(
+                final_df["timestamp"], format="ISO8601", utc=True
+            )
+            if resolution in ("D", "W"):
+                # Floored, not merely shifted. A settled daily candle arrives on
+                # 00:00 IST and the shift alone lands it right, but the candle
+                # for a session still in progress is stamped with the session
+                # open (09:15 IST), which would place today's bar a third of a
+                # day past every other one and read as a separate, later day.
+                final_df["timestamp"] = (
+                    final_df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+                ).dt.floor("D")
+            final_df["timestamp"] = final_df["timestamp"].astype("int64") // 10**9
+
+            for column in ("open", "high", "low", "close"):
+                final_df[column] = pd.to_numeric(final_df[column], errors="coerce")
+            # oi is unpopulated in phase one, so it lands as 0 rather than NaN.
+            for column in ("volume", "oi"):
+                final_df[column] = (
+                    pd.to_numeric(final_df[column], errors="coerce").fillna(0).astype("int64")
+                )
+
+            final_df = self._repair_candles(final_df, exchange, symbol, interval)
+
+            # Chunks can overlap at the seams and can arrive out of order.
+            final_df = (
+                final_df.sort_values("timestamp")
+                .drop_duplicates(subset=["timestamp"], keep="first")
+                .reset_index(drop=True)
+            )
+
+            return final_df[HISTORY_COLUMNS]
+
+        except Exception as e:
+            logger.exception(f"Error fetching historical data for {exchange}:{symbol}: {e}")
+            raise
 
     def get_supported_intervals(self) -> dict:
         """Return supported intervals matching the format expected by intervals.py"""
-        intervals = {
-            "seconds": [],
-            "minutes": [],
-            "hours": [],
-            "days": [],
-            "weeks": [],
-            "months": [],
+        offered = list(self.timeframe_map.keys())
+        return {
+            "seconds": [k for k in offered if k.endswith("s")],
+            "minutes": [k for k in offered if k.endswith("m")],
+            "hours": [k for k in offered if k.endswith("h")],
+            "days": [k for k in offered if k == "D"],
+            "weeks": [k for k in offered if k == "W"],
+            "months": [k for k in offered if k == "M"],
         }
-        logger.warning("Kotak Neo does not support historical data intervals")
-        return intervals

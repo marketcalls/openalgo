@@ -162,7 +162,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | iiflcapital | Y | Y | Y | Y |
 | indmoney | Y | Y | Y | Y |
 | jainamxts | Y | Y | Y | Y |
-| kotak | Y | Y | S | S |
+| kotak | Y | Y | Y | Y |
 | motilal | Y | Y | S | Y |
 | mstock | S | S | Y | Y |
 | nubra | Y | S | S | Y |
@@ -285,9 +285,9 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 - **Margin**: 22/36 brokers, 13 stub
 - **Quotes**: 34/36 brokers, 2 stub
 - **Depth**: 34/36 brokers, 2 stub
-- **History**: 27/36 brokers, 9 stub
-- **Intervals**: 34/36 brokers, 2 stub
+- **History**: 28/36 brokers, 8 stub
+- **Intervals**: 35/36 brokers, 1 stub
 - **Streaming: Market Data**: 35/36 brokers, 1 stub
 - **Streaming: Order/Trade Updates**: 18/36 brokers
 
-_Regenerated 27 August 2026._
+_Regenerated 06 September 2026._

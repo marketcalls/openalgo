@@ -17,10 +17,19 @@ function PopoverContent({
   className,
   align = 'center',
   sideOffset = 4,
+  container,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: React.ComponentProps<typeof PopoverPrimitive.Content> & {
+  /**
+   * Portal target. Defaults to the body, which is wrong inside a fullscreen
+   * element: only that element's subtree is painted, so a popover portalled to
+   * the body opens invisibly. A caller in fullscreen passes the element it made
+   * fullscreen. Mirrors the same prop on DropdownMenuContent.
+   */
+  container?: HTMLElement | null
+}) {
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={container ?? undefined}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}
