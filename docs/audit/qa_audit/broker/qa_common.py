@@ -420,14 +420,20 @@ def resolve_matrix(run: Runner, exchanges: list[str]) -> dict:
 
     # decimal-strike option, straight from the master
     def decimal_strike():
-        """Nearest-expiry decimal strike, preferring a liquid underlying.
+        """A decimal strike that has actually traded today.
 
-        An unordered `limit 1` returns whatever row SQLite reaches first,
-        which lands on a far-dated single-stock option that has never traded.
-        The contract is perfectly valid - the symbol round-trips - but with no
-        LTP the sandbox cannot fill a MARKET order against it, so the check
-        failed for a reason that had nothing to do with decimal strikes.
-        Ordering by expiry keeps the slot on something current.
+        Two earlier attempts at this were wrong in instructive ways. An
+        unordered `limit 1` returned whatever row SQLite reached first, which
+        was a far-dated contract. Ordering by expiry fixed the date but not
+        the liquidity, and the tiebreak that preferred an index underlying was
+        a no-op: index strikes are whole numbers at 50 and 100-point
+        intervals, so decimal strikes exist only on single stocks.
+
+        symtoken carries no OI or volume, so liquidity cannot be read from it.
+        The only reliable signal is the quote itself, so probe a bounded
+        number of nearest-expiry candidates and take the first with a live
+        price. Falling back to the nearest expiry keeps the slot resolvable
+        when nothing has traded - the caller records that it is untraded.
         """
         with sqlite3.connect(
                 str(Path(__file__).resolve().parents[4] / "db" / "openalgo.db")) as c:
@@ -441,21 +447,29 @@ def resolve_matrix(run: Runner, exchanges: list[str]) -> dict:
             ("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
 
-        def key(r):
-            _, _, exp, name = r
+        def when(r):
             try:
-                d, mo, y = exp.split("-")
-                when = (int(y), months.get(mo.upper(), 13), int(d))
+                d, mo, y = r[2].split("-")
+                return (int(y), months.get(mo.upper(), 13), int(d))
             except Exception:
-                when = (99, 99, 99)
-            # Index underlyings trade far more than single stocks, so a
-            # decimal strike on one is likelier to carry a live price.
-            liquid = 0 if name.upper() in ("NIFTY", "BANKNIFTY", "FINNIFTY",
-                                           "MIDCPNIFTY", "SENSEX", "BANKEX") else 1
-            return (when, liquid)
+                return (99, 99, 99)
 
-        best = min(rows, key=key)
-        return (best[0], best[1])
+        rows.sort(key=when)
+        probe = int(os.getenv("QA_DECIMAL_PROBE", "12"))
+        for sym, exch, _exp, _name in rows[:probe]:
+            try:
+                q = run.client.quotes(symbol=sym, exchange=exch)
+            except Exception:
+                continue
+            if q.get("status") != "success":
+                continue
+            d = q.get("data") or {}
+            try:
+                if float(d.get("ltp") or 0) > 0:
+                    return (sym, exch)
+            except (TypeError, ValueError):
+                continue
+        return (rows[0][0], rows[0][1])
 
     try_slot("OPT_DECIMAL_STRIKE", decimal_strike)
     return m

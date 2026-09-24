@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -91,6 +92,23 @@ def post(path: str, payload: dict) -> dict:
 # ==========================================================================
 # 2. master contract
 # ==========================================================================
+def _master_status_row(run: Runner) -> dict | None:
+    """The active broker's row from master_contract_status.
+
+    The table is keyed by broker and carries broker, status, message,
+    last_updated, total_symbols, is_ready, last_download_time, download_date,
+    exchange_stats and download_duration_seconds. There is no
+    column - selecting one raises, and swallowing that in a bare except
+    reports a schema mismatch as a missing table.
+    """
+    broker = run.env.get("broker") or ""
+    with run.db() as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute("select * from master_contract_status where broker=?",
+                        (broker,)).fetchone()
+    return dict(row) if row else None
+
+
 def sec_master(run: Runner) -> None:
     run.section("2. Master contract")
     ex_list = run.env["exchanges"]
@@ -335,22 +353,48 @@ def sec_master(run: Runner) -> None:
                   expected="rows returned, schema + count match symtoken")
 
     def mc_download_status():
-        """MC-01 - the master contract downloaded successfully today."""
+        """MC-01 - the master contract downloaded successfully, for THIS broker.
+
+        The table is keyed by broker, not by exchange: one row per broker,
+        carrying status, is_ready, total_symbols, download_date and an
+        exchange_stats JSON blob of per-exchange counts. Selecting an
+        `exchange` column raises, so the row must be read by broker.
+        """
+        row = _master_status_row(run)
+        need(row, f"no master_contract_status row for broker {run.env['broker']!r} - "
+                  f"the download has never run for it")
+        need(str(row["status"]).lower() == "success",
+             f"master contract status is {row['status']!r}: {row.get('message')}")
+        need(int(row.get("is_ready") or 0) == 1,
+             f"master contract is not ready (is_ready={row.get('is_ready')})")
+
+        total = int(row.get("total_symbols") or 0)
         with run.db() as c:
-            try:
-                rows = c.execute(
-                    "select exchange, status, last_updated from master_contract_status"
-                ).fetchall()
-            except Exception:
-                raise Skip("master_contract_status table not present in this build") from None
-        need(rows, "master_contract_status is empty - the download never ran")
-        bad = [(e, s) for e, s, _ in rows if str(s).lower() != "success"]
-        need(not bad, f"master contract not successful for: {bad[:5]}")
-        stamps = [t for _, _, t in rows if t]
-        run.note_limit("master contract last_updated", str(max(stamps)) if stamps else "unknown")
+            actual = c.execute("select count(*) from symtoken").fetchone()[0]
+        need(total > 0, "total_symbols is 0")
+        need(abs(total - actual) <= max(50, total * 0.02),
+             f"master contract reports {total} symbols but symtoken holds {actual} - "
+             f"a partial or interrupted load")
+
+        stats = {}
+        try:
+            stats = json.loads(row.get("exchange_stats") or "{}")
+        except Exception:
+            pass
+        run.note_limit("master contract download",
+                       f"{row.get('download_date')} in "
+                       f"{row.get('download_duration_seconds')}s, {total} symbols")
+        if stats:
+            run.note_limit("master contract exchange_stats", json.dumps(stats))
+            with run.db() as c:
+                live = dict(c.execute(
+                    "select exchange, count(*) from symtoken group by exchange"))
+            drift = [f"{e}: reported {n} vs {live.get(e, 0)} in symtoken"
+                     for e, n in stats.items() if abs(n - live.get(e, 0)) > max(5, n * 0.02)]
+            need(not drift, f"exchange_stats disagrees with symtoken: {drift[:4]}")
 
     run.check("MC-01", mc_download_status, endpoint="master_contract_status",
-              expected="status=success for every exchange")
+              expected="success, ready, counts agree with symtoken")
 
     def mc_symbol_construction():
         """MC-06 - sample the OpenAlgo symbol shape per segment."""
@@ -5249,31 +5293,30 @@ def main() -> int:
     run.check("PRE-03", token_valid, endpoint="funds", expected="authenticated, non-403")
 
     def master_fresh():
-        """PRE-04 - master contract downloaded successfully, and today."""
-        with run.db() as c:
-            try:
-                rows = c.execute(
-                    "select exchange, status, last_updated from master_contract_status"
-                ).fetchall()
-            except Exception:
-                rows = []
-        if not rows:
+        """PRE-04 - the master contract for THIS broker downloaded today.
+
+        One row per broker, so the active broker's row is the only one that
+        matters: another broker's stale row says nothing about this run.
+        """
+        row = _master_status_row(run)
+        if row is None:
             with run.db() as c:
                 n = c.execute("select count(*) from symtoken").fetchone()[0]
             need(n > 0, "symtoken is empty - the master contract has never downloaded")
-            raise Warn(f"no master_contract_status table; symtoken holds {n} rows")
-        bad = [(e, s) for e, s, _ in rows if str(s).lower() != "success"]
-        need(not bad, f"master contract not successful for {bad[:4]}")
-        stamps = [str(t) for _, _, t in rows if t]
-        if stamps:
-            newest = max(stamps)
-            run.env["master_contract_updated"] = newest
-            need(str(date.today()) in newest,
-                 f"master contract last updated {newest}, not today - re-download before "
-                 f"trusting symbol-level results")
+            raise Warn(f"no master_contract_status row for {run.env['broker']!r}; "
+                       f"symtoken holds {n} rows")
+        need(str(row["status"]).lower() == "success",
+             f"master contract status is {row['status']!r}: {row.get('message')}")
+        need(int(row.get("is_ready") or 0) == 1,
+             f"master contract not ready (is_ready={row.get('is_ready')})")
+        when = str(row.get("download_date") or row.get("last_updated") or "")
+        run.env["master_contract_updated"] = when
+        need(str(date.today()) in when,
+             f"master contract for {run.env['broker']} last downloaded {when}, not today - "
+             f"re-download before trusting symbol-level results")
 
     run.check("PRE-04", master_fresh, endpoint="master_contract_status",
-              expected="success for every exchange, dated today")
+              expected="this broker's download succeeded and is dated today")
 
     def market_open():
         """PRE-05 - skip-with-reason outside a session, never fail."""
