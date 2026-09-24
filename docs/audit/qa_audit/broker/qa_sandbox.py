@@ -1930,7 +1930,10 @@ def sec_orders(run: Runner) -> None:
     for ex2 in run.env["exchanges"]:
         if ex2 in INDEX_EXCHANGES:
             continue
-        slot = "EQ_BSE" if ex2 == "BSE" else f"FUT_{ex2}"
+        # Cash exchanges have no FUT_* slot. Mapping them to one is what made
+        # BSE and NSE skip for a missing FUT_BSE / FUT_NSE that can never
+        # exist - the slot is wrong, not the instrument.
+        slot = {"NSE": "EQ_CHEAP", "BSE": "EQ_BSE"}.get(ex2, f"FUT_{ex2}")
         if slot not in m:
             run.record(f"OD-11.{ex2}", SKIP, f"{slot} unresolved - no instrument to order",
                        endpoint="placeorder", exchange=ex2)
