@@ -2404,25 +2404,46 @@ def sec_orders(run: Runner) -> None:
         run.track_order(r.get("orderid"), r.get("symbol", ""), r.get("exchange", "NFO"), "NRML")
         return r
 
+    # The freeze limit is a quantity; an order is a whole number of lots. The
+    # exchange revises the two independently, so the freeze quantity is not
+    # generally a lot multiple - NIFTY is 1800 against a lot of 65, which is
+    # 27.69 lots. Testing "quantity == freeze" therefore asks for an order
+    # that cannot be placed at all, and the lot-size rejection that follows
+    # says nothing about freeze handling. Work in lot-aligned boundaries.
+    at_limit = (fz // lot) * lot          # largest orderable qty at or below freeze
+    above = at_limit + lot                # smallest orderable qty above freeze
+    need(at_limit > 0, f"freeze {fz} is smaller than one lot of {lot}")
+    run.note_limit("freeze boundary (lot-aligned)",
+                   f"freeze={fz} lot={lot} -> at/below={at_limit} ({at_limit//lot} lots), "
+                   f"above={above} ({above//lot} lots)")
+
     run.check("FZ-01", lambda: oorder(lot), endpoint="optionsorder",
-              expected=f"qty {lot} below freeze {fz} accepted")
-    run.check("FZ-02", lambda: oorder(fz), endpoint="optionsorder",
-              expected=f"qty == freeze {fz}, behaviour recorded")
+              expected=f"one lot ({lot}) well below freeze {fz} accepted")
+    run.check("FZ-02", lambda: oorder(at_limit), endpoint="optionsorder",
+              expected=f"{at_limit} - the largest lot multiple at or below freeze {fz}")
 
     def above_freeze():
-        q = fz + lot
+        """FZ-03 - a lot-aligned quantity ABOVE the freeze limit. It must be
+        refused for exceeding the freeze, or transparently auto-split; what it
+        must not do is fail for some unrelated reason that merely looks like a
+        freeze rejection."""
         try:
-            r = oorder(q)
+            r = oorder(above)
             run.note_quirk("Quantity above freeze without splitsize",
-                           f"accepted/auto-split at qty {q}: orderid {r.get('orderid')}")
+                           f"accepted or auto-split at qty {above}: "
+                           f"orderid {r.get('orderid')}")
         except AssertionError as e:
-            need("freeze" in str(e).lower() or "quantity" in str(e).lower(),
+            msg = str(e).lower()
+            need("multiples of lot" not in msg,
+                 f"rejected for lot alignment, not the freeze limit - {above} is "
+                 f"{above // lot} lots, so this is a harness arithmetic error: {e}")
+            need("freeze" in msg or "quantity" in msg,
                  f"rejection does not name the freeze limit: {e}")
 
     run.check("FZ-03", above_freeze, endpoint="optionsorder",
-              expected="clean rejection or auto-split, never silent")
-    run.check("FZ-04", lambda: oorder(fz + lot, splitsize=fz), endpoint="optionsorder",
-              expected="split into children at or below the freeze limit")
+              expected=f"{above} exceeds freeze {fz} - refused or auto-split, never silent")
+    run.check("FZ-04", lambda: oorder(above, splitsize=at_limit), endpoint="optionsorder",
+              expected=f"split into children of at most {at_limit}, each a whole lot")
 
     def fz_echo():
         r = oorder(lot)
@@ -2563,17 +2584,30 @@ def sec_orders(run: Runner) -> None:
               expected="BUY legs precede SELL legs")
 
     def leg_freeze():
-        """MO-05 - freeze rules apply per leg exactly as for a single option."""
+        """MO-05 - freeze rules apply per leg exactly as for a single option.
+
+        Lot-aligned like FZ-02/03: the freeze quantity is not generally a
+        multiple of the lot, so sending it verbatim asks for an unplaceable
+        order and the lot-size rejection that follows proves nothing about
+        freeze handling.
+        """
+        at_limit = (fz // lot) * lot
+        above = at_limit + lot
+        need(at_limit > 0, f"freeze {fz} is smaller than one lot of {lot}")
         r = multi([L("OTM40", "CE", "BUY", qty=lot),
-                   L("OTM40", "PE", "BUY", qty=fz)])
+                   L("OTM40", "PE", "BUY", qty=at_limit)])
         res = r.get("results") or []
         need(len(res) == 2, f"expected 2 legs, got {len(res)}")
         try:
-            over = multi([L("OTM40", "CE", "BUY", qty=fz + lot)])
+            over = multi([L("OTM40", "CE", "BUY", qty=above)])
             run.note_quirk("Multi-order leg above freeze",
-                           f"accepted at qty {fz + lot}: {over.get('results')}")
+                           f"accepted at qty {above}: {over.get('results')}")
         except AssertionError as e:
-            need("freeze" in str(e).lower() or "quantity" in str(e).lower(),
+            msg = str(e).lower()
+            need("multiples of lot" not in msg,
+                 f"leg rejected for lot alignment, not the freeze limit - {above} is "
+                 f"{above // lot} lots, so this is a harness arithmetic error: {e}")
+            need("freeze" in msg or "quantity" in msg,
                  f"over-freeze leg rejected with an unrelated message: {e}")
 
     run.check("MO-05", leg_freeze, endpoint="optionsmultiorder",
