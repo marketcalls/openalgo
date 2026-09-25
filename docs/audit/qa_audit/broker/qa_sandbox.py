@@ -2484,8 +2484,10 @@ def sec_orders(run: Runner) -> None:
         try:
             r = oorder(above)
             run.note_quirk("Quantity above freeze without splitsize",
-                           f"accepted or auto-split at qty {above}: "
+                           f"accepted as one order at qty {above}: "
                            f"orderid {r.get('orderid')}")
+            raise Warn(f"{above} exceeds freeze {fz} but was accepted without "
+                       "splitting or a freeze-limit rejection")
         except AssertionError as e:
             msg = str(e).lower()
             need("multiples of lot" not in msg,
@@ -2656,6 +2658,8 @@ def sec_orders(run: Runner) -> None:
             over = multi([L("OTM40", "CE", "BUY", qty=above)])
             run.note_quirk("Multi-order leg above freeze",
                            f"accepted at qty {above}: {over.get('results')}")
+            raise Warn(f"multi-order leg quantity {above} exceeds freeze {fz} "
+                       "but was accepted without splitting or a freeze-limit rejection")
         except AssertionError as e:
             msg = str(e).lower()
             need("multiples of lot" not in msg,
@@ -4812,34 +4816,38 @@ def sec_order_updates(run: Runner, base: list) -> None:
                   expected="OpenAlgo symbol, not broker tradingsymbol")
 
         def quantities():
-            """filled + pending must equal quantity, but only where the pair
-            has been populated. A freshly placed order can carry 0/0 before
-            the broker has reported any progress, and asserting on that reads
-            as a reconciliation failure when nothing has happened yet. Assert
-            on updates where either field is populated; record the all-zero
-            case, which is the same on every broker and so sits above the
-            adapter."""
+            """Open and trigger-pending orders must report their outstanding
+            quantity. Terminal cancelled/rejected updates may legitimately
+            report 0/0 because no quantity remains pending."""
             need(updates, "no order updates collected")
-            checked, unpopulated = 0, []
+            checked, terminal_unpopulated = 0, []
             for u in updates:
                 if "filled_quantity" not in u or "pending_quantity" not in u:
                     continue
                 q = as_num(u["quantity"], "quantity")
                 f = as_num(u["filled_quantity"], "filled_quantity")
                 p = as_num(u["pending_quantity"], "pending_quantity")
+                status = u.get("order_status")
                 if f == 0 and p == 0 and q != 0:
-                    unpopulated.append(f"{u.get('orderid')}({u.get('order_status')})")
+                    if status in ("open", "trigger pending", "pending"):
+                        raise AssertionError(
+                            f"{u.get('orderid')}({status}) reports filled=0 and "
+                            f"pending=0 for quantity {q}; an unfilled live order "
+                            "must report its full quantity as pending"
+                        )
+                    terminal_unpopulated.append(f"{u.get('orderid')}({status})")
                     continue
                 need(abs((f + p) - q) < 1e-6,
                      f"{u['orderid']}: filled {f} + pending {p} != quantity {q}")
                 checked += 1
-            if unpopulated:
-                run.note_quirk("order_update with filled=0 and pending=0",
-                               f"{len(unpopulated)} update(s) carry neither quantity: "
-                               f"{unpopulated[:4]}")
+            if terminal_unpopulated:
+                run.note_limit("terminal order_update with filled=0 and pending=0",
+                               f"{len(terminal_unpopulated)} update(s) carry neither quantity: "
+                               f"{terminal_unpopulated[:4]}")
             if not checked:
                 raise Warn("no update carried populated filled/pending quantities"
-                           + (f" - {len(unpopulated)} left both at 0" if unpopulated else ""))
+                           + (f" - {len(terminal_unpopulated)} terminal update(s) left both at 0"
+                              if terminal_unpopulated else ""))
 
         run.check("OU-05", quantities, endpoint="ws.orders",
                   expected="filled + pending reconcile with quantity")
