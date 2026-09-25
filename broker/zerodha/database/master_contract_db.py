@@ -265,6 +265,15 @@ def process_zerodha_csv(path):
         if unmapped:
             logger.warning(f"No MCX contract size for: {', '.join(unmapped)}")
 
+    # Kite leaves `name` blank on ~8k EQ-type rows: BSE/NSE debt (NCDs, bonds,
+    # CPs, the -N0/-SF series) and the NCO spot underlyings GOLD, SILVER,
+    # XAUGOLD, COPPER. Every derivative carries its underlying, so only these
+    # are affected. Fall back to the tradingsymbol, which for the NCO rows is
+    # the underlying itself. Done after the MCX sizing above, which reads a
+    # blank name as 'unknown underlying'.
+    blank_name = df['name'].isna() | (df['name'].astype(str).str.strip() == '')
+    df.loc[blank_name, 'name'] = df.loc[blank_name, 'brsymbol']
+
     # Fill NaN values in the 'expiry' column with an empty string
     df['expiry'] = df['expiry'].fillna('')
 
