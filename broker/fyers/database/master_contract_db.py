@@ -700,7 +700,20 @@ def master_contract_download():
 
     output_path = "tmp"
     try:
-        download_csv_fyers_data(output_path)
+        # download_csv_fyers_data catches every per-file network error and
+        # reports the outcome in its return value rather than raising, so the
+        # except below never sees a failed download. Deleting on the strength
+        # of the call having returned emptied symtoken and left the instance
+        # with no symbols at all, which is strictly worse than yesterday's
+        # contract: nothing resolves until a later download happens to succeed.
+        downloaded, _, download_error = download_csv_fyers_data(output_path)
+        if not downloaded:
+            message = f"Master contract download failed, keeping the existing symbols: {download_error}"
+            logger.error(message)
+            return socketio.emit(
+                "master_contract_download", {"status": "error", "message": message}
+            )
+
         delete_symtoken_table()
         token_df = process_fyers_nse_csv(output_path)
         copy_from_dataframe(token_df)
