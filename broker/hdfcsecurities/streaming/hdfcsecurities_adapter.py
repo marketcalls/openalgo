@@ -35,9 +35,11 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 # OpenAlgo numeric mode -> topic suffix. The proxy fans a published mode DOWN to
 # lower-mode subscribers (server.py: `for m in range(1, mode + 1)`) and never
-# up, so an instrument must always be published at the HIGHEST mode any client
-# subscribed it at. Publishing at a lower mode starves the higher-mode clients
-# completely.
+# up, so publishing below the highest subscribed mode starves the higher-mode
+# clients. It also tags each client with ONE mode per publish -- the highest it
+# holds -- so a client holding LTP and Quote on the same symbol would only ever
+# see Quote frames. Every subscribed mode is therefore published, as the
+# Zerodha adapter does (issue #1664).
 _MODE_TO_TOPIC = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
 
 # The feed runs on a real OS thread (see hdfcsecurities_websocket), so the
@@ -153,16 +155,20 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
         The tick thread reads this map without locking, so an entry is never
         edited in place: `modes` is a frozenset and the whole dict is replaced,
         which under the GIL means a reader sees either the old entry or the new
-        one but never a half-updated one. `topic_mode` is precomputed here so
-        the tick path does no iteration at all -- calling max() over a set that
-        subscribe/unsubscribe was mutating is what dropped ticks.
+        one but never a half-updated one. `topic_modes` is precomputed here as
+        an immutable tuple so the tick path never iterates a live set --
+        calling max() over a set that subscribe/unsubscribe was mutating is
+        what dropped ticks.
         """
         self.token_info[key] = {
             "symbol": symbol,
             "exchange": exchange,
             "scrip_id": scrip_id,
             "modes": modes,
-            "topic_mode": _MODE_TO_TOPIC.get(max(modes), "QUOTE"),
+            "topic_modes": tuple(
+                _MODE_TO_TOPIC[m] for m in sorted(modes, reverse=True) if m in _MODE_TO_TOPIC
+            )
+            or ("QUOTE",),
         }
 
     def _resolve_token(self, symbol, exchange):
@@ -302,18 +308,19 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 symbol = info["symbol"]
                 exchange = info["exchange"]
-                # Precomputed at subscribe time and always the highest
-                # subscribed mode (the proxy fans down only). Reading it costs
-                # one dict lookup, so a concurrent subscribe/unsubscribe cannot
-                # make the tick path fail mid-iteration.
-                topic_mode = info["topic_mode"]
+                # Precomputed at subscribe time: every subscribed mode, highest
+                # first, as an immutable tuple, so a concurrent
+                # subscribe/unsubscribe cannot make the tick path fail
+                # mid-iteration.
+                topic_modes = info["topic_modes"]
 
                 tick = self._merge_partial(key, tick)
                 if tick is None:
                     continue
 
-                data = self._normalize(tick, symbol, exchange, topic_mode)
-                self.publish_market_data(f"{exchange}_{symbol}_{topic_mode}", data)
+                for topic_mode in topic_modes:
+                    data = self._normalize(tick, symbol, exchange, topic_mode)
+                    self.publish_market_data(f"{exchange}_{symbol}_{topic_mode}", data)
             except Exception as e:
                 self.logger.error(f"Error handling HDFC Securities tick: {e}")
 
