@@ -68,7 +68,7 @@ from qa_common import (  # noqa: E402
 
 API_KEY = os.getenv("OPENALGO_API_KEY", "945bd843b8683f584321f6cf1fc55b664975321281ee536ee68aa9e36147eef6")
 HOST = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5000")
-HEAVY = os.getenv("QA_HEAVY", "") == "1"   # 500-symbol multiquotes, 2y history
+HEAVY = os.getenv("QA_HEAVY", "") == "1"   # 500-symbol multiquotes, WS keepalive
 NO_WS = os.getenv("QA_WS", "1") == "0"   # websocket runs by default; QA_WS=0 disables
 WS_URL = os.getenv("OPENALGO_WS", "ws://127.0.0.1:8765")
 STRAT = "QA-SANDBOX"
@@ -1385,11 +1385,8 @@ def sec_history(run: Runner) -> None:
                   endpoint="history", symbol=s, expected="10 days 1m")
         run.check("HS-05", lambda: hist(s, ex, "1m", 100, "HS-05"),
                   endpoint="history", symbol=s, expected="100 days 1m, chunked")
-        if HEAVY:
-            run.check("HS-06", lambda: hist(s, ex, "D", 730, "HS-06"),
-                      endpoint="history", symbol=s, expected="2 years daily")
-        else:
-            run.record("HS-06", SKIP, "QA_HEAVY=1 not set (2-year history)", endpoint="history")
+        run.check("HS-06", lambda: hist(s, ex, "D", 730, "HS-06"),
+                  endpoint="history", symbol=s, expected="2 years daily")
 
         def ist_open():
             _, ts = hist(s, ex, "1m", 6, "HS-07")
