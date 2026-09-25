@@ -983,6 +983,13 @@ def sec_quotes(run: Runner) -> None:
         df = run.client.history(symbol=s, exchange=ex, interval="1m",
                                 start_date=str(date.today() - timedelta(days=4)),
                                 end_date=str(date.today()))
+        # SDK contract: DataFrame on success, dict on error. Surface the
+        # broker's message instead of letting df.iloc raise AttributeError.
+        # A broker with no candle API (e.g. HDFC InvestRight) is judged by the
+        # HS-* checks; here the quote/depth scaling check has already passed.
+        if isinstance(df, dict):
+            raise Warn(f"quotes/depth agree at {q}; 1m history unavailable - "
+                       f"{str(df.get('message') or df)[:160]}")
         if df is None or len(df) == 0:
             raise Warn(f"quotes/depth agree at {q}; no 1m history to cross-check")
         close = as_num(df.iloc[-1]["close"], "last close")
