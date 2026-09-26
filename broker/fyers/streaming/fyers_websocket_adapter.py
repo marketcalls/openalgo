@@ -1047,6 +1047,12 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Error sending data via ZeroMQ: {e}")
             self.logger.error(f"Data causing error: {data}")
 
+    def is_connected(self) -> bool:
+        """Check the outer adapter and the underlying Fyers socket."""
+        return self.connected and bool(
+            self.fyers_adapter and self.fyers_adapter.is_connected()
+        )
+
     def get_connection_status(self) -> dict[str, Any]:
         """Get connection status"""
         status = {
