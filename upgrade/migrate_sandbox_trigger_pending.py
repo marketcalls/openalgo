@@ -31,6 +31,7 @@ Created: 2026-07-24
 
 import argparse
 import os
+import re
 import sys
 
 # Add parent directory to path for imports
@@ -122,52 +123,57 @@ def widen_order_status_constraint(conn):
 
     logger.info("Rebuilding sandbox_orders to widen the order_status CHECK constraint...")
 
+    # Derive the replacement schema from the LIVE table rather than hardcoding it.
+    #
+    # A hardcoded column list silently drops any column the installation has that
+    # this script does not know about, and the subsequent DROP TABLE makes that
+    # loss unrecoverable. That covers deployment-specific columns added by forks or
+    # operators, and -- more importantly for us -- any column a future release adds
+    # to sandbox_orders via ALTER TABLE, since this migration would then be
+    # rebuilding the table from a stale definition.
+    #
+    # Read both before the RENAME: SQLite rewrites the stored CREATE statements to
+    # reference sandbox_orders_old once the table is renamed.
+    old_ddl = conn.execute(
+        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='sandbox_orders'")
+    ).scalar()
+    old_indexes = [
+        row[0]
+        for row in conn.execute(
+            text(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='sandbox_orders' AND sql IS NOT NULL"
+            )
+        )
+    ]
+    columns = [row[1] for row in conn.execute(text("PRAGMA table_info(sandbox_orders)"))]
+
+    new_ddl, replaced = re.subn(
+        r"order_status\s+IN\s*\([^)]*\)",
+        f"order_status IN ({NEW_ORDER_STATUS_VALUES})",
+        old_ddl,
+        flags=re.IGNORECASE,
+    )
+    if replaced != 1:
+        logger.info(
+            "Could not locate exactly one order_status CHECK constraint "
+            f"(found {replaced}); leaving sandbox_orders untouched"
+        )
+        return
+
+    column_list = ", ".join(f'"{column}"' for column in columns)
+
     conn.execute(text("PRAGMA foreign_keys=OFF"))
 
     conn.execute(text("ALTER TABLE sandbox_orders RENAME TO sandbox_orders_old"))
 
-    conn.execute(
-        text(f"""
-        CREATE TABLE sandbox_orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            orderid VARCHAR(50) UNIQUE NOT NULL,
-            user_id VARCHAR(50) NOT NULL,
-            strategy VARCHAR(100),
-            symbol VARCHAR(50) NOT NULL,
-            exchange VARCHAR(20) NOT NULL,
-            action VARCHAR(10) NOT NULL CHECK(action IN ('BUY', 'SELL')),
-            quantity INTEGER NOT NULL,
-            price DECIMAL(10, 2),
-            trigger_price DECIMAL(10, 2),
-            price_type VARCHAR(20) NOT NULL CHECK(price_type IN ('MARKET', 'LIMIT', 'SL', 'SL-M')),
-            product VARCHAR(20) NOT NULL CHECK(product IN ('CNC', 'NRML', 'MIS')),
-            order_status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK(order_status IN ({NEW_ORDER_STATUS_VALUES})),
-            average_price DECIMAL(10, 2),
-            filled_quantity INTEGER DEFAULT 0,
-            pending_quantity INTEGER NOT NULL,
-            rejection_reason TEXT,
-            margin_blocked DECIMAL(10, 2) DEFAULT 0.00,
-            order_timestamp DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-            update_timestamp DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
-        )
-    """)
-    )
+    conn.execute(text(new_ddl))
 
     conn.execute(
-        text("""
-        INSERT INTO sandbox_orders (
-            id, orderid, user_id, strategy, symbol, exchange, action, quantity,
-            price, trigger_price, price_type, product, order_status,
-            average_price, filled_quantity, pending_quantity, rejection_reason,
-            margin_blocked, order_timestamp, update_timestamp
+        text(
+            f"INSERT INTO sandbox_orders ({column_list}) "
+            f"SELECT {column_list} FROM sandbox_orders_old"
         )
-        SELECT
-            id, orderid, user_id, strategy, symbol, exchange, action, quantity,
-            price, trigger_price, price_type, product, order_status,
-            average_price, filled_quantity, pending_quantity, rejection_reason,
-            margin_blocked, order_timestamp, update_timestamp
-        FROM sandbox_orders_old
-    """)
     )
 
     result = conn.execute(text("SELECT COUNT(*) FROM sandbox_orders_old"))
@@ -183,7 +189,10 @@ def widen_order_status_constraint(conn):
 
     conn.execute(text("DROP TABLE sandbox_orders_old"))
 
-    for stmt in SANDBOX_ORDERS_INDEXES:
+    # Dropping the old table drops its indexes with it, so replay the ones the
+    # table actually had, then the canonical set as an IF NOT EXISTS backstop for
+    # installations predating any of them.
+    for stmt in old_indexes + SANDBOX_ORDERS_INDEXES:
         conn.execute(text(stmt))
 
     conn.execute(text("PRAGMA foreign_keys=ON"))
