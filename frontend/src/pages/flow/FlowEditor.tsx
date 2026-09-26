@@ -54,6 +54,7 @@ import { nodeTypes } from '@/components/flow/nodes'
 import {
   ConfigPanel,
   ExecutionLogPanel,
+  type ExecutionStatus,
   type LogEntry,
   NodePalette,
 } from '@/components/flow/panels'
@@ -144,9 +145,7 @@ function FlowEditorContent() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogPanel, setShowLogPanel] = useState(false)
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
-  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>(
-    'idle'
-  )
+  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>('idle')
 
   // Theme and auth stores
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
@@ -335,6 +334,16 @@ function FlowEditorContent() {
       return executeWorkflow(Number(id))
     },
     onSuccess: (data) => {
+      if (data.status === 'accepted') {
+        // Only under the gthread web server: a workflow that waits on a Delay or
+        // Wait Until step was started in the background and is still running.
+        // Its orders go out when the wait ends, and its result lands in the
+        // execution history, so this is neither a success nor a failure yet.
+        setExecutionStatus('started')
+        setExecutionLogs([{ time: new Date().toISOString(), message: data.message, level: 'info' }])
+        showToast.info(data.message || 'Workflow started', 'flow')
+        return
+      }
       setExecutionStatus(data.status === 'success' ? 'success' : 'error')
       if (data.logs) {
         setExecutionLogs(data.logs as LogEntry[])

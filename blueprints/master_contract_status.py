@@ -1,17 +1,31 @@
-from threading import Thread
-
 from flask import Blueprint, jsonify, request, session
 
-from database.master_contract_status_db import check_if_ready, get_status, init_broker_status
+from database.master_contract_status_db import check_if_ready, get_status
 from utils.auth_utils import (
-    async_master_contract_download,
+    MASTER_CONTRACT_BUSY_MESSAGE,
     get_master_contract_cutoff,
+    is_master_contract_download_running,
     should_download_master_contract,
+    try_start_master_contract_download,
 )
 from utils.logging import get_logger
+from utils.runtime import gthread_active
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
+
+
+def _cache_busy_response(broker: str | None):
+    """The refusal for a manual cache reload or clear during a download, or None.
+
+    While a master contract download runs, the symbol table is being deleted
+    and rewritten, so a reload in the middle of it would load a partial
+    universe. Refused only under the gthread worker, where requests run
+    alongside the download; elsewhere the route behaves as it always has.
+    """
+    if broker and gthread_active() and is_master_contract_download_running(broker):
+        return jsonify({"status": "error", "message": MASTER_CONTRACT_BUSY_MESSAGE}), 409
+    return None
 
 master_contract_status_bp = Blueprint("master_contract_status_bp", __name__, url_prefix="/api")
 
@@ -117,6 +131,10 @@ def reload_cache():
         if not broker:
             return jsonify({"status": "error", "message": "No broker session found"}), 401
 
+        busy = _cache_busy_response(broker)
+        if busy is not None:
+            return busy
+
         from database.master_contract_cache_hook import load_symbols_to_cache
 
         success = load_symbols_to_cache(broker)
@@ -145,6 +163,10 @@ def reload_cache():
 def clear_cache():
     """Manually clear the cache"""
     try:
+        busy = _cache_busy_response(session.get("broker"))
+        if busy is not None:
+            return busy
+
         from database.token_db_enhanced import clear_cache as clear_symbol_cache
 
         clear_symbol_cache()
@@ -183,10 +205,16 @@ def force_master_contract_download():
                     "should_download": False
                 }), 200
 
-        # Initialize status and start download
-        init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-        thread.start()
+        # Claim the broker, then initialize status and start the download. A
+        # download already running owns the status row: resetting it here and
+        # then being refused would leave it pending after that download had
+        # reported success, while telling the trader a new one had started.
+        if not try_start_master_contract_download(broker, reset_status=True):
+            return jsonify({
+                "status": "error",
+                "message": MASTER_CONTRACT_BUSY_MESSAGE,
+                "started": False
+            }), 409
 
         return jsonify({
             "status": "success",

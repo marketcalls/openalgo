@@ -36,6 +36,16 @@ def load_symbols_to_cache(broker: str) -> bool:
             load_time = time.time() - start_time
             stats = get_cache_stats()
 
+            # Strike lists come from the contracts just replaced, so drop the
+            # cached ones now rather than let them live out their hour. Safe
+            # from any thread: the clear holds a real lock over dict work only.
+            try:
+                from services.option_symbol_service import clear_strikes_cache
+
+                clear_strikes_cache()
+            except Exception:
+                logger.exception("Could not clear the cached option strikes")
+
             logger.info(
                 f"Successfully loaded {stats['total_symbols']} symbols into cache "
                 f"in {load_time:.2f} seconds"

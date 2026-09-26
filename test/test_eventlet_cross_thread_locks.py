@@ -393,3 +393,194 @@ def test_a_result_from_the_loop_thread_wakes_its_caller_promptly():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_run_on_hub_carries_a_real_threads_call_onto_the_hub_promptly():
+    """A real OS thread (the agent, the Telegram bot) calling green-guarded code.
+
+    Called directly, the real thread would take a green lock a greenlet holds,
+    which is the crossing this file opens with. Through run_on_hub the call runs
+    on the hub, where that lock is an ordinary green one, and only a result
+    crosses back. Measured on elapsed time and hub liveness, not just on the
+    value, which a direct call might also have produced.
+    """
+    result = run(
+        """
+        import utils.real_threading as rt
+
+        assert rt.start_hub_worker() is True
+        assert rt.start_hub_worker() is True  # idempotent
+        eventlet.sleep(0.05)
+        hub_ident = rt._real_get_ident()
+        assert rt.on_hub_thread() is True
+
+        green_lock = threading.Lock()  # green: patched before this ran
+        ticks = []
+
+        def hub_alive():
+            while True:
+                ticks.append(1)
+                eventlet.sleep(0.02)
+
+        def holder():
+            with green_lock:
+                eventlet.sleep(0.3)
+
+        def guarded(value):
+            with green_lock:
+                return (value * 2, rt._real_get_ident())
+
+        g = eventlet.spawn(hub_alive)
+        h = eventlet.spawn(holder)
+        eventlet.sleep(0.05)
+
+        out = {}
+
+        def real_thread_side():
+            assert rt.on_hub_thread() is False
+            t0 = time.monotonic()
+            out["value"], out["ran_on"] = rt.run_on_hub(guarded, 21, timeout=5)
+            out["took"] = time.monotonic() - t0
+            try:
+                rt.run_on_hub(lambda: 1 / 0, timeout=5)
+            except ZeroDivisionError:
+                out["raised"] = True
+            t0 = time.monotonic()
+            try:
+                rt.run_on_hub(eventlet.sleep, 5, timeout=0.3)
+            except TimeoutError:
+                out["timed_out"] = time.monotonic() - t0
+
+        t = _orig.Thread(target=real_thread_side, daemon=True)
+        before = len(ticks)
+        t.start()
+        assert rt.join(t, timeout=10), "the real thread never finished"
+        during = len(ticks) - before
+        g.kill()
+        h.wait()
+
+        assert out["value"] == 42, out
+        assert out["ran_on"] == hub_ident, "the call did not run on the hub"
+        assert out["took"] < 1.5, f"took {out['took']:.2f}s; the hub never picked it up"
+        assert out.get("raised") is True, "an exception did not cross back"
+        assert out.get("timed_out", 99) < 2, "the timeout was not honoured"
+        assert during > 5, f"the hub froze: only {during} ticks"
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_an_idle_hub_drainer_leaves_the_hub_alone():
+    """The drainer sleeps until a real thread wakes it, never on a timer.
+
+    start_hub_worker runs at import on every eventlet worker, including the
+    default installs that have no caller for it yet. Polling the queue every
+    20 ms woke the worker's only hub fifty times a second, forever, raising
+    and catching Empty each time. Measured on how often the queue is read
+    while nothing is queued, then on how fast a real thread's call still runs.
+    """
+    result = run(
+        """
+        import utils.real_threading as rt
+
+        reads = []
+        real_get_nowait = rt._hub_queue.get_nowait
+
+        def counting_get_nowait():
+            reads.append(1)
+            return real_get_nowait()
+
+        rt._hub_queue.get_nowait = counting_get_nowait
+        assert rt.start_hub_worker() is True
+        eventlet.sleep(1.0)
+        idle_reads = len(reads)
+
+        out = {}
+
+        def real_thread_side():
+            t0 = time.monotonic()
+            out["value"] = rt.run_on_hub(lambda: 7, timeout=5)
+            out["took"] = time.monotonic() - t0
+            t0 = time.monotonic()
+            out["second"] = rt.run_on_hub(lambda: 8, timeout=5)
+            out["took_second"] = time.monotonic() - t0
+
+        t = _orig.Thread(target=real_thread_side, daemon=True)
+        t.start()
+        assert rt.join(t, timeout=10), "the real thread never finished"
+
+        assert idle_reads <= 1, f"the idle drainer read the queue {idle_reads} times in 1s"
+        assert out["value"] == 7 and out["second"] == 8, out
+        assert out["took"] < 0.5 and out["took_second"] < 0.5, out
+        assert rt.hub_worker_running() is True
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_submit_to_hub_and_emit_from_any_thread_leave_the_real_thread_at_once():
+    """Fire-and-forget from a real thread, including a Socket.IO emit.
+
+    SerializedSocketIO takes no lock under eventlet (green emitters cannot
+    interleave, and a green lock is exactly what a real thread must not take),
+    so a real thread's emit has to reach the hub instead: emit_from_any_thread.
+    """
+    result = run(
+        """
+        import utils.real_threading as rt
+        import extensions
+        from flask_socketio import SocketIO
+
+        assert rt.start_hub_worker() is True
+        hub_ident = rt._real_get_ident()
+        seen = []
+
+        def fake_emit(self, event, *args, **kwargs):
+            seen.append((event, args, kwargs, rt._real_get_ident()))
+
+        SocketIO.emit = fake_emit
+
+        # A green emit takes no lock under eventlet and still reaches the server.
+        extensions.socketio.emit("green", {"n": 1})
+        assert seen and seen[0][0] == "green"
+        seen.clear()
+
+        done = _orig.Event()
+
+        def real_thread_side():
+            rt.submit_to_hub(seen.append, ("submitted", (), {}, rt._real_get_ident()))
+            extensions.emit_from_any_thread("bot_status", {"running": True}, to="room")
+            done.set()
+
+        _orig.Thread(target=real_thread_side, daemon=True).start()
+        assert rt.wait_for(done, 5), "the real thread was held up"
+        deadline = time.monotonic() + 5
+        while len(seen) < 2 and time.monotonic() < deadline:
+            eventlet.sleep(0.02)
+
+        assert [item[0] for item in seen] == ["submitted", "bot_status"], seen
+        assert seen[1][1] == ({"running": True},) and seen[1][2] == {"to": "room"}
+        assert seen[1][3] == hub_ident, "the emit ran on the real thread, not the hub"
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_real_threading_sleep_is_the_unpatched_one():
+    """For real threads only: it must block the thread, not schedule on the hub."""
+    result = run(
+        """
+        import utils.real_threading as rt
+        from utils import runtime
+
+        assert runtime.is_monkey_patched() is True
+        assert rt.sleep is eventlet.patcher.original("time").sleep
+        assert rt.sleep is not time.sleep
+        assert rt.Lock is _orig.Lock
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr

@@ -42,6 +42,7 @@ import threading
 import time
 from collections import deque
 
+from utils.broker_backpressure import check_queue_wait
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -109,10 +110,15 @@ class SlidingWindowLimiter:
     future slot and are purged.
     """
 
-    def __init__(self, name: str, max_per_second: int, max_per_minute: int):
+    def __init__(
+        self, name: str, max_per_second: int, max_per_minute: int, kind: str = "data"
+    ):
         self.name = name
         self.max_per_second = max_per_second
         self.max_per_minute = max_per_minute
+        #: Which wait bound applies under the gthread worker: "data" or "order"
+        #: (utils.broker_backpressure).
+        self.kind = kind
         self._lock = threading.Lock()
         self._reserved: deque[float] = deque()
 
@@ -120,6 +126,17 @@ class SlidingWindowLimiter:
         """Reserve the earliest slot satisfying both windows.
 
         Returns the seconds the caller must sleep before issuing its request.
+
+        Past the per-minute cap every extra caller is booked about one slot
+        after the previous one, without limit. Under the gthread worker each
+        of those sleeps holds a request thread, so a caller whose slot is
+        further away than ``max_queue_wait(self.kind)`` is refused instead,
+        before anything is booked, and delays nobody behind it. Under eventlet
+        and the dev server there is no bound and every caller is booked as
+        before.
+
+        Raises:
+            BrokerBusyError: Under gthread, when the slot is too far away.
         """
         with self._lock:
             now = time.time()
@@ -132,6 +149,7 @@ class SlidingWindowLimiter:
             if len(self._reserved) >= self.max_per_minute:
                 slot = max(slot, self._reserved[-self.max_per_minute] + 60.0)
 
+            check_queue_wait(slot - now, self.kind)
             self._reserved.append(slot)
             return slot - now
 
@@ -228,6 +246,7 @@ ORDER_LIMITER = SlidingWindowLimiter(
     "order",
     max_per_second=_env_int("FLATTRADE_ORDER_MAX_PER_SECOND", 9, ceiling=10),
     max_per_minute=_env_int("FLATTRADE_ORDER_MAX_PER_MINUTE", 38, ceiling=40),
+    kind="order",
 )
 
 

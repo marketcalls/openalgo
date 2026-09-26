@@ -1,3 +1,4 @@
+import { blobRefusalSentence } from '@/lib/serverSentence'
 import { apiClient } from './client'
 
 /** One holding in the portfolio being tested. */
@@ -441,9 +442,19 @@ export async function listBenchmarks(apiKey: string): Promise<Benchmark[]> {
  * and shares, roughly a megabyte with every chart embedded.
  */
 export async function downloadTearsheet(req: BacktestRequest): Promise<void> {
-  const { data } = await apiClient.post('/portfolio/tearsheet', req, {
-    responseType: 'blob',
-  })
+  let data: BlobPart
+  try {
+    ;({ data } = await apiClient.post<BlobPart>('/portfolio/tearsheet', req, {
+      responseType: 'blob',
+    }))
+  } catch (error) {
+    // With a Blob response type the refusal's JSON arrives unparsed, so the
+    // caller would only ever see "Request failed with status code 429".
+    // Anything but a 409 or 429 with a message is rethrown untouched.
+    const sentence = await blobRefusalSentence(error)
+    if (sentence) throw new Error(sentence)
+    throw error
+  }
   const url = URL.createObjectURL(new Blob([data], { type: 'text/html' }))
   const link = document.createElement('a')
   link.href = url

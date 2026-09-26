@@ -1,0 +1,35 @@
+# Reviewed check-then-act sites for scripts/gthread_check_then_act.py.
+#
+# Format:  path::qualname::target  # benign|pending <owner>: reason
+#
+# Keyed by file, function and the name or attribute involved, not by line
+# number, so an edit above a site does not invalidate its entry. A reviewed
+# site is reported and never fails the gate. "benign" means safe as written.
+# "pending" means a real race whose fix belongs to the partition named; the
+# entry goes when the fix lands (the gate then reports it as stale).
+# Re-review an entry whenever the function it names changes.
+
+# --- Idempotent lazy initialisation -------------------------------------
+blueprints/admin.py::_get_client_logger::_client_logger  # benign: logging.getLogger returns the same logger to every caller, so a second initialisation changes nothing
+blueprints/python_strategy.py::init_scheduler::SCHEDULER  # benign: called once, at module import, which the import lock serialises
+broker/tradesmart/api/data.py::_websocket_cls::TradeSmartWebSocket  # benign: binds the same class object on every call
+
+# --- Warn-once and log-once flags ----------------------------------------
+# A race costs at most one repeated log line.
+services/agent/catalog.py::_litellm::_import_failed  # benign: records a failed optional import; a repeat only repeats the log line
+services/agent/stream.py::_estimate_cost_usd::_cost_lookup_warned  # benign: warn-once flag
+services/agent/tools/base.py::OpenAlgoToolkit._write_audit::_audit_sink_warned  # benign: warn-once flag
+services/strategy_module/broadcast.py::has_subscribers::_subscriber_probe_warned  # benign: warn-once flag
+utils/real_threading.py::_needs_marshal::_hub_missing_warned  # benign: warn-once flag
+utils/real_threading.py::_wake_hub::_hub_wake_failed_logged  # benign: log-once flag
+utils/stream_registry.py::thread_budget::_headroom_warned  # benign: warn-once flag
+
+# --- Objects local to one call --------------------------------------------
+broker/groww/api/data.py::BrokerData.fix_timestamps::df.index  # benign: a DataFrame built inside this call, never shared
+broker/groww/api/data.py::BrokerData.get_history::df.index  # benign: a DataFrame built inside this call, never shared
+broker/kotak/api/data.py::BrokerData.__init__::self.base_url  # benign: set once while the object is being constructed
+utils/logging.py::SensitiveDataFilter.filter::record.exc_text  # benign: each log record belongs to the one call that emits it
+utils/logging.py::SensitiveDataFilter.filter::record.stack_info  # benign: each log record belongs to the one call that emits it
+upgrade/migrate_smtp_simple.py::setup_unicode_output::sys.stdout  # benign: a one-shot command line migration, single threaded
+
+# --- Real races, fixes owned elsewhere --------------------------------------

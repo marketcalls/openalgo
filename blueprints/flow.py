@@ -198,9 +198,38 @@ def _execution_status_code(result: dict) -> int:
         return 200
     if result.get("already_running"):
         return 409
+    # Only a workflow started in the background (gthread only) carries these.
+    if result.get("accepted"):
+        return 202
+    if result.get("busy"):
+        return 429
     if result.get("status") == "error":
         return 502 if result.get("errors") else 500
     return 200
+
+
+def _run_or_start(workflow, **kwargs):
+    """Execute a triggered workflow, on this request or, if it waits, on the pool.
+
+    A Delay or Wait Until node can sleep for minutes inside the run. Under the
+    gthread worker that would hold one of a fixed number of request threads
+    for the whole wait, so there (and only there) a workflow whose waits add up
+    to more than FLOW_INLINE_WAIT_SECONDS is started on a Flow pool and the
+    trigger is answered at once with 202. Under eventlet and the development
+    server a sleeping request costs nothing, and every workflow runs on its
+    request exactly as before, so TradingView still gets the broker's answer.
+    A workflow with no wait, or a short one, always runs on its request.
+    """
+    from services.flow_executor_service import (
+        execute_workflow,
+        start_workflow_in_background,
+        workflow_runs_in_background,
+    )
+    from utils.runtime import gthread_active
+
+    if gthread_active() and workflow_runs_in_background(workflow.nodes):
+        return start_workflow_in_background(workflow.id, nodes=workflow.nodes, **kwargs)
+    return execute_workflow(workflow.id, **kwargs)
 
 
 def _existing_for_trigger_check(workflow_id):
@@ -675,7 +704,6 @@ def _execution_blocked(workflow):
 def execute_workflow_now(workflow_id):
     """Execute a workflow immediately"""
     from database.flow_db import get_workflow
-    from services.flow_executor_service import execute_workflow
 
     workflow = get_workflow(workflow_id)
     if not workflow:
@@ -690,7 +718,7 @@ def execute_workflow_now(workflow_id):
         return jsonify(blocked), 400
 
     try:
-        result = execute_workflow(workflow_id, api_key=api_key)
+        result = _run_or_start(workflow, api_key=api_key)
         return jsonify(result), _execution_status_code(result)
     except Exception as e:
         logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
@@ -1007,7 +1035,6 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
     import hmac
 
     from database.flow_db import get_workflow_by_webhook_token
-    from services.flow_executor_service import execute_workflow
 
     workflow = get_workflow_by_webhook_token(token)
     if not workflow:
@@ -1080,7 +1107,7 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
 
     try:
         logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")
-        result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
+        result = _run_or_start(workflow, webhook_data=data, api_key=api_key)
         status = result.get("status", "success")
         # On failure, report the run's own message. Overwriting it left a caller
         # such as TradingView with HTTP 200 and the text "Workflow 'X' triggered"

@@ -69,6 +69,159 @@ jobs:
             test/test_requirements_parity.py \
             -v --timeout=60
 
+  # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
+  # what an opted-in Ubuntu service and the gthread Docker start run, and it
+  # also runs eventlet (still the default web server) the same way. Each cell
+  # starts the app through it with a throwaway .env and runs
+  # scripts/gthread_smoke.py: the page, Socket.IO over polling and websocket,
+  # an SSE stream, requests while streams are held open, the runtime report,
+  # where the market data proxy runs, and a SIGTERM stop with connections
+  # open. gunicorn and eventlet are not in pyproject, so they are installed
+  # with the same pins as requirements-nginx.txt and the Dockerfile.
+  gunicorn-boot:
+    needs: backend-lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            worker: eventlet
+            mode: systemd
+            proxy: child
+            stop-within: 45
+          - python-version: "3.12"
+            worker: gthread
+            mode: systemd
+            proxy: child
+            stop-within: 45
+          - python-version: "3.12"
+            worker: gthread
+            mode: docker
+            proxy: external
+            # Docker's default stop window.
+            stop-within: 10
+          - python-version: "3.14"
+            worker: gthread
+            mode: systemd
+            proxy: child
+            stop-within: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync
+      - name: Install the production web server
+        # A server has eventlet installed whichever web server it runs, so the
+        # gthread cells keep it too. eventlet is not yet known to install on
+        # every newer Python, so the newest cell runs gthread without it.
+        run: |
+          uv pip install "gunicorn>=25.0,<26"
+          if [ "${{ matrix.python-version }}" = "3.12" ]; then
+            uv pip install "eventlet==0.41.2"
+          fi
+      - name: Throwaway .env
+        run: |
+          cp .sample.env .env
+          APP_KEY=$(.venv/bin/python -c 'import secrets; print(secrets.token_hex(32))')
+          PEPPER=$(.venv/bin/python -c 'import secrets; print(secrets.token_hex(32))')
+          sed -i "s|^APP_KEY *=.*|APP_KEY = '$APP_KEY'|; s|^API_KEY_PEPPER *=.*|API_KEY_PEPPER = '$PEPPER'|" .env
+          sed -i "s|^FLASK_PORT *=.*|FLASK_PORT = '5099'|; s|^WEBSOCKET_PORT *=.*|WEBSOCKET_PORT = '8799'|; s|^ZMQ_PORT *=.*|ZMQ_PORT = '5599'|" .env
+          sed -i "s|^HOST_SERVER *=.*|HOST_SERVER = 'http://127.0.0.1:5099'|; s|^REDIRECT_URL *=.*|REDIRECT_URL = 'http://127.0.0.1:5099/zerodha/callback'|" .env
+          echo "OPENALGO_WORKER_CLASS = '${{ matrix.worker }}'" >> .env
+          mkdir -p db log
+      - name: Boot through the launcher and run the smoke
+        run: |
+          if [ "${{ matrix.mode }}" = "docker" ]; then
+            # What start.sh does in the image: the proxy on its own, then the
+            # launcher with Docker's options.
+            export APP_MODE=standalone
+            .venv/bin/python -m websocket_proxy.server > proxy.log 2>&1 &
+            bash install/openalgo-gunicorn.sh --venv .venv --bind 127.0.0.1:5099 \
+              --proxy-mode external --timeout 300 --graceful-timeout 30 \
+              --worker-tmp-dir /tmp --log-level info > gunicorn.log 2>&1 &
+          else
+            bash install/openalgo-gunicorn.sh --venv .venv --bind 127.0.0.1:5099 \
+              --proxy-mode subprocess --log-level info > gunicorn.log 2>&1 &
+          fi
+          .venv/bin/python scripts/gthread_smoke.py --base-url http://127.0.0.1:5099 \
+            --worker ${{ matrix.worker }} --env-file .env --proxy-port 8799 \
+            --proxy ${{ matrix.proxy }} --pid $! --stop-within ${{ matrix.stop-within }} \
+            --log gunicorn.log
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: gunicorn-boot-${{ matrix.worker }}-${{ matrix.mode }}-py${{ matrix.python-version }}
+          path: |
+            gunicorn.log
+            proxy.log
+            log/errors.jsonl
+          retention-days: 7
+
+  # The eventlet tests. They run eventlet in a subprocess and assert on elapsed
+  # time and hub liveness, and each skips itself when eventlet is missing, which
+  # pyproject does not install. Here eventlet is installed, and the last step
+  # fails if anything was skipped, so a broken install cannot pass as skips.
+  eventlet-fallback:
+    needs: backend-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
+      - run: .venv/bin/python -c "import eventlet, gunicorn"
+      - name: Run the eventlet tests
+        run: |
+          .venv/bin/python -m pytest \
+            test/test_eventlet_cross_thread_locks.py \
+            test/test_sqlite_lock_cooperative.py \
+            test/test_agent_stream_eventlet.py \
+            test/test_telegram_startup.py \
+            test/test_telegram_startup_isolation.py \
+            test/test_gthread_deploy_eventlet.py \
+            -o addopts="" --timeout=120 -rs --junitxml=eventlet.xml
+      - name: Every eventlet test ran
+        run: |
+          .venv/bin/python - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+          root = ET.parse("eventlet.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root)
+          tests = sum(int(s.get("tests", 0)) for s in suites)
+          skipped = sum(int(s.get("skipped", 0)) for s in suites)
+          print(f"{tests} eventlet tests, {skipped} skipped")
+          sys.exit(1 if tests == 0 or skipped else 0)
+          EOF
+
+  # Static gates for code request threads run under gthread, plus the deploy
+  # and foundation tests. The gates key their reviewed lists by file and
+  # function; see the scripts for what each rule means.
+  gthread-gates:
+    needs: backend-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
+      - name: Check-then-act gate
+        run: .venv/bin/python scripts/gthread_check_then_act.py
+      - name: Sleep gate
+        run: .venv/bin/python scripts/gthread_sleep_gate.py
+      - name: Deploy and foundation tests
+        run: |
+          .venv/bin/python -m pytest test/test_gthread_deploy_*.py \
+            test/test_gthread_foundation_*.py -o addopts="" --timeout=120 -rs
+
   # Frontend linting
   frontend-lint:
     runs-on: ubuntu-latest
@@ -282,7 +435,7 @@ jobs:
   # assembles them into a single Docker Hub manifest list under the
   # canonical tags (:latest, :<sha>).
   docker-build:
-    needs: [backend-lint, backend-test, frontend-build, security-scan]
+    needs: [backend-lint, backend-test, frontend-build, security-scan, gunicorn-boot, eventlet-fallback, gthread-gates]
     # Skip for fork PRs (secrets not available)
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
     strategy:

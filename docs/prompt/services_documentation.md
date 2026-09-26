@@ -725,9 +725,8 @@ inside a feature blueprint.
 | `whatsapp_alert_service.py` | Formats and dispatches WhatsApp order/broadcast alerts. |
 | `whatsapp_bot_service.py` | Active WhatsApp pairing state, commands, and synchronous sends. |
 
-`telegram_bot_service_fixed.py` and `telegram_bot_service_v2.py` are not the
-active imports used by `app.py`, the REST namespace, or the Telegram blueprint.
-Do not select them for new integrations.
+The older copies `telegram_bot_service_fixed.py` and `telegram_bot_service_v2.py`
+have been deleted. `telegram_bot_service.py` is the only Telegram bot service.
 
 Alert-service entry points:
 

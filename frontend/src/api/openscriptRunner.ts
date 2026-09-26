@@ -193,9 +193,11 @@ export async function pauseStrategy(name: string): Promise<void> {
  *
  * **This one spends money and cannot be taken back**, so nothing here calls it
  * without the trader having been asked. A close that did not happen comes back
- * as a refusal with the reason, and the run is still running and still holding:
- * the message is passed through rather than replaced, because it says what to
- * do next.
+ * as a refusal with the reason, and the run is still running and still holding.
+ * A run that ended without confirming its close (it crashed, or was stopped
+ * before its closing order filled) is also refused, but that run has stopped,
+ * and the refusal says to check the position. Either way the message is passed
+ * through rather than replaced, because it says what to do next.
  */
 export async function closeStrategy(name: string): Promise<void> {
   try {

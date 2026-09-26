@@ -5,7 +5,7 @@ import threading
 import time as time_module
 import uuid
 from collections import deque
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from time import time
 
 import pytz
@@ -43,6 +43,8 @@ from database.chartink_db import (
 )
 from database.symbol import enhanced_search_symbols
 from limiter import limiter
+from utils import runtime
+from utils.db_sessions import releases_scoped_sessions, remove_all_scoped_sessions
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -54,8 +56,25 @@ STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 
 chartink_bp = Blueprint("chartink_bp", __name__, url_prefix="/chartink")
 
-# Initialize scheduler for time-based controls
-scheduler = BackgroundScheduler(timezone=pytz.timezone("Asia/Kolkata"))
+# Initialize scheduler for time-based controls. Under the gthread worker the
+# misfire grace is explicit: APScheduler's own is one second, so a square-off
+# that reached a worker thread a little late was skipped with only a "was
+# missed" line in the log, leaving the intraday position open. A late square-off
+# is far better than none, and five minutes bounds how late it may be. The
+# eventlet worker and the development server keep APScheduler's defaults, as
+# before: gthread is opt-in, and an install that has not chosen it must see no
+# change in when its jobs run.
+SCHEDULER_JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
+
+
+def scheduler_job_defaults() -> dict:
+    """The job defaults this runtime's scheduler is built with."""
+    return dict(SCHEDULER_JOB_DEFAULTS) if runtime.gthread_active() else {}
+
+
+scheduler = BackgroundScheduler(
+    timezone=pytz.timezone("Asia/Kolkata"), job_defaults=scheduler_job_defaults()
+)
 scheduler.start()
 
 # Get base URL from environment or default to localhost
@@ -76,6 +95,60 @@ order_processor_lock = threading.Lock()
 last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
 
 
+def _place_in_process(endpoint, payload):
+    """Place one queued order through the order services, without HTTP.
+
+    Used under the gthread worker only. The queue used to post each order to
+    this same server's /api/v1 endpoints, and under gthread that request needs
+    a free thread from the pool this processor's own server is serving: with the
+    pool held by long lived connections it waited, the post gave up after 30
+    seconds and logged the order as failed, and the server could still execute
+    it once a thread freed. The services are what those endpoints call, after
+    the same schema validation, so the order itself is the same.
+
+    Returns:
+        (ok, detail): whether the order was accepted, and what to log if not.
+    """
+    from marshmallow import ValidationError
+
+    try:
+        if endpoint == "placesmartorder":
+            from restx_api.schemas import SmartOrderSchema
+            from services.place_smart_order_service import place_smart_order
+
+            order_data = SmartOrderSchema().load(payload)
+            api_key = order_data.pop("apikey", None)
+            ok, response, _status = place_smart_order(order_data=order_data, api_key=api_key)
+        else:
+            from restx_api.schemas import OrderSchema
+            from services.place_order_service import place_order
+
+            order_data = OrderSchema().load(payload)
+            api_key = order_data.get("apikey")
+            ok, response, _status = place_order(order_data=order_data, api_key=api_key)
+    except ValidationError as err:
+        return False, str(err.messages)
+    finally:
+        # This thread has no request teardown, so it gives back the database
+        # sessions each order bound.
+        remove_all_scoped_sessions()
+    message = response.get("message") if isinstance(response, dict) else response
+    return bool(ok), message
+
+
+def _place(endpoint, payload):
+    """Place one queued order. Returns (ok, detail) for the log.
+
+    Under the gthread worker the order goes straight to the order service (see
+    _place_in_process). Everywhere else it is posted to this server's own API
+    exactly as it always has been.
+    """
+    if runtime.gthread_active():
+        return _place_in_process(endpoint, payload)
+    response = requests.post(f"{BASE_URL}/api/v1/{endpoint}", json=payload, timeout=30)
+    return response.ok, response.text
+
+
 def process_orders():
     """Background task to process orders from both queues with rate limiting"""
     global order_processor_running
@@ -89,18 +162,14 @@ def process_orders():
                     break
 
                 try:
-                    response = requests.post(
-                        f"{BASE_URL}/api/v1/placesmartorder",
-                        json=smart_order["payload"],
-                        timeout=30,
-                    )
-                    if response.ok:
+                    ok, detail = _place("placesmartorder", smart_order["payload"])
+                    if ok:
                         logger.info(
                             f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
                         )
                     else:
                         logger.error(
-                            f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
+                            f"Error placing smart order for {smart_order['payload']['symbol']}: {detail}"
                         )
                 except Exception as e:
                     logger.exception(f"Error placing smart order: {str(e)}")
@@ -127,19 +196,15 @@ def process_orders():
                         break
 
                     try:
-                        response = requests.post(
-                            f"{BASE_URL}/api/v1/placeorder",
-                            json=regular_order["payload"],
-                            timeout=30,
-                        )
-                        if response.ok:
+                        ok, detail = _place("placeorder", regular_order["payload"])
+                        if ok:
                             logger.info(
                                 f"Regular order placed for {regular_order['payload']['symbol']} in strategy {regular_order['payload']['strategy']}"
                             )
                             last_regular_orders.append(now)
                         else:
                             logger.error(
-                                f"Error placing regular order for {regular_order['payload']['symbol']}: {response.text}"
+                                f"Error placing regular order for {regular_order['payload']['symbol']}: {detail}"
                             )
                     except Exception as e:
                         logger.exception(f"Error placing regular order: {str(e)}")
@@ -221,8 +286,13 @@ def schedule_squareoff(strategy_id):
     if not strategy or not strategy.is_intraday or not strategy.squareoff_time:
         return
 
+    _add_squareoff_job(strategy_id, strategy.squareoff_time)
+
+
+def _add_squareoff_job(strategy_id, squareoff_time) -> bool:
+    """Put one strategy's square-off on the scheduler, replacing any it had."""
     try:
-        hours, minutes = map(int, strategy.squareoff_time.split(":"))
+        hours, minutes = map(int, squareoff_time.split(":"))
         job_id = f"squareoff_{strategy_id}"
 
         # Remove existing job if any
@@ -240,10 +310,165 @@ def schedule_squareoff(strategy_id):
             timezone=pytz.timezone("Asia/Kolkata"),
         )
         logger.info(f"Scheduled squareoff for strategy {strategy_id} at {hours}:{minutes}")
+        return True
     except Exception as e:
         logger.exception(f"Error scheduling squareoff for strategy {strategy_id}: {str(e)}")
+        return False
 
 
+# ---------------------------------------------------------------------------
+# Putting the square-off times back after a restart
+# ---------------------------------------------------------------------------
+#
+# The scheduler keeps its jobs in memory, and a square-off job was only ever
+# added when a strategy was created. So after any restart of the server no
+# intraday Chartink strategy was squared off at its square-off time any more,
+# however long ago it was created. restore_squareoff_jobs puts back the job of
+# every active intraday strategy that has a square-off time. It runs once, from
+# a scheduled attempt shortly after startup (retried until the database
+# answers) and, should that not have happened yet, from the first request to any
+# Chartink route.
+#
+# Only under the gthread worker. Putting the jobs back sends real closing orders
+# that an eventlet install has never sent after a restart, and gthread is opt-in:
+# an install that has not chosen it must see no change. Under eventlet and on the
+# development server nothing here is booked and nothing is restored.
+
+#: Seconds after startup before the first attempt, then between attempts.
+_SQUAREOFF_RESTORE_DELAY_SECONDS = 30
+_SQUAREOFF_RESTORE_RETRY_SECONDS = 60
+#: Attempts before giving up and saying so in the log.
+_SQUAREOFF_RESTORE_ATTEMPTS = 30
+_SQUAREOFF_RESTORE_JOB_ID = "chartink_restore_squareoffs"
+
+# Single flight. The flag is set last, and only once the strategies were read.
+_squareoff_restore_lock = threading.Lock()
+_squareoffs_restored = False
+
+
+def restore_squareoff_jobs() -> bool:
+    """Put back the square-off job of every active intraday strategy. True once done.
+
+    Does nothing outside the gthread worker (see the note above). A strategy
+    that already has its job (created since this server started) is left as it
+    is. A strategy that is turned off gets no job: a square-off closes the whole
+    net position in each mapped symbol, including one the trader opened by hand
+    or through another strategy, so a restart must never start closing positions
+    in the name of a strategy the trader turned off. Turning it back on puts its
+    square-off back (see _restore_squareoff_on_activation).
+
+    Returns:
+        True when the jobs are in place (now or by an earlier call), or when this
+        runtime does not restore them. False when the strategies could not be
+        read yet and a later call should try again.
+    """
+    global _squareoffs_restored
+    if not runtime.gthread_active():
+        return True
+    if _squareoffs_restored:
+        return True
+    with _squareoff_restore_lock:
+        if _squareoffs_restored:
+            return True
+        try:
+            strategies = ChartinkStrategy.query.all()
+        except Exception as error:
+            # get_all_strategies answers an empty list on failure, which would
+            # read as "nothing to restore" and never be retried. Expected while
+            # the database is still being set up at startup, so a warning; the
+            # attempt that gives up logs an error.
+            logger.warning(
+                "Could not read the Chartink strategies to put their square-off times "
+                f"back yet; will try again ({type(error).__name__})"
+            )
+            try:
+                db_session.rollback()
+            except Exception:
+                logger.debug("Rolling back the Chartink session failed")
+            return False
+
+        restored = 0
+        for strategy in strategies:
+            if not strategy.is_intraday or not strategy.squareoff_time:
+                continue
+            if not strategy.is_active:
+                continue
+            if scheduler.get_job(f"squareoff_{strategy.id}") is not None:
+                continue
+            if _add_squareoff_job(strategy.id, strategy.squareoff_time):
+                restored += 1
+
+        _squareoffs_restored = True
+        if restored:
+            logger.info(f"Put back the square-off time of {restored} Chartink strategies")
+        return True
+
+
+@releases_scoped_sessions
+def _restore_squareoffs_on_schedule(attempt=1):
+    """The scheduled attempt. Tries again later until the database answers."""
+    if restore_squareoff_jobs():
+        return
+    if attempt >= _SQUAREOFF_RESTORE_ATTEMPTS:
+        logger.error(
+            "The square-off times of the Chartink intraday strategies could not be put back "
+            "after the restart. Open the Chartink page to try again; until then those "
+            "positions are not squared off automatically."
+        )
+        return
+    try:
+        scheduler.add_job(
+            _restore_squareoffs_on_schedule,
+            "date",
+            run_date=datetime.now(pytz.timezone("Asia/Kolkata"))
+            + timedelta(seconds=_SQUAREOFF_RESTORE_RETRY_SECONDS),
+            args=[attempt + 1],
+            id=_SQUAREOFF_RESTORE_JOB_ID,
+            replace_existing=True,
+        )
+    except Exception:
+        logger.exception("Could not schedule another attempt to restore Chartink square-offs")
+
+
+def _restore_squareoff_on_activation(strategy) -> None:
+    """Under gthread, give a strategy that was turned back on its square-off job.
+
+    The restore skips strategies that were off at startup, so without this a
+    strategy turned on after a restart would never be squared off. A strategy
+    turned off keeps its job, as it always has on a server that never restarted.
+    """
+    if not runtime.gthread_active():
+        return
+    if not strategy or not strategy.is_active:
+        return
+    if not strategy.is_intraday or not strategy.squareoff_time:
+        return
+    if scheduler.get_job(f"squareoff_{strategy.id}") is None:
+        _add_squareoff_job(strategy.id, strategy.squareoff_time)
+
+
+@chartink_bp.before_request
+def _ensure_squareoffs_restored():
+    """The fallback: the first Chartink request after startup restores them."""
+    if not _squareoffs_restored and runtime.gthread_active():
+        restore_squareoff_jobs()
+
+
+if runtime.gthread_active():
+    try:
+        scheduler.add_job(
+            _restore_squareoffs_on_schedule,
+            "date",
+            run_date=datetime.now(pytz.timezone("Asia/Kolkata"))
+            + timedelta(seconds=_SQUAREOFF_RESTORE_DELAY_SECONDS),
+            id=_SQUAREOFF_RESTORE_JOB_ID,
+            replace_existing=True,
+        )
+    except Exception:
+        logger.exception("Could not schedule the restore of Chartink square-off times")
+
+
+@releases_scoped_sessions
 def squareoff_positions(strategy_id):
     """Square off all positions for intraday strategy"""
     try:
@@ -579,6 +804,7 @@ def toggle_strategy_route(strategy_id):
     try:
         strategy = toggle_strategy(strategy_id)
         if strategy:
+            _restore_squareoff_on_activation(strategy)
             status = "activated" if strategy.is_active else "deactivated"
             flash(f"Strategy {status} successfully", "success")
         else:
@@ -778,6 +1004,7 @@ def api_toggle_strategy(strategy_id):
     try:
         updated_strategy = toggle_strategy(strategy_id)
         if updated_strategy:
+            _restore_squareoff_on_activation(updated_strategy)
             return jsonify({"status": "success", "data": {"is_active": updated_strategy.is_active}})
         else:
             return jsonify({"status": "error", "message": "Failed to toggle strategy"}), 500

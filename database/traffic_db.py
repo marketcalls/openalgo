@@ -3,7 +3,6 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from cachetools import TTLCache
 from sqlalchemy import (
     Boolean,
     Column,
@@ -22,6 +21,8 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
 from database.settings_db import get_security_settings
+from utils.keyed_locks import KeyedLocks
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,19 @@ LogBase.query = logs_session.query_property()
 # which with NullPool means a fresh SQLite connection per request. Cache the
 # verdict per IP; ban_ip/unban_ip invalidate so enforcement stays immediate
 # (bans are only mutated in-process — single-instance deployment).
-_ip_ban_cache = TTLCache(maxsize=2048, ttl=60)
+#
+# A LockedTTLCache filled with the generation read before the query: under the
+# gthread worker a ban committed while another request's check is in flight
+# would otherwise be overwritten by that check's "not banned" for the TTL.
+_ip_ban_cache = LockedTTLCache(maxsize=2048, ttl=60)
+
+# The abuse trackers read a counter, add one and write it back. Two requests
+# from one address at once (a scanner, under the gthread worker) would each
+# read the same count and lose an increment, and two first hits would each
+# insert a row. One lock per (tracker, address) serialises exactly those, and
+# nothing else: unrelated addresses never wait on each other. The locks are
+# stdlib ones (green under eventlet), because the holder does database I/O.
+_tracker_locks = KeyedLocks(name="abuse-trackers")
 
 
 class TrafficLog(LogBase):
@@ -157,34 +170,37 @@ class IPBan(LogBase):
     @staticmethod
     def is_ip_banned(ip_address):
         """Check if an IP is currently banned"""
-        cached = _ip_ban_cache.get(ip_address)
-        if cached is not None:
+        cached = _ip_ban_cache.get(ip_address, MISSING)
+        if cached is not MISSING:
             return cached
 
+        # Read before the query: a ban committed while this check is in flight
+        # invalidates the entry, and this verdict is then not cached over it.
+        generation = _ip_ban_cache.generation
         try:
             ban = IPBan.query.filter_by(ip_address=ip_address).first()
             if not ban:
-                _ip_ban_cache[ip_address] = False
+                _ip_ban_cache.fill(ip_address, False, generation)
                 return False
 
             # Check permanent ban
             if ban.is_permanent:
-                _ip_ban_cache[ip_address] = True
+                _ip_ban_cache.fill(ip_address, True, generation)
                 return True
 
             # Check temporary ban expiry
             if ban.expires_at:
                 if datetime.utcnow() < ban.expires_at.replace(tzinfo=None):
-                    _ip_ban_cache[ip_address] = True
+                    _ip_ban_cache.fill(ip_address, True, generation)
                     return True
                 else:
                     # Ban expired, remove it
                     logs_session.delete(ban)
                     logs_session.commit()
-                    _ip_ban_cache[ip_address] = False
+                    _ip_ban_cache.fill(ip_address, False, generation)
                     return False
 
-            _ip_ban_cache[ip_address] = False
+            _ip_ban_cache.fill(ip_address, False, generation)
             return False
         except Exception as e:
             logger.exception(f"Error checking IP ban status: {e}")
@@ -238,7 +254,7 @@ class IPBan(LogBase):
                 logs_session.add(ban)
 
             logs_session.commit()
-            _ip_ban_cache.pop(ip_address, None)
+            _ip_ban_cache.invalidate(ip_address)
             logger.info(f"IP {ip_address} banned: {reason}")
             return True
         except Exception as e:
@@ -254,7 +270,7 @@ class IPBan(LogBase):
             if ban:
                 logs_session.delete(ban)
                 logs_session.commit()
-                _ip_ban_cache.pop(ip_address, None)
+                _ip_ban_cache.invalidate(ip_address)
                 logger.info(f"IP {ip_address} unbanned")
                 return True
             return False
@@ -272,11 +288,13 @@ class IPBan(LogBase):
                 IPBan.is_permanent == False, IPBan.expires_at < datetime.utcnow()
             ).all()
 
+            expired_ips = [ban.ip_address for ban in expired]
             for ban in expired:
                 logs_session.delete(ban)
-                _ip_ban_cache.pop(ban.ip_address, None)
 
             logs_session.commit()
+            for ip_address in expired_ips:
+                _ip_ban_cache.invalidate(ip_address)
 
             # Return active bans
             return IPBan.query.all()
@@ -305,7 +323,16 @@ class Error404Tracker(LogBase):
 
     @staticmethod
     def track_404(ip_address, path):
-        """Track a 404 error for an IP"""
+        """Track a 404 error for an IP.
+
+        Serialised per address, so parallel 404s from one scanner each count.
+        """
+        with _tracker_locks.hold(("404", ip_address)):
+            return Error404Tracker._track_404_locked(ip_address, path)
+
+    @staticmethod
+    def _track_404_locked(ip_address, path):
+        """The read-modify-write behind track_404. Call with the address locked."""
         try:
             # Check if already banned
             if IPBan.is_ip_banned(ip_address):
@@ -418,7 +445,16 @@ class InvalidAPIKeyTracker(LogBase):
 
     @staticmethod
     def track_invalid_api_key(ip_address, api_key_hash=None):
-        """Track an invalid API key attempt"""
+        """Track an invalid API key attempt.
+
+        Serialised per address, so parallel attempts from one address each count.
+        """
+        with _tracker_locks.hold(("api", ip_address)):
+            return InvalidAPIKeyTracker._track_invalid_api_key_locked(ip_address, api_key_hash)
+
+    @staticmethod
+    def _track_invalid_api_key_locked(ip_address, api_key_hash=None):
+        """The read-modify-write behind track_invalid_api_key. Call with the address locked."""
         try:
             # Check if already banned
             if IPBan.is_ip_banned(ip_address):

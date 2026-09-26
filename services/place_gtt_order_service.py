@@ -5,6 +5,7 @@ from typing import Any
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, GTTFailedEvent, GTTPlacedEvent
+from utils.broker_backpressure import BrokerBusyError
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -134,6 +135,26 @@ def place_gtt_order_with_auth(
 
     try:
         res, response_data, trigger_id = broker_module.place_gtt_order(order_data, auth_token)
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"GTT not sent, broker busy: {e}")
+        error_response = {"status": "error", "message": str(e)}
+        bus.publish(
+            GTTFailedEvent(
+                mode="live",
+                api_type=API_TYPE,
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                trigger_type=order_data.get("trigger_type", ""),
+                error_message=str(e),
+                request_data=order_request_data,
+                response_data=error_response,
+                api_key=api_key,
+            )
+        )
+        return False, error_response, 429
     except Exception as e:
         logger.exception(f"Error in broker_module.place_gtt_order: {e}")
         error_response = {"status": "error", "message": "Failed to place GTT due to internal error"}

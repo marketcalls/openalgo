@@ -3,6 +3,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -16,9 +17,32 @@ from broker.tradesmart.api.rate_limiter import (
     retry_delay,
 )
 from database.token_db import get_br_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
 logger = get_logger(__name__)
+
+# Under the gthread worker the REST quote fallback uses one process-wide pool of
+# this size instead of up to 90 new threads per request: those are real OS
+# threads there, outside the request pool, all competing for the shared httpx
+# connections that order placement also uses.
+_REST_QUOTE_SHARED_WORKERS = 16
+
+
+def _rest_quote_pool(pending: int):
+    """The executor for one REST quote fan-out, as a context manager.
+
+    Under eventlet and the dev server this is a pool of its own per call,
+    exactly as before. Under gthread it is the shared pool, which the ``with``
+    block must not shut down.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("tradesmart-rest-quotes", _REST_QUOTE_SHARED_WORKERS))
+    # Sized to the quote budget (100/sec), not the general one: threads are
+    # spawned lazily, so a short list still costs only len(pending) threads.
+    return ThreadPoolExecutor(max_workers=min(TRADESMART_QUOTE_MAX_PER_SECOND, pending))
 
 
 def _as_float(value, default=0.0):
@@ -464,6 +488,9 @@ class BrokerData:
                     f"Error from TradeSmart API: {response.get('emsg', 'Unknown error')}"
                 )
             return self._quote_dict(response)
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}") from e
 
@@ -516,10 +543,7 @@ class BrokerData:
             return results
 
         logger.info(f"Fetching {len(pending)} TradeSmart quotes over REST")
-        # Sized to the quote budget (100/sec), not the general one: threads are
-        # spawned lazily, so a short list still costs only len(pending) threads.
-        max_workers = min(TRADESMART_QUOTE_MAX_PER_SECOND, len(pending))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with _rest_quote_pool(len(pending)) as executor:
             future_map = {executor.submit(self._fetch_single_quote, item): item for item in pending}
             for future in as_completed(future_map):
                 item = future_map[future]
@@ -633,6 +657,9 @@ class BrokerData:
                 "volume": int(float(response.get("v", 0))),
                 "oi": int(float(response.get("oi", 0))),
             }
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}") from e
 
@@ -792,6 +819,9 @@ class BrokerData:
             df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
             return df
 
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}") from e
 

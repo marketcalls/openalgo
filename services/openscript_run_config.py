@@ -56,6 +56,7 @@ a rename, and two of those interleaved would lose one script's settings.
 import json
 import os
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -288,9 +289,7 @@ def all_run_configs() -> dict[str, dict]:
 def deployments_of(script: str) -> dict[str, dict]:
     """Every deployment of one script, by deployment id."""
     return {
-        name: entry
-        for name, entry in all_run_configs().items()
-        if entry.get("script") == script
+        name: entry for name, entry in all_run_configs().items() if entry.get("script") == script
     }
 
 
@@ -438,65 +437,70 @@ def write_run_config(
     if wrong:
         return False, wrong
 
-    stored = all_run_configs()
-    held = stored.get(deployment) if deployment else None
-
-    # The same four as something already deployed, and not that thing itself.
-    clash = next(
-        (
-            one
-            for one, saved in stored.items()
-            if one != deployment
-            and saved.get("script") == script
-            and saved.get("symbol") == symbol
-            and saved.get("exchange") == exchange
-            and saved.get("interval") == interval
-        ),
-        None,
-    )
-    if clash is not None:
-        return False, (
-            f"{script} is already deployed on {symbol} {exchange} at {interval}. One strategy "
-            "runs once on one instrument and interval: change the instrument or the interval, "
-            "or edit the deployment that is already there."
-        )
-
-    # **Editing keeps the id only while the deployment is still the same
-    # deployment.** Changing the instrument or the interval is not moving this
-    # one, it is making another: the form says so, and keeping the id would
-    # leave the new instrument showing the old one's orders, which is the exact
-    # confusion a token exists to end.
-    stays = held is not None and (
-        str(held.get("script") or "") == script
-        and str(held.get("symbol") or "") == symbol
-        and str(held.get("exchange") or "") == exchange
-        and str(held.get("interval") or "") == interval
-    )
-    key = (
-        str(held["deployment"])
-        if stays
-        else deployment_id(script, symbol, exchange, interval, token=new_token())
-    )
-
-    entry = {
-        "deployment": key,
-        "script": script,
-        "symbol": symbol,
-        "exchange": exchange,
-        "interval": interval,
-        "product": product,
-        "user_id": user_id,
-        "inputs": settings,
-        "updated_at": _ist_now().strftime("%Y-%m-%d %H:%M:%S IST"),
-    }
-    # The side this deployment last traded on is not a setting and survives
-    # an edit that keeps the deployment. Its orders are still where they went,
-    # and a trader changing a parameter between runs still wants to read them.
-    if stays and held.get("mode") in RUN_MODES:
-        entry["mode"] = held["mode"]
-
+    # The clash check and the write happen in one hold of the write lock. With
+    # the check outside it, two creates arriving together (a double clicked
+    # Save) both found no clash and both stored a deployment: one strategy
+    # twice on one instrument, which is exactly what the check exists to refuse.
     with _WRITE_LOCK:
         stored = all_run_configs()
+        held = stored.get(deployment) if deployment else None
+
+        # The same four as something already deployed, and not that thing itself.
+        clash = next(
+            (
+                one
+                for one, saved in stored.items()
+                if one != deployment
+                and saved.get("script") == script
+                and saved.get("symbol") == symbol
+                and saved.get("exchange") == exchange
+                and saved.get("interval") == interval
+            ),
+            None,
+        )
+        if clash is not None:
+            return False, (
+                f"{script} is already deployed on {symbol} {exchange} at {interval}. One strategy "
+                "runs once on one instrument and interval: change the instrument or the interval, "
+                "or edit the deployment that is already there."
+            )
+
+        # **Editing keeps the id only while the deployment is still the same
+        # deployment.** Changing the instrument or the interval is not moving
+        # this one, it is making another: the form says so, and keeping the id
+        # would leave the new instrument showing the old one's orders, which is
+        # the exact confusion a token exists to end.
+        stays = held is not None and (
+            str(held.get("script") or "") == script
+            and str(held.get("symbol") or "") == symbol
+            and str(held.get("exchange") or "") == exchange
+            and str(held.get("interval") or "") == interval
+        )
+        key = (
+            str(held["deployment"])
+            if stays
+            else deployment_id(script, symbol, exchange, interval, token=new_token())
+        )
+
+        entry = {
+            "deployment": key,
+            "script": script,
+            "symbol": symbol,
+            "exchange": exchange,
+            "interval": interval,
+            "product": product,
+            "user_id": user_id,
+            "inputs": settings,
+            "updated_at": _ist_now().strftime("%Y-%m-%d %H:%M:%S IST"),
+        }
+        # The side this deployment last traded on is not a setting and survives
+        # an edit that keeps the deployment. Its orders are still where they
+        # went, and a trader changing a parameter between runs still wants to
+        # read them. Read inside the hold, so a run recording its side at the
+        # same moment is not overwritten by a copy taken before it.
+        if stays and held.get("mode") in RUN_MODES:
+            entry["mode"] = held["mode"]
+
         stored[key] = entry
         saved, why = _save(stored)
 
@@ -592,9 +596,10 @@ def _save(configs: dict[str, dict]) -> tuple[bool, str]:
     file whose bytes are still in a buffer replaces good settings with an empty
     file.
 
-    The caller holds the write lock.
+    The caller holds the write lock. The temporary file has a name of its own
+    for each write, because the lock only serialises writers in this process.
     """
-    temporary = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+    temporary = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(temporary, "w", encoding="utf-8") as handle:
@@ -604,9 +609,12 @@ def _save(configs: dict[str, dict]) -> tuple[bool, str]:
         os.replace(temporary, CONFIG_FILE)
     except OSError:
         logger.exception("Could not save the OpenScript run settings to %s", CONFIG_FILE)
+        return False, "These run settings could not be saved on this server"
+    finally:
+        # Gone already after a successful rename. On any failure it is a file
+        # of this write alone that nothing will come back for.
         try:
             Path(temporary).unlink(missing_ok=True)
         except OSError:
             logger.debug("The half written run settings at %s could not be removed", temporary)
-        return False, "These run settings could not be saved on this server"
     return True, ""

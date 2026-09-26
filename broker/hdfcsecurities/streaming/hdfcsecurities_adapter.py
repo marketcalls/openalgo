@@ -21,7 +21,6 @@ Two properties of the feed shape the state kept here:
     published as a quote of their own, which would blank the live price.
 """
 
-import sys
 import threading
 
 from broker.hdfcsecurities.mapping.transform_data import ws_scrip_id
@@ -45,12 +44,13 @@ _MODE_TO_TOPIC = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
 # The feed runs on a real OS thread (see hdfcsecurities_websocket), so the
 # subscription-state lock must be a real lock too -- an eventlet-patched one
 # taken from a foreign thread does not block correctly.
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
 
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+_real_threading = _runtime.original("threading")
 
 # Partial-refresh packet kinds and the fields each one is allowed to carry over
 # into the merged snapshot.

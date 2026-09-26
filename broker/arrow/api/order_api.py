@@ -13,6 +13,12 @@ from broker.arrow.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -81,41 +87,50 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Mirrors the Zerodha adapter: only one smart order per symbol executes at a
 # time; others queue and each gets a fresh position book.
-_symbol_locks = {}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="arrow smart orders")
 
 # --- Position Book Cache (1s TTL) ---
-_position_cache = {}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """Arrow wraps a position book it read as {"status": "success", "data": [...]}."""
+    if not isinstance(positions_data, dict):
+        return False
+    status = positions_data.get("status")
+    if status == "success":
+        return True
+    return status is None and isinstance(positions_data.get("data"), list)
 
 
 def _get_cached_positions(auth):
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            logger.debug("Position book served from cache")
-            return cached["data"]
-
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-    return positions_data
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book("arrow", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    _position_cache.invalidate(auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
@@ -176,6 +191,7 @@ def place_order_api(data, auth):
     return response, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """Reconcile the live position to data['position_size'] and place the
     difference order. Same algorithm as the Zerodha reference."""
@@ -194,7 +210,9 @@ def place_smartorder_api(data, auth):
 
         symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        with symbol_lock:
+        with symbol_lock as acquired:
+            if not acquired:
+                return SymbolLocks.busy(symbol)
             position_size = int(data.get("position_size", "0"))
             current_position = int(
                 get_open_position(symbol, exchange, map_product_type(product), auth)
@@ -242,6 +260,8 @@ def place_smartorder_api(data, auth):
             }
             return res, response_data, orderid
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"
         logger.exception(error_msg)

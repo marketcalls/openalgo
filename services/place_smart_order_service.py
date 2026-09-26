@@ -10,6 +10,7 @@ from events import (
     OrderPlacedEvent,
     SmartOrderNoActionEvent,
 )
+from utils.broker_backpressure import BrokerBusyError
 from utils.constants import (
     REQUIRED_SMART_ORDER_FIELDS,
     VALID_ACTIONS,
@@ -247,6 +248,23 @@ def place_smart_order_with_auth(
                 api_key=api_key,
             ))
 
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Smart order not sent, broker busy: {e}")
+        error_response = {"status": "error", "message": str(e)}
+        bus.publish(
+            OrderFailedEvent(
+                mode="live",
+                api_type="placesmartorder",
+                request_data=order_request_data,
+                response_data=error_response,
+                api_key=api_key,
+                error_message=str(e),
+            )
+        )
+        return False, error_response, 429
     except Exception as e:
         logger.exception(f"Error in broker_module.place_smartorder_api: {e}")
         error_response = {

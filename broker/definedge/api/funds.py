@@ -4,6 +4,7 @@ import json
 
 from broker.definedge.api.baseurl import get_url
 from broker.definedge.api.rate_limiter import rate_limited_request
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -147,6 +148,8 @@ def get_margin_data(auth_token):
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error: {str(e)}")
         return {}
+    except BrokerBusyError:
+        raise
     except Exception as e:
         # General exception handling
         logger.error(f"An exception occurred while fetching margin data: {str(e)}")

@@ -8,7 +8,172 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Optional gthread web server
+
+OpenAlgo can now run under gunicorn's gthread worker, which gives every request
+its own thread from a fixed pool of 64, instead of eventlet. **eventlet stays
+the default.** An install that does not add `OPENALGO_WORKER_CLASS = 'gthread'`
+to `.env` keeps its service file, nginx configuration and dependencies exactly
+as they are, and an update does not switch anything. How to switch, check that
+it works and switch back: [docs/gthread/README.md](gthread/README.md).
+
+- **Ubuntu:** after 23:30 IST, `sudo bash install/switch-worker.sh --to gthread`.
+  The script backs up the service file, checks the result and puts the old one
+  back if OpenAlgo does not come up. It refuses to restart during the trading
+  day unless given `--force`.
+- **Docker:** set the line in `.env`, add `stop_grace_period: 45s` to the
+  OpenAlgo service in `docker-compose.yaml` (a gthread stop gives open requests
+  and running strategies up to 30 seconds, and Docker would otherwise cut it off
+  at 10), and recreate the container.
+- `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
+
+**What gthread refuses that eventlet waits for.** A request that would wait too
+long is answered with a sentence instead: a broker rate limit that would hold a
+request more than about 10 seconds (HTTP 429, nothing sent), a second order on
+the same symbol still waiting after 30 seconds, a live and sandbox mode change
+still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
+(Python strategy log views, remote MCP, agent chats). A Flow workflow whose
+Delay and Wait Until steps add up to more than 10 seconds answers at once (HTTP
+202) and runs in the background, up to 16 waiting on a Delay and 4 on a Wait
+Until at the same time; a refused one is shown in its execution history. The
+full list is in the guide above. None of this happens on eventlet.
+
+**Only under gthread, as eventlet already behaved or as the web page already
+did:**
+
+- Python strategies that were running when the server stopped are started
+  again when it comes back, as after an eventlet restart.
+- The Telegram live and sandbox mode buttons start or stop the sandbox engine
+  and square-off, as the web toggle does.
+- Chartink intraday square-off jobs are put back after a restart, for
+  strategies that are switched on, and scheduled starts, stops and square-offs
+  still run when they reach a thread up to five minutes late.
+- Action Center: approving an order another screen already approved or
+  rejected answers 409 with a sentence, and an order the broker pacer refused
+  before sending goes back to the pending list to be approved again.
+- IIFL: an order write answered with a rate limit is not sent a second time,
+  and a cancel or modify whose failure came back inside an HTTP 200 is reported
+  as a failure.
+- Docker: the container starts the market data service again if it stops
+  (after 1 second, then longer if it keeps stopping, up to 30 seconds), and
+  stops it within 5 seconds of OpenAlgo stopping. The container's first process
+  is now the start script, which passes a stop or an interrupt on to OpenAlgo;
+  other signals no longer reach it.
+
+**Changes on every install, eventlet included:**
+
+- The in-process market data client keeps reconnecting after a drop, every 30
+  seconds at most, instead of giving up for good on the fifth; it logs a short
+  warning every ten failed attempts.
+- Telegram: a bot token Telegram rejects is reported in a sentence instead of
+  an HTTP status, a check that gets no readable answer from Telegram counts as
+  failed instead of storing the token unchecked, and Start while the bot is
+  still starting or stopping is refused instead of starting a second copy.
+- Force master contract download while the login download is still running
+  answers 409 with a sentence instead of starting a second download over it.
+  Historify refuses to retry a download that is still running, or was
+  cancelled a moment ago and has not stopped yet.
+- Action Center: an approval whose send could not be recorded is put back in
+  the pending list and the operator is told it was not sent.
+- Action Center: an approved order that a restart or crash cut off while it was
+  being sent is shown as not confirmed, with a note that it may or may not have
+  reached the broker and to check the broker's order book before placing it
+  again. OpenAlgo never sends it again, and the page offers no way to. An order
+  still being sent is shown as Sending, with no note; only one still unanswered
+  two minutes after its approval, longer than any send takes, is shown as not
+  confirmed. The All Orders tab lists every order, not only the pending ones.
+- Each browser tab keeps one live update connection, shared by every page in
+  it. The Action Center, WhatsApp and Historify pages used to open a second
+  one, and Historify showed every order alert twice while it was open.
+- A sandbox GTT leg whose position has another order in progress fires on the
+  next tick instead of holding up every other tick until that order finishes.
+- The system report shows the web server, the one `.env` asks for, the request
+  threads, where the market data proxy runs and whether it is running. The
+  admin Diagnostics page shows the same details in a Web server card, in plain
+  words, and its uptime in hours and days. Threads free counts the request
+  threads that are idle, and none while requests are waiting.
+- The option chain, Greeks, IV, OI, max pain, volatility surface, straddle,
+  GEX and Strategy Builder tools, the Arbitrage spread order and the portfolio
+  tearsheet download show the server's own sentence when a request is refused
+  because the broker is busy or a limit was reached, instead of a generic
+  error or a status code. Every other failure shows what it showed before.
+- On a stop, the server waits up to 15 seconds for the market data proxy
+  process to exit before it exits itself, instead of leaving it to systemd.
+- Saving broker credentials refuses a value containing a line break (HTTP 400)
+  instead of writing it into `.env` as two lines.
+- Jainam XTS and Wisdom: the order book, trade book, positions and holdings no
+  longer fail on a server whose Python has no Tk.
+- A master contract reload clears the cached option strikes, and an empty
+  strike lookup is no longer cached.
+- Many races that could double a sandbox fill, a settlement or an alert are
+  closed. When requests do not overlap, the outcome is exactly as before.
+- Removed `services/telegram_bot_service_fixed.py` and
+  `services/telegram_bot_service_v2.py`, which nothing imported.
+- Motilal Oswal, Pocketful, Tradejini and Nubra: quote and market depth
+  requests answer as soon as the broker has sent everything they read, instead
+  of always waiting a fixed time. The answers are the same; they come sooner.
+- Pocketful: other requests no longer queue behind the market data feed while
+  it connects. A quote asked for after the feed dropped is answered from a new
+  packet, never from one left behind by an earlier request.
+- OpenScript: Stop reports "closed and stopped" only when the run confirms that
+  its position was closed. A run that crashed, or was stopped before its
+  closing order filled, is still marked stopped, and Stop now says it could not
+  confirm the close and asks you to check your positions. A run started before
+  this update cannot confirm, so its first Stop afterwards says so even when it
+  did close. Before it measures what it holds, Stop now cancels every order of
+  the run still working at the broker and counts the fills that came of them,
+  so an entry that filled a moment before Stop is closed, and a resting limit
+  or stop order cannot fill after the run has gone. If an order will not
+  finish, the run keeps running and says which order to check. Two Stops at
+  the same moment no longer lose each other's confirmation.
+- `install/update.sh` updates an instance made by `install-multi.sh` when run
+  from inside it, and restarts that instance's service. It used to treat such
+  an instance as a development checkout and never stopped or started its
+  service. A server that also has a single install at `/var/python/openalgo`
+  keeps updating that one, as before. Run from another OpenAlgo checkout, such
+  as a development clone on the same server, it updates that checkout and
+  leaves every instance and its service alone, as before.
+
+**Going back to an older release.** A service switched to the launcher starts
+through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
+`sudo bash install/switch-worker.sh --restore` before checking out an older
+revision; it puts the saved service file back and sets `.env` back to eventlet.
+
+**Still not modelled.** The sandbox margin reconcile does not count margin held
+by open and trigger-pending orders (unchanged from before).
+
 ### Fixed
+
+- **A smart order could double or reverse a position when the broker did not
+  answer the position check.** A smart order reads your open position from the
+  broker, compares it with the position size you asked for, and places the
+  difference. On every supported broker, a read that failed (a network error,
+  an expired session, the broker answering with an error, a reply that could
+  not be read) was taken to mean "no position". The order was then sized as if
+  you were flat: an entry or a flip placed its full quantity on top of the
+  position you really held, and an exit reported "no open position" and closed
+  nothing. Now a failed read sends no order and answers "OpenAlgo could not
+  read your open position from your broker, so no order was sent. Check your
+  positions and try again.", with your broker's name in it. An empty position
+  book is still read as flat, and a read that works places exactly the order
+  it placed before. An error from the broker is read as an empty book only
+  on brokers that answer an empty book with an error message, and only from
+  that message: on Dhan, Zerodha, Upstox, Angel One and Fyers, among others,
+  an error always refuses. On IndMoney and Groww, an F&O read that
+  fails refuses F&O smart orders while equity smart orders go ahead. On
+  Alice Blue, "Failed to retrieve the position book" now refuses, the same as
+  its code EC919. This covers `/api/v1/placesmartorder` and everything that
+  calls it (TradingView and other alerts, the order nodes in Flow that place
+  a smart order, Python strategies), and the close button on the Positions
+  page. Sandbox mode is not affected: it reads positions from the sandbox.
+  Not changed by this fix: a check that only reads your position and places
+  nothing (`/api/v1/openposition`, and the Open Position and Position Check
+  nodes in Flow) still reads a failed read as no position on most brokers, so
+  do not let such a check decide an order while your broker is not answering.
+  On CompositEdge, 5 Paisa (XTS), IIFL, Wisdom Capital and Groww the smart
+  order reads every position as flat even when the read works, so on those
+  brokers do not rely on a smart order to adjust or close a position you
+  already hold until that is fixed separately. Nothing to do after pulling.
 
 - **Ubuntu installs on 2.0.2.6 could not run OpenScript strategies or the
   agent.** `requirements-nginx.txt`, which `install.sh`, `install-multi.sh` and

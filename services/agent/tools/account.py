@@ -51,7 +51,13 @@ from typing import TYPE_CHECKING, Any
 from agno.exceptions import RetryAgentRun
 
 from services.agent.prompts import ASSISTANT_NAME, wrap_tool_result
-from services.agent.tools.base import OpenAlgoToolkit
+from services.agent.tools.base import (
+    SERVICE_BUSY_MESSAGE,
+    OpenAlgoToolkit,
+    _HubTimeout,
+    call_service,
+)
+from utils import real_threading
 from utils.constants import VALID_EXCHANGES, VALID_PRODUCT_TYPES
 from utils.logging import get_logger
 
@@ -671,9 +677,14 @@ class AccountToolkit(OpenAlgoToolkit):
         # answer here: raising on it would have the model report a failure when
         # the truth is simply that no such order exists.
         try:
-            outcome = get_order_status(
-                {"orderid": order_id, "strategy": STRATEGY_LABEL}, api_key=self.api_key
+            outcome = call_service(
+                get_order_status,
+                {"orderid": order_id, "strategy": STRATEGY_LABEL},
+                api_key=self.api_key,
             )
+        except (real_threading.HubQueueFull, _HubTimeout) as exc:
+            logger.warning("Agent tool get_order_status: %s could not run in time", label)
+            raise RetryAgentRun(SERVICE_BUSY_MESSAGE.format(label=label)) from exc
         except Exception as exc:
             logger.exception("Agent tool get_order_status: %s raised", label)
             raise RetryAgentRun(

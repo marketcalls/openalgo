@@ -31,14 +31,14 @@ from __future__ import annotations
 import atexit
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import Any
-
-from cachetools import TTLCache
 
 from database import strategy_module_db as store
 from utils.env_config import env_int
 from utils.event_bus import bus
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -107,7 +107,11 @@ def start() -> bool:
     with _lock:
         if _started:
             return False
-        bus.subscribe("order.update", _on_order_update, name="StrategyOrderUpdates")
+        # The critical lane: this subscriber is how a strategy learns a fill
+        # happened, and a fill it never hears about is a leg with no stop. It
+        # must not share the best-effort lane's cap with alert senders, which
+        # sheds callbacks under a burst.
+        bus.subscribe("order.update", _on_order_update, name="StrategyOrderUpdates", critical=True)
         _started = True
         atexit.register(_shutdown_pool)
         logger.info("Strategy module subscribed to order updates")
@@ -119,9 +123,32 @@ def _shutdown_pool() -> None:
 
 
 #: Updates that arrived before their order row existed, keyed by broker order
-#: id. Small and short-lived on purpose: the window this covers is the few
-#: milliseconds between a dispatch returning and its row being committed.
-_pending_updates: TTLCache = TTLCache(maxsize=512, ttl=120)
+#: id, each a list of frames in the order they were held. Small and
+#: short-lived on purpose: the window this covers is the few milliseconds
+#: between a dispatch returning and its row being committed.
+#:
+#: A list, not one frame: a broker pushes an order's "open" and its
+#: "complete" within milliseconds, and both can miss the row. One slot per id
+#: kept only the frame written last, and under the gthread worker, where the
+#: update workers run in parallel, that could be the "open", losing the fill.
+#:
+#: Written by the update pool's workers and popped by whichever thread records
+#: the order, which under the gthread worker run truly in parallel. A plain
+#: cachetools TTLCache is not safe for that (its expiry list corrupts under
+#: concurrent set and pop), so every operation here runs under the cache's own
+#: real lock, whose critical section is dictionary work only.
+_pending_updates: LockedTTLCache = LockedTTLCache(maxsize=512, ttl=120)
+
+#: Most frames held for one order. An order sends a handful of frames in the
+#: milliseconds before its row exists; the cap only bounds an id that another
+#: surface keeps updating, whose frames nobody will ever apply.
+_MAX_FRAMES_PER_ORDER = 16
+
+#: How many times replay_for has run, bumped under the stash's lock before it
+#: pops. An update worker that missed its row compares this with the value it
+#: read before its lookup: unchanged means no replay ran in between, so any
+#: replay for that order is still to come and will find the stashed frame.
+_replays = 0
 
 
 def replay_for(order_id: str | None) -> None:
@@ -130,14 +157,77 @@ def replay_for(order_id: str | None) -> None:
     Called by the engine straight after it records an order, which is the
     moment the update becomes matchable. A no-op when nothing was held, which
     is the normal case for a broker that answers before it fills.
+
+    The pop is atomic and takes every frame held for the order, and the update
+    worker that stashed a frame pops with the same call when its own re-check
+    finds the row, so exactly one of the two applies each frame.
     """
+    global _replays
     if not order_id:
         return
-    event = _pending_updates.pop(str(order_id), None)
-    if event is None:
+    with _pending_updates.lock:
+        _replays += 1
+        frames = _pending_updates.pop(str(order_id), None)
+    if not frames:
         return
     logger.debug("Replaying an order update that arrived before its row: %s", order_id)
-    _apply_update(str(order_id), event)
+    for frame in frames:
+        _apply_update(str(order_id), frame)
+
+
+def _stash_until_recorded(order_id: str, event: Any, replays_before: int):
+    """Hold an update whose row is not there yet, then look once more if needed.
+
+    Stashing and replaying is a handshake between two threads: the update
+    worker that missed the row, and the thread that records it and then calls
+    replay_for. Once the frame is stashed, any replay still to come will find
+    it. The one that can miss it is a replay that ran between this worker's
+    lookup and its stash, and replay_for counts itself before it pops, so a
+    changed count after the stash is exactly when a second look is needed.
+    If the row is there now, whichever of the two pops the frame applies it;
+    the other gets nothing back.
+
+    The count keeps the common case cheap. An update for another surface's
+    order, which is almost every update, still costs one lookup unless a
+    strategy happened to record an order in that instant.
+
+    Args:
+        order_id: The broker order id the update names.
+        event: The update.
+        replays_before: ``_replays`` as read before the first lookup.
+
+    Returns:
+        ``(row, frames)`` when this call took the held frames back and must
+        apply every one of them (its own, and any a sibling worker held for the
+        same order in the same instant), otherwise None (still held for
+        replay_for, applied by it or by a sibling already, or somebody else's
+        order).
+    """
+    with _pending_updates.lock:
+        frames = _pending_updates.get(order_id)
+        if frames is None:
+            _pending_updates[order_id] = [event]
+        else:
+            frames.append(event)
+            del frames[:-_MAX_FRAMES_PER_ORDER]
+        replayed_meanwhile = _replays != replays_before
+    if not replayed_meanwhile:
+        return None
+    # Nothing is loaded in this session yet (the first lookup found no row),
+    # but expire anyway so the second look can only read what is committed.
+    try:
+        store.db_session.expire_all()
+    except Exception:
+        logger.debug("Could not expire the session before re-checking %s", order_id)
+    row = store.get_order_by_broker_id(order_id)
+    if row is None:
+        return None
+    frames = _pending_updates.pop(order_id, None)
+    if not frames:
+        # replay_for, or a sibling worker's own re-check, took the frames
+        # between the stash and the look, and applies them.
+        return None
+    return row, frames
 
 
 def apply_order_snapshot(broker_order_id: str, order: dict[str, Any]) -> None:
@@ -495,28 +585,13 @@ def _push_fill(run_id: int, order: dict[str, Any] | None) -> None:
         logger.exception("Could not push a fill for run %s", run_id)
 
 
-def _apply_update(order_id: str, event: Any) -> None:
-    """Match the update to a strategy order and apply it."""
-    try:
-        row = store.get_order_by_broker_id(order_id)
-        if row is None:
-            # Either somebody else's order, which is the overwhelmingly common
-            # case, or ours a moment too early. The engine dispatches and only
-            # then records the row, and the sandbox executes a MARKET order
-            # synchronously inside the dispatch call, so its fill is published
-            # while no row carries that broker id yet. Dropping it there is not
-            # a rare race in sandbox: it happens every time, and the leg keeps
-            # an entry of zero, which means no stop, no target and no mark to
-            # market. A live broker whose fill beats the insert lands in the
-            # same place.
-            #
-            # Held briefly instead, and replayed by replay_for() the moment the
-            # row appears. Bounded in both size and time, so the updates that
-            # really do belong to other surfaces cost a capped amount of memory
-            # and expire on their own.
-            _pending_updates[order_id] = event
-            return
+def _apply_frame(order_id: str, row: Any, event: Any) -> None:
+    """Fold one update into its order row and apply what it changed.
 
+    A failure is logged and kept to this frame, so another frame for the
+    same order taken in the same call is still applied.
+    """
+    try:
         broker_status = _normalise(getattr(event, "order_status", ""))
         if broker_status in _FILLED:
             canonical_status = "complete"
@@ -679,6 +754,64 @@ def _apply_update(order_id: str, event: Any) -> None:
         if fold.fill_delta > 0 or fold.terminal:
             durable = store.get_order_by_broker_id(order_id)
             _push_fill(run_id, store.order_to_dict(durable) if durable is not None else None)
+    except Exception:
+        logger.exception("Could not apply order update %s", order_id)
+
+
+def _apply_update(order_id: str, event: Any) -> None:
+    """Match the update to a strategy order and apply it."""
+    try:
+        # Read before the lookup; see _stash_until_recorded.
+        replays_before = _replays
+        row = store.get_order_by_broker_id(order_id)
+        if row is None:
+            # Either somebody else's order, which is the overwhelmingly common
+            # case, or ours a moment too early. The engine dispatches and only
+            # then records the row, and the sandbox executes a MARKET order
+            # synchronously inside the dispatch call, so its fill is published
+            # while no row carries that broker id yet. Dropping it there is not
+            # a rare race in sandbox: it happens every time, and the leg keeps
+            # an entry of zero, which means no stop, no target and no mark to
+            # market. A live broker whose fill beats the insert lands in the
+            # same place.
+            #
+            # Held briefly instead, and replayed by replay_for() the moment the
+            # row appears. Bounded in both size and time, so the updates that
+            # really do belong to other surfaces cost a capped amount of memory
+            # and expire on their own.
+            #
+            # Held and then looked up once more, because the row can be
+            # committed and replay_for called between the lookup above and the
+            # stash: under the gthread worker those run in parallel, and a
+            # frame stashed after its replay would never be applied.
+            #
+            # The look can hand back more than this worker's own frame: a
+            # second update for the same order (its 'open' and its 'complete',
+            # say) stashed by a sibling worker in the same instant. Every frame
+            # taken is applied; folding is order-insensitive and never reopens
+            # a terminal row, so the order they are applied in does not matter.
+            taken = _stash_until_recorded(order_id, event, replays_before)
+            if taken is None:
+                return
+            row, frames = taken
+        else:
+            frames = [event]
+
+        # The row's identity, read once: applying a frame expires the session,
+        # and a second frame must not depend on reloading the row.
+        identity = SimpleNamespace(
+            run_id=row.run_id,
+            leg_id=row.leg_id,
+            kind=row.kind,
+            id=row.id,
+            position_ref=row.position_ref,
+            broker_order_id=row.broker_order_id,
+            action=row.action,
+            qty=row.qty,
+            symbol=row.symbol,
+        )
+        for frame in frames:
+            _apply_frame(order_id, identity, frame)
     except Exception:
         logger.exception("Could not apply order update %s", order_id)
     finally:

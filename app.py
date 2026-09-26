@@ -993,53 +993,26 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Error checking analyzer mode on startup: {e}")
 
-            # Auto-start Telegram bot if it was active (after DB tables exist)
+            # Auto-start Telegram bot if it was active (after DB tables exist).
+            # initialize_bot_sync is the one entry point: which validation path
+            # it takes for this runtime is the service's decision, so this
+            # block no longer inspects the runtime or builds an event loop.
             try:
-                import sys
-
                 bot_config = get_bot_config()
                 if bot_config.get("is_active") and bot_config.get("bot_token"):
                     logger.debug("Auto-starting Telegram bot (background)...")
 
-                    if "eventlet" in sys.modules:
-                        success, message = telegram_bot_service.initialize_bot_sync(
-                            token=bot_config["bot_token"]
-                        )
+                    success, message = telegram_bot_service.initialize_bot_sync(
+                        token=bot_config["bot_token"]
+                    )
+                    if success:
+                        success, message = telegram_bot_service.start_bot()
                         if success:
-                            success, message = telegram_bot_service.start_bot()
-                            if success:
-                                logger.debug(f"Telegram bot auto-started successfully: {message}")
-                            else:
-                                logger.error(f"Failed to auto-start Telegram bot: {message}")
+                            logger.debug(f"Telegram bot auto-started successfully: {message}")
                         else:
-                            logger.error(f"Failed to initialize Telegram bot: {message}")
+                            logger.error(f"Failed to auto-start Telegram bot: {message}")
                     else:
-                        import asyncio
-
-                        try:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                success, message = loop.run_until_complete(
-                                    telegram_bot_service.initialize_bot(
-                                        token=bot_config["bot_token"]
-                                    )
-                                )
-                            finally:
-                                loop.close()
-
-                            if success:
-                                success, message = telegram_bot_service.start_bot()
-                                if success:
-                                    logger.debug(
-                                        f"Telegram bot auto-started successfully: {message}"
-                                    )
-                                else:
-                                    logger.error(f"Failed to auto-start Telegram bot: {message}")
-                            else:
-                                logger.error(f"Failed to initialize Telegram bot: {message}")
-                        except Exception as e:
-                            logger.error(f"Error in Telegram bot startup: {e}")
+                        logger.error(f"Failed to initialize Telegram bot: {message}")
             except Exception as e:
                 logger.error(f"Error auto-starting Telegram bot: {e}")
 
@@ -1050,6 +1023,14 @@ app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+# Under eventlet, start the green thread that runs calls real OS threads hand
+# to the hub (utils.real_threading.run_on_hub). This runs at import, on the
+# hub's own thread, which is what it must be started from. A no-op under the
+# gthread worker and the dev server, where nothing needs marshalling.
+from utils.real_threading import start_hub_worker
+
+start_hub_worker()
 
 # Restore caches from database in background (not needed until first trade/lookup)
 import threading
@@ -1092,26 +1073,23 @@ def shutdown_database_sessions(exception=None):
     remove_all_scoped_sessions()
 
 
-# Integrate the WebSocket proxy server with the Flask app
-# Check if running in Docker (standalone mode) or local (integrated mode)
-# Docker is detected by checking for /.dockerenv file or APP_MODE override
-is_docker = (
-    os.path.exists("/.dockerenv")
-    or os.environ.get("APP_MODE", "").strip().strip("'\"") == "standalone"
-)
+# Integrate the WebSocket proxy server with the Flask app. Where it runs is
+# decided in one place, websocket_proxy.app_integration.resolve_proxy_mode():
+# a child *process* under gunicorn with either worker (so the proxy's asyncio
+# loop never shares an eventlet hub, issue #1421, and under gthread stays out
+# of the process that places orders), a real OS thread on the dev server, and
+# nothing here under Docker, where start.sh runs it. Under eventlet that is
+# exactly what this block used to decide itself.
+logger.debug("Starting WebSocket proxy")
+start_websocket_proxy(app)
 
-if is_docker:
-    logger.debug(
-        "Running in Docker/standalone mode - WebSocket server started separately by start.sh"
-    )
-else:
-    # Under gunicorn+eventlet, start_websocket_proxy() spawns a child *process*
-    # (not a thread) so the WS asyncio loop never shares an eventlet hub with
-    # gunicorn — closes the greenlet.error cross-thread crash class entirely
-    # (including GitHub issue #1421). Under the dev server (no eventlet) it
-    # still uses a real OS thread, as before.
-    logger.debug("Starting WebSocket proxy")
-    start_websocket_proxy(app)
+# Under the gthread worker, end Socket.IO sessions as soon as gunicorn starts
+# its graceful stop: each open session holds a worker thread, and a thread
+# still held when the window closes turns the stop into a kill. A no-op under
+# eventlet and on the dev server.
+from utils.shutdown import start_drain_watcher
+
+start_drain_watcher()
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == "__main__":

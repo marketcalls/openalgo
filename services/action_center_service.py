@@ -1,6 +1,7 @@
 # services/action_center_service.py
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from database.action_center_db import get_pending_orders
@@ -8,6 +9,21 @@ from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+
+def _seconds_since(moment) -> float | None:
+    """Seconds from a stored UTC moment to now, or None when there is none.
+
+    Measured here rather than in the browser, so a page open outside IST, or on
+    a machine whose clock is off, reads the same age as the server. The column
+    is written as naive UTC; an aware value is converted first.
+    """
+    if not isinstance(moment, datetime):
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    return max(0.0, (now - moment).total_seconds())
 
 
 def parse_pending_order(pending_order) -> dict[str, Any]:
@@ -35,6 +51,9 @@ def parse_pending_order(pending_order) -> dict[str, Any]:
             # Timestamps
             "created_at_ist": pending_order.created_at_ist,
             "approved_at_ist": pending_order.approved_at_ist,
+            # How long ago it was approved, which is when its send began. The
+            # page tells a send still under way from one a restart cut off.
+            "approved_age_seconds": _seconds_since(getattr(pending_order, "approved_at", None)),
             "approved_by": pending_order.approved_by,
             "rejected_at_ist": pending_order.rejected_at_ist,
             "rejected_by": pending_order.rejected_by,

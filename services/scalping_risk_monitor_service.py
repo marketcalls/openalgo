@@ -24,6 +24,19 @@ FD / thread hygiene:
     never blocks tick processing; the worker removes every scoped_session it
     touches (background threads have no Flask teardown).
   * stop() unsubscribes, disconnects the client and is registered with atexit.
+
+Threading:
+  * _on_tick() and _on_auth() run on the websocket client's dispatch thread,
+    which also delivers ticks to the sandbox execution engine, the strategy
+    tick feed and Flow. Under the gthread worker (and the development server)
+    that is a real thread running in parallel with the request threads, the
+    sync worker and the exit workers; under eventlet it is a greenlet.
+  * self._lock is a real RLock (utils.real_threading), so it excludes for real
+    under gthread. No critical section holds it across I/O: the websocket
+    subscribe and unsubscribe (which wait up to 12s for the proxy), the SQLite
+    writes and the Socket.IO emits all happen after it is released. Held across
+    any of those, one slow proxy ack would stall every tick subscriber in the
+    process.
 """
 
 from __future__ import annotations
@@ -50,6 +63,27 @@ def _slkey(symbol: str, exchange: str, product: str) -> str:
 
 def _symkey(symbol: str, exchange: str) -> str:
     return f"{exchange}:{symbol}"
+
+
+def _client_usable(ws) -> bool:
+    """Whether a websocket client can still deliver ticks, now or after it reconnects.
+
+    ``alive`` (running, loop thread up) rather than ``connected``: a client
+    between reconnects is still the one to use, and one whose loop has ended
+    never comes back, so it must be fetched again (get_websocket_client
+    replaces it). A client without ``alive`` falls back to ``connected``.
+    """
+    if ws is None:
+        return False
+    alive = getattr(ws, "alive", None)
+    if alive is None:
+        return bool(getattr(ws, "connected", False))
+    return bool(alive)
+
+
+def _has_callback(ws, event_type: str, callback) -> bool:
+    """Whether ``callback`` is already registered on ``ws`` for ``event_type``."""
+    return callback in (getattr(ws, "callbacks", None) or {}).get(event_type, ())
 
 
 def evaluate_trail(state: dict, ltp: float) -> dict:
@@ -119,9 +153,11 @@ class ScalpingRiskMonitor:
             return cls._instance
 
     def _init_once(self) -> None:
-        # Real, not green: _on_tick() and _on_auth() are invoked on the
-        # websocket client's asyncio loop thread, while sync() and
-        # _clear_state() take this from greenlets. See utils/real_threading.
+        # Real, not green: _on_tick() and _on_auth() run on the websocket
+        # client's dispatch thread (a real thread under gthread and the dev
+        # server), while sync(), _clear_state() and the exit workers take this
+        # from their own threads. Held for in-memory bookkeeping only; see the
+        # Threading note at the top of this module and utils/real_threading.
         self._lock = _real_threading.RLock()
         self._states: dict[str, dict] = {}  # slkey -> state (in-memory source of truth)
         self._subscribed: set[str] = set()  # symkey currently subscribed on the feed
@@ -131,6 +167,15 @@ class ScalpingRiskMonitor:
         self._last_exit_attempt: dict[str, float] = {}
         self._last_persist: dict[str, float] = {}
         self._last_emit: dict[str, float] = {}
+        # A stop cleared while sync() was reading the database must not be
+        # brought back by the rows it read. Each clear bumps _clear_gen and,
+        # while a sync is in flight, records the key it cleared; a sync drops
+        # every row cleared after it started. Entries are kept only while some
+        # sync that predates them is still running, so this stays tiny.
+        self._clear_gen = 0
+        self._cleared: dict[str, int] = {}
+        self._sync_token = 0
+        self._syncs_in_flight: dict[int, int] = {}
         # Background sync coalescing — sync() does blocking WS subscribe calls (up to
         # ~12s for the proxy ack), so it must NEVER run on a request thread.
         # request_sync() schedules it on a single daemon worker and coalesces repeats.
@@ -201,6 +246,23 @@ class ScalpingRiskMonitor:
         """
         from database.scalping_db import get_active_sl_states
 
+        with self._lock:
+            self._sync_token += 1
+            token = self._sync_token
+            self._syncs_in_flight[token] = self._clear_gen
+        try:
+            self._sync_from(get_active_sl_states, token)
+        finally:
+            with self._lock:
+                self._syncs_in_flight.pop(token, None)
+                if self._syncs_in_flight:
+                    oldest = min(self._syncs_in_flight.values())
+                    self._cleared = {k: g for k, g in self._cleared.items() if g > oldest}
+                else:
+                    self._cleared.clear()
+
+    def _sync_from(self, get_active_sl_states, token: int) -> None:
+        """The body of sync(), registered as in flight under ``token``."""
         try:
             # Only watch SLs for the CURRENT trading mode so sandbox SLs never
             # drive live exits (and vice-versa).
@@ -212,6 +274,16 @@ class ScalpingRiskMonitor:
         # actual subscribe/unsubscribe (blocking WS calls) happen OUTSIDE the lock so
         # they never block tick processing (_on_tick).
         with self._lock:
+            # Rows cleared by an exit after this sync started are stale: the
+            # read may have happened before the delete. Reinstalling one would
+            # breach again on the next tick with no cooldown left, and a
+            # positionbook that does not yet show the first exit would send a
+            # second, full-size one.
+            started_at = self._syncs_in_flight.get(token, self._clear_gen)
+            cleared = {k for k, g in self._cleared.items() if g > started_at}
+            rows = [
+                r for r in rows if _slkey(r["symbol"], r["exchange"], r["product"]) not in cleared
+            ]
             self._states = {
                 _slkey(r["symbol"], r["exchange"], r["product"]): dict(r) for r in rows
             }
@@ -237,7 +309,7 @@ class ScalpingRiskMonitor:
 
     # ------------------------------------------------------------------ ws plumbing
     def _ensure_ws(self) -> bool:
-        if self._ws is not None and getattr(self._ws, "connected", False):
+        if _client_usable(self._ws):
             return True
         api_key = self._resolve_api_key()
         if not api_key:
@@ -249,13 +321,22 @@ class ScalpingRiskMonitor:
         except Exception as e:
             logger.debug("Scalping risk monitor: feed not available yet: %s", e)
             return False
-        self._ws = ws
-        if not self._callbacks_registered:
+        with self._lock:
+            if ws is not self._ws:
+                # A replacement client holds none of our subscriptions, so none
+                # may be skipped as already made. At worst one is made twice.
+                self._subscribed.clear()
+            self._ws = ws
+        # Checked on the client itself, not remembered here: the shared client
+        # is replaced when it stops for good, and the replacement may or may
+        # not already carry these (it adopts the old client's callbacks).
+        if not _has_callback(ws, "market_data", self._on_tick):
             ws.register_callback("market_data", self._on_tick)
+        if not _has_callback(ws, "auth", self._on_auth):
             # Re-subscribe after a (re)connect — the client re-auths but does not
             # restore subscriptions itself.
             ws.register_callback("auth", self._on_auth)
-            self._callbacks_registered = True
+        self._callbacks_registered = True
         return True
 
     def _subscribe(self, symkeys: set[str]) -> None:
@@ -284,9 +365,13 @@ class ScalpingRiskMonitor:
         if data.get("status") != "success":
             return
         # Re-subscribe after a (re)connect. Snapshot + clear under the lock, then do
-        # the blocking subscribe OUTSIDE the lock so ticks aren't blocked.
+        # the blocking subscribe OUTSIDE the lock so ticks aren't blocked. Every
+        # symbol an active stop needs, not only the ones that were subscribed: a
+        # subscribe attempted while the feed was reconnecting failed, and would
+        # otherwise wait for the next save or delete of a stop.
         with self._lock:
             syms = set(self._subscribed)
+            syms |= {_symkey(s["symbol"], s["exchange"]) for s in self._states.values()}
             self._subscribed.clear()
         if syms:
             self._subscribe(syms)
@@ -308,7 +393,11 @@ class ScalpingRiskMonitor:
         except (TypeError, ValueError):
             return
 
-        symkey = _symkey(symbol, exchange)
+        # The mode is read before the lock: it may touch the settings database,
+        # and nothing that can wait belongs inside the lock (see the module note).
+        current_mode = self._mode()
+        exits: list[tuple[str, dict, str | None]] = []
+        persists: list[tuple[str, dict]] = []
         with self._lock:
             # A symbol can carry both an MIS and an NRML leg.
             matches = [
@@ -316,7 +405,6 @@ class ScalpingRiskMonitor:
                 for k, s in self._states.items()
                 if s.get("symbol") == symbol and s.get("exchange") == exchange
             ]
-            current_mode = self._mode()
             for key, state in matches:
                 # Skip SLs whose mode no longer matches (user flipped mode without
                 # a resync) — never act on a sandbox SL while live, or vice-versa.
@@ -330,7 +418,7 @@ class ScalpingRiskMonitor:
                     continue
                 result = evaluate_trail(state, ltp)
                 if result["breached"]:
-                    self._dispatch_exit(key, state, result["reason"], ltp)
+                    exits.append((key, state, result["reason"]))
                     continue
                 moved = (
                     result["current_sl"] != state.get("current_sl")
@@ -341,9 +429,15 @@ class ScalpingRiskMonitor:
                     state["current_sl"] = result["current_sl"]
                     state["highest_price"] = result["highest_price"]
                     state["lowest_price"] = result["lowest_price"]
-                    self._maybe_persist(key, state)
-        # symkey kept for symmetry / future per-symbol bookkeeping
-        del symkey
+                    # A copy: the write and the emit happen after the release,
+                    # and must carry the values this tick produced.
+                    persists.append((key, dict(state)))
+        # The decisions were made under the lock; the work they call for (an
+        # exit thread, a SQLite write, a Socket.IO emit) is done after it.
+        for key, state, reason in exits:
+            self._dispatch_exit(key, state, reason, ltp)
+        for key, snapshot in persists:
+            self._maybe_persist(key, snapshot)
 
     def _maybe_persist(self, key: str, state: dict) -> None:
         # Persist the LATEST trailed stop, rate-limited so a fast market can't storm
@@ -351,10 +445,12 @@ class ScalpingRiskMonitor:
         # The write always uses the current in-memory state, so staleness on a
         # restart is bounded to <= PERSIST_THROTTLE_SEC (then it re-trails on the next
         # tick). MUST carry `mode` or the upsert would write the wrong row.
+        # Called without the lock held; only the throttle bookkeeping takes it.
         now = time.monotonic()
-        if now - self._last_persist.get(key, 0.0) < PERSIST_THROTTLE_SEC:
-            return
-        self._last_persist[key] = now
+        with self._lock:
+            if now - self._last_persist.get(key, 0.0) < PERSIST_THROTTLE_SEC:
+                return
+            self._last_persist[key] = now
         try:
             from database.scalping_db import upsert_sl_state
 
@@ -378,13 +474,20 @@ class ScalpingRiskMonitor:
     # ------------------------------------------------------------------ exit
     def _dispatch_exit(self, key: str, state: dict, reason: str | None, ltp: float) -> None:
         now = time.monotonic()
-        if key in self._exit_inflight:
-            return
-        if now - self._last_exit_attempt.get(key, 0.0) < EXIT_RETRY_COOLDOWN_SEC:
-            return
-        self._last_exit_attempt[key] = now
-        self._exit_inflight.add(key)
-        snapshot = dict(state)
+        # The in-flight check and its marker are one decision, made under the
+        # lock: exit workers clear the marker from their own threads.
+        with self._lock:
+            if self._states.get(key) is not state:
+                # Cleared (or replaced by a sync) since the tick decided: an
+                # exit already completed for it, or the next tick re-decides.
+                return
+            if key in self._exit_inflight:
+                return
+            if now - self._last_exit_attempt.get(key, 0.0) < EXIT_RETRY_COOLDOWN_SEC:
+                return
+            self._last_exit_attempt[key] = now
+            self._exit_inflight.add(key)
+            snapshot = dict(state)
         worker = threading.Thread(
             target=self._exit_worker,
             args=(key, snapshot, reason, ltp),
@@ -453,7 +556,8 @@ class ScalpingRiskMonitor:
         except Exception as e:
             logger.exception("Scalping auto-exit error for %s: %s", symbol, e)
         finally:
-            self._exit_inflight.discard(key)
+            with self._lock:
+                self._exit_inflight.discard(key)
             self._remove_sessions()
 
     def _clear_state(
@@ -465,14 +569,33 @@ class ScalpingRiskMonitor:
             delete_sl_state(symbol, exchange, product, mode=mode)
         finally:
             self._remove_session("database.scalping_db")
+        symkey = _symkey(symbol, exchange)
         with self._lock:
             self._states.pop(key, None)
             self._last_persist.pop(key, None)
             self._last_exit_attempt.pop(key, None)
+            self._last_emit.pop(key, None)
+            # A sync reading the database right now may have read this row
+            # before the delete above; tell it not to bring the stop back.
+            self._clear_gen += 1
+            if self._syncs_in_flight:
+                self._cleared[key] = self._clear_gen
             # Drop the feed subscription if no other leg needs this symbol.
-            symkey = _symkey(symbol, exchange)
-            if not any(_symkey(s["symbol"], s["exchange"]) == symkey for s in self._states.values()):
-                self._unsubscribe({symkey})
+            # Decided here, done after the release: the unsubscribe waits for
+            # the proxy's ack, and ticks for every symbol wait on this lock.
+            need_unsub = not any(
+                _symkey(s["symbol"], s["exchange"]) == symkey for s in self._states.values()
+            )
+        if need_unsub:
+            self._unsubscribe({symkey})
+            # A stop saved for the same symbol while the unsubscribe was in
+            # flight saw it still subscribed and did not subscribe again.
+            with self._lock:
+                wanted_again = symkey not in self._subscribed and any(
+                    _symkey(s["symbol"], s["exchange"]) == symkey for s in self._states.values()
+                )
+            if wanted_again:
+                self._subscribe({symkey})
         self._emit_update(key, None, cleared=True, symbol=symbol, exchange=exchange, product=product)
 
     # ------------------------------------------------------------------ emit
@@ -488,9 +611,10 @@ class ScalpingRiskMonitor:
     ) -> None:
         if throttled:
             now = time.monotonic()
-            if now - self._last_emit.get(key, 0.0) < EMIT_THROTTLE_SEC:
-                return
-            self._last_emit[key] = now
+            with self._lock:
+                if now - self._last_emit.get(key, 0.0) < EMIT_THROTTLE_SEC:
+                    return
+                self._last_emit[key] = now
         try:
             from extensions import socketio
 

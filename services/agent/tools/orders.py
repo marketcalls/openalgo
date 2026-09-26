@@ -26,7 +26,9 @@ The pipeline, in this exact order, for every tool
    transient fault.
 4. **The service is called**, through ``services.*`` directly. No tool here
    makes an HTTP request back into this process and none of them touches the
-   ``openalgo`` SDK.
+   ``openalgo`` SDK. Under the eventlet worker the call (and the reads before
+   the guard) are made on the hub rather than on the agent's real thread; see
+   :meth:`OrdersToolkit._run_mutation`.
 5. **An audit result row is written** with the outcome and the broker order ids.
 
 Two things the guard cannot do for itself
@@ -100,6 +102,7 @@ from services.agent import prompts
 from services.agent.safety import audit as audit_trail
 from services.agent.safety.risk import Verdict, get_guard
 from services.agent.tools.base import OpenAlgoToolkit
+from utils import real_threading
 from utils.constants import (
     PRICE_TYPE_LIMIT,
     PRICE_TYPE_MARKET,
@@ -117,6 +120,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from services.agent.tools import ToolContext
 
 logger = get_logger(__name__)
+
+#: How long a tool waits for its preparation (the quote, funds and position
+#: reads and the risk guard) to run in the web server's world. See
+#: :meth:`OrdersToolkit._run_mutation`.
+AGENT_PREPARE_TIMEOUT_SECONDS = 60.0
+
+#: How long a tool waits for its service call. A call still running when this
+#: runs out may yet reach the broker, so the outcome is reported as unknown.
+AGENT_DISPATCH_TIMEOUT_SECONDS = 120.0
+
+#: What the model is told when the web server could not take the call at all.
+_HUB_BUSY_MESSAGE = (
+    "The web server is too busy to take this call right now, so nothing was sent "
+    "to the broker. Try again in a few seconds."
+)
 
 #: The strategy name every order this toolkit sends is tagged with. It appears
 #: in the order book, the logs and the alerts, so an operator can tell an
@@ -803,6 +821,15 @@ class OrdersToolkit(OpenAlgoToolkit):
         method is the only place it is implemented, so no tool can accidentally
         run them in a different order or skip one.
 
+        This runs on the agent's real OS thread. Under the gthread worker and
+        the development server the service layer is safe to call from it
+        directly. Under the eventlet worker it is not: sandbox orders take
+        green locks (the fund manager's, the execution engine's), and a real
+        thread that waits on one while a greenlet holds it is left blocked
+        forever. So ``plan_factory`` and the dispatch both go through
+        :func:`utils.real_threading.run_on_hub`, which runs them on the hub
+        under eventlet and simply calls them everywhere else.
+
         Args:
             tool: The tool's registered name, used on both audit rows.
             args: The arguments the model supplied, recorded on the attempt row
@@ -828,7 +855,7 @@ class OrdersToolkit(OpenAlgoToolkit):
             # or through the dispatch it returns, so warming the restx_api cycle
             # here covers all seven of them from one place.
             _ensure_order_services_importable()
-            plan = plan_factory()
+            plan = real_threading.run_on_hub(plan_factory, timeout=AGENT_PREPARE_TIMEOUT_SECONDS)
         except RetryAgentRun as exc:
             self.audit_result(
                 tool,
@@ -897,8 +924,39 @@ class OrdersToolkit(OpenAlgoToolkit):
 
         guard = self._guard()
         try:
-            raw = plan.dispatch()
+            raw = real_threading.run_on_hub(plan.dispatch, timeout=AGENT_DISPATCH_TIMEOUT_SECONDS)
+        except real_threading.HubQueueFull:
+            # Refused before it was queued, so it never ran: nothing was sent
+            # and the claim goes back, as for a clean refusal.
+            guard.release(verdict)
+            logger.warning("Agent tool %s was not dispatched: the hub queue is full", tool)
+            self.audit_result(
+                tool,
+                ok=False,
+                response={
+                    "status": "error",
+                    "message": _HUB_BUSY_MESSAGE,
+                    "risk": verdict.as_dict(),
+                },
+                order_ids=[],
+                attempt_id=attempt_id,
+                risk_verdict=str(verdict.code),
+            )
+            return self._emit(
+                tool,
+                {
+                    "ok": False,
+                    "tool": tool,
+                    "status": "error",
+                    "message": _HUB_BUSY_MESSAGE,
+                    "risk": verdict.as_dict(),
+                    "retry": False,
+                },
+                **attributes,
+            )
         except Exception as exc:
+            # A TimeoutError from run_on_hub lands here too: a call that was
+            # still running when the wait ran out may yet reach the broker.
             # The outcome is unknown: the order may have reached the broker
             # before this failed. The claim is deliberately NOT released, so the
             # duplicate window still refuses an identical immediate resend.

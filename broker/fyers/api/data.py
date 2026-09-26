@@ -9,6 +9,7 @@ import pandas as pd
 
 from broker.fyers.api.rate_limiter import MAX_RETRIES, apply_rate_limit, retry_delay_from_headers
 from database.token_db import get_br_symbol, get_oa_symbol
+from utils.broker_backpressure import BrokerBusyError
 from utils.constants import FNO_EXCHANGES
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -77,6 +78,12 @@ def get_api_response(endpoint, auth, method="GET", payload="", _retry_count=0):
         logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
         return response_data
 
+    except BrokerBusyError:
+        # Refused by the rate limiter under the gthread worker and never
+        # sent. Raise it with its sentence for the trader rather than fold it
+        # into an error body: a position read answered that way reads as no
+        # position, and a smart order would size itself against it.
+        raise
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429 and _retry_count < MAX_RETRIES:
             delay = retry_delay_from_headers(e.response.headers, _retry_count)
@@ -176,6 +183,8 @@ class BrokerData:
                 "oi": int(depth_data.get("oi", 0)),
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
@@ -236,6 +245,8 @@ class BrokerData:
                 # Single batch processing
                 return self._process_quotes_batch(symbols, fetch_oi=fetch_oi)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -254,7 +265,14 @@ class BrokerData:
         Returns 0 on any error so a single bad symbol doesn't fail the batch.
         """
         encoded = urllib.parse.quote(br_symbol)
-        response = get_api_response(f"/data/depth?symbol={encoded}&ohlcv_flag=1", self.auth_token)
+        try:
+            response = get_api_response(
+                f"/data/depth?symbol={encoded}&ohlcv_flag=1", self.auth_token
+            )
+        except BrokerBusyError:
+            # As for any other failure here: the quote stands, its OI is 0.
+            logger.debug(f"Depth fetch for OI refused by the rate limiter for {br_symbol}")
+            return 0
 
         if response.get("s") != "ok":
             logger.debug(
@@ -564,6 +582,8 @@ class BrokerData:
                     # Move to next chunk
                     current_start = current_end + pd.Timedelta(days=1)
 
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {e}")
                     if retry_count < max_retries:
@@ -594,6 +614,8 @@ class BrokerData:
             logger.info(f"Successfully collected data: {len(final_df)} total candles")
             return final_df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             error_msg = f"Error fetching historical data for {exchange}:{symbol}"
             logger.exception(error_msg)
@@ -732,6 +754,8 @@ class BrokerData:
                 "oi": int(depth_data.get("oi", 0)),
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception(f"Error fetching market depth for {exchange}:{symbol}")
             raise Exception(f"Error fetching market depth: {e}")
