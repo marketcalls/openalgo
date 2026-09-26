@@ -24,6 +24,40 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+#: A smart order aims at a target position size, so the correct outcome is
+#: often no order at all. That is not a failure, and it is recognised by the
+#: shape of what the adapter returns rather than by its wording, because the
+#: wording is not uniform across the 30-odd adapters and is missing entirely
+#: from one: tradejini returns ``{"status": "success", "orderid": ""}`` with
+#: no message at all. Every adapter that placed nothing made no API call, so
+#: ``res`` is None and there is no order id; every adapter that placed an
+#: order returns the response object and the id it parsed. The sandbox is the
+#: same: a placed sandbox order carries ``orderid``, a no-action result does
+#: not. Issue #2054.
+NO_ACTION_FALLBACK_MESSAGE = "No action needed. Position already at the requested size."
+
+
+def is_no_action_response(response: Any, order_id: Any = None) -> bool:
+    """Whether a smart order correctly resulted in no order being placed.
+
+    Read off the shape rather than the message text: a placed order carries an
+    order id, a no-action result reports success without one. Callers on the
+    live path must also check that the adapter returned no response object,
+    since an order that went in but whose id failed to parse has a response
+    object and no id, and must not be announced as "no order was placed".
+
+    Args:
+        response: The response dict from a broker adapter or the sandbox.
+        order_id: The order id the adapter returned beside the response.
+
+    Returns:
+        bool: True when the response reports success and names no order.
+    """
+    if not isinstance(response, dict) or response.get("status") != "success":
+        return False
+
+    return not order_id and not response.get("orderid")
+
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
     """Publish an analyzer error event and return the error response dict."""
@@ -163,12 +197,12 @@ def place_smart_order_with_auth(
         analyzer_request = order_request_data.copy()
         analyzer_request["api_type"] = "placesmartorder"
 
-        # Check if this is a no-action case
-        no_action = (
-            response_data.get("status") == "success"
-            and "No action" in response_data.get("message", "")
-            or "Already Matched" in response_data.get("message", "")
-        )
+        # A sandbox smart order that placed nothing reports success with a
+        # message and no orderid; a placed one carries the orderid. Written as
+        # one call so the two paths cannot drift apart again: the inline
+        # expression this replaced matched one wording, and its "and" bound
+        # tighter than its "or", which let a failed response through.
+        no_action = is_no_action_response(response_data)
 
         if no_action:
             bus.publish(SmartOrderNoActionEvent(
@@ -210,21 +244,24 @@ def place_smart_order_with_auth(
     try:
         res, response_data, order_id = broker_module.place_smartorder_api(order_data, auth_token)
 
-        # Handle case where position size matches current position
-        if (
-            res is None
-            and response_data.get("status") == "success"
-            and "No action needed" in response_data.get("message", "")
-        ):
-            order_response_data = {
-                "status": "success",
-                "message": "Positions Already Matched. No Action needed.",
-            }
+        # Handle the cases where the adapter placed no order on purpose:
+        # position already at the requested size, or nothing to exit. It made
+        # no API call for either, so res is None and there is no order id to
+        # report; both are a success, not a failure. Matched on that shape,
+        # not on the message, because the wording differs per adapter
+        # ("No action needed", "No action required", "No position to square
+        # off", "No order action needed", ...) and tradejini sends none.
+        if res is None and is_no_action_response(response_data, order_id):
+            # Passed through as the adapter worded it, so the message names
+            # the actual cause rather than a rewrite that fits only one case.
+            message = response_data.get("message") or NO_ACTION_FALLBACK_MESSAGE
+
+            order_response_data = {"status": "success", "message": message}
             bus.publish(SmartOrderNoActionEvent(
                 mode="live", api_type="placesmartorder",
                 symbol=order_data.get("symbol", ""),
                 exchange=order_data.get("exchange", ""),
-                message=" Positions Already Matched. No Action needed.",
+                message=message,
                 request_data=order_request_data, response_data=order_response_data,
                 api_key=api_key,
             ))
