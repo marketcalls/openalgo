@@ -5,6 +5,7 @@ from typing import Any
 
 from broker.iiflcapital.api.rate_limiter import (
     MAX_RETRIES,
+    apply_account_rate_limit,
     apply_rate_limit,
     is_rate_limited,
     retry_delay_from_headers,
@@ -79,6 +80,7 @@ def _request(
     payload=None,
     params=None,
     _retry_count: int = 0,
+    account_class: bool = False,
 ):
     """
     Issue an HTTP request to an IIFL Capital order/account endpoint through
@@ -96,6 +98,9 @@ def _request(
     url = f"{BASE_URL}{endpoint}"
 
     apply_rate_limit()
+    if account_class:
+        # Order Book / Trade Book / Cancel-All sit in IIFL's 3 req/sec class.
+        apply_account_rate_limit()
 
     if method == "GET":
         response = client.get(url, headers=_headers(auth), params=params)
@@ -121,7 +126,9 @@ def _request(
             f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
         )
         time.sleep(delay)
-        return _request(endpoint, auth, method, payload, params, _retry_count + 1)
+        return _request(
+            endpoint, auth, method, payload, params, _retry_count + 1, account_class
+        )
 
     return response, data
 
@@ -220,7 +227,7 @@ def _is_success_result(result: dict) -> bool:
 
 
 def get_order_book(auth):
-    response, data = _request("/orders", auth)
+    response, data = _request("/orders", auth, account_class=True)
 
     if response.status_code == 200:
         rows = data if isinstance(data, list) else _extract_rows(data)
@@ -238,7 +245,7 @@ def get_order_book(auth):
 
 
 def get_trade_book(auth):
-    response, data = _request("/trades", auth)
+    response, data = _request("/trades", auth, account_class=True)
 
     if response.status_code == 200:
         if isinstance(data, list):
