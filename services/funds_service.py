@@ -73,6 +73,25 @@ def get_funds_with_auth(
         # Get funds data using broker's implementation
         funds = broker_module.get_margin_data(auth_token)
 
+        # An empty result means the broker returned no funds/margin data — the
+        # broker session is invalid or expired (all brokers return a POPULATED
+        # dict on success, even for a zero-balance account, e.g.
+        # availablecash="0.00"; they return {} only on the error/no-data path).
+        # Reporting this as success with empty data is misleading: it lets an
+        # expired session look "live" (callers such as the dashboard already
+        # compensate by re-checking `if not margin_data`). Surface it as a failure
+        # so every caller gets a consistent signal.
+        if not funds:
+            logger.warning("Empty funds/margin data — broker session likely invalid or expired")
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": "No funds data returned — broker session may be invalid or expired",
+                },
+                500,
+            )
+
         return True, {"status": "success", "data": funds}, 200
     except Exception as e:
         logger.exception(f"Error in broker_module.get_margin_data: {e}")
