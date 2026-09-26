@@ -1,0 +1,12 @@
+# Per-instance config (pre-prefix base names — patches run before transformers).
+# CORS_ALLOWED_ORIGINS and WEBSOCKET_URL are derived from HOST_SERVER by start.sh.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openalgo-config
+data:
+  HOST_SERVER: "https://fyers.example.com"
+  VALID_BROKERS: "fyers"
+  REDIRECT_URL: "https://fyers.example.com/fyers/callback"
+  SESSION_COOKIE_NAME: "oa-fyers-session"
+  CSRF_COOKIE_NAME: "oa-fyers-csrf"

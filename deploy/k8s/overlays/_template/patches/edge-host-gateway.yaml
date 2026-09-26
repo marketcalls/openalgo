@@ -1,0 +1,37 @@
+# Gateway API host patch — use INSTEAD of edge-host-ingress.yaml when the
+# overlay wires ../../edge/gateway. Pre-prefix base names.
+#
+# Strategic-merge patches REPLACE lists wholesale (CRDs have no merge keys), so
+# the full listener is repeated here — editing only `hostname` would silently
+# drop port/protocol/tls/allowedRoutes.
+#
+# The Service backendRefs and the Gateway parentRef are NOT patched here: they
+# are rewritten by namePrefix via edge/gateway/kustomizeconfig.yaml. The TLS
+# certificateRef IS set here — its Secret is operator-provided (cert-manager or
+# manual), not a build resource, so kustomize never rewrites it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: openalgo
+spec:
+  listeners:
+  - name: https
+    port: 443
+    protocol: HTTPS
+    hostname: CHANGE_ME.example.com
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: CHANGE_ME-openalgo-tls
+        kind: Secret
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openalgo
+spec:
+  hostnames:
+  - CHANGE_ME.example.com

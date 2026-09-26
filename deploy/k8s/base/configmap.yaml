@@ -1,0 +1,36 @@
+# Non-sensitive per-instance configuration. The values below are placeholders
+# that every overlay MUST patch (overlays/<broker>/patches/config.yaml) — they
+# are deliberately invalid as-is so an unpatched overlay fails visibly instead
+# of silently serving on the wrong host.
+#
+# NOTE: CORS_ALLOWED_ORIGINS and WEBSOCKET_URL are NOT set here — start.sh
+# derives both from HOST_SERVER when it generates /app/.env. FLASK_PORT,
+# WEBSOCKET_PORT, ZMQ_HOST and ZMQ_PORT are pinned as env vars in
+# statefulset.yaml and must not be set here.
+#
+# The database URLs (DATABASE_URL, LATENCY_/LOGS_/HEALTH_/SANDBOX_DATABASE_URL)
+# default to db/<name>.db relative paths, which land on the data PVC via the
+# subPath mounts; Historify uses HISTORIFY_DATABASE_PATH (same default).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openalgo-config
+data:
+  # Public origin, scheme included. https:// enables the __Secure- cookie
+  # prefixes. PATCH per overlay.
+  HOST_SERVER: "https://CHANGE_ME.example.com"
+  # Single broker slug per instance (faster startup); slugs must match the
+  # VALID_BROKERS list in .sample.env. PATCH per overlay.
+  VALID_BROKERS: "CHANGE_ME"
+  # OAuth callback registered with the broker: https://<host>/<broker>/callback.
+  # Must match the broker app registration exactly. PATCH per overlay.
+  REDIRECT_URL: "https://CHANGE_ME.example.com/CHANGE_ME/callback"
+  # Unique per instance so two instances never collide on cookies. PATCH per
+  # overlay. With https HOST_SERVER the app prefixes __Secure- at runtime.
+  SESSION_COOKIE_NAME: "oa-CHANGE_ME-session"
+  CSRF_COOKIE_NAME: "oa-CHANGE_ME-csrf"
+  # --- optional tuning (uncomment to override the app defaults) ---
+  # FLASK_ENV: "production"
+  # LOG_LEVEL: "INFO"
+  # MCP_HTTP_ENABLED: "False"     # remote MCP; requires MCP_PUBLIC_URL when True
+  # SESSION_EXPIRY_TIME: "03:00"  # broker token-refresh window — never restart pods around it
