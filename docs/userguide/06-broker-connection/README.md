@@ -2,12 +2,12 @@
 
 ## Overview
 
-OpenAlgo loads broker adapters from `broker/<name>/`. The current repository contains 36 plugin directories: 35 securities integrations and Delta Exchange for crypto derivatives. One OpenAlgo instance uses one configured broker at a time.
+OpenAlgo loads broker adapters from `broker/<name>/`. The current repository contains 37 plugin directories: 36 securities integrations and Delta Exchange for crypto derivatives. One OpenAlgo instance uses one configured broker at a time.
 
 The installed plugin directories are the authoritative inventory:
 
 ```text
-aliceblue, angel, arrow, compositedge, definedge, deltaexchange,
+aliceblue, angel, arrow, acagarwalxts, compositedge, definedge, deltaexchange,
 dhan, dhan_sandbox, firstock, fivepaisa, fivepaisaxts, flattrade,
 fyers, groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital,
 indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm,

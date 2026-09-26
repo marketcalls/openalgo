@@ -41,10 +41,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENALGO_DIR="$SCRIPT_DIR"
 
 # XTS Brokers that require market data credentials
-XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
+XTS_BROKERS="fivepaisaxts,acagarwalxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
 
 # Valid brokers list
-VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+VALID_BROKERS="fivepaisa,fivepaisaxts,acagarwalxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
 # Banner
 echo ""
@@ -208,7 +208,7 @@ do_setup() {
     echo -e "${BLUE}  ========================================${NC}"
     echo ""
     echo "  Valid brokers:"
-    echo "  fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge,"
+    echo "  fivepaisa, fivepaisaxts, acagarwalxts, aliceblue, angel, arrow, compositedge,"
     echo "  definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,"
     echo "  groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
     echo "  mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,"
@@ -583,7 +583,7 @@ do_help() {
     echo "  - Logs:       $OPENALGO_DIR/log/"
     echo ""
     echo "XTS Brokers (require market data credentials):"
-    echo "  fivepaisaxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom"
+    echo "  fivepaisaxts, acagarwalxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom"
     echo ""
 }
 
