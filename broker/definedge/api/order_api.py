@@ -15,6 +15,11 @@ from broker.definedge.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 
 logger = get_logger(__name__)
 
@@ -104,6 +109,23 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """Definedge answers {"status": "SUCCESS", "positions": [...]}.
+
+    Its own errors say status "ERROR", and get_api_response reports a request
+    that failed as {"stat": "Not_Ok"}.
+    """
+    if isinstance(positions_data, list):
+        return True
+    if not isinstance(positions_data, dict):
+        return False
+    if positions_data.get("stat") == "Ok" or positions_data.get("status") == "SUCCESS":
+        return True
+    if positions_data.get("stat") or positions_data.get("status"):
+        return False
+    return "positions" in positions_data or "data" in positions_data
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -113,7 +135,7 @@ def _get_cached_positions(auth):
             return cached["data"]
 
     # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    positions_data = read_position_book("definedge", lambda: get_positions(auth), _position_book_ok)
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -292,6 +314,7 @@ def place_order_api(data, auth):
         return response, response_data, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """Place smart order based on position sizing logic."""
 
@@ -388,6 +411,8 @@ def place_smartorder_api(data, auth):
                 response_data = {"status": "success", "message": "No action required"}
                 return res, response_data, orderid
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"
         logger.error(error_msg)

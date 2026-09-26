@@ -10,6 +10,11 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 
 from ..mapping.order_data import (
     map_trade_data,
@@ -364,12 +369,15 @@ def get_trade_book(auth):
         return []
 
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Get list of positions using Tradejini API.
 
     Args:
         auth (str): Authentication token
+        strict (bool): Fail the whole read when a row cannot be transformed,
+            instead of leaving that row out. The smart order passes True,
+            because a row left out reads as a flat position.
 
     Returns:
         dict: Positions data in OpenAlgo format
@@ -488,6 +496,11 @@ def get_positions(auth):
 
                 except Exception as e:
                     logger.error(f"Error transforming position: {str(e)}", exc_info=True)
+                    if strict:
+                        return {
+                            "status": "error",
+                            "message": f"A position row could not be read: {e}",
+                        }
                     continue
 
             # Return in OpenAlgo format - same pattern as orderbook and tradebook
@@ -679,6 +692,12 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """get_positions answers {"status": "success", "data": [...]} for a book it
+    read, "no-data" included, and {"status": "error"} for every failure."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -688,7 +707,9 @@ def _get_cached_positions(auth):
             return cached["data"]
 
     # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    positions_data = read_position_book(
+        "tradejini", lambda: get_positions(auth, strict=True), _position_book_ok
+    )
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -746,7 +767,21 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
                 pos_symbol = str(position.get("symbol", "")).upper().strip()
                 pos_exch = str(position.get("exchange", "")).upper().strip()
-                pos_qty = int(float(position.get("quantity", 0)))
+                try:
+                    pos_qty = int(float(position.get("quantity", 0)))
+                except (TypeError, ValueError) as exc:
+                    if pos_exch == exchange and pos_symbol == tradingsymbol:
+                        # The row for this very symbol cannot be read, so its
+                        # position is unknown, not flat.
+                        raise PositionReadError(
+                            "tradejini",
+                            f"quantity {position.get('quantity')!r} of {pos_symbol}: {exc}",
+                        ) from exc
+                    logger.warning(
+                        f"get_open_position - Skipping {pos_symbol} on {pos_exch}: "
+                        f"quantity {position.get('quantity')!r} is not a number"
+                    )
+                    continue
 
                 logger.debug(
                     f"get_open_position - Checking OpenAlgo position: {pos_symbol} on {pos_exch}, qty: {pos_qty}"
@@ -857,9 +892,14 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         )
         return "0"
 
+    except PositionReadError:
+        raise
     except Exception as e:
+        # The book was read, but something in it could not be: the position
+        # is unknown, and reading it as flat would size the order against
+        # nothing.
         logger.exception(f"get_open_position - Exception: {str(e)}")
-        return "0"
+        raise PositionReadError("tradejini", f"{type(e).__name__}: {e}") from e
 
 
 def place_order_api(data, auth):
@@ -1005,6 +1045,7 @@ def place_order_api(data, auth):
         return None, {"status": "error", "message": error_msg}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Place a smart order using Tradejini API.
@@ -1059,6 +1100,8 @@ def place_smartorder_api(data, auth):
                     f"(from get_open_position)"
                 )
 
+            except PositionReadError:
+                raise
             except Exception as e:
                 logger.exception(f"place_smartorder_api - Error getting position: {str(e)}")
                 return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
@@ -1205,6 +1248,8 @@ def place_smartorder_api(data, auth):
                 logger.exception(error_msg)
                 return None, {"status": "error", "message": error_msg}, None
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Smart order placement failed: {str(e)}"
         logger.exception(f"place_smartorder_api - Exception occurred: {error_msg}")

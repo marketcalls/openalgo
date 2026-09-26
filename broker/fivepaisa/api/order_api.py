@@ -19,6 +19,11 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
 
 logger = get_logger(__name__)
 
@@ -117,20 +122,24 @@ def get_trade_book(auth: str) -> dict[str, Any]:
         raise
 
 
-def get_positions(auth: str) -> dict[str, Any]:
-    """Get net positions for the client
+# Positions API often needs longer timeout
+_POSITION_READ_ATTEMPTS = 3
+
+
+def _request_positions(auth: str) -> dict[str, Any]:
+    """Read the net position book, retrying a timeout, and raise when it fails.
+
+    get_positions turns a failure into an empty book, which is what the
+    position book page wants. The smart order reads through here instead,
+    because an empty book means flat and a failed read does not.
 
     Args:
         auth (str): Authentication token
 
     Returns:
-        Dict[str, Any]: Net positions data or empty dict on failure
+        Dict[str, Any]: The NetPositionNetWise response as 5 Paisa sent it
     """
-    # Positions API often needs longer timeout
-    max_retries = 3
-    current_retry = 0
-
-    while current_retry < max_retries:
+    for attempt in range(1, _POSITION_READ_ATTEMPTS + 1):
         try:
             # Get the shared httpx client
             client = get_httpx_client()
@@ -151,16 +160,30 @@ def get_positions(auth: str) -> dict[str, Any]:
             return response.json()
 
         except httpx.TimeoutException as e:
-            current_retry += 1
-            logger.debug(f"Timeout getting positions (attempt {current_retry}/{max_retries}): {e}")
-            if current_retry >= max_retries:
-                logger.debug("Maximum retries reached for positions data. Returning empty result.")
-                return {"body": {"NetPositionDetail": []}}  # Return empty position structure
-        except Exception as e:
-            logger.error(f"Error getting positions: {e}")
-            return {
-                "body": {"NetPositionDetail": []}
-            }  # Return empty position structure on any error
+            logger.debug(
+                f"Timeout getting positions (attempt {attempt}/{_POSITION_READ_ATTEMPTS}): {e}"
+            )
+            if attempt >= _POSITION_READ_ATTEMPTS:
+                raise
+
+
+def get_positions(auth: str) -> dict[str, Any]:
+    """Get net positions for the client
+
+    Args:
+        auth (str): Authentication token
+
+    Returns:
+        Dict[str, Any]: Net positions data or empty dict on failure
+    """
+    try:
+        return _request_positions(auth)
+    except httpx.TimeoutException:
+        logger.debug("Maximum retries reached for positions data. Returning empty result.")
+        return {"body": {"NetPositionDetail": []}}  # Return empty position structure
+    except Exception as e:
+        logger.error(f"Error getting positions: {e}")
+        return {"body": {"NetPositionDetail": []}}  # Return empty position structure on any error
 
 
 def get_holdings(auth: str) -> dict[str, Any]:
@@ -201,6 +224,25 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """5 Paisa confirms a read in head.statusDescription and body.Status 0."""
+    if not isinstance(positions_data, dict):
+        return False
+    body = positions_data.get("body")
+    if not isinstance(body, dict):
+        return False
+    rows = body.get("NetPositionDetail")
+    if isinstance(rows, list) and rows:
+        return True
+    head = positions_data.get("head")
+    if not isinstance(head, dict) or head.get("statusDescription") != "Success":
+        return False
+    try:
+        return int(body.get("Status", 0)) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -209,7 +251,9 @@ def _get_cached_positions(auth):
         if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
             return cached["data"]
 
-    positions_data = get_positions(auth)
+    positions_data = read_position_book(
+        "fivepaisa", lambda: _request_positions(auth), _position_book_ok
+    )
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -287,6 +331,9 @@ def get_open_position(
                     break  # Found the match we need
 
         return net_qty
+    except PositionReadError:
+        # The position is unknown, not zero: let the smart order refuse.
+        raise
     except Exception as e:
         logger.error(f"Error in get_open_position: {e}")
         return "0"  # Return default quantity on error
@@ -378,6 +425,7 @@ def place_order_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
         raise
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
     AUTH_TOKEN = auth
 

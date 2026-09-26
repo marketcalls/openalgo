@@ -20,6 +20,12 @@ from broker.indmoney.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+    says_no_positions,
+)
 
 logger = get_logger(__name__)
 
@@ -294,7 +300,31 @@ def _enrich_positions_with_ltp(positions, auth):
 
 
 
-def get_positions(auth, include_ltp=True):
+class _PositionRows(list):
+    """The rows of a strict read, and the query segments that could not be read.
+
+    A list, so it passes the smart order's success check and is cached like any
+    other book. A smart order in a segment that was read in full goes ahead on
+    these rows, and one in a failed segment is refused (get_open_position): an
+    account without F&O keeps its equity smart orders, and they share one
+    cached book instead of each paying for all four queries again.
+    """
+
+    def __init__(self, rows, failed_segments=()):
+        super().__init__(rows)
+        self.failed_segments = frozenset(failed_segments)
+
+
+# The query segment that holds each exchange's positions.
+_SEGMENT_BY_EXCHANGE = {
+    "NSE": "equity",
+    "BSE": "equity",
+    "NFO": "derivative",
+    "BFO": "derivative",
+}
+
+
+def get_positions(auth, include_ltp=True, strict=False):
     """
     Fetch all positions for the current trading day.
     Fetches positions from all combinations of segment and product:
@@ -306,9 +336,16 @@ def get_positions(auth, include_ltp=True):
         include_ltp: Attach live prices so the position book can show market
             value and MTM. Skipped on the smart-order path, which only needs
             net quantity and should not pay for an extra quote round trip.
+        strict: Report a query that failed instead of leaving its rows out.
+            The position book leaves them out; the smart order passes True,
+            because a missing row reads as flat. The rows come back as a
+            _PositionRows naming the segments that failed, and a read in which
+            no segment worked raises PositionReadError.
     """
     try:
         all_positions = []
+        failed_segments = set()
+        failures = []
 
         # Define all combinations of segment and product
         position_queries = [
@@ -324,6 +361,11 @@ def get_positions(auth, include_ltp=True):
 
             # Debug: Log the actual API response to understand the structure
             logger.debug(f"Positions API response for {query}: {result}")
+
+            if strict and _position_query_failed(result):
+                failed_segments.add(query["segment"])
+                failures.append(f"{query}: {str(result)[:200]}")
+                continue
 
             # /portfolio/positions returns `data` as a FLAT ARRAY. Collect the
             # rows first, then tag every row with the query it came from - the
@@ -355,15 +397,43 @@ def get_positions(auth, include_ltp=True):
                     pos["query_product"] = query["product"]
                     all_positions.append(pos)
 
+        if failed_segments:
+            detail = "; ".join(failures)
+            if failed_segments >= set(_SEGMENT_BY_EXCHANGE.values()):
+                raise PositionReadError("indmoney", detail)
+            logger.warning(
+                f"IndMoney position read incomplete, {sorted(failed_segments)} not read: {detail}"
+            )
+            return _PositionRows(all_positions, failed_segments)
+
         if include_ltp and all_positions:
             _enrich_positions_with_ltp(all_positions, auth)
 
         logger.debug(f"Fetched {len(all_positions)} total positions (all segments and products)")
         return all_positions
 
+    except PositionReadError:
+        raise
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
+        if strict:
+            raise
         return []
+
+
+def _position_query_failed(result):
+    """True when one /portfolio/positions query did not come back as a book.
+
+    get_api_response returns the rows of a query that worked (a list, or None
+    for an empty one) and {"status": "error"/"failure", ...} for every failure.
+    """
+    if result is None or isinstance(result, list):
+        return False
+    if not isinstance(result, dict):
+        return True
+    if result.get("status") in ("error", "failure") or result.get("success") is False:
+        return not says_no_positions(result)
+    return False
 
 
 def get_holdings(auth):
@@ -401,6 +471,11 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """get_positions(strict=True) returns a list, or raises when a query failed."""
+    return isinstance(positions_data, list)
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -411,7 +486,9 @@ def _get_cached_positions(auth):
 
     # Cache miss or expired - fetch from broker. The smart-order path only reads
     # net quantity, so skip the LTP round trip that the position book needs.
-    positions_data = get_positions(auth, include_ltp=False)
+    positions_data = read_position_book(
+        "indmoney", lambda: get_positions(auth, include_ltp=False, strict=True), _position_book_ok
+    )
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -441,6 +518,16 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     target_token = str(get_token(tradingsymbol, exchange) or "")
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_response = _get_cached_positions(auth)
+    failed_segments = getattr(positions_response, "failed_segments", frozenset())
+    if failed_segments:
+        # Only the other segment failed when this one was read in full, so its
+        # rows are the whole answer for this symbol. A symbol in a failed
+        # segment, or in one this read does not cover, has no answer at all.
+        segment = _SEGMENT_BY_EXCHANGE.get(str(exchange).upper())
+        if segment is None or segment in failed_segments:
+            raise PositionReadError(
+                "indmoney", f"the {sorted(failed_segments)} position query failed"
+            )
     net_qty = "0"
     # logger.debug(f"Positions response: {positions_response}")
 
@@ -619,6 +706,7 @@ def place_order_api(data, auth):
     return res, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
     # If no API call is made in this function then res will return None

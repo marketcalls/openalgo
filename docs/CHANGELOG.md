@@ -10,6 +10,37 @@ fix, live in [docs/releases](releases/).
 
 ### Fixed
 
+- **A smart order could double or reverse a position when the broker did not
+  answer the position check.** A smart order reads your open position from the
+  broker, compares it with the position size you asked for, and places the
+  difference. On every supported broker, a read that failed (a network error,
+  an expired session, the broker answering with an error, a reply that could
+  not be read) was taken to mean "no position". The order was then sized as if
+  you were flat: an entry or a flip placed its full quantity on top of the
+  position you really held, and an exit reported "no open position" and closed
+  nothing. Now a failed read sends no order and answers "OpenAlgo could not
+  read your open position from your broker, so no order was sent. Check your
+  positions and try again.", with your broker's name in it. An empty position
+  book is still read as flat, and a read that works places exactly the order
+  it placed before. An error from the broker is read as an empty book only
+  on brokers that answer an empty book with an error message, and only from
+  that message: on Dhan, Zerodha, Upstox, Angel One and Fyers, among others,
+  an error always refuses. On IndMoney and Groww, an F&O read that
+  fails refuses F&O smart orders while equity smart orders go ahead. On
+  Alice Blue, "Failed to retrieve the position book" now refuses, the same as
+  its code EC919. This covers `/api/v1/placesmartorder` and everything that
+  calls it (TradingView and other alerts, the order nodes in Flow that place
+  a smart order, Python strategies), and the close button on the Positions
+  page. Sandbox mode is not affected: it reads positions from the sandbox.
+  Not changed by this fix: a check that only reads your position and places
+  nothing (`/api/v1/openposition`, and the Open Position and Position Check
+  nodes in Flow) still reads a failed read as no position on most brokers, so
+  do not let such a check decide an order while your broker is not answering.
+  On CompositEdge, 5 Paisa (XTS), IIFL, Wisdom Capital and Groww the smart
+  order reads every position as flat even when the read works, so on those
+  brokers do not rely on a smart order to adjust or close a position you
+  already hold until that is fixed separately. Nothing to do after pulling.
+
 - **Ubuntu installs on 2.0.2.6 could not run OpenScript strategies or the
   agent.** `requirements-nginx.txt`, which `install.sh`, `install-multi.sh` and
   `update.sh` install from, was missing `openscript`, `litellm`, `agno` and

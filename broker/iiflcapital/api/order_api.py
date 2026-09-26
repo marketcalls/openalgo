@@ -19,6 +19,7 @@ from broker.iiflcapital.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 
 logger = get_logger(__name__)
 
@@ -262,8 +263,20 @@ def get_holdings(auth):
     return data
 
 
+def _position_book_ok(positions_data):
+    """IIFL Capital marks success with status "Ok" or "success".
+
+    _request turns a body that would not parse into status "error".
+    """
+    if isinstance(positions_data, list):
+        return True
+    return isinstance(positions_data, dict) and _ok(positions_data)
+
+
 def get_open_position(tradingsymbol, exchange, producttype, auth):
-    positions_data = get_positions(auth)
+    positions_data = read_position_book(
+        "iiflcapital", lambda: get_positions(auth), _position_book_ok
+    )
     rows = _extract_rows(positions_data)
 
     br_symbol = get_br_symbol(tradingsymbol, exchange) or tradingsymbol
@@ -322,6 +335,7 @@ def place_order_api(data, auth):
     return _status_wrapper(error_status), error_response, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")

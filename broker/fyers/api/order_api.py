@@ -15,6 +15,7 @@ from broker.fyers.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 
 logger = get_logger(__name__)
 
@@ -140,6 +141,11 @@ def _get_symbol_lock(symbol, exchange, product):
         return _symbol_locks[key]
 
 
+def _position_book_ok(positions_data):
+    """Fyers marks success with s "ok"; get_api_response's own failures say "error"."""
+    return isinstance(positions_data, dict) and positions_data.get("s") == "ok"
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
     with _position_cache_lock:
@@ -149,7 +155,7 @@ def _get_cached_positions(auth):
             return cached["data"]
 
     # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    positions_data = read_position_book("fyers", lambda: get_positions(auth), _position_book_ok)
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -250,6 +256,7 @@ def place_order_api(data, auth):
         return response, {"s": "error", "message": f"General error: {e}"}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 
