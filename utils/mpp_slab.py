@@ -5,6 +5,7 @@
 # When brokers stop supporting market orders, this converts MARKET orders to LIMIT orders
 # with a price buffer based on configurable protection percentages.
 
+import math
 from typing import Optional
 
 from utils.logging import get_logger
@@ -81,11 +82,19 @@ def get_mpp_percentage(price: float, instrument_type: str = "EQ") -> float:
     Returns:
         float: The protection percentage to apply
 
+    Raises:
+        TypeError: If price is not a number (e.g. None, a string, or a bool).
+        ValueError: If price is NaN or infinite (no slab can match it).
+
     Example:
         >>> get_mpp_percentage(50, 'EQ')   # Returns 2.0 (for EQ/FUT price < 100)
         >>> get_mpp_percentage(50, 'CE')   # Returns 3.0 (for OPT price 10-100)
         >>> get_mpp_percentage(5, 'PE')    # Returns 5.0 (for OPT price < 10)
     """
+    if isinstance(price, bool) or not isinstance(price, (int, float)):
+        raise TypeError(f"MPP price must be a number, got {type(price).__name__}")
+    if not math.isfinite(price):
+        raise ValueError(f"MPP price must be finite, got {price!r}")
     slabs = get_mpp_slabs(instrument_type)
     slab_type = "OPT" if instrument_type in OPTIONS_INSTRUMENT_TYPES else "EQ/FUT"
 
