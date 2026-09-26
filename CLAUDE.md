@@ -348,6 +348,21 @@ The reason to still register a route in `blueprints/react_app.py` is that
 unregistered paths hit `Error404Tracker` for *unauthenticated* visitors and
 count toward an IP ban.
 
+### Architecture changes also update the docs diagrams
+
+The architecture and flow diagrams on https://docs.openalgo.in are illustrated
+images in the separate `openalgo-docs` repository, each rendered from an HTML
+source (`diagrams/<slug>.html` -> `.gitbook/assets/diagram-<slug>.png`, tooling in
+`diagrams/_tools/`, rules in that repo's `CLAUDE.md`). **A change that adds a
+feature or changes a component, flow, process, port, database, thread model or
+integration is not done until the affected diagrams are updated in the same
+piece of work.** Find them with `grep -rl "diagram-" --include=*.md` in
+`openalgo-docs` and by reading the sources for the components you touched; edit
+the source, re-render, check the PNG, and fix any prose the change made wrong.
+Most readers are traders who trust the picture, so a stale diagram misleads more
+than a missing one. The Market Data diagram had silently lost the ZeroMQ bus this
+way before the September 2026 refresh.
+
 ### Adding a page: the three registrations
 
 A new page is not done until all three are present. Miss the second and the
