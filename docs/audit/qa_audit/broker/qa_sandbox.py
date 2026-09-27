@@ -68,7 +68,7 @@ from qa_common import (  # noqa: E402
 
 API_KEY = os.getenv("OPENALGO_API_KEY", "945bd843b8683f584321f6cf1fc55b664975321281ee536ee68aa9e36147eef6")
 HOST = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5000")
-HEAVY = os.getenv("QA_HEAVY", "") == "1"   # 500-symbol multiquotes, 2y history
+HEAVY = os.getenv("QA_HEAVY", "") == "1"   # 500-symbol multiquotes, WS keepalive
 NO_WS = os.getenv("QA_WS", "1") == "0"   # websocket runs by default; QA_WS=0 disables
 WS_URL = os.getenv("OPENALGO_WS", "ws://127.0.0.1:8765")
 STRAT = "QA-SANDBOX"
@@ -983,6 +983,13 @@ def sec_quotes(run: Runner) -> None:
         df = run.client.history(symbol=s, exchange=ex, interval="1m",
                                 start_date=str(date.today() - timedelta(days=4)),
                                 end_date=str(date.today()))
+        # SDK contract: DataFrame on success, dict on error. Surface the
+        # broker's message instead of letting df.iloc raise AttributeError.
+        # A broker with no candle API (e.g. HDFC InvestRight) is judged by the
+        # HS-* checks; here the quote/depth scaling check has already passed.
+        if isinstance(df, dict):
+            raise Warn(f"quotes/depth agree at {q}; 1m history unavailable - "
+                       f"{str(df.get('message') or df)[:160]}")
         if df is None or len(df) == 0:
             raise Warn(f"quotes/depth agree at {q}; no 1m history to cross-check")
         close = as_num(df.iloc[-1]["close"], "last close")
@@ -1385,11 +1392,8 @@ def sec_history(run: Runner) -> None:
                   endpoint="history", symbol=s, expected="10 days 1m")
         run.check("HS-05", lambda: hist(s, ex, "1m", 100, "HS-05"),
                   endpoint="history", symbol=s, expected="100 days 1m, chunked")
-        if HEAVY:
-            run.check("HS-06", lambda: hist(s, ex, "D", 730, "HS-06"),
-                      endpoint="history", symbol=s, expected="2 years daily")
-        else:
-            run.record("HS-06", SKIP, "QA_HEAVY=1 not set (2-year history)", endpoint="history")
+        run.check("HS-06", lambda: hist(s, ex, "D", 730, "HS-06"),
+                  endpoint="history", symbol=s, expected="2 years daily")
 
         def ist_open():
             _, ts = hist(s, ex, "1m", 6, "HS-07")
@@ -1775,24 +1779,42 @@ def sec_options(run: Runner) -> None:
     run.check("OS-15", multigreeks, endpoint="multioptiongreeks", expected="per-symbol batch")
 
     def multigreeks_invalid():
-        """A bad leg must not sink the valid ones - per-row status, not a
-        whole-request rejection."""
+        """A bad leg must not sink the valid ones.
+
+        A mixed batch returns status "partial", not "success" - the service
+        computes it as success / partial / error from the per-leg counts, and
+        "partial" is exactly the right answer when some legs worked and some
+        did not. Demanding "success" here reported correct isolation as a
+        whole-batch failure. What the check should assert is the isolation
+        itself: both rows present, the good one resolved, the bad one carrying
+        an error and a message, and a summary that counts them.
+        """
         good = osym("ATM", "CE")["symbol"]
         r = post("multioptiongreeks", {"symbols": [
             {"symbol": good, "exchange": "NFO"},
             {"symbol": "ZZNOTREAL99", "exchange": "NFO"}]})
-        need(r.get("status") == "success",
-             f"batch failed entirely on one bad symbol: {r.get('message')}")
+        need(r.get("status") in ("success", "partial"),
+             f"one bad leg sank the whole batch: status={r.get('status')!r} "
+             f"{str(r.get('message'))[:110]}")
         rows = r.get("data") or []
         need(len(rows) == 2, f"expected 2 result rows, got {len(rows)}")
         by = {x.get("symbol"): x for x in rows}
-        need(by.get(good, {}).get("status") == "success", "valid leg did not resolve")
+        need(by.get(good, {}).get("status") == "success",
+             f"valid leg did not resolve: {by.get(good)}")
         bad = by.get("ZZNOTREAL99", {})
         need(bad.get("status") != "success", "invalid leg reported success")
         need(str(bad.get("message", "")), "failing leg carries no message")
+        summary = r.get("summary") or {}
+        if summary:
+            need(int(as_num(summary.get("total", 0), "summary.total")) == 2
+                 and int(as_num(summary.get("success", 0), "summary.success")) == 1
+                 and int(as_num(summary.get("failed", 0), "summary.failed")) == 1,
+                 f"summary does not match the rows: {summary}")
+        run.note_limit("multioptiongreeks mixed batch",
+                       f"status={r.get('status')} summary={summary}")
 
     run.check("OS-15b", multigreeks_invalid, endpoint="multioptiongreeks",
-              expected="invalid leg isolated to its own row")
+              expected="invalid leg isolated; batch reports partial with a summary")
 
     def synth(u="NIFTY", idx_ex="NSE_INDEX", exp=None):
         """The documented key is `synthetic_future_price`, at the top level."""
@@ -2466,8 +2488,10 @@ def sec_orders(run: Runner) -> None:
         try:
             r = oorder(above)
             run.note_quirk("Quantity above freeze without splitsize",
-                           f"accepted or auto-split at qty {above}: "
+                           f"accepted as one order at qty {above}: "
                            f"orderid {r.get('orderid')}")
+            raise Warn(f"{above} exceeds freeze {fz} but was accepted without "
+                       "splitting or a freeze-limit rejection")
         except AssertionError as e:
             msg = str(e).lower()
             need("multiples of lot" not in msg,
@@ -2638,6 +2662,8 @@ def sec_orders(run: Runner) -> None:
             over = multi([L("OTM40", "CE", "BUY", qty=above)])
             run.note_quirk("Multi-order leg above freeze",
                            f"accepted at qty {above}: {over.get('results')}")
+            raise Warn(f"multi-order leg quantity {above} exceeds freeze {fz} "
+                       "but was accepted without splitting or a freeze-limit rejection")
         except AssertionError as e:
             msg = str(e).lower()
             need("multiples of lot" not in msg,
@@ -4753,9 +4779,14 @@ def sec_order_updates(run: Runner, base: list) -> None:
             collect(8.0)
             states = {u.get("order_status") for u in updates
                       if str(u.get("orderid")) == oid}
+            # Record what was observed BEFORE asserting on it. Setting this
+            # after the assertion meant a failing OU-02 threw the observation
+            # away, and SB-07 - which reads it - then skipped claiming the
+            # stream had not run at all. An assertion failing about an
+            # observation must not delete the observation.
+            run.env["ou_states"] = sorted(s for s in states if s)
             need("cancelled" in states,
                  f"cancellation not pushed - states seen for {oid}: {states}")
-            run.env["ou_states"] = sorted(s for s in states if s)
 
         run.check("OU-02", lifecycle_pushed, endpoint="ws.orders",
                   expected="open and cancelled both pushed")
@@ -4789,34 +4820,38 @@ def sec_order_updates(run: Runner, base: list) -> None:
                   expected="OpenAlgo symbol, not broker tradingsymbol")
 
         def quantities():
-            """filled + pending must equal quantity, but only where the pair
-            has been populated. A freshly placed order can carry 0/0 before
-            the broker has reported any progress, and asserting on that reads
-            as a reconciliation failure when nothing has happened yet. Assert
-            on updates where either field is populated; record the all-zero
-            case, which is the same on every broker and so sits above the
-            adapter."""
+            """Open and trigger-pending orders must report their outstanding
+            quantity. Terminal cancelled/rejected updates may legitimately
+            report 0/0 because no quantity remains pending."""
             need(updates, "no order updates collected")
-            checked, unpopulated = 0, []
+            checked, terminal_unpopulated = 0, []
             for u in updates:
                 if "filled_quantity" not in u or "pending_quantity" not in u:
                     continue
                 q = as_num(u["quantity"], "quantity")
                 f = as_num(u["filled_quantity"], "filled_quantity")
                 p = as_num(u["pending_quantity"], "pending_quantity")
+                status = u.get("order_status")
                 if f == 0 and p == 0 and q != 0:
-                    unpopulated.append(f"{u.get('orderid')}({u.get('order_status')})")
+                    if status in ("open", "trigger pending", "pending"):
+                        raise AssertionError(
+                            f"{u.get('orderid')}({status}) reports filled=0 and "
+                            f"pending=0 for quantity {q}; an unfilled live order "
+                            "must report its full quantity as pending"
+                        )
+                    terminal_unpopulated.append(f"{u.get('orderid')}({status})")
                     continue
                 need(abs((f + p) - q) < 1e-6,
                      f"{u['orderid']}: filled {f} + pending {p} != quantity {q}")
                 checked += 1
-            if unpopulated:
-                run.note_quirk("order_update with filled=0 and pending=0",
-                               f"{len(unpopulated)} update(s) carry neither quantity: "
-                               f"{unpopulated[:4]}")
+            if terminal_unpopulated:
+                run.note_limit("terminal order_update with filled=0 and pending=0",
+                               f"{len(terminal_unpopulated)} update(s) carry neither quantity: "
+                               f"{terminal_unpopulated[:4]}")
             if not checked:
                 raise Warn("no update carried populated filled/pending quantities"
-                           + (f" - {len(unpopulated)} left both at 0" if unpopulated else ""))
+                           + (f" - {len(terminal_unpopulated)} terminal update(s) left both at 0"
+                              if terminal_unpopulated else ""))
 
         run.check("OU-05", quantities, endpoint="ws.orders",
                   expected="filled + pending reconcile with quantity")
@@ -5077,8 +5112,9 @@ def sec_universal(run: Runner) -> None:
     run.check("UNI-01", enforced("HTTP status matches the scenario",
                                  "run.ok() / run.expect_error() on every call"),
               endpoint="-", expected="enforced globally")
-    run.check("UNI-02", enforced("status is exactly success or error",
-                                 "Runner.ok() rejects any other value"),
+    run.check("UNI-02", enforced("status is success, error, or partial",
+                                 "Runner.ok() rejects any other value; partial is "
+                                 "documented for multi-item results"),
               endpoint="-", expected="enforced globally")
     run.check("UNI-03", enforced("errors carry a message and leak no traceback",
                                  "Runner.ok() / expect_error()"),
@@ -5340,11 +5376,31 @@ def sec_sandbox_parity(run: Runner) -> None:
               expected="sandbox GTT answers with mode=analyze and margin_blocked")
 
     def sandbox_order_stream():
+        """SB-07 - the sandbox pushes the same order_update shape as live.
+
+        The skip reason has to name which of the three reasons applies, since
+        they call for different responses: the section was switched off, the
+        section ran but the stream produced nothing, or the stream produced
+        something and OU-02 found it incomplete.
+        """
         pushed = run.env.get("ou_states")
         if not pushed:
-            raise Skip("order-update stream not exercised (QA_WS=0 or no updates captured)")
+            if NO_WS:
+                raise Skip("QA_WS=0 - the websocket section did not run")
+            ou = [r for r in run.results if r.id.startswith("OU-")]
+            if not ou:
+                raise Skip("the order-update section did not run")
+            raise Skip(f"the order-update stream ran but pushed no states "
+                       f"({len(ou)} OU checks recorded) - nothing to compare")
         run.note_limit("sandbox order_update states", ", ".join(pushed))
         need(all(s == s.lower() for s in pushed), f"non-lowercase statuses pushed: {pushed}")
+        # A partial lifecycle is worth flagging here even though OU-02 owns
+        # the assertion: SB-07 is about parity, and half a lifecycle cannot
+        # be compared against the live one.
+        missing = {"open", "cancelled"} - set(pushed)
+        if missing:
+            raise Warn(f"only {pushed} pushed - {sorted(missing)} never arrived, so the "
+                       f"sandbox lifecycle cannot be compared against live (see OU-02)")
 
     run.check("SB-07", sandbox_order_stream, endpoint="ws.orders",
               expected="same order_update shape with mode=analyze")

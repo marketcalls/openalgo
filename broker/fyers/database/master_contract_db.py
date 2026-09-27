@@ -242,12 +242,17 @@ def process_fyers_nse_csv(path):
         (df["Exchange Instrument type"] == 2) & (df["Symbol ticker"].str.endswith("-GB")),
         "exchange",
     ] = "NSE"
+    # Government bonds are typed EQ, as Kite types its -GS/-TB/-SG debt rows;
+    # GB would be a fifth instrumenttype no consumer knows (QA MC-04).
     df.loc[
         (df["Exchange Instrument type"] == 2) & (df["Symbol ticker"].str.endswith("-GB")),
         "instrumenttype",
-    ] = "GB"
+    ] = "EQ"
     df.loc[df["Exchange Instrument type"] == 10, "exchange"] = "NSE_INDEX"
-    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "INDEX"
+    # Typed EQ, not INDEX: instrumenttype is the platform's four-value vocabulary
+    # -- EQ, FUT, CE, PE -- taken from Kite, which types its INDICES segment EQ.
+    # The NSE_INDEX exchange is what says this is an index (QA MC-04).
+    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "EQ"
 
     # Keeping only rows where 'exchange' column has been filled ('NSE' or 'NSE_INDEX')
     df_filtered = df[df["exchange"].isin(["NSE", "NSE_INDEX"])].copy()
@@ -323,7 +328,8 @@ def process_fyers_bse_csv(path):
     df.loc[df["Exchange Instrument type"].isin([0, 4, 50]), "exchange"] = "BSE"
     df.loc[df["Exchange Instrument type"].isin([0, 4, 50]), "instrumenttype"] = "EQ"
     df.loc[df["Exchange Instrument type"] == 10, "exchange"] = "BSE_INDEX"
-    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "INDEX"
+    # EQ, not INDEX -- the BSE_INDEX exchange marks it as an index (QA MC-04).
+    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "EQ"
 
     # Keeping only rows where 'exchange' column has been filled ('BSE' or 'BSE_INDEX')
     df_filtered = df[df["Exchange Instrument type"].isin([0, 4, 10, 50])].copy()
