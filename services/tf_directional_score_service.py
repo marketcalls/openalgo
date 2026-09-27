@@ -29,6 +29,8 @@ import threading
 import time
 from datetime import UTC, date, datetime
 
+from cachetools import TTLCache
+
 from services.history_service import get_history
 from utils.logging import get_logger
 
@@ -37,7 +39,9 @@ logger = get_logger(__name__)
 REFRESH_INTERVAL_SEC = 300  # recompute at most once every 5 minutes per symbol
 
 # symbol -> (date_str, computed_at_monotonic, score, direction, reversals)
-_cache: dict[str, tuple[str, float, float, str | None, int]] = {}
+# Bounded: see services/tf_momentum_setup_service.py's _cache comment -- same
+# reasoning, same sibling-service pattern.
+_cache: TTLCache = TTLCache(maxsize=2000, ttl=86400)
 _pending: set[str] = set()
 _lock = threading.Lock()
 
@@ -87,9 +91,14 @@ def _compute_directional_score(
     today_str = date.today().strftime("%Y-%m-%d")
     try:
         success, data, _status = get_history(
-            symbol=symbol, exchange=exchange, interval="5m",
-            start_date=today_str, end_date=today_str,
-            auth_token=auth_token, broker=broker, source="api",
+            symbol=symbol,
+            exchange=exchange,
+            interval="5m",
+            start_date=today_str,
+            end_date=today_str,
+            auth_token=auth_token,
+            broker=broker,
+            source="api",
         )
     except Exception as e:
         logger.debug(f"tf_directional_score_service: history fetch failed for {symbol}: {e}")
@@ -148,8 +157,10 @@ def ensure_directional_score_cache(
         _pending.update(todo)
     if todo:
         threading.Thread(
-            target=_background_fill, args=(todo, exchange, auth_token, broker),
-            daemon=True, name="tf-directional-score-fill",
+            target=_background_fill,
+            args=(todo, exchange, auth_token, broker),
+            daemon=True,
+            name="tf-directional-score-fill",
         ).start()
 
 

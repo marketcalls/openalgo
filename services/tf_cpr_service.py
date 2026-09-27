@@ -21,12 +21,16 @@ from __future__ import annotations
 import threading
 from datetime import UTC, date, datetime, timedelta
 
+from cachetools import TTLCache
+
 from services.history_service import get_history
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_cache: dict[str, tuple[str, float, float, float]] = {}   # symbol -> (date_str, width_pct, tc, bc)
+# symbol -> (date_str, width_pct, tc, bc). Bounded: see
+# services/tf_momentum_setup_service.py's _cache comment for the reasoning.
+_cache: TTLCache = TTLCache(maxsize=2000, ttl=86400)
 _pending: set[str] = set()
 _lock = threading.Lock()
 
@@ -49,12 +53,17 @@ def _compute_cpr_data(
     """Returns (width_pct, top, bottom) for today's CPR (Pivot/TC/BC from the
     previous day's H/L/C), or None if it can't be computed."""
     end = date.today()
-    start = end - timedelta(days=7)   # buffer for weekends/holidays
+    start = end - timedelta(days=7)  # buffer for weekends/holidays
     try:
         success, data, _status = get_history(
-            symbol=symbol, exchange=exchange, interval="D",
-            start_date=start.strftime("%Y-%m-%d"), end_date=end.strftime("%Y-%m-%d"),
-            auth_token=auth_token, broker=broker, source="api",
+            symbol=symbol,
+            exchange=exchange,
+            interval="D",
+            start_date=start.strftime("%Y-%m-%d"),
+            end_date=end.strftime("%Y-%m-%d"),
+            auth_token=auth_token,
+            broker=broker,
+            source="api",
         )
     except Exception as e:
         logger.debug(f"tf_cpr_service: history fetch failed for {symbol}: {e}")
@@ -101,7 +110,9 @@ def _background_fill(symbols: list[str], exchange: str, auth_token: str, broker:
                 _pending.discard(symbol)
 
 
-def ensure_cpr_cache(symbols: list[str], auth_token: str, broker: str, exchange: str = "NSE") -> None:
+def ensure_cpr_cache(
+    symbols: list[str], auth_token: str, broker: str, exchange: str = "NSE"
+) -> None:
     """Non-blocking. Kicks a background thread to fill in symbols missing
     today's CPR width. Safe to call on every /tfmarketpulse poll — symbols
     already cached today or already in flight are skipped, so a steady
@@ -109,14 +120,17 @@ def ensure_cpr_cache(symbols: list[str], auth_token: str, broker: str, exchange:
     today_str = date.today().strftime("%Y-%m-%d")
     with _lock:
         todo = [
-            s for s in symbols
+            s
+            for s in symbols
             if s not in _pending and (s not in _cache or _cache[s][0] != today_str)
         ]
         _pending.update(todo)
     if todo:
         threading.Thread(
-            target=_background_fill, args=(todo, exchange, auth_token, broker),
-            daemon=True, name="tf-cpr-fill",
+            target=_background_fill,
+            args=(todo, exchange, auth_token, broker),
+            daemon=True,
+            name="tf-cpr-fill",
         ).start()
 
 

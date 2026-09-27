@@ -22,12 +22,16 @@ from __future__ import annotations
 import threading
 from datetime import UTC, date, datetime
 
+from cachetools import TTLCache
+
 from services.history_service import get_history
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_cache: dict[str, tuple[str, float]] = {}   # symbol -> (date_str, range_pct)
+# symbol -> (date_str, range_pct). Bounded: see
+# services/tf_momentum_setup_service.py's _cache comment for the reasoning.
+_cache: TTLCache = TTLCache(maxsize=2000, ttl=86400)
 _pending: set[str] = set()
 _lock = threading.Lock()
 
@@ -53,9 +57,14 @@ def _compute_first_candle_range_pct(
     today_str = date.today().strftime("%Y-%m-%d")
     try:
         success, data, _status = get_history(
-            symbol=symbol, exchange=exchange, interval="5m",
-            start_date=today_str, end_date=today_str,
-            auth_token=auth_token, broker=broker, source="api",
+            symbol=symbol,
+            exchange=exchange,
+            interval="5m",
+            start_date=today_str,
+            end_date=today_str,
+            auth_token=auth_token,
+            broker=broker,
+            source="api",
         )
     except Exception as e:
         logger.debug(f"tf_first_candle_service: history fetch failed for {symbol}: {e}")
@@ -95,7 +104,9 @@ def _background_fill(symbols: list[str], exchange: str, auth_token: str, broker:
                 _pending.discard(symbol)
 
 
-def ensure_first_candle_cache(symbols: list[str], auth_token: str, broker: str, exchange: str = "NSE") -> None:
+def ensure_first_candle_cache(
+    symbols: list[str], auth_token: str, broker: str, exchange: str = "NSE"
+) -> None:
     """Non-blocking. Kicks a background thread to fill in symbols missing
     today's first-candle range. Safe to call on every /tfmarketpulse poll —
     symbols already cached today or already in flight are skipped. Symbols
@@ -105,14 +116,17 @@ def ensure_first_candle_cache(symbols: list[str], auth_token: str, broker: str, 
     today_str = date.today().strftime("%Y-%m-%d")
     with _lock:
         todo = [
-            s for s in symbols
+            s
+            for s in symbols
             if s not in _pending and (s not in _cache or _cache[s][0] != today_str)
         ]
         _pending.update(todo)
     if todo:
         threading.Thread(
-            target=_background_fill, args=(todo, exchange, auth_token, broker),
-            daemon=True, name="tf-first-candle-fill",
+            target=_background_fill,
+            args=(todo, exchange, auth_token, broker),
+            daemon=True,
+            name="tf-first-candle-fill",
         ).start()
 
 
