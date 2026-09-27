@@ -107,6 +107,8 @@ def init_tf_boost_database():
             ("cpr_width_pct", "DOUBLE"),
             ("cpr_bias", "VARCHAR"),
             ("first_candle_range_pct", "DOUBLE"),
+            ("momentum_signal", "VARCHAR"),
+            ("momentum_signal_price", "DOUBLE"),
         ):
             conn.execute(
                 f"ALTER TABLE tf_boost_snapshots ADD COLUMN IF NOT EXISTS {column} {ddl_type}"

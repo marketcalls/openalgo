@@ -84,6 +84,10 @@ def _enrich_boost_items(items: list[dict]) -> None:
             ensure_directional_score_cache,
         )
         from services.tf_first_candle_service import attach_first_candle, ensure_first_candle_cache
+        from services.tf_momentum_setup_service import (
+            attach_momentum_setup,
+            ensure_momentum_setup_cache,
+        )
 
         symbols = [it["symbol"] for it in items if it.get("symbol")]
         api_key = get_first_available_api_key()
@@ -93,12 +97,14 @@ def _enrich_boost_items(items: list[dict]) -> None:
                 ensure_cpr_cache(symbols, auth_token, broker)
                 ensure_first_candle_cache(symbols, auth_token, broker)
                 ensure_directional_score_cache(symbols, auth_token, broker)
+                ensure_momentum_setup_cache(symbols, auth_token, broker)
         # Attached regardless of whether the caches could be topped up: whatever
         # the live endpoint has already computed this session is still worth
         # storing, and a symbol with nothing cached gets None rather than a zero.
         attach_cpr(items)
         attach_first_candle(items)
         attach_directional_score(items)
+        attach_momentum_setup(items)
     except Exception as e:
         logger.warning(f"tf_boost_snapshot: enrichment skipped: {e}")
 
@@ -160,8 +166,9 @@ def _run_snapshot_tick():
                                 (snapshot_date, snapshot_time, list_type, rank, symbol,
                                  ltp, prev_close, change_pct, score,
                                  directional_score, directional_direction, directional_reversals,
-                                 cpr_width_pct, cpr_bias, first_candle_range_pct)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 cpr_width_pct, cpr_bias, first_candle_range_pct,
+                                 momentum_signal, momentum_signal_price)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT (snapshot_time, list_type, symbol) DO NOTHING
                             """,
                             [
@@ -180,6 +187,8 @@ def _run_snapshot_tick():
                                 item.get("cpr_width_pct"),
                                 item.get("cpr_bias"),
                                 item.get("first_candle_range_pct"),
+                                item.get("momentum_signal"),
+                                item.get("momentum_signal_price"),
                             ],
                         )
                         total_inserted += 1

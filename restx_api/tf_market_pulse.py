@@ -16,6 +16,11 @@ from services.tf_future_liquidity_service import (
     attach_future_liquidity,
     ensure_future_liquidity_cache,
 )
+from services.tf_momentum_setup_service import (
+    attach_momentum_setup,
+    ensure_momentum_setup_cache,
+    momentum_signals_today,
+)
 from services.tradefinder_service import fetch_market_pulse
 from utils.logging import get_logger
 
@@ -92,6 +97,14 @@ class TfMarketPulse(Resource):
                 # for why this reads the live book and not the bhavcopy).
                 ensure_future_liquidity_cache(boost_symbols, auth_token, broker)
                 attach_future_liquidity(result["intraday_boost"])
+
+                # Momentum Setup (Vijay Thakare scalping setup) enrichment:
+                # same non-blocking pattern, but candle-close-aligned rather
+                # than a wall-clock TTL (see services/tf_momentum_setup_service.py).
+                ensure_momentum_setup_cache(boost_symbols, auth_token, broker)
+                attach_momentum_setup(result["intraday_boost"])
+
+            result["momentum_signals_today"] = momentum_signals_today()
 
             return make_response(jsonify({"status": "success", "data": result}), 200)
 

@@ -189,6 +189,11 @@ interface Features {
    * hides -- a thin contract is a warning to price in, not a reason to lose
    * sight of a mover. */
   futureLiquidity: boolean
+  /** Shows the server-side "Momentum Setup: Vijay Thakare Option Buying
+   * Scalping Setup" buy/sell signal -- the same triangle the chart indicator
+   * draws, computed for every row on the list whether or not its chart is
+   * open. */
+  momentumSetup: boolean
 }
 
 const DEFAULT_FEATURES: Features = {
@@ -220,6 +225,7 @@ const DEFAULT_FEATURES: Features = {
   clickToFuture: false,
   badgedOnly: false,
   futureLiquidity: false,
+  momentumSetup: false,
 }
 
 function readFeatures(): Features {
@@ -633,6 +639,32 @@ function LiquidityChip({ item }: { item: TfListItem }) {
   )
 }
 
+/** The chart's own Momentum Setup indicator, run server-side against every
+ * row's 5-minute candles rather than only whichever one symbol happens to be
+ * open on the chart. Named distinctly from MomentumBadge below -- that one is
+ * the unrelated client-side clean-climb/base-breakout detector. */
+function MomentumSetupBadge({ item }: { item: TfListItem }) {
+  if (!item.momentum_signal) return null
+  const buy = item.momentum_signal === 'buy'
+  const Icon = buy ? ArrowUp : ArrowDown
+  const priceText = item.momentum_signal_price != null ? ` near ${item.momentum_signal_price}` : ''
+  const timeText = item.momentum_signal_bar_time
+    ? ` on the ${new Date(item.momentum_signal_bar_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} candle`
+    : ''
+  const countText =
+    item.momentum_signal_count != null && item.momentum_signal_count > 1
+      ? ` (fired ${item.momentum_signal_count} times since yesterday 3:15pm)`
+      : ''
+  return (
+    <span
+      title={`${buy ? 'Buy' : 'Sell'} setup fired${priceText}${timeText}${countText} (Momentum Setup: Vijay Thakare scanner, Continuous mode).`}
+      className={cn('inline-flex shrink-0', buy ? 'text-emerald-500' : 'text-rose-500')}
+    >
+      <Icon className="h-3 w-3" aria-hidden="true" />
+    </span>
+  )
+}
+
 function MovementBadge({ mv }: { mv: BoostMovementRow }) {
   const badge = MOVEMENT_BADGE[mv.event]
   if (!badge) return null
@@ -918,6 +950,16 @@ function FeatureSettings({
       <span className="block pb-1 text-[10px] text-muted-foreground">
         Shows how wide each stock's current-month future is quoted right now. An option follows its
         future, so a wide book there is what makes a position hard to leave. Marked, never hidden.
+      </span>
+      <FeatureRow
+        label="Momentum Setup signals"
+        checked={features.momentumSetup}
+        onChange={(v) => set('momentumSetup', v)}
+      />
+      <span className="block pb-1 text-[10px] text-muted-foreground">
+        The chart's own Momentum Setup (Vijay Thakare scalping setup) indicator, run server-side
+        against every row's 5-minute candles -- the same buy/sell triangle it draws on a chart,
+        without that chart needing to be open.
       </span>
       <FeatureRow
         label="Show only badged movers"
@@ -1837,6 +1879,9 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
               {movement.size === 0
                 ? 'Waiting for the movement engine'
                 : `${movement.size} symbols tracked, ${badgedCount} badged`}
+              {features.momentumSetup && pulse?.momentum_signals_today != null
+                ? `, ${pulse.momentum_signals_today} setups today`
+                : ''}
             </span>
           )}
         </div>
@@ -1927,7 +1972,17 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
                     'w-full border-b border-border/40 px-2 text-left text-[12px] transition-colors hover:bg-accent',
                     features.compactDensity ? 'py-0.5' : 'py-1',
                     activeSymbol === `NSE:${item.symbol}` &&
-                      'font-medium ring-1 ring-inset ring-primary/60'
+                      'font-medium ring-1 ring-inset ring-primary/60',
+                    // A left border rather than a full ring: the active-symbol
+                    // ring above already owns "this row is selected," and the
+                    // two must stay visually distinct from a setup that is
+                    // merely signaling, whether or not it's charted right now.
+                    features.momentumSetup &&
+                      item.momentum_signal === 'buy' &&
+                      'border-l-4 border-l-emerald-500',
+                    features.momentumSetup &&
+                      item.momentum_signal === 'sell' &&
+                      'border-l-4 border-l-rose-500'
                   )}
                   title={`Chart ${item.symbol}`}
                 >
@@ -1955,6 +2010,7 @@ export function TradeFinderPanel({ apiKey, onPick, activeSymbol }: Props) {
                           Without this the row renders bare and reads as the
                           filter having leaked, which is what it looked like. */}
                       {features.futureLiquidity && <LiquidityChip item={item} />}
+                      {features.momentumSetup && <MomentumSetupBadge item={item} />}
                       {features.badgedOnly && !isBadgedNow(item.symbol) && (
                         <FadedBadge
                           sighting={badgedWithin(

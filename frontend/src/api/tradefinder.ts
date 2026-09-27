@@ -30,12 +30,28 @@ export interface TfListItem {
    * volume is not, since lot size and price both vary. */
   fut_turnover_cr?: number | null
   fut_tier?: 'tight' | 'ok' | 'wide' | null
+  /** The chart's own "Momentum Setup: Vijay Thakare Option Buying Scalping
+   * Setup" indicator, computed server-side against 5-minute candles so a
+   * signal shows up without that symbol's chart being open. `buy`/`sell`
+   * only while the setup's Continuous-mode trigger is 1 on the most
+   * recently closed candle; null once it stops firing, never left stale. */
+  momentum_signal?: 'buy' | 'sell' | null
+  momentum_signal_price?: number | null
+  momentum_signal_bar_time?: string | null
+  /** How many times this direction fired since the scan window opened
+   * (previous trading day 15:15 IST through now) -- Continuous mode can
+   * fire more than once while a setup holds. */
+  momentum_signal_count?: number | null
 }
 
 export interface MarketPulseData {
   intraday_boost: TfListItem[]
   breakout_beacon: TfListItem[]
   high_powered_stocks: TfListItem[]
+  /** Distinct intraday_boost symbols that have fired a Momentum Setup buy or
+   * sell signal so far today -- a same-session count, reset at the next
+   * server restart or IST date rollover. */
+  momentum_signals_today?: number | null
 }
 
 export interface MarketPulseResponse {
