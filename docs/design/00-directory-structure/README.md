@@ -8,7 +8,7 @@ openalgo/
 |-- restx_api/                 External `/api/v1` resources and schemas
 |-- blueprints/                Session UI APIs, webhooks, React route serving
 |-- services/                  Business logic and mode routing
-|-- broker/                    34 metadata-driven broker plugins
+|-- broker/                    36 metadata-driven broker plugins
 |-- websocket_proxy/           Standalone asyncio WebSocket server and adapters
 |-- database/                  SQLAlchemy/DuckDB models and persistence helpers
 |-- sandbox/                   Analyzer execution, positions, funds, settlement

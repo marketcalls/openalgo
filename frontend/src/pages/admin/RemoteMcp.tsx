@@ -14,7 +14,7 @@ import {
   ShieldAlert,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { adminApi } from '@/api/admin'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {

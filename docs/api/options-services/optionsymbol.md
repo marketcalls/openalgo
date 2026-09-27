@@ -17,7 +17,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsymbol
   "apikey": "<your_app_apikey>",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "30DEC25",
+  "expiry_date": "25AUG26",
   "offset": "ATM",
   "option_type": "CE"
 }
@@ -32,7 +32,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
   "apikey": "<your_app_apikey>",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "30DEC25",
+  "expiry_date": "25AUG26",
   "offset": "ATM",
   "option_type": "CE"
 }'
@@ -43,7 +43,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2525950CE",
+  "symbol": "NIFTY25AUG2625950CE",
   "exchange": "NFO",
   "lotsize": 65,
   "tick_size": 5,
@@ -59,7 +59,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
   "apikey": "<your_app_apikey>",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "30DEC25",
+  "expiry_date": "25AUG26",
   "offset": "ITM3",
   "option_type": "PE"
 }
@@ -70,7 +70,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2526100PE",
+  "symbol": "NIFTY25AUG2626100PE",
   "exchange": "NFO",
   "lotsize": 65,
   "tick_size": 5,
@@ -86,7 +86,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
   "apikey": "<your_app_apikey>",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "30DEC25",
+  "expiry_date": "25AUG26",
   "offset": "OTM4",
   "option_type": "CE"
 }
@@ -97,7 +97,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2526150CE",
+  "symbol": "NIFTY25AUG2626150CE",
   "exchange": "NFO",
   "lotsize": 65,
   "tick_size": 5,

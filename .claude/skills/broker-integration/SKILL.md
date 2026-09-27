@@ -10,7 +10,7 @@ description: Integrate a new Indian broker into OpenAlgo, or modify an existing 
 > specific shapes into those common contracts (and back). Copy the closest
 > reference broker, then adapt the broker-specific bits.
 
-35 brokers already exist. Almost every problem you will hit has been solved in
+36 broker plugins already exist. Almost every problem you will hit has been solved in
 one of them — the skill is knowing **which one to copy**, and which details are
 genuinely broker-specific.
 
@@ -142,7 +142,7 @@ Services do `importlib.import_module(f"broker.{broker}.api.<module>")` and call
 `auth` is always the decrypted broker token string (last positional arg).
 
 There is one more optional surface: an **order-update stream** (real-time fills,
-rejections, cancellations pushed to the client). 11 of 35 brokers implement it.
+rejections, cancellations pushed to the client). 17 of 36 brokers implement it.
 It is registered separately in `services/order_update_service.py`, not in the
 table above — see `references/order-updates.md`.
 
@@ -217,22 +217,22 @@ broker/<name>/
 
 `plugin.json` fields that actually do something: `supported_exchanges` (drives
 capability checks and what you must live-test), `broker_type` (`IN_stock` for
-all 34 Indian brokers, `crypto` for deltaexchange), `leverage_config` (false for
+all 35 Indian brokers, `crypto` for deltaexchange), `leverage_config` (false for
 every Indian broker in the tree).
 
 ## Shared `utils/` a broker plugin depends on
 
 Never hand-roll these — the shared helper is the contract, and bypassing it is
 how FD leaks, unredacted secrets and rate-limit breaches get introduced. Usage
-counts across the 35 existing plugins:
+counts across the 36 existing plugins:
 
 | Module | Uses | What you must take from it |
 | --- | --- | --- |
-| `utils.logging` | ~339 | `logger = get_logger(__name__)` in every module. Its `SensitiveDataFilter` is what stops broker tokens reaching the logs — a bare `print()` or `logging.getLogger()` bypasses that redaction. Errors use `logger.exception()`. |
+| `utils.logging` | ~361 | `logger = get_logger(__name__)` in every module. Its `SensitiveDataFilter` is what stops broker tokens reaching the logs — a bare `print()` or `logging.getLogger()` bypasses that redaction. Errors use `logger.exception()`. |
 | `utils.httpx_client` | ~197 | `get_httpx_client()` — the shared pooled HTTP/2 client. Never construct a per-call client. Always pass an explicit `timeout=`. |
-| `utils.mpp_slab` | ~16 | Market Price Protection slabs for emulating MARKET/SL-M. See `references/order-type-emulation.md`. |
+| `utils.mpp_slab` | ~18 | Market Price Protection slabs for emulating MARKET/SL-M. See `references/order-type-emulation.md`. |
 | `utils.config` | ~5 | `get_broker_api_key()`, `get_broker_api_secret()`, `get_host_server()`, rate-limit getters. Prefer these over raw `os.getenv` so composite `:::` keys and defaults resolve consistently. |
-| `utils.constants` | 1 | `EXCHANGE_NSE`, `EXCHANGE_NFO`, ... — canonical exchange codes. Use them instead of string literals. |
+| `utils.constants` | 2 | `EXCHANGE_NSE`, `EXCHANGE_NFO`, ... — canonical exchange codes. Use them instead of string literals. |
 | `utils.plugin_loader` | — | Discovers `broker/*/plugin.json` at startup and requires the exact name `authenticate_broker`. You do not call it; it calls you. |
 
 `utils.event_bus` exists but is a **services-layer** concern — broker modules do

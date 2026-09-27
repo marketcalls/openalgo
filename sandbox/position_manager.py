@@ -13,7 +13,7 @@ Features:
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
 from decimal import Decimal
 
@@ -26,6 +26,7 @@ from database.sandbox_db import SandboxPositions, SandboxTrades, db_session, get
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
+from sandbox.session_boundary import IST, last_session_expiry_utc
 from services.market_data_service import get_market_data_service
 from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
@@ -172,8 +173,13 @@ def get_contract_expiry(symbol, exchange):
 # MIS square-off times in sandbox config (15:15 etc.), which are deliberately
 # BEFORE close -- an expiring contract trades right up to the closing bell.
 EXCHANGE_CLOSE_TIMES = {
-    "NFO": dt_time(15, 30),
-    "BFO": dt_time(15, 30),
+    # 15:40, not 15:30: SEBI's Closing Auction Session (effective 2026-08-03)
+    # pauses continuous trading in the cash segment at 15:15 and derives its
+    # close by auction, while the derivatives segment keeps trading to roughly
+    # 15:40. Settling an expiring contract at 15:30 would close it ten minutes
+    # before it actually stops trading.
+    "NFO": dt_time(15, 40),
+    "BFO": dt_time(15, 40),
     "CDS": dt_time(17, 0),
     "BCD": dt_time(17, 0),
     "MCX": dt_time(23, 30),
@@ -451,30 +457,18 @@ class PositionManager:
         """
         try:
             import os
-            from datetime import datetime, time, timedelta
+            from datetime import datetime
 
             # Get session expiry time from config (e.g., '03:00')
             session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-            expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
 
-            # Get current time
-            now = datetime.now()
-            today = now.date()
-
-            # Calculate if we're in a new session
-            session_expiry_time = time(expiry_hour, expiry_minute)
-
-            # Determine last session expiry
-            if now.time() < session_expiry_time:
-                # We're before today's session expiry (e.g., before 3 AM)
-                # Last session expired yesterday at 3 AM
-                last_session_expiry = datetime.combine(
-                    today - timedelta(days=1), session_expiry_time
-                )
-            else:
-                # We're after today's session expiry (e.g., after 3 AM)
-                # Last session expired today at 3 AM
-                last_session_expiry = datetime.combine(today, session_expiry_time)
+            # updated_at is stored in the database's clock (UTC on SQLite),
+            # so the boundary must be resolved in UTC too — see
+            # last_session_expiry_utc().
+            last_session_expiry = last_session_expiry_utc(
+                session_expiry_str, datetime.now(IST)
+            )
+            today = datetime.now(UTC).date()
 
             # Get all positions (including zero quantity ones from current session)
             positions_query = SandboxPositions.query.filter(

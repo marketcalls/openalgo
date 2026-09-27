@@ -29,7 +29,7 @@ def get_httpx_client() -> httpx.Client:
 
     if _httpx_client is None:
         _httpx_client = _create_http_client()
-        logger.info(
+        logger.debug(
             "Created HTTP client with automatic protocol negotiation (HTTP/2 preferred, HTTP/1.1 fallback)"
         )
     return _httpx_client
@@ -148,7 +148,9 @@ def _create_http_client() -> httpx.Client:
     def log_request(request):
         """Hook called before request is sent"""
         request.extensions["start_time"] = time.time()
-        logger.debug(f"Starting request to {request.url}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.debug(f"Starting request to {redact_url_credentials(request.url)}")
 
     def log_response(response):
         """Hook called after response is received"""
@@ -197,9 +199,9 @@ def _create_http_client() -> httpx.Client:
         )
 
         if is_standalone:
-            logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
+            logger.debug("Running in standalone mode - HTTP/2 disabled for compatibility")
         else:
-            logger.info("Running in integrated mode - HTTP/2 enabled for optimal performance")
+            logger.debug("Running in integrated mode - HTTP/2 enabled for optimal performance")
 
         return client
 

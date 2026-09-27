@@ -1,13 +1,13 @@
 import os
 from datetime import datetime
 
-import httpx
 import pandas as pd
 from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.engine_factory import create_db_engine
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -16,9 +16,6 @@ try:
     from extensions import socketio  # Import SocketIO
 except ImportError:
     socketio = None
-
-# Create a shared httpx client for connection pooling
-client = httpx.Client(timeout=30.0)
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
@@ -104,7 +101,8 @@ def get_scrip_groups():
     try:
         # Add version=0 parameter to force fresh data
         params = {"version": "0"}
-        response = client.get(SCRIP_GROUPS_URL, params=params)
+        client = get_httpx_client()
+        response = client.get(SCRIP_GROUPS_URL, params=params, timeout=30.0)
         response.raise_for_status()
         data = response.json()
         logger.info(f"Received scrip groups data: {data}")
@@ -127,7 +125,8 @@ def get_scrip_data(scrip_group):
     try:
         # Add version=0 parameter to force fresh data
         params = {"version": "0"}
-        response = client.get(SCRIP_DATA_URL.format(group=scrip_group), params=params)
+        client = get_httpx_client()
+        response = client.get(SCRIP_DATA_URL.format(group=scrip_group), params=params, timeout=60.0)
         response.raise_for_status()
 
         # Split the response text into lines
@@ -152,43 +151,45 @@ def get_scrip_data(scrip_group):
         return []
 
 
-def format_symbol(row, id_format):
-    """Format symbol based on Tradejini's idFormat patterns"""
-    try:
-        # Handle different idFormat patterns
-        if id_format == "instrument_symbol_series_exchange":
-            # For equity symbols
-            return row.get("symbol", "")
+# Each scrip group declares its own id layout via 'idFormat' in the Scrip Master
+# Groups response (e.g. "instrument_symbol_exchange_expiry_strike_optType"). Split
+# the id on '_' and read the components by name so a change in component order
+# does not silently mis-parse every contract in the group.
+def parse_scrip_id(scrip_id, id_format):
+    """
+    Split a scrip id into its named components using the group's idFormat.
 
-        elif id_format == "instrument_symbol_exchange_expiry":
-            # For futures
-            symbol = row.get("symbol", "")
-            expiry = row.get("expiry", "")
-            return f"{symbol}{expiry}FUT" if expiry else symbol
+    Returns a dict keyed by component name (symbol, exchange, expiry, strike,
+    optType, series, instrument, excToken). Returns an empty dict when the id
+    does not have as many components as the format declares.
+    """
+    parts = str(scrip_id).split("_")
+    names = [name for name in str(id_format or "").split("_") if name]
 
-        elif id_format == "instrument_symbol_exchange_expiry_strike_optType":
-            # For options
-            symbol = row.get("symbol", "")
-            expiry = row.get("expiry", "")
-            strike = row.get("strikePrice")
-            opt_type = row.get("optionType", "CE")
+    if not names or len(parts) < len(names):
+        return {}
 
-            if all([symbol, expiry, strike, opt_type]):
-                strike_fmt = int(float(strike)) if float(strike).is_integer() else float(strike)
-                return f"{symbol}{expiry}{strike_fmt}{opt_type}"
-            return symbol
+    return dict(zip(names, parts, strict=False))
 
-        elif id_format == "instrument_excToken_exchange":
-            # For indices
-            return row.get("symbol", "").replace(" ", "")
 
-        else:
-            # Default to trading symbol if format not recognized
-            return row.get("tradingSymbol", row.get("symbol", ""))
+def parse_expiry(expiry_value):
+    """
+    Parse a scrip expiry into a datetime.
 
-    except Exception as e:
-        logger.error(f"Error formatting symbol with format {id_format}: {e}")
-        return row.get("tradingSymbol", row.get("symbol", ""))
+    Ids carry ISO dates ('2024-04-25'); accept the compact exchange forms too.
+    """
+    if not expiry_value:
+        return None
+
+    value = str(expiry_value).strip()
+    for fmt in ("%Y-%m-%d", "%d%b%Y", "%d%b%y", "%d-%b-%Y", "%d-%b-%y"):
+        try:
+            # strptime matches month names case-insensitively, so 'APR' parses
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+
+    return None
 
 
 def process_scrip_data(scrip_data, group_info):
@@ -213,6 +214,7 @@ def process_scrip_data(scrip_data, group_info):
 
     # Get group name and format
     group_name = group_info.get("name", "")
+    id_format = group_info.get("idFormat", "")
 
     # Handle index data separately
     if group_name == "Index":
@@ -267,7 +269,8 @@ def process_scrip_data(scrip_data, group_info):
                 if group_name == "Securities":
                     # Format: instrument_symbol_series_exchange
                     if len(parts) >= 4:
-                        exchange = parts[-1]
+                        components = parse_scrip_id(item["id"], id_format)
+                        exchange = components.get("exchange") or parts[-1]
                         record = {
                             "symbol": item["dispName"],
                             "brsymbol": item["id"],
@@ -285,33 +288,47 @@ def process_scrip_data(scrip_data, group_info):
 
                 elif group_name in ["FutureContracts", "CurrencyFuture", "CommodityFuture"]:
                     # Format: instrument_symbol_exchange_expiry
-                    if len(parts) >= 4:
-                        base_symbol = parts[1]
-                        exchange = parts[2]
-                        expiry_date = parts[3]
+                    components = parse_scrip_id(item["id"], id_format)
+                    base_symbol = (
+                        components.get("symbol")
+                        or item.get("symbol")
+                        or (parts[1] if len(parts) > 1 else "")
+                    )
+                    exchange = components.get("exchange") or (parts[2] if len(parts) > 2 else "")
+                    expiry_date = (
+                        components.get("expiry")
+                        or item.get("expiry")
+                        or (parts[3] if len(parts) > 3 else "")
+                    )
 
-                        try:
-                            expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
-                            expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
-                            expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
-                            openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
+                    expiry_dt = parse_expiry(expiry_date)
+                    if not (base_symbol and exchange and expiry_dt):
+                        logger.info(f"Skipping future with unparseable id: {item['id']}")
+                        continue
 
-                            record = {
-                                "symbol": openalgo_symbol,
-                                "brsymbol": item["id"],
-                                "name": item.get("desc", item["dispName"]),
-                                "exchange": exchange,
-                                "brexchange": exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": expiry_db,
-                                "strike": 0,
-                                "lotsize": int(item.get("lot", 1)),
-                                "instrumenttype": "FUT",
-                                "tick_size": float(item.get("tick", 0.05)),
-                            }
-                            records.append(record)
-                        except Exception as e:
-                            logger.info(f"Error processing future {item['id']}: {e}")
+                    try:
+                        expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                        expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
+                        openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
+
+                        record = {
+                            "symbol": openalgo_symbol,
+                            "brsymbol": item["id"],
+                            # 'name' must be the underlying root for derivatives -
+                            # the F&O tools look contracts up by it.
+                            "name": base_symbol,
+                            "exchange": exchange,
+                            "brexchange": exchange,
+                            "token": str(item["excToken"]),
+                            "expiry": expiry_db,
+                            "strike": 0,
+                            "lotsize": int(item.get("lot", 1)),
+                            "instrumenttype": "FUT",
+                            "tick_size": float(item.get("tick", 0.05)),
+                        }
+                        records.append(record)
+                    except Exception as e:
+                        logger.info(f"Error processing future {item['id']}: {e}")
 
                 elif group_name in [
                     "NSEOptions",
@@ -320,42 +337,64 @@ def process_scrip_data(scrip_data, group_info):
                     "CommodityOptions",
                 ]:
                     # Format: instrument_symbol_exchange_expiry_strike_optType
-                    if len(parts) >= 6:
-                        base_symbol = parts[1]
-                        exchange = parts[2]
-                        expiry_date = parts[3]
-                        strike_price = float(parts[4])
-                        option_type = parts[5]
+                    components = parse_scrip_id(item["id"], id_format)
+                    base_symbol = (
+                        components.get("symbol")
+                        or item.get("symbol")
+                        or (parts[1] if len(parts) > 1 else "")
+                    )
+                    exchange = components.get("exchange") or (parts[2] if len(parts) > 2 else "")
+                    expiry_date = (
+                        components.get("expiry")
+                        or item.get("expiry")
+                        or (parts[3] if len(parts) > 3 else "")
+                    )
+                    raw_strike = (
+                        components.get("strike")
+                        or item.get("strike")
+                        or (parts[4] if len(parts) > 4 else "")
+                    )
+                    option_type = (
+                        components.get("optType")
+                        or item.get("optType")
+                        or (parts[5] if len(parts) > 5 else "")
+                    )
 
-                        try:
-                            expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
-                            expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
-                            expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
-                            strike_str = (
-                                str(int(strike_price))
-                                if strike_price.is_integer()
-                                else str(strike_price)
-                            )
-                            openalgo_symbol = (
-                                f"{base_symbol}{expiry_formatted}{strike_str}{option_type}"
-                            )
+                    expiry_dt = parse_expiry(expiry_date)
+                    if not (base_symbol and exchange and expiry_dt and option_type):
+                        logger.info(f"Skipping option with unparseable id: {item['id']}")
+                        continue
 
-                            record = {
-                                "symbol": openalgo_symbol,
-                                "brsymbol": item["id"],
-                                "name": item.get("desc", item["dispName"]),
-                                "exchange": exchange,
-                                "brexchange": exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": expiry_db,
-                                "strike": strike_price,
-                                "lotsize": int(item.get("lot", 1)),
-                                "instrumenttype": option_type,
-                                "tick_size": float(item.get("tick", 0.05)),
-                            }
-                            records.append(record)
-                        except Exception as e:
-                            logger.info(f"Error processing option {item['id']}: {e}")
+                    try:
+                        strike_price = float(raw_strike)
+                        expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                        expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
+                        strike_str = (
+                            str(int(strike_price))
+                            if strike_price.is_integer()
+                            else str(strike_price)
+                        )
+                        openalgo_symbol = (
+                            f"{base_symbol}{expiry_formatted}{strike_str}{option_type}"
+                        )
+
+                        record = {
+                            "symbol": openalgo_symbol,
+                            "brsymbol": item["id"],
+                            # 'name' must be the underlying root for derivatives
+                            "name": base_symbol,
+                            "exchange": exchange,
+                            "brexchange": exchange,
+                            "token": str(item["excToken"]),
+                            "expiry": expiry_db,
+                            "strike": strike_price,
+                            "lotsize": int(item.get("lot", 1)),
+                            "instrumenttype": option_type,
+                            "tick_size": float(item.get("tick", 0.05)),
+                        }
+                        records.append(record)
+                    except Exception as e:
+                        logger.info(f"Error processing option {item['id']}: {e}")
 
                 elif instr_type == "IDX":
                     # Index symbols are handled by the "Index" group above; skip here

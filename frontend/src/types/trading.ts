@@ -84,6 +84,7 @@ export interface GttLeg {
   price: number
   pricetype: string // usually "LIMIT"
   product: string // "MIS" | "NRML" | "CNC"
+  triggered_order_id?: string | null // the order this leg placed when it fired (sandbox)
 }
 
 export type GttStatus =

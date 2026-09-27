@@ -138,8 +138,16 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # No per-order event emission - a summary event is emitted at the end of all orders
-            return {"symbol": order_data["symbol"], "status": "success", "orderid": order_id}
+            # No per-order event emission - a summary event is emitted at the end of all orders.
+            # exchange/product identify the leg: a basket spans several contracts, so the
+            # summary event cannot supply them and subscribers have only this dict to key on.
+            return {
+                "symbol": order_data["symbol"],
+                "exchange": order_data.get("exchange", ""),
+                "product": order_data.get("product", ""),
+                "status": "success",
+                "orderid": order_id,
+            }
         else:
             message = (
                 response_data.get("message", "Failed to place order")
@@ -261,6 +269,8 @@ def process_basket_order_with_auth(
                 analyze_results.append(
                     {
                         "symbol": order.get("symbol", "Unknown"),
+                        "exchange": order.get("exchange", ""),
+                        "product": order.get("product", ""),
                         "status": "success",
                         "orderid": response.get("orderid"),
                         "batch_order": True,

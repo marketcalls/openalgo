@@ -16,18 +16,27 @@ OpenAlgo is built **by traders, for traders**. We believe in democratizing algor
 
 ## Table of Contents
 
-1. [Technology Stack](#technology-stack)
-2. [Development Setup](#development-setup)
-3. [Local Development](#local-development)
-4. [Project Structure](#project-structure)
-5. [Development Workflow](#development-workflow)
-6. [Contributing Guidelines](#contributing-guidelines)
-7. [Testing](#testing)
-8. [Adding a New Broker](#adding-a-new-broker)
-9. [Frontend Development](#frontend-development)
-10. [Documentation](#documentation)
-11. [Best Practices](#best-practices)
-12. [Getting Help](#getting-help)
+1. [Let's democratize algorithmic trading, together!](#lets-democratize-algorithmic-trading-together)
+2. [Our Mission](#our-mission)
+3. [Table of Contents](#table-of-contents)
+4. [Technology Stack](#technology-stack)
+5. [Development Setup](#development-setup)
+6. [Local Development](#local-development)
+7. [Project Structure](#project-structure)
+8. [Development Workflow](#development-workflow)
+9. [Contributing Guidelines](#contributing-guidelines)
+10. [Testing](#testing)
+11. [Adding a New Broker](#adding-a-new-broker)
+12. [Frontend Development](#frontend-development)
+13. [Documentation](#documentation)
+14. [Best Practices](#best-practices)
+15. [Troubleshooting](#troubleshooting)
+16. [Getting Help](#getting-help)
+17. [Code Review Process](#code-review-process)
+18. [Recognition & Community](#recognition--community)
+19. [Quick Reference Links](#quick-reference-links)
+20. [License](#license)
+21. [Thank You!](#thank-you)
 
 ---
 
@@ -82,7 +91,9 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 - **Flask-CORS** - CORS protection
 
 > [!IMPORTANT]
-> You will need **Python 3.12+**, **Node.js 20/22/24**, and the **uv** package manager.
+> You will need **Python 3.12+** and the **uv** package manager. **Node.js is only
+> required if you change frontend code**: `main` ships the built UI, so backend and
+> documentation contributors can skip it entirely.
 
 ---
 
@@ -93,7 +104,7 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 Before you begin, make sure you have the following installed:
 
 - **Python 3.12+** - [Download Python](https://www.python.org/downloads/)
-- **Node.js 20, 22, or 24** - [Download Node.js](https://nodejs.org/)
+- **Node.js (frontend contributors only)** - [Download Node.js](https://nodejs.org/). The `engines` field in `frontend/package.json` is the source of truth: `>=20.20.0 || >=22.22.0 || >=24.13.0`. Node below 20.20.0 will emit an `EBADENGINE` warning on `npm install`. Skip this if you are working on the backend or documentation.
 - **Git** - [Download Git](https://git-scm.com/downloads)
 - **Code Editor** - VS Code recommended with extensions:
   - Python
@@ -115,7 +126,10 @@ pip install uv
 # Sync Python dependencies (uv handles virtualenv automatically)
 uv sync
 
-# Build React frontend (required before first run)
+# That is the whole setup for backend and documentation work: a clone of main
+# already contains the built UI at frontend/dist/, so the app runs as-is.
+
+# Only if you are changing frontend code:
 cd frontend
 npm install
 npm run build
@@ -196,7 +210,7 @@ uv run gunicorn --worker-class eventlet -w 1 app:app
 ### Access Points
 
 - **Main app**: http://127.0.0.1:5000
-- **React frontend**: http://127.0.0.1:5000/react
+- **Dashboard**: http://127.0.0.1:5000/dashboard
 - **REST API documentation**: [docs/api/README.md](docs/api/README.md)
 - **API Analyzer**: http://127.0.0.1:5000/analyzer
 
@@ -223,12 +237,12 @@ openalgo/
 │   ├── biome.json            # Biome linter/formatter config
 │   ├── tsconfig.json         # TypeScript configuration
 │   ├── vite.config.ts        # Vite build configuration
-│   └── dist/                 # Production build output (gitignored)
+│   └── dist/                 # Production build output (built by CI, tracked on main)
 ├── blueprints/               # Flask blueprints for web routes
 │   ├── auth.py               # Authentication routes
 │   ├── react_app.py          # Serves React SPA from frontend/dist/
 │   └── ...
-├── broker/                   # Broker integrations (34 brokers)
+├── broker/                   # Broker integrations (36 plugins)
 │   ├── zerodha/              # Reference implementation
 │   ├── dhan/                 # Modern API design
 │   ├── angel/                # AngelOne integration
@@ -277,20 +291,27 @@ git remote -v
 >
 > After forking, go to your fork's **Settings → Actions → General** (`https://github.com/YOUR_USERNAME/openalgo/settings/actions`) and select **"Disable actions"** under Actions permissions. This prevents CI workflows (frontend builds, Docker pushes) from running on your fork unnecessarily — those workflows are only meant to run on the upstream repository.
 
-### 2. Frontend Build Assets (Auto-Built by CI)
+### 2. Frontend Build Assets (Tracked on `main`, Built by CI)
 
-The `/frontend/dist` directory is **gitignored** and not tracked in the repository. CI automatically builds the frontend when changes are merged to main.
+`frontend/dist/` is listed in `.gitignore` **and is tracked on `main`**. That is not a
+contradiction: Git applies ignore rules only to untracked files, so the ignore entry stops
+only the *new* hashed assets a local build produces, while the copy already tracked on
+`main` keeps being updated by CI. Run `git ls-files frontend/dist` to see the tracked files.
+
+This is deliberate: **a plain `git pull` of `main` gives production servers and
+backend-only contributors a working UI with no Node.js installed.** That is the canonical
+upgrade path for a deployment.
 
 **How it works:**
-- PRs are tested with a fresh frontend build (but not committed)
-- When merged to main, CI automatically:
-  1. Builds the frontend (`cd frontend && npm run build`)
-  2. Pushes Docker image to Docker Hub
+- On a pull request, CI builds the frontend to prove it compiles and uploads the result as a workflow artifact. Nothing is committed to your branch.
+- After a push to `main`, the `commit-dist` job in `.github/workflows/ci.yml` rebuilds the frontend, force-adds it (`git add -f frontend/dist/`) and pushes a `chore: auto-build frontend dist [skip ci]` commit.
+- On a push to `main` the same workflow also builds and pushes the Docker image to Docker Hub. That job is skipped for fork pull requests, since it needs repository secrets.
 
-**For Contributors:**
-- Build locally for development: `cd frontend && npm install && npm run build`
-- Do NOT commit `frontend/dist/` — it is gitignored
-- Focus on source code changes — CI handles production builds
+**For contributors:**
+- **Do not commit `frontend/dist/` yourself.** CI owns that directory. The `.gitignore` entry does not protect you here, because those files are already tracked: a local `npm run build` modifies them and `git add .` stages the result. Check `git status` and run `git restore frontend/dist` before committing. A hand-built `dist/` in a pull request is review noise that conflicts on merge.
+- **Backend and documentation contributors:** nothing to do here. The UI in your clone is already built.
+- **Frontend contributors:** run `cd frontend && npm install && npm run build` (or `npm run dev`) to see your changes locally, and commit only your `frontend/src/` sources.
+- **Feature branches CI has not built** may carry a stale or missing `dist/`. Rebase onto recent `main`, or build locally.
 
 ### 3. Create a Feature Branch
 
@@ -375,20 +396,32 @@ git commit -m "refactor: optimize order processing pipeline"
 
 ### 5. Test Your Changes
 
+For a documentation-only change, see [Documentation-only changes](#documentation-only-changes)
+instead of this checklist.
+
 ```bash
-# Run Python tests
+# Fast backend check (same maintained selection used by CI)
+uv run pytest test/test_log_location.py test/test_navigation_update.py \
+  test/test_python_editor.py test/test_rate_limits_simple.py \
+  test/test_logout_csrf.py test/test_auth_logout.py \
+  test/test_auth_resume.py test/test_auth_upsert_multisession.py \
+  test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
+  test/test_telegram_api_contract.py test/test_multi_option_greeks_regression.py \
+  test/test_history_format.py -v --timeout=60
+
+# Full backend suite (not CI-safe; not green on a clean checkout)
 uv run pytest test/ -v
 
-# Run React tests
+# Run React tests once (CI/completion check)
 cd frontend
-npm test
+npm run test:run
 
 # Run end-to-end tests
 npm run e2e
 
 # Manual testing:
 # 1. Web UI: http://127.0.0.1:5000
-# 2. React UI: http://127.0.0.1:5000/react
+# 2. Dashboard: http://127.0.0.1:5000/dashboard
 # 3. REST API documentation: docs/api/README.md
 # 4. API Analyzer: http://127.0.0.1:5000/analyzer
 ```
@@ -398,9 +431,9 @@ npm run e2e
 - [ ] Application starts without errors (`uv run app.py`)
 - [ ] All existing features still work
 - [ ] New feature works as expected
-- [ ] Python tests pass (`uv run pytest test/ -v`)
-- [ ] Frontend tests pass (`cd frontend && npm test`)
-- [ ] No TypeScript errors (`cd frontend && npm run build`)
+- [ ] CI-safe backend tests pass (the pytest selection above)
+- [ ] Frontend tests pass, if you changed frontend code (`cd frontend && npm run test:run`)
+- [ ] No TypeScript errors, if you changed frontend code (`cd frontend && npm run build`)
 - [ ] No linting errors (Ruff for Python, Biome for frontend)
 - [ ] API endpoints return correct responses
 - [ ] WebSocket connections work (if applicable)
@@ -607,7 +640,7 @@ describe('MyComponent', () => {
 import { test, expect } from '@playwright/test';
 
 test('feature works end to end', async ({ page }) => {
-  await page.goto('/react');
+  await page.goto('/dashboard');
   await expect(page.getByText('Dashboard')).toBeVisible();
 });
 ```
@@ -867,6 +900,58 @@ npm run check
 
 ## Documentation
 
+### Documentation-only changes
+
+Start with [`docs/INDEX.md`](docs/INDEX.md), the map of OpenAlgo's canonical
+documentation. Follow it to the existing source for the topic and update that
+file instead of copying the same guidance into a second page. Use a `docs/`
+branch for a documentation-only change, for example:
+
+```bash
+git checkout -b docs/clarify-order-constants
+```
+
+Keep the pull request focused on one documentation outcome. While editing:
+
+- resolve relative links from the directory containing the changed Markdown
+  file, and preserve the exact case of repository paths;
+- check every changed heading link against the rendered GitHub anchor (for
+  example, `## Order Types` becomes `#order-types`);
+- preview the changed Markdown to catch broken lists, tables, code fences, and
+  callouts; and
+- run any command shown in a changed example when it is safe and does not
+  require broker credentials or other secrets.
+
+Before committing, inspect the working tree so new, untracked Markdown files
+are visible. Stage only the intended documentation, then review and check the
+exact content that will be committed. Open each changed local link and anchor
+as part of that review:
+
+```bash
+git diff --check
+git status --short
+git add docs/prompt/order-constants.md
+git diff --cached --name-only
+git diff --cached --check
+```
+
+When the diff contains only Markdown, the backend pytest suite and frontend
+test/build commands are not required: they do not validate prose, links, or
+anchors. If the documentation changes an executable example, API contract, or
+generated artifact, run the smallest relevant check and record it in the pull
+request instead.
+
+Use a Conventional Commit with the `docs:` type:
+
+```bash
+git commit -m "docs: clarify order constants"
+```
+
+Use the same style for the pull request title. In its description, link the
+issue (for example, `Closes #123`), summarize the reader-visible improvement,
+list the files reviewed, and report validation explicitly, including "code
+tests not run (Markdown-only change)" when applicable.
+
 ### Code Documentation
 
 1. **Python Docstrings** - Use Google-style:
@@ -1024,7 +1109,8 @@ npm run check
 #### Frontend Build Errors
 
 ```bash
-# Ensure correct Node.js version (20, 22, or 24)
+# Ensure a supported Node.js version: >=20.20.0, >=22.22.0 or >=24.13.0
+# (the engines field in frontend/package.json is the source of truth)
 node --version
 
 # Clean install

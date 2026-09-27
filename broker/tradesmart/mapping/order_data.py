@@ -4,6 +4,42 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# TradeSmart (Noren) order statuses arrive with underscores ("TRIGGER_PENDING")
+# and inconsistent casing ("Open" / "OPEN", "REJECT" / "REJECTED"), so normalize
+# the separator and case before matching.
+_COMPLETE_STATUSES = {"COMPLETE"}
+_REJECTED_STATUSES = {"REJECTED", "REJECT"}
+_CANCELLED_STATUSES = {"CANCELED", "CANCELLED"}
+# Still working at the exchange, i.e. modifiable/cancellable. A stop-loss order
+# waiting for its trigger sits in TRIGGER_PENDING and must surface as "open" so
+# the order book offers Modify/Cancel.
+_OPEN_STATUSES = {
+    "OPEN",
+    "PENDING",
+    "TRIGGER PENDING",
+    "NEW",
+    "REPLACED",
+    "OPEN PENDING",
+    "MODIFY PENDING",
+    "CANCEL PENDING",
+    "AFTER MARKET ORDER REQ RECEIVED",
+}
+
+
+def normalize_order_status(raw_status):
+    """Map a TradeSmart status to an OpenAlgo status (open/complete/cancelled/rejected)."""
+    status = str(raw_status or "").strip().upper().replace("_", " ")
+    if status in _COMPLETE_STATUSES:
+        return "complete"
+    if status in _OPEN_STATUSES:
+        return "open"
+    if status in _REJECTED_STATUSES:
+        return "rejected"
+    if status in _CANCELLED_STATUSES:
+        return "cancelled"
+    return status.lower()
+
+
 def map_order_data(order_data):
     """Normalize raw OrderBook rows: resolve OpenAlgo symbol + product/pricetype."""
     if order_data is None or (isinstance(order_data, dict) and (order_data.get("stat") == "Not_Ok")):
@@ -13,7 +49,7 @@ def map_order_data(order_data):
     if order_data:
         for order in order_data:
             # Capture broker rejection reason for rejected orders
-            if str(order.get("status", "")).upper() == "REJECTED":
+            if normalize_order_status(order.get("status")) == "rejected":
                 logger.debug(
                     f"Rejected order {order.get('norenordno', '')} "
                     f"({order.get('tsym', '')}): {order.get('rejreason', 'no reason provided')}"
@@ -25,33 +61,40 @@ def map_order_data(order_data):
 
             if symbol_from_db:
                 order["tsym"] = symbol_from_db
-                if (order["exch"] in ("NSE", "BSE")) and order["prd"] == "C":
-                    order["prd"] = "CNC"
-                elif order["prd"] == "I":
-                    order["prd"] = "MIS"
-                elif order["exch"] in ["NFO", "MCX", "BFO", "CDS"] and order["prd"] == "M":
-                    order["prd"] = "NRML"
-
-                if order["prctyp"] == "MKT":
-                    order["prctyp"] = "MARKET"
-                elif order["prctyp"] == "LMT":
-                    order["prctyp"] = "LIMIT"
-                elif order["prctyp"] == "SL-MKT":
-                    order["prctyp"] = "SL-M"
-                elif order["prctyp"] == "SL-LMT":
-                    order["prctyp"] = "SL"
-
-                # Prefer average fill price when present
-                if order.get("avgprc") and float(order.get("avgprc", 0)) > 0:
-                    order["prc"] = order["avgprc"]
-                elif order["prctyp"] in ["MARKET", "SL-M"] and float(order.get("prc", 0)) == 0.0:
-                    rprc = order.get("rprc", 0)
-                    if rprc and float(rprc) > 0:
-                        order["prc"] = rprc
             else:
                 logger.warning(
                     f"Symbol not found for token {symboltoken} and exchange {exchange}."
                 )
+
+            # Product, price type and the price preference are independent of the
+            # symbol lookup, so map them unconditionally - otherwise a lookup
+            # miss leaves raw Noren values (e.g. "SL-LMT") that the order book's
+            # Modify dialog cannot match.
+            if (order["exch"] in ("NSE", "BSE")) and order["prd"] == "C":
+                order["prd"] = "CNC"
+            elif order["prd"] == "I":
+                order["prd"] = "MIS"
+            elif order["exch"] in ["NFO", "MCX", "BFO", "CDS"] and order["prd"] == "M":
+                order["prd"] = "NRML"
+
+            price_type = str(order.get("prctyp") or "").upper()
+            if price_type == "MKT":
+                order["prctyp"] = "MARKET"
+            elif price_type == "LMT":
+                order["prctyp"] = "LIMIT"
+            elif price_type in ("SL-MKT", "SLMKT"):
+                order["prctyp"] = "SL-M"
+            elif price_type in ("SL-LMT", "SLLMT"):
+                order["prctyp"] = "SL"
+
+            # Prefer average fill price when present. Runs after the price-type
+            # mapping above, which the rprc fallback reads.
+            if order.get("avgprc") and float(order.get("avgprc", 0)) > 0:
+                order["prc"] = order["avgprc"]
+            elif order.get("prctyp") in ["MARKET", "SL-M"] and float(order.get("prc", 0)) == 0.0:
+                rprc = order.get("rprc", 0)
+                if rprc and float(rprc) > 0:
+                    order["prc"] = rprc
 
     return order_data
 
@@ -70,11 +113,12 @@ def calculate_order_statistics(order_data):
                 order["trantype"] = "SELL"
                 total_sell_orders += 1
 
-            if order["status"] == "COMPLETE":
+            status = normalize_order_status(order.get("status"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif order["status"] == "OPEN":
+            elif status == "open":
                 total_open_orders += 1
-            elif order["status"] == "REJECTED":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     return {
@@ -110,7 +154,7 @@ def transform_order_data(orders):
             "pricetype": order.get("prctyp", ""),
             "product": order.get("prd", ""),
             "orderid": order.get("norenordno", ""),
-            "order_status": order.get("status", "").lower(),
+            "order_status": normalize_order_status(order.get("status")),
             "timestamp": order.get("norentm", ""),
         })
 

@@ -39,26 +39,28 @@ function convertExpiryForAPI(expiry: string): string {
   return expiry.replace(/-/g, '').toUpperCase()
 }
 
-function formatNumber(num: number): string {
-  if (num >= 10000000) return `${(num / 10000000).toFixed(1)}Cr`
-  if (num >= 100000) return `${(num / 100000).toFixed(1)}L`
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`
+export function formatNumber(num: number): string {
+  const sign = num < 0 ? '-' : ''
+  const abs = Math.abs(num)
+  if (abs >= 10000000) return `${sign}${(abs / 10000000).toFixed(1)}Cr`
+  if (abs >= 100000) return `${sign}${(abs / 100000).toFixed(1)}L`
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}K`
   return num.toFixed(0)
 }
 
 export default function GEXDashboard() {
   const { mode, appMode } = useThemeStore()
-  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
+  const { toolsFnoExchanges, defaultToolsFnoExchange, defaultUnderlyings } = useSupportedExchanges()
   const isAnalyzer = appMode === 'analyzer'
   const isDark = mode === 'dark' || isAnalyzer
 
-  const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
+  const [selectedExchange, setSelectedExchange] = useState(defaultToolsFnoExchange)
   const [underlyings, setUnderlyings] = useState<string[]>(
-    defaultUnderlyings[defaultFnoExchange] || []
+    defaultUnderlyings[defaultToolsFnoExchange] || []
   )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
   const [selectedUnderlying, setSelectedUnderlying] = useState(
-    defaultUnderlyings[defaultFnoExchange]?.[0] || ''
+    defaultUnderlyings[defaultToolsFnoExchange]?.[0] || ''
   )
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
@@ -71,9 +73,9 @@ export default function GEXDashboard() {
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
     setSelectedExchange((prev) =>
-      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+      prev && toolsFnoExchanges.some((ex) => ex.value === prev) ? prev : defaultToolsFnoExchange
     )
-  }, [defaultFnoExchange, fnoExchanges])
+  }, [defaultToolsFnoExchange, toolsFnoExchanges])
 
   // Fetch underlyings when exchange changes
   useEffect(() => {
@@ -193,8 +195,8 @@ export default function GEXDashboard() {
           ? 'rgba(180,160,255,0.1)'
           : 'rgba(255,255,255,0.1)'
         : 'rgba(0,0,0,0.08)',
-      ceBar: '#ef4444',
-      peBar: '#22c55e',
+      ceBar: '#22c55e',
+      peBar: '#ef4444',
       positiveGex: '#3b82f6',
       negativeGex: '#f97316',
       atmLine: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',
@@ -494,7 +496,7 @@ export default function GEXDashboard() {
               <SelectValue placeholder="Exchange" />
             </SelectTrigger>
             <SelectContent>
-              {fnoExchanges.map((ex) => (
+              {toolsFnoExchanges.map((ex) => (
                 <SelectItem key={ex.value} value={ex.value}>
                   {ex.label}
                 </SelectItem>

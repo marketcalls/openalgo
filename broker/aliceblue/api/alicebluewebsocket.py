@@ -29,8 +29,22 @@ class AliceBlueWebSocket:
     # REST API base URL for WebSocket session management (V2 API)
     BASE_URL = "https://a3.aliceblueonline.com/"
 
-    # Maximum reconnection attempts
+    # Backoff ceiling for reconnection. There is deliberately NO attempt cap:
+    # this feed has to survive a full trading session, and a hard limit meant a
+    # single transient blip mid-session left market data dead until someone
+    # restarted the process. Retry forever, but never faster than this.
+    MAX_RECONNECT_BACKOFF_SECONDS = 30
+
+    # Kept for compatibility with callers that read it; no longer a stop
+    # condition, only the point at which backoff has fully ramped.
     MAX_RECONNECT_ATTEMPTS = 5
+
+    # AliceBlue closes connections that neither send nor receive for a while.
+    # Docs (11-websocket.md): "Send heartbeat once in every 50 seconds" -
+    # without it, a book of illiquid symbols that prints no ticks gets dropped
+    # server-side, which is exactly the long-session failure. Payload is
+    # {"k": "", "t": "h"} and draws no response.
+    HEARTBEAT_INTERVAL_SECONDS = 50
 
     def __init__(self, user_id: str, session_id: str):
         """
@@ -54,6 +68,8 @@ class AliceBlueWebSocket:
         self._connect_thread = None
         self._reconnect_thread = None
         self._stop_event = threading.Event()
+        self._heartbeat_thread = None
+        self._heartbeat_stop = threading.Event()
 
         # Generate the encrypted token as required by AliceBlue
         sha256_encryption1 = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
@@ -173,7 +189,9 @@ class AliceBlueWebSocket:
         urls = [self.PRIMARY_URL, self.ALTERNATE_URL]
         attempt = 0
 
-        while not self._stop_event.is_set() and attempt < self.MAX_RECONNECT_ATTEMPTS:
+        # No attempt cap: the feed must survive a whole trading session, and a
+        # limit meant one blip killed market data until a manual restart.
+        while not self._stop_event.is_set():
             # Try each URL in sequence
             for url in urls:
                 if self._stop_event.is_set():
@@ -216,36 +234,44 @@ class AliceBlueWebSocket:
             if self._stop_event.is_set() or self.is_connected:
                 break
 
-            # Exponential backoff for reconnection attempts
+            # Exponential backoff, ramping to MAX_RECONNECT_BACKOFF_SECONDS
+            # and then holding there for as long as the outage lasts.
             attempt += 1
-            sleep_time = min(2**attempt, 30)  # Max 30 seconds between retries
-            logger.info(
-                f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s"
-            )
-            time.sleep(sleep_time)
-
-        if attempt >= self.MAX_RECONNECT_ATTEMPTS and not self.is_connected:
-            logger.error(
-                "Maximum reconnection attempts reached. Could not connect to AliceBlue WebSocket."
-            )
+            sleep_time = min(2**attempt, self.MAX_RECONNECT_BACKOFF_SECONDS)
+            # Log the first few loudly, then only every 20th, so an hour-long
+            # broker outage does not bury the rest of the log.
+            if attempt <= 5 or attempt % 20 == 0:
+                logger.warning(
+                    f"AliceBlue WebSocket reconnect attempt {attempt} failed; "
+                    f"retrying in {sleep_time}s"
+                )
+            # Sleep in 1s slices so disconnect() is not blocked for 30s.
+            for _ in range(sleep_time):
+                if self._stop_event.is_set():
+                    break
+                time.sleep(1)
 
     def disconnect(self):
         """
         Disconnects from the WebSocket and stops the connection thread.
         """
         self._stop_event.set()
+        self._heartbeat_stop.set()
 
         if self.ws:
             logger.info("Closing AliceBlue WebSocket connection")
             self.ws.close()
 
-        # Wait for threads to finish so they don't leak
-        for thr in (self._connect_thread, self._reconnect_thread):
+        # Wait for threads to finish so they don't leak. The heartbeat is in
+        # here too: one per connection, and over a long session with repeated
+        # reconnects an unjoined thread each time is a slow leak.
+        for thr in (self._connect_thread, self._reconnect_thread, self._heartbeat_thread):
             if thr and thr.is_alive():
                 thr.join(timeout=5)
 
         self._connect_thread = None
         self._reconnect_thread = None
+        self._heartbeat_thread = None
         self.is_connected = False
         logger.info("AliceBlue WebSocket disconnected")
 
@@ -274,6 +300,49 @@ class AliceBlueWebSocket:
             logger.info("AliceBlue WebSocket authentication message sent")
         except Exception as e:
             logger.error(f"Error sending authentication message: {str(e)}")
+
+        self._start_heartbeat(ws)
+
+    def _start_heartbeat(self, ws):
+        """Keep the connection alive across quiet periods.
+
+        AliceBlue closes a socket that neither sends nor receives for a while,
+        so a book of illiquid symbols that prints no ticks gets dropped
+        server-side - the classic "worked all morning, died after lunch"
+        failure. The docs ask for {"k": "", "t": "h"} every 50 seconds and send
+        no reply, so this is fire-and-forget.
+
+        One thread per connection, replacing any previous one, stopped by the
+        same _stop_event as everything else and by the send failing once the
+        socket is gone. It is a daemon so it can never hold up shutdown.
+        """
+        existing = getattr(self, "_heartbeat_thread", None)
+        if existing and existing.is_alive():
+            self._heartbeat_stop.set()
+            existing.join(timeout=2)
+
+        self._heartbeat_stop = threading.Event()
+        stop = self._heartbeat_stop
+
+        def beat():
+            while not stop.is_set() and not self._stop_event.is_set():
+                # Sleep in 1s slices so shutdown is not delayed by up to 50s.
+                for _ in range(self.HEARTBEAT_INTERVAL_SECONDS):
+                    if stop.is_set() or self._stop_event.is_set():
+                        return
+                    time.sleep(1)
+                try:
+                    ws.send(json.dumps({"k": "", "t": "h"}))
+                    logger.debug("AliceBlue WebSocket heartbeat sent")
+                except Exception as exc:
+                    # Socket already gone; the reconnect loop owns recovery.
+                    logger.debug(f"Heartbeat send stopped: {exc}")
+                    return
+
+        self._heartbeat_thread = threading.Thread(
+            target=beat, daemon=True, name="aliceblue-ws-heartbeat"
+        )
+        self._heartbeat_thread.start()
 
     def on_message(self, ws, message):
         """
@@ -717,27 +786,24 @@ class AliceBlueWebSocket:
             if self._stop_event.is_set():
                 return
 
-            # Grab reference to old thread while holding lock
-            old_thread = self._reconnect_thread
             self.reconnect_count += 1
-            sleep_time = min(2**self.reconnect_count, 30)
 
-        # Join outside lock to avoid deadlock (delayed_reconnect -> connect -> self.lock)
-        if old_thread and old_thread.is_alive():
-            logger.info("Waiting for previous reconnect thread to finish")
-            old_thread.join(timeout=5)
-
-        logger.info(f"Attempting to reconnect in {sleep_time} seconds")
-
-        def delayed_reconnect():
-            time.sleep(sleep_time)
-            if not self._stop_event.is_set():
-                self.connect()
-
-        t = threading.Thread(target=delayed_reconnect, daemon=True)
-        with self.lock:
-            self._reconnect_thread = t
-        t.start()
+        # Reconnection is owned solely by _connection_loop, which already
+        # retries with exponential backoff and stops at MAX_RECONNECT_ATTEMPTS.
+        #
+        # This handler used to spawn its own delayed_reconnect -> connect()
+        # thread as well, and the two owners fed each other: connect() begins by
+        # calling invalidateWsSess, so the second reconnect tore down the socket
+        # the first had just established, which fired on_close again. The result
+        # was a self-sustaining storm - "Connection to remote host was lost"
+        # every few hundred ms, "WebSocket connection thread is already running"
+        # as threads piled up, and "Reconnection attempt 1/5" forever, because
+        # each freshly spawned loop started its own attempt counter at zero so
+        # the cap was never reached.
+        logger.info(
+            f"Connection closed (close #{self.reconnect_count}); "
+            f"_connection_loop owns the retry"
+        )
 
     def subscribe(self, instruments, is_depth=False):
         """Subscribe to market data for given instruments
@@ -822,6 +888,17 @@ class AliceBlueWebSocket:
                 logger.info(f"Removed subscription: {subscription_key}")
 
             self.subscribed_tokens.discard(subscription_key)
+
+            # Drop the cached tick and depth for this instrument too. These are
+            # keyed "exchange:token" while subscriptions are keyed
+            # "exchange|token", and unsubscribe only ever cleared the latter -
+            # so every option-chain sweep left ~80 quote entries behind
+            # permanently. The connection is now pooled and long-lived, and the
+            # worker never restarts, so that accumulated for the whole session.
+            cache_key = f"{instrument.exchange}:{instrument.token}"
+            self.last_quotes.pop(cache_key, None)
+            self.last_depth.pop(cache_key, None)
+
             subscription_keys.append(subscription_key)
 
         if subscription_keys:

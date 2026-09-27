@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import sys
 import threading
@@ -10,6 +9,7 @@ from urllib.parse import unquote
 from broker.samco.api.data import BrokerData
 from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -25,7 +25,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("samco_websocket")
+        self.logger = get_logger("samco_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "samco"
@@ -38,6 +38,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._reconnecting = False  # Guard against concurrent reconnect threads
         self._broker_data = None  # Cached BrokerData for index listing lookups
         self._index_listing_cache = {}  # {symbol_exchange: listing_id}
+        self.auth_failed = False  # Set when the broker rejects the session token
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -73,7 +74,13 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raise ValueError("Missing required authentication data (session_token)")
 
         # Create SamcoWebSocket instance
-        self.ws_client = SamcoWebSocket(session_token=session_token, user_id=user_id)
+        self.ws_client = SamcoWebSocket(
+            session_token=session_token,
+            user_id=user_id,
+            # is_auth_error() is inherited from BaseBrokerWebSocketAdapter, so
+            # samco shares the fleet's 401/403 vocabulary instead of its own.
+            auth_error_check=self.is_auth_error,
+        )
 
         # Set callbacks
         self.ws_client.on_open = self._on_open
@@ -139,10 +146,24 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         )
 
                     self.ws_client.connect()
+
+                    # A rejected session token cannot be fixed by retrying: the
+                    # user has to re-login. Retrying anyway hammers the broker
+                    # for the rest of the session and risks an IP rate-limit.
+                    if getattr(self.ws_client, "auth_failed", False):
+                        self._stop_for_auth_failure(
+                            getattr(self.ws_client, "auth_failure_reason", None)
+                        )
+                        return
+
                     self.reconnect_attempts = 0  # Reset attempts on successful connection
                     break
 
                 except Exception as e:
+                    if self.is_auth_error(str(e)):
+                        self._stop_for_auth_failure(str(e))
+                        return
+
                     self.reconnect_attempts += 1
                     delay = min(
                         self.reconnect_delay * (2**self.reconnect_attempts),
@@ -156,6 +177,24 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         finally:
             with self.lock:
                 self._reconnecting = False
+
+    def _stop_for_auth_failure(self, reason: str | None) -> None:
+        """
+        Stop reconnecting because the broker refused our credentials.
+
+        Clearing `running` is what breaks the loop: `_connect_with_retry` tests
+        it on every pass and `_on_close` only respawns the retry thread while it
+        is set. Without this, a dead token produces a reconnect storm that runs
+        until the process is restarted.
+        """
+        with self.lock:
+            self.auth_failed = True
+            self.connected = False
+            self.running = False
+        self.logger.error(
+            f"Auth failure on Samco WebSocket ({reason}); stopping reconnect loop. "
+            "User must re-login to refresh the session token."
+        )
 
     def disconnect(self) -> None:
         """Disconnect from Samco WebSocket"""
@@ -401,10 +440,21 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback for WebSocket errors"""
         self.logger.error(f"Samco WebSocket error: {error}")
 
+        # The close callback owns reconnect scheduling; we only have to clear
+        # `running` here so it short-circuits.
+        if self.is_auth_error(str(error)):
+            self._stop_for_auth_failure(str(error))
+
     def _on_close(self, wsapp) -> None:
         """Callback when connection is closed"""
         self.logger.info("Samco WebSocket connection closed")
         self.connected = False
+
+        # The client keeps the close code/message to itself (this callback only
+        # gets `wsapp`), so read the verdict it latched for us.
+        if getattr(self.ws_client, "auth_failed", False):
+            self._stop_for_auth_failure(getattr(self.ws_client, "auth_failure_reason", None))
+            return
 
         # Attempt to reconnect if we're still running
         if self.running:

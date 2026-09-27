@@ -112,6 +112,37 @@ def download_csv_dhan_data(output_path):
             )
 
 
+def format_strike(strike):
+    """Render a strike in OpenAlgo format: exact value, no trailing zeros.
+
+    SEM_CUSTOM_SYMBOL renders strikes at two decimals, which both misformats
+    (87.5 shown as "87.50") and, in currency, loses precision outright - EURUSD
+    1.010 and 1.015 both display as "1.01". Building the strike from the
+    authoritative SEM_STRIKE_PRICE avoids both. See #1930.
+    """
+    if pd.isna(strike):
+        return ""
+    # Format with decimals first so rstrip cannot eat significant zeros: "100"
+    # would strip to "1", whereas "100.000000" stops at the decimal point.
+    return f"{float(strike):.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def qualify_equity_symbol(trading_symbol, series):
+    """Suffix a non-EQ NSE series onto the symbol, matching Zerodha's convention.
+
+    Several NSE securities share a SEM_TRADING_SYMBOL across series - ELECTCAST
+    is both the equity (EQ) and its warrant (W1), and IMC1 is three different
+    bond tranches (N1/N2/N3). Without the series in the symbol, get_token()
+    takes the first match and an order can reach the warrant. See #1930.
+    """
+    if pd.isna(series):
+        return trading_symbol
+    series = str(series).strip()
+    if not series or series == "EQ":
+        return trading_symbol
+    return f"{trading_symbol}-{series}"
+
+
 def reformat_symbol(row):
     symbol = row["SEM_CUSTOM_SYMBOL"]
     instrument_type = row["instrumenttype"]
@@ -119,7 +150,11 @@ def reformat_symbol(row):
     expiry = row["expiry"].replace("-", "")
 
     if equity == "EQUITY":
-        symbol = row["SEM_TRADING_SYMBOL"]
+        # NSE qualifies by series; BSE ships one row per symbol and has none.
+        if row["SEM_EXM_EXCH_ID"] == "NSE":
+            symbol = qualify_equity_symbol(row["SEM_TRADING_SYMBOL"], row["SEM_SERIES"])
+        else:
+            symbol = row["SEM_TRADING_SYMBOL"]
     elif equity == "INDEX":
         symbol = row["SEM_TRADING_SYMBOL"]
 
@@ -131,12 +166,11 @@ def reformat_symbol(row):
         if len(parts) == 4:  # Make sure the symbol has the correct format
             symbol = f"{parts[0]}{expiry}{instrument_type}"
     elif instrument_type in ["CE", "PE"]:
-        # For CE/PE, rearrange the parts and remove spaces
+        # For CE/PE take the underlying from the display string but the strike
+        # from SEM_STRIKE_PRICE, which is exact.
         parts = symbol.split(" ")
-        if len(parts) == 4:  # Make sure the symbol has the correct format
-            symbol = f"{parts[0]}{expiry}{parts[2]}{instrument_type}"
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = f"{parts[0]}{expiry}{parts[3]}{instrument_type}"
+        if len(parts) in (4, 5):
+            symbol = f"{parts[0]}{expiry}{format_strike(row['SEM_STRIKE_PRICE'])}{instrument_type}"
 
     else:
         symbol = symbol  # No change for other instrument types
@@ -144,66 +178,80 @@ def reformat_symbol(row):
     return symbol
 
 
+# Dhan segment codes. A Dhan security id is unique per SEM_SEGMENT, not per
+# SEM_EXM_EXCH_ID, so the segment is the only safe key to map on.
+SEGMENT_EQUITY = "E"
+SEGMENT_INDEX = "I"
+SEGMENT_EQUITY_DERIVATIVE = "D"
+SEGMENT_CURRENCY = "C"
+SEGMENT_COMMODITY = "M"
+
+# Instrument names valid within each segment.
+EQUITY_FNO_INSTRUMENTS = {"FUTIDX", "FUTSTK", "OPTIDX", "OPTSTK", "OPTFUT"}
+CURRENCY_INSTRUMENTS = {"FUTCUR", "OPTCUR"}
+COMMODITY_INSTRUMENTS = {"FUTCOM", "FUTIDX", "OPTFUT", "OPTIDX"}
+
+
 # Define the function to apply conditions
 def assign_values(row):
-    if row["SEM_EXM_EXCH_ID"] == "NSE" and row["SEM_INSTRUMENT_NAME"] == "EQUITY":
-        return "NSE", "NSE_EQ", "EQ"
-    elif row["SEM_EXM_EXCH_ID"] == "BSE" and row["SEM_INSTRUMENT_NAME"] == "EQUITY":
-        return "BSE", "BSE_EQ", "EQ"
-    elif row["SEM_EXM_EXCH_ID"] == "NSE" and row["SEM_INSTRUMENT_NAME"] == "INDEX":
-        return "NSE_INDEX", "IDX_I", "INDEX"
-    elif row["SEM_EXM_EXCH_ID"] == "BSE" and row["SEM_INSTRUMENT_NAME"] == "INDEX":
-        return "BSE_INDEX", "IDX_I", "INDEX"
-    elif row["SEM_EXM_EXCH_ID"] == "MCX" and row["SEM_INSTRUMENT_NAME"] in [
-        "FUTIDX",
-        "FUTCOM",
-        "OPTFUT",
-    ]:
-        return (
-            "MCX",
-            "MCX_COMM",
-            row["SEM_OPTION_TYPE"] if "OPT" in row["SEM_INSTRUMENT_NAME"] else "FUT",
-        )
+    """Map a Dhan scrip master row onto an OpenAlgo (exchange, brexchange, instrumenttype).
 
-    elif row["SEM_EXM_EXCH_ID"] == "NSE" and row["SEM_INSTRUMENT_NAME"] in [
-        "FUTIDX",
-        "FUTSTK",
-        "OPTIDX",
-        "OPTSTK",
-        "OPTFUT",
-    ]:
-        return (
-            "NFO",
-            "NSE_FNO",
-            row["SEM_OPTION_TYPE"] if "OPT" in row["SEM_INSTRUMENT_NAME"] else "FUT",
-        )
-    elif row["SEM_EXM_EXCH_ID"] == "NSE" and row["SEM_INSTRUMENT_NAME"] in ["FUTCUR", "OPTCUR"]:
-        return (
-            "CDS",
-            "NSE_CURRENCY",
-            row["SEM_OPTION_TYPE"] if "OPT" in row["SEM_INSTRUMENT_NAME"] else "FUT",
-        )
+    Gating on SEM_SEGMENT is mandatory, not defensive. Dhan scopes
+    SEM_SMST_SECURITY_ID per segment, and NSE carries two derivative segments
+    under the same SEM_EXM_EXCH_ID of "NSE": segment D (equity F&O) and segment
+    M (NSE's own commodity book, all OPTFUT). Matching on SEM_INSTRUMENT_NAME
+    alone put both under NFO, so 8,642 security ids resolved to two different
+    contracts - a TCS option and a SILVERM option shared token 153964. The
+    reverse lookup in get_symbol() takes the first match, so a live equity
+    option position could be reported under a commodity symbol, the position
+    book lookup would miss it, and a strategy would skip the exit. See #1929.
+    """
+    exchange_id = row["SEM_EXM_EXCH_ID"]
+    segment = row["SEM_SEGMENT"]
+    instrument = str(row["SEM_INSTRUMENT_NAME"])
 
-    elif row["SEM_EXM_EXCH_ID"] == "BSE" and row["SEM_INSTRUMENT_NAME"] in [
-        "FUTIDX",
-        "FUTSTK",
-        "OPTIDX",
-        "OPTSTK",
-    ]:
-        return (
-            "BFO",
-            "BSE_FNO",
-            row["SEM_OPTION_TYPE"] if "OPT" in row["SEM_INSTRUMENT_NAME"] else "FUT",
-        )
-    elif row["SEM_EXM_EXCH_ID"] == "BSE" and row["SEM_INSTRUMENT_NAME"] in ["FUTCUR", "OPTCUR"]:
-        return (
-            "BCD",
-            "BSE_CURRENCY",
-            row["SEM_OPTION_TYPE"] if "OPT" in row["SEM_INSTRUMENT_NAME"] else "FUT",
-        )
+    # CE / PE for options, FUT for futures.
+    derivative_type = row["SEM_OPTION_TYPE"] if "OPT" in instrument else "FUT"
 
-    else:
-        return "Unknown", "Unknown", "Unknown"
+    if segment == SEGMENT_EQUITY and instrument == "EQUITY":
+        if exchange_id == "NSE":
+            return "NSE", "NSE_EQ", "EQ"
+        if exchange_id == "BSE":
+            return "BSE", "BSE_EQ", "EQ"
+
+    elif segment == SEGMENT_INDEX and instrument == "INDEX":
+        if exchange_id == "NSE":
+            return "NSE_INDEX", "IDX_I", "INDEX"
+        if exchange_id == "BSE":
+            return "BSE_INDEX", "IDX_I", "INDEX"
+
+    elif segment == SEGMENT_EQUITY_DERIVATIVE and instrument in EQUITY_FNO_INSTRUMENTS:
+        if exchange_id == "NSE":
+            return "NFO", "NSE_FNO", derivative_type
+        if exchange_id == "BSE":
+            return "BFO", "BSE_FNO", derivative_type
+
+    elif segment == SEGMENT_CURRENCY and instrument in CURRENCY_INSTRUMENTS:
+        if exchange_id == "NSE":
+            return "CDS", "NSE_CURRENCY", derivative_type
+        if exchange_id == "BSE":
+            return "BCD", "BSE_CURRENCY", derivative_type
+
+    elif segment == SEGMENT_COMMODITY and instrument in COMMODITY_INSTRUMENTS:
+        if exchange_id == "MCX":
+            return "MCX", "MCX_COMM", derivative_type
+        # NSE segment M is NSE's commodity derivatives book - OpenAlgo's NCO
+        # exchange, which Dhan addresses as NSE_COMM. That segment string is
+        # absent from Dhan's published annexure but is accepted by the API:
+        # /v2/margincalculator returns a real margin and the live account
+        # balance for NSE_COMM + securityId 153964, while NSE_COMMODITY and
+        # NSE_FNO are both rejected with DH-905. It must never be folded into
+        # NFO - its id space (121601-171512) overlaps NSE segment D, which is
+        # the #1929 collision.
+        if exchange_id == "NSE":
+            return "NCO", "NSE_COMM", derivative_type
+
+    return "Unknown", "Unknown", "Unknown"
 
 
 def process_dhan_csv(path):
@@ -241,6 +289,27 @@ def process_dhan_csv(path):
     df[["exchange", "brexchange", "instrumenttype"]] = df.apply(
         assign_values, axis=1, result_type="expand"
     )
+
+    # Drop rows no OpenAlgo exchange covers. Today that is NSE segment M, whose
+    # security ids Dhan does not serve on any exchangeSegment (see
+    # assign_values). A row kept here would keep its raw SEM_CUSTOM_SYMBOL
+    # (reformat_symbol only normalizes known instrument types) and still
+    # surface in symbol search, which filters by exchange only when the caller
+    # passes one - so it would look tradable and then fail at the quote step.
+    # Log the breakdown so a segment Dhan adds later is visible, not silent.
+    unmapped = df["exchange"] == "Unknown"
+    if unmapped.any():
+        breakdown = (
+            df.loc[unmapped]
+            .groupby(["SEM_EXM_EXCH_ID", "SEM_SEGMENT", "SEM_INSTRUMENT_NAME"])
+            .size()
+            .to_dict()
+        )
+        logger.info(
+            f"Dhan master contract: dropping {int(unmapped.sum())} rows with no "
+            f"OpenAlgo exchange (exchange/segment/instrument: {breakdown})"
+        )
+        df = df[~unmapped].copy()
 
     df["symbol"] = df.apply(reformat_symbol, axis=1)
 
@@ -332,6 +401,44 @@ def process_dhan_csv(path):
     }
     df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].replace(bse_index_map)
 
+    # A (exchange, token) pair is what get_symbol() reverse-looks-up a live
+    # position with, so it has to be unique. Two rows sharing one pair means a
+    # position can resolve to the wrong contract silently (#1929). Log loudly
+    # rather than raise - a broken master contract is worse than a duplicated
+    # one, and the operator needs the detail to report it.
+    collisions = df[df.duplicated(subset=["exchange", "token"], keep=False)]
+    if not collisions.empty:
+        samples = [
+            f"{r.exchange}/{r.token}: {r.brsymbol}"
+            for r in collisions.sort_values(["exchange", "token"]).head(6).itertuples()
+        ]
+        logger.error(
+            f"Dhan master contract: {len(collisions)} rows share a duplicate "
+            f"(exchange, token) across "
+            f"{collisions.groupby(['exchange', 'token']).ngroups} pairs "
+            f"(by exchange: {collisions['exchange'].value_counts().to_dict()}). "
+            f"Position reverse-lookup is ambiguous for these. Samples: {samples}"
+        )
+
+    # The mirror of the check above: (symbol, exchange) is what get_token()
+    # forward-looks-up before placing an order, so it has to be unique too. Two
+    # rows sharing one pair means an order can reach the wrong instrument -
+    # historically a warrant instead of the equity, or a neighbouring strike
+    # (#1930). Logged, not raised, for the same reason as above.
+    sym_collisions = df[df.duplicated(subset=["symbol", "exchange"], keep=False)]
+    if not sym_collisions.empty:
+        samples = [
+            f"{r.exchange}/{r.symbol} -> {r.brsymbol} (token {r.token})"
+            for r in sym_collisions.sort_values(["exchange", "symbol"]).head(6).itertuples()
+        ]
+        logger.error(
+            f"Dhan master contract: {len(sym_collisions)} rows share a duplicate "
+            f"(symbol, exchange) across "
+            f"{sym_collisions.groupby(['symbol', 'exchange']).ngroups} pairs "
+            f"(by exchange: {sym_collisions['exchange'].value_counts().to_dict()}). "
+            f"Order forward-lookup is ambiguous for these. Samples: {samples}"
+        )
+
     # List of columns to remove
     columns_to_remove = [
         "SEM_EXM_EXCH_ID",
@@ -352,8 +459,9 @@ def process_dhan_csv(path):
         "SM_SYMBOL_NAME",
     ]
 
-    # Removing the specified columns
-    token_df = df.drop(columns=columns_to_remove)
+    # Removing the specified columns. errors="ignore" so a column Dhan drops
+    # from a future master file does not break the whole download.
+    token_df = df.drop(columns=columns_to_remove, errors="ignore")
 
     return token_df
 

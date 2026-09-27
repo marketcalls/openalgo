@@ -2,6 +2,7 @@ import json
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
@@ -855,6 +856,27 @@ _MAX_CLIENT_URL_LEN = 2000
 _MAX_CLIENT_COMPONENT_STACK_LEN = 5000
 _MAX_CLIENT_USER_AGENT_LEN = 500
 _CLIENT_LEVEL_ALLOWLIST = frozenset({"ERROR", "WARN"})
+_REDACTED_CLIENT_URL_VALUE = "[redacted]"
+_SENSITIVE_CLIENT_URL_QUERY_PARAMETER_NAMES = frozenset(
+    {
+        "token",
+        "code",
+        "requesttoken",
+        "accesstoken",
+        "authtoken",
+        "refreshtoken",
+        "resettoken",
+        "apikey",
+        "email",
+        "state",
+        "password",
+        "otp",
+        "secret",
+        "clientsecret",
+        "idtoken",
+        "jwt",
+    }
+)
 
 # Logger dedicated to browser-reported errors. Distinct name so they're easy
 # to filter in errors.jsonl and in the grouped view.
@@ -877,6 +899,32 @@ def _scrub_control_chars(text):
     return "".join(ch for ch in text if ch == "\n" or ch == "\t" or (ch.isprintable()))
 
 
+def _sanitize_client_error_url(url):
+    """Redact sensitive query values and remove fragments before logging a URL."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url.split("?", 1)[0].split("#", 1)[0]
+
+    if parsed.scheme in {"", "http", "https"}:
+        query = urlencode(
+            [
+                (
+                    key,
+                    _REDACTED_CLIENT_URL_VALUE
+                    if key.lower().replace("_", "").replace("-", "")
+                    in _SENSITIVE_CLIENT_URL_QUERY_PARAMETER_NAMES
+                    else value,
+                )
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+    if parsed.scheme.endswith("-extension"):
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return f"{parsed.scheme}:"
+
+
 @admin_bp.route("/api/errors/client", methods=["POST"])
 @check_session_validity
 @limiter.limit(_CLIENT_REPORT_RATE)
@@ -897,7 +945,9 @@ def api_errors_client_report():
 
         message = _scrub_control_chars(str(data.get("message") or ""))[:_MAX_CLIENT_MESSAGE_LEN]
         stack = _scrub_control_chars(str(data.get("stack") or ""))[:_MAX_CLIENT_STACK_LEN]
-        url = _scrub_control_chars(str(data.get("url") or ""))[:_MAX_CLIENT_URL_LEN]
+        url = _sanitize_client_error_url(
+            _scrub_control_chars(str(data.get("url") or ""))
+        )[:_MAX_CLIENT_URL_LEN]
         component_stack = _scrub_control_chars(str(data.get("component_stack") or ""))[
             :_MAX_CLIENT_COMPONENT_STACK_LEN
         ]
@@ -1484,12 +1534,16 @@ def _check_db_read():
 def _check_loopback_http():
     """HEAD the local Flask app — measures internal request latency.
 
-    Two candidate targets, because the listening topology differs by install:
+    Candidate targets, because the listening topology differs by install, in
+    the same resolution order as blueprints/mcp_http.py:
+      - MCP_LOOPBACK_URL: explicit override for unusual topologies. Tried
+        first, since an operator who had to set it did so precisely because
+        neither default answers (GitHub issue #1441).
       - Docker / dev server: gunicorn (or Flask) listens on TCP
         127.0.0.1:{FLASK_PORT|PORT}.
       - Ubuntu install.sh: gunicorn binds to a UNIX SOCKET behind nginx — no
         TCP port answers locally, so HOST_SERVER via nginx is the only
-        loopback that works (same resolution as blueprints/mcp_http.py).
+        loopback that works.
     Trying only the TCP port made this check a guaranteed false alarm on
     every native Ubuntu install (GitHub issue #1483).
     """
@@ -1499,19 +1553,23 @@ def _check_loopback_http():
     # FLASK_PORT is the canonical OpenAlgo var; PORT is the Docker/Railway
     # convention (gunicorn binds to ${PORT:-5000} in start.sh).
     port = os.getenv("FLASK_PORT") or os.getenv("PORT") or "5000"
-    targets = [f"http://127.0.0.1:{port}/"]
+
+    targets = []
+    override = (os.getenv("MCP_LOOPBACK_URL") or "").strip().rstrip("/")
+    if override:
+        targets.append((f"{override}/", "MCP_LOOPBACK_URL"))
+    targets.append((f"http://127.0.0.1:{port}/", "direct"))
     host_server = (os.getenv("HOST_SERVER") or "").strip().rstrip("/")
     if host_server and "127.0.0.1" not in host_server and "localhost" not in host_server:
-        targets.append(f"{host_server}/")
+        targets.append((f"{host_server}/", "via nginx (unix-socket bind)"))
 
     last_error = "no target answered"
-    for target in targets:
+    for target, label in targets:
         started = time.perf_counter()
         try:
             req = urllib.request.Request(target, method="HEAD")
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 elapsed = round((time.perf_counter() - started) * 1000, 1)
-                label = "direct" if "127.0.0.1" in target else "via nginx (unix-socket bind)"
                 return {
                     "name": "Loopback HTTP",
                     "ok": resp.status < 500,

@@ -10,7 +10,7 @@ If you're comfortable with command line, here's the fastest way:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 
 # 2. Install UV package manager
@@ -22,6 +22,15 @@ cp .sample.env .env
 # 4. Run OpenAlgo
 uv run app.py
 ```
+
+> **Why `--filter=blob:none`?** It makes a [partial clone](https://git-scm.com/docs/partial-clone):
+> git downloads the full history of commits but only the file contents the
+> checkout actually needs, fetching anything older on demand. That is about
+> **20 MB instead of 280 MB**, and roughly 8 seconds instead of 36. Everything
+> still works normally: `git pull` to upgrade, checking out any branch or
+> release tag, and rolling back to any commit. Drop the flag if you want the
+> entire history on disk up front, or if you are cloning from a git host that
+> does not support filtering (it will simply fall back to a full clone).
 
 Open `http://127.0.0.1:5000` in your browser. That's it!
 
@@ -62,7 +71,7 @@ Open Command Prompt (search "cmd") and run:
 cd C:\Users\YourName\Documents
 
 # Clone the repository
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 
 # Enter the folder
 cd openalgo
@@ -120,7 +129,7 @@ python3.12 --version
 
 ```bash
 # Clone repository
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 ```
 
@@ -160,7 +169,7 @@ brew install python@3.12 git
 
 ```bash
 # Clone repository
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 
 # Install UV
@@ -210,7 +219,7 @@ ZMQ_PORT='5555'
 
 ```bash
 # Clone repository
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 
 # Create environment file
@@ -825,7 +834,7 @@ sudo sh get-docker.sh
 
 **Clone and Build:**
 ```bash
-git clone https://github.com/marketcalls/openalgo
+git clone --filter=blob:none https://github.com/marketcalls/openalgo
 cd openalgo
 cp .sample.env .env
 # Edit .env with your broker credentials

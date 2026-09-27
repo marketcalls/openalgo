@@ -8,7 +8,7 @@ A systematic testing procedure to ensure quality and catch bugs effectively.
 
 ```bash
 # 1. Setup
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 cp .sample.env .env
 # Edit .env with your broker credentials
@@ -369,12 +369,12 @@ open http://127.0.0.1:5000
 
 ## 8. Strategies & Webhooks
 
-### 8.1 Webhook Strategies
+### 8.1 Flow Webhooks
 | Test | Steps | Expected | Status |
 |------|-------|----------|--------|
-| Create strategy | Go to `/strategy/new` | Strategy created | [ ] |
-| Add symbol | Add symbol mapping | Symbol added | [ ] |
-| Enable strategy | Toggle enable | Strategy active | [ ] |
+| Create workflow | Go to `/flow` and add a webhook trigger | Workflow created | [ ] |
+| Wire an order node | Connect the trigger to a place-order node | Nodes connected | [ ] |
+| Activate workflow | Toggle active | Workflow active | [ ] |
 | Webhook URL | Copy webhook URL | URL copied | [ ] |
 
 ### 8.2 TradingView Webhooks

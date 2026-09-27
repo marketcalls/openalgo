@@ -273,3 +273,64 @@ def _emit_analyzer_update(event):
         "analyzer_update",
         {"request": event.request_data, "response": event.response_data},
     )
+
+
+# --- GTT ------------------------------------------------------------------
+
+
+def _emit_gtt_event(event, name):
+    """Emit a GTT event to the UI, or an analyzer update in analyze mode.
+
+    Analyze mode reuses analyzer_update so the analyzer view refreshes the same
+    way it does for orders; live mode gets its own gtt_event so the GTT tab can
+    refresh without reloading the whole orderbook.
+    """
+    if event.mode == "analyze":
+        _emit_analyzer_update(event)
+        return
+    try:
+        socketio.emit(
+            "gtt_event",
+            {
+                "event": name,
+                "symbol": getattr(event, "symbol", ""),
+                "exchange": getattr(event, "exchange", ""),
+                "trigger_id": getattr(event, "trigger_id", ""),
+                "triggered_order_id": getattr(event, "triggered_order_id", ""),
+                "mode": "live",
+            },
+        )
+    except Exception as e:
+        logger.exception(f"Error emitting gtt_event {name}: {e}")
+
+
+def on_gtt_placed(event):
+    _emit_gtt_event(event, "placed")
+
+
+def on_gtt_failed(event):
+    _emit_gtt_event(event, "failed")
+
+
+def on_gtt_modified(event):
+    _emit_gtt_event(event, "modified")
+
+
+def on_gtt_modify_failed(event):
+    _emit_gtt_event(event, "modify_failed")
+
+
+def on_gtt_cancelled(event):
+    _emit_gtt_event(event, "cancelled")
+
+
+def on_gtt_cancel_failed(event):
+    _emit_gtt_event(event, "cancel_failed")
+
+
+def on_gtt_triggered(event):
+    _emit_gtt_event(event, "triggered")
+
+
+def on_gtt_expired(event):
+    _emit_gtt_event(event, "expired")

@@ -127,7 +127,6 @@ finally:
 
 **Locations:**
 - `blueprints/chartink.py:92, 128`
-- `blueprints/strategy.py:112, 148`
 
 ```python
 response = requests.post(f"{BASE_URL}/api/v1/placesmartorder", json=payload)
@@ -328,10 +327,9 @@ useEffect(() => {
 
 1. `blueprints/admin.py` - Temp file handling
 2. `blueprints/chartink.py` - Request timeouts
-3. `blueprints/strategy.py` - Request timeouts
-4. `blueprints/python_strategy.py` - File permissions
-5. `database/historify_db.py` - SQL query construction
-6. `websocket_proxy/server.py` - Missing `db` import
+3. `blueprints/python_strategy.py` - File permissions
+4. `database/historify_db.py` - SQL query construction
+5. `websocket_proxy/server.py` - Missing `db` import
 
 ### Code Quality Review
 

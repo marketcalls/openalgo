@@ -41,7 +41,7 @@ Authenticate first, then send:
 ## Order Update Message
 
 Every field uses OpenAlgo's common order constants: `symbol` in OpenAlgo
-format (e.g. `NIFTY28JUL26FUT`, mapped from the broker's own symbology),
+format (e.g. `NIFTY25AUG26FUT`, mapped from the broker's own symbology),
 `action` `BUY`/`SELL`, `pricetype` `MARKET`/`LIMIT`/`SL`/`SL-M`, `product`
 `CNC`/`NRML`/`MIS`, and lowercase `order_status`
 (`open`/`trigger pending`/`complete`/`rejected`/`cancelled`, plus broker extras such as
@@ -55,7 +55,7 @@ sandbox events.
   "mode": "analyze",
   "broker": "sandbox",
   "orderid": "26071590395364",
-  "symbol": "NIFTY28JUL26FUT",
+  "symbol": "NIFTY25AUG26FUT",
   "exchange": "NFO",
   "action": "BUY",
   "quantity": 65,
@@ -111,8 +111,9 @@ A live rejection example (pushed by the broker's own order feed):
 ## Sources and Broker Coverage
 
 - **Dedicated order feed / ticker postback**: Zerodha, Dhan, Fyers, Upstox,
-  AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow stream natively via
-  each broker's push channel (`broker/*/streaming/*_order_adapter.py`).
+  AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow, IIFL Capital, Kotak
+  stream natively via each broker's push channel
+  (`broker/*/streaming/*_order_adapter.py`).
 - **REST polling fallback**: brokers with no push mechanism (e.g. Groww) are
   covered by server-side orderbook polling (`ORDER_POLL_INTERVAL`, default 5s).
 - **HTTPS postbacks**: `/postback/<broker>` webhook receivers feed the same

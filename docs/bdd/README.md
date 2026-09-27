@@ -7,7 +7,7 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 | File | Domain | Definitions |
 |---|---|---:|
 | `rest_api_inventory.feature` | All 57 registered REST v1 method/path pairs | 1 outline |
-| `broker_plugin_inventory.feature` | All 34 broker plugins | 1 outline |
+| `broker_plugin_inventory.feature` | All 36 broker plugins | 1 outline |
 | `auth_and_setup.feature` | Setup, login, TOTP, route order, DB readiness, logout | 7 |
 | `session_lifecycle.feature` | Multi-session cap, heartbeat, rollover, reconnect | 5 |
 | `broker_sessions.feature` | Broker login, callbacks, credentials, capabilities | 4 |
@@ -17,20 +17,21 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 | `market_data.feature` | Quotes, history, option chain, instruments | 5 |
 | `websocket_streaming.feature` | Proxy protocol, subscriptions, ZMQ fan-in | 6 |
 | `sandbox_analyzer.feature` | Analyzer mode and sandbox state | 5 |
-| `automation_webhooks.feature` | Chartink, Strategy, JSON webhooks, Python host | 5 |
+| `automation_webhooks.feature` | Chartink, JSON webhooks, Python host | 4 |
 | `flow_workflows.feature` | Flow CRUD, execution, webhook, scheduler, monitor | 5 |
 | `scalping_and_tools.feature` | Scalping safety/risk plus current analytics tools | 8 |
 | `notifications_observability.feature` | Telegram, WhatsApp, EventBus, health, traffic | 8 |
 | `admin_and_security.feature` | Admin, IP security, CSP, Remote MCP controls | 4 |
 | `historify_and_tools.feature` | Historify jobs/schedules and option tools | 4 |
+| `strategy_module_rms.feature` | Multi-leg baskets, signal legs, durable ownership, aggregate-trigger versus execution truth, pending stops, recovery/P&L authority, broker-primary UI truth | 35 |
 
 Current totals:
 
-- Feature files: 17
-- Scenario definitions: 86
+- Feature files: 18
+- Scenario definitions: 120
 - Scenario outlines: 6
-- Example rows across outlines: 104
-- Expanded scenario cases: 184 (`86 - 6 + 104`)
+- Example rows across outlines: 106
+- Expanded scenario cases: 220 (`120 - 6 + 106`)
 
 The REST inventory outline is contract coverage, not proof that every endpoint succeeds against every broker. The broker outline proves configuration inventory only; broker-specific behavioral verification remains in broker tests and adapter integration checks.
 

@@ -18,7 +18,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
   "strategy": "Iron Condor Test",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "25NOV25",
+  "expiry_date": "25AUG26",
   "legs": [
     {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 65},
     {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 65},
@@ -38,7 +38,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
   "strategy": "Iron Condor Test",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "25NOV25",
+  "expiry_date": "25AUG26",
   "legs": [
     {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 65},
     {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 65},
@@ -64,7 +64,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
       "option_type": "CE",
       "orderid": "25111996859688",
       "status": "success",
-      "symbol": "NIFTY25NOV2526350CE"
+      "symbol": "NIFTY25AUG2626350CE"
     },
     {
       "action": "BUY",
@@ -74,7 +74,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
       "option_type": "PE",
       "orderid": "25111996042210",
       "status": "success",
-      "symbol": "NIFTY25NOV2525750PE"
+      "symbol": "NIFTY25AUG2625750PE"
     },
     {
       "action": "SELL",
@@ -84,7 +84,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
       "option_type": "CE",
       "orderid": "25111922189638",
       "status": "success",
-      "symbol": "NIFTY25NOV2526250CE"
+      "symbol": "NIFTY25AUG2626250CE"
     },
     {
       "action": "SELL",
@@ -94,7 +94,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
       "option_type": "PE",
       "orderid": "25111919252668",
       "status": "success",
-      "symbol": "NIFTY25NOV2525850PE"
+      "symbol": "NIFTY25AUG2625850PE"
     }
   ]
 }
@@ -109,8 +109,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
   "legs": [
-    {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 65, "expiry_date": "30DEC25"},
-    {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 65, "expiry_date": "25NOV25"}
+    {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 65, "expiry_date": "29SEP26"},
+    {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 65, "expiry_date": "25AUG26"}
   ]
 }
 ```
@@ -128,7 +128,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
       "option_type": "CE",
       "orderid": "25111933337854",
       "status": "success",
-      "symbol": "NIFTY30DEC2525950CE"
+      "symbol": "NIFTY29SEP2625950CE"
     },
     {
       "action": "SELL",
@@ -138,7 +138,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
       "option_type": "CE",
       "orderid": "25111957475473",
       "status": "success",
-      "symbol": "NIFTY25NOV2526150CE"
+      "symbol": "NIFTY25AUG2626150CE"
     }
   ],
   "status": "success",

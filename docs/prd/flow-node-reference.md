@@ -1,5 +1,9 @@
 # Flow Node Reference
 
+> The per-node field tables below are a summary. [`docs/prompt/flow-import-format.md`](../prompt/flow-import-format.md)
+> is the authoritative contract - it is what the importer and the executor are validated against.
+> Where the two disagree, that file is correct and this one is stale.
+
 Complete reference for all 50+ nodes available in the Flow visual workflow builder.
 
 ## Node Categories
@@ -261,13 +265,15 @@ Check if position exists.
 
 ### Fund Check
 
-Check available funds.
+Check available funds. Expresses a minimum only: the condition is true when
+available cash is at least `minAvailable`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| field | string | available_cash, used_margin, total |
-| operator | string | >, <, == |
-| value | number | Comparison value |
+| minAvailable | number | Required. Minimum available cash. Without it the node fails rather than passing on any balance. |
+
+A node saved before this field existed carries a legacy `threshold` (with
+`operator`), which is still accepted when the operator expresses "at least".
 
 ### Time Window
 
@@ -291,8 +297,9 @@ Check specific time.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| time | string | Target time (HH:MM) |
-| operator | string | before, after, at |
+| targetTime | string | Target time (HH:MM) |
+| operator | string | `>=`, `<=`, `>`, `<` |
+| conditionType | string | Label only: entry, exit or custom. Does not affect evaluation or order side. |
 
 ### AND Gate
 
@@ -521,7 +528,7 @@ Get market timings.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| exchange | string | Exchange |
+| date | string | Date as YYYY-MM-DD. Blank means today. |
 | outputVariable | string | Store timings |
 
 ---

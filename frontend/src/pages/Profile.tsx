@@ -27,7 +27,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { webClient } from '@/api/client'
 import TwoFactorEnforcement from '@/components/auth/TwoFactorEnforcement'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -205,11 +205,6 @@ const ALERT_CATEGORIES_TRADING: {
     key: 'positions',
     label: 'Positions',
     description: 'Position close/update operations and P&L notifications',
-  },
-  {
-    key: 'strategy',
-    label: 'Strategy Management',
-    description: 'Strategy creation, symbol configuration, and webhook operations',
   },
   {
     key: 'chartink',
@@ -1138,6 +1133,23 @@ export default function ProfilePage() {
                   </AlertDescription>
                 </Alert>
               )}
+              {selectedBroker === 'indmoney' && (
+                <Alert className="bg-blue-50 dark:bg-blue-950 border-blue-200">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>IndMoney Credentials</AlertTitle>
+                  <AlertDescription>
+                    <p>
+                      <strong>API Key</strong>: the <code>Client ID</code> shown at indstocks.com
+                      &gt; API Trading &gt; Access Tokens after you set up TOTP.
+                    </p>
+                    <p className="mt-1">
+                      <strong>API Secret</strong>: leave blank to log in with MPIN + TOTP
+                      (recommended). If you paste an access token here instead, it is used as-is and
+                      the TOTP flow is skipped - you must regenerate it every 24 hours.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
 
               {/* Save Button */}
               <Button
@@ -1624,9 +1636,6 @@ export default function ProfilePage() {
                 <ul className="list-disc list-inside space-y-1 ml-2">
                   <li>
                     <strong>Positions:</strong> Position close/update notifications
-                  </li>
-                  <li>
-                    <strong>Strategy:</strong> Strategy CRUD, symbol configuration, webhooks
                   </li>
                   <li>
                     <strong>Chartink:</strong> Chartink scanner and strategy integrations

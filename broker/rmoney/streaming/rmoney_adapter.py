@@ -1,6 +1,5 @@
 import base64
 import json
-import logging
 import os
 import sys
 import threading
@@ -10,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from broker.rmoney.streaming.rmoney_websocket import RMoneyWebSocketClient
 from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -26,7 +26,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("rmoney_websocket")
+        self.logger = get_logger("rmoney_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "rmoney"
@@ -96,7 +96,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET credentials")
             raise ValueError("Missing RMoney XTS API credentials")
 
-        self.logger.info(f"Using API Key: {api_key[:10]}... for RMoney XTS connection")
+        self.logger.info("Using configured API key for RMoney XTS connection")
 
         # Close previous client if initialize() is called again
         if self.ws_client is not None:

@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { compression } from 'vite-plugin-compression2'
 import path from 'path'
 
 // https://vite.dev/config/
@@ -9,13 +8,12 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    // Emit pre-compressed .br and .gz next to each asset at build time.
-    // CI force-commits frontend/dist/ to main, so these ship to every
-    // deployment (incl. no-nginx laptop installs) without a Node step.
-    // blueprints/react_app.py serves them when the client advertises the
-    // encoding, falling back to the raw asset otherwise. Zero per-request
-    // CPU; nginx passes Content-Encoding through without double-compressing.
-    compression({ algorithms: ['brotliCompress', 'gzip'], exclude: [/\.(br|gz)$/], threshold: 1024 }),
+    // No build-time compression plugin. The .br/.gz variants it used to emit
+    // were force-committed with frontend/dist/ by CI, and because compressed
+    // output can be neither deflated nor delta-compressed by git, they grew
+    // into two thirds of the repository history and tripled clone times.
+    // utils/precompress_assets.py regenerates the gzip variants at app
+    // startup instead, from the tracked raw assets, in about 30ms once warm.
   ],
   // plotly.js-dist-min's UMD wrapper has an unguarded `global.matchMedia`
   // reference. Vite 8 no longer shims Node's `global` in the browser, so the
@@ -41,6 +39,12 @@ export default defineConfig({
         ws: true,
       },
       '/auth': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
+      // User indicator modules are served by Flask from strategies/indicators,
+      // never bundled, so the dev server has to pass them through too.
+      '/custom-indicators': {
         target: 'http://localhost:5000',
         changeOrigin: true,
       },

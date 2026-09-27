@@ -11,6 +11,15 @@ export async function fetchCSRFToken(): Promise<string> {
   return data.csrf_token
 }
 
+/**
+ * The methods Flask-WTF protects, which is what has to carry the token.
+ *
+ * Mirrors WTF_CSRF_METHODS, whose default is {POST, PUT, PATCH, DELETE}; app.py
+ * never narrows it. Kept as one set so the two interceptors below cannot drift
+ * apart, which is how PATCH came to be missing from both.
+ */
+const CSRF_METHODS = new Set(['post', 'put', 'patch', 'delete'])
+
 export const apiClient = axios.create({
   baseURL: `${API_BASE_URL}/api/v1`,
   headers: {
@@ -64,18 +73,26 @@ authClient.interceptors.request.use(
       return url === exempt || url.startsWith(`${exempt}?`) || url.startsWith(`${exempt}#`)
     })
 
-    if (
-      !isExempt &&
-      (config.method === 'post' || config.method === 'put' || config.method === 'delete')
-    ) {
+    // PATCH included: Flask-WTF's WTF_CSRF_METHODS defaults to
+    // {POST, PUT, PATCH, DELETE} and app.py never narrows it, so a PATCH sent
+    // without the header is rejected with 400 before it reaches the route.
+    // Omitting it here did not weaken anything, it made every PATCH in the app
+    // fail outright.
+    if (!isExempt && CSRF_METHODS.has(config.method ?? '')) {
+      // Fail the request rather than sending it without a token. Continuing
+      // meant Flask-WTF rejected it anyway, but the caller saw an opaque CSRF
+      // error instead of the real cause, and a failed logout still cleared
+      // local state and routed to /login while the server session survived.
+      let csrfToken: string
       try {
-        const csrfToken = await fetchCSRFToken()
-        if (csrfToken) {
-          config.headers['X-CSRFToken'] = csrfToken
-        }
-      } catch {
-        // Continue without CSRF for auth operations - backend may handle differently
+        csrfToken = await fetchCSRFToken()
+      } catch (cause) {
+        throw new Error(`Could not obtain a CSRF token for ${config.method} ${url}`, { cause })
       }
+      if (!csrfToken) {
+        throw new Error(`Empty CSRF token returned for ${config.method} ${url}`)
+      }
+      config.headers['X-CSRFToken'] = csrfToken
     }
     return config
   },
@@ -96,7 +113,7 @@ export const webClient = axios.create({
 webClient.interceptors.request.use(
   async (config) => {
     const method = config.method?.toLowerCase()
-    if (method === 'post' || method === 'put' || method === 'delete') {
+    if (CSRF_METHODS.has(method ?? '')) {
       try {
         const csrfToken = await fetchCSRFToken()
         if (!csrfToken) {
@@ -130,6 +147,19 @@ webClient.interceptors.response.use(
       // Forbidden - user doesn't have permission for this resource
       // Create a more descriptive error for the caller to handle
       error.message = 'You do not have permission to access this resource'
+    } else {
+      // Surface the server's own explanation instead of axios's generic
+      // "Request failed with status code 400". Flask returns the useful text
+      // in the body — `message` carries the specific reason (e.g. which node
+      // field a workflow is missing) while `error` is the generic headline —
+      // and callers only ever read `error.message`, so without this the real
+      // cause reached the server log and nothing else.
+      const data = error.response?.data
+      const serverMessage =
+        typeof data === 'string' ? data : data?.message || data?.error || data?.detail
+      if (serverMessage) {
+        error.message = serverMessage
+      }
     }
     return Promise.reject(error)
   }

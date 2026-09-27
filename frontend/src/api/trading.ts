@@ -289,9 +289,13 @@ export const tradingApi = {
   /**
    * Get the GTT (Good Till Triggered) order book — active triggers + recent history.
    */
-  getGttOrderbook: async (apiKey: string): Promise<ApiResponse<GttOrder[]>> => {
+  getGttOrderbook: async (
+    apiKey: string,
+    status: 'active' | 'all' = 'active'
+  ): Promise<ApiResponse<GttOrder[]>> => {
     const response = await apiClient.post<ApiResponse<GttOrder[]>>('/gttorderbook', {
       apikey: apiKey,
+      status,
     })
     return response.data
   },

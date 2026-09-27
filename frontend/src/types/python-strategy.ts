@@ -57,18 +57,45 @@ export interface ScheduleConfig {
 }
 
 // Exchanges that drive the strategy's calendar/holiday awareness in /python.
-// Labels show the default daily window only; per-date overrides (e.g. partial
-// holidays, Muhurat sessions) come from the market calendar DB.
-export const STRATEGY_EXCHANGES = [
-  { value: 'NSE', label: 'NSE — Equity (09:15-15:30)' },
-  { value: 'BSE', label: 'BSE — Equity (09:15-15:30)' },
-  { value: 'NFO', label: 'NFO — NSE F&O (09:15-15:30)' },
-  { value: 'BFO', label: 'BFO — BSE F&O (09:15-15:30)' },
-  { value: 'CDS', label: 'CDS — NSE Currency (09:00-17:00)' },
-  { value: 'BCD', label: 'BCD — BSE Currency (09:00-17:00)' },
-  { value: 'MCX', label: 'MCX — Commodity (09:00-23:55)' },
-  { value: 'CRYPTO', label: 'CRYPTO — 24/7' },
-] as const
+// The session window shown against each one is served by /python/api/exchanges
+// from the market calendar DB, so an exchange timing change (SEBI moving the
+// F&O close to 15:40, or an admin edit under /admin/timings) reaches this
+// dropdown with no code change. Per-date overrides (partial holidays, Muhurat
+// sessions) are applied by the backend scheduler from the same DB.
+export interface StrategyExchange {
+  value: string
+  label: string
+  /** Descriptive segment name, e.g. 'NSE F&O'. Null for CRYPTO. */
+  description: string | null
+  /** Session open as HH:MM IST. Null for 24/7 exchanges. */
+  start_time: string | null
+  /** Session close as HH:MM IST. Null for 24/7 exchanges. */
+  end_time: string | null
+  /** Human-readable window, e.g. '09:15-15:40' or '24/7'. */
+  window: string | null
+  is_24x7: boolean
+}
+
+// Shown only until /python/api/exchanges responds. Deliberately carries no
+// timings: a stale hardcoded window is worse than none, and the real values
+// arrive a moment later.
+export const FALLBACK_STRATEGY_EXCHANGES: StrategyExchange[] = [
+  { value: 'NSE', label: 'NSE — Equity', description: 'Equity' },
+  { value: 'BSE', label: 'BSE — Equity', description: 'Equity' },
+  { value: 'NFO', label: 'NFO — NSE F&O', description: 'NSE F&O' },
+  { value: 'BFO', label: 'BFO — BSE F&O', description: 'BSE F&O' },
+  { value: 'CDS', label: 'CDS — NSE Currency', description: 'NSE Currency' },
+  { value: 'BCD', label: 'BCD — BSE Currency', description: 'BSE Currency' },
+  { value: 'MCX', label: 'MCX — Commodity', description: 'Commodity' },
+  { value: 'NCO', label: 'NCO — NSE Commodity', description: 'NSE Commodity' },
+  { value: 'CRYPTO', label: 'CRYPTO — 24/7', description: null },
+].map((e) => ({
+  ...e,
+  start_time: null,
+  end_time: null,
+  window: e.value === 'CRYPTO' ? '24/7' : null,
+  is_24x7: e.value === 'CRYPTO',
+}))
 
 export const CRYPTO_EXCHANGE_VALUE = 'CRYPTO'
 

@@ -6,6 +6,7 @@
 import { Handle, Position } from '@xyflow/react'
 import { TrendingUp } from 'lucide-react'
 import { memo } from 'react'
+import { OPTION_NODE_PRODUCT } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import type { OptionsOrderNodeData } from '@/types/flow'
 
@@ -66,7 +67,7 @@ export const OptionsOrderNode = memo(({ data, selected }: OptionsOrderNodeProps)
             </div>
           </div>
           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
-            <span>{data.product || 'MIS'}</span>
+            <span>{data.product || OPTION_NODE_PRODUCT}</span>
             <span>{data.priceType || 'MARKET'}</span>
           </div>
           {data.ltp !== undefined && (

@@ -541,7 +541,7 @@ def purge_old_traffic_logs(days=None):
         )
         logs_session.commit()
         if deleted:
-            logger.info(f"Purged {deleted} traffic log entries older than {days} days")
+            logger.debug(f"Purged {deleted} traffic log entries older than {days} days")
         return deleted
     except Exception as e:
         logger.exception(f"Error purging old traffic logs: {e}")

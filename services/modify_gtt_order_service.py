@@ -49,12 +49,27 @@ def modify_gtt_order_with_auth(
     trigger_id = order_data.get("trigger_id", "")
 
     if get_analyze_mode():
-        error_response = {
-            "mode": "analyze",
-            "status": "error",
-            "message": "Sandbox GTT support not yet implemented",
-        }
-        return False, error_response, 501
+        from services.sandbox_service import sandbox_modify_gtt_order
+
+        success, response, status_code = sandbox_modify_gtt_order(
+            trigger_id, order_data, api_key
+        )
+        if success:
+            bus.publish(GTTModifiedEvent(
+                mode="analyze", api_type=API_TYPE,
+                symbol=order_data.get("symbol", ""), exchange=order_data.get("exchange", ""),
+                trigger_id=trigger_id,
+                request_data=order_request_data, response_data=response, api_key=api_key,
+            ))
+        else:
+            bus.publish(GTTModifyFailedEvent(
+                mode="analyze", api_type=API_TYPE,
+                symbol=order_data.get("symbol", ""), exchange=order_data.get("exchange", ""),
+                trigger_id=trigger_id,
+                error_message=response.get("message", "GTT modify failed"),
+                request_data=order_request_data, response_data=response, api_key=api_key,
+            ))
+        return success, response, status_code
 
     broker_module = import_broker_gtt_module(broker)
     if broker_module is None:

@@ -4,14 +4,15 @@ import os
 from datetime import datetime
 
 import pandas as pd
-import requests
 from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from broker.nubra.api.baseurl import INDEX_MASTER_PATH, get_nubra_headers, get_url
 from database.auth_db import Auth, get_auth_token
 from database.engine_factory import create_db_engine
 from extensions import socketio
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -91,18 +92,20 @@ def download_nubra_instruments(output_path):
     if not auth_token:
         raise Exception(f"No valid auth token found for user '{login_username}'. Please login first.")
 
-    headers = {
-        'Authorization': f'Bearer {auth_token}',
-        'x-device-id': 'OPENALGO'
-    }
+    headers = get_nubra_headers(auth_token, with_json=False)
+
+    # Shared pooled HTTP/2 client. The per-exchange refdata payload is large
+    # (NSE alone is ~75k instruments), so give it a longer explicit timeout than
+    # an ordinary API call rather than inheriting the client default.
+    client = get_httpx_client()
 
     all_data = []
 
     for exchange in ['NSE', 'BSE', 'MCX']:
-        url = f'https://api.nubra.io/refdata/refdata/{date}?exchange={exchange}'
+        url = get_url(f'/refdata/refdata/{date}?exchange={exchange}')
         logger.info(f"Downloading Nubra instruments for {exchange}")
 
-        response = requests.get(url, headers=headers, timeout=15)
+        response = client.get(url, headers=headers, timeout=120)
 
         if response.status_code != 200:
             logger.error(f"{exchange} failed: {response.text}")
@@ -236,12 +239,12 @@ def process_nubra_json(path):
 def download_nubra_indexes(output_path):
     """
     Downloads index data from Nubra public API (no authentication required).
-    URL: https://api.nubra.io/public/indexes?format=csv
+    Path: /public/indexes?format=csv
     """
-    url = 'https://api.nubra.io/public/indexes?format=csv'
+    url = get_url(INDEX_MASTER_PATH)
     logger.info("Downloading Nubra index data")
 
-    response = requests.get(url, timeout=15)
+    response = get_httpx_client().get(url, timeout=30)
 
     if response.status_code != 200:
         logger.error(f"Failed to download index data: {response.text}")

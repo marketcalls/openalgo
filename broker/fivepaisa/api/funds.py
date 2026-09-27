@@ -62,17 +62,28 @@ def get_margin_data(auth_token: str) -> dict[str, Any]:
         margin_data = response.json()
         logger.info(f"Margin Data is : {margin_data}")
 
-        equity_margin = margin_data.get("body", {}).get("EquityMargin", [])[
-            0
-        ]  # Access the first element of the list
+        # EquityMargin is an array with a single entry; it comes back empty when
+        # the API reports Status 1 ("No record found"), so don't index blindly.
+        equity_margins = margin_data.get("body", {}).get("EquityMargin") or []
+        if not equity_margins:
+            logger.error(
+                f"5Paisa Margin returned no EquityMargin entry: "
+                f"{margin_data.get('body', {}).get('Message')}"
+            )
+            return {}
+        equity_margin = equity_margins[0]
+
         positions_data = get_positions(auth_token)
 
-        # Extracting the position details
-        net_position_details = positions_data["body"]["NetPositionDetail"]
+        # 5Paisa sends NetPositionDetail as null (not []) when the account has
+        # no open positions — iterating that raised TypeError, which the handler
+        # below swallowed into an empty dict, so the funds page went blank for
+        # every flat account. Coalesce to a list.
+        net_position_details = (positions_data.get("body") or {}).get("NetPositionDetail") or []
 
         # Calculating the total BookedPL and total MTOM
-        total_booked_pl = sum(position["BookedPL"] for position in net_position_details)
-        total_mtom = sum(position["MTOM"] for position in net_position_details)
+        total_booked_pl = sum(position.get("BookedPL", 0) or 0 for position in net_position_details)
+        total_mtom = sum(position.get("MTOM", 0) or 0 for position in net_position_details)
 
         # Construct and return the processed margin data
         processed_margin_data = {

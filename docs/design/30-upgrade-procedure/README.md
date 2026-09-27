@@ -60,13 +60,24 @@ Then restart the application service.
 
 ## Migration Runner
 
-Run the migration set directly only when diagnosing or completing an interrupted update:
+Run the complete migration set for an existing installation with the supported
+upgrade-directory command:
 
 ```bash
-uv run upgrade/migrate_all.py
+cd upgrade
+uv run migrate_all.py
+cd ..
 ```
 
-The runner continues past scripts that report warnings and summarizes failures. Inspect its complete output rather than treating the final line alone as proof that every migration applied.
+The master command applies changes and has no `--status` preview mode;
+unsupported options are rejected before migrations start. The runner preserves
+the historical warning handling of legacy best-effort scripts, but a required
+schema migration failure is counted as failed and makes the master command exit
+non-zero. Do not start the newer application code after a non-zero exit. Fix the
+reported cause and run the same command again; migrations are idempotent.
+The native Linux updater, Windows updater, Docker startup entrypoint, and the
+Linux/Windows `docker-run` migration helpers all propagate that non-zero result
+and stop before restarting or reporting successful completion.
 
 `upgrade/rotate_pepper.py` is deliberately excluded from automatic migration because rotating `API_KEY_PEPPER` has authentication and ciphertext consequences. It is an explicit operator action.
 

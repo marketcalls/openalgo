@@ -488,9 +488,15 @@ if [ "$SERVER_MODE" = true ]; then
     if [ -f "$OPENALGO_PATH/upgrade/migrate_all.py" ]; then
         log_message "Running database migrations..." "$BLUE"
         sudo -u "$WEB_USER" bash -c "source $VENV_PATH/bin/activate && cd $OPENALGO_PATH && python upgrade/migrate_all.py" 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        migration_status=${PIPESTATUS[0]}
+        if [ "$migration_status" -ne 0 ]; then
             log_message "Retrying migrations with elevated permissions..." "$YELLOW"
             sudo bash -c "source $VENV_PATH/bin/activate && cd $OPENALGO_PATH && python upgrade/migrate_all.py" 2>&1 | tee -a "$LOG_FILE"
+            migration_status=${PIPESTATUS[0]}
+            if [ "$migration_status" -ne 0 ]; then
+                log_message "Database migrations failed after retry; update aborted." "$RED"
+                exit 1
+            fi
         fi
         log_message "Database migrations completed" "$GREEN"
     else
@@ -501,6 +507,11 @@ else
     if [ -f "$OPENALGO_PATH/upgrade/migrate_all.py" ]; then
         cd "$OPENALGO_PATH"
         $UV_CMD run upgrade/migrate_all.py 2>&1 | tee -a "$LOG_FILE"
+        migration_status=${PIPESTATUS[0]}
+        if [ "$migration_status" -ne 0 ]; then
+            log_message "Database migrations failed; update aborted." "$RED"
+            exit 1
+        fi
         log_message "Database migrations completed" "$GREEN"
     else
         log_message "No migration script found (upgrade/migrate_all.py)" "$YELLOW"
@@ -516,9 +527,156 @@ if [ "$SERVER_MODE" = true ]; then
     # Reload systemd in case service file changed
     sudo systemctl daemon-reload
 
+    # Retrofit deployments created by older installers. The guard is written
+    # into each OpenAlgo server block, so inherited/default nginx access logs
+    # are replaced by a conditional log that excludes replayable URL secrets.
+    # Every edit is backed up and nginx -t must pass before the backup is
+    # discarded; otherwise all touched files are restored.
+    harden_nginx_webhook_logs() {
+        local backup_dir manifest conf temp_file backup_file changed=0 index=0
+        backup_dir=$(mktemp -d /tmp/openalgo-nginx-log-guard-XXXXXX) || return 1
+        manifest="$backup_dir/manifest"
+        : > "$manifest"
+
+        cleanup_nginx_log_guard_temp() {
+            sudo find "$backup_dir" -type f -delete 2>/dev/null || true
+            sudo rmdir "$backup_dir" 2>/dev/null || true
+        }
+
+        restore_nginx_log_guard_backups() {
+            while IFS="$(printf '\t')" read -r conf backup_file; do
+                [ -n "$conf" ] || continue
+                sudo cp "$backup_file" "$conf"
+            done < "$manifest"
+        }
+
+        for conf in /etc/nginx/sites-available/* /etc/nginx/conf.d/*.conf; do
+            [ -f "$conf" ] || continue
+            grep -q 'unix:.*\.sock\|openalgo\|gunicorn' "$conf" 2>/dev/null || continue
+            grep -q 'OPENALGO_WEBHOOK_LOG_GUARD' "$conf" 2>/dev/null && continue
+
+            index=$((index + 1))
+            backup_file="$backup_dir/config-$index"
+            temp_file="$backup_dir/rendered-$index"
+            sudo cp "$conf" "$backup_file" || {
+                restore_nginx_log_guard_backups
+                cleanup_nginx_log_guard_temp
+                return 1
+            }
+            printf '%s\t%s\n' "$conf" "$backup_file" >> "$manifest"
+
+            awk '
+                function emit_guard(indent) {
+                    print indent "# OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs."
+                    print indent "set $openalgo_loggable 1;"
+                    print indent "if ($uri ~ ^/(strategy|flow|chartink)/webhook/) {"
+                    print indent "    set $openalgo_loggable 0;"
+                    print indent "}"
+                    print indent "access_log /var/log/nginx/openalgo_access.log combined if=$openalgo_loggable;"
+                }
+                {
+                    line = $0
+                    trimmed = line
+                    sub(/^[[:space:]]+/, "", trimmed)
+                    if (trimmed ~ /^access_log[[:space:]]+/ &&
+                        trimmed !~ /^access_log[[:space:]]+off[[:space:]]*;/ &&
+                        trimmed !~ /if=\$openalgo_loggable/) {
+                        if (trimmed ~ /^access_log[[:space:]]+[^[:space:];]+[[:space:]]*;/) {
+                            sub(/;[[:space:]]*$/, " combined if=$openalgo_loggable;", line)
+                        } else {
+                            sub(/;[[:space:]]*$/, " if=$openalgo_loggable;", line)
+                        }
+                    }
+                    print line
+                    if (trimmed ~ /^server_name[[:space:]]+/) {
+                        match(line, /^[[:space:]]*/)
+                        emit_guard(substr(line, 1, RLENGTH))
+                    }
+                }
+            ' "$conf" > "$temp_file" || {
+                restore_nginx_log_guard_backups
+                cleanup_nginx_log_guard_temp
+                return 1
+            }
+            sudo cp "$temp_file" "$conf" || {
+                restore_nginx_log_guard_backups
+                cleanup_nginx_log_guard_temp
+                return 1
+            }
+            changed=1
+        done
+
+        if [ "$changed" -eq 1 ] && ! sudo nginx -t; then
+            restore_nginx_log_guard_backups
+            sudo nginx -t >/dev/null 2>&1 || true
+            log_message "Restored nginx configs after webhook log guard validation failed" "$RED"
+            cleanup_nginx_log_guard_temp
+            return 1
+        fi
+
+        if [ "$changed" -eq 1 ]; then
+            log_message "Installed OPENALGO_WEBHOOK_LOG_GUARD in existing nginx config(s)" "$GREEN"
+        fi
+        cleanup_nginx_log_guard_temp
+        return 0
+    }
+
+    harden_nginx_webhook_logs
+    check_status "Failed to harden nginx webhook access logs"
+
     # Start the OpenAlgo service
     sudo systemctl start "$SERVICE_NAME"
     check_status "Failed to start $SERVICE_NAME"
+
+    # --------------------------------------------------------------
+    # Warn about the forced WebSocket upgrade header on the main proxy
+    # block. Configs written by earlier installers set
+    #     proxy_set_header Upgrade $http_upgrade;
+    #     proxy_set_header Connection "upgrade";
+    # inside `location / {`, which carries ordinary HTTP, not WebSockets
+    # (/ws, /ws/ and /socket.io/ have their own blocks). Every normal
+    # request then reaches gunicorn claiming an upgrade with an empty
+    # Upgrade:, which breaks HTTP/1.1 keep-alive and shows up as
+    # intermittent truncated asset responses and 5xx (issue #1807).
+    #
+    # This only reports; it does not edit nginx configs. A wrong automated
+    # rewrite of a live reverse proxy takes the whole instance offline, and
+    # admins routinely hand-customise these files, so the edit is left to a
+    # human who can run `nginx -t` and watch the reload.
+    # --------------------------------------------------------------
+    check_nginx_upgrade_header() {
+        local conf found=""
+        for conf in /etc/nginx/sites-available/* /etc/nginx/conf.d/*.conf; do
+            [ -f "$conf" ] || continue
+            grep -q 'unix:.*\.sock\|openalgo\|gunicorn' "$conf" 2>/dev/null || continue
+            # Report only when `location / {` still forces the header.
+            if awk '
+                /location \/ \{/           { inroot = 1 }
+                inroot && /^[[:space:]]*\}/ { inroot = 0 }
+                inroot && /proxy_set_header[[:space:]]+Connection[[:space:]]+"upgrade";/ { hit = 1 }
+                END { exit !hit }
+            ' "$conf" 2>/dev/null; then
+                found="$found $conf"
+            fi
+        done
+
+        [ -n "$found" ] || return 0
+
+        log_message "
+Nginx: the main proxy block forces a WebSocket upgrade header" "$YELLOW"
+        log_message "Affected config(s):$found" "$YELLOW"
+        log_message "Inside the 'location / {' block only, replace these two lines:" "$YELLOW"
+        log_message "    proxy_set_header Upgrade \$http_upgrade;" "$YELLOW"
+        log_message "    proxy_set_header Connection \"upgrade\";" "$YELLOW"
+        log_message "with this single line:" "$YELLOW"
+        log_message "    proxy_set_header Connection \"\";" "$YELLOW"
+        log_message "Leave the /ws, /ws/ and /socket.io/ blocks unchanged, then run:" "$YELLOW"
+        log_message "    sudo nginx -t && sudo systemctl reload nginx" "$YELLOW"
+        log_message "Background: https://github.com/marketcalls/openalgo/issues/1807
+" "$YELLOW"
+    }
+
+    check_nginx_upgrade_header
 
     # Reload Nginx
     sudo systemctl reload nginx

@@ -2,6 +2,7 @@ import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
+from utils.constants import SUPPORTED_INTERVALS
 from utils.logging import get_logger
 
 # Initialize logger
@@ -62,19 +63,27 @@ def get_intervals_with_auth(auth_token: str, broker: str) -> tuple[bool, dict[st
 
             return sorted(interval_list, key=extract_number)
 
+        # Only what the history API will actually accept. A broker map often
+        # carries an alias for a resolution it already has (Zerodha maps both
+        # "60m" and "1h" to "60minute"), and advertising the one history rejects
+        # hands the caller a timeframe that 400s the moment it is used. Worse,
+        # the choice is remembered, so a chart that picked it stays broken across
+        # reloads. The alias keeps working as input; it is just not offered.
+        offered = [k for k in data_handler.timeframe_map.keys() if k in SUPPORTED_INTERVALS]
+        dropped = [k for k in data_handler.timeframe_map.keys() if k not in SUPPORTED_INTERVALS]
+        if dropped:
+            logger.debug(
+                "Not advertising broker intervals the history API rejects: %s",
+                ", ".join(sorted(dropped)),
+            )
+
         intervals = {
-            "seconds": sort_intervals(
-                [k for k in data_handler.timeframe_map.keys() if k.endswith("s")]
-            ),
-            "minutes": sort_intervals(
-                [k for k in data_handler.timeframe_map.keys() if k.endswith("m")]
-            ),
-            "hours": sort_intervals(
-                [k for k in data_handler.timeframe_map.keys() if k.endswith("h")]
-            ),
-            "days": sorted([k for k in data_handler.timeframe_map.keys() if k == "D"]),
-            "weeks": sorted([k for k in data_handler.timeframe_map.keys() if k == "W"]),
-            "months": sorted([k for k in data_handler.timeframe_map.keys() if k == "M"]),
+            "seconds": sort_intervals([k for k in offered if k.endswith("s")]),
+            "minutes": sort_intervals([k for k in offered if k.endswith("m")]),
+            "hours": sort_intervals([k for k in offered if k.endswith("h")]),
+            "days": sorted([k for k in offered if k == "D"]),
+            "weeks": sorted([k for k in offered if k == "W"]),
+            "months": sorted([k for k in offered if k == "M"]),
         }
 
         return True, {"status": "success", "data": intervals}, 200

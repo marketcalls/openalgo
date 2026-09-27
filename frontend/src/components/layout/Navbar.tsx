@@ -1,6 +1,6 @@
 import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { authApi } from '@/api/auth'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { Badge } from '@/components/ui/badge'
@@ -27,7 +27,21 @@ import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
-export function Navbar() {
+interface NavbarProps {
+  /**
+   * Span the full viewport instead of the centred, width-capped container.
+   *
+   * Pages rendered inside Layout share its `container mx-auto`, so the nav
+   * lines up with the content below it and this stays false. Full-bleed pages
+   * under FullWidthLayout render this navbar themselves and have no such
+   * container, so a capped nav floats inset above edge-to-edge content -- on a
+   * 1920px screen Tailwind caps `container` at 1536px, leaving ~192px of gutter
+   * each side while the page fills the width.
+   */
+  fluid?: boolean
+}
+
+export function Navbar({ fluid = false }: NavbarProps = {}) {
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -73,7 +87,13 @@ export function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container mx-auto px-4 flex h-14 items-center">
+      <div
+        data-testid="navbar-row"
+        className={cn(
+          'px-4 flex h-14 items-center',
+          fluid ? 'w-full' : 'container mx-auto'
+        )}
+      >
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild className="md:hidden">
@@ -104,9 +124,10 @@ export function Navbar() {
                   Navigation
                 </div>
                 {mobileSheetItems.map((item) => {
+                  const active = isActive(item.href)
                   const cls = cn(
                     'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
-                    isActive(item.href)
+                    active
                       ? 'bg-primary text-primary-foreground'
                       : 'hover:bg-muted active:bg-muted'
                   )
@@ -122,6 +143,7 @@ export function Navbar() {
                       href={item.href}
                       onClick={() => setMobileOpen(false)}
                       className={cls}
+                      aria-current={active ? 'page' : undefined}
                     >
                       {inner}
                     </a>
@@ -131,6 +153,7 @@ export function Navbar() {
                       to={item.href}
                       onClick={() => setMobileOpen(false)}
                       className={cls}
+                      aria-current={active ? 'page' : undefined}
                     >
                       {inner}
                     </Link>
@@ -143,22 +166,26 @@ export function Navbar() {
                 <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Quick Access
                 </div>
-                {filteredProfileMenuItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    to={item.href}
-                    onClick={() => setMobileOpen(false)}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
-                      isActive(item.href)
-                        ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-muted active:bg-muted'
-                    )}
-                  >
-                    <item.icon className="h-4 w-4" />
-                    {item.label}
-                  </Link>
-                ))}
+                {filteredProfileMenuItems.map((item) => {
+                  const active = isActive(item.href)
+                  return (
+                    <Link
+                      key={item.href}
+                      to={item.href}
+                      onClick={() => setMobileOpen(false)}
+                      className={cn(
+                        'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
+                        active
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-muted active:bg-muted'
+                      )}
+                      aria-current={active ? 'page' : undefined}
+                    >
+                      <item.icon className="h-4 w-4" />
+                      {item.label}
+                    </Link>
+                  )
+                })}
                 <a
                   href="https://docs.openalgo.in"
                   target="_blank"
@@ -183,12 +210,28 @@ export function Navbar() {
         {/* Desktop Navigation.
             Icon-only between md and xl so all 9 items fit portrait monitors
             and small laptops (768-1280px wide) without squashing or pushing
-            the profile menu off-screen; full labels from xl up (issue #1384). */}
-        <nav className="hidden md:flex items-center gap-1">
+            the profile menu off-screen; full labels from xl up (issue #1384).
+
+            From xl the labels appear but the bar does not grow to match: inside
+            Layout it shares the page `container`, which Tailwind caps at 1280px
+            for every viewport from 1280px to 1535px. Nine labelled items are
+            986px and the logo plus the right-hand controls take 394px, so the
+            row needed 1412px and had 1248px (issue #1507). Below 2xl the items
+            therefore use px-1.5 with tighter gaps, and the right-hand controls
+            keep their tighter gap and the short mode wording already used below
+            lg (203px instead of 255px). The padding is deliberately tighter
+            than it needs to be on the fonts we develop against: this row is
+            laid out with fixed spacing but rendered in whatever the OS resolves
+            for `system-ui`, and the widest common face (DejaVu Sans, a Linux
+            default) runs ~7% wider than macOS. px-2 left only 2px of slack
+            there; px-1.5 leaves ~38px. At 2xl and above nothing changes, and
+            e2e/navbar-fit.spec.ts asserts the row never overflows. */}
+        <nav className="hidden md:flex items-center gap-0.5 2xl:gap-1">
           {navItems.map((item) => {
+            const active = isActive(item.href)
             const className = cn(
-              'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-              isActive(item.href)
+              'flex items-center gap-1.5 2xl:gap-2 rounded-md px-1.5 2xl:px-3 py-2 text-sm font-medium transition-colors',
+              active
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             )
@@ -201,11 +244,23 @@ export function Navbar() {
             // Flask-served pages (e.g. /trading) need a full page load,
             // not client-side routing.
             return item.external ? (
-              <a key={item.href} href={item.href} title={item.label} className={className}>
+              <a
+                key={item.href}
+                href={item.href}
+                title={item.label}
+                className={className}
+                aria-current={active ? 'page' : undefined}
+              >
                 {content}
               </a>
             ) : (
-              <Link key={item.href} to={item.href} title={item.label} className={className}>
+              <Link
+                key={item.href}
+                to={item.href}
+                title={item.label}
+                className={className}
+                aria-current={active ? 'page' : undefined}
+              >
                 {content}
               </Link>
             )
@@ -213,7 +268,7 @@ export function Navbar() {
         </nav>
 
         {/* Right Side */}
-        <div className="ml-auto flex items-center gap-1 sm:gap-2">
+        <div className="ml-auto flex items-center gap-1 2xl:gap-2">
           {/* Broker Badge — hidden below lg to keep the bar within narrow
               (portrait/small-laptop) widths */}
           {user?.broker && (
@@ -230,10 +285,10 @@ export function Navbar() {
               appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
             )}
           >
-            <span className="hidden lg:inline">
+            <span className="hidden 2xl:inline">
               {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
             </span>
-            <span className="lg:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+            <span className="2xl:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
           </Badge>
 
           {/* Mode Toggle */}

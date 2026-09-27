@@ -5,6 +5,7 @@ import httpx
 import threading
 import time
 
+from broker.shoonya.mapping.order_data import normalize_order_status
 from broker.shoonya.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -399,9 +400,11 @@ def cancel_all_orders_api(data, auth):
     if order_book_response is None:
         return [], []
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
+    # Filter orders still working at the exchange (OPEN / PENDING / TRIGGER_PENDING)
     orders_to_cancel = [
-        order for order in order_book_response if order["status"] in ["OPEN", "TRIGGER PENDING"]
+        order
+        for order in order_book_response
+        if normalize_order_status(order.get("status")) == "open"
     ]
     canceled_orders = []
     failed_cancellations = []

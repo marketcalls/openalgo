@@ -497,10 +497,23 @@ def get_bot_config() -> dict:
 
 
 def update_bot_config(config: dict) -> bool:
-    """Update bot configuration"""
+    """Update bot configuration.
+
+    Writes nothing when every supplied field already matches what is stored.
+    The auto-start path re-submits the exact token it just read out of the same
+    row, and that pointless UPDATE was failing with "database is locked" on
+    startup, when the rest of the boot sequence is hammering openalgo.db (all
+    telegram tables live in the main DB, not a separate file). Skipping the
+    write removes the contention instead of waiting it out. The token is
+    compared as decrypted plaintext — Fernet ciphertext is non-deterministic,
+    so comparing encrypted blobs would never match.
+    """
     try:
         bot_config = db_session.query(BotConfig).filter_by(id=1).first()
 
+        # A row that does not exist yet always has to be written, whatever the
+        # field-level comparison below concludes.
+        changed = bot_config is None
         if not bot_config:
             bot_config = BotConfig(id=1)
             db_session.add(bot_config)
@@ -510,12 +523,22 @@ def update_bot_config(config: dict) -> bool:
         for key, value in config.items():
             # Handle the bot_token -> token mapping
             if key == "bot_token":
+                if _safe_decrypt_telegram(bot_config.token) == value:
+                    continue
+                changed = True
                 if value:
                     bot_config.token = fernet.encrypt(value.encode()).decode()
                 else:
                     bot_config.token = None
             elif hasattr(bot_config, key) and key not in ["id", "created_at"]:
+                if getattr(bot_config, key) == value:
+                    continue
+                changed = True
                 setattr(bot_config, key, value)
+
+        if not changed:
+            logger.debug("Bot configuration unchanged, skipping write")
+            return True
 
         db_session.commit()
         logger.debug("Bot configuration updated")

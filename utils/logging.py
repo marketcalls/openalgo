@@ -9,6 +9,46 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
+from utils import real_threading as _real_threading
+from utils.url_redaction import redact_url_credentials
+
+
+def _create_real_lock(self) -> None:
+    """Give every logging handler a REAL lock instead of eventlet's green one.
+
+    ``logging.Handler`` serialises emit() with a lock it builds in __init__.
+    Under gunicorn+eventlet the app is imported after monkey-patching, so that
+    lock is a green semaphore owned by the hub, and it can only be handed
+    between greenlets.
+
+    Every real OS thread in this project logs: the websocket client's asyncio
+    loop, the Telegram bot thread and its Kaleido renderer, the broker snapshot
+    feed threads. The moment one of them logs while a greenlet holds the same
+    handler lock, the hub tries to resume a waiter belonging to another thread,
+    raises ``greenlet.error: Cannot switch to a different thread`` inside
+    ``fire_timers``, and leaves that thread blocked on the handler **forever**.
+    The give-away beforehand is ``AttributeError: 'StreamHandler' object has no
+    attribute 'lock'`` on unrelated requests. See issues #1569 and #1402.
+
+    A real lock is held only for the duration of one emit, and it is the same
+    lock the dev server has always used, where nothing is patched.
+
+    Patched on the class so it also covers handlers this project does not
+    create: gunicorn's, Flask's, and any third-party library's.
+    """
+    self.lock = _real_threading.RLock()
+
+
+logging.Handler.createLock = _create_real_lock
+
+# Handlers built before this module was imported still hold a green lock.
+# Re-lock whatever is already attached anywhere in the tree.
+for _logger in [logging.getLogger()] + [
+    logging.getLogger(_name) for _name in list(logging.root.manager.loggerDict)
+]:
+    for _handler in list(getattr(_logger, "handlers", ())):
+        _handler.createLock()
+
 # Load environment variables if .env file exists
 try:
     from dotenv import load_dotenv
@@ -37,16 +77,33 @@ except ImportError:
 # consumed; the surrounding quote (if any) is preserved by anchoring on the
 # prefix capture group.
 SENSITIVE_PATTERNS = [
-    # Bearer header tokens — run first so the broader pattern below doesn't
+    # Bearer header tokens, run first so the broader pattern below doesn't
     # leave the bearer suffix exposed when wrapped in quotes.
-    (r"(Bearer\s+)[\w\-\.]+", r"\1[REDACTED]"),
+    #
+    # The value is not always a single word. Two brokers send a composite
+    # credential: tradejini uses "Bearer <api_key>:<access_token>" and aliceblue
+    # uses "Bearer <user_id> <session_id>". A [\w\-\.]+ value class stops at the
+    # separator, so it redacted the harmless half and left the real secret in
+    # the log. Continue across ':' and single spaces between word characters.
+    # That still stops at a quote, comma or brace, so it cannot swallow the rest
+    # of a headers dict.
+    (r"(Bearer\s+)[\w\-\.]+(?:[:\s][\w\-\.]+)*", r"\1[REDACTED]"),
+    # Legacy callback diagnostics also used prose rather than key=value:
+    # "Received authorization code: X", "The request token is X", and
+    # similar forms. Keep the useful label while removing the replayable
+    # value. This is deliberately narrower than a generic ``code`` rule so
+    # HTTP/status/error codes remain visible.
+    (
+        r"((?:received\s+(?:authorization\s+code|token[_-]?id)|the\s+(?:request\s+token|code)\s+is|oauth\s+callback\s+with\s+code)\s*:?\s*)[^\s'\",;}\]]+",
+        r"\1[REDACTED]",
+    ),
     # Common credential keys in any of: key=val, key: val, 'key': 'val',
     # "key":"val", key="val". Includes broker-token aliases the codebase
     # actually logs (enctoken, feed_token, access_token, session_token).
     # Value class is a negated set so passwords with symbols (@!#$ ...) are
     # fully consumed; we stop at whitespace, quotes, and dict/JSON structure.
     (
-        r"(['\"]?(?:api[_-]?key[_-]?pepper|api[_-]?key|app[_-]?key|password|access[_-]?token|enctoken|feed[_-]?token|session[_-]?token|auth[_-]?token|authorization|secret|pepper|token)['\"]?\s*[:=]\s*['\"]?)[^\s'\",;}\]]+",
+        r"(['\"]?(?:api[_-]?key[_-]?pepper|api[_-]?key|app[_-]?key|password|access[_-]?token|enctoken|feed[_-]?token|session[_-]?token|auth[_-]?token|api[_-]?session|token[_-]?id|request[_-]?token|auth[_-]?code|authorization|cookie|secret|pepper|token)['\"]?\s*[:=]\s*['\"]?)[^\s'\",;}\]]+",
         r"\1[REDACTED]",
     ),
 ]
@@ -146,35 +203,69 @@ class WebSocketHandshakeFilter(logging.Filter):
         return True
 
 
+def redact_text(text: str) -> str:
+    """Apply every sensitive pattern to a piece of text."""
+    text = redact_url_credentials(text)
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 class SensitiveDataFilter(logging.Filter):
-    """Filter to redact sensitive information from log messages."""
+    """Redact sensitive information from log records.
+
+    The record is rendered first and redacted afterwards, which is the only
+    order that is both correct and safe.
+
+    Redacting the template and the arguments separately, as this used to, went
+    wrong in three ways at once. Every argument was passed through ``str()``,
+    so an argument feeding a ``%d`` or ``%.2f`` became text and the record
+    could no longer be formatted: the operator was shown "Strategy module
+    recovered %d run(s)", with no way to tell whether it recovered none or
+    twelve. A mapping argument, the ``%(key)s`` form, was iterated as keys and
+    replaced by a tuple of key names. And redacting the template could delete a
+    placeholder along with the secret beside it, leaving more arguments than
+    specifiers.
+
+    Rendering first fixes all three: the arguments are still their own types
+    when the message is built, so numbers format; the mapping form formats
+    normally; and the redaction then runs over the finished text, which is
+    where a secret ends up regardless of whether it arrived in the template or
+    in an argument. Clearing ``args`` afterwards is what keeps the two in step,
+    and is the same thing the JSON handler below already does.
+    """
 
     def filter(self, record) -> bool:
-        """
-        Redact sensitive data from the log message.
-
-        Args:
-            record (logging.LogRecord): The log record to modify.
-
-        Returns:
-            bool: Always True, as this filter modifies the record in-place rather than filtering it out.
-        """
+        """Redact the record in place. Always returns True."""
         try:
-            # Filter the main message
-            for pattern, replacement in SENSITIVE_PATTERNS:
-                record.msg = re.sub(pattern, replacement, str(record.msg), flags=re.IGNORECASE)
+            try:
+                text = record.getMessage()
+            except Exception:
+                # Malformed format string or mismatched arguments. Fall back to
+                # the raw template so the line is still emitted and still
+                # redacted, rather than being dropped.
+                text = str(record.msg)
 
-            # Filter args if present
-            if hasattr(record, "args") and record.args:
-                filtered_args = []
-                for arg in record.args:
-                    filtered_arg = str(arg)
-                    for pattern, replacement in SENSITIVE_PATTERNS:
-                        filtered_arg = re.sub(
-                            pattern, replacement, filtered_arg, flags=re.IGNORECASE
-                        )
-                    filtered_args.append(filtered_arg)
-                record.args = tuple(filtered_args)
+            text = redact_text(text)
+
+            # The traceback too. A secret raised inside an exception message,
+            # or sitting in a frame's arguments, reaches every sink through
+            # exc_info rather than through the message, and the message was the
+            # only thing being redacted. Rendering it here and storing the
+            # redacted form in exc_text is what the standard Formatter reads in
+            # preference to formatting exc_info again.
+            if record.exc_info and record.exc_info[0] is not None:
+                record.exc_text = redact_text("".join(traceback.format_exception(*record.exc_info)))
+            elif record.exc_text:
+                record.exc_text = redact_text(record.exc_text)
+            if record.stack_info:
+                record.stack_info = redact_text(record.stack_info)
+
+            record.msg = text
+            # Rendered, so there is nothing left to substitute. getMessage()
+            # skips formatting entirely when args is falsy, which also means a
+            # stray "%" surviving in the text cannot raise later.
+            record.args = ()
         except Exception:
             # If filtering fails, don't block the log message
             pass
@@ -309,15 +400,22 @@ class JSONErrorFormatter(logging.Formatter):
 
         # Capture full traceback if present
         if record.exc_info and record.exc_info[0] is not None:
-            entry["exception"] = traceback.format_exception(*record.exc_info)
+            # Redacted here as well as in the filter: this handler renders
+            # exc_info itself rather than reading the exc_text the filter
+            # prepared, and log/errors.jsonl is the first place CLAUDE.md tells
+            # anyone to look when debugging.
+            entry["exception"] = [
+                redact_text(line) for line in traceback.format_exception(*record.exc_info)
+            ]
 
         # Capture Flask request context if available
         try:
             from flask import has_request_context, request
+
             if has_request_context():
                 entry["request"] = {
                     "method": request.method,
-                    "path": request.path,
+                    "path": redact_url_credentials(request.path),
                     "ip": request.remote_addr,
                 }
         except Exception:
@@ -406,9 +504,7 @@ def setup_logging():
         if errors_file.exists() and errors_file.stat().st_size > 0:
             lines = errors_file.read_text(encoding="utf-8").splitlines()
             if len(lines) > 1000:
-                errors_file.write_text(
-                    "\n".join(lines[-1000:]) + "\n", encoding="utf-8"
-                )
+                errors_file.write_text("\n".join(lines[-1000:]) + "\n", encoding="utf-8")
     except Exception:
         pass
     json_handler = logging.FileHandler(
@@ -479,8 +575,6 @@ def highlight_url(url: str, text: str = None) -> str:
     bright_cyan = Fore.CYAN + Style.BRIGHT
     bright_white = Fore.WHITE + Style.BRIGHT
     reset = Style.RESET_ALL
-
-    display_text = text or url
 
     # Format: [bright_white]text[reset] -> [bright_cyan]url[reset]
     if text and text != url:

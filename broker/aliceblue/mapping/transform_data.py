@@ -2,6 +2,9 @@
 # Mapping AliceBlue V2 API Parameters
 
 from database.token_db import get_br_symbol, get_token
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # ─── Product / Order type mappings (OpenAlgo ↔ AliceBlue V2) ──────────────────
@@ -39,7 +42,19 @@ def map_order_type(pricetype):
         "SL": "SL",
         "SL-M": "SLM",
     }
-    return mapping.get(pricetype, "MARKET")
+    order_type = mapping.get(pricetype)
+    if order_type is None:
+        # Falling back to MARKET turns a mistyped stop into an order that fills
+        # at once instead of resting - the opposite of what was asked for, and
+        # "SLM" (AliceBlue's own code for SL-M) is an easy thing to send by
+        # mistake. Keep the fallback for compatibility, but say so, as
+        # broker/fyers does at the same spot.
+        logger.warning(
+            f"Unknown pricetype {pricetype!r} received; defaulting to MARKET. "
+            f"Valid values: {', '.join(mapping)}"
+        )
+        return "MARKET"
+    return order_type
 
 
 def reverse_map_order_type(order_type):

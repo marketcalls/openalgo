@@ -1,6 +1,6 @@
 # OpenAlgo - Algorithmic Trading Platform
 
-OpenAlgo is a production-ready algorithmic trading platform providing a unified API layer across 34 Indian brokers. Seamlessly integrate with TradingView, Amibroker, Excel, Python, and AI agents.
+OpenAlgo is a production-ready algorithmic trading platform providing a unified API layer across 36 broker plugins: 35 securities integrations and Delta Exchange for crypto derivatives. Seamlessly integrate with TradingView, Amibroker, Excel, Python, and AI agents.
 
 ## Quick Start
 

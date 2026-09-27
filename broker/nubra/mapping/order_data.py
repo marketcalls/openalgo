@@ -1,185 +1,379 @@
-import json
+from datetime import datetime
 
+from broker.nubra.mapping.transform_data import (
+    brexchange_of,
+    candidate_exchanges,
+    derivative_type_of,
+    map_exchange,
+    reverse_map_product_type,
+)
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def map_order_data(order_data):
+def flatten_order_buckets(response, buckets=None):
     """
-    Processes and modifies a list of order dictionaries from Nubra API.
-    
-    Nubra API returns orders as a direct list with fields like:
-    - order_id, order_side, order_status, order_type, order_price, order_qty
-    - ref_data containing: token, stock_name, exchange, etc.
-    
-    Parameters:
-    - order_data: Response from Nubra API (list of orders or dict with status).
+    Flatten the bucketed GET /sentinel/orders response into a list of orders.
 
-    Returns:
-    - The modified order_data normalized to OpenAlgo format.
+    V3 returns ``{"orders": {"open": [...], "executed": [...], "cancelled": [...],
+    "expired": [...], "rejected": [...], "gtt": [...]}}``. Each order is tagged
+    with its bucket under ``_bucket`` so callers can derive status from the
+    bucket rather than re-deriving it from mixed fields.
+
+    Args:
+        buckets: optional iterable restricting which buckets are returned.
     """
-    # Nubra API returns a direct list of orders, not wrapped in {status: bool, data: [...]}
-    # Handle both cases for compatibility
-    if isinstance(order_data, dict):
-        if "data" in order_data and order_data.get("data") is not None:
-            orders = order_data["data"]
-        elif order_data.get("status") == False or order_data.get("error"):
-            logger.info(f"No data available or error in response: {order_data}")
-            return []
-        else:
-            # Might be an empty dict or unexpected format
-            logger.info("No data available.")
-            return []
-    elif isinstance(order_data, list):
-        orders = order_data
-    else:
-        logger.info("Unexpected order_data format.")
+    if not isinstance(response, dict):
         return []
 
+    grouped = response.get("orders")
+    if not isinstance(grouped, dict):
+        return []
+
+    flattened = []
+    for bucket, orders in grouped.items():
+        if buckets is not None and bucket not in buckets:
+            continue
+        for order in orders or []:
+            if isinstance(order, dict):
+                order = dict(order)
+                order["_bucket"] = bucket
+                flattened.append(order)
+    return flattened
+
+
+def extract_positions(positions_data):
+    """
+    Pull the flat positions list out of a V3 /sentinel/portfolio/positions response.
+    """
+    if isinstance(positions_data, list):
+        return positions_data
+    if not isinstance(positions_data, dict):
+        return []
+
+    portfolio = positions_data.get("portfolio") or {}
+    return portfolio.get("positions") or []
+
+
+def resolve_instrument(brexchange, derivative_type=None, ref_id=None, broker_symbol=None):
+    """
+    Resolve a Nubra instrument to (OpenAlgo symbol, OpenAlgo exchange).
+
+    The exchange is confirmed rather than inferred: map_exchange() only decides
+    which OpenAlgo exchanges are worth probing, and both values returned come
+    from the master contract row that actually matched. ``ref_id`` is tried
+    first because that is what Nubra stores in ``symtoken.token``; the broker
+    symbol is the second key.
+
+    Returns:
+        ``(symbol, exchange)``, or ``(None, None)`` when nothing matched, so
+        callers can say so instead of substituting a plausible-looking guess.
+    """
+    ref_id = str(ref_id or "").strip()
+    broker_symbol = str(broker_symbol or "").strip()
+
+    for candidate in candidate_exchanges(brexchange, derivative_type):
+        if ref_id:
+            symbol = get_symbol(ref_id, candidate)
+            if symbol:
+                return symbol, candidate
+        if broker_symbol:
+            symbol = get_oa_symbol(broker_symbol, candidate)
+            if symbol:
+                return symbol, candidate
+
+    return None, None
+
+
+def _first_present(row, *names):
+    """First non-None value among ``names``, or None when the row has none of them."""
+    if not isinstance(row, dict):
+        return None
+    for name in names:
+        value = row.get(name)
+        if value is not None:
+            return value
+    return None
+
+
+# The live /sentinel/portfolio/positions payload does NOT use the field names in
+# the V3 doc: it returns netQty/buyQty/sellQty/ltp where the doc promises
+# netQuantity/buyQuantity/sellQuantity/lastTradedPrice. Read the observed name
+# first and keep the documented one as a fallback, so this survives Nubra
+# aligning the API to its own documentation later.
+def position_net_qty(position):
+    """Signed net quantity for a V3 position row, as an int."""
+    try:
+        return int(_first_present(position, "netQty", "netQuantity") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def position_ltp_paise(position):
+    """Last traded price for a V3 position row, in paise."""
+    return _first_present(position, "ltp", "lastTradedPrice") or 0
+
+
+def resolve_position(position):
+    """
+    Resolve (tradingsymbol, exchange) for a V3 position row.
+
+    ``position["symbol"]`` is Nubra's brsymbol, which only coincides with the
+    OpenAlgo symbol for cash instruments -- an option is ``NIFTY26AUG24000CE``
+    on Nubra and ``NIFTY25AUG2624000CE`` in OpenAlgo.
+
+    An unresolved row keeps Nubra's own symbol and exchange so a live position
+    is never dropped from the book, but says so in the log -- silently showing
+    broker-native values would be indistinguishable from a correct row while
+    every downstream lookup on it fails.
+    """
+    broker_symbol = position.get("symbol", "")
+    nubra_exchange = brexchange_of(position)
+    derivative_type = derivative_type_of(position)
+    ref_id = str(position.get("refId", "") or "")
+
+    symbol, exchange = resolve_instrument(
+        nubra_exchange, derivative_type, ref_id=ref_id, broker_symbol=broker_symbol
+    )
+    if symbol:
+        return symbol, exchange
+
+    logger.warning(
+        f"Nubra position not in the master contract: refId={ref_id!r} "
+        f"symbol={broker_symbol!r} exchange={nubra_exchange!r} "
+        f"derivativeType={derivative_type!r}; reporting broker-native values"
+    )
+    return broker_symbol, map_exchange(nubra_exchange, derivative_type)
+
+
+# Nubra V3 lifecycle bucket -> OpenAlgo status vocabulary.
+# GET /sentinel/orders groups orders by bucket instead of returning a flat list,
+# so the bucket name is the authoritative status. "gtt" holds good-till-triggered
+# orders, which are still-armed working orders.
+_BUCKET_STATUS = {
+    "open": "open",
+    "executed": "complete",
+    "cancelled": "cancelled",
+    "rejected": "rejected",
+    "expired": "cancelled",
+    "gtt": "open",
+}
+
+
+def _parse_timestamp(value):
+    """
+    Format a V3 lifecycle timestamp for display.
+
+    V3 ``timestamps`` are RFC3339 strings ("2026-06-22T05:00:45.054721358Z"),
+    unlike V2's nanosecond integers. Fractional seconds can carry 9 digits,
+    which ``fromisoformat`` rejects before Python 3.11, so truncate to
+    microseconds first.
+    """
+    if not value:
+        return ""
+    if isinstance(value, (int, float)):
+        # Defensive: accept a nanosecond epoch if Nubra ever returns one.
+        try:
+            return datetime.fromtimestamp(value / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, OSError, OverflowError):
+            return str(value)
+
+    text = str(value).strip().replace("Z", "+00:00")
+    if "." in text:
+        head, _, tail = text.partition(".")
+        digits = ""
+        for ch in tail:
+            if ch.isdigit():
+                digits += ch
+            else:
+                tail = tail[len(digits):]
+                break
+        else:
+            tail = ""
+        text = f"{head}.{digits[:6]}{tail}"
+
+    try:
+        return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(value)
+
+
+def _last_timestamp(order):
+    """Best available lifecycle time for an order, newest meaningful first."""
+    timestamps = order.get("timestamps") or {}
+    for key in ("lastUpdatedAt", "filledAt", "sentToColoAt", "intentCreatedAt"):
+        if timestamps.get(key):
+            return _parse_timestamp(timestamps[key])
+    return ""
+
+
+def _resolve_symbol(order):
+    """
+    Resolve (tradingsymbol, exchange, ref_id) for a V3 order or leg.
+
+    The instrument lives on the first leg whenever the row carries no top-level
+    refId. That is not just the strategy-order case the docs describe: live
+    single orders also come back as ``isMulti: true`` with a populated
+    ``legs[]`` and no top-level ``refId``.
+
+    ``exchange`` is folded to the OpenAlgo exchange before any lookup -- Nubra
+    reports an NSE option as ``NSE``, so ``get_symbol(ref_id, "NSE")`` would
+    miss the ``NFO`` row and leave the caller with Nubra's display name.
+    """
+    ref_data = order.get("refData") or {}
+    ref_id = order.get("refId")
+
+    if not ref_id and order.get("legs"):
+        first_leg = (order.get("legs") or [{}])[0] or {}
+        ref_data = first_leg.get("refData") or ref_data
+        ref_id = first_leg.get("refId")
+
+    nubra_exchange = ref_data.get("exchange") or order.get("exchange", "")
+    derivative_type = ref_data.get("derivativeType") or derivative_type_of(order)
+    ref_id = str(ref_id or "")
+    broker_symbol = ref_data.get("stockName", "")
+
+    tradingsymbol, exchange = resolve_instrument(
+        nubra_exchange, derivative_type, ref_id=ref_id, broker_symbol=broker_symbol
+    )
+    if tradingsymbol:
+        return tradingsymbol, exchange, ref_id
+
+    # displayName ("NIFTY 23 JUN 26 24050 CE") is a human label, never an
+    # OpenAlgo symbol -- it is the last resort purely so the row still renders,
+    # and it is worth a warning because nothing downstream can look it up.
+    logger.warning(
+        f"Nubra order not in the master contract: refId={ref_id!r} "
+        f"stockName={broker_symbol!r} exchange={nubra_exchange!r} "
+        f"derivativeType={derivative_type!r}; reporting broker-native values"
+    )
+    return (
+        broker_symbol or ref_data.get("displayName", ""),
+        map_exchange(nubra_exchange, derivative_type),
+        ref_id,
+    )
+
+
+def _trigger_price_paise(order):
+    """
+    Extract the entry-trigger price (paise) from a V3 order.
+
+    V3 has no flat trigger_price field -- a stop order carries an LTP trigger
+    under entryConfig.triggers.ltp.{atOrAbove,atOrBelow}.value. Nubra may
+    normalize entryConfig into a list, so handle both shapes.
+    """
+    entry_config = order.get("entryConfig")
+    if isinstance(entry_config, list):
+        entry_config = entry_config[0] if entry_config else None
+    if not isinstance(entry_config, dict):
+        return 0
+
+    triggers = entry_config.get("triggers")
+    if isinstance(triggers, list):
+        triggers = triggers[0] if triggers else None
+    if not isinstance(triggers, dict):
+        return 0
+
+    ltp = triggers.get("ltp")
+    if not isinstance(ltp, dict):
+        return 0
+
+    for bound in ("atOrAbove", "atOrBelow"):
+        node = ltp.get(bound)
+        if isinstance(node, dict) and node.get("value"):
+            return int(node["value"] or 0)
+    return 0
+
+
+def _order_type(order, trigger_paise):
+    """
+    Derive the OpenAlgo pricetype for a V3 order.
+
+    V3 drops V2's ORDER_TYPE_STOPLOSS: a stop is an ordinary order carrying an
+    entry trigger, so the presence of a trigger promotes MARKET/LIMIT to
+    SL-M/SL.
+    """
+    price_type = str(order.get("priceType", "")).upper()
+    if trigger_paise:
+        return "SL-M" if price_type == "MARKET" else "SL"
+    return price_type if price_type in ("MARKET", "LIMIT") else "MARKET"
+
+
+def map_order_data(order_data):
+    """
+    Normalize the bucketed GET /sentinel/orders response to OpenAlgo format.
+
+    Nubra V3 returns
+        {"orders": {"open": [...], "executed": [...], "cancelled": [...], ...}}
+    where each order is the normalized V3 intent-order model. Prices are in
+    paise (divide by 100 for rupees).
+    """
+    orders = flatten_order_buckets(order_data)
+
     if not orders:
+        logger.info("No Nubra order data available.")
         return []
 
     normalized_orders = []
     for order in orders:
-        # Get ref_data for symbol information
-        ref_data = order.get("ref_data", {})
-        
-        # Map Nubra fields to OpenAlgo/Angel-like format
-        # Nubra: order_side -> transactiontype (BUY/SELL)
-        order_side = order.get("order_side", "")
-        if order_side == "ORDER_SIDE_BUY":
-            transaction_type = "BUY"
-        elif order_side == "ORDER_SIDE_SELL":
-            transaction_type = "SELL"
-        else:
-            transaction_type = order_side.replace("ORDER_SIDE_", "") if order_side else ""
+        tradingsymbol, exchange, ref_id = _resolve_symbol(order)
 
-        # Nubra: order_status -> status (complete/open/rejected/cancelled).
-        # Nubra OrderStatus enum: PENDING, SENT, OPEN, REJECTED, CANCELLED,
-        # FILLED, TRIGGERED. (There is no PARTIALLY_FILLED state - partial fills
-        # stay OPEN with filled_qty < order_qty.)
-        order_status = order.get("order_status", "")
-        status_map = {
-            "ORDER_STATUS_FILLED": "complete",
-            "ORDER_STATUS_OPEN": "open",
-            "ORDER_STATUS_PENDING": "open",
-            "ORDER_STATUS_SENT": "open",
-            "ORDER_STATUS_TRIGGERED": "open",
-            "ORDER_STATUS_REJECTED": "rejected",
-            "ORDER_STATUS_CANCELLED": "cancelled",
-        }
-        status = status_map.get(order_status, order_status.replace("ORDER_STATUS_", "").lower() if order_status else "")
+        bucket = order.get("_bucket", "")
+        status = _BUCKET_STATUS.get(bucket, str(order.get("status", "")).lower())
 
-        # Nubra uses both order_type and price_type:
-        # - order_type: ORDER_TYPE_REGULAR, ORDER_TYPE_STOPLOSS, ORDER_TYPE_ICEBERG
-        # - price_type: MARKET, LIMIT
-        # For OpenAlgo we need: MARKET, LIMIT, SL, SL-M (uppercase like Angel)
-        order_type = order.get("order_type", "")
-        price_type = order.get("price_type", "")
-        
-        # Determine the ordertype based on Nubra's fields
-        if order_type == "ORDER_TYPE_STOPLOSS":
-            # Stoploss order - check price_type for SL vs SL-M
-            if price_type == "MARKET":
-                ordertype = "SL-M"
-            else:
-                # Check if it's our emulated SL-M (Limit price == Trigger price)
-                # Need to read prices first to compare
-                op_paise = order.get("order_price", 0)
-                tp_paise = order.get("trigger_price", 0)
-                if not tp_paise:
-                    ap = order.get("algo_params") or {}
-                    tp_paise = ap.get("trigger_price", 0)
-                
-                if op_paise > 0 and op_paise == tp_paise:
-                    ordertype = "SL-M"
-                else:
-                    ordertype = "SL"
-        elif price_type == "MARKET":
-            ordertype = "MARKET"
-        elif price_type == "LIMIT":
-            ordertype = "LIMIT"
-        else:
-            # Fallback: try to derive from price_type or default to MARKET
-            ordertype = price_type.upper() if price_type else "MARKET"
+        trigger_paise = _trigger_price_paise(order)
+        ordertype = _order_type(order, trigger_paise)
 
-        # A stop (SL/SL-M) order that is still working (not filled/cancelled/
-        # rejected) is awaiting its trigger -> surface as OpenAlgo "trigger pending"
-        # (matches the zerodha reference vocabulary).
-        if ordertype in ("SL", "SL-M") and order_status in (
-            "ORDER_STATUS_PENDING",
-            "ORDER_STATUS_OPEN",
-            "ORDER_STATUS_SENT",
-        ):
+        # A still-working stop order is awaiting its trigger -> surface as
+        # OpenAlgo "trigger pending" (matches the zerodha reference vocabulary).
+        if ordertype in ("SL", "SL-M") and status == "open":
             status = "trigger pending"
 
-        # Nubra: order_delivery_type -> producttype (CNC/MIS/NRML)
-        delivery_type = order.get("order_delivery_type", "")
-        product_map = {
-            "ORDER_DELIVERY_TYPE_CNC": "CNC",
-            "ORDER_DELIVERY_TYPE_IDAY": "MIS",
-            "ORDER_DELIVERY_TYPE_INTRADAY": "MIS",
-            "ORDER_DELIVERY_TYPE_MARGIN": "NRML",
-            "ORDER_DELIVERY_TYPE_NRML": "NRML",
-        }
-        producttype = product_map.get(delivery_type, delivery_type.replace("ORDER_DELIVERY_TYPE_", "") if delivery_type else "")
+        order_price_paise = order.get("orderPrice", 0) or 0
+        filled_price_paise = order.get("filledPrice", 0) or 0
 
-        # Exchange from ref_data
-        exchange = ref_data.get("exchange", "")
-        
-        # Symbol token from ref_data
-        symboltoken = str(ref_data.get("token", order.get("ref_id", "")))
-        
-        # Get symbol from database using token
-        symbol_from_db = get_symbol(symboltoken, exchange)
-        tradingsymbol = symbol_from_db if symbol_from_db else order.get("display_name", ref_data.get("stock_name", ""))
+        strat_tags = order.get("stratTags") or []
 
-        # Build normalized order object
-        # Note: Nubra prices are in paise, convert to rupees (divide by 100)
-        order_price_paise = order.get("order_price", 0)
-        avg_price_paise = order.get("avg_filled_price", 0)
-        trigger_price_paise = order.get("trigger_price", 0)
-        # Fallback: Nubra returns trigger_price inside algo_params for stoploss orders
-        if not trigger_price_paise:
-            algo_params = order.get("algo_params") or {}
-            trigger_price_paise = algo_params.get("trigger_price", 0)
-        
-        normalized_order = {
-            "orderid": str(order.get("order_id", "")),
-            "exchange_order_id": str(order.get("exchange_order_id", "")),
+        normalized_orders.append({
+            "orderid": str(order.get("intentOrderId", "")),
+            "exchange_order_id": _exchange_order_id(order),
             "tradingsymbol": tradingsymbol,
-            "symboltoken": symboltoken,
+            "symboltoken": ref_id,
             "exchange": exchange,
-            "transactiontype": transaction_type,
-            "producttype": producttype,
+            "transactiontype": str(order.get("side", "")).upper(),
+            "producttype": reverse_map_product_type(order.get("deliveryType", "")),
             "ordertype": ordertype,
-            "quantity": order.get("order_qty", 0),
-            "filledshares": order.get("filled_qty", 0),
-            "averageprice": avg_price_paise / 100 if avg_price_paise else 0.0,
+            "quantity": order.get("orderQty", 0) or 0,
+            "filledshares": order.get("filledQty", 0) or 0,
+            "averageprice": filled_price_paise / 100 if filled_price_paise else 0.0,
             "price": order_price_paise / 100 if order_price_paise else 0.0,
-            "triggerprice": trigger_price_paise / 100 if trigger_price_paise else 0.0,
+            "triggerprice": trigger_paise / 100 if trigger_paise else 0.0,
             "status": status,
-            "ordertag": order.get("tag", ""),
-            "updatetime": "",  # Nubra doesn't provide formatted time directly
-        }
-        
-        # Convert timestamps if available
-        order_time = order.get("order_time")
-        if order_time:
-            try:
-                # Nubra timestamp is in nanoseconds, convert to readable format
-                from datetime import datetime
-                ts_seconds = order_time / 1_000_000_000
-                dt = datetime.fromtimestamp(ts_seconds)
-                normalized_order["updatetime"] = dt.strftime("%Y-%m-%d %H:%M:%S")
-            except (ValueError, OSError):
-                normalized_order["updatetime"] = str(order_time)
-
-        normalized_orders.append(normalized_order)
+            "ordertag": strat_tags[0] if strat_tags else "",
+            "updatetime": _last_timestamp(order),
+        })
 
     return normalized_orders
+
+
+def _exchange_order_id(order):
+    """
+    Flatten V3's ``exchangeOrderIds`` map into a display string.
+
+    V3 returns ``{"<refId>": [20]}`` rather than V2's single scalar id.
+    """
+    mapping = order.get("exchangeOrderIds")
+    if not isinstance(mapping, dict):
+        return ""
+    ids = []
+    for values in mapping.values():
+        if isinstance(values, list):
+            ids.extend(str(v) for v in values)
+        elif values is not None:
+            ids.append(str(values))
+    return ",".join(ids)
 
 
 def calculate_order_statistics(order_data):
@@ -239,129 +433,60 @@ def transform_order_data(orders):
             )
             continue
 
-        ordertype = order.get("ordertype", "")
-        if ordertype == "STOPLOSS_LIMIT":
-            ordertype = "SL"
-        if ordertype == "STOPLOSS_MARKET":
-            ordertype = "SL-M"
-
-        transformed_order = {
+        transformed_orders.append({
             "symbol": order.get("tradingsymbol", ""),
             "exchange": order.get("exchange", ""),
             "action": order.get("transactiontype", ""),
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("triggerprice", 0.0),
-            "pricetype": ordertype,
+            "pricetype": order.get("ordertype", ""),
             "product": order.get("producttype", ""),
             "orderid": order.get("orderid", ""),
             "order_status": order.get("status", ""),
             "timestamp": order.get("updatetime", ""),
-        }
-
-        transformed_orders.append(transformed_order)
+        })
 
     return transformed_orders
 
 
 def map_trade_data(trade_data):
     """
-    Map Nubra's orders response to tradebook format.
-    
-    Nubra doesn't have a separate tradebook API. This function takes the
-    orders response (from /orders/v2) and filters for filled orders,
-    mapping them to the normalized tradebook format.
-    
-    Nubra returns orders as a direct list (not wrapped in {"data": [...]}).
-    Prices are in paise (÷100 for rupees).
+    Map Nubra's V3 order response to tradebook format.
+
+    Nubra has no separate tradebook API, so trades are the orders carrying a
+    non-zero filled quantity. Partial fills stay in the ``open`` bucket with
+    filledQty > 0, so filtering on filledQty captures both full and partial
+    fills. Prices are in paise.
     """
-    # Handle Nubra's response format — direct list or dict with various shapes
-    if isinstance(trade_data, dict):
-        if "data" in trade_data and trade_data.get("data") is not None:
-            orders = trade_data["data"]
-        elif trade_data.get("status") == False or trade_data.get("error"):
-            logger.info(f"No trade data available or error: {trade_data}")
-            return []
-        else:
-            logger.info("No trade data available.")
-            return []
-    elif isinstance(trade_data, list):
-        orders = trade_data
-    else:
-        logger.info("Unexpected trade_data format.")
-        return []
+    orders = flatten_order_buckets(trade_data)
 
     if not orders:
+        logger.info("No Nubra trade data available.")
         return []
 
-    # Treat any order with a non-zero filled quantity as a trade. Nubra has no
-    # PARTIALLY_FILLED status (partial fills stay OPEN with filled_qty > 0), so
-    # filtering on filled_qty captures both full and partial fills.
-    filled_orders = [
-        order for order in orders
-        if (order.get("filled_qty") or 0) > 0
-        or order.get("order_status") == "ORDER_STATUS_FILLED"
-    ]
-
     normalized_trades = []
-    for order in filled_orders:
-        ref_data = order.get("ref_data", {})
-        exchange = ref_data.get("exchange", "")
-        symboltoken = str(ref_data.get("token", order.get("ref_id", "")))
+    for order in orders:
+        filled_qty = order.get("filledQty", 0) or 0
+        if filled_qty <= 0:
+            continue
 
-        # Get OpenAlgo symbol
-        symbol_from_db = get_symbol(symboltoken, exchange)
-        tradingsymbol = symbol_from_db if symbol_from_db else order.get("display_name", ref_data.get("stock_name", ""))
+        tradingsymbol, exchange, _ref_id = _resolve_symbol(order)
 
-        # Map transaction type
-        order_side = order.get("order_side", "")
-        if order_side == "ORDER_SIDE_BUY":
-            transaction_type = "BUY"
-        elif order_side == "ORDER_SIDE_SELL":
-            transaction_type = "SELL"
-        else:
-            transaction_type = order_side.replace("ORDER_SIDE_", "") if order_side else ""
+        filled_price = (order.get("filledPrice", 0) or 0) / 100
+        trade_value = round(filled_price * filled_qty, 2)
 
-        # Map product type
-        delivery_type = order.get("order_delivery_type", "")
-        product_map = {
-            "ORDER_DELIVERY_TYPE_CNC": "CNC",
-            "ORDER_DELIVERY_TYPE_IDAY": "MIS",
-            "ORDER_DELIVERY_TYPE_INTRADAY": "MIS",
-            "ORDER_DELIVERY_TYPE_MARGIN": "NRML",
-            "ORDER_DELIVERY_TYPE_NRML": "NRML",
-        }
-        producttype = product_map.get(delivery_type, delivery_type.replace("ORDER_DELIVERY_TYPE_", "") if delivery_type else "")
-
-        # Convert prices from paise to rupees
-        avg_filled_price = (order.get("avg_filled_price", 0) or 0) / 100
-        filled_qty = order.get("filled_qty", 0) or 0
-        trade_value = round(avg_filled_price * filled_qty, 2)
-
-        # Get fill time from order_time (nanosecond timestamp)
-        filltime = ""
-        order_time = order.get("order_time")
-        if order_time:
-            try:
-                from datetime import datetime
-                ts_seconds = order_time / 1_000_000_000
-                dt = datetime.fromtimestamp(ts_seconds)
-                filltime = dt.strftime("%Y-%m-%d %H:%M:%S")
-            except (ValueError, OSError):
-                filltime = str(order_time)
-
-        normalized_trade = {
+        normalized_trades.append({
             "tradingsymbol": tradingsymbol,
             "exchange": exchange,
-            "producttype": producttype,
-            "transactiontype": transaction_type,
+            "producttype": reverse_map_product_type(order.get("deliveryType", "")),
+            "transactiontype": str(order.get("side", "")).upper(),
             "quantity": filled_qty,
-            "fillprice": round(avg_filled_price, 2),
+            "fillprice": round(filled_price, 2),
             "tradevalue": trade_value,
-            "orderid": str(order.get("order_id", "")),
-            "filltime": filltime,
-        }
-        normalized_trades.append(normalized_trade)
+            "orderid": str(order.get("intentOrderId", "")),
+            "filltime": _last_timestamp(order),
+        })
 
     return normalized_trades
 
@@ -389,150 +514,48 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
     """
-    Map Nubra's positions response to OpenAlgo normalized format.
-    
-    Nubra returns positions in portfolio.stock_positions, portfolio.fut_positions, 
-    portfolio.opt_positions arrays. Prices are in paise (divide by 100).
-    
-    Args:
-        position_data: Raw response from Nubra's /portfolio/positions API
-        
-    Returns:
-        List of normalized position dictionaries
+    Map Nubra's V3 positions response to OpenAlgo normalized format.
+
+    V3 returns a single flat ``portfolio.positions`` list carrying a signed
+    signed net quantity -- replacing V2's stock/fut/opt/close split that had to
+    be merged and sign-corrected by hand.
+
+    Prices are in paise (divide by 100).
     """
-    logger.info(f"Nubra map_position_data input: {position_data}")
-    
-    # Handle error responses
-    if isinstance(position_data, dict) and position_data.get("error"):
+    if isinstance(position_data, dict) and (
+        position_data.get("error") or position_data.get("status") == "error"
+    ):
         logger.warning(f"Nubra positions error: {position_data}")
         return []
-    
-    # Handle empty response
-    if not position_data:
-        logger.info("No position data available.")
+
+    raw_positions = extract_positions(position_data)
+    if not raw_positions:
+        logger.info("No Nubra position data available.")
         return []
-    
+
     positions = []
-    
-    # If position_data is a dict with 'portfolio' key (Nubra format)
-    if isinstance(position_data, dict):
-        portfolio = position_data.get("portfolio", position_data)
-        
-        # Collect positions from all position types
-        stock_positions = portfolio.get("stock_positions") or []
-        fut_positions = portfolio.get("fut_positions") or []
-        opt_positions = portfolio.get("opt_positions") or []
-        close_positions = portfolio.get("close_positions") or []
-        
-        # Build a dictionary to merge positions by unique key (symbol+exchange+product)
-        # Open positions take priority over closed positions
-        merged_positions = {}
-        
-        # First, add closed positions (they will be overwritten by open positions if exists)
-        for pos in close_positions:
-            symbol = pos.get("symbol", pos.get("display_name", ""))
-            exchange = pos.get("exchange", "NSE")
-            product = pos.get("product", "")
-            key = f"{symbol}_{exchange}_{product}"
-            
-            # Mark as closed (qty=0)
-            pos_copy = pos.copy()
-            pos_copy["_is_closed"] = True
-            merged_positions[key] = pos_copy
-        
-        # Then, add open positions (will overwrite closed if same symbol)
-        for pos in stock_positions + fut_positions + opt_positions:
-            symbol = pos.get("symbol", pos.get("display_name", ""))
-            exchange = pos.get("exchange", "NSE")
-            product = pos.get("product", "")
-            key = f"{symbol}_{exchange}_{product}"
-            
-            pos_copy = pos.copy()
-            pos_copy["_is_closed"] = False
-            merged_positions[key] = pos_copy
-        
-        logger.info(f"Nubra merged_positions keys: {list(merged_positions.keys())}")
-        logger.info(f"Nubra merged_positions count: {len(merged_positions)}")
-        
-        # Process merged positions
-        for pos in merged_positions.values():
-            # Nubra prices are in paise, convert to rupees
-            # Note: PnL values are already in rupees, no conversion needed
-            avg_price_paise = pos.get("avg_price", 0) or 0
-            ltp_paise = pos.get("ltp", 0) or 0
-            pnl_rupees = pos.get("pnl", 0) or 0  # Already in rupees
-            
-            # Map product type from Nubra format to OpenAlgo format
-            product = pos.get("product", "")
-            if product == "ORDER_DELIVERY_TYPE_CNC":
-                producttype = "CNC"
-            elif product == "ORDER_DELIVERY_TYPE_IDAY":
-                producttype = "MIS"
-            elif product == "ORDER_DELIVERY_TYPE_NRML":
-                producttype = "NRML"
-            else:
-                producttype = product
-            
-            # Determine net quantity
-            qty = pos.get("qty", 0) or 0
-            order_side = pos.get("order_side", "BUY")
-            is_closed = pos.get("_is_closed", False)
-            
-            # If position is closed only (not in open positions), show qty=0
-            if is_closed or order_side == "C":
-                netqty = 0
-            elif order_side == "SELL":
-                netqty = -qty
-            else:  # BUY
-                netqty = qty
-            
-            normalized_position = {
-                "tradingsymbol": pos.get("symbol", pos.get("display_name", "")),
-                "symboltoken": str(pos.get("ref_id", "")),
-                "exchange": pos.get("exchange", "NSE"),
-                "producttype": producttype,
-                "netqty": netqty,
-                "quantity": qty if not is_closed else 0,
-                "avgnetprice": avg_price_paise / 100 if avg_price_paise else 0.0,
-                "avgbuyprice": (pos.get("avg_buy_price", 0) or 0) / 100,
-                "avgsellprice": (pos.get("avg_sell_price", 0) or 0) / 100,
-                "ltp": ltp_paise / 100 if ltp_paise else 0.0,
-                "pnl": pnl_rupees,  # Already in rupees
-                "pnlpercentage": pos.get("pnl_chg", 0) or 0,
-            }
-            positions.append(normalized_position)
-    
-    elif isinstance(position_data, list):
-        # If already a list, normalize each position
-        for pos in position_data:
-            avg_price_paise = pos.get("avg_price", pos.get("avgnetprice", 0)) or 0
-            ltp_paise = pos.get("ltp", 0) or 0
-            pnl_paise = pos.get("pnl", 0) or 0
-            
-            # Check if already in rupees (small value) or paise (large value)
-            # If avg_price > 10000, likely paise
-            if avg_price_paise > 10000:
-                avg_price = avg_price_paise / 100
-                ltp = ltp_paise / 100
-                pnl = pnl_paise / 100
-            else:
-                avg_price = avg_price_paise
-                ltp = ltp_paise
-                pnl = pnl_paise
-            
-            normalized_position = {
-                "tradingsymbol": pos.get("symbol", pos.get("tradingsymbol", "")),
-                "symboltoken": str(pos.get("ref_id", pos.get("symboltoken", ""))),
-                "exchange": pos.get("exchange", "NSE"),
-                "producttype": pos.get("producttype", "MIS"),
-                "netqty": pos.get("netqty", pos.get("qty", 0)),
-                "quantity": pos.get("quantity", pos.get("qty", 0)),
-                "avgnetprice": avg_price,
-                "ltp": ltp,
-                "pnl": pnl,
-            }
-            positions.append(normalized_position)
-    
+    for pos in raw_positions:
+        avg_price_paise = pos.get("avgPrice", 0) or 0
+        ltp_paise = position_ltp_paise(pos)
+        net_qty = position_net_qty(pos)
+
+        tradingsymbol, exchange = resolve_position(pos)
+
+        positions.append({
+            "tradingsymbol": tradingsymbol,
+            "symboltoken": str(pos.get("refId", "")),
+            "exchange": exchange,
+            "producttype": reverse_map_product_type(pos.get("deliveryType", "")),
+            "netqty": net_qty,
+            "quantity": net_qty,
+            "avgnetprice": avg_price_paise / 100 if avg_price_paise else 0.0,
+            "avgbuyprice": (pos.get("avgBuyPrice", 0) or 0) / 100,
+            "avgsellprice": (pos.get("avgSellPrice", 0) or 0) / 100,
+            "ltp": ltp_paise / 100 if ltp_paise else 0.0,
+            "pnl": (pos.get("pnl", 0) or 0) / 100,
+            "pnlpercentage": pos.get("pnlChg", 0) or 0,
+        })
+
     logger.info(f"Nubra mapped positions: {len(positions)} positions")
     return positions
 
@@ -540,10 +563,10 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     """
     Transform normalized position data to final UI format.
-    
+
     Args:
         positions_data: List of normalized position dictionaries from map_position_data
-        
+
     Returns:
         List of transformed position dictionaries for UI display
     """
@@ -598,25 +621,25 @@ def transform_holdings_data(holdings_data):
 
 def map_portfolio_data(portfolio_data):
     """
-    Map Nubra's holdings response to a normalized internal format.
+    Map Nubra's V3 holdings response to a normalized internal format.
 
-    Nubra API returns:
+    Nubra V3 returns:
         {
             "message": "holdings",
             "portfolio": {
-                "client_code": "...",
-                "holding_stats": { invested_amount, current_value, total_pnl, ... },
-                "holdings": [ { ref_id, symbol, exchange, qty, avg_price, ltp, net_pnl, ... } ]
+                "clientCode": "...",
+                "holdingStats": { investedAmount, currentValue, totalPnl, ... },
+                "holdings": [ { refId, symbol, exchange, quantity, avgPrice,
+                                lastTradedPrice, netPnl, ... } ]
             }
         }
 
-    Prices are in paise — this function converts them to rupees (÷100).
+    Prices are in paise -- this function converts them to rupees (/100).
     Symbols are mapped to OpenAlgo format via get_oa_symbol().
 
     Returns:
         {"holdings": [...normalized...], "holding_stats": {...converted...}}
     """
-    # Extract 'portfolio' from the Nubra response
     portfolio = None
     if isinstance(portfolio_data, dict):
         portfolio = portfolio_data.get("portfolio")
@@ -626,34 +649,33 @@ def map_portfolio_data(portfolio_data):
         return {"holdings": [], "holding_stats": {}}
 
     raw_holdings = portfolio.get("holdings") or []
-    raw_stats = portfolio.get("holding_stats") or {}
+    raw_stats = portfolio.get("holdingStats") or {}
 
     logger.info(f"Nubra holdings: {len(raw_holdings)} items, stats keys: {list(raw_stats.keys())}")
-    logger.info(f"Nubra Raw Holdings Data: {raw_holdings}")
 
     mapped_holdings = []
     for h in raw_holdings:
         exchange = h.get("exchange", "NSE")
-        broker_symbol = h.get("symbol", h.get("displayName", ""))
-        ref_id = str(h.get("ref_id", ""))
+        broker_symbol = h.get("symbol", "")
+        ref_id = str(h.get("refId", ""))
 
-        # Look up OpenAlgo symbol from database using ref_id or broker symbol
+        # Look up OpenAlgo symbol from database using the broker symbol
         oa_symbol = get_oa_symbol(broker_symbol, exchange)
         tradingsymbol = oa_symbol if oa_symbol else broker_symbol
 
-        # Convert paise → rupees for price fields
-        avg_price = (h.get("avg_price", 0) or 0) / 100
-        ltp = (h.get("ltp", 0) or 0) / 100
-        prev_close = (h.get("prev_close", 0) or 0) / 100
-        invested_value = (h.get("invested_value", 0) or 0) / 100
-        current_value = (h.get("current_value", 0) or 0) / 100
-        net_pnl = (h.get("net_pnl", 0) or 0) / 100
-        day_pnl = (h.get("day_pnl", 0) or 0) / 100
+        # Convert paise -> rupees for price fields
+        avg_price = (h.get("avgPrice", 0) or 0) / 100
+        ltp = (h.get("lastTradedPrice", 0) or 0) / 100
+        prev_close = (h.get("prevClose", 0) or 0) / 100
+        invested_value = (h.get("investedValue", 0) or 0) / 100
+        current_value = (h.get("currentValue", 0) or 0) / 100
+        net_pnl = (h.get("netPnl", 0) or 0) / 100
+        day_pnl = (h.get("dayPnl", 0) or 0) / 100
 
         mapped_holdings.append({
             "tradingsymbol": tradingsymbol,
             "exchange": exchange,
-            "quantity": h.get("qty", 0),
+            "quantity": h.get("quantity", 0) or 0,
             "product": "CNC",  # Holdings are always delivery
             "average_price": round(avg_price, 2),
             "ltp": round(ltp, 2),
@@ -661,21 +683,21 @@ def map_portfolio_data(portfolio_data):
             "invested_value": round(invested_value, 2),
             "current_value": round(current_value, 2),
             "pnl": round(net_pnl, 2),
-            "pnlpercent": round(h.get("net_pnl_chg", 0) or 0, 2),
+            "pnlpercent": round(h.get("netPnlChg", 0) or 0, 2),
             "day_pnl": round(day_pnl, 2),
-            "day_pnl_chg": round(h.get("day_pnl", 0) or 0, 2),  # percentage from API? No, use ltp_chg
-            "ltp_chg": round(h.get("ltp_chg", 0) or 0, 2),
+            "day_pnl_chg": round(day_pnl, 2),
+            "ltp_chg": round(h.get("netPnlChg", 0) or 0, 2),
             "ref_id": ref_id,
         })
 
-    # Convert holding_stats paise → rupees
+    # Convert holdingStats paise -> rupees
     mapped_stats = {
-        "invested_amount": round((raw_stats.get("invested_amount", 0) or 0) / 100, 2),
-        "current_value": round((raw_stats.get("current_value", 0) or 0) / 100, 2),
-        "total_pnl": round((raw_stats.get("total_pnl", 0) or 0) / 100, 2),
-        "total_pnl_chg": round(raw_stats.get("total_pnl_chg", 0) or 0, 2),
-        "day_pnl": round((raw_stats.get("day_pnl", 0) or 0) / 100, 2),
-        "day_pnl_chg": round(raw_stats.get("day_pnl_chg", 0) or 0, 2),
+        "invested_amount": round((raw_stats.get("investedAmount", 0) or 0) / 100, 2),
+        "current_value": round((raw_stats.get("currentValue", 0) or 0) / 100, 2),
+        "total_pnl": round((raw_stats.get("totalPnl", 0) or 0) / 100, 2),
+        "total_pnl_chg": round(raw_stats.get("totalPnlChg", 0) or 0, 2),
+        "day_pnl": round((raw_stats.get("dayPnl", 0) or 0) / 100, 2),
+        "day_pnl_chg": round(raw_stats.get("dayPnlChg", 0) or 0, 2),
     }
 
     return {"holdings": mapped_holdings, "holding_stats": mapped_stats}

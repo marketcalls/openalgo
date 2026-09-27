@@ -1,0 +1,35 @@
+version 1
+
+// A STUDY: plots and nothing else. It places no orders and holds no position,
+// so `pos.` and `buy` are not available to it and using one is refused at
+// compile time rather than at run time.
+//
+// A study is what a chart adds from its indicator list. A strategy can also be
+// drawn on a chart, but only a study can be added as an ordinary indicator.
+
+len = input(20, "Length", min = 2, max = 500)
+mult = input(2.0, "Width", min = 0.1, max = 10)
+shade = input(true, "Shade between the bands")
+
+study("Deviation bands", overlay = true, precision = 2)
+
+mid = sma(close, len)
+width = stdev(close, len) * mult
+
+// Absence propagates: for the first `len - 1` bars `mid` is absent, so `upper`
+// and `lower` are absent too, and the chart draws nothing there rather than
+// drawing a line at zero. That is the behaviour to want.
+upper = mid + width
+lower = mid - width
+
+plot(mid, "Mean", gray)
+
+// A plot call answers a handle, and fill() takes two of those rather than two
+// names. Passing the titles as strings is OS3020.
+top = plot(upper, "Upper", aqua, width = 2)
+bottom = plot(lower, "Lower", aqua, width = 2)
+
+// A declaration cannot sit inside an `if`: it defines part of the study's fixed
+// shape, and a shape that changed per bar would be a different study on every
+// bar. That is OS3006. To hide one per bar, pass `none` for its value instead.
+fill(top, bottom, shade ? aqua : none, opacity = 0.08)

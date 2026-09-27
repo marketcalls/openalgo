@@ -19,13 +19,21 @@ legs are ignored (their price levels are not premia and would blow up
 the scale). Timestamps missing for any active leg are dropped.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytz
 
 from services.history_service import get_history
 from services.quotes_service import get_quotes
+from services.strategy_builder_reference_service import (
+    BSE_INDEX_SYMBOLS,
+    NSE_INDEX_SYMBOLS,
+    resolve_strategy_builder_reference,
+)
+from services.strategy_builder_reference_service import (
+    get_quote_exchange as _get_quote_exchange,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -52,6 +60,68 @@ def _resolve_trading_window(days: int, ist_tz: pytz.BaseTzInfo) -> tuple[str, st
     return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
 
 
+# Bounds on an explicit window. Both endpoints fan one request out into a
+# broker call per leg, so an unbounded range is an amplifier: ten legs over
+# twenty years is two hundred years of broker history from a single click.
+MAX_WINDOW_DAYS = 400
+EARLIEST_START = date(2000, 1, 1)
+
+
+def _parse_ymd(value: str, field: str) -> date:
+    """
+    Parse a caller-supplied `YYYY-MM-DD`, rejecting anything else.
+
+    These dates come from a request body and are handed to broker adapters that
+    interpolate them into upstream URLs and query strings. `/api/v1/history`
+    validates its own with a schema; these endpoints call the history service
+    directly and so have to do it here rather than inherit it.
+
+    `strptime` is the check, not a regular expression: it rejects both the wrong
+    shape and the right shape with an impossible date in it, such as a 31st of
+    February.
+    """
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a date in YYYY-MM-DD form") from exc
+
+
+def _resolve_explicit_window(
+    start_date: str | None, end_date: str | None, ist_tz: pytz.BaseTzInfo
+) -> tuple[str, str] | None:
+    """
+    Resolve an explicit (start_date, end_date) window supplied by the caller.
+
+    The chart pages older history by asking for successively earlier windows,
+    so a request has to be able to name the window it wants rather than always
+    counting back from today. Returns None when the caller named no window, in
+    which case the day-count path applies.
+
+    An end date is optional and defaults to today: the first request for a
+    symbol asks for everything up to now, and only the paging requests carry
+    both ends.
+
+    Raises:
+        ValueError: when the window is malformed, inverted, or wider than a
+            chart could plausibly be scrolled through.
+    """
+    if not start_date:
+        return None
+
+    today = datetime.now(ist_tz).date()
+    start = _parse_ymd(start_date, "start_date")
+    end = _parse_ymd(end_date, "end_date") if end_date else today
+
+    if start < EARLIEST_START:
+        raise ValueError(f"start_date cannot be earlier than {EARLIEST_START.isoformat()}")
+    if end < start:
+        raise ValueError("end_date cannot be earlier than start_date")
+    if (end - start).days > MAX_WINDOW_DAYS:
+        raise ValueError(f"the window cannot be wider than {MAX_WINDOW_DAYS} days")
+
+    return start.isoformat(), end.isoformat()
+
+
 def _cap_last_n_trading_dates(series: list[dict], n: int, ist_tz: pytz.BaseTzInfo) -> list[dict]:
     """
     Trim `series` to rows whose IST calendar date is among the last N
@@ -69,36 +139,6 @@ def _cap_last_n_trading_dates(series: list[dict], n: int, ist_tz: pytz.BaseTzInf
     distinct_dates = sorted({d for d, _ in tagged}, reverse=True)
     keep = set(distinct_dates[:n])
     return [r for d, r in tagged if d in keep]
-
-
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-    "NIFTYIT",
-    "NIFTYPHARMA",
-    "NIFTYBANK",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
-
-
-def _get_quote_exchange(base_symbol: str, underlying_exchange: str) -> str:
-    """Resolve the exchange to use for fetching underlying quotes/history."""
-    upper = (underlying_exchange or "").upper()
-    if base_symbol in NSE_INDEX_SYMBOLS:
-        return "NSE_INDEX"
-    if base_symbol in BSE_INDEX_SYMBOLS:
-        return "BSE_INDEX"
-    if upper == "NFO":
-        return "NSE"
-    if upper == "BFO":
-        return "BSE"
-    if upper in ("NSE_INDEX", "BSE_INDEX"):
-        return upper
-    return upper
 
 
 def _convert_timestamp_to_ist(df: pd.DataFrame) -> pd.DataFrame | None:
@@ -168,6 +208,10 @@ def get_strategy_chart_data(
     interval: str,
     api_key: str,
     days: int = 5,
+    underlying_symbol: str | None = None,
+    underlying_exchange: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ):
     """
     Build the Strategy Chart time series for a user-defined options strategy.
@@ -181,20 +225,35 @@ def get_strategy_chart_data(
               Only active OPTION legs are used.
         interval: Candle interval (e.g., "1m", "5m").
         api_key: OpenAlgo API key.
-        days: Calendar-day lookback window.
+        days: Calendar-day lookback window. Ignored when start_date is given.
+        start_date: Explicit IST window start, "YYYY-MM-DD". Supplied by a chart
+                    paging older history, where counting back from today cannot
+                    express the window being asked for.
+        end_date: Explicit IST window end, "YYYY-MM-DD". Defaults to today.
 
     Returns:
         Tuple of (success: bool, response: dict, status_code: int).
     """
     try:
         ist = pytz.timezone("Asia/Kolkata")
-        start_date_str, end_date_str = _resolve_trading_window(days, ist)
+        try:
+            explicit = _resolve_explicit_window(start_date, end_date, ist)
+        except ValueError as exc:
+            # A window the caller can correct, not a server fault: say what is
+            # wrong with it rather than returning an opaque 500.
+            return False, {"status": "error", "message": str(exc)}, 400
+        if explicit is None:
+            start_date_str, end_date_str = _resolve_trading_window(days, ist)
+        else:
+            start_date_str, end_date_str = explicit
 
         base_symbol = (underlying or "").strip().upper()
         if not base_symbol:
             return False, {"status": "error", "message": "underlying is required"}, 400
 
-        normalized_legs = [nl for nl in (_normalize_leg(l) for l in (legs or [])) if nl]
+        normalized_legs = [
+            normalized for normalized in (_normalize_leg(leg) for leg in (legs or [])) if normalized
+        ]
         if not normalized_legs:
             return (
                 False,
@@ -202,7 +261,24 @@ def get_strategy_chart_data(
                 400,
             )
 
-        quote_exchange = _get_quote_exchange(base_symbol, exchange)
+        resolved_reference = resolve_strategy_builder_reference(
+            base_symbol,
+            exchange,
+            underlying_symbol,
+            underlying_exchange,
+        )
+        if resolved_reference is None:
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": (
+                        f"No unexpired futures found for {base_symbol} on {exchange.upper()}"
+                    ),
+                },
+                404,
+            )
+        reference_symbol, quote_exchange = resolved_reference
 
         # ── Underlying history ────────────────────────────────────────
         # Some brokers (e.g., Zerodha's Kite API) don't return intraday
@@ -213,7 +289,7 @@ def get_strategy_chart_data(
         underlying_missing = False
         df_underlying: pd.DataFrame | None = None
         success_u, resp_u, _ = get_history(
-            symbol=base_symbol,
+            symbol=reference_symbol,
             exchange=quote_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -243,7 +319,7 @@ def get_strategy_chart_data(
 
         # ── Per-leg history (deduped by (symbol, exchange)) ───────────
         leg_price_lookup: dict[tuple[str, str], dict] = {}
-        unique_keys = {(l["symbol"], l["exchange"]) for l in normalized_legs}
+        unique_keys = {(leg["symbol"], leg["exchange"]) for leg in normalized_legs}
 
         for symbol, leg_exchange in unique_keys:
             success_l, resp_l, _ = get_history(
@@ -329,7 +405,13 @@ def get_strategy_chart_data(
         # This gives "last N days" semantics that are correct for any market
         # (NSE equity/F&O, MCX, CDS, crypto 24x7) without hardcoding session
         # close times.
-        series = _cap_last_n_trading_dates(series, days, ist)
+        #
+        # Skipped for an explicit window: there the caller asked for a range and
+        # trimming it to the newest few dates would silently drop the older half
+        # of the answer, which for a chart paging backwards is the only half it
+        # wanted.
+        if explicit is None:
+            series = _cap_last_n_trading_dates(series, days, ist)
 
         # ── Credit / debit classification (static, from entry premia) ─
         entry_net = sum(leg["sign"] * leg["entry_price"] for leg in normalized_legs)
@@ -337,7 +419,7 @@ def get_strategy_chart_data(
 
         # ── Latest underlying LTP for the info bar ────────────────────
         success_q, quote_resp, _ = get_quotes(
-            symbol=base_symbol,
+            symbol=reference_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )

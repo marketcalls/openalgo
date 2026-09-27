@@ -6,8 +6,8 @@
  * crash the app — every codepath is wrapped, and the reporter refuses to
  * recurse into itself.
  *
- * Privacy: only message + stack + URL + component stack are sent. No DOM,
- * no localStorage, no form values, no breadcrumbs.
+ * Privacy: only message + stack + a redacted URL + component stack are sent.
+ * No DOM, no localStorage, no form values, no breadcrumbs.
  *
  * Throttling: dedups identical messages within 30s. Caps at 30 reports/min
  * (server enforces too).
@@ -31,6 +31,26 @@ const ENDPOINT = '/admin/api/errors/client'
 const DEDUP_WINDOW_MS = 30_000
 const MAX_REPORTS_PER_MINUTE = 30
 const RECENT_TTL_MS = 60_000
+const REDACTED_QUERY_VALUE = '[redacted]'
+const WEB_PROTOCOLS = new Set(['http:', 'https:'])
+const SENSITIVE_QUERY_PARAMETER_NAMES = new Set([
+  'token',
+  'code',
+  'requesttoken',
+  'accesstoken',
+  'authtoken',
+  'refreshtoken',
+  'resettoken',
+  'apikey',
+  'email',
+  'state',
+  'password',
+  'otp',
+  'secret',
+  'clientsecret',
+  'idtoken',
+  'jwt',
+])
 
 // Patterns that are noise — never report these.
 const IGNORE_PATTERNS = [
@@ -69,6 +89,10 @@ function pruneDedup(): void {
   for (const [key, ts] of recentSends.entries()) {
     if (now - ts > DEDUP_WINDOW_MS) recentSends.delete(key)
   }
+}
+
+function isSensitiveQueryParameter(name: string): boolean {
+  return SENSITIVE_QUERY_PARAMETER_NAMES.has(name.toLowerCase().replaceAll(/[_-]/g, ''))
 }
 
 async function fetchCSRFTokenSafe(): Promise<string | null> {
@@ -121,6 +145,26 @@ async function send(payload: ClientErrorPayload): Promise<void> {
   }
 }
 
+export function sanitizeErrorReportUrl(value: string): string {
+  try {
+    const url = new URL(value, window.location.origin)
+    if (WEB_PROTOCOLS.has(url.protocol)) {
+      for (const [key] of [...url.searchParams]) {
+        if (isSensitiveQueryParameter(key)) {
+          url.searchParams.set(key, REDACTED_QUERY_VALUE)
+        }
+      }
+      return `${url.origin}${url.pathname}${url.search}`
+    }
+    if (url.protocol.endsWith('-extension:')) {
+      return `${url.protocol}//${url.host}${url.pathname}`
+    }
+    return url.protocol
+  } catch {
+    return value.split(/[?#]/, 1)[0]
+  }
+}
+
 export function reportClientError(payload: ClientErrorPayload): void {
   try {
     const message = (payload.message || '').slice(0, 2000)
@@ -129,7 +173,7 @@ export function reportClientError(payload: ClientErrorPayload): void {
       level: payload.level ?? 'ERROR',
       message,
       stack: payload.stack?.slice(0, 20_000),
-      url: (payload.url || window.location.href).slice(0, 2000),
+      url: sanitizeErrorReportUrl(payload.url || window.location.href).slice(0, 2000),
       component_stack: payload.component_stack?.slice(0, 5000),
       user_agent: navigator.userAgent.slice(0, 500),
     })
@@ -140,6 +184,18 @@ export function reportClientError(payload: ClientErrorPayload): void {
 
 let installed = false
 
+export function handleWindowError(event: ErrorEvent): void {
+  reportClientError({
+    message: event.message || 'Uncaught error',
+    stack: event.error?.stack,
+    url: event.filename || window.location.href,
+  })
+  // Stale-bundle recovery: if a top-level script tag failed to load
+  // (e.g. preload of the new entry chunk after a deploy), reload once
+  // to fetch the fresh index.html.
+  tryAutoReloadOnChunkError(event.message)
+}
+
 export function installGlobalErrorReporter(): void {
   if (installed) return
   installed = true
@@ -148,17 +204,7 @@ export function installGlobalErrorReporter(): void {
   // produce noise that isn't representative of production.
   if (import.meta.env.DEV) return
 
-  window.addEventListener('error', (event: ErrorEvent) => {
-    reportClientError({
-      message: event.message || 'Uncaught error',
-      stack: event.error?.stack,
-      url: event.filename || window.location.href,
-    })
-    // Stale-bundle recovery: if a top-level script tag failed to load
-    // (e.g. preload of the new entry chunk after a deploy), reload once
-    // to fetch the fresh index.html.
-    tryAutoReloadOnChunkError(event.message)
-  })
+  window.addEventListener('error', handleWindowError)
 
   window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
     const reason = event.reason

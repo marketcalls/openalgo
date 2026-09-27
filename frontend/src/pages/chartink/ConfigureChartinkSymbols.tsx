@@ -1,6 +1,6 @@
 import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router'
 import { chartinkApi } from '@/api/chartink'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -42,9 +42,8 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
+import type { ChartinkStrategy, ChartinkSymbolMapping, SymbolSearchResult } from '@/types/chartink'
 import { CHARTINK_EXCHANGES, CHARTINK_PRODUCTS } from '@/types/chartink'
-import type { SymbolSearchResult } from '@/types/strategy'
 import { showToast } from '@/utils/toast'
 
 export default function ConfigureChartinkSymbols() {

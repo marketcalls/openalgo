@@ -5,6 +5,7 @@ import {
   BarSettingsDropdown,
   ColumnConfigDropdown,
   ColumnReorderPanel,
+  ViewModeToggle,
 } from '@/components/option-chain'
 import { PlaceOrderDialog } from '@/components/trading'
 import { Badge } from '@/components/ui/badge'
@@ -76,6 +77,25 @@ function formatInLakhs(num: number | undefined | null): string {
 function formatPrice(num: number | undefined | null): string {
   if (num === undefined || num === null) return '0.00'
   return num.toFixed(2)
+}
+
+/**
+ * Format a Greek, rendering a dash when it is not computable for that leg.
+ *
+ * A missing Greek is genuinely absent (no quote, expired chain, or an
+ * unconvergeable price) and must not be shown as 0.00, which a trader would
+ * read as a real value.
+ */
+function formatGreek(num: number | undefined | null, decimals: number): string {
+  if (num === undefined || num === null || !Number.isFinite(num)) return '-'
+  return num.toFixed(decimals)
+}
+
+/** Dim the placeholder dash so absent Greeks recede instead of reading as data. */
+function greekMutedClass(num: number | undefined | null): string {
+  return num === undefined || num === null || !Number.isFinite(num)
+    ? 'text-muted-foreground/50'
+    : ''
 }
 
 function convertExpiryForAPI(expiry: string): string {
@@ -240,6 +260,36 @@ const OptionChainRow = React.memo(function OptionChainRow({
         return <span className={numClass}>{ce?.ask_qty ?? 0}</span>
       case 'ce_spread':
         return <span className={cn(numClass, ceSpreadClass)}>{formatPrice(ceSpread)}</span>
+      case 'ce_iv':
+        return (
+          <span className={cn(numClass, 'font-semibold', greekMutedClass(ce?.implied_volatility))}>
+            {formatGreek(ce?.implied_volatility, 2)}
+          </span>
+        )
+      case 'ce_delta':
+        return (
+          <span className={cn(numClass, greekMutedClass(ce?.delta))}>
+            {formatGreek(ce?.delta, 4)}
+          </span>
+        )
+      case 'ce_gamma':
+        return (
+          <span className={cn(numClass, greekMutedClass(ce?.gamma))}>
+            {formatGreek(ce?.gamma, 4)}
+          </span>
+        )
+      case 'ce_theta':
+        return (
+          <span className={cn(numClass, greekMutedClass(ce?.theta))}>
+            {formatGreek(ce?.theta, 2)}
+          </span>
+        )
+      case 'ce_vega':
+        return (
+          <span className={cn(numClass, greekMutedClass(ce?.vega))}>
+            {formatGreek(ce?.vega, 2)}
+          </span>
+        )
       default:
         return null
     }
@@ -267,6 +317,36 @@ const OptionChainRow = React.memo(function OptionChainRow({
         return <span className={numClass}>{pe?.ask_qty ?? 0}</span>
       case 'pe_spread':
         return <span className={cn(numClass, peSpreadClass)}>{formatPrice(peSpread)}</span>
+      case 'pe_iv':
+        return (
+          <span className={cn(numClass, 'font-semibold', greekMutedClass(pe?.implied_volatility))}>
+            {formatGreek(pe?.implied_volatility, 2)}
+          </span>
+        )
+      case 'pe_delta':
+        return (
+          <span className={cn(numClass, greekMutedClass(pe?.delta))}>
+            {formatGreek(pe?.delta, 4)}
+          </span>
+        )
+      case 'pe_gamma':
+        return (
+          <span className={cn(numClass, greekMutedClass(pe?.gamma))}>
+            {formatGreek(pe?.gamma, 4)}
+          </span>
+        )
+      case 'pe_theta':
+        return (
+          <span className={cn(numClass, greekMutedClass(pe?.theta))}>
+            {formatGreek(pe?.theta, 2)}
+          </span>
+        )
+      case 'pe_vega':
+        return (
+          <span className={cn(numClass, greekMutedClass(pe?.vega))}>
+            {formatGreek(pe?.vega, 2)}
+          </span>
+        )
       default:
         return null
     }
@@ -466,12 +546,14 @@ export default function OptionChain() {
     defaultUnderlyings,
   } = useSupportedExchanges()
   const {
+    viewMode,
     visibleColumns,
     columnOrder,
     strikeCount,
     selectedUnderlying,
     barDataSource,
     barStyle,
+    setViewMode,
     toggleColumn,
     reorderColumns,
     setStrikeCount,
@@ -604,6 +686,24 @@ export default function OptionChain() {
       return () => clearTimeout(timeoutId)
     }
   }, [data?.chain])
+
+  // Keyboard shortcut: G flips Price <-> Greeks. Ignored while the user is
+  // typing, so it does not hijack the underlying search box.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'g' || e.ctrlKey || e.metaKey || e.altKey) return
+
+      const target = e.target as HTMLElement | null
+      if (target?.isContentEditable) return
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+
+      e.preventDefault()
+      setViewMode(viewMode === 'greeks' ? 'price' : 'greeks')
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [viewMode, setViewMode])
 
   const handleUnderlyingChange = (value: string) => {
     setSelectedUnderlying(value)
@@ -776,6 +876,7 @@ export default function OptionChain() {
               ))}
             </SelectContent>
           </Select>
+          <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
           <BarSettingsDropdown
             barDataSource={barDataSource}
             barStyle={barStyle}

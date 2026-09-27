@@ -1,6 +1,7 @@
 import os
 
 from broker.deltaexchange.api.baseurl import BASE_URL, get_auth_headers, get_url
+from broker.deltaexchange.api.rate_limiter import PRIVATE, consume
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -34,6 +35,9 @@ def authenticate_broker(code):
 
         # Verify credentials with a live signed request to GET /v2/profile
         path = "/v2/profile"
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,

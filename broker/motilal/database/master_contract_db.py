@@ -10,6 +10,7 @@ from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from broker.motilal.api.baseurl import ENDPOINTS, get_base_url
 from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
@@ -96,8 +97,8 @@ def download_csv_motilal_data(exchange_name):
         # Get the shared httpx client
         client = get_httpx_client()
 
-        # Motilal Oswal CSV download URL
-        url = f"https://openapi.motilaloswal.com/getscripmastercsv?name={exchange_name}"
+        # Motilal Oswal CSV download URL (host honours BROKER_API_URL for UAT)
+        url = f"{get_base_url()}{ENDPOINTS['getscripmastercsv']}?name={exchange_name}"
 
         logger.info(f"Downloading Motilal scrip master for {exchange_name} from {url}")
 
@@ -141,10 +142,22 @@ _NSE_INDEX_ALIASES: dict[str, str] = {
 # Broker-house-style BSE index name -> OpenAlgo canonical symbol. Keys are
 # matched against the raw broker string after upper-casing + collapsing runs
 # of whitespace to a single space (so "BSE  CAPGOOD" still hits "BSE CAPGOOD").
+#
+# The keys below are the strings the LIVE getindexdatacsv?name=BSE feed
+# actually sends -- they are NOT the documented/expanded index names. Twenty
+# keys here used to be spelled the documented way ("BSE DOLLEX 30",
+# "BSE HEALTHCARE", "SNSX50", ...) and therefore never matched a single row,
+# so those indices were stored under raw broker codes (BSEDOL30, BSEHEALTHC,
+# ENERGY, LRGCAP, FIN, ...). Before changing a key, download
+# https://openapi.motilaloswal.com/getindexdatacsv?name=BSE and copy the
+# `indexname` column verbatim. Names with no live counterpart are kept as
+# defensive entries in case the feed starts sending the longer form.
 _BSE_INDEX_ALIASES_RAW: dict[str, str] = {
+    # "SENSEX" is sent bare and falls through to "SENSEX" unchanged; the
+    # "BSE SENSEX" key is defensive only.
     "BSE SENSEX": "SENSEX",
     "BSE BANKEX": "BANKEX",
-    "SNSX50": "SENSEX50",
+    "BSE SENSEX 50": "SENSEX50",  # live name; was mis-keyed "SNSX50"
     "BSE 100": "BSE100",
     "BSE 150 MIDCAP": "BSE150MIDCAPINDEX",
     "BSE 200": "BSE200",
@@ -156,32 +169,32 @@ _BSE_INDEX_ALIASES_RAW: dict[str, str] = {
     "BSE CARBON": "BSECARBONEX",
     "BSE CONSDUR": "BSECONSUMERDURABLES",
     "BSE CPSE": "BSECPSE",
-    "BSE DOLLEX 100": "BSEDOLLEX100",
-    "BSE DOLLEX 200": "BSEDOLLEX200",
-    "BSE DOLLEX 30": "BSEDOLLEX30",
-    "BSE ENERGY": "BSEENERGY",
+    "BSE DOL100": "BSEDOLLEX100",  # live name; was mis-keyed "BSE DOLLEX 100"
+    "BSE DOL200": "BSEDOLLEX200",  # live name; was mis-keyed "BSE DOLLEX 200"
+    "BSE DOL30": "BSEDOLLEX30",  # live name; was mis-keyed "BSE DOLLEX 30"
+    "ENERGY": "BSEENERGY",  # live name; was mis-keyed "BSE ENERGY"
     "BSE FMCG": "BSEFASTMOVINGCONSUMERGOODS",
-    "BSE FINANCIAL SERVICES": "BSEFINANCIALSERVICES",
-    "BSE GREENEX": "BSEGREENEX",
-    "BSE HEALTHCARE": "BSEHEALTHCARE",
+    "FIN": "BSEFINANCIALSERVICES",  # live name; was "BSE FINANCIAL SERVICES"
+    "BSE GREENX": "BSEGREENEX",  # live name; was mis-keyed "BSE GREENEX"
+    "BSE HEALTHC": "BSEHEALTHCARE",  # live name; was mis-keyed "BSE HEALTHCARE"
     "BSE INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
-    "BSE INDUSTRIALS": "BSEINDUSTRIALS",
+    "INDSTR": "BSEINDUSTRIALS",  # live name; was mis-keyed "BSE INDUSTRIALS"
     "BSE IT": "BSEINFORMATIONTECHNOLOGY",
     "BSE IPO": "BSEIPO",
-    "BSE LARGECAP": "BSELARGECAP",
+    "LRGCAP": "BSELARGECAP",  # live name; was mis-keyed "BSE LARGECAP"
     "BSE METAL": "BSEMETAL",
     "BSE MIDCAP": "BSEMIDCAP",
-    "BSE MIDCAP SELECT": "BSEMIDCAPSELECTINDEX",
+    "MIDSEL": "BSEMIDCAPSELECTINDEX",  # live name; was "BSE MIDCAP SELECT"
     "BSE OIL&GAS": "BSEOIL&GAS",
     "BSE POWER": "BSEPOWER",
     "BSE PSU": "BSEPSU",
     "BSE REALTY": "BSEREALTY",
     "SNXT50": "BSESENSEXNEXT50",
-    "BSE SMALLCAP": "BSESMALLCAP",
-    "BSE SMALLCAP SELECT": "BSESMALLCAPSELECTINDEX",
-    "BSE SME IPO": "BSESMEIPO",
+    "BSE SMLCAP": "BSESMALLCAP",  # live name; was mis-keyed "BSE SMALLCAP"
+    "SMLSEL": "BSESMALLCAPSELECTINDEX",  # live name; was "BSE SMALLCAP SELECT"
+    "BSE SMEIPO": "BSESMEIPO",  # live name; was mis-keyed "BSE SME IPO"
     "BSE TECK": "BSETECK",
-    "BSE TELECOM": "BSETELECOM",
+    "TELCOM": "BSETELECOM",  # live name; was mis-keyed "BSE TELECOM"
 }
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -241,6 +254,90 @@ def standardize_index_symbols(df):
     return df
 
 
+# --- BSE F&O underlying normalization ------------------------------------
+#
+# `scripshortname` -- which becomes `name` and is what the OpenAlgo symbol is
+# built from -- carries Motilal/BSE *house contract codes* for BSE index
+# derivatives, not the underlying index name. The BSEFO feed sends BSX / BKX /
+# SX50 / BIT, which would produce "BSX03SEP2684200PE" instead of the canonical
+# "SENSEX03SEP2684200PE".
+#
+# The mapping below is confirmed against the `ultoken` column of the live
+# BSEFO scrip master, which points at the index code in getindexdatacsv?name=BSE:
+#   BSX  -> ultoken 999901 -> "SENSEX"        -> SENSEX
+#   BKX  -> ultoken 999912 -> "BSE BANKEX"    -> BANKEX
+#   SX50 -> ultoken 999947 -> "BSE SENSEX 50" -> SENSEX50
+#   BIT  -> ultoken 999975 -> "BSE Focused IT"-> *** deliberately unmapped ***
+#
+# BIT is left alone on purpose: its underlying is index 999975 "BSE Focused
+# IT", which is NOT the documented BSEINFORMATIONTECHNOLOGY index (999934,
+# "BSE IT"), and docs/prompt/symbol-format.md lists no canonical BFO name for
+# it. Guessing "BSEIT" here would point at the wrong index, so the rows keep
+# the broker code and a warning is logged instead (see _apply_bfo_underlying_aliases).
+#
+# NSEFO needs no equivalent map: its `scripshortname` is already canonical
+# (NIFTY, BANKNIFTY, NIFTYNXT50, MIDCPNIFTY, FINNIFTY, NIFTYFPI) -- verified
+# against the live NSEFO OPTIDX/FUTIDX rows.
+_BFO_UNDERLYING_ALIASES: dict[str, str] = {
+    "BSX": "SENSEX",
+    "BKX": "BANKEX",
+    "SX50": "SENSEX50",
+}
+
+# House codes seen on BSEFO index derivatives that have no confirmed canonical
+# OpenAlgo underlying yet. Logged once per download rather than guessed.
+_BFO_UNMAPPED_UNDERLYINGS = frozenset({"BIT"})
+
+
+def _apply_bfo_underlying_aliases(df):
+    """Rewrite BSE F&O house codes in `name` to canonical OpenAlgo underlyings.
+
+    Must run BEFORE the FUT/CE/PE symbol strings are assembled, since those are
+    built from `name`. Only touches rows whose exchange is BFO.
+    """
+    if "exchange" not in df.columns or "name" not in df.columns:
+        return df
+
+    bfo_mask = df["exchange"] == "BFO"
+    if not bfo_mask.any():
+        return df
+
+    names = df.loc[bfo_mask, "name"]
+    df.loc[bfo_mask, "name"] = names.replace(_BFO_UNDERLYING_ALIASES)
+
+    unmapped = names[names.isin(_BFO_UNMAPPED_UNDERLYINGS)]
+    if len(unmapped):
+        logger.warning(
+            f"Motilal BSEFO: {len(unmapped)} rows use house underlying code(s) "
+            f"{sorted(set(unmapped))} with no confirmed canonical OpenAlgo name; "
+            f"symbols keep the broker code. Add them to _BFO_UNDERLYING_ALIASES "
+            f"once docs/prompt/symbol-format.md names them."
+        )
+
+    return df
+
+
+# --- Expiry handling ------------------------------------------------------
+#
+# IMPORTANT: Motilal's `expirydate` column is NOT a Unix epoch. It is SECONDS
+# SINCE 1980-01-01T00:00:00Z, i.e. unix_ts = expirydate + 315532800. Nothing
+# else in OpenAlgo knows this, hence this note.
+#
+# We deliberately do NOT convert that field. Expiry is parsed out of
+# `scripname` instead ("TGBL 30-OCT-2025 CE 1180" -> 30-OCT-25), for two
+# reasons:
+#
+#   1. It is exact. Cross-checked against the converted epoch across all
+#      ~146k derivative rows of the live feed: 0 mismatches on NSEFO/BSEFO/NSECD.
+#   2. It dodges a real broker bug on MCX. Every one of the ~16k MCX rows
+#      carries a 23:59:59-UTC stamp (e.g. 1475711999 -> 2026-10-05 23:59:59Z),
+#      so converting and reading it in IST yields 2026-10-06 05:29:59 -- the
+#      expiry date plus one day, for the entire exchange.
+#
+# So: keep parsing from scripname. If you ever switch to the epoch, add the
+# 315532800 offset AND normalize MCX in UTC, not IST.
+
+
 def extract_expiry_from_scripname(scripname):
     """
     Extract expiry date from scripname and convert to DD-MMM-YY format.
@@ -285,8 +382,8 @@ def download_csv_index_data(exchange_name):
         # Get the shared httpx client
         client = get_httpx_client()
 
-        # Motilal Oswal Index CSV download URL
-        url = f"https://openapi.motilaloswal.com/getindexdatacsv?name={exchange_name}"
+        # Motilal Oswal Index CSV download URL (host honours BROKER_API_URL for UAT)
+        url = f"{get_base_url()}{ENDPOINTS['getindexdatacsv']}?name={exchange_name}"
 
         logger.info(f"Downloading Motilal index data for {exchange_name} from {url}")
 
@@ -328,6 +425,12 @@ def process_motilal_index_csv(df, exchange_name):
     # Set the name same as symbol for indices
     df["name"] = df["symbol"]
     df["brsymbol"] = df["symbol"]
+
+    # SymToken.token is a String column and process_motilal_csv() already emits
+    # str tokens. The index feed's `indexcode` parses as int64, so without this
+    # cast the same table would hold "26000" from one path and 26000 from the
+    # other -- and token lookups on the index rows would silently miss.
+    df["token"] = df["token"].astype(str)
 
     # Map exchange to OpenAlgo format with _INDEX suffix
     if exchange_name == "NSE":
@@ -432,7 +535,11 @@ def process_motilal_csv(df, exchange_name):
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(1).astype(int)
 
     # Motilal CSV already provides tick_size in rupees (e.g. 0.05), no conversion needed.
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0.05)
+    # Coerce non-positive ticks (not just NaN) to the 0.05 default: the live NSECD
+    # feed ships ticksize=0.000 on ~1.6k rows, and mapping/transform_data.py treats
+    # tick_size as falsy at 0 when rounding to the market protection price.
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
+    df.loc[~(df["tick_size"] > 0), "tick_size"] = 0.05
 
     # Convert token to string
     df["token"] = df["token"].astype(str)
@@ -442,6 +549,16 @@ def process_motilal_csv(df, exchange_name):
         df["optiontype"] = df["optiontype"].fillna("XX")
     else:
         df["optiontype"] = "XX"
+
+    # Motilal ships `instrumentname` space-padded, and BLANK for cash rows: every
+    # NSE/BSE equity landed with instrumenttype "      " (six spaces) instead of
+    # "EQ", and MCX underlyings with "COM   ". A padded value is not equal to any
+    # constant it is compared against, and it is truthy, so UI badges rendered
+    # blank and any instrumenttype filter silently matched nothing. Strip first,
+    # then let the FUT/CE/PE rules below refine it.
+    df["instrumenttype"] = (
+        df["instrumenttype"].fillna("").astype(str).str.strip().str.upper()
+    )
 
     # Update instrumenttype to match Angel format (FUT, CE, PE, etc.)
     # For Futures - set to 'FUT' (only when optiontype is XX, i.e., not an option)
@@ -467,6 +584,43 @@ def process_motilal_csv(df, exchange_name):
         (df["instrumenttype"].str.contains("IDX", na=False)) & (df["exchange"] == "MCX"), "exchange"
     ] = "MCX_INDEX"
 
+    # Cash rows carry no instrumentname at all, so after the index rows above
+    # have been routed to NSE_INDEX/BSE_INDEX everything still blank on a cash
+    # exchange is an equity-style scrip. "EQ" is what every other OpenAlgo
+    # broker stores there, and what the UI's type badge and instrumenttype
+    # filters expect.
+    df.loc[
+        (df["exchange"].isin(["NSE", "BSE"])) & (df["instrumenttype"] == ""),
+        "instrumenttype",
+    ] = "EQ"
+
+    # Normalize strike for everything that is not an option. Motilal ships
+    # strikeprice=-1.000 on futures and on the CDS/MCX underlying rows (UNDCUR,
+    # UNDIRC, COM); every other OpenAlgo broker stores 0.0 there, and -1.0 leaks
+    # into strike-based filters and API responses.
+    df.loc[~df["instrumenttype"].isin(["CE", "PE"]), "strike"] = 0.0
+
+    # BSE F&O index derivatives ship house codes (BSX/BKX/SX50) in `name`.
+    # Must happen before the symbol strings below are assembled from `name`.
+    df = _apply_bfo_underlying_aliases(df)
+
+    # Guard the symbol builders below: every FUT/CE/PE symbol is
+    # NAME + EXPIRY + [STRIKE] + SUFFIX, so an empty expiry collapses every
+    # contract on an underlying to the same string ("NIFTYFUT") and they all
+    # collide on the (symbol, exchange) dedupe. The MCX/CDS branches already
+    # tested for this; the other exchanges did not.
+    _deriv_mask = df["instrumenttype"].isin(["FUT", "CE", "PE"])
+    _has_expiry = df["expiry"].fillna("").astype(str) != ""
+    _missing_expiry = _deriv_mask & ~_has_expiry
+    if _missing_expiry.any():
+        logger.warning(
+            f"Motilal {exchange_name}: could not extract an expiry from scripname for "
+            f"{int(_missing_expiry.sum())} derivative row(s); their symbols are left as "
+            f"the raw broker scripname rather than being collapsed onto a shared "
+            f"expiry-less symbol. Samples: "
+            f"{df.loc[_missing_expiry, 'brsymbol'].head(5).tolist()}"
+        )
+
     # Helper function to format strike price
     def format_strike(strike):
         try:
@@ -489,9 +643,10 @@ def process_motilal_csv(df, exchange_name):
         "symbol",
     ] = df["name"] + df["expiry"].str.replace("-", "", regex=False) + "FUT"
     # For other exchanges with FUT
-    df.loc[(df["instrumenttype"] == "FUT") & (~df["exchange"].isin(["MCX", "CDS"])), "symbol"] = (
-        df["name"] + df["expiry"].str.replace("-", "", regex=False) + "FUT"
-    )
+    df.loc[
+        (df["instrumenttype"] == "FUT") & (~df["exchange"].isin(["MCX", "CDS"])) & _has_expiry,
+        "symbol",
+    ] = df["name"] + df["expiry"].str.replace("-", "", regex=False) + "FUT"
 
     # Format Options symbols: NAME + EXPIRY(no dashes) + STRIKE + CE/PE
     # For MCX and CDS options
@@ -518,28 +673,94 @@ def process_motilal_csv(df, exchange_name):
         + "PE"
     )
     # For other exchanges with options
-    df.loc[(df["instrumenttype"] == "CE") & (~df["exchange"].isin(["MCX", "CDS"])), "symbol"] = (
+    df.loc[
+        (df["instrumenttype"] == "CE") & (~df["exchange"].isin(["MCX", "CDS"])) & _has_expiry,
+        "symbol",
+    ] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
         + df["strike"].apply(format_strike)
         + "CE"
     )
-    df.loc[(df["instrumenttype"] == "PE") & (~df["exchange"].isin(["MCX", "CDS"])), "symbol"] = (
+    df.loc[
+        (df["instrumenttype"] == "PE") & (~df["exchange"].isin(["MCX", "CDS"])) & _has_expiry,
+        "symbol",
+    ] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
         + df["strike"].apply(format_strike)
         + "PE"
     )
 
-    # Clean up equity symbols (remove EQ suffix if present)
-    df.loc[df["instrumenttype"].str.contains("EQ|CASH", na=False, case=False), "symbol"] = (
-        df["symbol"].str.replace(" EQ", "", regex=False).str.strip()
-    )
+    # Clean up cash symbols: strip the exchange SERIES suffix.
+    #
+    # On the NSE cash feed the series lives in the `optiontype` column and is
+    # appended to `scripname`: "INFY EQ", "LOKESHMACH BE", "SFMP6DD MF",
+    # "745AP33 SG". `instrumentname` is six blanks on every cash row, so the old
+    # `EQ|CASH` instrumenttype test never fired, and the follow-up only removed
+    # a literal " EQ" -- leaving 7,197 of 9,858 NSE symbols with a trailing
+    # series token (SG 4301, N0 982, SM 442, BE 239, GS 132, ST 122, MF 115,
+    # N1 107, TB 81, SF 50, GB 45, ...). No OpenAlgo symbol may contain a space.
+    #
+    # `scripshortname` (-> `name`) already holds the bare scrip and matches
+    # `scripname` minus " <series>" on 9,839/9,858 NSE rows; the other 19 are
+    # series "NA", which pandas reads as NaN so the suffix cannot be rebuilt --
+    # `name` is right there too. So prefer `name`, and only fall back to
+    # stripping the literal " <optiontype>" off the raw scripname.
+    #
+    # Scoped to non-derivative NSE/BSE rows so nothing built above is touched.
+    # `brsymbol` intentionally keeps the RAW broker scripname ("INFY EQ").
+    cash_mask = df["exchange"].isin(["NSE", "BSE"]) & ~_deriv_mask
+    if cash_mask.any():
+        raw = df.loc[cash_mask, "brsymbol"].fillna("").astype(str)
+        series = df.loc[cash_mask, "optiontype"].fillna("").astype(str).str.strip()
+        bare = df.loc[cash_mask, "name"].fillna("").astype(str).str.strip()
 
-    # Additional cleanup: Remove EQ suffix for NSE exchange
-    df.loc[df["exchange"] == "NSE", "symbol"] = (
-        df["symbol"].str.replace(" EQ", "", regex=False).str.strip()
-    )
+        stripped = pd.Series(
+            [
+                r[: -(len(s) + 1)].strip() if s and s != "XX" and r.endswith(" " + s) else r.strip()
+                for r, s in zip(raw, series, strict=True)
+            ],
+            index=raw.index,
+        )
+        df.loc[cash_mask, "symbol"] = bare.where(bare != "", stripped)
+
+        # Stripping the series makes parallel listings of the SAME scrip collapse
+        # onto one bare symbol -- NSE runs temporary series alongside the main
+        # line ("CHOLAFIN D1" + "CHOLAFIN EQ", "MOTHERSON D1" + "MOTHERSON EQ",
+        # "ELECTCAST W1" + "ELECTCAST EQ"). OpenAlgo's namespace is
+        # (symbol, exchange), so only one can survive the dedupe in
+        # master_contract_download(); make it the EQ row, otherwise the canonical
+        # symbol would resolve to the temporary series' token and orders on it
+        # would hit the wrong instrument. Groups with no EQ row (e.g. the IMC1
+        # N1/N2/N3 government-security series) keep their first row as before.
+        eq_first = df.loc[cash_mask].assign(_eq_rank=(series != "EQ").astype(int))
+        survivors = (
+            eq_first.sort_values("_eq_rank", kind="stable")
+            .drop_duplicates(subset=["symbol", "exchange"], keep="first")
+            .index
+        )
+        shadowed = eq_first.index.difference(survivors)
+        if len(shadowed):
+            logger.info(
+                f"Motilal {exchange_name}: dropping {len(shadowed)} non-primary cash "
+                f"series row(s) that collapse onto an existing symbol: "
+                f"{df.loc[shadowed, 'brsymbol'].head(10).tolist()}"
+            )
+            df = df.drop(index=shadowed)
+            cash_mask = cash_mask.drop(index=shadowed)
+
+        # The broker's own scripshortname carries a space on a handful of BSE
+        # scrips ("PILANI INVE"); surface those rather than silently mangling
+        # them, since the correct bare symbol cannot be derived from the feed.
+        spaced = df.loc[cash_mask, "symbol"].astype(str).str.contains(" ")
+        if spaced.any():
+            logger.warning(
+                f"Motilal {exchange_name}: {int(spaced.sum())} cash symbol(s) still "
+                f"contain a space after series stripping (the broker's own "
+                f"scripshortname is spaced): "
+                f"{df.loc[cash_mask, 'symbol'][spaced].head(10).tolist()}"
+            )
 
     # Standardize index symbols to OpenAlgo format
     df = standardize_index_symbols(df)
@@ -618,8 +839,23 @@ def master_contract_download():
         # Combine all exchange data (scrip master + indices)
         token_df = pd.concat(all_data, ignore_index=True)
 
-        # Remove duplicates based on token
-        token_df = token_df.drop_duplicates(subset="token", keep="first")
+        # Deduplicate on (symbol, exchange) -- the house convention, see
+        # broker/hdfcsky, broker/fivepaisa and broker/definedge.
+        #
+        # NOT on token alone: a Motilal scripcode is unique only WITHIN an
+        # exchange, never globally. Deduping on token dropped 2,452 real
+        # instruments (169,486 -> 167,034), all of them CDS/MCX rows whose
+        # scripcode happened to collide with an NSE/BSE cash token -- e.g. token
+        # 5479 (USDINR23OCT26FUT) lost to an NSE scrip, token 10084
+        # (GBPUSD27AUG261.4CE) lost to NSE "EMAMIPAP". That silently deleted
+        # ~20% of the CDS segment, including 41 of its 178 futures.
+        before = len(token_df)
+        token_df = token_df.drop_duplicates(subset=["symbol", "exchange"], keep="first")
+        if before != len(token_df):
+            logger.info(
+                f"Dropped {before - len(token_df)} duplicate (symbol, exchange) rows "
+                f"({before} -> {len(token_df)})"
+            )
 
         logger.info(f"Total records to insert: {len(token_df)}")
 

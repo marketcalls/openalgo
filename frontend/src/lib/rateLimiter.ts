@@ -80,7 +80,7 @@ export function createRateLimiter(maxCalls: number, windowMs: number) {
 
   function cleanup() {
     const now = Date.now()
-    while (timestamps.length > 0 && timestamps[0] < now - windowMs) {
+    while (timestamps.length > 0 && timestamps[0] <= now - windowMs) {
       timestamps.shift()
     }
   }

@@ -279,6 +279,218 @@ def test_definedge_normalize_fill_and_ck_ack():
 
 
 # ---------------------------------------------------------------------------
+# Shoonya / Flattrade / Zebu / TradeSmart — the other four Noren om feeds
+#
+# These four share the Noren frame layout but each was written against a
+# different source of truth: Shoonya and Flattrade against their published
+# WebSocket docs, TradeSmart against its task table, and Zebu against the live
+# market-data client (it has no published order-update spec at all). The field
+# names below are therefore the contract worth pinning — a protocol drift here
+# shows up as *silence*, not an error, so only a fixture catches it.
+# ---------------------------------------------------------------------------
+
+
+class _FakeWs:
+    """Minimal websocket stand-in: records frames and close() calls."""
+
+    def __init__(self):
+        self.sent = []
+        self.closed = False
+
+    def send(self, payload):
+        self.sent.append(json.loads(payload))
+
+    def close(self):
+        self.closed = True
+
+
+def _noren_adapters():
+    """One adapter per Noren broker, as (name, adapter, uid)."""
+    from broker.flattrade.streaming.flattrade_order_adapter import (
+        FlattradeOrderUpdateAdapter,
+    )
+    from broker.shoonya.streaming.shoonya_order_adapter import ShoonyaOrderUpdateAdapter
+    from broker.tradesmart.streaming.tradesmart_order_adapter import (
+        TradeSmartOrderUpdateAdapter,
+    )
+    from broker.zebu.streaming.zebu_order_adapter import ZebuOrderUpdateAdapter
+
+    return [
+        ("shoonya", ShoonyaOrderUpdateAdapter(user_id="u", shoonya_uid="FA123", susertoken="s"), "FA123"),
+        ("flattrade", FlattradeOrderUpdateAdapter(user_id="u", flattrade_uid="FT123", accesstoken="s"), "FT123"),
+        ("zebu", ZebuOrderUpdateAdapter(user_id="u", zebu_uid="Z56004", susertoken="s"), "Z56004"),
+        ("tradesmart", TradeSmartOrderUpdateAdapter(user_id="u", tradesmart_uid="TS123", accesstoken="s"), "TS123"),
+    ]
+
+
+def test_noren_connect_frame_carries_accesstoken_not_usertoken():
+    # The published Shoonya doc says "usertoken"; the live client (and every
+    # adapter here) sends "accesstoken" with source=API. Pin that.
+    for name, adapter, uid in _noren_adapters():
+        ws = _FakeWs()
+        adapter.on_open_extra(ws)
+        assert len(ws.sent) == 1, name
+        frame = ws.sent[0]
+        assert frame["t"] == "a", name
+        assert frame["uid"] == uid and frame["actid"] == uid, name
+        assert frame["source"] == "API", name
+        assert frame["accesstoken"] == "s", name
+        # The composite "<uid>:::<bearer>" auth token must never reach the wire.
+        assert ":::" not in json.dumps(frame), name
+
+
+def test_noren_ack_subscribes_except_tradesmart():
+    for name, adapter, uid in _noren_adapters():
+        ws = _FakeWs()
+        adapter._ws = ws
+        assert adapter.normalize(json.dumps({"t": "ak", "s": "OK"})) is None, name
+        if name == "tradesmart":
+            # Doc task table: order updates are "automatic", no request frame.
+            assert ws.sent == [], name
+        else:
+            assert ws.sent == [{"t": "o", "actid": uid}], name
+        assert not ws.closed, name
+
+
+def test_noren_failed_ack_closes_socket_for_reconnect():
+    # A refused auth that the broker holds open would otherwise leave the
+    # adapter "connected" but subscribed to nothing, silent forever.
+    for name, adapter, _uid in _noren_adapters():
+        ws = _FakeWs()
+        adapter._ws = ws
+        assert adapter.normalize(json.dumps({"t": "ak", "s": "NOT_OK"})) is None, name
+        assert ws.closed, name
+        assert ws.sent == [], name
+
+
+def test_noren_ack_without_socket_is_survivable():
+    # _ws already cleared by a race with reconnect: no crash, no event.
+    for name, adapter, _uid in _noren_adapters():
+        adapter._ws = None
+        assert adapter.normalize(json.dumps({"t": "ak", "s": "Ok"})) is None, name
+
+
+def test_noren_ignores_non_order_frames():
+    # hk (heartbeat ack), ok/uok (subscribe acks), tf/df (market data) and the
+    # TradeSmart-only am/rm/ms feeds must all produce no order event.
+    for name, adapter, _uid in _noren_adapters():
+        for frame in ("hk", "ok", "uok", "tk", "tf", "dk", "df", "am", "rm", "ms"):
+            assert adapter.normalize(json.dumps({"t": frame})) is None, (name, frame)
+        assert adapter.normalize("not json at all") is None, name
+
+
+def test_noren_trigger_pending_stays_distinct_on_the_push_path():
+    # Underscore spelling from the wire; the push path keeps "trigger pending"
+    # distinct (the REST orderbook deliberately folds it into "open" instead).
+    for name, adapter, _uid in _noren_adapters():
+        fields = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "25073100000123", "tsym": "NHPC-EQ", "exch": "NSE",
+            "qty": "100", "fillshares": "0", "prc": "85.5", "trgprc": "86",
+            "prctyp": "SL-LMT", "trantype": "S", "prd": "M", "status": "TRIGGER_PENDING",
+        }))
+        assert fields["order_status"] == "trigger pending", name
+        assert fields["pricetype"] == "SL", name
+        assert fields["product"] == "NRML", name
+        assert fields["action"] == "SELL", name
+        assert fields["trigger_price"] == 86.0, name
+        assert fields["pending_quantity"] == 100, name
+
+
+def test_noren_terminal_statuses_and_partial_fill():
+    for name, adapter, _uid in _noren_adapters():
+        complete = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "1", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "10", "fillshares": "10", "avgprc": "1500.5", "prctyp": "LMT",
+            "trantype": "B", "prd": "C", "status": "COMPLETE",
+        }))
+        assert complete["order_status"] == "complete", name
+        assert complete["product"] == "CNC", name
+        assert complete["filled_quantity"] == 10 and complete["pending_quantity"] == 0, name
+        assert complete["average_price"] == 1500.5, name
+
+        # Noren spells it CANCELED (one L); OpenAlgo's vocabulary is cancelled.
+        cancelled = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "2", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "10", "fillshares": "0", "prctyp": "LMT", "trantype": "B",
+            "prd": "I", "status": "CANCELED",
+        }))
+        assert cancelled["order_status"] == "cancelled", name
+        assert cancelled["product"] == "MIS", name
+
+        rejected = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "3", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "10", "fillshares": "0", "prctyp": "MKT", "trantype": "S",
+            "prd": "I", "status": "REJECTED", "rejreason": "RED:Margin Shortfall",
+        }))
+        assert rejected["order_status"] == "rejected", name
+        assert rejected["rejection_reason"] == "RED:Margin Shortfall", name
+        assert rejected["pricetype"] == "MARKET", name
+
+        # Partial fill is still an open order, not a complete one.
+        partial = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "4", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "100", "fillshares": "40", "prctyp": "LMT", "trantype": "B",
+            "prd": "M", "status": "OPEN", "reporttype": "Fill",
+        }))
+        assert partial["order_status"] == "open", name
+        assert partial["filled_quantity"] == 40 and partial["pending_quantity"] == 60, name
+
+
+def test_noren_reporttype_fallback_when_status_is_unmapped():
+    # Terminal state carried only in reporttype. "Fill" is deliberately NOT a
+    # completion signal — it rides along with partial fills too.
+    for name, adapter, _uid in _noren_adapters():
+        fields = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "5", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "1", "fillshares": "0", "prctyp": "LMT", "trantype": "B",
+            "prd": "I", "status": "SOMETHING_NEW", "reporttype": "Canceled",
+        }))
+        assert fields["order_status"] == "cancelled", name
+
+
+def test_shoonya_and_zebu_read_the_norenoordno_typo():
+    # Shoonya's order-feed table spells the order number with a double o;
+    # every other Noren payload uses norenordno. Both adapters read either.
+    for name, adapter, _uid in _noren_adapters():
+        if name not in ("shoonya", "zebu"):
+            continue
+        fields = adapter.normalize(json.dumps({
+            "t": "om", "norenoordno": "25073100000999", "tsym": "INFY-EQ",
+            "exch": "NSE", "qty": "1", "fillshares": "1", "prctyp": "LMT",
+            "trantype": "B", "prd": "I", "status": "COMPLETE",
+        }))
+        assert fields["orderid"] == "25073100000999", name
+
+
+def test_zebu_and_tradesmart_accept_either_product_key():
+    # Noren uses "prd"; Flattrade/Firstock order feeds use "pcode". The two
+    # adapters written without a published order-update spec accept both.
+    for name, adapter, _uid in _noren_adapters():
+        if name not in ("zebu", "tradesmart"):
+            continue
+        fields = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "6", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "1", "fillshares": "0", "prctyp": "LMT", "trantype": "B",
+            "pcode": "C", "status": "OPEN",
+        }))
+        assert fields["product"] == "CNC", name
+
+
+def test_tradesmart_passes_through_products_openalgo_has_no_name_for():
+    # Doc: C=CNC, M=NRML, I=MIS, F=MTF, H=Cover, B=Bracket. The last three have
+    # no OpenAlgo equivalent, so they must survive as raw codes rather than be
+    # mislabelled as one of the three.
+    _name, adapter, _uid = _noren_adapters()[3]
+    for code in ("F", "H", "B"):
+        fields = adapter.normalize(json.dumps({
+            "t": "om", "norenordno": "7", "tsym": "INFY-EQ", "exch": "NSE",
+            "qty": "1", "fillshares": "0", "prctyp": "LMT", "trantype": "B",
+            "prd": code, "status": "OPEN",
+        }))
+        assert fields["product"] == code
+
+
+# ---------------------------------------------------------------------------
 # Angel — smart-order-update frames (11-websocket-order-status.md)
 # ---------------------------------------------------------------------------
 
@@ -433,6 +645,134 @@ def test_nubra_ignores_text_and_foreign_frames():
     adapter = NubraOrderUpdateAdapter(user_id="u", session_token="t")
     assert adapter.normalize("Invalid Token") is None
     assert adapter.normalize(b"\x00garbage") is None
+
+
+# ---------------------------------------------------------------------------
+# 5Paisa — OrderTradeConfirmations feed
+# (broker-api-docs/fivepaisa-api-docs/08-order-tracking.md)
+# ---------------------------------------------------------------------------
+
+
+def _fivepaisa_adapter():
+    from broker.fivepaisa.streaming.fivepaisa_order_adapter import (
+        FivepaisaOrderUpdateAdapter,
+    )
+
+    return FivepaisaOrderUpdateAdapter(user_id="u", client_code="CC", access_token="t")
+
+
+# The five ReqType samples, verbatim from the docs.
+_5P_PLACE = {
+    "ReqType": "P", "ClientCode": "CC", "Exch": "N", "ExchType": "C", "ScripCode": 1660,
+    "Symbol": "ITC", "Series": "EQ", "BrokerOrderID": 132038757,
+    "ExchOrderID": "1200010221327930", "BuySell": "B", "Qty": 1, "Price": 425,
+    "ReqStatus": 0, "Status": "Placed", "AtMarket": "N", "Product": "D",
+    "WithSL": "N", "SLTriggerRate": 0, "DisclosedQty": 0, "PendingQty": 1, "TradedQty": 0,
+}
+_5P_TRADE = {
+    "ReqType": "T", "ClientCode": "CC", "Exch": "N", "ExchType": "C", "ScripCode": 1660,
+    "Symbol": "ITC", "Series": "EQ", "ExchOrderID": "1200010221327930",
+    "ExchTradeId": "234495", "BuySell": "B", "Qty": 1, "Price": 434.2, "PendingQty": 0,
+    "TotalTradedQty": 1, "OrderQty": 1, "OrderPrice": 434.15, "Product": "D",
+    "ReqStatus": 0, "Status": "Fully Executed",
+}
+_5P_SL = {
+    "ReqType": "S", "ClientCode": "CC", "Exch": "N", "ExchType": "D", "ScripCode": 1660,
+    "Symbol": "ITC", "ExchOrderID": "1100000043224370", "BuySell": "B", "Qty": 1,
+    "OrderPrice": 433.9, "AtMarket": "N", "Product": "D", "ReqStatus": 0,
+    "SLTriggerRate": 433.85, "Status": "SL Triggered",
+}
+
+
+def test_fivepaisa_place_doc_sample():
+    fields = _fivepaisa_adapter().normalize(dict(_5P_PLACE))
+    assert fields["orderid"] == "132038757"
+    assert fields["order_status"] == "open"
+    assert fields["exchange"] == "NSE"
+    assert fields["action"] == "BUY"
+    assert fields["pricetype"] == "LIMIT"
+    assert fields["product"] == "CNC"
+    assert fields["quantity"] == 1
+    assert fields["pending_quantity"] == 1
+
+
+def test_fivepaisa_trade_resolves_broker_order_id_from_earlier_place():
+    """Trade and SL-trigger frames carry only ExchOrderID. They must still
+    report the BrokerOrderID that place_order handed the caller."""
+    adapter = _fivepaisa_adapter()
+    adapter.normalize(dict(_5P_PLACE))
+    fields = adapter.normalize(dict(_5P_TRADE))
+    assert fields["orderid"] == "132038757"  # not the ExchOrderID
+    assert fields["order_status"] == "complete"
+    assert fields["quantity"] == 1          # OrderQty, not this trade's Qty
+    assert fields["filled_quantity"] == 1   # TotalTradedQty
+    assert fields["price"] == 434.15        # OrderPrice
+    assert fields["average_price"] == 434.2  # executed price of the fill
+
+
+def test_fivepaisa_trade_without_a_known_place_falls_back_to_exchange_id():
+    fields = _fivepaisa_adapter().normalize(dict(_5P_TRADE))
+    assert fields["orderid"] == "1200010221327930"
+
+
+def test_fivepaisa_sl_trigger_is_open_not_pending():
+    fields = _fivepaisa_adapter().normalize(dict(_5P_SL))
+    assert fields["order_status"] == "open"
+    assert fields["pricetype"] == "SL"
+    assert fields["trigger_price"] == 433.85
+    assert fields["exchange"] == "NFO"
+    assert fields["product"] == "NRML"
+
+
+def test_fivepaisa_array_frames_publish_every_confirmation():
+    adapter = _fivepaisa_adapter()
+    published = []
+    adapter._publish_event_fields = published.append
+    cancel = dict(_5P_PLACE, BrokerOrderID=222072376, Status="Cancelled", ReqType="C")
+    adapter._handle_message(json.dumps([_5P_PLACE, cancel]))
+    assert [p["orderid"] for p in published] == ["132038757", "222072376"]
+    assert [p["order_status"] for p in published] == ["open", "cancelled"]
+
+
+def test_fivepaisa_ignores_acks_and_unparseable_frames():
+    adapter = _fivepaisa_adapter()
+    published = []
+    adapter._publish_event_fields = published.append
+    for junk in ['{"Status":"Ack"}', '{"Exch":"N","LastRate":1}', "not json", b"\x01\x02"]:
+        adapter._handle_message(junk)
+    assert published == []
+
+
+def test_fivepaisa_after_hours_and_transmit_states_collapse_to_openalgo_vocabulary():
+    from broker.fivepaisa.streaming.fivepaisa_order_adapter import _STATUS_MAP
+
+    # Every status in the docs' "Order Status" table must be mapped; an
+    # unmapped one reaches the UI as raw broker text and loses its meaning.
+    for status, expected in [
+        ("Fully Executed", "complete"), ("Modified", "open"), ("Xmitted", "open"),
+        ("Rejected By 5P", "rejected"), ("AH Cancelled", "cancelled"),
+        ("AH Modified", "open"), ("Rejected by Exch", "rejected"),
+        ("AH Placed", "open"), ("Cancelled", "cancelled"), ("Pending", "open"),
+    ]:
+        assert _STATUS_MAP[status.lower()] == expected, status
+
+
+def test_fivepaisa_feed_url_is_sharded_by_the_token_redirect_server():
+    import base64
+
+    adapter = _fivepaisa_adapter()
+    for server, host in [
+        ("A", "aopenfeed"), ("B", "bopenfeed"), ("C", "openfeed"),
+    ]:
+        body = base64.urlsafe_b64encode(
+            json.dumps({"RedirectServer": server}).encode()
+        ).decode().rstrip("=")
+        adapter.access_token = f"h.{body}.s"
+        assert adapter.get_ws_url().startswith(f"wss://{host}.5paisa.com/")
+        assert adapter.get_ws_url().endswith("|CC")
+
+    adapter.access_token = "not-a-jwt"
+    assert "openfeed.5paisa.com" in adapter.get_ws_url()
 
 
 # ---------------------------------------------------------------------------

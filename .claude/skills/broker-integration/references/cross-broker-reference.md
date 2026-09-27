@@ -1,4 +1,4 @@
-# Cross-broker reference — how the 35 existing plugins actually behave
+# Cross-broker reference — how the 36 existing plugins actually behave
 
 Measured from the tree, not from any broker's documentation. Use these as
 calibration when deciding what is normal, what is a broker quirk, and what a
@@ -78,7 +78,7 @@ broker module.
 ## Depth capability is loosely declared
 
 `get_supported_depth_levels()` exists in the adapter design but is implemented
-by only a couple of plugins — grepping all 35 finds `[1]` and `[5]` and little
+by only a couple of plugins — grepping all 36 finds `[1]` and `[5]` and little
 else. The mechanism that actually runs is:
 
 ```python

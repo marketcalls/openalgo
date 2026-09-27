@@ -3,8 +3,11 @@ import os
 
 import httpx
 import threading
+import weakref
 import time
 
+from broker.aliceblue.api.error_codes import describe
+from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from broker.aliceblue.mapping.order_data import (
     normalize_holding,
     normalize_order,
@@ -31,8 +34,17 @@ BASE_URL = "https://a3.aliceblueonline.com"
 # ─── API request helper ──────────────────────────────────────────────────────
 
 def get_api_response(endpoint, auth, method="GET", payload=None):
-    """Make API requests to AliceBlue V2 API using shared connection pooling."""
+    """Make API requests to AliceBlue V2 API using shared connection pooling.
+
+    Rate limited. This helper carries the reads - orderbook, tradebook,
+    holdings, positions, funds - which fall under AliceBlue's "all other
+    requests" budget of 1800 per 15 minutes. Placing, modifying and cancelling
+    build their own URLs and never come through here, which is what we want:
+    the broker does not limit those, and throttling an exit to protect a quota
+    would be the wrong trade.
+    """
     try:
+        apply_rate_limit()
         client = get_httpx_client()
         url = f"{BASE_URL}{endpoint}"
 
@@ -84,7 +96,9 @@ def _extract_result(response_data):
         if response_data.get("status") == "Ok":
             return response_data.get("result", [])
         else:
-            msg = response_data.get("message", "Unknown error")
+            # AliceBlue answers with a bare code like "EC912"; expand it so the
+            # log and the surfaced error say what actually went wrong.
+            msg = describe(response_data.get("message", "Unknown error"))
             logger.error(f"API error: {msg}")
             return None
     return response_data  # fallback: return as-is if not a dict
@@ -161,11 +175,39 @@ def get_holdings(auth):
     response = get_api_response("/open-api/od/v1/holdings/CNC", auth)
     result = _extract_result(response)
 
+    if result is None:
+        # V2 API returns error message when there are no holdings
+        msg = response.get("message", "")
+        if "No holding" in msg or "not found" in msg.lower() or "Failed to retrieve" in msg:
+            logger.debug(f"No holdings found: {msg}")
+            return []
+        return {"stat": "Not_Ok", "emsg": msg or "Failed to fetch holdings"}
+
+    if not result:
+        return []
+
+    return [normalize_holding(h) for h in result]
+
 
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
+#
+# WeakValueDictionary, not a plain dict: the key space is
+# symbol:exchange:product, which is unbounded, and a plain dict kept one
+# threading.Lock per symbol ever smart-ordered for the life of the worker.
+# Entries now disappear once no caller holds the lock, so the registry tracks
+# symbols being ordered right now rather than every symbol ever ordered.
+#
+# Do NOT swap this for a size-capped dict. Evicting a lock a thread is holding
+# hands the next caller a brand-new lock, both run the same symbol's smart
+# order concurrently against a stale position book, and the position is sized
+# twice. Weak references cannot do that: while any caller holds the lock it
+# holds a strong reference, so the entry survives. Same reasoning as
+# services/flow_executor_service._workflow_locks (issue #1739).
+_symbol_locks: "weakref.WeakValueDictionary[str, threading.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 _symbol_locks_lock = threading.Lock()
 
 # --- Position Book Cache ---
@@ -176,12 +218,20 @@ _POSITION_CACHE_TTL = 1.0   # seconds
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
+    """Get or create a per-symbol lock for serializing smart orders.
+
+    Callers must keep the returned lock referenced for the whole critical
+    section (``lock = _get_symbol_lock(...); with lock:``) - that reference is
+    what keeps the registry entry alive. Re-fetching mid-section would not be
+    safe.
+    """
     key = f"{symbol}:{exchange}:{product}"
     with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+        lock = _symbol_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _symbol_locks[key] = lock
+        return lock
 
 
 def _get_cached_positions(auth):
@@ -205,20 +255,6 @@ def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
     with _position_cache_lock:
         _position_cache.pop(auth, None)
-
-
-    if result is None:
-        # V2 API returns error message when there are no holdings
-        msg = response.get("message", "")
-        if "No holding" in msg or "not found" in msg.lower() or "Failed to retrieve" in msg:
-            logger.debug(f"No holdings found: {msg}")
-            return []
-        return {"stat": "Not_Ok", "emsg": msg or "Failed to fetch holdings"}
-
-    if not result:
-        return []
-
-    return [normalize_holding(h) for h in result]
 
 
 # ─── Open position lookup ────────────────────────────────────────────────────

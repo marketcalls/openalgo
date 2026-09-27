@@ -756,14 +756,99 @@
    CUSTOM SCROLLBAR STYLES
    ============================================================================= */
 
+/* Every scrollbar follows the theme. The browser default renders a light
+   track/thumb that reads as a bright seam on a dark chart pane, and it is not
+   worth remembering to opt in per element. `.scrollbar-thin` below still exists
+   for places that want the narrower variant. */
+
+/* Scrollbar chrome, and why it is a literal colour rather than a token.
+   ---------------------------------------------------------------------------
+   This file carries two incompatible token systems: the base :root and .dark
+   define channels ("240 3.8% 46.1%") for hsl(var(--x)), while .analyzer and the
+   accent themes define complete oklch() colours. hsl(var(--muted-foreground))
+   is therefore invalid under half of them, and an invalid scrollbar-color
+   silently falls back to `auto`, which paints the browser's light default on a
+   dark panel. That is exactly what shipped.
+
+   color-scheme is the real fix and covers more than scrollbars: it tells the
+   engine to render every native control (scrollbars, selects, checkboxes, date
+   pickers) in the matching palette. The scrollbar-color below is a literal
+   slate that reads on either theme, so it cannot be invalidated by whichever
+   token system is in force. */
+:root,
+.sandbox {
+  color-scheme: light;
+}
+
+/* .analyzer is a dark palette (background oklch(0.16 ...)) applied INSTEAD of
+   .dark, not alongside it: the theme store removes 'dark' when it adds
+   'analyzer'. So it has to declare dark itself or every native control in
+   Analyze Mode renders light on a dark page. .sandbox is the light one. */
+.dark,
+.analyzer {
+  color-scheme: dark;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(113 122 143 / 0.45) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(113 122 143 / 0.38);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(113 122 143 / 0.62);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Customising the scrollbar without this leaves Chrome drawing its own arrow
+   buttons at the ends, in default chrome colours -- which reads as a white bar
+   with an arrow on a dark pane even though the track and thumb are themed. */
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Scroll without a visible bar. A plain class rather than a Tailwind arbitrary
+   variant, so it cannot be lost to a purge or a variant-syntax change. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* Thin scrollbar utility class */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.38) transparent;
 }
 
 .scrollbar-thin:hover {
-  scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.62) transparent;
 }
 
 /* WebKit browsers (Chrome, Safari, Edge) */
@@ -789,4 +874,78 @@
 
 .scrollbar-thin::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* OpenScript editor syntax colours.
+ *
+ * Their own small palette rather than the app's accent, because the accent is
+ * the operator's choice from six hues and a keyword painted in it would vanish
+ * under one theme and shout under another. Low chroma on purpose: inside a
+ * monospace block these read as syntax, and a code panel is not the place to
+ * compete with the chart beside it.
+ *
+ * One place, so retuning them is one edit rather than a sweep through a
+ * component. Every pair below clears WCAG AA against the panel's own surface in
+ * the mode it belongs to.
+ */
+:root {
+  --oscript-comment: oklch(0.55 0.02 260);
+  --oscript-string: oklch(0.52 0.11 155);
+  --oscript-number: oklch(0.55 0.11 65);
+  --oscript-color: oklch(0.52 0.12 20);
+  --oscript-keyword: oklch(0.5 0.13 285);
+  --oscript-call: oklch(0.5 0.12 235);
+  --oscript-builtin: oklch(0.48 0.09 200);
+  --oscript-punctuation: oklch(0.55 0.02 260);
+}
+
+.dark {
+  --oscript-comment: oklch(0.62 0.02 260);
+  --oscript-string: oklch(0.78 0.13 155);
+  --oscript-number: oklch(0.8 0.12 75);
+  --oscript-color: oklch(0.78 0.12 25);
+  --oscript-keyword: oklch(0.76 0.12 290);
+  --oscript-call: oklch(0.78 0.11 235);
+  --oscript-builtin: oklch(0.8 0.09 200);
+  --oscript-punctuation: oklch(0.62 0.02 260);
+}
+
+.oscript-comment {
+  color: var(--oscript-comment);
+  font-style: italic;
+}
+.oscript-string {
+  color: var(--oscript-string);
+}
+.oscript-number {
+  color: var(--oscript-number);
+}
+/* A hexadecimal colour literal. It is a literal like a number and not like a
+   name, which is what it used to be painted as: the token's kind is hexColor,
+   and a rule that asked whether a kind was made of letters answered yes to it. */
+.oscript-color {
+  color: var(--oscript-color);
+}
+.oscript-keyword {
+  color: var(--oscript-keyword);
+}
+/* A function the language provides: plot, ema, input. */
+.oscript-call {
+  color: var(--oscript-call);
+}
+/* A value the language provides: close, aqua, math. Kept apart from a call
+   because one is a thing you do and the other is a thing you read, and a
+   reader scanning for where the work happens wants to tell them apart. */
+.oscript-builtin {
+  color: var(--oscript-builtin);
+}
+.oscript-punctuation {
+  color: var(--oscript-punctuation);
+}
+.oscript-identifier,
+.oscript-plain {
+  /* Inherited rather than named: this file defines --foreground as an HSL
+     triplet in some scopes and an oklch value in others, so wrapping it would
+     be invalid under half of them. The editor already sets its own colour. */
+  color: inherit;
 }

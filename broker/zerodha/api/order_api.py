@@ -5,6 +5,11 @@ import threading
 import time
 import urllib.parse
 
+from broker.zerodha.mapping.mcx_contract_size import (
+    McxQuantityError,
+    _resolve_size,
+    from_kite_quantity,
+)
 from broker.zerodha.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -152,11 +157,47 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position.get("exchange") == exchange
                 and position.get("product") == product
             ):
-                net_qty = position.get("quantity", "0")
+                # Raw Kite response, so MCX quantity is a contract count.
+                # place_smartorder_api compares this against a position size
+                # given in OpenAlgo units and hands the difference to
+                # place_order_api, which converts back -- so it has to be in
+                # units here or the order is divided by the lot size twice.
+                #
+                # An unresolved size must NOT fall back to a factor of 1 here.
+                # That is safe when reading an orderbook for display, but this
+                # value decides whether to trade: 30 held contracts read as 30
+                # units against a 30 unit target matches exactly, and the smart
+                # order reports "position already matched" while 450 units sit
+                # open and unhedged.
+                if _resolve_size(tradingsymbol, exchange) is None:
+                    raise McxQuantityError(
+                        f"Cannot read the open position in {tradingsymbol}: MCX has "
+                        f"revised its contract size and the master contract has no row "
+                        f"for this expiry. Re-download the master contract, then retry."
+                    )
+                net_qty = from_kite_quantity(
+                    position.get("quantity", "0"), tradingsymbol, exchange
+                )
                 logger.debug(f"Net Quantity {net_qty}")
                 break  # Assuming you need the first match
 
     return net_qty
+
+
+class _RejectedResponse:
+    """Stands in for an httpx response the request never earned.
+
+    place_order_api's callers read ``.status`` and the message out of the
+    response data, so a rejection shaped this way reaches the user as a 400
+    naming the real problem. Letting the exception escape instead lands in the
+    service layer's blanket handler, which reports "internal error" with a 500
+    and publishes an order-failed event -- true, but useless to whoever has to
+    fix the quantity.
+    """
+
+    def __init__(self, status=400):
+        self.status = status
+        self.status_code = status
 
 
 def place_order_api(data, auth):
@@ -165,7 +206,11 @@ def place_order_api(data, auth):
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     data["apikey"] = BROKER_API_KEY
     # token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)
+    try:
+        newdata = transform_data(data)
+    except McxQuantityError as exc:
+        logger.info(f"Rejected order before sending to Kite: {exc}")
+        return _RejectedResponse(), {"status": "error", "message": str(exc)}, None
 
     # Prepare the payload
     payload = {
@@ -299,6 +344,11 @@ def place_smartorder_api(data, auth):
                 response_data = {"status": "success", "message": "No action needed. Position already matched."}
                 return res, response_data, orderid
 
+    except McxQuantityError as exc:
+        # Ahead of the generic handler, which leaves res as None for the
+        # service to read .status from.
+        logger.info(f"Rejected smart order before sending to Kite: {exc}")
+        return _RejectedResponse(), {"status": "error", "message": str(exc)}, None
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"
         logger.exception(error_msg)
@@ -318,6 +368,8 @@ def close_all_positions(current_api_key, auth):
     if positions_response["data"] is None or not positions_response["data"]:
         return {"message": "No Open Positions Found"}, 200
 
+    failures: list[str] = []
+
     if positions_response["status"]:
         # Loop through each position to close
         for position in positions_response["data"]["net"]:
@@ -327,7 +379,15 @@ def close_all_positions(current_api_key, auth):
 
             # Determine action based on net quantity
             action = "SELL" if int(position["quantity"]) > 0 else "BUY"
-            quantity = abs(int(position["quantity"]))
+            # Same raw-response caveat as get_open_position: convert to OpenAlgo
+            # units here, because place_order_api converts back to contracts.
+            quantity = abs(
+                int(
+                    from_kite_quantity(
+                        position["quantity"], position["tradingsymbol"], position["exchange"]
+                    )
+                )
+            )
 
             # Get OA Symbol before sending to Place Order
             symbol = get_oa_symbol(position["tradingsymbol"], position["exchange"])
@@ -346,11 +406,30 @@ def close_all_positions(current_api_key, auth):
             logger.debug(f"Close position payload: {place_order_payload}")
 
             # Place the order to close the position
-            _, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
+            res, api_response, order_id = place_order_api(place_order_payload, AUTH_TOKEN)
 
             logger.debug(f"Close position response: {api_response}")
 
-            # Note: Ensure place_order_api handles any errors and logs accordingly
+            # A refused exit leaves the position open. Reporting "squared off"
+            # anyway is the worst possible answer: the caller stops watching a
+            # position the broker still holds. Collect the failures and say so.
+            if getattr(res, "status", None) != 200 or not order_id:
+                reason = (
+                    api_response.get("message", "order was refused")
+                    if isinstance(api_response, dict)
+                    else "order was refused"
+                )
+                failures.append(f"{symbol} ({position['exchange']}): {reason}")
+                logger.error(f"Square-off failed for {symbol}: {reason}")
+
+    if failures:
+        return {
+            "status": "error",
+            "message": (
+                f"{len(failures)} position(s) could not be squared off and are still "
+                f"open: {'; '.join(failures)}"
+            ),
+        }, 500
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -402,7 +481,11 @@ def cancel_order(orderid, auth):
 def modify_order(data, auth):
     AUTH_TOKEN = auth
 
-    newdata = transform_modify_order_data(data)  # You need to implement this function
+    try:
+        newdata = transform_modify_order_data(data)  # You need to implement this function
+    except McxQuantityError as exc:
+        logger.info(f"Rejected modify before sending to Kite: {exc}")
+        return {"status": "error", "message": str(exc)}, 400
 
     # Prepare the payload with proper handling of numeric fields
     payload = {

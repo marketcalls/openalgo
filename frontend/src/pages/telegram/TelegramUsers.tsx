@@ -1,6 +1,6 @@
 import { ArrowLeft, Bell, BellOff, Search, Send, Trash2, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { webClient } from '@/api/client'
 import {
   AlertDialog,

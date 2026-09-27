@@ -3,11 +3,12 @@ Minimal protobuf parser for Groww market data
 Parses binary protobuf messages without external protobuf library
 """
 
-import logging
 import struct
 from typing import Any, Dict, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Protobuf wire types
 VARINT = 0

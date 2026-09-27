@@ -26,6 +26,8 @@ import pytz
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import update
+
 from database.sandbox_db import (
     SandboxFunds,
     SandboxHoldings,
@@ -229,6 +231,81 @@ class FundManager:
             logger.exception(f"Error checking margin for user {self.user_id}: {e}")
             return False, f"Error checking margin: {str(e)}"
 
+    def stage_margin_delta(self, delta, description=""):
+        """Apply a margin change WITHOUT committing, so a caller can make the
+        funds move and its own state change one transaction.
+
+        block_margin and release_margin each commit on their own. That is right
+        for a plain order, but it makes a GTT transition two separate commits:
+        the funds move, then the GTT row is written, and a failure in between
+        leaves the ledger and the row disagreeing about the same money with
+        nothing to reconcile them. Callers that must be atomic stage the change
+        here and commit once, so either both land or neither does.
+
+        Args:
+            delta: Positive to block (reserve), negative to release.
+            description: For the log line.
+
+        Returns:
+            ``(ok, message)``. The caller must commit on success and roll back
+            on failure - nothing is committed here.
+        """
+        try:
+            if not self._ensure_funds_initialized():
+                return False, "Funds not initialized"
+
+            delta = Decimal(str(delta))
+            if delta == 0:
+                return True, "No change"
+
+            # A single UPDATE that computes the new balance in SQL, not in
+            # Python. Reading the row, adjusting it in memory and letting the
+            # caller commit is a lost update: two threads each read the same
+            # starting balance, each write their own total, and the second
+            # commit erases the first - two GTTs reserving 950 each while the
+            # ledger moved only once. The class lock cannot help, because it is
+            # released long before the caller commits, and it protects nothing
+            # against a second process.
+            #
+            # The sufficiency check is part of the WHERE clause for the same
+            # reason: checking in Python and updating afterwards is
+            # check-then-act, and rowcount tells us which of the two happened.
+            stmt = update(SandboxFunds).where(SandboxFunds.user_id == self.user_id)
+            if delta > 0:
+                stmt = stmt.where(SandboxFunds.available_balance >= delta)
+            else:
+                # Releasing more than is actually reserved would drive
+                # used_margin negative and credit the difference as available
+                # cash - money the account never had. Guarded in the same
+                # statement so the check cannot be raced past.
+                stmt = stmt.where(SandboxFunds.used_margin >= -delta)
+            stmt = stmt.values(
+                available_balance=SandboxFunds.available_balance - delta,
+                used_margin=SandboxFunds.used_margin + delta,
+            )
+            result = db_session.execute(stmt, execution_options={"synchronize_session": False})
+
+            if result.rowcount != 1:
+                if delta > 0:
+                    return False, f"Insufficient funds. Required: ₹{delta}"
+                return (
+                    False,
+                    f"Cannot release ₹{-delta}: more than the reserved margin",
+                )
+
+            # The in-memory copy is now stale; drop it so later reads see the
+            # value the database actually holds.
+            db_session.expire(self._ensure_funds_initialized())
+
+            # Deliberately no commit: the caller owns the transaction.
+            logger.info(
+                f"Staged ₹{delta} margin change for user {self.user_id}. {description}"
+            )
+            return True, f"Margin change staged: ₹{delta}"
+        except Exception as e:
+            logger.exception(f"Error staging margin for user {self.user_id}: {e}")
+            return False, f"Error staging margin: {str(e)}"
+
     def block_margin(self, amount, description=""):
         """Block margin for a trade"""
         with self._lock:
@@ -239,6 +316,13 @@ class FundManager:
                     return False, "Funds not initialized"
 
                 amount = Decimal(str(amount))
+
+                # A negative "block" is a release wearing the wrong name: it
+                # subtracts from used_margin and credits available_balance,
+                # inventing cash. Amounts are always positive; direction is the
+                # method you call.
+                if amount <= 0:
+                    return False, f"Block amount must be positive, got {amount}"
 
                 if funds.available_balance < amount:
                     return (
@@ -271,6 +355,29 @@ class FundManager:
 
                 amount = Decimal(str(amount))
                 realized_pnl = Decimal(str(realized_pnl))
+
+                # A negative release blocks margin and destroys available cash;
+                # same reasoning as block_margin. realized_pnl is deliberately
+                # unrestricted - a loss is a legitimate negative.
+                if amount < 0:
+                    return False, f"Release amount cannot be negative, got {amount}"
+
+                # Refuse to release more than is reserved. Letting it through
+                # drives used_margin negative and credits the difference as
+                # available cash, so a single over-release anywhere - a double
+                # release, a stale amount, a recovery bug - invents money and
+                # every figure derived from the balance is wrong afterwards.
+                # Failing here instead leaves the margin blocked, which
+                # reconcile_margin(auto_fix=True) already exists to correct.
+                if amount > funds.used_margin:
+                    logger.error(
+                        f"Refusing to release ₹{amount} for user {self.user_id}: only "
+                        f"₹{funds.used_margin} is reserved. {description}"
+                    )
+                    return (
+                        False,
+                        f"Cannot release ₹{amount}: only ₹{funds.used_margin} is reserved",
+                    )
 
                 # Release the margin
                 funds.used_margin -= amount
@@ -312,6 +419,24 @@ class FundManager:
 
                 amount = Decimal(str(amount))
 
+                if amount <= 0:
+                    return False, f"Transfer amount must be positive, got {amount}"
+
+                # Same ceiling as release_margin. This is the T+1 settlement
+                # path, so an over-transfer drives used_margin negative and the
+                # difference silently becomes headroom for further trades -
+                # without even the visible cash bump a bad release leaves.
+                if amount > funds.used_margin:
+                    logger.error(
+                        f"Refusing to transfer ₹{amount} to holdings for user "
+                        f"{self.user_id}: only ₹{funds.used_margin} is reserved. "
+                        f"{description}"
+                    )
+                    return (
+                        False,
+                        f"Cannot transfer ₹{amount}: only ₹{funds.used_margin} is reserved",
+                    )
+
                 # Reduce used margin (release from used_margin)
                 # But do NOT credit available_balance - money is now in holdings
                 funds.used_margin -= amount
@@ -341,6 +466,11 @@ class FundManager:
                     return False, "Funds not initialized"
 
                 amount = Decimal(str(amount))
+
+                # A negative credit debits available_balance with none of the
+                # sufficiency checks a real debit goes through.
+                if amount <= 0:
+                    return False, f"Credit amount must be positive, got {amount}"
 
                 # Credit sale proceeds to available balance
                 funds.available_balance += amount
@@ -516,6 +646,28 @@ def reconcile_margin(user_id, auto_fix=True):
             for pos in positions
             if pos.quantity != 0  # Only count open positions
         )
+
+        # Active GTTs hold margin too. Without counting them a resting GTT looks
+        # exactly like a leaked reservation, and with auto_fix on that would
+        # release the very margin the GTT needs to place its order when it
+        # fires.
+        try:
+            from database.sandbox_db import SandboxGTT
+
+            total_gtt_margin = sum(
+                Decimal(str(gtt.margin_blocked or 0))
+                for gtt in SandboxGTT.query.filter_by(
+                    user_id=user_id, gtt_status="active"
+                ).all()
+            )
+        except Exception:
+            logger.exception(
+                "Could not total active GTT margin during reconciliation; "
+                "skipping reconciliation rather than risk releasing it"
+            )
+            return False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"
+
+        total_position_margin += total_gtt_margin
 
         # Get current used_margin from funds
         funds = SandboxFunds.query.filter_by(user_id=user_id).first()

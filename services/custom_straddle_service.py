@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytz
 
+from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
 from services.option_symbol_service import (
     construct_crypto_option_symbol,
@@ -26,17 +27,18 @@ from services.option_symbol_service import (
 )
 from services.quotes_service import get_quotes
 from services.straddle_chart_service import (
-    NSE_INDEX_SYMBOLS,
     BSE_INDEX_SYMBOLS,
-    _get_quote_exchange,
-    _convert_timestamp_to_ist,
+    NO_SPOT_EXCHANGES,
+    NSE_INDEX_SYMBOLS,
     _calculate_days_to_expiry,
+    _convert_timestamp_to_ist,
+    _get_quote_exchange,
+    resolve_underlying_quote,
 )
 from services.strategy_chart_service import (
     _cap_last_n_trading_dates,
     _resolve_trading_window,
 )
-from database.token_db_enhanced import fno_search_symbols
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
@@ -71,14 +73,32 @@ def get_custom_straddle_simulation(
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
 
-        # Handle crypto perpetual symbol lookup (e.g. BTC → BTCUSDFUT)
+        # One chain, so a later branch cannot overwrite an earlier resolution.
         if exchange.upper() in CRYPTO_EXCHANGES:
+            # Crypto perpetual symbol lookup (e.g. BTC -> BTCUSDFUT)
             _perp = fno_search_symbols(
                 query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
             if not _perp:
                 return False, {"status": "error", "message": f"No perpetual futures found for {base_symbol}"}, 404
             underlying_quote_symbol = _perp[0]["symbol"]
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # MCX and the currency segments have no tradable spot, so the
+            # near-month future is both the quote and the history reference.
+            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if _resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures found for {base_symbol} on "
+                            f"{exchange.upper()}"
+                        ),
+                    },
+                    404,
+                )
+            underlying_quote_symbol, quote_exchange = _resolved
         else:
             underlying_quote_symbol = base_symbol
 

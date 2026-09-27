@@ -386,6 +386,53 @@ def get_order_book(auth):
     return direct_get_order_book(auth)
 
 
+def transform_groww_trade(trade):
+    """
+    Transform one normalised Groww trade into the shape map_trade_data and
+    transform_tradebook_data expect.
+
+    Groww reports the trade `price` in rupees, so it is carried through as-is.
+    An earlier value-based "paise to rupees" conversion divided any price above
+    100 by 100, which turned a genuine Rs 433.00 fill into Rs 4.33 and left the
+    scale discontinuous at Rs 100. Synthetic trades built from the order book
+    take their price from the same rupee-denominated source, so they were
+    corrupted the same way.
+
+    Args:
+        trade (dict): Trade as returned by get_order_trades(), or a synthetic
+            trade assembled from an executed order.
+
+    Returns:
+        dict: Trade in OpenAlgo's tradebook format.
+    """
+    price = trade.get("price", 0)
+
+    return {
+        # Fields expected by OpenAlgo's UI
+        "tradingSymbol": trade.get("symbol", ""),  # Capitalized for exact matching
+        "exchangeSegment": trade.get("exchange", ""),
+        "productType": trade.get("product", ""),
+        "transactionType": trade.get("transaction_type", ""),
+        "tradedQuantity": trade.get("quantity", 0),
+        "tradedPrice": price,
+        "orderId": trade.get("order_id", ""),
+        "updateTime": trade.get("trade_date_time", ""),
+        "tradeId": trade.get("trade_id", ""),
+        # Include additional fields that might be needed
+        "trade_id": trade.get("trade_id", ""),
+        "order_id": trade.get("order_id", ""),
+        "exchange": trade.get("exchange", ""),
+        "segment": trade.get("segment", ""),
+        "symbol": trade.get("symbol", ""),
+        "quantity": trade.get("quantity", 0),
+        "price": price,
+        "transaction_type": trade.get("transaction_type", ""),
+        "trade_date_time": trade.get("trade_date_time", ""),
+        "created_at": trade.get("created_at", ""),
+        "status": trade.get("trade_status", "EXECUTED"),
+    }
+
+
 def get_trade_book(auth):
     """
     Get list of all trades for the user using direct API calls
@@ -744,39 +791,7 @@ def get_trade_book(auth):
 
         # Format trades to match OpenAlgo's expected format (as used in the REST API)
         # This matches the format expected by the order_data.py mapping functions
-        openalgo_trades = []
-        for trade in all_trades:
-            # Convert price from paise to rupees if needed (Groww returns prices in paise)
-            price = trade.get("price", 0)
-            if price > 100:
-                price = price / 100
-
-            # Transform to the exact format expected by map_trade_data and transform_tradebook_data
-            openalgo_trade = {
-                # Fields expected by OpenAlgo's UI
-                "tradingSymbol": trade.get("symbol", ""),  # Capitalized for exact matching
-                "exchangeSegment": trade.get("exchange", ""),
-                "productType": trade.get("product", ""),
-                "transactionType": trade.get("transaction_type", ""),
-                "tradedQuantity": trade.get("quantity", 0),
-                "tradedPrice": price,
-                "orderId": trade.get("order_id", ""),
-                "updateTime": trade.get("trade_date_time", ""),
-                "tradeId": trade.get("trade_id", ""),
-                # Include additional fields that might be needed
-                "trade_id": trade.get("trade_id", ""),
-                "order_id": trade.get("order_id", ""),
-                "exchange": trade.get("exchange", ""),
-                "segment": trade.get("segment", ""),
-                "symbol": trade.get("symbol", ""),
-                "quantity": trade.get("quantity", 0),
-                "price": price,
-                "transaction_type": trade.get("transaction_type", ""),
-                "trade_date_time": trade.get("trade_date_time", ""),
-                "created_at": trade.get("created_at", ""),
-                "status": trade.get("trade_status", "EXECUTED"),
-            }
-            openalgo_trades.append(openalgo_trade)
+        openalgo_trades = [transform_groww_trade(trade) for trade in all_trades]
 
         # Log the first transformed trade for debugging
         if openalgo_trades:

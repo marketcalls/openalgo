@@ -3,6 +3,7 @@ import threading
 import time
 
 from broker.tradesmart.api.baseurl import post, resolve_uid
+from broker.tradesmart.mapping.order_data import normalize_order_status
 from broker.tradesmart.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -37,7 +38,7 @@ def get_order_book(auth):
     # Surface rejection reasons for any rejected orders
     if isinstance(response, list):
         for order in response:
-            if isinstance(order, dict) and str(order.get("status", "")).upper() == "REJECTED":
+            if isinstance(order, dict) and normalize_order_status(order.get("status")) == "rejected":
                 logger.debug(
                     f"Rejected order {order.get('norenordno', '')} "
                     f"({order.get('tsym', '')}): {order.get('rejreason', 'no reason provided')}"
@@ -291,10 +292,11 @@ def cancel_all_orders_api(data, auth):
     if order_book_response is None or not isinstance(order_book_response, list):
         return [], []
 
+    # Orders still working at the exchange (OPEN / PENDING / TRIGGER_PENDING)
     orders_to_cancel = [
         order
         for order in order_book_response
-        if order.get("status") in ["OPEN", "TRIGGER_PENDING"]
+        if normalize_order_status(order.get("status")) == "open"
     ]
 
     canceled_orders = []

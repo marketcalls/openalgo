@@ -4,3 +4,4 @@
 export { ConfigPanel } from './ConfigPanel'
 export { ExecutionLogPanel, type LogEntry } from './ExecutionLogPanel'
 export { NodePalette } from './NodePalette'
+export { OrderPriceFields } from './OrderPriceFields'

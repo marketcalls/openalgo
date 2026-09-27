@@ -81,3 +81,47 @@ def on_multiorder_completed(event):
 def on_analyzer_error(event):
     # Original code does NOT send telegram on validation errors — preserve behavior
     pass
+
+
+# --- GTT ------------------------------------------------------------------
+#
+# A GTT rests for weeks, so the moment that matters is when it fires: an order
+# has just been placed without the user asking. That one is always alerted.
+# Placement and cancellation are alerted too, matching how order.placed and
+# order.cancelled behave. Failures stay silent, as they do for orders.
+
+
+def on_gtt_placed(event):
+    _send_alert(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_cancelled(event):
+    _send_alert(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_modified(event):
+    _send_alert(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_triggered(event):
+    """The GTT fired and an order went in - the alert that matters most."""
+    _send_alert(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_expired(event):
+    """A trigger the user was relying on has lapsed without firing."""
+    _send_alert(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_failed(event):
+    # Matches on_order_failed: failures are surfaced in the response and the
+    # log, not pushed to Telegram.
+    pass
+
+
+def on_gtt_modify_failed(event):
+    pass
+
+
+def on_gtt_cancel_failed(event):
+    pass

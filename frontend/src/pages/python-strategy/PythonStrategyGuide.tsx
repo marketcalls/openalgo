@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import {
   Accordion,
   AccordionContent,
@@ -9,6 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useStrategyExchanges } from '@/hooks/useStrategyExchanges'
 import { showToast } from '@/utils/toast'
 
 const sampleStrategy = `"""
@@ -288,6 +289,8 @@ const copyToClipboard = (text: string) => {
 }
 
 export default function PythonStrategyGuide() {
+  const { exchanges } = useStrategyExchanges()
+
   return (
     <div className="container mx-auto py-6 space-y-6 max-w-4xl">
       {/* Back Button */}
@@ -631,34 +634,20 @@ export default function PythonStrategyGuide() {
           <div>
             <p className="font-medium mb-2">Supported Exchanges</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-              <div className="bg-muted p-2 rounded">
-                <strong>NSE</strong> &mdash; Equity (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>BSE</strong> &mdash; Equity (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>NFO</strong> &mdash; NSE F&O (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>BFO</strong> &mdash; BSE F&O (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>CDS</strong> &mdash; NSE Currency (09:00&ndash;17:00)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>BCD</strong> &mdash; BSE Currency (09:00&ndash;17:00)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>MCX</strong> &mdash; Commodity (09:00&ndash;23:55)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>CRYPTO</strong> &mdash; 24/7 (no holidays)
-              </div>
+              {exchanges.map((opt) => (
+                <div key={opt.value} className="bg-muted p-2 rounded">
+                  <strong>{opt.value}</strong>
+                  {opt.description ? ` — ${opt.description}` : ''}
+                  {opt.window ? ` (${opt.window})` : ''}
+                  {opt.is_24x7 ? ' (no holidays)' : ''}
+                </div>
+              ))}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Timings shown are defaults. Per-date overrides (partial holidays, special sessions)
-              come from the market calendar DB.
+              Windows are read live from the market calendar DB, so an exchange timing change (for
+              example the F&O close moving to 15:40) shows up here on its own. Per-date overrides
+              (partial holidays, special sessions) come from the same DB and are applied by the
+              scheduler.
             </p>
           </div>
 
@@ -892,7 +881,7 @@ export default function PythonStrategyGuide() {
                   <div className="flex items-center gap-3 p-2 bg-muted rounded">
                     <Badge className="bg-blue-500 text-white">Scheduled</Badge>
                     <div className="text-sm">
-                      <p>Strategy is armed and will auto-start at the scheduled time</p>
+                      <p>Strategy is waiting and will start on its own at the scheduled time</p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Shows context: "Starts today at 9:15 IST" or "Next: Mon, Tue at 9:15 IST"
                       </p>
@@ -928,11 +917,11 @@ export default function PythonStrategyGuide() {
                       <strong>Within schedule:</strong> Strategy starts running immediately
                     </li>
                     <li>
-                      <strong>Outside schedule:</strong> Strategy is "armed" &mdash; status changes
-                      to "Scheduled"
+                      <strong>Outside schedule:</strong> Strategy waits, and its status changes to
+                      "Scheduled"
                     </li>
                     <li>
-                      Button changes to <strong>Cancel</strong> after arming
+                      Button changes to <strong>Cancel</strong> once it is scheduled
                     </li>
                   </ul>
                 </div>
@@ -951,7 +940,7 @@ export default function PythonStrategyGuide() {
                   <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
                     <li>Cancels the scheduled auto-start</li>
                     <li>Sets "manually stopped" flag</li>
-                    <li>Click Start again to re-arm</li>
+                    <li>Click Start again to schedule it once more</li>
                   </ul>
                 </div>
 

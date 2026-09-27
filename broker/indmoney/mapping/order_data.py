@@ -1,6 +1,5 @@
 import json
 
-from broker.indmoney.mapping.transform_data import map_exchange
 from database.token_db import get_symbol
 from utils.logging import get_logger
 
@@ -31,6 +30,148 @@ CANCELLED_STATUSES = {
     "PARTIALLY FILLED - CANCELLED",
     "PARTIALLY FILLED - EXPIRED",
 }
+
+
+# --- Exchange resolution ---------------------------------------------------
+# IndMoney identifies an instrument's venue with a *pair*: `exchange` is
+# "NSE"/"BSE" and `segment` is "EQUITY"/"DERIVATIVE". OpenAlgo needs one code,
+# so a derivative has to fold into NFO/BFO rather than its NSE/BSE parent.
+# Reading `exchange` alone labels every F&O row "NSE", which then misses the
+# (token, exchange) symbol lookup - the master contract stores F&O tokens under
+# NFO/BFO - and leaves the product as MARGIN instead of NRML.
+#
+# `exchange` is also documented as sometimes EMPTY on derivative positions, so
+# when the pair is not conclusive we identify the venue from the token itself.
+_EXCHANGE_BY_SEGMENT = {
+    ("NSE", "EQUITY"): "NSE",
+    ("BSE", "EQUITY"): "BSE",
+    ("NSE", "DERIVATIVE"): "NFO",
+    ("BSE", "DERIVATIVE"): "BFO",
+}
+
+# Legacy/alternate single-field forms some payloads have used.
+_LEGACY_EXCHANGE_SEGMENTS = {
+    "NSE_EQ": "NSE",
+    "BSE_EQ": "BSE",
+    "NSE_FNO": "NFO",
+    "NSE_FO": "NFO",
+    "BSE_FNO": "BFO",
+    "BSE_FO": "BFO",
+}
+
+_DERIVATIVE_CANDIDATES = ("NFO", "BFO")
+_EQUITY_CANDIDATES = ("NSE", "BSE")
+
+# How the broker's order types map to OpenAlgo price types. The request
+# vocabulary for a stop is TRIGGER, but the order book reports the same order
+# back as GTT_LIMIT / GTT_MARKET, and a child leg as OCO.
+BROKER_ORDER_TYPE_MAP = {
+    "MARKET": "MARKET",
+    "LIMIT": "LIMIT",
+    "STOP_LOSS": "SL",
+    "STOP_LOSS_MARKET": "SL-M",
+    # Smart-order (GTT) vocabulary
+    "TRIGGER": "SL",
+    "GTT_LIMIT": "SL",
+    "GTT_MARKET": "SL-M",
+    "OCO": "OCO",
+}
+
+# Order types that identify a smart-order (GTT) leg, used by cancel/modify
+# routing to pick the /smart/order endpoints. Derived from the map above so the
+# two cannot drift: adding a GTT type in one place adds it in both.
+SMART_ORDER_TYPES = frozenset(
+    {"TRIGGER", "OCO"} | {t for t in BROKER_ORDER_TYPE_MAP if t.startswith("GTT_")}
+)
+
+
+def resolve_exchange(security_id, exchange, segment, default="NSE"):
+    """
+    Resolve the OpenAlgo exchange for an IndMoney order / trade / position row.
+
+    Args:
+        security_id: Instrument token, used to disambiguate when the payload
+            does not state the exchange.
+        exchange: IndMoney `exchange` value ("NSE"/"BSE", possibly empty), or a
+            legacy combined value such as "NSE_FNO".
+        segment: IndMoney `segment` value ("EQUITY"/"DERIVATIVE").
+        default: Returned when the venue cannot be determined at all.
+
+    Returns:
+        str: One of NSE, BSE, NFO, BFO (or `default`).
+    """
+    exch = str(exchange or "").strip().upper()
+    seg = str(segment or "").strip().upper()
+
+    # A combined value already names the venue outright.
+    if exch in _LEGACY_EXCHANGE_SEGMENTS:
+        return _LEGACY_EXCHANGE_SEGMENTS[exch]
+
+    resolved = _EXCHANGE_BY_SEGMENT.get((exch, seg))
+    if resolved:
+        return resolved
+
+    # Inconclusive pair - identify the venue from the token. get_symbol() is an
+    # O(1) cache lookup keyed on (token, exchange), so probing is cheap and only
+    # the correct exchange can hit.
+    token = str(security_id or "").strip()
+    if token:
+        if seg == "DERIVATIVE":
+            candidates = _DERIVATIVE_CANDIDATES
+        elif seg == "EQUITY":
+            candidates = _EQUITY_CANDIDATES
+        else:
+            candidates = _DERIVATIVE_CANDIDATES + _EQUITY_CANDIDATES
+
+        # A stated exchange still narrows the choice even when the segment did not.
+        if exch in ("NSE", "BSE"):
+            candidates = tuple(c for c in candidates if c in (exch, "NFO" if exch == "NSE" else "BFO"))
+
+        for candidate in candidates:
+            if get_symbol(token, candidate):
+                return candidate
+
+    logger.warning(
+        f"Could not resolve exchange for token={security_id!r} "
+        f"(exchange={exchange!r}, segment={segment!r}); defaulting to {default}"
+    )
+    return default
+
+
+def _first_price(*values):
+    """
+    First value that parses as a non-zero price, else 0.0.
+
+    IndMoney leaves inapplicable price fields as empty strings rather than
+    omitting them, so `dict.get(key, 0.0)` returns "" and renders as 0.00.
+    """
+    for value in values:
+        if value in (None, "", 0):
+            continue
+        try:
+            parsed = float(str(value).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+        if parsed:
+            return parsed
+    return 0.0
+
+
+def map_product_to_openalgo(product, exchange):
+    """
+    Map an IndMoney product to the OpenAlgo product code.
+
+    IndMoney: CNC / INTRADAY / MARGIN.  OpenAlgo: CNC / MIS / NRML.
+    """
+    api_product = str(product or "").strip().upper()
+    if api_product == "INTRADAY":
+        return "MIS"
+    if api_product in ("CNC", "DELIVERY"):
+        return "CNC"
+    if api_product == "MARGIN":
+        return "NRML"
+    # Unknown product: derivatives carry forward, equity does not.
+    return "NRML" if str(exchange or "").upper() in ("NFO", "BFO", "CDS", "BCD", "MCX") else "MIS"
 
 
 def normalize_order_status(status):
@@ -93,10 +234,14 @@ def map_order_data(order_data):
                     logger.warning(f"Skipping non-dictionary order: {type(order)}")
                     continue
 
-                # Extract the instrument_token and exchange for the current order
-                # Handle new IndMoney API format
+                # Extract the instrument_token and exchange for the current order.
+                # The venue needs BOTH `exchange` and `segment`: an F&O order
+                # reports exchange "NSE" with segment "DERIVATIVE" and must
+                # resolve to NFO, not NSE.
                 instrument_token = order.get("security_id")
-                exchange = map_exchange(order.get("exchange", ""))
+                exchange = resolve_exchange(
+                    instrument_token, order.get("exchange", ""), order.get("segment", "")
+                )
 
                 # Map new format to expected format for consistency
                 order["exchangeSegment"] = exchange
@@ -107,8 +252,20 @@ def map_order_data(order_data):
                 order["orderStatus"] = order.get("status", "").upper()
                 order["orderId"] = order.get("id", "")
                 order["quantity"] = order.get("requested_qty", 0)
-                order["price"] = order.get("requested_price", 0.0)
-                order["triggerPrice"] = order.get("sl_trigger_price", 0.0)
+                # A plain order carries requested_price. A trigger/GTT order
+                # leaves that empty and reports its prices in the leg fields
+                # instead - confirmed live: a standalone TRIGGER order comes
+                # back as order_type GTT_LIMIT with the trigger in
+                # tgt_trigger_price and the limit in tgt_limit_price.
+                order["price"] = _first_price(
+                    order.get("requested_price"),
+                    order.get("tgt_limit_price"),
+                    order.get("sl_limit_price"),
+                )
+                order["triggerPrice"] = _first_price(
+                    order.get("sl_trigger_price"),
+                    order.get("tgt_trigger_price"),
+                )
                 order["updateTime"] = order.get("created_at", "")
 
                 # Use the get_symbol function to fetch the symbol from the database
@@ -129,17 +286,9 @@ def map_order_data(order_data):
                     order["tradingSymbol"] = order.get("name", "")
 
                 # Map product types
-                if (
-                    order["exchangeSegment"] == "NSE" or order["exchangeSegment"] == "BSE"
-                ) and order["productType"] == "CNC":
-                    order["productType"] = "CNC"
-                elif order["productType"] == "INTRADAY":
-                    order["productType"] = "MIS"
-                elif (
-                    order["exchangeSegment"] in ["NFO", "MCX", "BFO", "CDS"]
-                    and order["productType"] == "MARGIN"
-                ):
-                    order["productType"] = "NRML"
+                order["productType"] = map_product_to_openalgo(
+                    order["productType"], order["exchangeSegment"]
+                )
 
         return order_data
 
@@ -240,18 +389,12 @@ def transform_order_data(orders):
                 )
                 continue
 
-            # Map order types to standard format
+            # Map order types to standard format. GTT_LIMIT / GTT_MARKET are
+            # what the order book calls a smart TRIGGER order - i.e. the
+            # stop-loss order types, which is how OpenAlgo should show them.
             order_type = order.get("orderType", "").upper()
-            if order_type == "MARKET":
-                order["orderType"] = "MARKET"
-            elif order_type == "LIMIT":
-                order["orderType"] = "LIMIT"
-            elif order_type == "STOP_LOSS":
-                order["orderType"] = "SL"
-            elif order_type == "STOP_LOSS_MARKET":
-                order["orderType"] = "SL-M"
-            elif order_type == "OCO":
-                order["orderType"] = "OCO"
+            if order_type in BROKER_ORDER_TYPE_MAP:
+                order["orderType"] = BROKER_ORDER_TYPE_MAP[order_type]
 
             transformed_order = {
                 "symbol": order.get("tradingSymbol", ""),
@@ -327,11 +470,11 @@ def map_trade_data(trade_data):
             scrip_code = trade.get("scrip_code")
             segment = trade.get("segment", "EQUITY")
 
-            # Map segment to exchange
-            if segment == "DERIVATIVE":
-                exchange = "NFO"  # Default to NFO for derivatives
-            else:
-                exchange = "NSE"  # Default to NSE for equity
+            # The trade-book payload has no exchange field. get_trade_book()
+            # copies it across from the matching order where possible; when the
+            # join misses, resolve_exchange() identifies the venue from the
+            # token so BSE equity and BFO trades are not forced onto NSE/NFO.
+            exchange = resolve_exchange(scrip_code, trade.get("exchange", ""), segment)
 
             # Map IndMoney trade format to expected format
             trade["exchangeSegment"] = exchange
@@ -362,18 +505,7 @@ def map_trade_data(trade_data):
 
             # Map product type from IndMoney format to OpenAlgo format
             product = trade.get("product", "")
-            if product == "INTRADAY":
-                trade["productType"] = "MIS"
-            elif product == "CNC" or product == "DELIVERY":
-                trade["productType"] = "CNC"
-            elif product == "MARGIN":
-                trade["productType"] = "NRML"
-            else:
-                # Default based on exchange segment
-                if segment == "DERIVATIVE":
-                    trade["productType"] = "NRML"
-                else:
-                    trade["productType"] = "MIS"
+            trade["productType"] = map_product_to_openalgo(product, exchange)
 
             logger.debug(
                 f"Mapped trade {scrip_code}: txn_type={txn_type}, product={product} -> {trade['productType']}"
@@ -489,27 +621,16 @@ def map_position_data(position_data):
             # Extract fields from actual IndMoney API format (new API response structure)
             instrument_token = position.get("security_id")
 
-            # Map exchange_segment from API to standard exchange format
-            exchange_segment = position.get("exchange_segment", "")
-            if "FNO" in exchange_segment or "F&O" in exchange_segment:
-                exchange = "NFO"
-            elif "NSE" in exchange_segment:
-                # Check if it's equity or derivative
-                if position.get("query_segment") == "derivative":
-                    exchange = "NFO"
-                else:
-                    exchange = "NSE"
-            elif "BSE" in exchange_segment:
-                exchange = "BSE"
-            elif "MCX" in exchange_segment:
-                exchange = "MCX"
-            else:
-                # Fallback to query_segment for mapping
-                query_segment = position.get("query_segment", "equity")
-                if query_segment == "derivative":
-                    exchange = "NFO"
-                else:
-                    exchange = "NSE"
+            # Resolve the venue from exchange + segment. `exchange` is empty on
+            # some derivative positions, and `segment` may be absent, so fall
+            # back to the segment the position was queried under before letting
+            # resolve_exchange() identify the venue from the token.
+            segment = position.get("segment") or position.get("query_segment", "")
+            exchange = resolve_exchange(
+                instrument_token,
+                position.get("exchange") or position.get("exchange_segment", ""),
+                segment,
+            )
 
             # Map actual IndMoney API format to expected format for consistency
             position["exchangeSegment"] = exchange
@@ -542,23 +663,34 @@ def map_position_data(position_data):
                 multiplier = position.get("multiplier", 1)
                 position["marketValue"] = net_qty * position["lastTradedPrice"] * multiplier
 
-            # Extract P&L directly from API - try multiple field names (documented and legacy)
-            pnl_absolute = (
-                position.get("pnl_absolute")
-                or position.get("pnl")
-                or position.get("unrealized_profit")
-                or position.get("realized_profit")
-            )
+            # P&L. IndMoney positions carry only `realized_profit` - there is no
+            # unrealized/MTM field - so total P&L is realized plus mark-to-market
+            # on whatever is still open. Using realized_profit alone (the old
+            # behaviour) reports a closed-out figure as though it were total.
+            pnl_absolute = position.get("pnl_absolute")
+            if pnl_absolute is None:
+                pnl_absolute = position.get("pnl")
+            if pnl_absolute is None:
+                pnl_absolute = position.get("unrealized_profit")
+
             if pnl_absolute is not None:
                 position["pnlAbsolute"] = float(pnl_absolute)
             else:
-                # Calculate P&L if not provided: (LTP - Avg Price) * Quantity * Multiplier
-                avg_price = position["avgCostPrice"]
+                realized = float(position.get("realized_profit") or 0.0)
                 net_qty = position["netQty"]
+                ltp = position["lastTradedPrice"]
+                avg_price = position["avgCostPrice"]
                 multiplier = position.get("multiplier", 1)
-                position["pnlAbsolute"] = (
-                    (position["lastTradedPrice"] - avg_price) * net_qty * multiplier
-                )
+
+                # Only mark to market when there is an open quantity AND a price
+                # to mark it against; a missing LTP would otherwise read as a
+                # total loss of the position's value.
+                if net_qty and ltp:
+                    unrealized = (ltp - float(avg_price or 0.0)) * net_qty * multiplier
+                else:
+                    unrealized = 0.0
+
+                position["pnlAbsolute"] = realized + unrealized
 
             # Extract multiplier from API or default to 1
             position["multiplier"] = position.get("multiplier", 1)

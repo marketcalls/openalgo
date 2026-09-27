@@ -27,7 +27,7 @@ The sample environment currently names `HISTORIFY_DATABASE_URL`, while `database
 |---|---|
 | `auth_db.py`, `user_db.py` | Broker auth, API keys, active sessions, login audit, local user |
 | `settings_db.py`, `leverage_db.py` | Analyzer and application settings |
-| `strategy_db.py`, `chartink_db.py`, `flow_db.py` | Automation definitions and executions |
+| `chartink_db.py`, `flow_db.py` | Automation definitions and executions |
 | `action_center_db.py` | Pending semi-auto requests and approval outcome |
 | `market_calendar_db.py`, `qty_freeze_db.py` | Exchange calendar and freeze quantities |
 | `telegram_db.py`, `whatsapp_db.py` | Bot configuration, linked users, notification state |
@@ -37,7 +37,7 @@ The sample environment currently names `HISTORIFY_DATABASE_URL`, while `database
 
 ## Sandbox Database
 
-Sandbox initialization is self-healing: startup must ensure every required table exists even if a prior initialization was partial. The presence of sandbox GTT tables does not mean REST analyzer GTT is implemented; those service calls currently return 501.
+Sandbox initialization is self-healing: startup must ensure every required table exists even if a prior initialization was partial. The sandbox GTT tables (`sandbox_gtt`, `sandbox_gtt_legs`) back the analyzer GTT services; `sandbox/gtt_manager.py` owns every transition.
 
 The sandbox managers own execution, order state, position netting, holdings/T+1 behavior, funds/margin, square-off, and settlement. No live broker order call belongs in this database layer.
 

@@ -178,7 +178,7 @@ def test_depth(client, symbols):
             print("-" * 30)
 
             buy_depth = depth_data.get("buy", [])
-            for i, level in enumerate(buy_depth[:5]):
+            for _i, level in enumerate(buy_depth[:5]):
                 price = format_price(level.get("price", 0))
                 qty = level.get("quantity", 0)
                 orders = level.get("orders", 0)
@@ -190,7 +190,7 @@ def test_depth(client, symbols):
             print("-" * 30)
 
             sell_depth = depth_data.get("sell", [])
-            for i, level in enumerate(sell_depth[:5]):
+            for _i, level in enumerate(sell_depth[:5]):
                 price = format_price(level.get("price", 0))
                 qty = level.get("quantity", 0)
                 orders = level.get("orders", 0)
@@ -475,12 +475,13 @@ def main():
     print("Comprehensive testing of LTP, Quote, and Depth with subscription management")
 
     # Get API key from environment or use the one from test files
-    api_key = os.getenv(
-        "API_KEY", "7653f710c940cdf1d757b5a7d808a60f43bc7e9c0239065435861da2869ec0fc"
-    )
+    api_key = os.getenv("OPENALGO_API_KEY", "")
 
     if not api_key:
-        print(f"{Colors.RED}Error: No API key found. Set API_KEY in .env file{Colors.ENDC}")
+        print(
+            f"{Colors.RED}OPENALGO_API_KEY is required before running this manual script"
+            f"{Colors.ENDC}"
+        )
         return
 
     # Test service layer functions first

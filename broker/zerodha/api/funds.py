@@ -8,6 +8,14 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _to_float(value, default=0.0):
+    """Coerce a Kite numeric field, tolerating nulls and strings."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_margin_data(auth_token):
     """Fetch margin data from Zerodha's API using the provided auth token."""
     api_key = os.getenv("BROKER_API_KEY")
@@ -41,10 +49,6 @@ def get_margin_data(auth_token):
         return {}
 
     try:
-        # Calculate the sum of net values for available margin
-        total_available_margin = sum(
-            [margin_data["data"]["commodity"]["net"], margin_data["data"]["equity"]["net"]]
-        )
         # Calculate the sum of debits for used margin
         total_used_margin = sum(
             [
@@ -60,6 +64,19 @@ def get_margin_data(auth_token):
                 margin_data["data"]["equity"]["available"]["collateral"],
             ]
         )
+
+        # "availablecash" must be the actual free cash balance, not total
+        # margin. Kite's own available.cash field has been observed to
+        # intermittently report 0 for a funded account even though the
+        # top-level "net" stays correct (see GitHub issue #1582 discussion).
+        # Kite defines net = cash + collateral - debits, so derive cash from
+        # the always-reliable net/debits/collateral instead of trusting
+        # available.cash directly -- mathematically identical when cash is
+        # healthy, and self-heals when it isn't.
+        total_net_margin = sum(
+            [margin_data["data"]["commodity"]["net"], margin_data["data"]["equity"]["net"]]
+        )
+        total_available_margin = total_net_margin + total_used_margin - total_collateral
 
         # Fetch PnL from position book
         total_realised = 0
@@ -101,11 +118,20 @@ def get_margin_data(auth_token):
                             ltp_map[key] = val.get("last_price", 0)
 
                     for p in open_positions:
-                        qty = p.get("quantity", 0)
-                        avg_price = p.get("average_price", 0)
+                        # Kite's own position multiplier, NOT the physical
+                        # contract size. The two diverge whenever a commodity is
+                        # quoted in a different unit from the one it trades in:
+                        # GOLDGUINEA is 8 grams quoted per 8 grams (multiplier 1),
+                        # GOLDM is 100 grams quoted per 10 grams (multiplier 10),
+                        # GOLD is 1 kg quoted per 10 grams (multiplier 100).
+                        # Scaling by contract size instead would report a rupee
+                        # move on GOLDGUINEA as 8 rupees and on GOLDM as 100.
+                        qty = _to_float(p.get("quantity", 0))
+                        multiplier = _to_float(p.get("multiplier", 1), default=1.0) or 1.0
+                        avg_price = _to_float(p.get("average_price", 0))
                         inst_key = f"{p['exchange']}:{p['tradingsymbol']}"
-                        live_ltp = ltp_map.get(inst_key, p.get("last_price", 0))
-                        total_unrealised += (live_ltp - avg_price) * qty
+                        live_ltp = _to_float(ltp_map.get(inst_key, p.get("last_price", 0)))
+                        total_unrealised += (live_ltp - avg_price) * qty * multiplier
         except Exception as e:
             logger.error(f"Error fetching positions for PnL: {e}")
 

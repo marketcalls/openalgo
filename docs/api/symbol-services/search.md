@@ -41,15 +41,15 @@ curl -X POST http://127.0.0.1:5000/api/v1/search \
   "data": [
     {
       "brexchange": "NSE_FO",
-      "brsymbol": "NIFTY 26000 CE 30 DEC 25",
+      "brsymbol": "NIFTY 26000 CE 25 AUG 26",
       "exchange": "NFO",
-      "expiry": "30-DEC-25",
+      "expiry": "25-AUG-26",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
       "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
-      "symbol": "NIFTY30DEC2526000CE",
+      "symbol": "NIFTY25AUG2626000CE",
       "tick_size": 5,
       "token": "NSE_FO|71399"
     },

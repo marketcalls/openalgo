@@ -265,12 +265,30 @@ def init_http_transport() -> None:
         api_key = "<not-configured>"
 
     mcp_module.init_for_http(api_key, host)
-    audit_registry()  # warns about any tool missing a scope entry
+    audit_registry()  # warns about scope/annotation drift
     _initialized = True
     logger.info(
         f"[MCP HTTP] transport initialized; loopback={host}, "
         f"key={'configured' if api_key != '<not-configured>' else 'MISSING'}"
     )
+
+    # The tool surface is env-configurable, so record what this boot
+    # actually exposes. Without it a narrowed server looks identical to
+    # a broken one in the logs.
+    active = getattr(mcp_module, "ACTIVE_TOOL_NAMES", ())
+    total = len(getattr(mcp_module, "TOOL_META", {}) or {})
+    logger.info(
+        f"[MCP HTTP] tools exposed: {len(active)}/{total}; "
+        f"toolsets={sorted(getattr(mcp_module, 'ACTIVE_TOOLSETS', ()))}; "
+        f"read_only={getattr(mcp_module, 'READ_ONLY', False)}; "
+        f"trust_envelope={getattr(mcp_module, 'TRUST_ENVELOPE_ENABLED', True)}"
+    )
+    unknown = getattr(mcp_module, "UNKNOWN_TOOLSETS", ())
+    if unknown:
+        logger.warning(
+            f"[MCP HTTP] OPENALGO_MCP_TOOLSETS contains unknown names: {list(unknown)}. "
+            "They were ignored. Check for a typo before assuming a tool is disabled."
+        )
 
 
 # --------------------------------------------------------------------
@@ -533,6 +551,18 @@ def _tool_descriptor(name: str) -> dict[str, Any]:
         full_desc = getattr(tool, "description", None)
         if isinstance(full_desc, str) and full_desc.strip():
             descriptor["description"] = full_desc.strip()
+        # Annotations (readOnlyHint / destructiveHint / ...) let a client
+        # tell "read the order book" apart from "cancel every order"
+        # before prompting the user to approve. Without this, remote
+        # clients would see every tool as equally risky while stdio
+        # clients get the hints.
+        annotations = getattr(tool, "annotations", None)
+        if annotations is not None:
+            dump = getattr(annotations, "model_dump", None)
+            if callable(dump):
+                hints = {k: v for k, v in dump().items() if v is not None}
+                if hints:
+                    descriptor["annotations"] = hints
     except Exception as e:  # never block tools/list on a metadata bug
         logger.warning(f"[MCP tools/list] failed to build descriptor for {name}: {e}")
 

@@ -40,7 +40,7 @@ def authenticate_broker(request_token):
 
         if response.status_code == 200:
             response_data = response.json()
-            logger.debug(f"Token: {response_data}")
+            logger.debug("Token response received; fields=%s", list(response_data.keys()))
 
             # Paytm returns multiple tokens:
             # - access_token: For REST API calls
@@ -64,7 +64,7 @@ def authenticate_broker(request_token):
             else:
                 error_msg = "Authentication succeeded but no access token was returned."
                 logger.error(error_msg)
-                logger.debug(f"Full response: {response_data}")
+                logger.debug("Token response did not contain an access token")
                 return None, None, error_msg
         else:
             # Parsing the error message from the API response
@@ -80,9 +80,7 @@ def authenticate_broker(request_token):
             except Exception:
                 error_msg = f"Authentication failed with status code {response.status_code} and non-JSON response: {response.text}"
 
-            logger.error(
-                f"Authentication failed with status code {response.status_code}. Error: {error_msg}"
-            )
+            logger.error("Authentication failed; status=%s", response.status_code)
             return None, None, error_msg
     except Exception:
         logger.exception("An exception occurred during authentication.")

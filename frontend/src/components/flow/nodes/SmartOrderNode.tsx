@@ -6,6 +6,7 @@
 import { Handle, Position } from '@xyflow/react'
 import { Zap } from 'lucide-react'
 import { memo } from 'react'
+import { defaultProductForExchange } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import type { SmartOrderNodeData } from '@/types/flow'
 
@@ -53,7 +54,7 @@ export const SmartOrderNode = memo(({ data, selected }: SmartOrderNodeProps) => 
           </div>
           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
             <span>{data.priceType || 'MARKET'}</span>
-            <span>{data.product || 'MIS'}</span>
+            <span>{data.product || defaultProductForExchange(data.exchange)}</span>
           </div>
         </div>
       </div>

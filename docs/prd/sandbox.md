@@ -1,6 +1,6 @@
 # PRD: Sandbox - Sandbox Trading Environment
 
-> **Status:** Implemented for supported analyzer trading/account operations. Analyzer GTT operations remain unsupported and return 501.
+> **Status:** Implemented for supported analyzer trading/account operations. Analyzer GTT place, modify, cancel and orderbook are implemented in sandbox/gtt_manager.py.
 
 ## Overview
 

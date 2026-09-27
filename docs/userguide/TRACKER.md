@@ -44,6 +44,8 @@ This comprehensive user guide is designed for **traders of all levels** - from c
 | 28 | Two-Factor Authentication | Complete | Beginner |
 | 29 | Troubleshooting | Complete | All Levels |
 | 30 | FAQs | Complete | All Levels |
+| 31 | Tools (Options & Strategy Analytics Suite) | Complete | Intermediate |
+| 32 | Charting Terminal | Complete | Intermediate |
 
 ## Learning Path
 

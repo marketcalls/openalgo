@@ -4,7 +4,6 @@ Historify Scheduler Service
 Handles scheduled historical data downloads using APScheduler (Flask/sync version)
 """
 
-import os
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,6 +13,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from database.apscheduler_jobstore_db import (
+    HISTORIFY_JOBSTORE_TABLE,
+    ensure_jobstore_table,
+    get_database_url,
+)
+from database.engine_factory import create_db_engine
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,15 +51,29 @@ class HistorifyScheduler:
                 return
 
             if db_url is None:
-                db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+                db_url = get_database_url()
 
             self._api_key = api_key
             self._socketio = socketio
 
             try:
+                # Create the job store table before APScheduler would. Its own
+                # DDL in start() is one-shot: an install that loses the boot
+                # write-lock race never initializes the scheduler, and every
+                # scheduled download then silently never runs for the life of
+                # the process (issue #1750). app.py normally creates this during
+                # the serialized database-init phase, which leaves the call
+                # below a read-only no-op; it retries here for any caller that
+                # starts the scheduler outside that path.
+                ensure_jobstore_table(HISTORIFY_JOBSTORE_TABLE, database_url=db_url)
+
+                # engine= rather than url= so the job store uses the project
+                # NullPool policy instead of SQLAlchemy's default QueuePool,
+                # which would hold connections open for the life of the
+                # process. See database/engine_factory.py.
                 jobstores = {
                     "default": SQLAlchemyJobStore(
-                        url=db_url, tablename="historify_apscheduler_jobs"
+                        engine=create_db_engine(db_url), tablename=HISTORIFY_JOBSTORE_TABLE
                     )
                 }
                 self._scheduler = BackgroundScheduler(
@@ -608,6 +627,24 @@ def execute_schedule(schedule_id: str, api_key: str = None):
             )
         update_schedule(schedule_id, status="idle", last_run_status="error")
         increment_schedule_run_counts(schedule_id, is_success=False)
+    finally:
+        # APScheduler runs this on its own worker thread with no Flask app
+        # context, so teardown_appcontext never fires and every scoped session
+        # this run touched - auth_db for the API key lookup, plus whatever
+        # create_and_start_job reaches - stays bound to that thread holding its
+        # SQLite connection. The worker threads are reused, so the connections
+        # accumulate rather than being released when a run ends, and production
+        # is a single Gunicorn worker that never restarts.
+        #
+        # This has to be a finally rather than a line at the end: the four
+        # early returns above (missing schedule, disabled, no API key, no
+        # symbols) are the common paths and would otherwise skip it entirely.
+        #
+        # Same cleanup flow_scheduler_service, flow_price_monitor_service and
+        # flow_order_update_monitor_service already do. See issue #1738.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 # Global scheduler instance

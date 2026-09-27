@@ -607,6 +607,12 @@ class OrderManager:
                     pending_quantity=0,
                     rejection_reason=cnc_sell_rejection_reason,
                     margin_blocked=Decimal("0"),  # No margin blocked for rejected orders
+                    # Deliberately NOT correlated to the GTT leg. The column is
+                    # unique and recovery reads it as proof the GTT fired, so a
+                    # rejected attempt claiming it would both mark the GTT
+                    # triggered and permanently block that leg from ever
+                    # ordering again. Rejections are audited via the order's own
+                    # strategy/rejection_reason instead.
                     order_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
                 )
 
@@ -667,6 +673,7 @@ class OrderManager:
                 pending_quantity=quantity,
                 rejection_reason=None,
                 margin_blocked=actual_margin_to_block,  # Store exact margin blocked
+                gtt_leg_id=order_data.get("gtt_leg_id"),
                 order_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
             )
 

@@ -45,6 +45,7 @@ function MiniPayoffIcon({ path, direction }: { path: string; direction: Directio
         : 'stroke-amber-500'
   return (
     <svg
+      aria-hidden="true"
       viewBox="0 0 100 40"
       className="h-10 w-full"
       fill="none"
@@ -104,6 +105,7 @@ export function TemplateGrid({ direction, onDirectionChange, onPick }: TemplateG
         <div className="relative sm:max-w-[220px] sm:flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            aria-label="Search strategy templates"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search strategy..."
@@ -119,6 +121,7 @@ export function TemplateGrid({ direction, onDirectionChange, onPick }: TemplateG
             key={f.value}
             type="button"
             onClick={() => onDirectionChange(f.value)}
+            aria-pressed={direction === f.value}
             className={cn(
               'group inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition',
               direction === f.value
@@ -178,6 +181,11 @@ export function TemplateGrid({ direction, onDirectionChange, onPick }: TemplateG
                 )}
               >
                 <MiniPayoffIcon path={tpl.payoffPath} direction={tpl.direction} />
+                {tpl.illustrativePreview && (
+                  <span className="absolute right-4 top-4 rounded bg-background/90 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-foreground shadow-sm">
+                    Illustrative
+                  </span>
+                )}
               </div>
 
               {/* Name + meta */}

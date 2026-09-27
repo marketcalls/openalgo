@@ -1,6 +1,7 @@
 import { BookOpen, ExternalLink, Info, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -31,6 +32,7 @@ const allBrokers = [
   { id: 'motilal', name: 'Motilal Oswal', authType: 'totp' },
   { id: 'fyers', name: 'Fyers', authType: 'oauth' },
   { id: 'groww', name: 'Groww', authType: 'totp' },
+  { id: 'hdfcsecurities', name: 'HDFC Securities', authType: 'oauth' },
   { id: 'hdfcsky', name: 'HDFC Sky', authType: 'oauth' },
   { id: 'ibulls', name: 'Ibulls', authType: 'totp' },
   { id: 'iifl', name: 'IIFL', authType: 'totp' },
@@ -195,6 +197,13 @@ export default function BrokerSelect() {
         loginUrl = `https://app.arrow.trade/app/login?appID=${broker_api_key}`
         break
 
+      case 'hdfcsecurities':
+        // HDFC Securities InvestRight hosted login (credentials + 2FA +
+        // consent); redirects back to the app's registered callback with a
+        // request token.
+        loginUrl = `https://developer.hdfcsec.com/oapi/v1/login?api_key=${broker_api_key}`
+        break
+
       case 'hdfcsky':
         // HDFC Sky hosted login (credentials + 2FA + consent); redirects back
         // to the app's registered callback with a request token.
@@ -305,6 +314,10 @@ export default function BrokerSelect() {
                   )}
                 </Button>
               </form>
+
+              <div className="mt-6 text-center text-sm">
+                <BrokerAuthSignOut />
+              </div>
             </CardContent>
           </Card>
 

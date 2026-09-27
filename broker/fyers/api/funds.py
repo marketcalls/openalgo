@@ -107,8 +107,15 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
         # Calculate totals with proper error handling
         try:
-            # Get available balance
-            balance = processed_funds.get("available_balance", {})
+            # "availablecash" must be the actual settled cash balance, not
+            # total trading capacity. Fyers' "Available Balance" is the final
+            # ledger line (Clear Balance + Collaterals + Fund Transfer +
+            # Receivables + Adhoc Limit, per the fund_limit ledger order),
+            # so it folds collateral back in -- double-counting against the
+            # separately reported "collateral" field below, same class of
+            # bug as GitHub issue #1582. "Clear Balance" is the settled,
+            # collateral-free cash figure, so use that instead.
+            balance = processed_funds.get("clear_balance", {})
             balance_equity = float(balance.get("equity_amount", 0))
             balance_commodity = float(balance.get("commodity_amount", 0))
             total_balance = balance_equity + balance_commodity

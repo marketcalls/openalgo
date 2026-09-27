@@ -963,6 +963,21 @@ def calculate_portfolio_statistics(holdings_data):
             "totalprofitandloss": 0,
         }
 
+    # Handle tuple input (holdings list, metadata) -- get_holdings() returns
+    # (holdings, status) for this broker, and holdings_service passes that
+    # through unchanged. transform_holdings_data() already unwraps it; without
+    # the same handling here every statistic silently came back as zero.
+    if isinstance(holdings_data, tuple):
+        holdings_data = holdings_data[0]  # Take the first element (holdings list)
+
+    if not holdings_data:
+        return {
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalpnlpercentage": 0,
+            "totalprofitandloss": 0,
+        }
+
     # Extract holdings from the API response structure
     if isinstance(holdings_data, dict):
         # Check if statistics are already provided

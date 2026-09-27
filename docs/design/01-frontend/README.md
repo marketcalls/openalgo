@@ -32,7 +32,7 @@ The Flask backend serves the production bundle through `blueprints/react_app.py`
 |---|---|
 | Public/auth | `/login`, `/setup`, `/reset-password`, broker callbacks |
 | Trading state | `/dashboard`, `/orderbook`, `/tradebook`, `/positions`, `/holdings` |
-| Automation | `/strategy`, `/chartink`, `/python`, `/flow` |
+| Automation | `/chartink`, `/python`, `/flow` |
 | Tools | `/optionchain`, `/strategybuilder`, `/ivchart`, `/oitracker`, `/gex`, `/gammadensity`, `/oirange`, `/arbitrage`, `/scalping` |
 | Monitoring | `/pnltracker`, `/latency`, `/traffic`, `/health`, `/security` |
 | Admin/integrations | `/admin`, `/apikey`, `/playground`, `/telegram`, `/whatsapp` |

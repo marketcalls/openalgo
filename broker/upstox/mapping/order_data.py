@@ -6,6 +6,48 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Upstox reports 17 order statuses (appendix/order-status), but OpenAlgo's order
+# book only understands open/complete/cancelled/rejected. Anything unmapped used
+# to reach the UI raw, where it fell through to the "open" label while failing
+# the `order_status === 'open'` check, so a stop-loss sitting in "trigger pending"
+# rendered as open yet offered no Modify/Cancel and never counted as an open order.
+_COMPLETE_STATUSES = {"COMPLETE"}
+_REJECTED_STATUSES = {"REJECTED"}
+_CANCELLED_STATUSES = {"CANCELLED", "CANCELED", "CANCELLED AFTER MARKET ORDER"}
+# Still live at the exchange, i.e. modifiable/cancellable. "trigger pending" is
+# where an SL/SL-M order waits for its trigger; the "not cancelled"/"not modified"
+# pair mean the request failed and the original order is still working.
+_OPEN_STATUSES = {
+    "OPEN",
+    "OPEN PENDING",
+    "TRIGGER PENDING",
+    "VALIDATION PENDING",
+    "MODIFY PENDING",
+    "MODIFY VALIDATION PENDING",
+    "CANCEL PENDING",
+    "MODIFIED",
+    "NOT MODIFIED",
+    "NOT CANCELLED",
+    "PUT ORDER REQ RECEIVED",
+    "AFTER MARKET ORDER REQ RECEIVED",
+    "MODIFY AFTER MARKET ORDER REQ RECEIVED",
+}
+
+
+def normalize_order_status(raw_status):
+    """Map an Upstox status to an OpenAlgo status (open/complete/cancelled/rejected)."""
+    status = str(raw_status or "").strip().upper().replace("_", " ")
+    if status in _COMPLETE_STATUSES:
+        return "complete"
+    if status in _OPEN_STATUSES:
+        return "open"
+    if status in _REJECTED_STATUSES:
+        return "rejected"
+    if status in _CANCELLED_STATUSES:
+        return "cancelled"
+    return status.lower()
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -80,11 +122,12 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            if order["status"] == "complete":
+            status = normalize_order_status(order.get("status"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif order["status"] == "open":
+            elif status == "open":
                 total_open_orders += 1
-            elif order["status"] == "rejected":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -121,7 +164,7 @@ def transform_order_data(orders):
             "pricetype": order.get("order_type", ""),
             "product": order.get("product", ""),
             "orderid": order.get("order_id", ""),
-            "order_status": order.get("status", ""),
+            "order_status": normalize_order_status(order.get("status")),
             "timestamp": order.get("order_timestamp", ""),
         }
 
@@ -208,15 +251,36 @@ def transform_positions_data(positions_data):
 def transform_holdings_data(holdings_data):
     transformed_data = []
     for holdings in holdings_data:
+        # Upstox documents `average_price` on holdings as the acquisition
+        # price, but it can come back null or 0 -- for shares received rather
+        # than bought (IPO allotments, bonuses, transfers) the broker has no
+        # acquisition price to report.
+        average_price = float(holdings.get("average_price") or 0.0)
+        last_price = float(holdings.get("last_price") or 0.0)
+
+        if average_price == 0:
+            logger.debug(
+                f"Zero average price for holding: {holdings.get('tradingsymbol', 'Unknown')}"
+            )
+            pnlpercent = 0.0
+        else:
+            # Guarded: dividing by the average unconditionally raised
+            # ZeroDivisionError on exactly those holdings and took the whole
+            # holdings response down with it.
+            pnlpercent = round((last_price - average_price) / average_price * 100, 2)
+
         transformed_position = {
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("quantity", 0),
             "product": holdings.get("product", ""),
-            "pnl": holdings.get("pnl", 0.0),
-            "pnlpercent": (holdings.get("last_price", 0) - holdings.get("average_price", 0.0))
-            / holdings.get("average_price", 0.0)
-            * 100,
+            # Both were being dropped, which is why the holdings page showed a
+            # dash for every average and an investment value of zero: the data
+            # was in the Upstox response and never reached the payload.
+            "average_price": average_price,
+            "ltp": last_price,
+            "pnl": round(float(holdings.get("pnl") or 0.0), 2),
+            "pnlpercent": pnlpercent,
         }
         transformed_data.append(transformed_position)
     return transformed_data
