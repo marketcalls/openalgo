@@ -242,12 +242,17 @@ def process_fyers_nse_csv(path):
         (df["Exchange Instrument type"] == 2) & (df["Symbol ticker"].str.endswith("-GB")),
         "exchange",
     ] = "NSE"
+    # Government bonds are typed EQ, as Kite types its -GS/-TB/-SG debt rows;
+    # GB would be a fifth instrumenttype no consumer knows (QA MC-04).
     df.loc[
         (df["Exchange Instrument type"] == 2) & (df["Symbol ticker"].str.endswith("-GB")),
         "instrumenttype",
-    ] = "GB"
+    ] = "EQ"
     df.loc[df["Exchange Instrument type"] == 10, "exchange"] = "NSE_INDEX"
-    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "INDEX"
+    # Typed EQ, not INDEX: instrumenttype is the platform's four-value vocabulary
+    # -- EQ, FUT, CE, PE -- taken from Kite, which types its INDICES segment EQ.
+    # The NSE_INDEX exchange is what says this is an index (QA MC-04).
+    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "EQ"
 
     # Keeping only rows where 'exchange' column has been filled ('NSE' or 'NSE_INDEX')
     df_filtered = df[df["exchange"].isin(["NSE", "NSE_INDEX"])].copy()
@@ -323,7 +328,8 @@ def process_fyers_bse_csv(path):
     df.loc[df["Exchange Instrument type"].isin([0, 4, 50]), "exchange"] = "BSE"
     df.loc[df["Exchange Instrument type"].isin([0, 4, 50]), "instrumenttype"] = "EQ"
     df.loc[df["Exchange Instrument type"] == 10, "exchange"] = "BSE_INDEX"
-    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "INDEX"
+    # EQ, not INDEX -- the BSE_INDEX exchange marks it as an index (QA MC-04).
+    df.loc[df["Exchange Instrument type"] == 10, "instrumenttype"] = "EQ"
 
     # Keeping only rows where 'exchange' column has been filled ('BSE' or 'BSE_INDEX')
     df_filtered = df[df["Exchange Instrument type"].isin([0, 4, 10, 50])].copy()
@@ -700,7 +706,20 @@ def master_contract_download():
 
     output_path = "tmp"
     try:
-        download_csv_fyers_data(output_path)
+        # download_csv_fyers_data catches every per-file network error and
+        # reports the outcome in its return value rather than raising, so the
+        # except below never sees a failed download. Deleting on the strength
+        # of the call having returned emptied symtoken and left the instance
+        # with no symbols at all, which is strictly worse than yesterday's
+        # contract: nothing resolves until a later download happens to succeed.
+        downloaded, _, download_error = download_csv_fyers_data(output_path)
+        if not downloaded:
+            message = f"Master contract download failed, keeping the existing symbols: {download_error}"
+            logger.error(message)
+            return socketio.emit(
+                "master_contract_download", {"status": "error", "message": message}
+            )
+
         delete_symtoken_table()
         token_df = process_fyers_nse_csv(output_path)
         copy_from_dataframe(token_df)

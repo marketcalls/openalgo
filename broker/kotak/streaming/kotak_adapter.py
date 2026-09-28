@@ -17,6 +17,43 @@ from .sfeed_websocket import KotakSFeedWebSocket
 
 logger = get_logger(__name__)
 
+# Kotak's own names for the indices, which is how the index feed addresses them:
+# "nse_cm|Nifty 50", not the master-contract token. The names are not derivable
+# from the master contract, which stores the short ticker.
+#
+# broker/kotak/api/data.py holds the same map for the quotes endpoint. The two
+# are deliberately separate copies -- the streaming path cannot import that
+# module, which pulls in httpx, the token database and the master contract --
+# and test_kotak_index_feed_subscription.py compares them so a drift fails a
+# test rather than silently subscribing a name Kotak does not know.
+_INDEX_NAMES = {
+    "NIFTY": ["Nifty 50"],
+    "NIFTY50": ["Nifty 50"],
+    "BANKNIFTY": ["Nifty Bank"],
+    "FINNIFTY": ["Nifty Fin Service"],
+    "MIDCPNIFTY": [
+        "Nifty Mid Select",
+        "Nifty Midcap Sel",
+        "Nifty Midcap Select",
+        "NIFTY MID SELECT",
+    ],
+    "NIFTYNXT50": ["Nifty Next 50"],
+    "INDIAVIX": ["India VIX"],
+    "SENSEX": ["SENSEX"],
+    "BANKEX": ["BANKEX"],
+}
+
+
+def index_name_candidates(symbol):
+    """Kotak's candidate names for an OpenAlgo index symbol, best first."""
+    return _INDEX_NAMES.get((symbol or "").upper(), [symbol])
+
+
+def is_index_exchange(exchange):
+    """Whether an OpenAlgo exchange names indices rather than tradeable scrips."""
+    return (exchange or "").upper().endswith("_INDEX")
+
+
 # HSI scrip operations: sub_type -> (feed family, is_unsubscribe). The family
 # groups a subscribe with its matching unsubscribe so the batcher can collapse
 # them per scrip, while leaving quote/depth/index independent of each other.
@@ -250,6 +287,20 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Extract key identifiers - following AliceBlue pattern
             token = str(parsed_data.get("tk", ""))
             broker_exchange = parsed_data.get("e", "UNKNOWN")
+
+            # An index names itself. Its packet carries a token of Kotak's own
+            # choosing rather than the master-contract one -- NIFTY subscribed
+            # as "nse_cm|Nifty 50" answers with tk 4247863880, not 26000 -- so
+            # keying on the token alone matches no subscription and the tick is
+            # dropped, which looks exactly like the feed never sending one. The
+            # name is the identity we subscribed under, so fall back to it.
+            with self._lock:
+                known = (broker_exchange, token) in self._kotak_to_openalgo
+                feed_name = str(parsed_data.get("ts", "") or "")
+                by_name = bool(feed_name) and (broker_exchange, feed_name) in self._kotak_to_openalgo
+            if not known and by_name:
+                token = feed_name
+
             ltp = parsed_data.get("ltp")
 
             # **CRITICAL FIX**: Check if this is depth data (has bids/asks) or LTP data
@@ -482,6 +533,20 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "close": parsed_data.get("prev_close", 0.0),
                         }
                     elif mode == 3:
+                        # An index has no order book, so the only thing a depth
+                        # frame can carry for one is its price. Kotak still sends
+                        # a book: subscribing NSE_INDEX:NIFTY returns a snapshot
+                        # of five zero levels, which satisfies has_depth_data
+                        # below. The price rides a separate packet that only
+                        # arrives while the index is ticking, so outside market
+                        # hours the pair produces a frame reading ltp 0.0 over an
+                        # empty ladder -- no information at all, and it overwrote
+                        # the REST spot the option chain had already rendered
+                        # (NIFTY Spot showing 0.00 while Zerodha showed a price).
+                        # Nothing to say is better than saying zero.
+                        if exchange.endswith("_INDEX") and not effective_ltp:
+                            continue
+
                         # Use current depth data or fall back to cached depth
                         # (Kotak sends depth and LTP as separate packets)
                         if has_depth_data:
@@ -494,6 +559,25 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             depth_sell = local_depth_cache.get("sell", [])
                             depth_total_buy = local_depth_cache.get("totalbuyqty", 0)
                             depth_total_sell = local_depth_cache.get("totalsellqty", 0)
+                        elif exchange.endswith("_INDEX") and has_ltp_data:
+                            # An index has no order book, so it never satisfies
+                            # either branch above and used to fall through to the
+                            # `continue` below -- a Depth subscription to NIFTY
+                            # received nothing at all, ever. The option chain
+                            # subscribes its underlying in Depth mode alongside
+                            # the strikes, so the spot never got a tick and the
+                            # page kept the zero it starts with: NIFTY Spot
+                            # rendered from the REST poll and then read 0.00.
+                            #
+                            # Zerodha routes indices through a dedicated
+                            # _transform_index_tick that publishes the price in
+                            # full/Depth mode with no book, which is why the same
+                            # chain shows a spot there. Same thing here: the
+                            # price is real, the ladder is genuinely empty.
+                            depth_buy = []
+                            depth_sell = []
+                            depth_total_buy = 0
+                            depth_total_sell = 0
                         else:
                             continue  # No depth data available at all
 
@@ -580,6 +664,34 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
         self._batch_timer.daemon = True
         self._batch_timer.start()
+
+    def _index_feed_names(self, kotak_exchange, exchange, symbol, token):
+        """The index name(s) to subscribe, registering how their ticks map back.
+
+        Only the first candidate is subscribed. A subscribe frame carries many
+        scrips and Kotak answers it as a whole, so sending a speculative
+        spelling would risk taking the other indices batched with it down too.
+        MIDCPNIFTY is the only symbol with more than one candidate, so this
+        costs a guess on one index rather than a working subscription on eight.
+
+        Every candidate is still registered on the inbound side, alongside the
+        master-contract token, because an index packet may identify itself by
+        its name or by a token of Kotak's own choosing, and accepting either
+        costs nothing. Without this the tick arrives and matches no
+        subscription, which looks exactly like no tick at all.
+        """
+        candidates = index_name_candidates(symbol)
+        with self._lock:
+            for key in [str(token), *candidates]:
+                mapping_key = (kotak_exchange, key)
+                self._kotak_to_openalgo[mapping_key] = (exchange, symbol)
+                self._symbol_modes.setdefault(mapping_key, set())
+            # Every alias shares one mode set, or a tick arriving under the name
+            # would be published in whichever modes the token happened to hold.
+            modes = self._symbol_modes[(kotak_exchange, str(token))]
+            for key in candidates:
+                self._symbol_modes[(kotak_exchange, key)] = modes
+        return candidates[:1]
 
     def _enqueue_subscription(self, kotak_exchange, token, sub_type, channelnum="1"):
         """Append a subscription to the queue and arm the batch timer if idle."""
@@ -1082,11 +1194,23 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return False
 
             # Enqueue for batched dispatch — flushed by _process_batch_subscriptions.
-            self._enqueue_subscription(kotak_exchange, token, sub_type="mws")
-            logger.debug(
-                f"Queued quote subscription: {exchange}:{symbol} "
-                f"(kotak: {kotak_exchange}|{token})"
-            )
+            #
+            # An index rides its own feed. Kotak addresses it by name rather
+            # than by master-contract token ("nse_cm|Nifty 50", documented under
+            # Subscribe Index) and answers on message 7207, which only
+            # subscribeIndices delivers. Subscribed as an ordinary scrip it is
+            # accepted and then simply never ticks, which is what left the
+            # option chain's spot reading 0.00 with no price ever arriving.
+            if is_index_exchange(exchange):
+                for feed_name in self._index_feed_names(kotak_exchange, exchange, symbol, token):
+                    self._enqueue_subscription(kotak_exchange, feed_name, sub_type="ifs")
+                logger.debug(f"Queued index subscription: {exchange}:{symbol}")
+            else:
+                self._enqueue_subscription(kotak_exchange, token, sub_type="mws")
+                logger.debug(
+                    f"Queued quote subscription: {exchange}:{symbol} "
+                    f"(kotak: {kotak_exchange}|{token})"
+                )
             return True
 
         except Exception as e:
@@ -1138,7 +1262,11 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Enqueue outside lock — batched by _process_batch_subscriptions,
             # so tearing down a large watchlist costs one frame, not one each.
             if should_unsub_broker:
-                self._enqueue_subscription(kotak_exchange, token, sub_type="mwu")
+                if is_index_exchange(exchange):
+                    for feed_name in self._index_feed_names(kotak_exchange, exchange, symbol, token):
+                        self._enqueue_subscription(kotak_exchange, feed_name, sub_type="ifu")
+                else:
+                    self._enqueue_subscription(kotak_exchange, token, sub_type="mwu")
                 logger.debug(f"Queued broker unsubscribe: {exchange}:{symbol}")
 
         except Exception as e:
@@ -1177,6 +1305,16 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return False
 
             # Enqueue for batched dispatch — flushed by _process_batch_subscriptions.
+            #
+            # Depth on an index means its price: there is no book to ask for,
+            # and the depth feed answers one with five zero levels. See the
+            # quote path above for why this goes to the index feed instead.
+            if is_index_exchange(exchange):
+                for feed_name in self._index_feed_names(kotak_exchange, exchange, symbol, token):
+                    self._enqueue_subscription(kotak_exchange, feed_name, sub_type="ifs")
+                logger.debug(f"Queued index subscription for depth: {exchange}:{symbol}")
+                return True
+
             self._enqueue_subscription(kotak_exchange, token, sub_type="dps")
             logger.debug(
                 f"Queued depth subscription: {exchange}:{symbol} "
@@ -1229,7 +1367,11 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Enqueue outside lock — batched by _process_batch_subscriptions.
             if should_unsub_broker:
-                self._enqueue_subscription(kotak_exchange, token, sub_type="dpu")
+                if is_index_exchange(exchange):
+                    for feed_name in self._index_feed_names(kotak_exchange, exchange, symbol, token):
+                        self._enqueue_subscription(kotak_exchange, feed_name, sub_type="ifu")
+                else:
+                    self._enqueue_subscription(kotak_exchange, token, sub_type="dpu")
                 logger.debug(f"Queued broker depth unsubscribe: {exchange}:{symbol}")
 
         except Exception as e:

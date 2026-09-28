@@ -162,8 +162,17 @@ class BasketOrderItemSchema(Schema):
 class BasketOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
+    # min=1 matches every other collection endpoint - multiquotes and
+    # multioptiongreeks symbols, optionsmultiorder legs, margin positions.
+    # Without it an empty list validated, the service iterated nothing and
+    # returned success, so a caller whose order list came out empty was told
+    # the basket had been placed. No maximum: none is documented for this
+    # endpoint and none is enforced downstream, so adding one here would
+    # reject baskets that work today.
     orders = fields.List(
-        fields.Nested(BasketOrderItemSchema), required=True
+        fields.Nested(BasketOrderItemSchema),
+        required=True,
+        validate=validate.Length(min=1, error="Orders must contain at least 1 item."),
     )  # List of order details
 
 

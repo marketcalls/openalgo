@@ -53,6 +53,34 @@ HISTORY_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "oi"]
 HISTORY_RATE_LIMIT_PER_SEC = 1
 HISTORY_MIN_INTERVAL = 1.0 / HISTORY_RATE_LIMIT_PER_SEC
 
+# The quotes endpoint refuses on CONCURRENCY, not on rate. Probed 2026-09-23
+# against nse_cm|Nifty 50: 20 back-to-back sequential requests with no gap at all
+# ran 20/20, and every sequential pacing from a 0.10s gap upward ran 14/14, so
+# there is no sustained-rate ceiling worth pacing against. Simultaneous requests
+# are what it rejects -- 2, 3 and 4 in flight were clean, 6 drew one HTTP 429
+# ("too many request received"), and 8 lost 14 of 24. So this is a gate on
+# requests in flight, not a delay between them: a delay would tax the sequential
+# case that already works while still letting a burst through.
+#
+# Unhandled, a 429 here returned None from _make_quotes_request, and with NIFTY
+# carrying a single index candidate there was no second attempt: get_quotes
+# returned None, quotes_service turned that into HTTP 500 "Failed to fetch
+# quotes", and the option services reported "Failed to fetch LTP for NIFTY"
+# (QA OS-12, OS-13). Hence the retry as well as the gate.
+QUOTES_MAX_INFLIGHT = 4
+QUOTES_MAX_RETRIES = 3
+QUOTES_BASE_BACKOFF = 0.5
+
+# No timeout was passed here at all, so a slow response inherited the shared
+# client's 120s -- a market-data call that hangs a page for two minutes. A quote
+# is worthless long before then.
+QUOTES_TIMEOUT = 15.0
+
+# Module level, not on BrokerData: services build a fresh handler per request,
+# so a gate held on the instance would admit one caller each and gate nothing.
+_quotes_gate = threading.Semaphore(QUOTES_MAX_INFLIGHT)
+
+
 # Neo refuses a fromdate five years or older with a 400 that fails the whole
 # pull. Probed 2026-09-21: today-1825d (2021-09-22) was served, today-1826d
 # (2021-09-21, five years to the day) was refused, so the earliest accepted
@@ -119,6 +147,33 @@ def _history_earliest_start() -> pd.Timestamp:
     """
     today = pd.Timestamp.now(tz="Asia/Kolkata").normalize().tz_localize(None)
     return today - pd.DateOffset(years=HISTORY_MAX_LOOKBACK_YEARS) + timedelta(days=1)
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    """Neo sends every field as a string, and an absent one as None."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value, default: int = 0) -> int:
+    """As _as_float, via float: a quantity can arrive as "16131960.0000"."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _quotes_retry_delay(headers, attempt: int) -> float:
+    """Back off 0.5s, 1s, 2s. Neo sends no Retry-After, but honour one if it does."""
+    value = headers.get("Retry-After") or headers.get("retry-after")
+    if value:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    return QUOTES_BASE_BACKOFF * (2**attempt)
 
 
 def _history_retry_delay(headers, attempt: int) -> float:
@@ -192,6 +247,13 @@ class BrokerData:
         canonical name differs per index and is not always derivable from the
         master contract (which often stores just the short ticker). We try
         descriptive variants in priority order and stop at the first hit.
+
+        The SFeed index subscription in broker/kotak/streaming/kotak_adapter.py
+        keeps its own copy of this map, because the streaming path cannot import
+        this module. test_kotak_index_feed_subscription.py compares the two and
+        fails if they drift: a name that resolves here but not there subscribes
+        an index Kotak does not know, which reads as a price that never ticks
+        rather than as an error.
         """
         index_map = {
             "NIFTY": ["Nifty 50"],
@@ -209,8 +271,7 @@ class BrokerData:
             "SENSEX": ["SENSEX"],
             "BANKEX": ["BANKEX"],
         }
-        key = symbol.upper()
-        return index_map.get(key, [symbol])
+        return index_map.get(symbol.upper(), [symbol])
 
     def _make_quotes_request(self, query, filter_name="all"):
         """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
@@ -229,7 +290,27 @@ class BrokerData:
             logger.info(f"QUOTES API - Making request to: {url}")
             logger.debug(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
 
-            response = client.get(url, headers=headers)
+            # A 429 retries the same request rather than falling through to the
+            # caller. The gate is taken per attempt and released before the
+            # backoff sleep: holding a slot while doing nothing would idle a
+            # quarter of the budget for the length of the wait.
+            for attempt in range(QUOTES_MAX_RETRIES + 1):
+                with _quotes_gate:
+                    response = client.get(url, headers=headers, timeout=QUOTES_TIMEOUT)
+                if response.status_code != 429:
+                    break
+                if attempt == QUOTES_MAX_RETRIES:
+                    logger.warning(
+                        f"QUOTES API - Rate limited after {QUOTES_MAX_RETRIES} retries: {url}"
+                    )
+                    break
+                delay = _quotes_retry_delay(response.headers, attempt)
+                logger.info(
+                    f"QUOTES API - 429 for {query}, retry "
+                    f"{attempt + 1}/{QUOTES_MAX_RETRIES} in {delay:.2f}s"
+                )
+                time.sleep(delay)
+
             logger.info(f"QUOTES API - Response status: {response.status_code} for {url}")
 
             if response.status_code == 200:
@@ -418,8 +499,12 @@ class BrokerData:
                 logger.debug(
                     f"DEPTH API - Index candidates for {symbol}: {candidates}"
                 )
+                # "all", not "depth": Neo's filters are strict subsets, and the
+                # depth one returns the book alone -- no ltp, ohlc, volume or oi.
+                # "all" carries the identical book plus those fields, in the same
+                # single request, so the narrower filter only loses data.
                 response, query = self._query_index_with_candidates(
-                    kotak_exchange, candidates, "depth"
+                    kotak_exchange, candidates, "all"
                 )
                 if response is None:
                     logger.warning(
@@ -449,8 +534,9 @@ class BrokerData:
                 query = f"{kotak_exchange}|{psymbol}"
                 logger.debug(f"DEPTH API - Query: {query}")
 
-                # Make API request with depth filter (index branch already fetched response)
-                response = self._make_quotes_request(query, "depth")
+                # "all" for the reason given in the index branch above (index
+                # branch already fetched its own response).
+                response = self._make_quotes_request(query, "all")
 
             if response and isinstance(response, list) and len(response) > 0:
                 target_quote = response[0]
@@ -499,14 +585,32 @@ class BrokerData:
                 while len(asks) < 5:
                     asks.append({"price": 0, "quantity": 0})
 
-                total_buy_qty = sum(bid["quantity"] for bid in bids if bid["quantity"] > 0)
-                total_sell_qty = sum(ask["quantity"] for ask in asks if ask["quantity"] > 0)
+                # Neo reports a whole-book total on cash rows -- RELIANCE came back
+                # at 634710 against 2616 across the five visible levels -- but
+                # leaves it 0 on F&O, where the visible levels are all there is to
+                # add up. Prefer the broker's figure, fall back to the sum, so an
+                # unpopulated field never reads as an empty book.
+                level_buy_qty = sum(bid["quantity"] for bid in bids if bid["quantity"] > 0)
+                level_sell_qty = sum(ask["quantity"] for ask in asks if ask["quantity"] > 0)
+                total_buy_qty = _as_int(target_quote.get("total_buy")) or level_buy_qty
+                total_sell_qty = _as_int(target_quote.get("total_sell")) or level_sell_qty
+
+                ohlc_data = target_quote.get("ohlc") or {}
 
                 result = {
                     "bids": bids,
                     "asks": asks,
                     "totalbuyqty": total_buy_qty,
                     "totalsellqty": total_sell_qty,
+                    "ltp": _as_float(target_quote.get("ltp")),
+                    "ltq": _as_int(target_quote.get("last_traded_quantity")),
+                    "open": _as_float(ohlc_data.get("open")),
+                    "high": _as_float(ohlc_data.get("high")),
+                    "low": _as_float(ohlc_data.get("low")),
+                    # Neo's ohlc.close is the previous close, not the last price.
+                    "prev_close": _as_float(ohlc_data.get("close")),
+                    "volume": _as_int(target_quote.get("last_volume")),
+                    "oi": _as_int(target_quote.get("open_int")),
                 }
 
                 logger.debug(f"DEPTH API - Final result: {result}")
@@ -772,12 +876,24 @@ class BrokerData:
         }
 
     def _get_default_depth(self):
-        """Return default depth structure"""
+        """Return default depth structure.
+
+        Carries every key the success path does. A caller that reads depth["ltp"]
+        must not raise KeyError merely because the quote could not be fetched.
+        """
         return {
             "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
             "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
             "totalbuyqty": 0,
             "totalsellqty": 0,
+            "ltp": 0.0,
+            "ltq": 0,
+            "open": 0.0,
+            "high": 0.0,
+            "low": 0.0,
+            "prev_close": 0.0,
+            "volume": 0,
+            "oi": 0,
         }
 
     def _history_segment(self, symbol: str, exchange: str) -> str:

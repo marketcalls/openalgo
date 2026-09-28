@@ -140,9 +140,22 @@ class BrokerData:
             )
             return {}
 
+        # BFO and CDS rows come back with "exchange": "" -- recover the code
+        # from the request when the token was asked for under exactly one.
+        requested = {}
+        for inst in instruments:
+            requested.setdefault(str(inst["token"]), set()).add(str(inst["exchange"]).upper())
+
         result = {}
         for row in payload.get("data") or []:
-            key = (str(row.get("exchange", "")).upper(), str(row.get("token", "")))
+            token = str(row.get("token", ""))
+            exchange = str(row.get("exchange") or "").upper()
+            if not exchange:
+                codes = requested.get(token, set())
+                if len(codes) != 1:
+                    continue
+                exchange = next(iter(codes))
+            key = (exchange, token)
             result[key] = {
                 "ltp": float(row.get("ltp") or 0.0),
                 "prev_close": float(row.get("prev_close") or 0.0),
@@ -150,8 +163,8 @@ class BrokerData:
         return result
 
     def _ltp_for_row(self, row):
-        # fetch-ltp addresses indices by NSE_INDEX / BSE_INDEX, not by their
-        # parent cash exchange - see to_ltp_exchange.
+        # fetch-ltp addresses instruments by segment code (NFO, NSE_INDEX, ...),
+        # not by their parent exchange - see to_ltp_exchange.
         exchange_code = to_ltp_exchange(row.exchange)
         quotes = self._fetch_ltp([{"exchange": exchange_code, "token": str(row.token)}])
         return quotes.get((exchange_code, str(row.token)), {"ltp": 0.0, "prev_close": 0.0})
