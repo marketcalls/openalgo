@@ -35,7 +35,7 @@ from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
-from utils.session import check_session_validity, is_session_valid, revoke_user_tokens
+from utils.session import check_session_validity, is_session_valid, revoke_user_tokens, check_user_session
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -1382,7 +1382,7 @@ def logout():
 
 
 @auth_bp.route("/profile-data", methods=["GET"])
-@check_session_validity
+@check_user_session
 def get_profile_data():
     """Return profile data for React SPA."""
     if "user" not in session:

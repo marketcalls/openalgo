@@ -10,7 +10,7 @@ import re
 from flask import Blueprint, jsonify, request
 
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, check_user_session
 
 logger = get_logger(__name__)
 
@@ -117,7 +117,7 @@ def get_broker_from_redirect_url(redirect_url: str) -> str:
 
 
 @broker_credentials_bp.route("/credentials", methods=["GET"])
-@check_session_validity
+@check_user_session
 def get_credentials():
     """Get current broker credentials (masked)."""
     try:
@@ -179,7 +179,7 @@ def get_credentials():
 
 
 @broker_credentials_bp.route("/credentials", methods=["POST"])
-@check_session_validity
+@check_user_session
 def update_credentials():
     """Update broker credentials in .env file."""
     try:
@@ -354,7 +354,7 @@ def update_credentials():
 
 
 @broker_credentials_bp.route("/capabilities", methods=["GET"])
-@check_session_validity
+@check_user_session
 def get_capabilities():
     """Return broker capabilities (supported exchanges, type, features) from cached plugin.json."""
     from flask import session
