@@ -896,6 +896,14 @@ export class TradingTerminal {
   private offProfileObject: (() => void) | null = null
   private drawJson: DrawingsDocument = emptyDrawings()
   /**
+   * The storage key `drawJson` came from, so a symbol change can put the
+   * drawings back where they belong. Drawings used to be saved under the
+   * pane's own `draw` key, which outlives the symbol in it: a trend line
+   * drawn on one instrument reappeared on every instrument loaded after it,
+   * at the same price anchors, and deleting it anywhere deleted it for all.
+   */
+  private drawOwner: string | null = null
+  /**
    * A 1.9.x save (a bare array) waiting for the draw tier to migrate it. The
    * migration lives in the tier, which is fetched on first use, so it cannot
    * run on the boot path without bundling the tier for every pane; the array
@@ -2176,6 +2184,8 @@ export class TradingTerminal {
     this.profileLayer = null
     // Snapshot drawings before the chart they live on goes away.
     this.detachDrawing()
+    // ... and hand them to the right symbol before the next chart restores them.
+    this.syncDrawingsToSymbol()
     this.offBranding?.()
     this.offBranding = null
     if (this.chart) this.chart.destroy()
@@ -2524,15 +2534,39 @@ export class TradingTerminal {
    * storage slot. Anything malformed is dropped rather than thrown — a stale
    * entry must never stop the terminal booting.
    */
-  private restoreChartTools(): void {
+  /** Drawings belong to an instrument, not to the pane showing it. */
+  private drawKey(sym: { symbol: string; exchange: string } | null | undefined): string {
+    return sym ? `draw-${sym.exchange}:${sym.symbol}` : 'draw'
+  }
+
+  /** The pane's last symbol, which is what its saved drawings belong to. */
+  private savedSymbol(): { symbol: string; exchange: string } | null {
     try {
-      const raw = this.lsGet('alerts')
-      if (raw) this.alertJson = parseAlertsDocument(JSON.parse(raw))
+      const raw = this.lsGet('symbol')
+      const parsed: unknown = raw ? JSON.parse(raw) : null
+      if (parsed && typeof parsed === 'object') {
+        const { symbol, exchange } = parsed as { symbol?: unknown; exchange?: unknown }
+        if (typeof symbol === 'string' && typeof exchange === 'string') return { symbol, exchange }
+      }
     } catch {
-      this.toast('Saved alerts could not be restored. Check the saved document.', 'err')
+      /* a malformed entry is no symbol at all */
     }
+    return null
+  }
+
+  /**
+   * Load one symbol's saved drawings into `drawJson`, or the 1.9.x array into
+   * `drawLegacy` for the draw tier to migrate on attach. Falls back to the
+   * pane-level `draw` key written before drawings were keyed by symbol, so the
+   * first load after the upgrade adopts them for the symbol they were drawn on
+   * rather than dropping them.
+   */
+  private readDrawings(key: string, migrate: boolean): void {
+    this.drawJson = emptyDrawings()
+    this.drawLegacy = null
+    let raw = this.lsGet(key)
+    if (raw === null && migrate) raw = this.lsGet('draw')
     try {
-      const raw = this.lsGet('draw')
       const parsed: unknown = raw ? JSON.parse(raw) : null
       if (Array.isArray(parsed)) {
         // A 1.9.x save. The migration lives in the draw tier, which is fetched
@@ -2553,6 +2587,36 @@ export class TradingTerminal {
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * Hand the drawings over when the pane changes instrument: the outgoing
+   * symbol's go back to its own key, the incoming symbol's come out of theirs.
+   * Called from `buildChart` right after `detachDrawing`, so `drawJson` still
+   * holds what was on screen and the controller is gone - nothing is rendering
+   * while the swap happens. A rebuild that is not a symbol change (an interval
+   * or chart-type switch) leaves the owner where it is and returns.
+   */
+  private syncDrawingsToSymbol(): void {
+    // Before the first symbol lands there is nothing to hand over, and the
+    // restored document belongs to the symbol the pane is about to load.
+    if (!this.sym) return
+    const current = this.drawKey(this.sym)
+    if (this.drawOwner === current) return
+    if (this.drawOwner) this.lsSet(this.drawOwner, JSON.stringify(this.drawJson))
+    this.drawOwner = current
+    this.readDrawings(current, false)
+  }
+
+  private restoreChartTools(): void {
+    try {
+      const raw = this.lsGet('alerts')
+      if (raw) this.alertJson = parseAlertsDocument(JSON.parse(raw))
+    } catch {
+      this.toast('Saved alerts could not be restored. Check the saved document.', 'err')
+    }
+    this.drawOwner = this.drawKey(this.savedSymbol())
+    this.readDrawings(this.drawOwner, true)
     try {
       const raw = this.lsGet('indicators')
       this.activeIndicators = readStoredIndicators(raw ? JSON.parse(raw) : [])
@@ -2779,7 +2843,8 @@ export class TradingTerminal {
     if (!this.draw) return
     this.drawTool = this.draw.activeTool()
     this.drawJson = this.draw.toJSON()
-    this.lsSet('draw', JSON.stringify(this.drawJson))
+    this.drawOwner ??= this.drawKey(this.sym)
+    this.lsSet(this.drawOwner, JSON.stringify(this.drawJson))
     this.cb.onDrawChange?.(this.drawStats())
     this.cb.onDrawSelect?.(this.drawSelection())
   }
