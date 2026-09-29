@@ -152,7 +152,12 @@ describe('workspace replay page ownership', () => {
   it('publishes visible members, pauses autosave for every replay phase and resumes on cancellation', async () => {
     const view = render(<Trading />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
-    expect(fake.members).toHaveBeenLastCalledWith([{ id: 'p0', terminal: fake.terminal }])
+    // The pane's terminal registers into terminalsRef asynchronously as it
+    // builds, one tick after the button first renders, so members() can still
+    // be mid-flight (last called with []) right after the button appears.
+    await waitFor(() =>
+      expect(fake.members).toHaveBeenLastCalledWith([{ id: 'p0', terminal: fake.terminal }])
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Replay p0' }))
     expect(fake.start).toHaveBeenCalledExactlyOnceWith('p0')
     for (const phase of ['picking', 'loading', 'active'] as const) {
