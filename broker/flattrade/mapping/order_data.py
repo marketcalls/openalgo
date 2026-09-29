@@ -166,6 +166,23 @@ def calculate_order_statistics(order_data):
     }
 
 
+def _int_or_zero(value) -> int:
+    """Coerce a Noren numeric field to int. Noren sends them as strings and
+    omits them entirely on an order that has never traded."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_or_zero(value) -> float:
+    """Coerce a Noren numeric field to float, defaulting to 0.0."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def transform_order_data(orders):
     # Handle None or empty orders
     if orders is None:
@@ -198,6 +215,25 @@ def transform_order_data(orders):
             "orderid": order.get("norenordno", ""),
             "order_status": normalize_order_status(order.get("status")),
             "timestamp": order.get("norentm", ""),
+            # Fill state. Flattrade's OrderBook returns "fillshares" (total
+            # traded quantity) and "avgprc" (average traded price) - see
+            # broker-api-docs/flattrade-api-docs/03-orders.md, Order Book
+            # response - but this mapping used to drop both.
+            #
+            # That is load-bearing for order updates. Flattrade now ingests them
+            # by polling the normalized orderbook
+            # (websocket_proxy/order_adapter.py::PollingOrderUpdateAdapter),
+            # which detects a change by diffing (order_status, filled_quantity)
+            # per orderid. With filled_quantity absent it read 0 on every poll,
+            # so a partial fill that left the order OPEN changed nothing and
+            # published no event - the fill was invisible until the order
+            # reached a terminal state. Emitting these three fields is what
+            # makes partial fills observable on that path (issue #1806).
+            "filled_quantity": _int_or_zero(order.get("fillshares")),
+            "pending_quantity": max(
+                _int_or_zero(order.get("qty")) - _int_or_zero(order.get("fillshares")), 0
+            ),
+            "average_price": _float_or_zero(order.get("avgprc")),
         }
 
         transformed_orders.append(transformed_order)

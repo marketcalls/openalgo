@@ -43,6 +43,48 @@ class UpstoxWebSocketClient:
     HEALTH_CHECK_INTERVAL = 30
     DATA_TIMEOUT = 90
 
+    # Granularity of the reconnect backoff sleep. The loop waits in slices of
+    # this size so disconnect() is noticed within it instead of at the end of a
+    # full 2-30s backoff (see _run_websocket).
+    BACKOFF_SLICE = 0.2
+
+    # Per-mode "individual" key caps from Upstox V3's connection & subscription
+    # limits table (upstox-api-docs/21a-websocket-market-data-v3.md). Keyed by the
+    # Upstox mode STRING, not by OpenAlgo's internal mode int — OpenAlgo mode 3
+    # (depth) maps to `full`, NOT to `full_d30` (see
+    # UpstoxWebSocketAdapter._get_upstox_mode), so capping "depth" at 50 would
+    # throttle every depth subscription to 1/40th of what Upstox actually allows.
+    # `full_d30` is the dangerous row: 50 keys, 40x smaller than plain `full`, so a
+    # depth-30 subscription that is harmless in any other mode breaches its cap at
+    # the 51st symbol.
+    MODE_KEY_LIMITS = {
+        "ltpc": 5000,
+        "option_greeks": 3000,
+        "full": 2000,
+        "full_d30": 50,
+    }
+    # An unrecognised / future mode is treated as `full`, the tightest of the
+    # non-d30 rows, so a new mode string cannot slip through uncapped.
+    DEFAULT_MODE_KEY_LIMIT = 2000
+
+    # The "combined" column of the same table. The doc does not define the word,
+    # so this takes the conservative reading: once MORE THAN ONE mode is live on a
+    # connection, the total key count across all of them is capped by the smallest
+    # combined figure among the modes in use. Never applied while a single mode is
+    # in use, where the individual cap above is the operative one.
+    MODE_COMBINED_LIMITS = {
+        "ltpc": 2000,
+        "option_greeks": 2000,
+        "full": 1500,
+        "full_d30": 1500,
+    }
+    DEFAULT_MODE_COMBINED_LIMIT = 1500
+
+    # A socket that has never completed a handshake is a different failure from one
+    # that dropped; say so after this many consecutive failed attempts rather than
+    # retrying quietly for the full budget.
+    NEVER_CONNECTED_ALERT_AFTER = 3
+
     def __init__(self, auth_token: str, user_id: str | None = None):
         self.auth_token = auth_token
         # user_id is used on reconnect to re-read a fresh bearer token from the
@@ -58,6 +100,17 @@ class UpstoxWebSocketClient:
         self._health_check_thread: threading.Thread | None = None
         self._last_message_time: float | None = None
         self._connected = False
+
+        # Live key count per Upstox mode string, used to enforce the subscription
+        # caps above. Reset on every handshake (see `_on_ws_open`) because Upstox
+        # drops all server-side subscriptions when the socket closes, and the
+        # adapter replays them from scratch.
+        self._keys_by_mode: dict[str, set] = {}
+
+        # True once any handshake has ever succeeded. Distinguishes "the feed
+        # dropped" from "the feed was never allowed to open" (issue: an over-limit
+        # 3rd connection on an Upstox Standard account).
+        self._ever_connected = False
 
         # Set by _force_reconnect() so _run_websocket can log the next
         # reconnect attempt as STALL-TRIGGERED instead of looking identical
@@ -77,10 +130,9 @@ class UpstoxWebSocketClient:
         # (the watchdog reconnected 5× during a slow start, then gave up).
         self._reconnect_config = {"max_attempts": 50, "base_delay": 2, "max_delay": 30}
 
-        # SSL context
-        self._ssl_context = ssl.create_default_context()
-        self._ssl_context.check_hostname = False
-        self._ssl_context.verify_mode = ssl.CERT_NONE
+        # Serialises connect() against itself. Nothing else takes it — in
+        # particular _run_websocket never does — so it cannot deadlock the feed.
+        self._connect_lock = threading.Lock()
 
     def connect(self) -> bool:
         """Establish WebSocket connection in a background thread.
@@ -88,35 +140,62 @@ class UpstoxWebSocketClient:
         Returns immediately after starting the connection thread (same as Angel).
         The actual connection happens asynchronously - do NOT block with wait()
         as that causes eventlet timeout issues in gunicorn+eventlet deployments.
+
+        Re-entrant calls are refused rather than honoured. A second connect()
+        while a loop is alive would build a second WebSocketApp, overwrite
+        `self.ws` and leave the first socket and thread with nothing holding a
+        handle to either — an unrecoverable leak, because the orphan stays
+        blocked inside run_forever() for the life of the process. Refusing is
+        the right half of that trade: tearing the live socket down instead
+        would drop a working feed (Upstox discards every server-side
+        subscription on close) for what is almost always a redundant
+        "make sure we are connected" call, and it could not be done safely
+        anyway — threads are not joined here (see disconnect()), so the old
+        loop could still be inside run_forever() when the new one starts, which
+        is precisely the two-loop state this guard exists to prevent. A caller
+        that genuinely wants a fresh socket calls disconnect() first.
         """
-        if not self._is_valid_auth_token():
-            self._trigger_error("Invalid or missing access token")
-            return False
+        with self._connect_lock:
+            # NOTE: this guard cannot interfere with the reconnect inside
+            # _run_websocket. That loop rebuilds the WebSocketApp inline and
+            # calls run_forever() again on the SAME iteration of the same
+            # thread — it never re-enters connect() — so reconnection is
+            # untouched by anything decided here.
+            if self.running and self._ws_thread is not None and self._ws_thread.is_alive():
+                self.logger.info(
+                    "Connect ignored - a WebSocket loop is already running "
+                    "(connected or reconnecting)"
+                )
+                return True
 
-        ws_url = self._get_websocket_url()
-        if not ws_url:
-            self._trigger_error("Failed to get WebSocket URL")
-            return False
+            if not self._is_valid_auth_token():
+                self._trigger_error("Invalid or missing access token")
+                return False
 
-        self.running = True
+            ws_url = self._get_websocket_url()
+            if not ws_url:
+                self._trigger_error("Failed to get WebSocket URL")
+                return False
 
-        # Create WebSocketApp with callbacks
-        # Use on_message only (not on_data) — on_message receives both
-        # text (str) and binary (bytes) messages reliably
-        self.ws = websocket.WebSocketApp(
-            ws_url,
-            on_open=self._on_ws_open,
-            on_message=self._on_ws_message,
-            on_error=self._on_ws_error,
-            on_close=self._on_ws_close,
-            on_ping=self._on_ws_ping,
-            on_pong=self._on_ws_pong,
-        )
+            self.running = True
 
-        # Run WebSocket in a daemon thread (same pattern as Angel/Dhan)
-        # Return immediately - connection happens in background
-        self._ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
-        self._ws_thread.start()
+            # Create WebSocketApp with callbacks
+            # Use on_message only (not on_data) — on_message receives both
+            # text (str) and binary (bytes) messages reliably
+            self.ws = websocket.WebSocketApp(
+                ws_url,
+                on_open=self._on_ws_open,
+                on_message=self._on_ws_message,
+                on_error=self._on_ws_error,
+                on_close=self._on_ws_close,
+                on_ping=self._on_ws_ping,
+                on_pong=self._on_ws_pong,
+            )
+
+            # Run WebSocket in a daemon thread (same pattern as Angel/Dhan)
+            # Return immediately - connection happens in background
+            self._ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
+            self._ws_thread.start()
 
         self.logger.info("Upstox WebSocket connection thread started")
         return True
@@ -148,6 +227,29 @@ class UpstoxWebSocketClient:
                 self._trigger_error("Max reconnect attempts reached")
                 break
 
+            # A socket that has NEVER completed a handshake is not a reconnect, it
+            # is a connection that Upstox refused — most often an over-limit one
+            # (Upstox allows 2 concurrent market-data connections on Standard, 5 on
+            # Plus, while the pool opens up to MAX_WEBSOCKET_CONNECTIONS). Left to
+            # the plain reconnect path this is invisible: the adapter has already
+            # reported "connected", every subscribe reports "queued", the batch
+            # timer defers against a dead socket, and no tick ever arrives while
+            # the loop retries for ~25 minutes. Raise it through the error callback
+            # once, with the cause named.
+            if (
+                not self._ever_connected
+                and self._reconnect_attempts == self.NEVER_CONNECTED_ALERT_AFTER
+            ):
+                self._trigger_error(
+                    f"Upstox WebSocket has never completed a handshake after "
+                    f"{self._reconnect_attempts} attempts - no market data will arrive on "
+                    f"this connection. Most likely cause: this connection is over the "
+                    f"Upstox per-user limit (2 concurrent market-data connections on "
+                    f"Standard, 5 on Plus). MAX_WEBSOCKET_CONNECTIONS in .env decides how "
+                    f"many the pool opens; its generic default of 3 is one too many for a "
+                    f"Standard account - set MAX_WEBSOCKET_CONNECTIONS=2 there."
+                )
+
             delay = self._calculate_backoff_delay(self._reconnect_attempts)
             # Distinguish stall-triggered from network-triggered reconnects
             # in the logs so operators can diagnose root cause from a single
@@ -163,7 +265,21 @@ class UpstoxWebSocketClient:
                 self.logger.info(
                     f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})..."
                 )
-            time.sleep(delay)
+            # Sleep in slices and re-test `running`. A single sleep(delay) means
+            # a disconnect() landing inside this 2-30s window still wakes the
+            # loop into a database read (_refresh_auth_token) and an outbound
+            # HTTPS authorize, both on behalf of an adapter that is already torn
+            # down, before the `while` finally notices. Same shape as
+            # websocket_proxy/order_adapter.py's interruptible backoff. The
+            # total delay is unchanged while the client is running, so the
+            # backoff curve and the 50-attempt budget are untouched.
+            slept = 0.0
+            while slept < delay and self.running:
+                time.sleep(min(self.BACKOFF_SLICE, delay - slept))
+                slept += self.BACKOFF_SLICE
+
+            if not self.running:
+                break
 
             # Re-read a fresh bearer token from the database before re-fetching
             # the WebSocket URL. _get_websocket_url() signs the authorize request
@@ -187,22 +303,103 @@ class UpstoxWebSocketClient:
                 )
 
     def subscribe(self, instrument_keys: list[str], mode: str = "ltpc") -> bool:
-        """Subscribe to market data for given instrument keys"""
+        """Subscribe to market data for given instrument keys.
+
+        Every subscribe — batched, replayed after a reconnect, or issued directly —
+        funnels through here, so this is the one place the Upstox subscription caps
+        can be enforced without a caller being able to bypass them. Keys within the
+        cap are sent in chunks of at most `MODE_KEY_LIMITS[mode]`; keys beyond it
+        are dropped with an error, because a cap on how many keys may be *subscribed*
+        cannot be satisfied by splitting the same keys across more messages.
+        """
         if not self._connected or not self.ws:
             self.logger.error("WebSocket not connected")
             return False
 
+        keys, dropped = self._enforce_key_limits(instrument_keys, mode)
+        if not keys:
+            # Nothing left to send: either every key is already live in this mode
+            # (a no-op, e.g. OpenAlgo modes 2 and 3 both mapping to `full` for the
+            # same symbol) or the caps left no room at all, which is a failure.
+            return not dropped
+
+        limit = self.MODE_KEY_LIMITS.get(mode, self.DEFAULT_MODE_KEY_LIMIT)
         try:
-            message = self._create_subscription_message(instrument_keys, mode, "sub")
-            # Send as binary frame — original async code used:
-            # await websocket.send(json.dumps(msg).encode("utf-8"))
-            self.ws.send(json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY)
-            self._subscriptions.update(instrument_keys)
-            self.logger.debug(f"Subscribed to {len(instrument_keys)} instruments in {mode} mode")
+            for start in range(0, len(keys), limit):
+                chunk = keys[start : start + limit]
+                message = self._create_subscription_message(chunk, mode, "sub")
+                # Send as binary frame — original async code used:
+                # await websocket.send(json.dumps(msg).encode("utf-8"))
+                self.ws.send(
+                    json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY
+                )
+                self._subscriptions.update(chunk)
+                self._keys_by_mode.setdefault(mode, set()).update(chunk)
+            self.logger.debug(f"Subscribed to {len(keys)} instruments in {mode} mode")
             return True
         except Exception as e:
             self.logger.error(f"Subscribe error: {e}")
             return False
+
+    def _enforce_key_limits(self, instrument_keys: list[str], mode: str) -> tuple[list[str], int]:
+        """Trim a subscribe request down to what Upstox's caps actually permit.
+
+        Returns (keys to send, number of keys dropped) — the keys in the order they
+        were requested. Anything dropped is logged at ERROR naming the cap it hit;
+        silently sending an over-cap request is worse, because Upstox rejects the
+        whole message and the operator sees only a dead feed.
+        """
+        already = self._keys_by_mode.get(mode, set())
+        # De-duplicate against what this connection already carries in this mode,
+        # otherwise a repeat subscribe would count the same key twice against the
+        # cap and start rejecting live symbols.
+        seen: set = set()
+        new_keys = []
+        for key in instrument_keys:
+            if key in already or key in seen:
+                continue
+            seen.add(key)
+            new_keys.append(key)
+        if not new_keys:
+            # Nothing new — a successful no-op for the caller, nothing dropped.
+            return [], 0
+
+        dropped = 0
+
+        # Individual cap: total keys allowed in this mode on this connection.
+        limit = self.MODE_KEY_LIMITS.get(mode, self.DEFAULT_MODE_KEY_LIMIT)
+        room = max(limit - len(already), 0)
+        if len(new_keys) > room:
+            dropped = len(new_keys) - room
+            self.logger.error(
+                f"Upstox {mode} subscription cap reached: {limit} keys per connection "
+                f"({len(already)} already subscribed). Dropping {dropped} of "
+                f"{len(new_keys)} requested key(s). Lower MAX_SYMBOLS_PER_WEBSOCKET so "
+                f"the pool spreads symbols across connections before this cap is hit."
+            )
+            new_keys = new_keys[:room]
+            if not new_keys:
+                return [], dropped
+
+        # Combined cap: only bites once a second mode is live on this connection.
+        modes_in_use = set(self._keys_by_mode) | {mode}
+        if len(modes_in_use) > 1:
+            budget = min(
+                self.MODE_COMBINED_LIMITS.get(m, self.DEFAULT_MODE_COMBINED_LIMIT)
+                for m in modes_in_use
+            )
+            total = sum(len(v) for v in self._keys_by_mode.values())
+            room = max(budget - total, 0)
+            if len(new_keys) > room:
+                dropped += len(new_keys) - room
+                self.logger.error(
+                    f"Upstox combined subscription cap reached: {budget} keys total across "
+                    f"modes {sorted(modes_in_use)} ({total} already subscribed). Dropping "
+                    f"{len(new_keys) - room} of {len(new_keys)} requested {mode} key(s)."
+                )
+                new_keys = new_keys[:room]
+
+        return new_keys, dropped
 
     def unsubscribe(self, instrument_keys: list[str]) -> bool:
         """Unsubscribe from market data"""
@@ -213,6 +410,11 @@ class UpstoxWebSocketClient:
             message = self._create_subscription_message(instrument_keys, method="unsub")
             self.ws.send(json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY)
             self._subscriptions.difference_update(instrument_keys)
+            # Free the cap budget too, otherwise a long-running session that churns
+            # symbols would count every key it has ever held and start refusing new
+            # subscriptions well below the real limit.
+            for keys in self._keys_by_mode.values():
+                keys.difference_update(instrument_keys)
             self.logger.debug(f"Unsubscribed from {len(instrument_keys)} instruments")
             return True
         except Exception as e:
@@ -240,9 +442,16 @@ class UpstoxWebSocketClient:
         # Don't join threads — daemon threads will stop on their own
         # join() causes eventlet.timeout.Timeout in gunicorn+eventlet
         self._health_check_thread = None
-        self._ws_thread = None
+
+        # KEEP the _run_websocket handle. Nulling it destroyed the only evidence
+        # that a loop existed, so nothing could ever detect or reap one it had
+        # lost track of; connect()'s re-entrancy guard tests it. A finished
+        # Thread object holds no descriptor and CPython clears its target, so
+        # retaining it costs nothing, and the guard also tests `running` (False
+        # from here on) so a legitimate reconnect after disconnect() is allowed.
 
         self._subscriptions.clear()
+        self._keys_by_mode.clear()
         self._last_message_time = None
         self.logger.info("Disconnected from WebSocket")
 
@@ -251,8 +460,16 @@ class UpstoxWebSocketClient:
         """Called when WebSocket connection is opened"""
         self.logger.debug("Upstox WebSocket connection opened")
         self._connected = True
+        self._ever_connected = True
         self._reconnect_attempts = 0
         self._last_message_time = time.time()
+
+        # Upstox drops every server-side subscription when the socket closes, so the
+        # cap accounting must start from zero on each handshake — the adapter's
+        # on_connect callback below replays the whole subscription set, and stale
+        # counts here would make that replay look like a cap breach.
+        self._keys_by_mode.clear()
+        self._subscriptions.clear()
 
         # Start health check thread
         self._start_health_check()
@@ -378,7 +595,23 @@ class UpstoxWebSocketClient:
             self.logger.error(f"Failed to parse JSON message: {e}")
 
     def _decode_protobuf_to_dict(self, buffer: bytes) -> dict[str, Any]:
-        """Decode protobuf FeedResponse to dictionary"""
+        """Decode protobuf FeedResponse to dictionary.
+
+        The default `MessageToDict` options are load-bearing — do not add
+        `always_print_fields_with_no_presence` / `including_default_value_fields`
+        or `preserving_proto_field_name` here:
+
+        - Keys stay camelCase (`marketOHLC`, `bidAskQuote`, `iiqTotal`), which is
+          what every consumer in upstox_adapter reads.
+        - Defaulted proto3 scalars are omitted, so the CAS / pre-open fields
+          (iep, rp, ieq, iiqTotal, iiqM, casEligible) are simply absent outside an
+          auction window instead of arriving as a misleading 0 / False.
+        - `LTPC.iep` is a DoubleValue wrapper, so json_format emits it if and only
+          if `HasField('iep')` is true and flattens it to the bare `.value`;
+          printing no-presence fields would destroy that signal.
+        - int64 fields render as strings (`"vtt"`, `"ltt"`, `"iiqTotal"`); the
+          adapter int()s them, which preserves a negative iiqTotal.
+        """
         feed_response = MarketDataFeedV3_pb2.FeedResponse()
         feed_response.ParseFromString(buffer)
         return MessageToDict(feed_response)
@@ -432,6 +665,24 @@ class UpstoxWebSocketClient:
                 return None
         except requests.Timeout:
             self.logger.error(f"Timeout getting WebSocket authorization")
+            return None
+        except requests.HTTPError as e:
+            # raise_for_status() throws the response BODY away, and the body is
+            # where Upstox puts the actual reason (errors[].errorCode / message) —
+            # including a refusal because the account is already at its concurrent
+            # connection limit. Without this, an over-limit 3rd connection on a
+            # Standard account reads as a generic network failure.
+            status = e.response.status_code if e.response is not None else "?"
+            body = (e.response.text or "")[:500] if e.response is not None else ""
+            self.logger.error(f"WebSocket authorize rejected: HTTP {status} {body}")
+            if status == 429 or "limit" in body.lower():
+                self.logger.error(
+                    "Upstox refused the market-data feed authorization. Upstox permits 2 "
+                    "concurrent market-data connections on Standard and 5 on Plus; "
+                    "MAX_WEBSOCKET_CONNECTIONS in .env decides how many the pool opens "
+                    "(generic default 3, which is one too many for Standard). Set "
+                    "MAX_WEBSOCKET_CONNECTIONS=2 on a Standard account."
+                )
             return None
         except Exception as e:
             self.logger.error(f"Failed to get WebSocket authorization: {e}")

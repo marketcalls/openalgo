@@ -336,6 +336,24 @@ class FyersHSMWebSocket:
 
         return buffer_msg
 
+    @staticmethod
+    def _auth_response_ok(data: bytearray) -> bool:
+        """Return True if a request-type-1 frame reports authentication accepted.
+
+        Layout after the 2-byte length, 1-byte request type and 1-byte field
+        count: ``[field id][u16 field length][value]``. The first field carries
+        the status string, which is ``"K"`` when the hsm_key was accepted. A
+        frame too short to hold the field is treated as a failure rather than
+        silently passing.
+        """
+        try:
+            if len(data) < 8:
+                return False
+            field_length = struct.unpack("!H", data[5:7])[0]
+            return data[7 : 7 + field_length].decode("utf-8", errors="replace") == "K"
+        except (struct.error, IndexError):
+            return False
+
     def _parse_binary_message(self, data: bytearray):
         """
         Parse incoming binary message from HSM WebSocket
@@ -351,7 +369,23 @@ class FyersHSMWebSocket:
             msg_type = data[2]
 
             if msg_type == 1:
-                # Authentication response
+                # Authentication response. The verdict is a status field, not the
+                # mere arrival of the frame: byte 4 is the field ID, bytes 5-6 the
+                # field length, and the value is "K" for accepted. Treating any
+                # type-1 frame as success would report a rejected token as a
+                # healthy connection that then never delivers a tick.
+                if not self._auth_response_ok(data):
+                    self.authenticated = False
+                    self.logger.error(
+                        "HSM authentication rejected by Fyers - the access token's "
+                        "hsm_key was not accepted (re-authenticate the broker)"
+                    )
+                    if self.on_error_callback:
+                        self.on_error_callback(
+                            ConnectionError("Fyers HSM authentication failed - invalid token")
+                        )
+                    return
+
                 self.authenticated = True
                 self.logger.info("HSM authentication successful")
 
@@ -896,7 +930,21 @@ class FyersHSMWebSocket:
                     on_close=self._on_ws_close,
                     on_ping=self._on_ws_ping,
                     on_pong=self._on_ws_pong,
-                    header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
+                    # NO Authorization header. The HSM feed authenticates purely
+                    # in-band, via the binary request-type-1 frame carrying the
+                    # JWT's hsm_key (see _create_auth_message). Fyers' gateway now
+                    # *silently drops* any handshake that carries an Authorization
+                    # header: the WebSocket upgrade still succeeds, but the auth
+                    # frame is never answered and the socket sits mute until our
+                    # 15s timeout. Verified against the live endpoint — a bare
+                    # JWT, an "<appId>:<token>" pair, and even "Authorization: x"
+                    # all produce silence, while no header (or any other header,
+                    # e.g. User-Agent) returns the type-1 auth response. The
+                    # official fyers-apiv3 SDK's data_ws.py likewise passes no
+                    # headers here. The <appId>:<token> Authorization header is
+                    # still required by the *order* socket (wss://socket.fyers.in/
+                    # trade/v3) and the *TBT* socket — this applies to HSM only.
+                    header={"User-Agent": f"{self.source}/1.0"},
                 )
 
                 # Run until disconnection. Enable protocol ping/pong keepalive so

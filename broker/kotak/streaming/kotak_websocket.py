@@ -17,10 +17,45 @@ logger = get_logger(__name__)
 
 
 class KotakWebSocket:
+    # Scrips per subscribe frame. HSI caps a single frame at MAX_SCRIPS, so a
+    # larger batch has to be split. The adapter reads this rather than assuming
+    # a limit, because SFeed's is very different.
+    MAX_BATCH_SIZE = 100
+
     def __init__(self, auth_config, ws_url="wss://mlhsm.kotaksecurities.com"):
         """
         Each instance is isolated: no shared state.
         auth_config: dict with keys 'auth_token', 'sid', 'hs_server_id', 'access_token'
+
+        The default host is deliberate and is not interchangeable with Kotak's
+        newer feeds. Kotak runs three market-data broadcast sources and resolves
+        one per data centre from a config service:
+
+            GET https://lapi.kotaksecurities.com/5config/config
+                ?appVersion=<v>&platform=api&environment=prod
+            {data_center}_broadcast_source          -> "hs" | "sh" | "ks"
+            {data_center}_{source}_broadcast_endpoint
+
+        This client speaks "hs" (hypersync/HSM) and only that: big-endian, a
+        one-byte message type, codes 1-10 (see HSWebSocketLib.BinRespTypes).
+        "sh" is SFeed at sfeed.kotaksecurities.com/apifeed and "ks" is
+        cdtstream.kotaksecurities.com/mfeed, both little-endian with a 9-byte
+        header and uint16 codes (104, 105, 6511, 7207, ...). The code spaces do
+        not overlap, so pointing ws_url at either without replacing
+        HSWebSocketLib gives a socket that connects, authenticates and then
+        never yields a usable tick.
+
+        That also answers where the CAS (104) and market-status (105/6511/6521)
+        message types Kotak added in Aug-Sep 2026 went: they are SFeed message
+        types and cannot arrive here. HSWebSocketLib skips unknown feed types
+        and response types while keeping byte alignment, so nothing breaks if
+        the broker ever does send something new on this socket.
+
+        Known risk, checked against the live prod config on 2026-09-06: every
+        data centre now selects "sh" or "ks" and none selects "hs". The
+        *_hs_broadcast_endpoint keys still exist and mlhsm still serves, so this
+        works today, but Kotak's own SDK no longer references mlhsm at all.
+        Treat HSM as legacy and expect a migration to be needed eventually.
         """
         self.auth_config = auth_config.copy()
         self.ws_url = ws_url

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 
 import httpx
 import pandas as pd
+import pytz
 
 from broker.deltaexchange.api.baseurl import BASE_URL
 from broker.deltaexchange.api.rate_limiter import (
@@ -29,6 +30,10 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# OpenAlgo's date arguments are IST calendar dates on every broker, Delta
+# included: the exchange itself is 24x7 UTC, but the callers are not.
+IST = pytz.timezone("Asia/Kolkata")
 
 
 def _f(value, default=0.0):
@@ -505,9 +510,23 @@ class BrokerData:
 
             all_candles = []
 
+            # Delta fills the whole window it is asked for: past the last trade
+            # it emits flat, zero-volume candles at the previous close, right up
+            # to `end`. Asking for the end of the current day therefore returns
+            # hours of synthetic bars that a chart plots as real ones. Capping
+            # the request at the current time is what keeps the series ending on
+            # the bar that is actually forming.
+            now_ts = int(time.time())
+
             for chunk_start, chunk_end in chunks:
                 start_ts = self._to_epoch(chunk_start, end_of_day=False)
-                end_ts   = self._to_epoch(chunk_end,   end_of_day=True)
+                end_ts   = min(self._to_epoch(chunk_end, end_of_day=True), now_ts)
+
+                if end_ts < start_ts:
+                    # Chunk lies entirely in the future (a range that runs past
+                    # today). Nothing to fetch, and Delta would answer with
+                    # padding alone.
+                    continue
 
                 params = {
                     "symbol":     br_symbol,
@@ -578,6 +597,10 @@ class BrokerData:
 
             if all_candles:
                 df = pd.DataFrame(all_candles)
+                # Belt-and-braces against the padding described above: a bar
+                # that opens after the present moment cannot have traded, so
+                # drop it rather than let it reach a chart.
+                df = df[df["timestamp"] <= now_ts]
                 df = (
                     df.sort_values("timestamp")
                     .drop_duplicates(subset=["timestamp"])
@@ -716,13 +739,18 @@ class BrokerData:
     def _to_epoch(date_str: str, end_of_day: bool = False) -> int:
         """
         Convert a YYYY-MM-DD date string to a Unix epoch (seconds, UTC).
-        Uses UTC midnight for start, UTC 23:59:59 for end.
+
+        The date is read as an **IST calendar date** — 00:00:00 IST for the
+        start of the window, 23:59:59 IST for the end — because that is the
+        contract every OpenAlgo caller works to. `services/history_service`
+        hands brokers plain date strings, and the chart backends that consume
+        the result (`blueprints/scalping.py`, `blueprints/chart_test.py`) build
+        them from `datetime.now(IST).date()` and then re-group the returned
+        candles by IST date. Reading them as UTC dates slid the whole window
+        5h30m forward, so a requested day ran 05:30 IST to 05:29 IST the next
+        morning instead of covering the IST day that was asked for.
         """
-        import calendar
-        fmt = "%Y-%m-%d %H:%M:%S"
-        if end_of_day:
-            dt = datetime.strptime(f"{date_str} 23:59:59", fmt)
-        else:
-            dt = datetime.strptime(f"{date_str} 00:00:00", fmt)
-        # calendar.timegm interprets the struct_time as UTC regardless of local timezone
-        return calendar.timegm(dt.timetuple())
+        dt = datetime.strptime(
+            f"{date_str} {'23:59:59' if end_of_day else '00:00:00'}", "%Y-%m-%d %H:%M:%S"
+        )
+        return int(IST.localize(dt).timestamp())

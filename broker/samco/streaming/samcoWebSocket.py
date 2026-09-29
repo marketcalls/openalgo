@@ -61,6 +61,7 @@ class SamcoWebSocket:
         on_close: Callable | None = None,
         on_open: Callable | None = None,
         on_data: Callable | None = None,
+        auth_error_check: Callable | None = None,
     ):
         """
         Initialize Samco WebSocket client
@@ -73,6 +74,10 @@ class SamcoWebSocket:
             on_close: Callback for connection close
             on_open: Callback for connection open
             on_data: Callback for market data
+            auth_error_check: Predicate that returns True when an error string
+                means the broker refused a dead credential (401/403). The
+                adapter passes BaseBrokerWebSocketAdapter.is_auth_error so
+                samco shares the fleet's auth-error vocabulary.
         """
         # Authentication credentials
         # URL-decode the session token if it contains encoded characters
@@ -91,6 +96,13 @@ class SamcoWebSocket:
         self._on_close_callback = on_close
         self._on_open_callback = on_open
         self._on_data_callback = on_data
+        self.auth_error_check = auth_error_check
+
+        # Auth-failure state. Set from the error/close handlers when the broker
+        # rejects the session token; the adapter reads it to stop reconnecting
+        # instead of hammering the broker with a credential that cannot work.
+        self.auth_failed = False
+        self.auth_failure_reason = None
 
         # Subscription tracking
         self.subscribed_symbols = {}  # {symbol_key: {symbol, exchange, mode}}
@@ -191,6 +203,11 @@ class SamcoWebSocket:
         """Initialize WebSocket connection with authentication headers"""
         self.running = True
         self.DISCONNECT_FLAG = False
+        # A new attempt carries a freshly re-read token, so the previous
+        # attempt's verdict must not block it. The adapter has already
+        # consumed the old flag by the time it calls connect() again.
+        self.auth_failed = False
+        self.auth_failure_reason = None
 
         # Build headers with session token
         # Log token info for debugging (first/last 4 chars only for security)
@@ -227,6 +244,12 @@ class SamcoWebSocket:
             if self.connected:
                 self.logger.info("Samco WebSocket connected successfully")
                 return True
+            if self.auth_failed:
+                # The handshake was rejected outright; waiting out the full
+                # timeout only delays the adapter's decision to stop.
+                self.logger.error(f"Samco WebSocket auth failure: {self.auth_failure_reason}")
+                self.close_connection()
+                return False
             time.sleep(0.1)
 
         self.logger.error("Connection timeout")
@@ -665,9 +688,34 @@ class SamcoWebSocket:
         except (ValueError, TypeError):
             return 0
 
+    def _is_auth_error(self, detail) -> bool:
+        """True when `detail` reads as the broker refusing a dead credential."""
+        if self.auth_error_check is None or detail in (None, ""):
+            return False
+        try:
+            return bool(self.auth_error_check(str(detail)))
+        except Exception:
+            self.logger.exception("samco auth_error_check raised; treating as non-auth error")
+            return False
+
+    def _record_auth_failure(self, reason: str) -> None:
+        """Latch the auth-failure verdict for the adapter to act on."""
+        if self.auth_failed:
+            return
+        self.auth_failed = True
+        self.auth_failure_reason = reason
+        self.logger.error(f"Samco WebSocket auth failure: {reason}")
+
     def _on_error(self, ws, error) -> None:
         """Handle WebSocket connection errors — reconnection is handled by the adapter"""
         self.logger.error(f"Samco WebSocket error: {error}")
+
+        # websocket-client raises WebSocketBadStatusException with the HTTP
+        # status attached when the handshake itself is rejected; the status
+        # attribute is more reliable than the stringified message.
+        status = getattr(error, "status_code", None)
+        if status in (401, 403) or self._is_auth_error(error):
+            self._record_auth_failure(str(error))
 
         if self._on_error_callback:
             try:
@@ -681,6 +729,11 @@ class SamcoWebSocket:
         """Handle WebSocket connection close event"""
         self.connected = False
         self.logger.info(f"Samco WebSocket closed: {close_status_code} - {close_msg}")
+
+        # The adapter's on_close callback only receives `ws`, so the close
+        # reason has to be judged here and latched on the client.
+        if self._is_auth_error(close_msg) or self._is_auth_error(close_status_code):
+            self._record_auth_failure(f"close code={close_status_code} msg={close_msg}")
 
         self._stop_heartbeat()
         self._stop_subscription_flusher()

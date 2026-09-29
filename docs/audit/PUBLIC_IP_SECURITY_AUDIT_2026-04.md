@@ -60,9 +60,9 @@ Phase-1 fixes (login rate reduction, webhook HMAC, WebSocket/ZMQ binding, sessio
 - **Fix:** Call `session.clear()` + regenerate the session ID **before** populating authenticated state.
 
 #### C5. Webhooks have no HMAC signature verification
-- **Files:** `blueprints/chartink.py:787`, `blueprints/strategy.py:~869`, `blueprints/flow.py:596 & 610`
+- **Files:** `blueprints/chartink.py:787`, `blueprints/flow.py:596 & 610`
 - **Issue:** Authentication is by URL path `<webhook_id>`/`<token>`. That token ends up in strategy config screenshots, support tickets, GitHub issues, and reverse-proxy access logs. Once leaked, anyone can submit orders.
-- **Fix:** On strategy creation, also generate a `webhook_secret` (`secrets.token_hex(32)`). Require `X-Signature: sha256=<hmac>` header; verify with `hmac.compare_digest`. Document the secret in Chartink/TradingView configuration guides.
+- **Fix:** On strategy or workflow creation, also generate a `webhook_secret` (`secrets.token_hex(32)`). Require `X-Signature: sha256=<hmac>` header; verify with `hmac.compare_digest`. Document the secret in the Chartink and Flow configuration guides.
 
 ---
 
@@ -189,20 +189,19 @@ Counts are **total routes / authenticated / rate-limited**. "Auth" = `@check_ses
 | `playground.py` | 4 | 4 | 0 | 4 |
 | `pnltracker.py` | 3 | 0 | 0 | 3 |
 | `python_strategy.py` | 22 | 22 | 0 | **22** |
-| `react_app.py` | 64 | 0 | 0 | 64 (SPA, auth at API) |
+| `react_app.py` | 60 | 0 | 0 | 60 (SPA, auth at API) |
 | `sandbox.py` | 14 | 14 | 0 | 14 |
 | `search.py` | 4 | 0 | 0 | 4 |
 | `security.py` | 8 | 8 | 8 | 0 |
 | `settings.py` | 2 | 0 | 0 | 2 |
 | `straddle_chart.py` | 2 | 0 | 0 | 2 |
-| `strategy.py` | 16 | 15 | 1 | 15 |
 | `system_permissions.py` | 2 | 0 | 0 | 2 |
 | `telegram.py` | 14 | 14 | 0 | **14** |
 | `traffic.py` | 4 | 4 | 4 | 0 |
 | `tv_json.py` | 1 | 0 | 0 | 1 |
 | `vol_surface.py` | 1 | 0 | 0 | 1 |
 | `websocket_example.py` | 13 | 13 (manual) | 0 | **13** |
-| **Totals (blueprints)** | **~336** | **~280 (83%)** | **~80 (24%)** | **~220 (65%)** |
+| **Totals (blueprints)** | **~316** | **~265 (84%)** | **~79 (25%)** | **~201 (64%)** |
 
 **REST API (`restx_api/`)**: ~44 endpoints. ~39 have rate limits; API-key auth is **done inside handlers**, not via decorator. 3–5 endpoints missing rate limits.
 
@@ -221,7 +220,7 @@ The following authenticated endpoints are **missing rate limits** and are either
 | **High** | `blueprints/health.py:256–337` | `/api/current`, `/api/history`, `/api/stats` | Unauth + unlimited metrics disclosure |
 | **High** | `blueprints/historify.py:120–1536` | `/api/download`, `/api/export`, `/api/export/bulk`, `/api/upload`, `/api/delete/bulk` | Resource exhaustion on large data ops |
 | **High** | `blueprints/orders.py:*` | order/position read routes | No rate limit despite being authenticated |
-| **Medium** | `blueprints/strategy.py:775`, `chartink.py:691`, `flow.py:60,127,159` | strategy/workflow CRUD | DB bloat on spam create |
+| **Medium** | `blueprints/chartink.py:691`, `flow.py:60,127,159` | strategy/workflow CRUD | DB bloat on spam create |
 | **Medium** | `blueprints/telegram.py:92,163,202,313` | bot start/stop/broadcast | Messaging spam |
 | **Medium** | `blueprints/sandbox.py:*` | analyzer endpoints | 14 routes unlimited |
 
@@ -330,7 +329,7 @@ Required before exposing OpenAlgo on a public IP:
 **Phase 2 (next 1–2 weeks):**
 7. `@require_api_key` decorator rollout across `restx_api/*`.
 8. Per-user WebSocket connection + subscription caps.
-9. HMAC on strategy / Chartink / flow webhooks with backward-compatible migration.
+9. HMAC on Chartink and flow webhooks with backward-compatible migration.
 10. Random per-deployment Fernet salt (with migration that re-encrypts existing broker tokens on first start).
 11. Trusted-proxy handling for `X-Forwarded-For`.
 12. Auth + rate limit on `/health/api/*` metrics endpoints.
@@ -357,7 +356,7 @@ Required before exposing OpenAlgo on a public IP:
 - `blueprints/websocket_example.py:61–186` — WS control-plane rate limits
 - `blueprints/python_strategy.py:1665–1964` — strategy exec rate limits
 - `blueprints/historify.py:120–1536` — export/import rate limits
-- `blueprints/chartink.py:787`, `blueprints/strategy.py:~869`, `blueprints/flow.py:596,610` — webhook HMAC
+- `blueprints/chartink.py:787`, `blueprints/flow.py:596,610` — webhook HMAC
 - `utils/ip_helper.py` — `X-Forwarded-For` trust model
 - `csp.py:28–35` — CSP style relaxation
 - `start.sh:70–82`, `.sample.env` — WEBSOCKET_HOST / ZMQ_HOST defaults

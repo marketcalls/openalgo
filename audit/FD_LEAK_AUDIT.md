@@ -120,7 +120,7 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 
 ## Informational
 
-- **[I-1] Scheduler count vs. docs**: CLAUDE.md says Flow and Historify "share the same scheduler instance," but there are at least **six** independent `BackgroundScheduler` instances: `blueprints/python_strategy.py:110`, `services/flow_scheduler_service.py:57`, `services/historify_scheduler_service.py:60`, and — added per cross-review — `blueprints/chartink.py:58`, `blueprints/strategy.py:59`, and `sandbox/squareoff_thread.py:330`. Each is a properly-guarded singleton (bounded total) — not a leak, but the doc is inaccurate and the count is higher than stated.
+- **[I-1] Scheduler count vs. docs**: CLAUDE.md says Flow and Historify "share the same scheduler instance," but there are at least **five** independent `BackgroundScheduler` instances: `blueprints/python_strategy.py:110`, `services/flow_scheduler_service.py:57`, `services/historify_scheduler_service.py:60`, and — added per cross-review — `blueprints/chartink.py:58` and `sandbox/squareoff_thread.py:330`. Each is a properly-guarded singleton (bounded total) — not a leak, but the doc is inaccurate and the count is higher than stated.
 - **[I-2] Dead code**: `services/telegram_bot_service_v2.py:42` and `services/telegram_bot_service_fixed.py:42` each create an `httpx.AsyncClient` but are not imported anywhere — candidates for deletion (no runtime impact).
 - **[I-3] Per-request audit log open** `blueprints/mcp_http.py:348` uses `with _AUDIT_PATH.open("a")` per MCP request — opened and closed each call, FD-safe (minor perf only).
 

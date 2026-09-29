@@ -299,7 +299,7 @@ def create_kotak_order_adapter(user_id: str) -> "KotakOrderUpdateAdapter | None"
         return None
 
     parts = auth_token.split(":::")
-    if len(parts) != 4:
+    if len(parts) < 4:
         logger.warning(
             f"Unexpected Kotak auth token format for user {user_id}; "
             "order-update adapter not started"

@@ -16,10 +16,10 @@ They are unrelated and never move together. If the request is ambiguous, ask.
 
 ## 1. Platform version (e.g. `2.0.1.0`)
 
-OpenAlgo itself. Touches **two files** plus the lockfile. **Never** touch `requirements.txt` or `requirements-nginx.txt` for a platform bump — the platform version does not appear there.
+OpenAlgo itself. Touches **two files** plus the lockfile. **Never** touch `requirements.txt` or `requirements-nginx.txt` for a platform bump - the platform version does not appear there.
 
-1. `utils/version.py` — `VERSION = "x.y.z.w"` (runtime source of truth, read by `get_version()`)
-2. `pyproject.toml` — `version = "x.y.z.w"` (line 4, package metadata)
+1. `utils/version.py` - `VERSION = "x.y.z.w"` (runtime source of truth, read by `get_version()`)
+2. `pyproject.toml` - `version = "x.y.z.w"` (line 4, package metadata)
 3. `uv sync` to regenerate `uv.lock`
 
 ```bash
@@ -40,7 +40,7 @@ The platform version surfaces in the UI footer / about page (via `get_version()`
 ### Release notes are part of the bump, not a follow-up
 
 A platform bump is only half a release. Every recent release commit also adds a
-notes file — the last one was literally titled "bump platform to 2.0.1.6 **and
+notes file - the last one was literally titled "bump platform to 2.0.1.6 **and
 add release notes**" and touched four paths:
 
 ```
@@ -57,9 +57,12 @@ files in that directory. The established structure:
 2. A one-paragraph bold summary naming the release theme
 3. A prose overview stating the commit count since the previous tag and what
    changed at a system level
-4. `**Highlights**` — a bullet per significant change, **each citing its commit
+4. `**Highlights**` - a bullet per significant change, **each citing its commit
    SHA** (and issue number where one exists), e.g.
-   `**HDFC Sky broker integration (`cb4ec7d56` + 9 follow-up fixes)** — ...`
+   `**HDFC Sky broker integration (`cb4ec7d56` + 9 follow-up fixes)** - ...`
+5. `**Dependencies**` - what moved, or an explicit "no dependencies changed"
+6. `**Contributors**` - see below. Never optional.
+7. `**Links**` - repository, docs, PyPI, Discord, YouTube, issue tracker
 
 Get the commit range with:
 
@@ -70,28 +73,70 @@ git log --oneline v<previous>..HEAD                # source material for highlig
 
 If no tags exist, diff against the previous release notes file's date.
 
-**`docs/CHANGELOG.md` is for major releases only.** It was last written for
-2.0.0.0 and is not updated per point release — do not add a stanza there for a
-routine bump.
+### Always credit every contributor
+
+**Every release credits everyone who contributed to it, with no exceptions.**
+Contributors go in **all three** places, not just one:
+
+1. the release notes file, as a `**Contributors**` section
+2. the `docs/CHANGELOG.md` stanza, as a `### Contributors` section
+3. the GitHub release body
+
+Format is one bullet per person: `**@handle (Real Name)** - what they did, with
+PR or issue numbers.` Use the real name only where the commit or profile gives
+one; `**@handle**` alone is correct otherwise. Order by volume of work, with the
+maintainer first. Do not silently fold a contributor's work into someone else's
+bullet, and do not omit a docs-only or test-only contribution.
+
+Collect the list from git rather than from memory:
+
+```bash
+git log --format='%an <%ae>' <previous>..HEAD | sort | uniq -c | sort -rn
+git log --format='%b' <previous>..HEAD | grep -i '^Co-authored-by:' | sort -u
+git log --format='%h|%an|%s' <previous>..HEAD | grep -vE 'github-actions'
+```
+
+Author names are not GitHub handles, and the credit needs the handle. Resolve
+each one:
+
+```bash
+gh pr view <PR> --json author -q .author.login       # commits merged via a PR
+gh api repos/marketcalls/openalgo/commits/<sha> -q .author.login   # direct pushes
+```
+
+Exclude `github-actions[bot]` (the `auto-build frontend dist` commits) and the
+`Co-authored-by: Claude ...` trailers.
+
+### `docs/CHANGELOG.md` gets a stanza per release
+
+Every release adds a `## [x.y.z.w] - YYYY-MM-DD` stanza at the top, above the
+previous one, following the shape the existing stanzas use: a `### <Theme>
+Release` heading, the commit count and a link to the full notes, then
+`### Highlights`, the grouped fix sections that fit this release, `###
+Dependencies` and `### Contributors`. The stanza is a summary; the release notes
+file is where the detail lives.
 
 ### Order of work
 
 1. `utils/version.py` and `pyproject.toml`
 2. `uv sync`
-3. Write `docs/releases/version-<x.y.z.w>-released.md`
-4. Verify: `uv run python -c "from utils.version import get_version; print(get_version())"`
-5. Commit all four paths together — a version bump without its notes leaves the release undocumented, and the notes are what users actually read.
+3. Collect the commit range and resolve every contributor's GitHub handle
+4. Write `docs/releases/version-<x.y.z.w>-released.md`
+5. Add the `docs/CHANGELOG.md` stanza
+6. Verify: `uv run python -c "from utils.version import get_version; print(get_version())"`
+7. Commit all five paths together - a version bump without its notes leaves the release undocumented, and the notes are what users actually read.
+8. If the user asked for a release: tag, push, and create the GitHub release with the contributors section included.
 
 ## 2. OpenAlgo Python SDK pin (e.g. `openalgo==1.0.49`)
 
 A **separate** client library published on PyPI (https://pypi.org/project/openalgo/) that the platform consumes internally. It has its own release cycle. Touches the dependency lists, **not** `utils/version.py`.
 
-1. `pyproject.toml` — the `openalgo==X.Y.Z` entry in the `dependencies` list
-2. `requirements.txt` — the `openalgo==X.Y.Z` line
-3. `requirements-nginx.txt` — the `openalgo==X.Y.Z` line
+1. `pyproject.toml` - the `openalgo==X.Y.Z` entry in the `dependencies` list
+2. `requirements.txt` - the `openalgo==X.Y.Z` line
+3. `requirements-nginx.txt` - the `openalgo==X.Y.Z` line
 4. `uv sync` to regenerate `uv.lock`
 
-All three files must be updated together. Missing one means a deploy path installs a different SDK version than the others — `requirements-nginx.txt` is the one most often forgotten.
+All three files must be updated together. Missing one means a deploy path installs a different SDK version than the others - `requirements-nginx.txt` is the one most often forgotten.
 
 ## Committing
 
@@ -105,3 +150,17 @@ chore(deps): bump openalgo SDK to 1.0.50
 ```
 
 Do not commit or push unless the user asked for it.
+
+## Publishing the GitHub release
+
+Releases are titled `v<x.y.z.w>` and carry a **descriptive tag**, not a version
+tag: `v2.0.2.1` was published on the tag `openalgo-flow-upgrade`. Check what the
+last few used before picking one.
+
+```bash
+gh release list -L 5                      # TITLE, TYPE, TAG NAME, PUBLISHED
+gh release create <descriptive-tag> --title "v<x.y.z.w>" --notes-file <file>
+```
+
+The body is the release notes, and **it must carry the contributors section**.
+A release that thanks nobody is not finished.

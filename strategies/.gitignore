@@ -1,12 +1,38 @@
 # Strategy configuration file (contains user-specific data)
 strategy_configs.json
 
+# What each OpenScript strategy is run on, when it starts and stops, and
+# which ones a trader means to have running right now, and what a trader has
+# asked of one that is still going. All four are the
+# trader's own choices, written by the server beside the file above and kept
+# on the same named volume, so none of them belongs in the repository.
+# Without these lines a saved instrument shows up as an untracked file and
+# can be committed by accident.
+openscript_run_configs.json
+openscript_runner_schedules.json
+openscript_running.json
+openscript_commands.json
+
+# Where the test suite keeps its copies of the four above, so a suite run on a
+# machine with live strategies cannot touch a trader's own.
+test/
+
+# What an interrupted atomic write leaves beside them. The settings file is
+# written through a .tmp and the schedules through a .partial.
+*.tmp
+*.partial
+
 # Environment variables (contains sensitive data)
 strategy_env.json
 .secure_env
 
 # Uploaded strategy scripts
 scripts/*.py
+
+# Custom chart indicators written by the user (see indicators/.gitignore)
+indicators/*.js
+# except the reference indicator that ships with OpenAlgo
+!indicators/open_range_breakout.js
 
 # Keep example strategies
 !examples/

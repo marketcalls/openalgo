@@ -6,7 +6,7 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 
 - Backend runtime: Flask app with Flask-RESTX, Flask-SocketIO, SQLAlchemy, APScheduler, DuckDB, ZeroMQ, and a separate asyncio WebSocket proxy. Entry point is `app.py:134`.
 - Frontend runtime: React 19, Vite 8, TypeScript 5.9, served from `frontend/dist` by `blueprints/react_app.py` when available. React routes are registered before the REST/UI blueprints at `app.py:236`.
-- API surface documented here: 57 RESTX `/api/v1` endpoints, 459 Flask blueprint routes, and 1 app-level route. Total documented HTTP endpoints: 517.
+- API surface documented here: 57 RESTX `/api/v1` endpoints, 442 Flask blueprint routes, and 1 app-level route. Total documented HTTP endpoints: 500.
 - Broker plugins: 36 broker plugin directories with `plugin.json`, matching `VALID_BROKERS` in `.sample.env:22`.
 - Primary data stores: main `openalgo.db`, traffic `logs.db`, latency `latency.db`, health `health.db`, sandbox `sandbox.db`, and Historify `historify.duckdb`, configured in `.sample.env:54` through `.sample.env:61`.
 - Security baseline: `APP_KEY` and `API_KEY_PEPPER` are required and placeholder-rotated, API keys are Argon2-hashed plus encrypted for retrieval, broker tokens are Fernet-encrypted, CSRF is enabled for session routes, and `/api/v1` is CSRF-exempt for external callers. Sources: `.sample.env:24`, `database/auth_db.py:36`, `database/auth_db.py:761`, `app.py:171`, `app.py:248`.
@@ -247,8 +247,6 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 
 - Chartink webhooks parse scan-name action keywords, validate strategy state and intraday windows, map symbols, then queue `/api/v1/placeorder` or `/api/v1/placesmartorder`. Source: `blueprints/chartink.py:785` through `blueprints/chartink.py:950`.
 - Chartink smart-order queue is processed one per second, regular queue up to ten per second. Source: `blueprints/chartink.py:67` through `blueprints/chartink.py:176`.
-- Strategy webhooks validate strategy mode, trading hours, symbol mappings, API key presence, and queue order payloads. Source: `blueprints/strategy.py:869` through `blueprints/strategy.py:1033`.
-- Strategy order queues use the same one smart order per second and ten regular orders per second pattern. Source: `blueprints/strategy.py:87` through `blueprints/strategy.py:209`.
 - Flow CRUD, activation, webhook, import/export, and monitor routes live under `/flow`. Source: `blueprints/flow.py:31` through `blueprints/flow.py:693`.
 - Flow stores workflow graph JSON, webhook token, webhook secret, webhook auth type, active flag, scheduler job ID, encrypted API key, and executions. Source: `database/flow_db.py:78` through `database/flow_db.py:120`.
 - Flow API keys are encrypted at rest and decrypted for webhook execution. Source: `database/flow_db.py:57` through `database/flow_db.py:75`.
@@ -270,7 +268,7 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 
 ## Flask Blueprint Route Inventory
 
-The following inventory is static source discovery of `@blueprint.route` decorators. Count: 459 routes.
+The following inventory is static source discovery of `@blueprint.route` decorators. Count: 442 routes.
 
 ```text
 blueprints/admin.py:112 GET /admin/api/stats api_stats
@@ -574,10 +572,6 @@ blueprints/react_app.py:294 GET /websocket/test/50 react_websocket_test_50
 blueprints/react_app.py:300 GET /sandbox react_sandbox
 blueprints/react_app.py:306 GET /sandbox/mypnl react_sandbox_mypnl
 blueprints/react_app.py:312 GET /analyzer react_analyzer
-blueprints/react_app.py:324 GET /strategy react_strategy_index
-blueprints/react_app.py:329 GET /strategy/new react_strategy_new
-blueprints/react_app.py:334 GET /strategy/<int:strategy_id> react_strategy_view
-blueprints/react_app.py:339 GET /strategy/<int:strategy_id>/configure react_strategy_configure
 blueprints/react_app.py:346 GET /python react_python_index
 blueprints/react_app.py:351 GET /python/new react_python_new
 blueprints/react_app.py:356 GET /python/<strategy_id>/edit react_python_edit
@@ -664,19 +658,6 @@ blueprints/settings.py:17 GET /settings/analyze-mode get_mode
 blueprints/settings.py:28 POST /settings/analyze-mode/<int:mode> set_mode
 blueprints/straddle_chart.py:23 POST /straddle/api/straddle-data straddle_data
 blueprints/straddle_chart.py:72 GET /straddle/api/intervals straddle_intervals
-blueprints/strategy.py:334 GET /strategy index
-blueprints/strategy.py:357 GET,POST /strategy/new new_strategy
-blueprints/strategy.py:443 GET /strategy/<int:strategy_id> view_strategy
-blueprints/strategy.py:465 POST /strategy/toggle/<int:strategy_id> toggle_strategy_route
-blueprints/strategy.py:497 POST /strategy/<int:strategy_id>/delete delete_strategy_route
-blueprints/strategy.py:530 GET,POST /strategy/<int:strategy_id>/configure configure_symbols
-blueprints/strategy.py:649 POST /strategy/<int:strategy_id>/symbol/<int:mapping_id>/delete delete_symbol
-blueprints/strategy.py:671 GET /strategy/search search_symbols
-blueprints/strategy.py:697 GET /strategy/api/strategies api_get_strategies
-blueprints/strategy.py:729 GET /strategy/api/strategy/<int:strategy_id> api_get_strategy
-blueprints/strategy.py:778 POST /strategy/api/strategy api_create_strategy
-blueprints/strategy.py:845 POST /strategy/api/strategy/<int:strategy_id>/toggle api_toggle_strategy
-blueprints/strategy.py:871 POST /strategy/webhook/<webhook_id> webhook
 blueprints/strategy_chart.py:33 POST /strategybuilder/api/strategy-chart strategy_chart_data
 blueprints/strategy_chart.py:92 POST /strategybuilder/api/multi-strike-oi multi_strike_oi_data
 blueprints/strategy_chart.py:150 GET /strategybuilder/api/intervals strategy_chart_intervals

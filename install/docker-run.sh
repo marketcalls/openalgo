@@ -545,6 +545,7 @@ do_migrate() {
         log_ok "Migrations completed successfully."
     else
         log_warn "Some migrations may have had issues. Check the output above."
+        return 1
     fi
 }
 

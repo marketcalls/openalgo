@@ -69,6 +69,28 @@ def get_csp_config():
     if child_src:
         csp_config["child-src"] = child_src
 
+    # Worker source directive.
+    #
+    # Stated rather than left to the fallback chain, which is worker-src, then
+    # child-src, then script-src. Without this a worker is governed by
+    # script-src, which carries a CDN it has no use for; naming it keeps a
+    # worker to this origin alone, which is tighter than what it inherited.
+    #
+    # 'self' and nothing else. The worker this application loads is a file the
+    # build emits and the server serves, so a blob or data URL would be a
+    # loosening with nothing asking for it: neither was reachable before this
+    # directive existed either, since the chain landed on script-src, which
+    # carries no blob.
+    #
+    # The charting terminal loads one: a backtest over a hundred thousand bars
+    # takes most of a second to fold, and doing that on the page freezes the
+    # live chart and the live price along with it. A deployment that sets this
+    # to 'none' does not break the backtest, which falls back to running on the
+    # page, but every long run stalls the terminal while it does.
+    worker_src = os.getenv("CSP_WORKER_SRC", "'self'")
+    if worker_src:
+        csp_config["worker-src"] = worker_src
+
     # Form action directive
     form_action = os.getenv("CSP_FORM_ACTION", "'self'")
     if form_action:
@@ -121,6 +143,24 @@ def build_csp_header(csp_config):
     return "; ".join(directives)
 
 
+def _voice_surface_enabled():
+    """Whether the /agent voice surface is on, for the Permissions-Policy header.
+
+    Imported lazily and guarded: this runs on every response, and a security
+    header must not depend on the agent module being importable. Anything that
+    goes wrong reports False, which leaves the microphone closed.
+
+    Returns:
+        bool: True when the operator has enabled voice.
+    """
+    try:
+        from services.agent.settings import voice_enabled
+
+        return voice_enabled()
+    except Exception:
+        return False
+
+
 def get_security_headers():
     """
     Get additional security headers configuration from environment variables.
@@ -142,10 +182,25 @@ def get_security_headers():
         headers["Referrer-Policy"] = referrer_policy
 
     # Permissions Policy
-    permissions_policy = os.getenv(
-        "PERMISSIONS_POLICY",
-        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(), web-share=()",
-    )
+    #
+    # `microphone=()` disables the microphone for the whole origin, and it wins
+    # over every browser and operating-system permission: getUserMedia fails
+    # with NotAllowedError and the browser stores nothing, so the page looks as
+    # though it was refused by a setting the operator cannot find. That is the
+    # correct default and it stays the default. The one directive is relaxed to
+    # `self` only while the /agent voice surface is switched on, because a
+    # capability advertised to pages that have no use for it is a capability
+    # granted for nothing. Turning voice off closes it on the next response.
+    #
+    # An operator who sets PERMISSIONS_POLICY explicitly owns the whole string,
+    # and nothing here rewrites it.
+    permissions_policy = os.getenv("PERMISSIONS_POLICY")
+    if permissions_policy is None:
+        microphone = "microphone=(self)" if _voice_surface_enabled() else "microphone=()"
+        permissions_policy = (
+            f"camera=(), {microphone}, geolocation=(), payment=(), usb=(), "
+            "screen-wake-lock=(), web-share=()"
+        )
     if permissions_policy:
         headers["Permissions-Policy"] = permissions_policy
 

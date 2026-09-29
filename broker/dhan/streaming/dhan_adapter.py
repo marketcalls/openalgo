@@ -518,8 +518,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             # Drop any pending queued subscribes for this instrument so a
             # quick subscribe -> unsubscribe before the batch timer fires
-            # does not leave a ghost upstream subscription on Dhan
-            # (Dhan has no real unsubscribe — once SUBSCRIBE is sent, it sticks).
+            # does not send a subscribe we would immediately have to cancel.
+            # Dhan does support unsubscribe (codes 16/18/22/24 - see
+            # DhanWebSocket.REQUEST_CODES), so this is an optimisation rather
+            # than the only defence it used to be.
             self.subscription_queue = [
                 item for item in self.subscription_queue
                 if not (

@@ -160,7 +160,12 @@ def process_kotak_nse_csv(path):
     df.loc[df["pGroup"].isin(["EQ", "BE"]), "instrumenttype"] = "EQ"
     df.loc[df["pISIN"].isna(), "exchange"] = "NSE_INDEX"
     df.loc[df["pGroup"].isin(["EQ", "BE"]), "exchange"] = "NSE"
-    df.loc[df["pISIN"].isna(), "instrumenttype"] = "INDEX"
+    # An index carries no ISIN, which is how it is told apart here. It is typed
+    # EQ, not INDEX: instrumenttype is the platform's own four-value vocabulary
+    # -- EQ, FUT, CE, PE -- taken from Kite, which likewise types its INDICES
+    # segment EQ. The exchange column (NSE_INDEX) is what says this is an index,
+    # so an INDEX type here would be a fifth value no consumer knows (QA MC-04).
+    df.loc[df["pISIN"].isna(), "instrumenttype"] = "EQ"
     df.loc[df["pISIN"].isna(), "pGroup"] = ""
 
     filtereddataframe["instrumenttype"] = df["instrumenttype"]
@@ -210,7 +215,8 @@ def process_kotak_bse_csv(path):
 
     df["exchange"] = "BSE"
     df.loc[df["pISIN"].isna(), "exchange"] = "BSE_INDEX"
-    df.loc[df["pISIN"].isna(), "instrumenttype"] = "INDEX"
+    # EQ rather than INDEX, for the reason given in the NSE branch above.
+    df.loc[df["pISIN"].isna(), "instrumenttype"] = "EQ"
     df.loc[df["pISIN"].isna(), "pGroup"] = ""
 
     filtereddataframe["instrumenttype"] = df["instrumenttype"]
@@ -229,6 +235,35 @@ def process_kotak_bse_csv(path):
     token_df = df_filtered.drop(columns=columns_to_remove)
 
     return token_df
+
+
+def _demote_non_expiring(tokensymbols, raw_expiry):
+    """Strip the expiry, and the derivative type, from rows that never expire.
+
+    Kotak marks a row that carries no expiry with a non-positive lExpiryDate,
+    and the segments do not agree on which one: MCX uses 0 and CDS uses -1.
+    Converted as a timestamp those became dates, so the table advertised 40 MCX
+    rows expiring 01-JAN-70 and 14 CDS rows expiring 31-DEC-79, and
+    combine_details baked each date into the symbol: GOLD01JAN70,
+    EURINR31DEC79FUT (QA MC-05).
+
+    The type goes with the expiry. Both sets are reference rows rather than
+    contracts -- the MCX spot and index rows whose brsymbol ends COM, and the
+    CDS currency pairs USDINR, EURINR, JPYINR and a DUMMY1 test row -- but
+    pOptionType reads XX on the CDS ones, which the XX-to-FUT rewrite turns
+    into a future. Emptying only the expiry would leave a future with no expiry
+    date, which is a worse row than the one it replaced and fails MC-05 from
+    the other side. A thing with no expiry is not a future.
+
+    Read from the raw column, before the NFO and CDS branches add their
+    315513000 epoch offset, so one rule recognises the sentinel in every
+    segment rather than a different rendered date in each.
+    """
+    no_expiry = pd.to_numeric(raw_expiry, errors="coerce").fillna(0) <= 0
+    if no_expiry.any():
+        tokensymbols.loc[no_expiry, "expiry"] = ""
+        tokensymbols.loc[no_expiry, "instrumenttype"] = ""
+    return tokensymbols
 
 
 def combine_details(row):
@@ -255,6 +290,7 @@ def process_kotak_nfo_csv(path):
     tokensymbols = pd.DataFrame()
     tokensymbols["token"] = df["pSymbol"]
     tokensymbols["name"] = df["pSymbolName"]
+    raw_expiry = df["lExpiryDate"].copy()
     df["lExpiryDate"] = df["lExpiryDate"] + 315513000
 
     # Convert 'Expiry date' from Unix timestamp to datetime
@@ -273,7 +309,9 @@ def process_kotak_nfo_csv(path):
     tokensymbols["exchange"] = "NFO"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
+
+    _demote_non_expiring(tokensymbols, raw_expiry)
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
@@ -289,7 +327,7 @@ def get_kotak_master_filepaths():
     auth_token = get_auth_token(login_username)
 
     # Updated for Neo API v2: trading_token:::trading_sid:::base_url:::access_token
-    trading_token, trading_sid, base_url, access_token = auth_token.split(":::")
+    trading_token, trading_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Use the baseUrl from auth token first, then try alternatives
     # Sometimes scripmaster API is on different servers
@@ -392,17 +430,35 @@ def get_kotak_master_filepaths():
         "NSE_CM": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed-v1/nse_cm-v1.csv",
     }
 
-    # Test accessibility of fallback URLs using httpx
+    # Test accessibility of fallback URLs using httpx.
+    #
+    # A plain HEAD request here reliably hits an infinite redirect loop on
+    # Kotak's CDN (lapi.kotaksecurities.com) -- verified directly: httpx.head()
+    # on these URLs raises "Exceeded maximum allowed redirects" every time,
+    # while httpx.get() on the identical URL returns 200 immediately with the
+    # full CSV, no redirects at all. Because every accessibility check failed,
+    # accessible_urls stayed empty and the caller (download_csv_kotak_data)
+    # raised "Scripmaster API failed" even though the files were fully
+    # downloadable the whole time. Use a ranged GET (bytes=0-0) instead of
+    # HEAD -- avoids the redirect loop. Kotak's CDN ignores the Range header
+    # and answers with the full multi-MB body regardless, so stream the
+    # request and close it after reading only the status line/headers --
+    # otherwise a plain client.get() call buffers the entire CSV into memory
+    # just for this check, then the real download in download_csv_kotak_data
+    # pulls the same bytes again.
     accessible_urls = {}
     for key, url in fallback_urls.items():
         try:
             logger.info(f"Testing direct URL: {url}")
-            response = client.head(url, timeout=10, follow_redirects=True)
-            if response.status_code == 200:
+            with client.stream(
+                "GET", url, timeout=10, follow_redirects=True, headers={"Range": "bytes=0-0"}
+            ) as response:
+                status_code = response.status_code
+            if status_code in (200, 206):
                 accessible_urls[key] = url
                 logger.info(f"Direct URL accessible: {key}")
             else:
-                logger.warning(f"Direct URL returned {response.status_code}: {key}")
+                logger.warning(f"Direct URL returned {status_code}: {key}")
         except httpx.HTTPError as e:
             logger.warning(f"Direct URL HTTP error: {key} - {e}")
         except Exception as e:
@@ -429,6 +485,7 @@ def process_kotak_cds_csv(path):
     tokensymbols = pd.DataFrame()
     tokensymbols["token"] = df["pSymbol"]
     tokensymbols["name"] = df["pSymbolName"]
+    raw_expiry = df["lExpiryDate"].copy()
     df["lExpiryDate"] = df["lExpiryDate"] + 315513000
 
     # Convert 'Expiry date' from Unix timestamp to datetime
@@ -447,7 +504,9 @@ def process_kotak_cds_csv(path):
     tokensymbols["exchange"] = "CDS"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
+
+    _demote_non_expiring(tokensymbols, raw_expiry)
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
@@ -468,7 +527,7 @@ def process_kotak_mcx_csv(path):
     tokensymbols = pd.DataFrame()
     tokensymbols["token"] = df["pSymbol"]
     tokensymbols["name"] = df["pSymbolName"]
-    df["lExpiryDate"] = df["lExpiryDate"]
+    raw_expiry = df["lExpiryDate"].copy()
 
     # Convert 'Expiry date' from Unix timestamp to datetime
     tokensymbols["expiry"] = pd.to_datetime(df["lExpiryDate"], unit="s")
@@ -486,7 +545,14 @@ def process_kotak_mcx_csv(path):
     tokensymbols["exchange"] = "MCX"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    # Stripped because Kotak pads pOptionType out to two characters and leaves it
+    # blank on the rows that are neither a future nor an option: the MCX spot and
+    # index rows (GOLDCOM, MCXCOPRDEX and the like, all carrying epoch-zero
+    # expiries). Untrimmed, that "  " lands in the table as a fifth instrument
+    # type nothing recognises, where "" already means unclassified (QA MC-04).
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
+
+    _demote_non_expiring(tokensymbols, raw_expiry)
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)
@@ -507,7 +573,7 @@ def process_kotak_bfo_csv(path):
     tokensymbols = pd.DataFrame()
     tokensymbols["token"] = df["pSymbol"]
     tokensymbols["name"] = df["pSymbolName"]
-    df["lExpiryDate"] = df["lExpiryDate"]
+    raw_expiry = df["lExpiryDate"].copy()
 
     # Convert 'Expiry date' from Unix timestamp to datetime
     tokensymbols["expiry"] = pd.to_datetime(df["lExpiryDate"], unit="s")
@@ -525,7 +591,9 @@ def process_kotak_bfo_csv(path):
     tokensymbols["exchange"] = "BFO"
 
     # df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
-    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT")
+    tokensymbols["instrumenttype"] = df["pOptionType"].str.replace("XX", "FUT").str.strip()
+
+    _demote_non_expiring(tokensymbols, raw_expiry)
 
     # pSymbolName  df['expiry']
     tokensymbols["symbol"] = tokensymbols.apply(combine_details, axis=1)

@@ -947,82 +947,107 @@ export default function Positions() {
 
                         {/* Position Rows */}
                         {!isCollapsed &&
-                          groupPositions.map((position, index) => (
-                            <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
-                              <TableCell className="w-[140px] font-medium">
-                                {position.symbol}
-                              </TableCell>
-                              <TableCell className="w-[80px]">
-                                <Badge
-                                  variant="outline"
-                                  className={EXCHANGE_COLORS[position.exchange] || ''}
-                                >
-                                  {position.exchange}
-                                </Badge>
-                              </TableCell>
-                              {!isCrypto && (
+                          groupPositions.map((position, index) => {
+                            // A broker keeps reporting a position it has
+                            // squared off, with quantity 0 and its realised
+                            // P&L. Those rows stay - the figure is the point -
+                            // but there is nothing left to close on them.
+                            //
+                            // Coerced, not compared directly: the quantity is
+                            // typed as a number but does not always arrive as
+                            // one. Zerodha's position mapping defaults it to
+                            // the string "0", and a strict `!== 0` reads that
+                            // as an open position, which is the exact row this
+                            // guard exists to catch. calculatePnlPercent above
+                            // coerces for the same reason.
+                            const quantity = Number(position.quantity) || 0
+                            const isOpen = quantity !== 0
+
+                            return (
+                              <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
+                                <TableCell className="w-[140px] font-medium">
+                                  {position.symbol}
+                                </TableCell>
                                 <TableCell className="w-[80px]">
                                   <Badge
                                     variant="outline"
-                                    className={PRODUCT_COLORS[position.product] || ''}
+                                    className={EXCHANGE_COLORS[position.exchange] || ''}
                                   >
-                                    {position.product}
+                                    {position.exchange}
                                   </Badge>
                                 </TableCell>
-                              )}
-                              <TableCell
-                                className={cn(
-                                  'w-[80px] text-right font-medium',
-                                  position.quantity > 0 ? 'text-green-600' : 'text-red-600'
+                                {!isCrypto && (
+                                  <TableCell className="w-[80px]">
+                                    <Badge
+                                      variant="outline"
+                                      className={PRODUCT_COLORS[position.product] || ''}
+                                    >
+                                      {position.product}
+                                    </Badge>
+                                  </TableCell>
                                 )}
-                              >
-                                {position.quantity}
-                              </TableCell>
-                              <TableCell className="w-[120px] text-right font-mono">
-                                {formatCurrency(position.average_price)}
-                              </TableCell>
-                              <TableCell className="w-[120px] text-right font-mono">
-                                {position.ltp !== undefined ? formatCurrency(position.ltp) : '-'}
-                              </TableCell>
-                              <TableCell
-                                className={cn(
-                                  'w-[120px] text-right font-medium',
-                                  isProfit(position.pnl) ? 'text-green-600' : 'text-red-600'
-                                )}
-                              >
-                                <div className="flex items-center justify-end gap-1">
-                                  {isProfit(position.pnl) ? (
-                                    <TrendingUp className="h-4 w-4" />
-                                  ) : (
-                                    <TrendingDown className="h-4 w-4" />
+                                <TableCell
+                                  className={cn(
+                                    'w-[80px] text-right font-medium',
+                                    // A squared-off position is neither long nor
+                                    // short. Colouring its 0 red read as a short.
+                                    !isOpen
+                                      ? 'text-muted-foreground'
+                                      : quantity > 0
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
                                   )}
-                                  {formatCurrency(position.pnl)}
-                                </div>
-                              </TableCell>
-                              <TableCell
-                                className={cn(
-                                  'w-[100px] text-right',
-                                  isProfit(calculatePnlPercent(position))
-                                    ? 'text-green-600'
-                                    : 'text-red-600'
-                                )}
-                              >
-                                {calculatePnlPercent(position) >= 0 ? '+' : ''}
-                                {calculatePnlPercent(position).toFixed(2)}%
-                              </TableCell>
-                              <TableCell className="w-[60px] text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={() => handleClosePosition(position)}
-                                  aria-label={`Close ${position.symbol} position`}
                                 >
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                                  {position.quantity}
+                                </TableCell>
+                                <TableCell className="w-[120px] text-right font-mono">
+                                  {formatCurrency(position.average_price)}
+                                </TableCell>
+                                <TableCell className="w-[120px] text-right font-mono">
+                                  {position.ltp !== undefined ? formatCurrency(position.ltp) : '-'}
+                                </TableCell>
+                                <TableCell
+                                  className={cn(
+                                    'w-[120px] text-right font-medium',
+                                    isProfit(position.pnl) ? 'text-green-600' : 'text-red-600'
+                                  )}
+                                >
+                                  <div className="flex items-center justify-end gap-1">
+                                    {isProfit(position.pnl) ? (
+                                      <TrendingUp className="h-4 w-4" />
+                                    ) : (
+                                      <TrendingDown className="h-4 w-4" />
+                                    )}
+                                    {formatCurrency(position.pnl)}
+                                  </div>
+                                </TableCell>
+                                <TableCell
+                                  className={cn(
+                                    'w-[100px] text-right',
+                                    isProfit(calculatePnlPercent(position))
+                                      ? 'text-green-600'
+                                      : 'text-red-600'
+                                  )}
+                                >
+                                  {calculatePnlPercent(position) >= 0 ? '+' : ''}
+                                  {calculatePnlPercent(position).toFixed(2)}%
+                                </TableCell>
+                                <TableCell className="w-[60px] text-right">
+                                  {isOpen && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={() => handleClosePosition(position)}
+                                      aria-label={`Close ${position.symbol} position`}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
                       </React.Fragment>
                     )
                   })}

@@ -46,6 +46,15 @@ export interface StrategyChartRequest {
   legs: StrategyChartLegInput[]
   interval: string
   days: number
+  /**
+   * Explicit IST window, `YYYY-MM-DD`, for a chart paging older history.
+   *
+   * When present the backend serves exactly this range and `days` is ignored.
+   * Counting back from today cannot express "the fortnight before what I
+   * already have", which is what scrolling left asks for.
+   */
+  start_date?: string
+  end_date?: string
 }
 
 export interface IntervalsData {

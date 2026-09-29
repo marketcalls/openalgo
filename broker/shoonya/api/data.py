@@ -88,6 +88,45 @@ def _quote_attempts() -> int:
 QUOTE_ATTEMPTS = _quote_attempts()
 
 
+# Shoonya reports every failure the same way - {"stat":"Not_Ok","emsg":"..."} -
+# so the emsg text is the only thing separating "your login is dead" from "this
+# scrip had no trades in that window". Matching is substring/lowercase because
+# the wording carries varying prefixes ("Session Expired : Invalid Session Key").
+SESSION_ERROR_MARKERS = (
+    "session expired",
+    "invalid session",
+    "session key",
+    "not logged in",
+    "invalid input : uid",
+)
+
+NO_DATA_MARKERS = (
+    "no data",
+    "no data available",
+)
+
+
+def is_session_error(emsg) -> bool:
+    """True when the broker's error message means the login is no longer valid.
+
+    Session death is fatal for every subsequent request, so callers raise on it
+    rather than treating it as a transient per-request hiccup.
+    """
+    text = str(emsg or "").lower()
+    return any(marker in text for marker in SESSION_ERROR_MARKERS)
+
+
+def is_no_data_error(emsg) -> bool:
+    """True when the broker is saying the window is legitimately empty.
+
+    Not a failure: illiquid contracts, ranges before a scrip was listed and
+    holiday-only windows all answer this way, and an empty frame is the correct
+    result for them.
+    """
+    text = str(emsg or "").lower()
+    return any(marker in text for marker in NO_DATA_MARKERS)
+
+
 def quote_matches_request(response: dict, exch: str, token: str) -> bool:
     """Check that a GetQuotes reply describes the instrument that was asked for.
 
@@ -830,8 +869,11 @@ class BrokerData:
 
             response_candles = []
             chunk_start = start_ts
+            attempted_chunks = 0
+            failed_chunks = 0
             while chunk_start <= end_ts:
                 chunk_end = min(chunk_start + chunk_seconds, end_ts)
+                attempted_chunks += 1
                 if interval == "D":
                     payload = {
                         "sym": f"{exchange}:{eod_symbol}",
@@ -856,6 +898,7 @@ class BrokerData:
                     logger.error(
                         f"{endpoint} chunk request failed ({chunk_start}-{chunk_end}): {e}"
                     )
+                    failed_chunks += 1
                     chunk_start = chunk_end + 1
                     continue
 
@@ -865,10 +908,28 @@ class BrokerData:
                 # and crashed trying to json.loads("stat")).
                 if isinstance(chunk_response, dict):
                     emsg = chunk_response.get("emsg") or chunk_response.get("message") or "unknown"
+                    # A dead session fails every chunk identically, so tolerating
+                    # it per chunk drains the loop to zero candles and the API
+                    # layer reports {"status":"success","data":[]} - a fake gap
+                    # indistinguishable from a quiet window (#1944). Raise on it
+                    # the way get_quotes() does.
+                    if is_session_error(emsg):
+                        raise Exception(f"Error from Shoonya API: {emsg}")
+                    # "no data" is Shoonya answering, not failing: illiquid
+                    # contracts, pre-listing ranges and holiday-only windows all
+                    # come back this way. Count it as an empty success so the
+                    # all-chunks-failed guard below does not turn it into a 500.
+                    if is_no_data_error(emsg):
+                        logger.debug(
+                            f"{endpoint} reported no data for chunk {chunk_start}-{chunk_end}"
+                        )
+                        chunk_start = chunk_end + 1
+                        continue
                     logger.warning(
                         f"{endpoint} returned error for chunk {chunk_start}-{chunk_end}: "
                         f"stat={chunk_response.get('stat')} emsg={emsg}"
                     )
+                    failed_chunks += 1
                     chunk_start = chunk_end + 1
                     continue
 
@@ -877,11 +938,22 @@ class BrokerData:
                         f"Unexpected {endpoint} response type {type(chunk_response).__name__}: "
                         f"{str(chunk_response)[:200]}"
                     )
+                    failed_chunks += 1
                     chunk_start = chunk_end + 1
                     continue
 
                 response_candles.extend(chunk_response)
                 chunk_start = chunk_end + 1
+
+            # A single bad chunk inside a long range stays tolerated - the rest
+            # of the series is still worth returning. Every chunk failing is a
+            # different animal: there is no series at all, so surface it as an
+            # error instead of an empty success (#1944).
+            if attempted_chunks and failed_chunks == attempted_chunks:
+                raise Exception(
+                    f"All {attempted_chunks} {endpoint} chunk request(s) failed for "
+                    f"{symbol}/{oa_exchange} between {start_date_str} and {end_date_str}"
+                )
 
             if interval == "D" and not response_candles:
                 # An unknown index name resolves to an empty list rather than

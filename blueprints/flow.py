@@ -4,17 +4,25 @@ Flow Blueprint - Visual Workflow Automation
 Provides routes for managing and executing workflows
 """
 
+import json
 import logging
+import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, session
 
 from database.auth_db import get_api_key_for_tradingview
+from limiter import limiter
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
 
 flow_bp = Blueprint("flow", __name__, url_prefix="/flow")
+
+# The same variable and default the /chartink webhook reads, and the legacy
+# /strategy webhook read before it was removed. Flow inherits the budget an
+# operator has already configured rather than introducing a second knob.
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
 
 
 def get_current_api_key():
@@ -328,6 +336,7 @@ def update_workflow(workflow_id):
 def delete_workflow(workflow_id):
     """Delete a workflow"""
     from database.flow_db import delete_workflow, get_workflow
+    from services.flow_executor_service import release_workflow_subscriptions
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -345,6 +354,11 @@ def delete_workflow(workflow_id):
         scheduler.remove_workflow_job(workflow_id)
         get_flow_price_monitor().remove_alert(workflow_id)
         get_flow_order_update_monitor().remove_watch(workflow_id)
+
+    # Unconditionally, not only when active: a workflow deactivated and then
+    # deleted has already been released, and this is a no-op, but one that
+    # subscribed while active and was never deactivated still holds them.
+    release_workflow_subscriptions(workflow_id)
 
     if delete_workflow(workflow_id):
         return jsonify({"status": "success", "message": "Workflow deleted"})
@@ -573,6 +587,7 @@ def deactivate_workflow(workflow_id):
     """Deactivate a workflow"""
     from database.flow_db import deactivate_workflow as db_deactivate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_executor_service import release_workflow_subscriptions
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -604,6 +619,12 @@ def deactivate_workflow(workflow_id):
         # Remove order-update watch if any
         order_monitor = get_flow_order_update_monitor()
         order_monitor.remove_watch(workflow_id)
+
+        # Give back any market-data subscription the workflow opened. The
+        # websocket client is a process-wide singleton, so a subscription left
+        # behind is held for the life of the worker and counts against the
+        # per-broker symbol ceiling that /trading and the sandbox engine share.
+        release_workflow_subscriptions(workflow_id)
 
         # Update workflow as inactive
         if not db_deactivate(workflow_id):
@@ -711,8 +732,6 @@ def get_workflow_executions(workflow_id):
 
 def get_webhook_base_url():
     """Get the base URL for webhooks based on server configuration"""
-    import os
-
     # Use HOST_SERVER from .env or default to localhost
     host = os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
     # Ensure no trailing slash
@@ -885,10 +904,107 @@ def set_webhook_auth(workflow_id):
 # === Webhook Trigger Routes (CSRF Exempt) ===
 
 
+def _webhook_token_key():
+    """Rate-limit key naming the workflow instead of the caller."""
+    token = (request.view_args or {}).get("token") or ""
+    return f"flow-webhook:{token}"
+
+
+# Two limits at the same budget, because they bound different things and neither
+# subsumes the other.
+#
+# By caller address: the only key that can stop someone walking the token space.
+# Every guess carries a different token, so a token-keyed limit would score each
+# one against an empty bucket and never fire, while each miss still costs a
+# database lookup. This is also exactly what /chartink enforces, so Flow is not
+# weaker than the surface it replaces.
+#
+# By token: bounds what one leaked token can do to the broker account no matter
+# how many addresses replay it. The token is the credential here (the payload
+# secret is optional), so this is the limit that caps real order flow.
+#
+# Both are shared scopes so /webhook/<token> and /webhook/<token>/<symbol> draw
+# on one budget. Per-endpoint buckets would hand the same workflow twice the
+# configured rate simply for alternating between two spellings of itself.
+_webhook_caller_limit = limiter.shared_limit(WEBHOOK_RATE_LIMIT, scope="flow_webhook_caller")
+_webhook_workflow_limit = limiter.shared_limit(
+    WEBHOOK_RATE_LIMIT, scope="flow_webhook_workflow", key_func=_webhook_token_key
+)
+
+
+@flow_bp.errorhandler(429)
+def _rate_limited(error):
+    """Answer an over-limit caller with 429 JSON rather than the app-wide redirect.
+
+    app.py's 429 handler returns JSON only for paths under `/api/` and redirects
+    everything else to the React `/rate-limited` page. A browser reads that; an
+    automated caller does not. TradingView would follow the redirect, receive
+    HTML and 200, and record the alert as delivered, so a throttled workflow
+    would be indistinguishable from a working one and nothing would surface the
+    loss. A blueprint handler is consulted ahead of the application one, so this
+    corrects the answer for Flow without changing it for the rest of the product.
+    """
+    retry_after = 60
+    breached = getattr(error, "limit", None)
+    try:
+        retry_after = int(breached.limit.get_expiry())
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    response = jsonify(
+        {
+            "status": "error",
+            "message": "Rate limit exceeded. Please slow down your requests.",
+            "limit": getattr(error, "description", None),
+            "retry_after": retry_after,
+        }
+    )
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+def _read_webhook_payload():
+    """Read a webhook body whatever shape the sender used.
+
+    `request.get_json()` refuses anything not declared `application/json` and
+    Flask answers 415 before the handler runs. External platforms are exactly
+    the callers that cannot set a header: a TradingView alert left on its
+    default plain-text message never reached the workflow at all, and neither
+    did a form-encoded post.
+
+    Order matters. The body is parsed as JSON first regardless of what the
+    sender declared, because a sender that cannot set a Content-Type still
+    posts JSON far more often than not. Only a body that is not JSON falls
+    through to form fields, then to raw text under `message`.
+    """
+    raw = request.get_data(as_text=True) or ""
+    text = raw.strip()
+
+    if text:
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+        if parsed is not None:
+            # Valid JSON that is not an object: a list, a bare string or number.
+            # Keep the decoded value, and the raw text so a template can read
+            # either without the workflow having to know which arrived.
+            return {"message": text, "payload": parsed}
+
+    # Form-encoded (ChartInk and friends). `request.form` is empty for the
+    # content types handled above, so this cannot shadow a JSON body.
+    if request.form:
+        return dict(request.form)
+
+    return {"message": text} if text else {}
+
+
 def _execute_webhook(token, webhook_data=None, url_secret=None):
     """Internal function to execute webhook"""
     import hmac
-    import os
 
     from database.flow_db import get_workflow_by_webhook_token
     from services.flow_executor_service import execute_workflow
@@ -919,9 +1035,20 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
         else:
             # Secret expected in payload (default)
             provided_secret = data.pop("secret", "") or ""
+            # A secret carried in the payload requires a payload with fields,
+            # so plain text is not accepted on this path. It is not that the
+            # text could not be parsed: it is that an unauthenticated body must
+            # not reach the workflow, and text has nowhere to put the secret.
+            # Send JSON, or switch the workflow to URL auth.
             if not provided_secret:
                 return jsonify(
-                    {"error": "Missing webhook secret in payload. Add 'secret' field to JSON body"}
+                    {
+                        "error": (
+                            "Missing webhook secret in payload. Send JSON with a 'secret' "
+                            "field. Plain text cannot carry one: switch the webhook to URL "
+                            "auth to authenticate with ?secret=... instead."
+                        )
+                    }
                 ), 401
             if not hmac.compare_digest(provided_secret, workflow.webhook_secret):
                 return jsonify({"error": "Invalid webhook secret"}), 401
@@ -976,6 +1103,8 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
 
 
 @flow_bp.route("/webhook/<token>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_workflow_limit
 def trigger_webhook(token):
     """
     Trigger a workflow via webhook (CSRF exempt)
@@ -985,11 +1114,13 @@ def trigger_webhook(token):
     2. Payload field: {"secret": "your_secret", ...} (for TradingView, etc.)
     """
     url_secret = request.args.get("secret")
-    payload = request.get_json() or {}
+    payload = _read_webhook_payload()
     return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 
 
 @flow_bp.route("/webhook/<token>/<symbol>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_workflow_limit
 def trigger_webhook_with_symbol(token, symbol):
     """
     Trigger a workflow via webhook with symbol in URL path (CSRF exempt)
@@ -997,7 +1128,7 @@ def trigger_webhook_with_symbol(token, symbol):
     The symbol is automatically injected into the webhook data.
     """
     url_secret = request.args.get("secret")
-    payload = request.get_json() or {}
+    payload = _read_webhook_payload()
     payload["symbol"] = symbol
     return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 

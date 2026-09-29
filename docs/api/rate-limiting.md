@@ -60,10 +60,23 @@ OpenAlgo implements differentiated rate limiting for various types of operations
 | Per Minute | 100 per minute | External webhook endpoints from trading platforms |
 
 **Applies to:**
-- `/strategy/webhook/<webhook_id>` - Strategy webhook from external platforms
 - `/chartink/webhook/<webhook_id>` - ChartInk webhook from external platforms
+- `/flow/webhook/<token>` - Flow workflow webhook from external platforms
+- `/flow/webhook/<token>/<symbol>` - the same, with the symbol in the path
 
 These limits protect against external DoS attacks and webhook flooding.
+
+The Flow webhook is counted twice at this budget, once by caller address and
+once by workflow token, because the two bound different things. The address
+limit is what stops a caller walking the token space; the token limit is what
+caps the order flow a single leaked token can drive, however many addresses
+replay it. Both routes above share one budget per key, so alternating between
+them does not double the rate.
+
+Unlike the rest of the product, a throttled Flow webhook answers `429` with a
+JSON body rather than redirecting to the `/rate-limited` page. Automated
+callers such as TradingView do not read an HTML page, and would otherwise
+record a redirect as a delivered alert.
 
 ### Strategy Management APIs
 
@@ -72,9 +85,6 @@ These limits protect against external DoS attacks and webhook flooding.
 | Per Minute | 200 per minute | Strategy creation, modification, and deletion |
 
 **Applies to:**
-- `/strategy/new` - Create new strategies
-- `/strategy/<id>/delete` - Delete strategies
-- `/strategy/<id>/configure` - Configure strategy symbols
 - `/chartink/new` - Create new ChartInk strategies
 - `/chartink/<id>/delete` - Delete ChartInk strategies
 - `/chartink/<id>/configure` - Configure ChartInk strategy symbols

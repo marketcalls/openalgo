@@ -3,6 +3,8 @@
 import os
 from datetime import datetime
 
+import pytz
+
 from dotenv import load_dotenv
 from sqlalchemy import (
     DECIMAL,
@@ -23,6 +25,17 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
+
+#: The sandbox keeps every timestamp as naive IST wall-clock: the order book
+#: stamps datetime.now(IST) and SQLite drops the offset on the way in. GTT rows
+#: and the GTT manager's clock use the same helper so they compare and display
+#: consistently, whatever timezone the host machine runs in.
+IST = pytz.timezone("Asia/Kolkata")
+
+
+def ist_now() -> datetime:
+    return datetime.now(IST).replace(tzinfo=None)
+
 
 from utils.logging import get_logger
 
@@ -310,8 +323,11 @@ class SandboxGTT(Base):
     # Wall-clock expiry (Zerodha parity: default 365d from placement). Nullable.
     expires_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=func.now())
-    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    # IST wall-clock like every other sandbox stamp. func.now() is SQLite's
+    # CURRENT_TIMESTAMP, which is UTC, so these two columns were the only
+    # sandbox timestamps 5h30 behind the order book and the GTT's own expiry.
+    created_at = Column(DateTime, nullable=False, default=ist_now)
+    updated_at = Column(DateTime, nullable=False, default=ist_now, onupdate=ist_now)
 
     legs = relationship(
         "SandboxGTTLeg",
@@ -390,8 +406,11 @@ class SandboxGTTLeg(Base):
     # find legs stuck in ``triggering`` after a worker crash.
     claimed_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=func.now())
-    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    # IST wall-clock like every other sandbox stamp. func.now() is SQLite's
+    # CURRENT_TIMESTAMP, which is UTC, so these two columns were the only
+    # sandbox timestamps 5h30 behind the order book and the GTT's own expiry.
+    created_at = Column(DateTime, nullable=False, default=ist_now)
+    updated_at = Column(DateTime, nullable=False, default=ist_now, onupdate=ist_now)
 
     gtt = relationship("SandboxGTT", back_populates="legs")
 

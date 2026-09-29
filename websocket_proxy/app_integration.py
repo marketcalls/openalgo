@@ -298,10 +298,24 @@ def start_websocket_server():
                 except Exception as loop_err:
                     logger.warning(f"Error closing event loop: {loop_err}")
 
-    # Start the WebSocket server in a daemon thread
+    # Daemon, and the cleanup below is what makes that safe.
+    #
+    # This thread was non-daemon, with cleanup_websocket_server registered
+    # through atexit. Those two cannot both work: atexit runs only after the
+    # interpreter has finished joining every non-daemon thread, so the cleanup
+    # that releases this thread was queued behind the wait for this thread.
+    # Nothing in that pair ever completes on its own.
+    #
+    # What used to break the tie was signal_handler below, which cleaned up and
+    # called os._exit(0). utils/shutdown.py registers its SIGINT handler later
+    # in app.py and replaced it, so Ctrl+C stopped reaching the cleanup and the
+    # dev server stopped exiting. utils.shutdown now stops the proxy itself,
+    # before the interpreter starts joining threads, and daemon=True is what
+    # keeps a cleanup that times out from wedging the exit anyway.
     _websocket_thread = _original_threading.Thread(
         target=run_websocket_server,
-        daemon=False,  # Changed to False so we can properly clean up
+        daemon=True,
+        name="websocket-proxy",
     )
     _websocket_thread.start()
 

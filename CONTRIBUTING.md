@@ -6,6 +6,8 @@ We're thrilled that you're interested in contributing to OpenAlgo! This guide wi
 
 Below you'll find everything you need to set up OpenAlgo on your computer and start contributing.
 
+Everyone taking part follows our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ---
 
 ## Our Mission

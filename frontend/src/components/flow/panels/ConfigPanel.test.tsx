@@ -178,3 +178,65 @@ describe('imported basket editing contract', () => {
     expect(textarea).not.toHaveAttribute('readonly')
   })
 })
+
+describe('the options node strike offset', () => {
+  beforeEach(() => useFlowWorkflowStore.getState().resetWorkflow())
+
+  function renderOptionsOrder(offset: string) {
+    useFlowWorkflowStore.setState({
+      nodes: [
+        {
+          id: 'options-order',
+          type: 'optionsOrder',
+          position: { x: 0, y: 0 },
+          data: {
+            underlying: 'NIFTY',
+            exchange: 'NSE_INDEX',
+            expiryType: 'current_week',
+            offset,
+            optionType: 'PE',
+            action: 'SELL',
+            quantity: 1,
+            priceType: 'MARKET',
+          },
+        },
+      ],
+      selectedNodeId: 'options-order',
+    })
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    })
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <ConfigPanel />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+
+    const trigger = screen.getByText('Strike Offset').parentElement?.querySelector('button')
+    if (!trigger) throw new Error('Strike Offset control was not rendered')
+    return trigger
+  }
+
+  it('shows a far offset the node already stores', () => {
+    /** This control listed six offsets - ATM, ITM1, ITM2, OTM1, OTM2, OTM3 -
+     * directly beneath its own hint promising ITM1-ITM50 and OTM1-OTM50. An
+     * imported OTM12 leg had nothing to render and the trigger came up empty. */
+    expect(renderOptionsOrder('OTM12').textContent).toContain('OTM12')
+  })
+
+  it('offers out to the same window the strike picker uses', () => {
+    /** Not the executor's full ITM50/OTM50: an offset further out than the
+     * chain endpoint returns names a contract the panel cannot show. A leg
+     * already storing one is kept by the test above. */
+    fireEvent.click(renderOptionsOrder('ATM'))
+    const offered = screen.getAllByRole('option').map((option) => option.textContent)
+
+    expect(offered).toContain('OTM12')
+    expect(offered).toContain('OTM25')
+    expect(offered).toContain('ITM25')
+    expect(offered).not.toContain('OTM26')
+  })
+})

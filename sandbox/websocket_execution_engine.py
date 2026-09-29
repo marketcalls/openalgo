@@ -23,6 +23,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.sandbox_db import SandboxOrders, db_session
 from services.market_data_service import get_market_data_service
 from services.websocket_service import subscribe_to_symbols, unsubscribe_from_symbols
+from utils import real_threading as _real_threading
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +39,15 @@ class WebSocketExecutionEngine:
         self.market_data_service = get_market_data_service()
         self._subscriber_id: str | None = None
         self._running = False
-        self._lock = threading.Lock()
+        # A REAL lock, not eventlet's green semaphore. _on_market_data()
+        # takes it on the websocket client's asyncio loop thread (a real OS
+        # thread) while notify_order_placed(), notify_position_opened() and
+        # the rest take it from greenlets on the request path. Contended
+        # across that boundary a green semaphore wedges the loop thread for
+        # good, which stops every tick this engine needs to trigger pending
+        # SL, LIMIT and GTT orders. Both sections it guards only copy out of
+        # a dict; the database work deliberately happens after the release.
+        self._lock = _real_threading.Lock()
 
         # Index of pending orders by symbol key (exchange:symbol)
         # Maps symbol_key -> list of order IDs

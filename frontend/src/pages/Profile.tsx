@@ -207,11 +207,6 @@ const ALERT_CATEGORIES_TRADING: {
     description: 'Position close/update operations and P&L notifications',
   },
   {
-    key: 'strategy',
-    label: 'Strategy Management',
-    description: 'Strategy creation, symbol configuration, and webhook operations',
-  },
-  {
     key: 'chartink',
     label: 'Chartink',
     description: 'Chartink strategy operations and scanner integrations',
@@ -1641,9 +1636,6 @@ export default function ProfilePage() {
                 <ul className="list-disc list-inside space-y-1 ml-2">
                   <li>
                     <strong>Positions:</strong> Position close/update notifications
-                  </li>
-                  <li>
-                    <strong>Strategy:</strong> Strategy CRUD, symbol configuration, webhooks
                   </li>
                   <li>
                     <strong>Chartink:</strong> Chartink scanner and strategy integrations

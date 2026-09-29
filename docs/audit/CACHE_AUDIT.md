@@ -27,7 +27,7 @@
 
 ## 1. Executive Summary
 
-OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primarily on `cachetools.TTLCache` with one custom singleton cache (`BrokerSymbolCache`) and several broker-specific streaming caches. There are **28+ distinct cache instances** spread across database modules, broker adapters, and utility services. No external cache service (Redis, Memcached) is used.
+OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primarily on `cachetools.TTLCache` with one custom singleton cache (`BrokerSymbolCache`) and several broker-specific streaming caches. There are **26+ distinct cache instances** spread across database modules, broker adapters, and utility services. No external cache service (Redis, Memcached) is used.
 
 ### Strengths
 - Well-structured TTL-based caching with appropriate expiry times
@@ -58,48 +58,46 @@ OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primar
 | 4 | `verified_api_key_cache` | `database/auth_db.py:123` | 1024 | 36000s (10 hr) | SHA256(api_key) → user_id |
 | 5 | `invalid_api_key_cache` | `database/auth_db.py:125` | 512 | 300s (5 min) | SHA256(bad_key) → True |
 | 6 | `_settings_cache` | `database/settings_db.py:19` | 10 | 3600s (1 hr) | analyze_mode, security settings |
-| 7 | `_strategy_webhook_cache` | `database/strategy_db.py:15` | 5000 | 300s (5 min) | webhook_id → Strategy |
-| 8 | `_user_strategies_cache` | `database/strategy_db.py:16` | 1000 | 600s (10 min) | user_id → [strategies] |
-| 9 | `_workflow_webhook_cache` | `database/flow_db.py:27` | 5000 | 300s (5 min) | webhook_token → Workflow |
-| 10 | `_workflow_cache` | `database/flow_db.py:28` | 1000 | 600s (10 min) | Workflow details |
-| 11 | `_telegram_user_cache` | `database/telegram_db.py:38` | 10000 | 1800s (30 min) | Telegram chat_id → user |
-| 12 | `_telegram_username_cache` | `database/telegram_db.py:39` | 10000 | 1800s (30 min) | Username → user |
-| 13 | `_user_preferences_cache` | `database/telegram_db.py:40` | 10000 | 1800s (30 min) | User preferences |
-| 14 | `_user_credentials_cache` | `database/telegram_db.py:41` | 10000 | 1800s (30 min) | User API credentials |
-| 15 | `_timings_cache` | `database/market_calendar_db.py:32` | 500 | 3600s (1 hr) | Market open/close times |
-| 16 | `_holidays_cache` | `database/market_calendar_db.py:33` | 50 | 3600s (1 hr) | Market holidays |
-| 17 | `username_cache` | `database/user_db.py:58` | 1024 | 30s | Username existence checks |
-| 18 | `token_cache` (DEAD) | `database/token_db.py:42` | 1024 | 3600s | **Unused** — dummy for backward compat |
+| 7 | `_workflow_webhook_cache` | `database/flow_db.py:27` | 5000 | 300s (5 min) | webhook_token → Workflow |
+| 8 | `_workflow_cache` | `database/flow_db.py:28` | 1000 | 600s (10 min) | Workflow details |
+| 9 | `_telegram_user_cache` | `database/telegram_db.py:38` | 10000 | 1800s (30 min) | Telegram chat_id → user |
+| 10 | `_telegram_username_cache` | `database/telegram_db.py:39` | 10000 | 1800s (30 min) | Username → user |
+| 11 | `_user_preferences_cache` | `database/telegram_db.py:40` | 10000 | 1800s (30 min) | User preferences |
+| 12 | `_user_credentials_cache` | `database/telegram_db.py:41` | 10000 | 1800s (30 min) | User API credentials |
+| 13 | `_timings_cache` | `database/market_calendar_db.py:32` | 500 | 3600s (1 hr) | Market open/close times |
+| 14 | `_holidays_cache` | `database/market_calendar_db.py:33` | 50 | 3600s (1 hr) | Market holidays |
+| 15 | `username_cache` | `database/user_db.py:58` | 1024 | 30s | Username existence checks |
+| 16 | `token_cache` (DEAD) | `database/token_db.py:42` | 1024 | 3600s | **Unused** — dummy for backward compat |
 
 ### 2.2 Custom Caches
 
 | # | Cache | File | Type | Eviction | Purpose |
 |---|-------|------|------|----------|---------|
-| 19 | `BrokerSymbolCache` | `database/token_db_enhanced.py:109` | Singleton dict-of-dicts | Session-based validity check | 100K+ symbols with multi-index O(1) lookups |
-| 20 | `_freeze_qty_cache` | `database/qty_freeze_db.py:42` | Plain dict | None (permanent) | F&O quantity freeze limits |
-| 21 | `last_message_time` | `websocket_proxy/server.py:76` | Plain dict | Periodic cleanup (5 min) | WebSocket message throttling (50ms) |
-| 22 | Rate limiter store | `limiter.py:7` | `memory://` (flask-limiter) | Moving window | Request rate limiting |
+| 17 | `BrokerSymbolCache` | `database/token_db_enhanced.py:109` | Singleton dict-of-dicts | Session-based validity check | 100K+ symbols with multi-index O(1) lookups |
+| 18 | `_freeze_qty_cache` | `database/qty_freeze_db.py:42` | Plain dict | None (permanent) | F&O quantity freeze limits |
+| 19 | `last_message_time` | `websocket_proxy/server.py:76` | Plain dict | Periodic cleanup (5 min) | WebSocket message throttling (50ms) |
+| 20 | Rate limiter store | `limiter.py:7` | `memory://` (flask-limiter) | Moving window | Request rate limiting |
 
 ### 2.3 Broker Streaming Adapter Caches
 
 | # | Cache | File | Type | Thread-Safe | Purpose |
 |---|-------|------|------|-------------|---------|
-| 23 | `MarketDataCache._cache` | `broker/definedge/streaming/definedge_adapter.py` | Dict with `threading.Lock` | **Yes** | Smart-merge OHLC data per token |
-| 24 | `_ltp_cache`, `_quote_cache`, `_depth_cache` | `broker/kotak/streaming/kotak_adapter.py` | Dicts with `threading.RLock` | **Yes** | Separate LTP/quote/depth caches |
-| 25 | `ohlcv_cache` | `broker/nubra/streaming/nubra_adapter.py` | Dict | No | OHLC candle data |
-| 26 | `MarketDataCache` variants | `broker/shoonya/`, `broker/flattrade/`, `broker/zebu/` | Dict with Lock | **Yes** | Smart-merge market data |
+| 21 | `MarketDataCache._cache` | `broker/definedge/streaming/definedge_adapter.py` | Dict with `threading.Lock` | **Yes** | Smart-merge OHLC data per token |
+| 22 | `_ltp_cache`, `_quote_cache`, `_depth_cache` | `broker/kotak/streaming/kotak_adapter.py` | Dicts with `threading.RLock` | **Yes** | Separate LTP/quote/depth caches |
+| 23 | `ohlcv_cache` | `broker/nubra/streaming/nubra_adapter.py` | Dict | No | OHLC candle data |
+| 24 | `MarketDataCache` variants | `broker/shoonya/`, `broker/flattrade/`, `broker/zebu/` | Dict with Lock | **Yes** | Smart-merge market data |
 
 ### 2.4 Health Monitor Cache
 
 | # | Cache | File | Type | Thread-Safe | Purpose |
 |---|-------|------|------|-------------|---------|
-| 27 | `_cached_metrics` | `utils/health_monitor.py` | Dict with `threading.Lock` | **Yes** | Sampled every 10s by background thread; instant access for `/health/status` |
+| 25 | `_cached_metrics` | `utils/health_monitor.py` | Dict with `threading.Lock` | **Yes** | Sampled every 10s by background thread; instant access for `/health/status` |
 
 ### 2.5 Flask Session Cache
 
 | # | Cache | Mechanism | TTL |
 |---|-------|-----------|-----|
-| 28 | Flask sessions | Server-side signed cookies | SESSION_EXPIRY_TIME (default 03:00 IST) |
+| 26 | Flask sessions | Server-side signed cookies | SESSION_EXPIRY_TIME (default 03:00 IST) |
 
 ---
 
@@ -113,7 +111,7 @@ OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primar
 ┌─────────────────────────────────────────────────────┐
 │                   Flask Process                      │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
-│  │  TTLCache ×17│  │BrokerSymbol  │  │ Rate Limiter│ │
+│  │  TTLCache ×15│  │BrokerSymbol  │  │ Rate Limiter│ │
 │  │  (cachetools)│  │Cache (custom)│  │  (memory://)│ │
 │  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘ │
 │         │                 │                 │        │
@@ -170,7 +168,7 @@ return result
 | Broker names | API key → broker string | ~200 bytes | **HIGH** — plaintext API key as cache key |
 | Symbol data | SymbolData dataclasses | ~500 bytes each × 100K+ | LOW — public instrument data |
 | Settings | Boolean/dict values | ~100 bytes | LOW |
-| Strategies | Strategy ORM objects | ~1 KB each | MEDIUM — trading configs |
+| Workflows | Workflow ORM objects | ~1 KB each | MEDIUM — trading configs |
 | Telegram users | User/credential objects | ~500 bytes each | **HIGH** — contains API credentials |
 | Market calendar | Timing dicts, holiday lists | ~200 bytes each | LOW |
 | Qty freeze | Symbol → integer | ~50 bytes each | LOW |
@@ -210,7 +208,7 @@ return result
 | Broker cache | **No** | Populated on first API call |
 | API key caches | **No** | Populated on first verification |
 | Settings cache | **No** | Populated on first access |
-| Strategy/Flow caches | **No** | Populated on first webhook |
+| Flow caches | **No** | Populated on first webhook |
 | Telegram caches | **No** | Populated on first bot message |
 | Rate limiter | **No** | **Risk**: Banned IPs/brute force counters reset |
 | Qty freeze | **Yes** | Loaded from DB on startup |
@@ -220,7 +218,7 @@ return result
 
 All caches except rate limiter and WebSocket throttle are backed by SQLite databases:
 
-- `db/openalgo.db` — Auth, settings, strategies, symbols, users
+- `db/openalgo.db` — Auth, settings, workflows, symbols, users
 - `db/logs.db` — Traffic logs (IP bans)
 - `db/sandbox.db` — Analyzer mode data
 - `db/latency.db` — Latency metrics
@@ -255,7 +253,7 @@ The `BrokerSymbolCache` and `_freeze_qty_cache` have **no eviction policy** — 
 |---------|---------------|-----------|
 | Login/token update | `auth_cache`, `feed_token_cache`, `broker_cache` (all entries) | `upsert_auth()` at `auth_db.py:238` |
 | API key regeneration | All auth caches + `verified_api_key_cache` + `invalid_api_key_cache` | `invalidate_user_cache()` at `auth_db.py:404` |
-| Logout | Auth, feed, symbol, settings, strategy, telegram caches | `revoke_user_tokens()` at `session.py:76` |
+| Logout | Auth, feed, symbol, settings, telegram caches | `revoke_user_tokens()` at `session.py:76` |
 | Session expiry | Same as logout | `check_session_validity()` decorator |
 | Settings change | `_settings_cache` (specific key) | `set_analyze_mode()`, `set_security_settings()` |
 | Cross-process | Auth/feed caches in other processes | ZeroMQ pub/sub via `cache_invalidation.py` |
@@ -272,7 +270,7 @@ The `BrokerSymbolCache` and `_freeze_qty_cache` have **no eviction policy** — 
 - `upsert_api_key()` calls `invalidate_user_cache()` clearing all auth caches
 - `set_analyze_mode()` deletes the specific cache key
 - `set_security_settings()` deletes the specific cache key
-- Strategy/flow CRUD operations should invalidate their respective caches
+- Flow CRUD operations should invalidate their respective caches
 
 ### B. Versioned Keys?
 
@@ -301,7 +299,7 @@ However, `cachetools.TTLCache` handles `KeyError` internally for expired items, 
 - Hit rate calculated as `hits / (hits + misses) × 100`
 - Available via `get_cache_stats()` and the `/health` endpoint
 
-**No hit ratio tracking for TTLCache instances.** The 17 TTLCache instances have no visibility into hit/miss rates.
+**No hit ratio tracking for TTLCache instances.** The 15 TTLCache instances have no visibility into hit/miss rates.
 
 ### B. Memory Growth Bounded?
 
@@ -325,7 +323,7 @@ However, `cachetools.TTLCache` handles `KeyError` internally for expired items, 
 - Corrupted internal state
 - Lost updates
 
-**Affected caches:** All 17 TTLCache instances in `auth_db.py`, `settings_db.py`, `strategy_db.py`, `flow_db.py`, `telegram_db.py`, `market_calendar_db.py`, `user_db.py`.
+**Affected caches:** All 15 TTLCache instances in `auth_db.py`, `settings_db.py`, `flow_db.py`, `telegram_db.py`, `market_calendar_db.py`, `user_db.py`.
 
 **Mitigating factors:**
 1. The default deployment uses Gunicorn with `-w 1` (single worker), reducing multi-process issues
@@ -505,7 +503,7 @@ If someone uses `-w N` (N > 1) despite documentation warnings:
 |---|------|----------|--------|------------|
 | L1 | **`_freeze_qty_cache` never expires** | `qty_freeze_db.py:42` | Stale freeze quantities if updated without restart | LOW (rarely changes) |
 | L2 | **Settings cache 1-hour TTL** | `settings_db.py:19` | Settings changes take up to 1 hour to propagate | LOW (settings rarely change) |
-| L3 | **Strategy/webhook cache 5-min TTL** | `strategy_db.py:15` | New strategies may not receive webhooks for up to 5 minutes | LOW |
+| L3 | **Workflow webhook cache 5-min TTL** | `flow_db.py:27` | New workflows may not receive webhooks for up to 5 minutes | LOW |
 | L4 | **Static Fernet encryption salt** | `auth_db.py:60` | `b"openalgo_static_salt"` — functional but reduces KDF diversity | LOW |
 
 ---
@@ -643,7 +641,7 @@ if len(self.last_message_time) > 10000:
 
 1. **Add hit/miss metrics to all TTLCache instances** — Wrap each cache with a thin metrics layer
 2. **Consider Redis for shared state** — If multi-worker deployment is ever needed, Redis would solve cache coherence, rate limiting persistence, and session storage
-3. **Add cache warm-up for webhook caches** — Pre-populate strategy/flow webhook caches on startup to avoid cold-start latency
+3. **Add cache warm-up for webhook caches** — Pre-populate the flow webhook caches on startup to avoid cold-start latency
 4. **Add memory budget configuration** — Allow operators to configure max memory for the symbol cache via environment variable
 
 ---
@@ -670,7 +668,6 @@ Logout/Expiry:
   revoke_user_tokens() → clear auth_cache, feed_token_cache
                        → clear_cache_on_logout() → BrokerSymbolCache.clear_cache()
                        → clear_settings_cache()
-                       → clear_strategy_cache()
                        → clear_telegram_cache()
                        → ZMQ publish_all_cache_invalidation()
                        → upsert_auth(revoke=True) → DB update

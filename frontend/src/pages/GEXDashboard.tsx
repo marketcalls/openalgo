@@ -39,10 +39,12 @@ function convertExpiryForAPI(expiry: string): string {
   return expiry.replace(/-/g, '').toUpperCase()
 }
 
-function formatNumber(num: number): string {
-  if (num >= 10000000) return `${(num / 10000000).toFixed(1)}Cr`
-  if (num >= 100000) return `${(num / 100000).toFixed(1)}L`
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`
+export function formatNumber(num: number): string {
+  const sign = num < 0 ? '-' : ''
+  const abs = Math.abs(num)
+  if (abs >= 10000000) return `${sign}${(abs / 10000000).toFixed(1)}Cr`
+  if (abs >= 100000) return `${sign}${(abs / 100000).toFixed(1)}L`
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}K`
   return num.toFixed(0)
 }
 
@@ -193,8 +195,8 @@ export default function GEXDashboard() {
           ? 'rgba(180,160,255,0.1)'
           : 'rgba(255,255,255,0.1)'
         : 'rgba(0,0,0,0.08)',
-      ceBar: '#ef4444',
-      peBar: '#22c55e',
+      ceBar: '#22c55e',
+      peBar: '#ef4444',
       positiveGex: '#3b82f6',
       negativeGex: '#f97316',
       atmLine: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',

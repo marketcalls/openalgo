@@ -6,7 +6,7 @@ Handles scheduled workflow execution using APScheduler (Flask/sync version)
 
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -21,9 +21,45 @@ from database.apscheduler_jobstore_db import (
     get_database_url,
 )
 from database.engine_factory import create_db_engine
+from utils.env_config import env_int
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+#: Seconds past a boundary that an aligned interval job first fires at.
+#:
+#: Not zero: firing exactly on the minute races the bar that is closing, and the
+#: feed may or may not have opened the next one, which are answers a whole candle
+#: apart. Kept small so a one-minute strategy still acts on the candle that just
+#: closed. Tunable because how long a feed takes to settle is a property of the
+#: broker and the instrument, not of this scheduler.
+INTERVAL_ALIGN_OFFSET_SECONDS = env_int("FLOW_INTERVAL_ALIGN_OFFSET", 2, minimum=0)
+
+
+def _next_aligned_start(value: int, unit: str) -> datetime:
+    """The next clock boundary for an interval schedule, plus a small offset.
+
+    A 5-minute job lands on :00, :05, :10 rather than five minutes after
+    whenever it was switched on. Sub-minute intervals are left alone: there is
+    no meaningful boundary to align a 10-second job to, and the offset would
+    cost more than the alignment is worth.
+    """
+    now = datetime.now()
+    if unit == "seconds":
+        return now + timedelta(seconds=1)
+
+    step = timedelta(hours=value) if unit == "hours" else timedelta(minutes=value)
+    anchor = now.replace(minute=0, second=0, microsecond=0)
+    if unit != "hours":
+        anchor = now.replace(second=0, microsecond=0)
+        # Back up to the last boundary this interval divides into the hour on.
+        anchor -= timedelta(minutes=anchor.minute % value)
+
+    start = anchor + timedelta(seconds=INTERVAL_ALIGN_OFFSET_SECONDS)
+    while start <= now:
+        start += step
+    return start
 
 
 class FlowScheduler:
@@ -143,14 +179,30 @@ class FlowScheduler:
             value = interval_value or 1
             unit = interval_unit or "minutes"
 
-            if unit == "seconds":
-                trigger = IntervalTrigger(seconds=value)
-            elif unit == "hours":
-                trigger = IntervalTrigger(hours=value)
-            else:
-                trigger = IntervalTrigger(minutes=value)
+            # Anchored to the clock, not to whenever the workflow was activated.
+            # APScheduler counts from `start_date`, which defaults to "now", so
+            # "every 1 minute" fired at 11:34:37, 11:35:37, ... and the phase
+            # changed on every reactivation and restart. Anything reading bars
+            # cares: a strategy comparing the last two closed candles needs the
+            # new one to exist before it looks, and an arbitrary phase decides
+            # that by luck.
+            #
+            # The offset puts the run just inside the new bar rather than on its
+            # boundary. Firing exactly on the minute races the bar that is
+            # closing: the feed may or may not have opened the next one yet, and
+            # the two answers differ by a whole candle.
+            start = _next_aligned_start(value, unit)
 
-            logger.info(f"Creating interval trigger: every {value} {unit}")
+            if unit == "seconds":
+                trigger = IntervalTrigger(seconds=value, start_date=start)
+            elif unit == "hours":
+                trigger = IntervalTrigger(hours=value, start_date=start)
+            else:
+                trigger = IntervalTrigger(minutes=value, start_date=start)
+
+            logger.info(
+                f"Creating interval trigger: every {value} {unit}, first run {start:%H:%M:%S}"
+            )
 
         elif schedule_type == "once" and execute_at:
             try:
