@@ -639,7 +639,14 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         try:
             # Initialize TBT client if needed
             if not self.tbt_client:
-                self.tbt_client = FyersTbtWebSocket(access_token=self.access_token, log_path="")
+                # The TBT socket and its URL lookup authenticate with
+                # "appId:accessToken", the same header the order socket and the
+                # official SDK send. A bare token is tolerated today but is not
+                # the documented format.
+                app_id = os.getenv("BROKER_API_KEY")
+                self.tbt_client = FyersTbtWebSocket(
+                    access_token=f"{app_id}:{self.access_token}", log_path=""
+                )
 
                 # Set up TBT callback
                 def tbt_depth_handler(ticker, depth_data):
