@@ -6,11 +6,15 @@ Uses database lookup for brsymbol mapping
 
 import json
 import logging
-from typing import Dict, List, Optional, Tuple
+import threading
+from pathlib import Path
 
 import requests
 
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+
+logger = get_logger("fyers_token_converter")
 
 # Import database functions
 try:
@@ -40,22 +44,45 @@ class FyersTokenConverter:
         "1020": "nse_com",  # NSE Commodity
     }
 
-    # Known index mappings (from official library)
-    INDEX_MAPPINGS = {
-        "NSE:NIFTY50-INDEX": "Nifty 50",
-        "NSE:NIFTYBANK-INDEX": "Nifty Bank",
-        "NSE:FINNIFTY-INDEX": "Nifty Fin Service",
-        "NSE:INDIAVIX-INDEX": "India VIX",
-        "NSE:NIFTY100-INDEX": "Nifty 100",
-        "NSE:NIFTYNEXT50-INDEX": "Nifty Next 50",
-        "NSE:NIFTYMIDCAP50-INDEX": "Nifty Midcap 50",
-        "NSE:NIFTYSMLCAP50-INDEX": "NIFTY SMLCAP 50",
-        "BSE:SENSEX-INDEX": "SENSEX",
-        "BSE:BANKEX-INDEX": "BANKEX",
-        "BSE:BSE500-INDEX": "BSE500",
-        "BSE:BSE100-INDEX": "BSE100",
-        "BSE:BSE200-INDEX": "BSE200",
-    }
+    # An index scrip token carries a name ("if|nse_cm|Nifty IT"), not a number.
+    # The feed answers to the index's display name, which is what the official
+    # SDK sends, and today also to the ticker stem ("NIFTYIT"); the latter is
+    # undocumented, so the display name is used wherever Fyers publishes one.
+    # fyers-apiv3 3.1.18 fetches the table on connect and falls back to a
+    # bundled copy, and so does this. The bundled file is a snapshot of that
+    # URL (121 entries on 2026-09-29); a symbol absent from it keeps the stem.
+    INDEX_MAPPING_URL = "https://public.fyers.in/sym_details/index_hsm_mapping.json"
+    INDEX_MAPPING_FILE = Path(__file__).with_name("index_hsm_mapping.json")
+    INDEX_MAPPINGS: dict[str, str] = json.loads(INDEX_MAPPING_FILE.read_text(encoding="utf-8"))
+
+    _index_mapping_cache: dict[str, str] | None = None
+    _index_mapping_lock = threading.Lock()
+
+    @classmethod
+    def load_index_mapping(cls) -> dict[str, str]:
+        """Return the index name table, fetched from Fyers once per process.
+
+        The live table is laid over the bundled copy so an index missing from
+        either still resolves. A failed fetch uses the bundled copy alone and
+        is retried by the next connect, as the SDK does.
+        """
+        if cls._index_mapping_cache is None:
+            with cls._index_mapping_lock:
+                if cls._index_mapping_cache is None:
+                    try:
+                        response = get_httpx_client().get(cls.INDEX_MAPPING_URL, timeout=10)
+                        response.raise_for_status()
+                        live = response.json()
+                        if not isinstance(live, dict) or not live:
+                            raise ValueError("index mapping is not a non-empty object")
+                        cls._index_mapping_cache = {**cls.INDEX_MAPPINGS, **live}
+                        logger.debug(f"Loaded {len(live)} index names from Fyers")
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not fetch the Fyers index name table, using the bundled copy: {e}"
+                        )
+                        return dict(cls.INDEX_MAPPINGS)
+        return cls._index_mapping_cache
 
     def __init__(self, access_token: str):
         """
@@ -71,6 +98,7 @@ class FyersTokenConverter:
 
         self.symbols_token_api = "https://api-t1.fyers.in/data/symbol-token"
         self.database_available = DATABASE_AVAILABLE
+        self.index_mappings = self.load_index_mapping()
 
     def get_brsymbols_from_database(
         self, symbol_exchange_pairs: list[tuple[str, str]]
@@ -292,8 +320,8 @@ class FyersTokenConverter:
             if is_index:
                 # For indices, always use index feed (if) regardless of data_type
                 # Depth requests for indices will be converted to quote data and then synthetic depth
-                if symbol in self.INDEX_MAPPINGS:
-                    token_name = self.INDEX_MAPPINGS[symbol]
+                if symbol in self.index_mappings:
+                    token_name = self.index_mappings[symbol]
                 else:
                     # Extract index name from symbol
                     token_name = symbol.split(":")[1].replace("-INDEX", "")
@@ -359,8 +387,8 @@ class FyersTokenConverter:
                 if symbol.endswith("-INDEX"):
                     # For indices, always use index feed (if) regardless of data_type
                     prefix = "if"
-                    if symbol in self.INDEX_MAPPINGS:
-                        token = self.INDEX_MAPPINGS[symbol]
+                    if symbol in self.index_mappings:
+                        token = self.index_mappings[symbol]
                     else:
                         token = symbol_name.replace("-INDEX", "")
 
