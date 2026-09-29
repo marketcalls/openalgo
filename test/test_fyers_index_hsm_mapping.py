@@ -1,21 +1,33 @@
-"""Index subscriptions on the Fyers HSM feed use the index's display name.
+"""Fyers index subscriptions take their HSM name from the master contract.
 
-The feed's scrip token for an index is "if|<segment>|<name>". The official
-SDK sends the display name ("if|nse_cm|Nifty IT"); FyersTokenConverter had a
-13-entry table of those and sent the ticker stem ("NIFTYIT") for every other
-index. The feed accepted the stem when measured on 2026-09-29, but that is
-undocumented, so the converter now sends what the SDK sends: Fyers publishes
-the full table (121 entries) and fyers-apiv3 3.1.18 fetches it on connect
-with a bundled fallback. A symbol in neither table still gets the stem.
+The HSM feed subscribes an index by name, "if|nse_cm|Nifty IT", and the
+official SDK sends the display name Fyers publishes at
+public.fyers.in/sym_details/index_hsm_mapping.json. No master-contract column
+carries that name (Symbol Details is "NIFTYIT-INDEX", Underlying symbol is
+"NIFTYIT"), so the download fetches the table and stores the display name in
+symtoken.name for index rows, keeping the ticker stem where Fyers publishes
+none; the feed accepted the stem too when measured on 2026-09-29. The token
+converter then reads the name through the symbol cache like every other
+field. The same download names the BSE indices that used to fall through the
+normalisation map unprefixed (ALLCAP, UTILS, BHRT22...).
 
-No network: the shared HTTP client is replaced with a stub.
+No network and no database: the HTTP client, the symbol lookups and the Fyers
+symbol-token API are all replaced. The CSV rows are real lines from Fyers'
+BSE_CM.csv of 2026-09-29.
 """
 
+import pandas as pd
 import pytest
 
+import broker.fyers.database.master_contract_db as mcd
 import broker.fyers.streaming.fyers_token_converter as ftc
 
-FYTOKEN = "101000000026008"  # NSE:NIFTYIT-INDEX; segment 1010 is nse_cm
+BSE_CSV = (
+    "121000000036,S&P BSE AllCap-INDEX,10,1,0.01,,0915-1530|1815-1915:,2018-02-05,,"
+    "BSE:ALLCAP-INDEX,12,10,36,ALLCAP,36,-1.0,XX,121000000036,None,0,0.0\n"
+    "1210000000500112,STATE BANK OF INDIA,0,1,0.05,INE062A01020,0915-1530|1815-1915:,"
+    "2026-09-24,,BSE:SBIN-A,12,10,500112,SBIN,500112,-1.0,XX,1210000000500112,None,0,0.0\n"
+)
 
 
 class FakeResponse:
@@ -30,85 +42,174 @@ class FakeResponse:
 
 
 class FakeClient:
-    """Stands in for utils.httpx_client.get_httpx_client()."""
-
     def __init__(self, payload=None, error=None):
         self.payload = payload
         self.error = error
-        self.calls = []
 
     def get(self, url, timeout=None):
-        self.calls.append((url, timeout))
         if self.error:
             raise self.error
         return FakeResponse(self.payload)
 
 
-@pytest.fixture(autouse=True)
-def fresh_cache():
-    ftc.FyersTokenConverter._index_mapping_cache = None
-    yield
-    ftc.FyersTokenConverter._index_mapping_cache = None
+# --- master contract download -----------------------------------------------
 
 
-def converter(monkeypatch, client):
-    monkeypatch.setattr(ftc, "get_httpx_client", lambda: client)
+def processed_frame():
+    """The shape a cash-segment processor hands back, before the database copy."""
+    return pd.DataFrame(
+        [
+            {"brsymbol": "NSE:NIFTYIT-INDEX", "exchange": "NSE_INDEX", "name": "NIFTYIT-INDEX"},
+            {
+                "brsymbol": "NSE:NIFTYALPHALOWVOL-INDEX",
+                "exchange": "NSE_INDEX",
+                "name": "NIFTYALPHALOWVOL-INDEX",
+            },
+            {"brsymbol": "NSE:SBIN-EQ", "exchange": "NSE", "name": "STATE BANK OF INDIA"},
+        ]
+    )
+
+
+def test_index_rows_take_the_published_display_name():
+    df = processed_frame()
+
+    mcd._apply_index_names(df, {"NSE:NIFTYIT-INDEX": "Nifty IT"})
+
+    assert list(df["name"]) == ["Nifty IT", "NIFTYALPHALOWVOL", "STATE BANK OF INDIA"]
+
+
+def test_without_a_table_index_rows_keep_the_ticker_stem():
+    df = processed_frame()
+
+    mcd._apply_index_names(df, {})
+
+    assert list(df["name"]) == ["NIFTYIT", "NIFTYALPHALOWVOL", "STATE BANK OF INDIA"]
+
+
+def test_a_frame_without_the_columns_is_left_alone():
+    df = pd.DataFrame([{"symbol": "SBIN", "exchange": "NSE", "token": "1"}])
+
+    mcd._apply_index_names(df, {"NSE:NIFTYIT-INDEX": "Nifty IT"})
+
+    assert list(df.columns) == ["symbol", "exchange", "token"]
+
+
+def test_fetch_returns_the_published_table(monkeypatch):
+    monkeypatch.setattr(
+        mcd, "get_httpx_client", lambda: FakeClient({"NSE:NIFTY50-INDEX": "Nifty 50"})
+    )
+
+    assert mcd.fetch_index_hsm_names() == {"NSE:NIFTY50-INDEX": "Nifty 50"}
+
+
+@pytest.mark.parametrize(
+    "client",
+    [FakeClient(error=RuntimeError("offline")), FakeClient(["not", "an", "object"])],
+    ids=["request fails", "not an object"],
+)
+def test_a_failed_fetch_yields_an_empty_table(monkeypatch, client):
+    monkeypatch.setattr(mcd, "get_httpx_client", lambda: client)
+
+    assert mcd.fetch_index_hsm_names() == {}
+
+
+def test_a_bse_index_outside_the_old_map_gets_a_prefixed_symbol_and_its_name(tmp_path):
+    (tmp_path / "BSE_CM.csv").write_text(BSE_CSV, encoding="utf-8")
+
+    df = mcd.process_fyers_bse_csv(str(tmp_path))
+    mcd._apply_index_names(df, {"BSE:ALLCAP-INDEX": "BSEALLCAP"})
+    rows = {r.brsymbol: r for r in df.itertuples()}
+
+    assert rows["BSE:ALLCAP-INDEX"].symbol == "BSEALLCAP"  # fell through as ALLCAP before
+    assert rows["BSE:ALLCAP-INDEX"].exchange == "BSE_INDEX"
+    assert rows["BSE:ALLCAP-INDEX"].name == "BSEALLCAP"
+    assert rows["BSE:SBIN-A"].symbol == "SBIN"
+    assert rows["BSE:SBIN-A"].name == "STATE BANK OF INDIA"
+
+
+def test_the_download_names_both_cash_segments_before_copying(monkeypatch):
+    table = {"NSE:NIFTY50-INDEX": "Nifty 50"}
+    applied = []
+    monkeypatch.setattr(mcd, "download_csv_fyers_data", lambda path: (True, [], None))
+    monkeypatch.setattr(mcd, "fetch_index_hsm_names", lambda: table)
+    monkeypatch.setattr(mcd, "delete_symtoken_table", lambda: None)
+    monkeypatch.setattr(mcd, "copy_from_dataframe", lambda df: None)
+    monkeypatch.setattr(mcd, "delete_fyers_temp_data", lambda path: None)
+    monkeypatch.setattr(mcd.socketio, "emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mcd, "_apply_index_names", lambda df, names: applied.append(names))
+    for name in (
+        "process_fyers_nse_csv",
+        "process_fyers_bse_csv",
+        "process_fyers_nfo_csv",
+        "process_fyers_bfo_csv",
+        "process_fyers_cds_json",
+        "process_fyers_mcx_json",
+    ):
+        monkeypatch.setattr(mcd, name, lambda path: pd.DataFrame())
+
+    mcd.master_contract_download()
+
+    assert applied == [table, table]
+
+
+# --- token converter ---------------------------------------------------------
+
+
+class Info:
+    def __init__(self, name):
+        self.name = name
+
+
+BRSYMBOLS = {"NIFTYIT": "NSE:NIFTYIT-INDEX", "BSEPSU": "BSE:PSU-INDEX"}
+FYTOKENS = {"NSE:NIFTYIT-INDEX": "101000000026008", "BSE:PSU-INDEX": "121000000010"}
+
+
+def fake_symbol_token_api(**kwargs):
+    asked = kwargs["json"]["symbols"]
+    return FakeResponse(
+        {"s": "ok", "validSymbol": {s: FYTOKENS[s] for s in asked}, "invalidSymbol": []}
+    )
+
+
+def converter(monkeypatch, names):
+    monkeypatch.setattr(ftc, "get_br_symbol", lambda symbol, exchange: BRSYMBOLS.get(symbol))
+    monkeypatch.setattr(
+        ftc,
+        "get_symbol_info",
+        lambda symbol, exchange: Info(names[symbol]) if symbol in names else None,
+    )
+    monkeypatch.setattr(ftc.requests, "post", fake_symbol_token_api)
     return ftc.FyersTokenConverter("appid:token")
 
 
-def test_an_index_outside_the_old_table_gets_its_display_name(monkeypatch):
-    conv = converter(monkeypatch, FakeClient({"NSE:NIFTYIT-INDEX": "Nifty IT"}))
+def test_an_index_named_in_the_master_contract_subscribes_by_that_name(monkeypatch):
+    conv = converter(monkeypatch, {"NIFTYIT": "Nifty IT", "BSEPSU": "BSEPSU"})
 
-    token = conv._convert_to_hsm_token("NSE:NIFTYIT-INDEX", FYTOKEN, "SymbolUpdate")
+    tokens, mapping, invalid = conv.convert_openalgo_symbols_to_hsm(
+        [
+            {"symbol": "NIFTYIT", "exchange": "NSE_INDEX"},
+            {"symbol": "BSEPSU", "exchange": "BSE_INDEX"},
+        ]
+    )
 
-    assert token == "if|nse_cm|Nifty IT"
-
-
-def test_a_name_missing_from_both_tables_is_still_guessed(monkeypatch):
-    # The residual behaviour, pinned so a change to it is deliberate.
-    conv = converter(monkeypatch, FakeClient({"NSE:NIFTYIT-INDEX": "Nifty IT"}))
-
-    token = conv._convert_to_hsm_token("NSE:MADEUP-INDEX", FYTOKEN, "SymbolUpdate")
-
-    assert token == "if|nse_cm|MADEUP"
+    assert sorted(tokens) == ["if|bse_cm|BSEPSU", "if|nse_cm|Nifty IT"]
+    assert mapping["if|nse_cm|Nifty IT"] == "NSE:NIFTYIT-INDEX"
+    assert invalid == []
 
 
-def test_a_failed_fetch_falls_back_to_the_bundled_copy(monkeypatch):
-    conv = converter(monkeypatch, FakeClient(error=RuntimeError("offline")))
+def test_an_index_with_no_stored_name_subscribes_by_the_ticker_stem(monkeypatch):
+    conv = converter(monkeypatch, {})
 
-    assert conv.index_mappings["NSE:NIFTY50-INDEX"] == "Nifty 50"
-    # The bundled copy is the full published table, not the old 13 names.
-    assert conv.index_mappings["NSE:NIFTYIT-INDEX"] == "Nifty IT"
-    assert len(conv.index_mappings) > 100
+    tokens, _, _ = conv.convert_openalgo_symbols_to_hsm(
+        [{"symbol": "NIFTYIT", "exchange": "NSE_INDEX"}]
+    )
 
-
-def test_the_table_is_fetched_once_per_process(monkeypatch):
-    client = FakeClient({"NSE:NIFTYIT-INDEX": "Nifty IT"})
-
-    converter(monkeypatch, client)
-    converter(monkeypatch, client)
-
-    assert client.calls == [(ftc.FyersTokenConverter.INDEX_MAPPING_URL, 10)]
+    assert tokens == ["if|nse_cm|NIFTYIT"]
 
 
-def test_a_failed_fetch_is_retried_by_the_next_connect(monkeypatch):
-    client = FakeClient(error=RuntimeError("offline"))
-
-    converter(monkeypatch, client)
-    converter(monkeypatch, client)
-
-    assert len(client.calls) == 2
-
-
-def test_the_live_table_wins_over_the_bundled_copy(monkeypatch):
-    conv = converter(monkeypatch, FakeClient({"NSE:NIFTY50-INDEX": "Nifty 50 renamed"}))
-
-    assert conv.index_mappings["NSE:NIFTY50-INDEX"] == "Nifty 50 renamed"
-    assert conv.index_mappings["NSE:NIFTYBANK-INDEX"] == "Nifty Bank"  # bundled entries kept
-
-
-def test_the_manual_fallback_uses_the_same_table(monkeypatch):
-    conv = converter(monkeypatch, FakeClient({"NSE:NIFTYIT-INDEX": "Nifty IT"}))
+def test_the_manual_fallback_uses_the_stored_name(monkeypatch):
+    conv = converter(monkeypatch, {"NIFTYIT": "Nifty IT"})
+    conv.convert_openalgo_symbols_to_hsm([{"symbol": "NIFTYIT", "exchange": "NSE_INDEX"}])
 
     tokens, mapping, invalid = conv._manual_conversion(["NSE:NIFTYIT-INDEX"], "SymbolUpdate")
 
