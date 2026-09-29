@@ -1,7 +1,16 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Watchlist } from '@/api/watchlist'
 import { render, screen, userEvent, waitFor } from '@/test/test-utils'
 import { WatchlistPanel } from './WatchlistPanel'
+
+vi.mock('@/api/tradefinder', () => ({
+  tradefinderApi: {
+    getMarketPulse: vi.fn().mockResolvedValue({ data: { intraday_boost: [] } }),
+    getSectorScope: vi.fn().mockResolvedValue({ data: { sectors: {} } }),
+  },
+}))
 
 /**
  * The API and the price hook are both mocked. What is under test here is the
@@ -70,8 +79,13 @@ const LIST: Watchlist = {
   ],
 }
 
+function wrap(node: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>)
+}
+
 function renderPanel(props: Partial<React.ComponentProps<typeof WatchlistPanel>> = {}) {
-  return render(
+  return wrap(
     <WatchlistPanel
       apiKey="k"
       onPick={props.onPick ?? (() => {})}

@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { TradingTerminal } from './terminal'
 
-// warnIfStarved is private and needs nothing from a live chart: give it the two
+// warnIfStarved is private and needs nothing from a live chart: give it the
 // fields it reads and call it directly.
 type Warn = (
-  inst: { name: string; values(): Record<string, unknown> },
+  inst: {
+    name: string
+    indicatorId: string
+    values(): Record<string, unknown>
+    series(plotKey: string): unknown
+  },
   descriptor?: { plots?: readonly { style?: { visible?: boolean } }[] }
 ) => void
 
@@ -15,7 +20,11 @@ function warnedBy(
   const toasts: string[] = []
   const self = { rawBars: [{}, {}], toast: (message: string) => toasts.push(message) }
   const warn = (TradingTerminal.prototype as unknown as { warnIfStarved: Warn }).warnIfStarved
-  warn.call(self as never, { name: 'Thing', values: () => values }, descriptor)
+  warn.call(
+    self as never,
+    { name: 'Thing', indicatorId: 'thing', values: () => values, series: (key) => values[key] },
+    descriptor
+  )
   return toasts
 }
 

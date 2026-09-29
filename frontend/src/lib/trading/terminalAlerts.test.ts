@@ -54,6 +54,15 @@ afterEach(() => {
 async function mount(preferences?: null) {
   const onToast = vi.fn()
   const onContextMenu = vi.fn()
+  // Explicit "[]" (not an unset key) so the constructor's restoreChartTools()
+  // doesn't seed the default Volume indicator on a test's first mount -- these
+  // tests want a blank chart to start from. Only when unset: a later mount()
+  // in the same test simulating a reload must still see what the first mount
+  // persisted. Must run before construction: restoreChartTools runs once, in
+  // the constructor, and reads this synchronously.
+  if (globalThis.localStorage.getItem('oa-trading-indicators') === null) {
+    globalThis.localStorage.setItem('oa-trading-indicators', '[]')
+  }
   const terminal = new TradingTerminal({
     apiKey: 'test',
     wsUrl: 'ws://test.invalid',

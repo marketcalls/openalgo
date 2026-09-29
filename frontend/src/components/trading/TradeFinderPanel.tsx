@@ -314,11 +314,7 @@ function DirectionalScoreCell({ item }: { item: TfListItem }) {
   const title =
     reversals != null ? `${reversals} reversal${reversals === 1 ? '' : 's'} since open` : undefined
   return (
-    <span
-      className="flex items-center justify-end gap-0.5 tabular-nums"
-      title={title}
-      aria-label={title}
-    >
+    <span className="flex items-center justify-end gap-0.5 tabular-nums" title={title}>
       {item.directional_score.toFixed(0)}
       {item.directional_direction === 'up' && (
         <TrendingUp className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -502,12 +498,7 @@ function JwtHealthBadge({ health }: { health: JwtHealthResponse | null }) {
           : 'bg-emerald-500'
 
   return (
-    <span
-      className={cn('h-2 w-2 shrink-0 rounded-full', color)}
-      title={label}
-      aria-label={label}
-      role="status"
-    />
+    <output className={cn('h-2 w-2 shrink-0 rounded-full', color)} title={label} aria-label={label} />
   )
 }
 
