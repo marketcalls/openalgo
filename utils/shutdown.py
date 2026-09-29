@@ -158,6 +158,13 @@ def _stop_historify_scheduler() -> None:
         module.get_historify_scheduler().shutdown()
 
 
+def _stop_historify_downloads() -> None:
+    """Wake Historify workers before executor/interpreter shutdown begins."""
+    module = _imported("services.historify_service")
+    if module is not None:
+        module.stop_all_download_jobs()
+
+
 def _stop_chartink_scheduler() -> None:
     """Stop the Chartink time-based control scheduler."""
     module = _imported("blueprints.chartink")
@@ -427,6 +434,7 @@ def shutdown_runtime() -> None:
         _stop_health_collector,
         _stop_flow_scheduler,
         _stop_historify_scheduler,
+        _stop_historify_downloads,
         _stop_chartink_scheduler,
         _stop_python_strategy_scheduler,
         _stop_squareoff_scheduler,

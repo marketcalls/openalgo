@@ -9,12 +9,14 @@ Optimized for backtesting and analytical queries.
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from dotenv import load_dotenv
 
+from utils import real_threading
 from utils.logging import get_logger
 
 # Initialize logger
@@ -25,6 +27,45 @@ load_dotenv()
 
 # Database path - in /db folder like other OpenAlgo databases
 HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
+
+# DuckDB permits concurrent connections, but conflicting writes are optimistic:
+# one transaction loses rather than waiting for another to finish.  Historify is
+# deliberately a single-process service, so serialize every logical mutation in
+# this process.  Keep the lock at the function boundary: several mutations are
+# read-then-write sequences and locking individual statements does not make
+# those sequences atomic.
+_historify_write_lock = real_threading.Lock()
+
+
+def _serialized_write(func):
+    """Run one complete Historify mutation without an in-process writer race."""
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with _historify_write_lock:
+            return func(*args, **kwargs)
+
+    return wrapped
+
+
+def _retry_duckdb_conflict(func):
+    """Retry the rare conflict from a writer outside this process."""
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        import time
+
+        import duckdb
+
+        for attempt in range(3):
+            try:
+                return func(*args, **kwargs)
+            except (duckdb.ConstraintException, duckdb.TransactionException):
+                if attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+
+    return wrapped
 
 
 def get_db_path() -> str:
@@ -91,6 +132,7 @@ def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
         conn.close()
 
 
+@_serialized_write
 def init_database():
     """
     Initialize the Historify database schema.
@@ -240,6 +282,20 @@ def init_database():
             )
         """)
 
+        # These tables predate DuckDB sequences.  Create each sequence at the
+        # current high-water mark so existing installations migrate without an
+        # ID collision; new installations begin at one.
+        for sequence, table in (
+            ("watchlist_id_seq", "watchlist"),
+            ("data_catalog_id_seq", "data_catalog"),
+            ("job_items_id_seq", "job_items"),
+            ("historify_schedule_executions_id_seq", "historify_schedule_executions"),
+        ):
+            next_id = conn.execute(
+                f"SELECT COALESCE(MAX(id), 0) + 1 FROM {table}"
+            ).fetchone()[0]
+            conn.execute(f"CREATE SEQUENCE IF NOT EXISTS {sequence} START {next_id}")
+
         # No secondary indexes on market_data: every query leads with
         # `symbol`, DuckDB serves range scans from per-row-group zone maps,
         # and ART index memory stays fully resident as the table grows,
@@ -284,6 +340,7 @@ def get_watchlist() -> list[dict[str, Any]]:
         return result.to_dict("records")
 
 
+@_serialized_write
 def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> tuple[bool, str]:
     """
     Add a symbol to the watchlist.
@@ -304,16 +361,12 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> tu
             if existing:
                 return True, f"{symbol} already in watchlist"
 
-            # DuckDB doesn't auto-generate IDs, so we need to calculate the next ID
-            result = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM watchlist").fetchone()
-            next_id = result[0] if result else 1
-
             conn.execute(
                 """
                 INSERT INTO watchlist (id, symbol, exchange, display_name)
-                VALUES (?, ?, ?, ?)
+                VALUES (nextval('watchlist_id_seq'), ?, ?, ?)
             """,
-                [next_id, symbol.upper(), exchange.upper(), display_name],
+                [symbol.upper(), exchange.upper(), display_name],
             )
 
         logger.info(f"Added {symbol}:{exchange} to watchlist")
@@ -323,6 +376,7 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> tu
         return False, str(e)
 
 
+@_serialized_write
 def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[int, int, list[dict[str, str]]]:
     """
     Add multiple symbols to the watchlist in a single transaction.
@@ -344,10 +398,6 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[int, int, list
                 SELECT symbol, exchange FROM watchlist
             """).fetchall()
             existing_set = {(row[0], row[1]) for row in existing_result}
-
-            # Get the current max ID
-            max_id_result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM watchlist").fetchone()
-            next_id = max_id_result[0] + 1
 
             # Prepare records for bulk insert
             records_to_insert = []
@@ -371,16 +421,15 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[int, int, list
                     skipped += 1
                     continue
 
-                records_to_insert.append((next_id, symbol, exchange, display_name))
+                records_to_insert.append((symbol, exchange, display_name))
                 existing_set.add((symbol, exchange))  # Prevent duplicates within batch
-                next_id += 1
 
             # Bulk insert all records at once
             if records_to_insert:
                 conn.executemany(
                     """
                     INSERT INTO watchlist (id, symbol, exchange, display_name)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (nextval('watchlist_id_seq'), ?, ?, ?)
                 """,
                     records_to_insert,
                 )
@@ -394,6 +443,7 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[int, int, list
         return 0, 0, [{"symbol": "batch", "exchange": "", "error": str(e)}]
 
 
+@_serialized_write
 def remove_from_watchlist(symbol: str, exchange: str) -> tuple[bool, str]:
     """
     Remove a symbol from the watchlist.
@@ -418,6 +468,7 @@ def remove_from_watchlist(symbol: str, exchange: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+@_serialized_write
 def bulk_remove_from_watchlist(
     symbols: list[dict[str, str]],
 ) -> tuple[int, int, list[dict[str, str]]]:
@@ -484,6 +535,7 @@ def bulk_remove_from_watchlist(
         return 0, 0, [{"symbol": "ALL", "exchange": "ALL", "error": str(e)}]
 
 
+@_serialized_write
 def clear_watchlist() -> tuple[bool, str]:
     """Clear all symbols from watchlist."""
     try:
@@ -501,6 +553,8 @@ def clear_watchlist() -> tuple[bool, str]:
 # =============================================================================
 
 
+@_serialized_write
+@_retry_duckdb_conflict
 def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: str) -> int:
     """
     Insert or update OHLCV data from a pandas DataFrame.
@@ -549,8 +603,10 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
         ]
 
         with get_connection() as conn:
-            # Use INSERT with ON CONFLICT for upsert (DuckDB requires explicit conflict target)
-            conn.execute("""
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                # Use INSERT with ON CONFLICT for upsert (DuckDB requires explicit conflict target)
+                conn.execute("""
                 INSERT INTO market_data
                 (symbol, exchange, interval, timestamp, open, high, low, close, volume, oi)
                 SELECT symbol, exchange, interval, timestamp, open, high, low, close, volume, oi
@@ -562,20 +618,20 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
                     close = EXCLUDED.close,
                     volume = EXCLUDED.volume,
                     oi = EXCLUDED.oi
-            """)
+                """)
 
-            # Update catalog - check if exists first due to multiple constraints
-            existing = conn.execute(
+                # Update catalog in the same transaction as the candle upsert.
+                existing = conn.execute(
                 """
                 SELECT id FROM data_catalog
                 WHERE symbol = ? AND exchange = ? AND interval = ?
             """,
                 [symbol.upper(), exchange.upper(), interval],
-            ).fetchone()
+                ).fetchone()
 
-            if existing:
+                if existing:
                 # Update existing record
-                conn.execute(
+                    conn.execute(
                     """
                     UPDATE data_catalog SET
                         first_timestamp = (SELECT MIN(timestamp) FROM market_data
@@ -601,28 +657,21 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
                         exchange.upper(),
                         interval,
                     ],
-                )
-            else:
-                # Insert new record
-                next_id_result = conn.execute(
-                    "SELECT COALESCE(MAX(id), 0) + 1 FROM data_catalog"
-                ).fetchone()
-                next_id = next_id_result[0] if next_id_result else 1
-
-                conn.execute(
+                    )
+                else:
+                    conn.execute(
                     """
                     INSERT INTO data_catalog
                     (id, symbol, exchange, interval, first_timestamp, last_timestamp,
                      record_count, last_download_at)
                     SELECT
-                        ?, ?, ?, ?,
+                        nextval('data_catalog_id_seq'), ?, ?, ?,
                         MIN(timestamp), MAX(timestamp), COUNT(*),
                         current_timestamp
                     FROM market_data
                     WHERE symbol = ? AND exchange = ? AND interval = ?
                 """,
                     [
-                        next_id,
                         symbol.upper(),
                         exchange.upper(),
                         interval,
@@ -630,7 +679,11 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
                         exchange.upper(),
                         interval,
                     ],
-                )
+                    )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
         logger.info(f"Upserted {len(df)} records for {symbol}:{exchange}:{interval}")
         return len(df)
@@ -1216,6 +1269,7 @@ def get_data_range(symbol: str, exchange: str, interval: str) -> dict[str, Any] 
         return None
 
 
+@_serialized_write
 def delete_market_data(symbol: str, exchange: str, interval: str | None = None) -> tuple[bool, str]:
     """
     Delete market data for a symbol.
@@ -1271,6 +1325,7 @@ def delete_market_data(symbol: str, exchange: str, interval: str | None = None) 
         return False, str(e)
 
 
+@_serialized_write
 def bulk_delete_market_data(
     symbols: list[dict[str, str]],
 ) -> tuple[int, int, list[dict[str, str]]]:
@@ -1494,6 +1549,7 @@ def get_database_stats() -> dict[str, Any]:
         }
 
 
+@_serialized_write
 def vacuum_database():
     """
     Vacuum the database to reclaim space and optimize performance.
@@ -1754,6 +1810,7 @@ def import_from_parquet(
 # =============================================================================
 
 
+@_serialized_write
 def create_download_job(
     job_id: str,
     job_type: str,
@@ -1819,12 +1876,12 @@ def create_download_job(
                         ]
                     )
 
-                    # Atomic batch insert with computed IDs using ROW_NUMBER
-                    # This generates IDs atomically without race conditions
+                    # Sequence allocation is atomic and independent of other
+                    # jobs, unlike MAX(id) + ROW_NUMBER().
                     conn.execute("""
                         INSERT INTO job_items (id, job_id, symbol, exchange, status)
                         SELECT
-                            (SELECT COALESCE(MAX(id), 0) FROM job_items) + ROW_NUMBER() OVER () as id,
+                            nextval('job_items_id_seq') as id,
                             job_id, symbol, exchange, status
                         FROM symbols_df
                     """)
@@ -1988,6 +2045,7 @@ def get_job_items(job_id: str, status: str = None) -> list[dict[str, Any]]:
         return []
 
 
+@_serialized_write
 def update_job_status(job_id: str, status: str, error_message: str = None) -> bool:
     """Update the status of a download job."""
     try:
@@ -2028,6 +2086,7 @@ def update_job_status(job_id: str, status: str, error_message: str = None) -> bo
         return False
 
 
+@_serialized_write
 def update_job_item_status(
     item_id: int, status: str, records_downloaded: int = 0, error_message: str = None
 ) -> bool:
@@ -2070,6 +2129,7 @@ def update_job_item_status(
         return False
 
 
+@_serialized_write
 def update_job_progress(job_id: str, completed: int, failed: int) -> bool:
     """Update job progress counters."""
     try:
@@ -2089,6 +2149,7 @@ def update_job_progress(job_id: str, completed: int, failed: int) -> bool:
         return False
 
 
+@_serialized_write
 def delete_download_job(job_id: str) -> tuple[bool, str]:
     """Delete a download job and its items."""
     try:
@@ -2109,6 +2170,7 @@ def delete_download_job(job_id: str) -> tuple[bool, str]:
 # =============================================================================
 
 
+@_serialized_write
 def upsert_symbol_metadata(symbols: list[dict[str, Any]]) -> int:
     """
     Insert or update symbol metadata.
@@ -3083,6 +3145,7 @@ def get_export_preview(
 # =============================================================================
 
 
+@_serialized_write
 def create_schedule(
     schedule_id: str,
     name: str,
@@ -3226,6 +3289,7 @@ def get_all_schedules() -> list[dict[str, Any]]:
         return []
 
 
+@_serialized_write
 def update_schedule(
     schedule_id: str,
     name: str | None = None,
@@ -3316,6 +3380,7 @@ def update_schedule(
         return False, str(e)
 
 
+@_serialized_write
 def delete_schedule(schedule_id: str) -> tuple[bool, str]:
     """Delete a schedule and its execution history."""
     try:
@@ -3335,6 +3400,7 @@ def delete_schedule(schedule_id: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+@_serialized_write
 def increment_schedule_run_counts(schedule_id: str, is_success: bool) -> tuple[bool, str]:
     """Increment run counts for a schedule."""
     try:
@@ -3369,6 +3435,7 @@ def increment_schedule_run_counts(schedule_id: str, is_success: bool) -> tuple[b
         return False, str(e)
 
 
+@_serialized_write
 def create_schedule_execution(schedule_id: str, download_job_id: str | None = None) -> int | None:
     """
     Create a new execution record for a schedule.
@@ -3376,31 +3443,19 @@ def create_schedule_execution(schedule_id: str, download_job_id: str | None = No
     Returns:
         Execution ID or None on failure
     """
-    import time
-
     try:
-        # Use timestamp-based ID to minimize collision risk
-        # Format: last 9 digits of current timestamp in microseconds
-        execution_id = int(time.time() * 1000000) % 1000000000
-
         with get_connection() as conn:
-            # Try inserting, if collision occurs retry with incremented ID
-            for attempt in range(3):
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO historify_schedule_executions
-                        (id, schedule_id, download_job_id, status, started_at)
-                        VALUES (?, ?, ?, 'running', current_timestamp)
-                    """,
-                        [execution_id + attempt, schedule_id, download_job_id],
-                    )
-                    execution_id = execution_id + attempt
-                    break
-                except Exception:
-                    if attempt == 2:
-                        raise
-                    continue
+            execution_id = conn.execute(
+                "SELECT nextval('historify_schedule_executions_id_seq')"
+            ).fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO historify_schedule_executions
+                (id, schedule_id, download_job_id, status, started_at)
+                VALUES (?, ?, ?, 'running', current_timestamp)
+            """,
+                [execution_id, schedule_id, download_job_id],
+            )
 
         logger.info(f"Created execution {execution_id} for schedule {schedule_id}")
         return execution_id
@@ -3410,6 +3465,7 @@ def create_schedule_execution(schedule_id: str, download_job_id: str | None = No
         return None
 
 
+@_serialized_write
 def update_schedule_execution(
     execution_id: int,
     status: str | None = None,
