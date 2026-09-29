@@ -30,7 +30,7 @@ _next_history_slot: float = 0.0
 _history_slot_lock = real_threading.Lock()
 
 
-def _enforce_rate_limit():
+def _enforce_rate_limit(*, background: bool = False):
     """Wait for this request's turn (~3 per second).
 
     Raises:
@@ -43,7 +43,11 @@ def _enforce_rate_limit():
         now = time.monotonic()
         slot = max(now, _next_history_slot)
         wait = slot - now
-        check_queue_wait(wait, kind="data")
+        # Historify workers are not Gunicorn request threads.  They must share
+        # the booking queue (and therefore the broker's 3 req/s limit), but a
+        # queued background download must be allowed to wait for its turn.
+        if not background:
+            check_queue_wait(wait, kind="data")
         _next_history_slot = slot + _MIN_HISTORY_INTERVAL
     if wait > 0:
         time.sleep(wait)
@@ -250,6 +254,7 @@ def get_history(
     feed_token: str | None = None,
     broker: str | None = None,
     source: str = "api",
+    background: bool = False,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get historical data for a symbol.
@@ -296,7 +301,10 @@ def get_history(
     # Source: 'api' (default) - Fetch from broker API
     # Enforce 3 requests/second rate limit for broker history calls
     try:
-        _enforce_rate_limit()
+        if background:
+            _enforce_rate_limit(background=True)
+        else:
+            _enforce_rate_limit()
     except BrokerBusyError as e:
         return broker_busy_result(e, f"History request for {exchange}:{symbol}")
 

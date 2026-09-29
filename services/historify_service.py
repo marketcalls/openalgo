@@ -326,6 +326,7 @@ def download_data(
             start_date=start_date,
             end_date=end_date,
             api_key=api_key,
+            background=True,
         )
 
         if not success:
@@ -1318,6 +1319,17 @@ RETRY_BUSY_MESSAGE = (
 )
 
 
+def stop_all_download_jobs() -> None:
+    """Wake every worker so a graceful shutdown never waits on a paused job."""
+    with _job_state_lock:
+        running = list(_running_jobs)
+        for job_id in running:
+            _running_jobs[job_id] = False
+            event = _paused_jobs.get(job_id)
+            if event:
+                event.set()
+
+
 def cleanup_zombie_jobs():
     """
     Clean up zombie jobs on server startup.
@@ -1413,8 +1425,14 @@ def create_and_start_job(
             _paused_jobs[job_id] = threading.Event()
             _paused_jobs[job_id].set()  # Not paused initially
 
-        # Start background processing
-        _job_executor.submit(_process_download_job, job_id, api_key)
+        # A failed submit (for example while Python is shutting executors
+        # down) must not strand the in-memory claim forever.
+        try:
+            _job_executor.submit(_process_download_job, job_id, api_key)
+        except Exception:
+            _cleanup_job(job_id)
+            update_job_status(job_id, "failed", "Could not start background download")
+            raise
 
         return (
             True,
@@ -1456,6 +1474,9 @@ def _process_download_job(job_id: str, api_key: str):
         upsert_symbol_metadata,
     )
 
+    config = {}
+    completed = failed = total_items = 0
+    final_status = "failed"
     try:
         # Get job details
         job = get_download_job(job_id)
@@ -1479,7 +1500,6 @@ def _process_download_job(job_id: str, api_key: str):
         pending_items = [item for item in items if item["status"] in ("pending", "downloading")]
 
         # Parse config for incremental flag
-        config = {}
         if job.get("config"):
             try:
                 config = (
@@ -1512,6 +1532,7 @@ def _process_download_job(job_id: str, api_key: str):
             if is_cancelled:
                 logger.info(f"Job {job_id} cancelled")
                 update_job_status(job_id, "cancelled")
+                final_status = "cancelled"
                 _cleanup_job(job_id)
                 return
 
@@ -1528,6 +1549,7 @@ def _process_download_job(job_id: str, api_key: str):
                     if is_cancelled:
                         logger.info(f"Job {job_id} cancelled while paused")
                         update_job_status(job_id, "cancelled")
+                        final_status = "cancelled"
                         _cleanup_job(job_id)
                         return
 
@@ -1696,7 +1718,34 @@ def _process_download_job(job_id: str, api_key: str):
                 time.sleep(batch_delay)
 
         # Job completed
-        final_status = "completed" if failed == 0 else "completed_with_errors"
+        # A pause can land after the final item but before the terminal status
+        # is written. Honour it here as well as between items; otherwise the
+        # pause endpoint could write ``paused`` after this worker wrote
+        # ``completed`` (or vice versa).
+        with _job_state_lock:
+            final_pause_event = _paused_jobs.get(job_id)
+        while final_pause_event and not final_pause_event.is_set():
+            _emit_job_paused(job_id, processed_count, total_items)
+            final_pause_event.wait(timeout=1.0)
+            with _job_state_lock:
+                if not _running_jobs.get(job_id, False):
+                    final_status = "cancelled"
+                    update_job_status(job_id, final_status)
+                    _cleanup_job(job_id)
+                    return
+        # Claim the terminal transition before the database write. A cancel or
+        # pause that already passed its DB read then sees no live processor and
+        # cannot overwrite this terminal status afterwards.
+        with _job_state_lock:
+            cancelled_at_finish = not _running_jobs.get(job_id, False)
+            if not cancelled_at_finish:
+                _running_jobs.pop(job_id, None)
+                _paused_jobs.pop(job_id, None)
+        final_status = (
+            "cancelled"
+            if cancelled_at_finish
+            else ("completed" if failed == 0 else "completed_with_errors")
+        )
         update_job_status(job_id, final_status)
 
         # Emit completion event
@@ -1711,6 +1760,46 @@ def _process_download_job(job_id: str, api_key: str):
         logger.exception(f"Error processing job {job_id}: {e}")
         update_job_status(job_id, "failed", str(e))
         _cleanup_job(job_id)
+    finally:
+        schedule_id = config.get("schedule_id")
+        if schedule_id:
+            try:
+                from services.historify_scheduler_service import (
+                    get_historify_scheduler,
+                    release_schedule_run,
+                )
+                from database.historify_db import (
+                    increment_schedule_run_counts,
+                    update_schedule,
+                    update_schedule_execution,
+                )
+
+                execution_id = config.get("schedule_execution_id")
+                if execution_id is not None:
+                    update_schedule_execution(
+                        execution_id,
+                        status=final_status,
+                        completed_at=datetime.now(),
+                        symbols_processed=total_items,
+                        symbols_success=completed,
+                        symbols_failed=failed,
+                    )
+                update_schedule(schedule_id, status="idle", last_run_status=final_status)
+                increment_schedule_run_counts(schedule_id, is_success=final_status == "completed")
+                scheduler = get_historify_scheduler()
+                if scheduler.socketio:
+                    scheduler.socketio.emit(
+                        "historify_schedule_execution_complete",
+                        {"schedule_id": schedule_id, "execution_id": execution_id, "status": final_status},
+                    )
+                release_schedule_run(schedule_id)
+            except Exception:
+                logger.exception("Could not finalize Historify schedule run")
+        # Executor workers are reused, so Flask teardown never releases the
+        # auth/token scoped sessions they touched.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 def _cleanup_job(job_id: str):
@@ -1857,10 +1946,6 @@ def cancel_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
                 400,
             )
 
-        # Immediately update database status to 'cancelled'
-        update_job_status(job_id, "cancelled")
-        logger.info(f"Job {job_id} cancelled")
-
         # Use lock for thread-safe state modification
         with _job_state_lock:
             # Signal cancellation to stop the processing thread. The entry is
@@ -1873,8 +1958,9 @@ def cancel_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             # then removed the retry's claim and the retried job was marked
             # cancelled. Only a job a processor has claimed gets the marker, so
             # one with nothing to remove it is never left unretryable.
-            if job_id in _running_jobs:
-                _running_jobs[job_id] = False
+            if job_id not in _running_jobs:
+                return False, {"status": "error", "message": "Job has already finished"}, 409
+            _running_jobs[job_id] = False
             # Resume if paused so thread can exit cleanly
             pause_event = _paused_jobs.get(job_id)
             if pause_event:
@@ -1884,6 +1970,9 @@ def cancel_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             # blocked the cancel forever and every later user of the lock with
             # it (the download workers, pause, resume, retry and every new job).
             _paused_jobs.pop(job_id, None)
+
+        update_job_status(job_id, "cancelled")
+        logger.info(f"Job {job_id} cancelled")
 
         # Emit cancellation event to frontend
         _emit_job_cancelled(job_id)
@@ -1930,11 +2019,14 @@ def pause_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             # Signal pause (clear the event)
             if pause_event:
                 pause_event.clear()
-                update_job_status(job_id, "paused")
-                logger.info(f"Job {job_id} paused")
-                return True, {"status": "success", "message": "Job paused"}, 200
             else:
                 return False, {"status": "error", "message": "Job not found in running jobs"}, 400
+
+        # Do not hold a real state lock across DuckDB I/O: under eventlet a
+        # waiter would otherwise stall the hub while this connection writes.
+        update_job_status(job_id, "paused")
+        logger.info(f"Job {job_id} paused")
+        return True, {"status": "success", "message": "Job paused"}, 200
 
     except Exception as e:
         logger.exception(f"Error pausing job: {e}")
@@ -1970,11 +2062,12 @@ def resume_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             pause_event = _paused_jobs.get(job_id)
             if pause_event:
                 pause_event.set()
-                update_job_status(job_id, "running")
-                logger.info(f"Job {job_id} resumed")
-                return True, {"status": "success", "message": "Job resumed"}, 200
             else:
                 return False, {"status": "error", "message": "Job not found in running jobs"}, 400
+
+        update_job_status(job_id, "running")
+        logger.info(f"Job {job_id} resumed")
+        return True, {"status": "success", "message": "Job resumed"}, 200
 
     except Exception as e:
         logger.exception(f"Error resuming job: {e}")

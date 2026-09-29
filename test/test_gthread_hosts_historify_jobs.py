@@ -22,6 +22,7 @@ import pytest
 
 import database.historify_db as historify_db
 from services import historify_service as hs
+from services import historify_scheduler_service as scheduler_service
 
 
 @pytest.fixture(autouse=True)
@@ -159,3 +160,16 @@ def test_a_retry_that_cannot_start_releases_its_claim(monkeypatch):
     assert not ok and code == 500
     assert "J4" not in hs._running_jobs
     assert "J4" not in hs._paused_jobs
+
+
+def test_schedule_claim_stays_held_until_its_download_releases_it():
+    """A scheduler tick and a manual trigger cannot overlap one download."""
+    schedule_id = "schedule-single-flight"
+    scheduler_service.release_schedule_run(schedule_id)
+
+    assert scheduler_service.claim_schedule_run(schedule_id) is True
+    assert scheduler_service.claim_schedule_run(schedule_id) is False
+
+    scheduler_service.release_schedule_run(schedule_id)
+    assert scheduler_service.claim_schedule_run(schedule_id) is True
+    scheduler_service.release_schedule_run(schedule_id)
