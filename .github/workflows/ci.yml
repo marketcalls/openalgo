@@ -69,6 +69,7 @@ jobs:
             test/test_graceful_shutdown.py \
             test/test_flattrade_data_silence_watchdog.py \
             test/test_requirements_parity.py \
+            test/test_fyers_index_hsm_mapping.py \
             -v --timeout=60
 
   # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
