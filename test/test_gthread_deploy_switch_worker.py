@@ -365,6 +365,29 @@ def test_a_failed_start_puts_the_previous_file_back(box):
     assert "worker failed to boot" in result.stderr  # the journal tail is shown
 
 
+def test_service_copy_failure_puts_env_back_before_any_restart(box):
+    unit = box.single("APP_KEY = 'x'\n")
+    original_unit = unit.read_bytes()
+    env_file = box.root / "openalgo" / ".env"
+    original_env = env_file.read_bytes()
+    _executable(
+        box.bin / "cp",
+        """#!/bin/bash
+if [[ "$1" == /tmp/openalgo-switch-* && "$2" == "$OPENALGO_SWITCH_TEST_SYSTEMD_DIR/openalgo.service" ]]; then
+  exit 1
+fi
+exec /bin/cp "$@"
+""",
+    )
+
+    result = box.run("--yes", "--to", "gthread")
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert unit.read_bytes() == original_unit
+    assert env_file.read_bytes() == original_env
+    assert box.systemctl() == []
+
+
 def test_when_nothing_starts_the_manual_rollback_is_printed(box):
     unit = box.single()
     (box.state / "fail_launcher").touch()

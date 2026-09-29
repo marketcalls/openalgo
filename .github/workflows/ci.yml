@@ -202,9 +202,8 @@ jobs:
           sys.exit(1 if tests == 0 or skipped else 0)
           EOF
 
-  # Static gates for code request threads run under gthread, plus the deploy
-  # and foundation tests. The gates key their reviewed lists by file and
-  # function; see the scripts for what each rule means.
+  # Static gates for code request threads run under gthread. The gates key
+  # their reviewed lists by file and function; see the scripts for each rule.
   gthread-gates:
     needs: backend-lint
     runs-on: ubuntu-latest
@@ -220,10 +219,64 @@ jobs:
         run: .venv/bin/python scripts/gthread_check_then_act.py
       - name: Sleep gate
         run: .venv/bin/python scripts/gthread_sleep_gate.py
-      - name: Deploy and foundation tests
-        run: |
-          .venv/bin/python -m pytest test/test_gthread_deploy_*.py \
-            test/test_gthread_foundation_*.py -o addopts="" --timeout=120 -rs
+
+  # The complete gthread migration suite: deploy, foundation, broker, host,
+  # messaging, sandbox, strategy and review tests. Previously only deploy and
+  # foundation files ran in CI; the other migration tests could silently rot.
+  # These tests use fake brokers and isolated test databases, not live accounts.
+  # Eventlet is installed here too so the lifecycle and compatibility proofs
+  # execute rather than skip on the default production worker.
+  gthread-migration:
+    needs: backend-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
+      - name: Run every gthread migration test file
+        run: .venv/bin/python -m pytest test/test_gthread_*.py -o addopts="" --timeout=120 -rs
+
+  # Windows (development installs), macOS and native Linux ARM64 run the
+  # portable runtime, lifecycle, session, shutdown and sandbox money tests.
+  # Shell launcher/systemd/Docker tests stay in the Linux migration job.
+  # The ARM64 cell installs eventlet so the default-worker lifecycle cases run.
+  gthread-platforms:
+    needs: backend-lint
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, macos-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync
+      - name: Install the default worker on Linux ARM64
+        if: runner.os == 'Linux'
+        run: uv pip install "eventlet==0.41.2"
+      - name: Portable runtime and concurrency tests
+        run: >-
+          uv run --no-sync python -m pytest
+          test/test_gthread_foundation_runtime.py
+          test/test_gthread_foundation_lifecycle.py
+          test/test_gthread_core_db_sessions.py
+          test/test_gthread_core_shutdown.py
+          test/test_gthread_core_proxy_mode.py
+          test/test_gthread_hosts_chartink.py
+          test/test_gthread_historify_lifecycle.py
+          test/test_gthread_sandbox_funds.py
+          test/test_gthread_sandbox_orders.py
+          test/test_gthread_review_funds_cas_cleanup.py
+          -o addopts="" --timeout=120 -rs
 
   # Frontend linting
   frontend-lint:
@@ -438,7 +491,7 @@ jobs:
   # assembles them into a single Docker Hub manifest list under the
   # canonical tags (:latest, :<sha>).
   docker-build:
-    needs: [backend-lint, backend-test, frontend-build, security-scan, gunicorn-boot, eventlet-fallback, gthread-gates]
+    needs: [backend-lint, backend-test, frontend-build, security-scan, gunicorn-boot, eventlet-fallback, gthread-gates, gthread-migration, gthread-platforms]
     # Skip for fork PRs (secrets not available)
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
     strategy:

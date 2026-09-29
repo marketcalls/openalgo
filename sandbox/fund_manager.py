@@ -533,6 +533,9 @@ class FundManager:
 
             ok, message = self._apply(compute)
             if not ok:
+                # This wrapper owns the commit, unlike stage_* callers. A
+                # failed CAS must end its outer SQLite write transaction.
+                db_session.rollback()
                 return False, message
 
             db_session.commit()
@@ -617,6 +620,7 @@ class FundManager:
         try:
             ok, message = self.stage_release_margin(amount, realized_pnl, description, log=False)
             if not ok:
+                db_session.rollback()
                 return False, message
 
             db_session.commit()
@@ -688,6 +692,7 @@ class FundManager:
         try:
             ok, message = self.stage_transfer_margin_to_holdings(amount, description, log=False)
             if not ok:
+                db_session.rollback()
                 return False, message
 
             db_session.commit()
@@ -739,6 +744,7 @@ class FundManager:
         try:
             ok, message = self.stage_credit_sale_proceeds(amount, description, log=False)
             if not ok:
+                db_session.rollback()
                 return False, message
 
             db_session.commit()
@@ -815,6 +821,7 @@ class FundManager:
 
             ok, message = self._apply(compute)
             if not ok:
+                db_session.rollback()
                 return False, message
 
             db_session.commit()
@@ -982,6 +989,7 @@ def rebase_starting_capital(new_capital) -> int:
     for user_id in user_ids:
         ok, message = apply_funds_change(user_id, compute)
         if not ok:
+            db_session.rollback()
             raise RuntimeError(
                 f"Could not move funds of user {user_id} to the new capital: {message}"
             )
@@ -1005,15 +1013,12 @@ def reconcile_margin(user_id, auto_fix=True):
         tuple: (has_discrepancy: bool, discrepancy_amount: Decimal, message: str)
     """
     try:
-        holds_write_lock = False
         for _attempt in range(_FUNDS_WRITE_ATTEMPTS):
-            outcome = _reconcile_once(user_id, auto_fix, holds_write_lock)
+            outcome = _reconcile_once(user_id, auto_fix)
             if outcome is not None:
                 return outcome
-            # Funds moved between the read and the write. The failed write left
-            # this session holding SQLite's write lock, so reading funds,
-            # positions and GTTs again gives the final word.
-            holds_write_lock = True
+            # The CAS lost and _reconcile_once rolled back its write
+            # transaction. Read all inputs again before deciding.
 
         db_session.rollback()
         logger.warning(
@@ -1027,30 +1032,17 @@ def reconcile_margin(user_id, auto_fix=True):
         return False, Decimal("0"), f"Error during reconciliation: {str(e)}"
 
 
-def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
+def _reconcile_once(user_id, auto_fix):
     """One read-compare-write pass of :func:`reconcile_margin`.
 
     Args:
         user_id: The account to reconcile.
         auto_fix: Write the correction, or only report it.
-        holds_write_lock: True for a pass after a lost compare-and-set, which
-            runs inside the transaction that failed write opened.
 
     Returns:
         reconcile_margin's result tuple, or None when the funds row changed
         between the read and the write and the pass must be repeated.
     """
-
-    def settle(result):
-        # A pass after a lost compare-and-set holds SQLite's write lock. One
-        # that ends without writing must close that transaction: the engine
-        # threads that call this never release their sessions, so the lock
-        # would stay with them until something else on that thread commits,
-        # which can be hours, and every other sandbox writer (order placement,
-        # the position book, square-off) fails with "database is locked".
-        if holds_write_lock:
-            db_session.rollback()
-        return result
 
     # Funds first. Every writer that moves position or GTT margin moves the
     # funds row in the same commit (settlement, T+1, a GTT reserving or
@@ -1064,7 +1056,7 @@ def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
     # appear either.
     snapshot = read_funds_snapshot(user_id)
     if snapshot is None:
-        return settle((False, Decimal("0"), "No funds record found for user"))
+        return False, Decimal("0"), "No funds record found for user"
 
     # Calculate total margin blocked across all open positions. populate_existing
     # so the margins are the committed ones, not copies this session loaded
@@ -1094,7 +1086,7 @@ def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
             "Could not total active GTT margin during reconciliation; "
             "skipping reconciliation rather than risk releasing it"
         )
-        return settle((False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"))
+        return False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"
 
     total_position_margin += total_gtt_margin
 
@@ -1106,7 +1098,7 @@ def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
     discrepancy = current_used_margin - total_position_margin
 
     if discrepancy == 0:
-        return settle((False, Decimal("0"), "No margin discrepancy detected"))
+        return False, Decimal("0"), "No margin discrepancy detected"
 
     # Log the discrepancy
     logger.warning(
@@ -1116,12 +1108,10 @@ def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
     )
 
     if not auto_fix:
-        return settle(
-            (
-                True,
-                discrepancy,
-                f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
-            )
+        return (
+            True,
+            discrepancy,
+            f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
         )
 
     # Fix the discrepancy by adjusting used_margin and available_balance, but
@@ -1132,6 +1122,7 @@ def _reconcile_once(user_id, auto_fix, holds_write_lock=False):
         "available_balance": snapshot.values["available_balance"] + discrepancy,
     }
     if not write_funds_if_unchanged(user_id, snapshot, new_values):
+        db_session.rollback()
         return None
     db_session.commit()
 

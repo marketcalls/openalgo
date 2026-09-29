@@ -27,6 +27,20 @@ it works and switch back: [docs/gthread/README.md](gthread/README.md).
   at 10), and recreate the container.
 - `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
 
+**Review hardening:** Historify writes now keep the eventlet hub responsive
+during database retries, and cancelling a job paused after its final item no
+longer deadlocks cleanup. Pause and resume status writes cannot overwrite the
+processor's final completion. Failed sandbox funds changes release their SQLite
+write transaction without committing staged order changes; cancellation reports
+a failure if its reserved margin cannot be released. Under gthread, a
+Definedge order answered with HTTP 429 is not resent or labelled as a local
+pre-send refusal. Action Center explains that a delayed split or basket order
+may still be sending. Proxy supervision retries an initial launch failure and
+reaps a child launched during shutdown; Chartink retries failed schedule
+restoration. Worker switching preserves the previous configuration when a
+service-file backup or installation fails. The worker guide now describes
+platform deployment choices and checks for continuous operation.
+
 **What gthread refuses that eventlet waits for.** A request that would wait too
 long is answered with a sentence instead: a broker rate limit that would hold a
 request more than about 10 seconds (HTTP 429, nothing sent), a second order on

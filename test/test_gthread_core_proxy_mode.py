@@ -270,6 +270,54 @@ def test_a_restart_that_cannot_launch_is_tried_again(monkeypatch, proxy_state):
     ai._terminate_websocket_subprocess()
 
 
+def test_gthread_retries_when_the_initial_child_cannot_launch(monkeypatch, proxy_state):
+    _speed_up(monkeypatch)
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
+    healthy = FakeProc(pid=3)
+    launches = [None, healthy]
+    monkeypatch.setattr(ai, "_launch_child", lambda: launches.pop(0) if launches else healthy)
+
+    ai._spawn_websocket_subprocess()
+    deadline = time.monotonic() + 5
+    while ai._websocket_subprocess is not healthy and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert ai._websocket_subprocess is healthy
+    assert ai.proxy_status()["restarts"] == 1
+    ai._terminate_websocket_subprocess()
+
+
+def test_gthread_reaps_a_child_launched_while_shutdown_begins(monkeypatch, proxy_state):
+    _speed_up(monkeypatch)
+    monkeypatch.setattr(runtime, "gthread_active", lambda: True)
+    crashed = FakeProc(pid=4)
+    crashed.returncode = 3
+    late = FakeProc(pid=5)
+    launch_started = threading.Event()
+    finish_launch = threading.Event()
+    launches = 0
+
+    def launch():
+        nonlocal launches
+        launches += 1
+        if launches == 1:
+            return crashed
+        launch_started.set()
+        assert finish_launch.wait(5)
+        return late
+
+    monkeypatch.setattr(ai, "_launch_child", launch)
+    ai._spawn_websocket_subprocess()
+    assert launch_started.wait(5)
+    ai._terminate_websocket_subprocess()
+    finish_launch.set()
+    ai._supervisor_thread.join(5)
+
+    assert not ai._supervisor_thread.is_alive()
+    assert late.poll() is not None
+    assert ai._websocket_subprocess is None
+
+
 def test_eventlet_and_the_dev_server_do_not_supervise(monkeypatch, proxy_state):
     _speed_up(monkeypatch)
     monkeypatch.setattr(runtime, "gthread_active", lambda: False)

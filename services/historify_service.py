@@ -1308,6 +1308,10 @@ _job_executor = ThreadPoolExecutor(max_workers=int(os.getenv("HISTORIFY_MAX_WORK
 # Track running jobs for cancellation and pause state
 _running_jobs: dict[str, bool] = {}
 _paused_jobs: dict[str, threading.Event] = {}  # Event is set when NOT paused
+# A pause/resume status write happens outside _job_state_lock. The processor
+# waits for that write before claiming completion, and cancel waits before
+# writing cancelled, so an older control request cannot overwrite either.
+_job_status_writes: dict[str, threading.Event] = {}
 
 # Lock for thread-safe access to job state dictionaries. Not reentrant: nothing
 # that holds it may call a function that takes it again (_cleanup_job does).
@@ -1722,25 +1726,26 @@ def _process_download_job(job_id: str, api_key: str):
         # is written. Honour it here as well as between items; otherwise the
         # pause endpoint could write ``paused`` after this worker wrote
         # ``completed`` (or vice versa).
-        with _job_state_lock:
-            final_pause_event = _paused_jobs.get(job_id)
-        while final_pause_event and not final_pause_event.is_set():
-            _emit_job_paused(job_id, processed_count, total_items)
-            final_pause_event.wait(timeout=1.0)
+        while True:
             with _job_state_lock:
-                if not _running_jobs.get(job_id, False):
-                    final_status = "cancelled"
-                    update_job_status(job_id, final_status)
-                    _cleanup_job(job_id)
-                    return
-        # Claim the terminal transition before the database write. A cancel or
-        # pause that already passed its DB read then sees no live processor and
-        # cannot overwrite this terminal status afterwards.
-        with _job_state_lock:
-            cancelled_at_finish = not _running_jobs.get(job_id, False)
-            if not cancelled_at_finish:
-                _running_jobs.pop(job_id, None)
-                _paused_jobs.pop(job_id, None)
+                pending_write = _job_status_writes.get(job_id)
+                final_pause_event = _paused_jobs.get(job_id)
+                cancelled_at_finish = not _running_jobs.get(job_id, False)
+                if not pending_write and (
+                    cancelled_at_finish or not final_pause_event or final_pause_event.is_set()
+                ):
+                    if not cancelled_at_finish:
+                        _running_jobs.pop(job_id, None)
+                        _paused_jobs.pop(job_id, None)
+                    break
+            if pending_write:
+                pending_write.wait(timeout=1.0)
+            elif final_pause_event:
+                _emit_job_paused(job_id, processed_count, total_items)
+                final_pause_event.wait(timeout=1.0)
+        # The pause state and terminal claim were checked under one lock. A
+        # pause that cleared the event first keeps this processor alive; a
+        # later pause finds no claim and cannot overwrite the terminal status.
         final_status = (
             "cancelled"
             if cancelled_at_finish
@@ -1932,44 +1937,34 @@ def cancel_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
     from database.historify_db import get_download_job, update_job_status
 
     try:
-        job = get_download_job(job_id)
-        if not job:
-            return False, {"status": "error", "message": "Job not found"}, 404
+        while True:
+            job = get_download_job(job_id)
+            if not job:
+                return False, {"status": "error", "message": "Job not found"}, 404
 
-        if job["status"] not in ("running", "paused"):
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": f"Job is not running or paused (status: {job['status']})",
-                },
-                400,
-            )
+            if job["status"] not in ("running", "paused"):
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Job is not running or paused (status: {job['status']})",
+                    },
+                    400,
+                )
 
-        # Use lock for thread-safe state modification
-        with _job_state_lock:
-            # Signal cancellation to stop the processing thread. The entry is
-            # left in place as False, not removed: the processor may still be
-            # mid-download, and it is the one that removes the entry when it
-            # sees False on its next check and leaves through its cancelled
-            # path. Removed here, a retry landing before that check found no
-            # processor, started a second one, and the first read the retry's
-            # claim as "not cancelled" and carried on beside it; its cleanup
-            # then removed the retry's claim and the retried job was marked
-            # cancelled. Only a job a processor has claimed gets the marker, so
-            # one with nothing to remove it is never left unretryable.
-            if job_id not in _running_jobs:
-                return False, {"status": "error", "message": "Job has already finished"}, 409
-            _running_jobs[job_id] = False
-            # Resume if paused so thread can exit cleanly
-            pause_event = _paused_jobs.get(job_id)
-            if pause_event:
-                pause_event.set()
-            # Not through _cleanup_job, which takes _job_state_lock itself: the
-            # lock is not reentrant, so calling it from inside this block
-            # blocked the cancel forever and every later user of the lock with
-            # it (the download workers, pause, resume, retry and every new job).
-            _paused_jobs.pop(job_id, None)
+            with _job_state_lock:
+                pending_write = _job_status_writes.get(job_id)
+                if not pending_write:
+                    # Keep the False marker until the processor exits; a
+                    # retry must not start a second processor meanwhile.
+                    if job_id not in _running_jobs:
+                        return False, {"status": "error", "message": "Job has already finished"}, 409
+                    _running_jobs[job_id] = False
+                    pause_event = _paused_jobs.pop(job_id, None)
+                    if pause_event:
+                        pause_event.set()
+                    break
+            pending_write.wait(timeout=1.0)
 
         update_job_status(job_id, "cancelled")
         logger.info(f"Job {job_id} cancelled")
@@ -2010,6 +2005,8 @@ def pause_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
 
         # Use lock for thread-safe state modification
         with _job_state_lock:
+            if job_id in _job_status_writes:
+                return False, {"status": "error", "message": "Job status is changing"}, 409
             pause_event = _paused_jobs.get(job_id)
 
             # Check if already paused
@@ -2019,12 +2016,19 @@ def pause_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             # Signal pause (clear the event)
             if pause_event:
                 pause_event.clear()
+                status_write = threading.Event()
+                _job_status_writes[job_id] = status_write
             else:
                 return False, {"status": "error", "message": "Job not found in running jobs"}, 400
 
         # Do not hold a real state lock across DuckDB I/O: under eventlet a
         # waiter would otherwise stall the hub while this connection writes.
-        update_job_status(job_id, "paused")
+        try:
+            update_job_status(job_id, "paused")
+        finally:
+            with _job_state_lock:
+                _job_status_writes.pop(job_id, None)
+                status_write.set()
         logger.info(f"Job {job_id} paused")
         return True, {"status": "success", "message": "Job paused"}, 200
 
@@ -2059,13 +2063,22 @@ def resume_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
 
         # Use lock for thread-safe state modification
         with _job_state_lock:
+            if job_id in _job_status_writes:
+                return False, {"status": "error", "message": "Job status is changing"}, 409
             pause_event = _paused_jobs.get(job_id)
             if pause_event:
-                pause_event.set()
+                status_write = threading.Event()
+                _job_status_writes[job_id] = status_write
             else:
                 return False, {"status": "error", "message": "Job not found in running jobs"}, 400
 
-        update_job_status(job_id, "running")
+        try:
+            update_job_status(job_id, "running")
+        finally:
+            with _job_state_lock:
+                pause_event.set()
+                _job_status_writes.pop(job_id, None)
+                status_write.set()
         logger.info(f"Job {job_id} resumed")
         return True, {"status": "success", "message": "Job resumed"}, 200
 

@@ -351,11 +351,10 @@ def _spawn_websocket_subprocess():
 
     proc = _launch_child()
     _websocket_subprocess = proc
-    if proc is None:
-        return
-
-    # Graceful shutdown on clean gunicorn exit
-    atexit.register(_terminate_websocket_subprocess)
+    if proc is not None or _supervised():
+        # The supervisor may launch the child after an initial spawn failure,
+        # so its eventual child needs the same clean-exit backstop.
+        atexit.register(_terminate_websocket_subprocess)
 
     if _supervised():
         _start_supervisor()
@@ -464,6 +463,11 @@ def _supervise() -> None:
 
         proc = _launch_child()
         _websocket_subprocess = proc
+        if _should_stop_supervising():
+            # Shutdown may have checked the previous (dead) child while this
+            # launch was in progress. Reap the new one before leaving.
+            _terminate_websocket_subprocess()
+            return
         started_at = time.monotonic()
         with _state_lock:
             _restarts += 1

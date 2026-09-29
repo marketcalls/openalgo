@@ -7,6 +7,7 @@ Optimized for backtesting and analytical queries.
 """
 
 import os
+import threading
 from contextlib import contextmanager
 from datetime import date, datetime
 from functools import wraps
@@ -34,16 +35,24 @@ HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
 # this process.  Keep the lock at the function boundary: several mutations are
 # read-then-write sequences and locking individual statements does not make
 # those sequences atomic.
-_historify_write_lock = real_threading.Lock()
+# Mutations can yield during connection/conflict retries. This must be green
+# under eventlet so another waiting writer cannot block the lock holder's hub.
+# Native background callers enter through run_on_hub below.
+_historify_write_lock = threading.Lock()
 
 
 def _serialized_write(func):
     """Run one complete Historify mutation without an in-process writer race."""
 
-    @wraps(func)
-    def wrapped(*args, **kwargs):
+    def write(*args, **kwargs):
         with _historify_write_lock:
             return func(*args, **kwargs)
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        # Do not impose a new write deadline. Under eventlet a native thread
+        # cannot take a green lock directly; elsewhere this is inline.
+        return real_threading.run_on_hub(write, *args, timeout=None, **kwargs)
 
     return wrapped
 

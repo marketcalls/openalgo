@@ -235,13 +235,67 @@ def test_once_the_processor_has_left_the_retry_runs(historify):
     assert not _processor_sees_cancelled(hs, "H2"), "the retried job reads as cancelled"
 
 
-def test_cancelling_a_job_no_processor_holds_leaves_nothing_behind(historify):
+def test_cancel_without_a_processor_cannot_overwrite_a_terminal_transition(historify):
     hs, status, submitted = historify
 
-    assert hs.cancel_job("H3")[2] == 200
+    # The processor releases its claim before writing its terminal status.
+    # A cancellation whose earlier DB read saw "running" must not overwrite
+    # that completion or create a cancellation marker with nobody to remove it.
+    assert hs.cancel_job("H3")[2] == 409
 
     assert "H3" not in hs._running_jobs
-    assert hs.retry_failed_items("H3", "key")[2] == 200
+    assert "H3" not in hs._paused_jobs
+    assert status["value"] == "running"
+    assert submitted == []
+
+
+def test_cancel_waits_for_a_resume_status_write(historify, monkeypatch):
+    import database.historify_db as historify_db
+
+    hs, status, _submitted = historify
+    _processor_claimed(hs, "H4")
+    hs._paused_jobs["H4"].clear()
+    status["value"] = "paused"
+    writing_running = threading.Event()
+    finish_running = threading.Event()
+    results = {}
+
+    def update(_job_id, value, *args):
+        if value == "running":
+            writing_running.set()
+            assert finish_running.wait(3)
+        status["value"] = value
+
+    monkeypatch.setattr(historify_db, "update_job_status", update)
+    resumer = threading.Thread(
+        target=lambda: results.setdefault("resume", hs.resume_job("H4")), daemon=True
+    )
+    canceller = threading.Thread(
+        target=lambda: results.setdefault("cancel", hs.cancel_job("H4")), daemon=True
+    )
+    resumer.start()
+    assert writing_running.wait(3)
+    waiting_on_status = threading.Event()
+    with hs._job_state_lock:
+        status_write = hs._job_status_writes["H4"]
+    original_wait = status_write.wait
+
+    def wait_for_status(timeout=None):
+        waiting_on_status.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(status_write, "wait", wait_for_status)
+    canceller.start()
+    assert waiting_on_status.wait(3), "cancel did not wait for the resume write"
+    finish_running.set()
+    resumer.join(3)
+    canceller.join(3)
+
+    assert not resumer.is_alive() and not canceller.is_alive()
+    assert results["resume"][2] == 200
+    assert results["cancel"][2] == 200
+    assert status["value"] == "cancelled"
+    assert hs._running_jobs["H4"] is False
 
 
 def test_a_processor_that_finds_no_job_releases_its_claim(historify, monkeypatch):

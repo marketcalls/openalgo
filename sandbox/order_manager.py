@@ -1108,13 +1108,32 @@ class OrderManager:
                     400,
                 )
 
-            # The release commits the cancel and the funds change together.
+            # Stage the release in the same transaction as the cancel claim.
+            # release_margin() commits or rolls back on its own, so calling it
+            # here could undo the claim and still let this method report 200.
             if release_amount is not None:
-                self.fund_manager.release_margin(release_amount, 0, f"Order cancelled: {orderid}")
-            if release_note:
-                logger.info(release_note)
+                released, reason = self.fund_manager.stage_release_margin(
+                    release_amount, 0, f"Order cancelled: {orderid}", log=False
+                )
+                if not released:
+                    db_session.rollback()
+                    return (
+                        False,
+                        {
+                            "status": "error",
+                            "message": (
+                                f"Cannot cancel order: {reason}. The order remains open; "
+                                "check its status before trying again."
+                            ),
+                            "mode": "analyze",
+                        },
+                        409,
+                    )
 
             db_session.commit()
+
+            if release_note:
+                logger.info(release_note)
 
             logger.info(f"Order cancelled: {orderid}")
 

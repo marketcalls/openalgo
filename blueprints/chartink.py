@@ -388,6 +388,7 @@ def restore_squareoff_jobs() -> bool:
             return False
 
         restored = 0
+        all_registered = True
         for strategy in strategies:
             if not strategy.is_intraday or not strategy.squareoff_time:
                 continue
@@ -397,11 +398,13 @@ def restore_squareoff_jobs() -> bool:
                 continue
             if _add_squareoff_job(strategy.id, strategy.squareoff_time):
                 restored += 1
+            else:
+                all_registered = False
 
-        _squareoffs_restored = True
+        _squareoffs_restored = all_registered
         if restored:
             logger.info(f"Put back the square-off time of {restored} Chartink strategies")
-        return True
+        return all_registered
 
 
 @releases_scoped_sessions

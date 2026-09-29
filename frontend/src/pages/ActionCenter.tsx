@@ -64,7 +64,8 @@ interface PendingOrder {
   broker_order_id?: string | null
   /**
    * Seconds since the order was approved, measured by the server when this
-   * list was read. Its send begins at approval. Null while it is pending.
+   * list was read. Null while it is pending. Approval age alone cannot tell
+   * whether a long split or basket send is still running.
    */
   approved_age_seconds?: number | null
 }
@@ -74,20 +75,16 @@ interface PendingOrder {
  * no broker answer recorded for (SUBMITTING in database/action_center_db.py).
  *
  * It is written just before the order goes to the broker and replaced by the
- * broker's answer as soon as there is one, which also refreshes this page. So
- * a young one is a send still under way: waiting for its turn at the broker,
- * then for the broker's answer. An order that stays in it past any send was
- * cut off mid-send, by a restart or a crash, so it may or may not be at the
- * broker. OpenAlgo never sends such an order again on its own, and this page
- * offers no way to: only the broker's order book can say whether it arrived.
+ * broker's answer as soon as there is one. A long-running split or basket send
+ * can remain in this state for minutes; a crash can leave it there indefinitely.
+ * Elapsed time cannot distinguish those cases, so the page never treats age as
+ * proof that sending stopped.
  */
 const SENDING_NOT_CONFIRMED = 'submitting'
 
 /**
- * How long a send can take before it can only have been cut off: the wait for
- * the broker's rate limit, the broker call and the order status call after it,
- * with room to spare. Telling a trader to check the order book any sooner can
- * send them to place by hand an order OpenAlgo is still sending.
+ * When to show a longer-wait notice. This is a prompt to investigate an order
+ * without a broker answer, not a deadline after which sending must have stopped.
  */
 export const SEND_SETTLE_MS = 120_000
 
@@ -102,13 +99,13 @@ function isClaimed(order: PendingOrder): boolean {
   return order.status === 'approved' && order.broker_status === SENDING_NOT_CONFIRMED
 }
 
-/** An approved order whose send is still under way. */
+/** An approved order in the initial sending window. */
 function isSending(order: PendingOrder, readAt: number, now: number): boolean {
   const started = sendStartedAt(order, readAt)
   return isClaimed(order) && started !== null && now - started < SEND_SETTLE_MS
 }
 
-/** An approved order whose send was cut off, so nobody knows if it arrived. */
+/** An approved order still lacking an answer after the initial window. */
 function isSendNotConfirmed(order: PendingOrder, readAt: number, now: number): boolean {
   return isClaimed(order) && !isSending(order, readAt, now)
 }
@@ -194,9 +191,9 @@ export default function ActionCenterPage() {
     fetchData()
   }, [fetchData])
 
-  // A send still under way either finishes, which refreshes this page through
-  // pending_order_updated, or outlives SEND_SETTLE_MS. Look again at that
-  // moment, so an order that was cut off is shown as not confirmed.
+  // A send may finish, which refreshes this page through pending_order_updated,
+  // or outlive SEND_SETTLE_MS. Look again then and show the longer-wait notice
+  // without assuming that the send stopped.
   useEffect(() => {
     let next: number | null = null
     for (const order of orders) {
@@ -682,7 +679,7 @@ export default function ActionCenterPage() {
                                 variant="outline"
                                 className="h-8 border-amber-500 text-amber-700 dark:text-amber-400"
                               >
-                                Not confirmed
+                                Status unclear
                               </Badge>
                             )}
 
@@ -728,21 +725,19 @@ export default function ActionCenterPage() {
                         </TableCell>
                       </TableRow>
 
-                      {/* An order cut off while it was being sent: say so, and
-                          say what to check, because nothing will resend it. */}
+                      {/* A long send may still be running or have been interrupted. */}
                       {isSendNotConfirmed(order, readAt, now) && (
                         <TableRow>
                           <TableCell colSpan={10} className="p-2">
                             <Alert variant="warning">
                               <AlertTriangle className="h-4 w-4" />
-                              <AlertTitle>
-                                This order may or may not have reached your broker
-                              </AlertTitle>
+                              <AlertTitle>This order may still be sending</AlertTitle>
                               <AlertDescription>
-                                OpenAlgo started sending it but has no answer from your broker
-                                recorded, so it cannot tell whether the broker received it. OpenAlgo
-                                will not send it again. Check your broker's order book before you
-                                place this order again.
+                                OpenAlgo has no broker answer recorded. A split or basket order can
+                                take longer than two minutes. Sending may still be in progress, or
+                                an interruption may have left its outcome unknown. Check your
+                                broker's order book and refresh this page. Do not place this order
+                                again while its status is unclear.
                               </AlertDescription>
                             </Alert>
                           </TableCell>

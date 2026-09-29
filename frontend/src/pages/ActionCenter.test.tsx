@@ -1,14 +1,7 @@
 /**
- * An approved order whose send was cut off is shown as not confirmed.
- *
- * The backend claims an approved order for sending by writing broker_status
- * "submitting" before the broker call, and replaces it with the broker's answer
- * on every path that returns. A restart or crash between the two leaves the
- * row in "submitting", and the backend never sends it again (see
- * claim_pending_order_for_execution in database/action_center_db.py). Until
- * now the page did not read broker_status at all, so such a row looked like
- * any other approved order and a trader had no reason to check whether it
- * reached the broker before placing it again.
+ * A claimed order has no recorded broker answer while it is being sent and
+ * after an interrupted send. Age alone cannot tell those cases apart, since
+ * split and basket orders may send for longer than two minutes.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -35,14 +28,15 @@ type Row = {
   symbol: string
   status: 'pending' | 'approved' | 'rejected'
   broker_status: string | null
+  api_type?: string
   /** Seconds since approval, as the server measures it when the list is read. */
   approved_age_seconds?: number | null | (() => number)
 }
 
-/** Long past any send: an order still claimed this old was cut off. */
+/** Old enough to investigate, while a large split order may still be sending. */
 const LONG_AGO = 600
 
-function order({ id, symbol, status, broker_status, approved_age_seconds }: Row) {
+function order({ id, symbol, status, broker_status, api_type, approved_age_seconds }: Row) {
   const age =
     typeof approved_age_seconds === 'function'
       ? approved_age_seconds()
@@ -54,7 +48,7 @@ function order({ id, symbol, status, broker_status, approved_age_seconds }: Row)
   return {
     id,
     strategy: 'TV Alerts',
-    api_type: 'placeorder',
+    api_type: api_type ?? 'placeorder',
     symbol,
     exchange: 'NSE',
     action: 'BUY',
@@ -97,25 +91,24 @@ function rowOf(symbol: string) {
   return row
 }
 
-const NOTICE_TITLE = 'This order may or may not have reached your broker'
+const NOTICE_TITLE = 'This order may still be sending'
 
-describe('Action Center: an order whose send was not confirmed', () => {
+describe('Action Center: a send without a broker answer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
   })
 
-  it('says it may or may not have reached the broker, that it will not be sent again, and what to check', async () => {
+  it('says an old send may still be running and warns against placing it again', async () => {
     respondWith([{ id: 1, symbol: 'SBIN', status: 'approved', broker_status: 'submitting' }])
     render(<ActionCenterPage />)
 
     expect(await screen.findByText(NOTICE_TITLE)).toBeInTheDocument()
     const notice = screen.getByText(NOTICE_TITLE).closest('[role="alert"]') as HTMLElement
-    expect(notice).toHaveTextContent('OpenAlgo will not send it again.')
-    expect(notice).toHaveTextContent(
-      "Check your broker's order book before you place this order again."
-    )
-    expect(within(rowOf('SBIN')).getByText('Not confirmed')).toBeInTheDocument()
+    expect(notice).toHaveTextContent('A split or basket order can take longer than two minutes.')
+    expect(notice).toHaveTextContent('Do not place this order again while its status is unclear.')
+    expect(notice).not.toHaveTextContent('will not send it again')
+    expect(within(rowOf('SBIN')).getByText('Status unclear')).toBeInTheDocument()
   })
 
   it('offers no way to send it again', async () => {
@@ -127,7 +120,7 @@ describe('Action Center: an order whose send was not confirmed', () => {
     await screen.findByText(NOTICE_TITLE)
 
     // A pending order has approve and reject beside the details toggle. The
-    // unconfirmed one has only the toggle and the delete of any finished row.
+    // claimed one has only the toggle and the delete of any approved row.
     expect(within(rowOf('INFY')).getAllByRole('button')).toHaveLength(3)
     const buttons = within(rowOf('SBIN')).getAllByRole('button')
     expect(buttons).toHaveLength(2)
@@ -135,7 +128,7 @@ describe('Action Center: an order whose send was not confirmed', () => {
     expect(http.post).not.toHaveBeenCalled()
   })
 
-  it('marks each unconfirmed order, and only those', async () => {
+  it('marks each overdue claimed order, and only those', async () => {
     respondWith([
       { id: 1, symbol: 'SBIN', status: 'approved', broker_status: 'submitting' },
       { id: 2, symbol: 'TCS', status: 'approved', broker_status: 'submitting' },
@@ -147,10 +140,10 @@ describe('Action Center: an order whose send was not confirmed', () => {
     await screen.findAllByText(NOTICE_TITLE)
 
     expect(screen.getAllByText(NOTICE_TITLE)).toHaveLength(2)
-    expect(within(rowOf('SBIN')).getByText('Not confirmed')).toBeInTheDocument()
-    expect(within(rowOf('TCS')).getByText('Not confirmed')).toBeInTheDocument()
+    expect(within(rowOf('SBIN')).getByText('Status unclear')).toBeInTheDocument()
+    expect(within(rowOf('TCS')).getByText('Status unclear')).toBeInTheDocument()
     for (const symbol of ['RELIANCE', 'HDFCBANK', 'INFY']) {
-      expect(within(rowOf(symbol)).queryByText('Not confirmed')).not.toBeInTheDocument()
+      expect(within(rowOf(symbol)).queryByText('Status unclear')).not.toBeInTheDocument()
     }
   })
 
@@ -163,7 +156,39 @@ describe('Action Center: an order whose send was not confirmed', () => {
     await screen.findByText('RELIANCE')
 
     expect(screen.queryByText(NOTICE_TITLE)).not.toBeInTheDocument()
-    expect(screen.queryByText('Not confirmed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Status unclear')).not.toBeInTheDocument()
+  })
+
+  it('does not imply that long-running split and basket sends stopped', async () => {
+    respondWith([
+      {
+        id: 1,
+        symbol: 'SBIN',
+        status: 'approved',
+        broker_status: 'submitting',
+        api_type: 'splitorder',
+        approved_age_seconds: 180,
+      },
+      {
+        id: 2,
+        symbol: 'TCS',
+        status: 'approved',
+        broker_status: 'submitting',
+        api_type: 'basketorder',
+        approved_age_seconds: 240,
+      },
+    ])
+    render(<ActionCenterPage />)
+
+    expect(await screen.findAllByText(NOTICE_TITLE)).toHaveLength(2)
+    for (const symbol of ['SBIN', 'TCS']) {
+      expect(within(rowOf(symbol)).getByText('Status unclear')).toBeInTheDocument()
+    }
+    for (const notice of screen.getAllByText(NOTICE_TITLE)) {
+      const alert = notice.closest('[role="alert"]') as HTMLElement
+      expect(alert).toHaveTextContent('Sending may still be in progress')
+      expect(alert).not.toHaveTextContent('will not send it again')
+    }
   })
 })
 
@@ -189,10 +214,10 @@ describe('Action Center: an order that is still being sent', () => {
 
     expect(await within(await findRow('SBIN')).findByText('Sending')).toBeInTheDocument()
     expect(screen.queryByText(NOTICE_TITLE)).not.toBeInTheDocument()
-    expect(screen.queryByText('Not confirmed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Status unclear')).not.toBeInTheDocument()
   })
 
-  it('shows a send as not confirmed once no send could still be running', async () => {
+  it('keeps an overdue send uncertain because it may still be running', async () => {
     const approvedAt = Date.now() - (SEND_SETTLE_MS - 300)
     respondWith([
       {
@@ -209,8 +234,11 @@ describe('Action Center: an order that is still being sent', () => {
     expect(screen.queryByText(NOTICE_TITLE)).not.toBeInTheDocument()
 
     expect(await screen.findByText(NOTICE_TITLE, {}, { timeout: 3000 })).toBeInTheDocument()
-    expect(within(rowOf('SBIN')).getByText('Not confirmed')).toBeInTheDocument()
+    expect(within(rowOf('SBIN')).getByText('Status unclear')).toBeInTheDocument()
     expect(within(rowOf('SBIN')).queryByText('Sending')).not.toBeInTheDocument()
+    expect(screen.getByText(NOTICE_TITLE).closest('[role="alert"]')).toHaveTextContent(
+      'Do not place this order again while its status is unclear.'
+    )
   })
 })
 

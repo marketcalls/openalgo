@@ -38,6 +38,39 @@ threads, see [Known limits](#known-limits)).
 
 ## Before you start
 
+### Platforms
+
+| Host | Runtime and deployment |
+|---|---|
+| Ubuntu desktop or server | The supplied systemd installer and worker switch script, or Linux containers |
+| Other Linux desktops and servers | Linux containers, or a managed Gunicorn process using the launcher; the supplied systemd installer assumes Ubuntu |
+| Windows | `uv run app.py` uses native threads and ignores the worker setting. Use a Linux container or Ubuntu in WSL2 for the Gunicorn eventlet/gthread deployment |
+| macOS | `uv run app.py` uses native threads. Linux containers provide the production deployment; the Ubuntu systemd scripts do not apply to macOS |
+| Raspberry Pi | Use a 64-bit Linux OS and ARM64 dependencies. Native Linux ARM64 CI checks compatibility; it does not measure a Pi's memory, thermal limits, or trading-day capacity |
+
+Gunicorn is a Unix server; setting `OPENALGO_WORKER_CLASS` does not turn the
+native Windows development server into Gunicorn. A desktop running a server
+must stay awake and keep its network connection available.
+
+### Running continuously
+
+Use a service manager or the documented container restart policy so OpenAlgo
+starts after a reboot or process failure. Keep one Gunicorn worker per
+instance, allow the shutdown window described below, and monitor disk space
+for databases, strategy output and logs. On a small ARM64 host, check memory
+and thread usage with the actual number of tabs, strategies and subscriptions
+you intend to run; the 64-thread request budget is per instance.
+
+Before relying on a new runtime for live trading, run it through a complete
+trading day and the overnight broker-session expiry. Check that reconnects
+and resubscriptions recover, scheduled jobs resume, and memory, file handles
+and thread counts settle after repeated connect/disconnect cycles. Automated
+lifecycle and platform tests cover regressions but do not establish a
+multi-day uptime guarantee or certify every broker. See the verification
+status at the end of this page.
+
+### Switch checklist
+
 - **Update OpenAlgo first.** The files `install/openalgo-gunicorn.sh` and
   `install/switch-worker.sh` must be present in your OpenAlgo folder.
 - **Ubuntu:** your service must be the one `install.sh` or `install-multi.sh`
@@ -284,7 +317,11 @@ again. None of these is a setting, and none of them happens on eventlet.
 
 - **A busy broker.** When a broker's rate limit would keep a request waiting
   more than about 10 seconds, the request is refused (HTTP 429) and nothing is
-  sent to the broker. A smart order refused this way places nothing.
+  sent to the broker. A smart order refused this way places nothing. This
+  applies to a local refusal before sending. A broker response received
+  after sending is not proof that nothing was placed; check the broker order
+  book before repeating an order. An Action Center order whose status becomes
+  unclear may still be sending, especially a split or basket order.
 - **Two orders for the same symbol at once.** A smart order, or a sandbox
   order, that waits more than 30 seconds for another one on the same symbol to
   finish is refused with a sentence asking you to try again. Check your

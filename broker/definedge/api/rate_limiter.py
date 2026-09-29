@@ -13,6 +13,7 @@ import threading
 import time
 from urllib.parse import urlparse
 
+from utils import runtime
 from utils.broker_backpressure import BrokerBusyError, cap_server_delay, check_queue_wait
 from utils.logging import get_logger
 
@@ -117,6 +118,12 @@ def rate_limited_request(client, method, url, *, wait_kind="data", **kwargs):
         apply_rate_limit(bucket, wait_kind)
         response = client.request(method, url, **kwargs)
         if response.status_code != 429:
+            return response
+        # An order endpoint may have accepted the write before answering 429.
+        # Return its actual response instead of retrying it or raising the
+        # pre-send BrokerBusyError used by Action Center to offer an order for
+        # reapproval. Reads retain the bounded retry behavior.
+        if wait_kind == "order" and runtime.gthread_active():
             return response
         if attempt < MAX_RETRIES:
             delay = retry_delay(response.headers, attempt, wait_kind)

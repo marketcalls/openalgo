@@ -257,6 +257,29 @@ def test_a_database_that_is_not_ready_is_retried(restore, monkeypatch):
     assert retry.args == [4]
 
 
+def test_failed_squareoff_registration_is_retried(restore, monkeypatch):
+    scheduler, reads = restore
+    real_add = scheduler.add_job
+    failed = False
+
+    def add_job(*args, **kwargs):
+        nonlocal failed
+        if kwargs.get("id") == "squareoff_1" and not failed:
+            failed = True
+            raise RuntimeError("scheduler temporarily unavailable")
+        return real_add(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler, "add_job", add_job)
+
+    assert chartink.restore_squareoff_jobs() is False
+    assert chartink._squareoffs_restored is False
+    assert "squareoff_1" not in scheduler.jobs
+
+    assert chartink.restore_squareoff_jobs() is True
+    assert "squareoff_1" in scheduler.jobs
+    assert len(reads) == 2
+
+
 def test_the_first_chartink_request_restores_when_the_scheduled_attempt_has_not(
     restore, monkeypatch
 ):

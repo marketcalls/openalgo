@@ -309,6 +309,53 @@ def test_a_long_retry_after_is_honoured_outside_gthread(not_gthread):
     assert definedge.retry_delay({}, 2) == 4.0
 
 
+def test_definedge_sent_order_throttle_is_not_a_pre_send_refusal(gthread, monkeypatch):
+    from broker.definedge.api import rate_limiter as definedge
+
+    response = SimpleNamespace(status_code=429, headers={"Retry-After": "60"})
+    sent = []
+
+    class Client:
+        def request(self, method, url, **kwargs):
+            sent.append((method, url))
+            return response
+
+    monkeypatch.setattr(definedge, "_last_call_time", {})
+    recorder = bp.RefusalRecorder().start()
+    try:
+        result = definedge.rate_limited_request(
+            Client(), "POST", "https://example.invalid/placeorder", wait_kind="order"
+        )
+        assert result is response
+        assert sent == [("POST", "https://example.invalid/placeorder")]
+        assert not recorder.refused, "a sent order may not be returned for reapproval"
+    finally:
+        recorder.stop()
+
+
+def test_definedge_legacy_order_throttle_still_retries(not_gthread, monkeypatch):
+    from broker.definedge.api import rate_limiter as definedge
+
+    throttled = SimpleNamespace(status_code=429, headers={"Retry-After": "0.05"})
+    accepted = SimpleNamespace(status_code=200, headers={})
+    responses = iter((throttled, accepted))
+    sent = []
+
+    class Client:
+        def request(self, method, url, **kwargs):
+            sent.append(method)
+            return next(responses)
+
+    monkeypatch.setattr(definedge, "_last_call_time", {})
+    monkeypatch.setattr(definedge.time, "sleep", lambda _seconds: None)
+    result = definedge.rate_limited_request(
+        Client(), "POST", "https://example.invalid/placeorder", wait_kind="order"
+    )
+
+    assert result is accepted
+    assert sent == ["POST", "POST"]
+
+
 # --- a refusal is never read as data --------------------------------------------
 
 

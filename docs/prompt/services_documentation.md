@@ -589,6 +589,14 @@ Initialize Historify and its scheduler through application startup. Feature
 code should retrieve the initialized scheduler rather than creating a second
 instance.
 
+Historify database mutations are serialized as complete operations. Under
+eventlet their lock is cooperative, and native thread callers enter through
+`real_threading.run_on_hub`; never hold a real bookkeeping lock across a
+database retry or green sleep. Job registry locks protect claims and signals
+only: release them before writing status or calling cleanup, which acquires
+the registry lock itself. A cancellation that loses the processor's terminal
+claim returns 409 rather than overwriting a completed job with `cancelled`.
+
 ### Streaming and market-data state
 
 | Files | Responsibility |

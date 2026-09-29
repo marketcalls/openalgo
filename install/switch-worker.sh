@@ -565,11 +565,6 @@ switch_one() {
     confirm "  Switch $service to the launcher and restart it on the $expected web server now?" \
         || { say "  Nothing changed."; rm -rf "$tmpdir"; return 3; }
 
-    if [ -n "$TO" ]; then
-        previous="$(requested_worker "$workdir" "$OLD_VENV")"
-        set_env_worker "$workdir" "$OLD_VENV" "$TO" || { rm -rf "$tmpdir"; return 3; }
-    fi
-
     if ! as_root cp -p "$unit" "$backup"; then
         warn "  Could not save a copy of the service file. Nothing was changed."
         rm -rf "$tmpdir"
@@ -582,6 +577,14 @@ switch_one() {
         return 3
     fi
     rm -rf "$tmpdir"
+    if [ -n "$TO" ]; then
+        previous="$(requested_worker "$workdir" "$OLD_VENV")"
+        if ! set_env_worker "$workdir" "$OLD_VENV" "$TO"; then
+            as_root cp -p "$backup" "$unit"
+            warn "  Could not select the new web server. The previous service file is in place."
+            return 3
+        fi
+    fi
     say "  Saved the previous service file as $backup"
 
     if restart_and_check "$service" "$OLD_BIND" "$expected"; then

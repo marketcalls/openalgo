@@ -93,7 +93,7 @@ def _pause_before_release(monkeypatch, barrier):
     """Make every margin release wait (briefly) for the other racer."""
     from sandbox.fund_manager import FundManager
 
-    real_release = FundManager.release_margin
+    real_release = FundManager.stage_release_margin
 
     def release_after_both_decided(self, *args, **kwargs):
         try:
@@ -103,7 +103,7 @@ def _pause_before_release(monkeypatch, barrier):
             pass
         return real_release(self, *args, **kwargs)
 
-    monkeypatch.setattr(FundManager, "release_margin", release_after_both_decided)
+    monkeypatch.setattr(FundManager, "stage_release_margin", release_after_both_decided)
 
 
 def test_two_cancels_of_one_order_release_its_margin_once(monkeypatch):
@@ -121,6 +121,25 @@ def test_two_cancels_of_one_order_release_its_margin_once(monkeypatch):
     funds = funds_of(USER)
     assert funds["used"] == 20 * PRICE
     assert funds["available"] == CAPITAL - 20 * PRICE
+
+
+def test_failed_margin_release_does_not_report_a_cancelled_order():
+    """A failed staged release must roll back the cancel claim and tell the caller."""
+    from database.sandbox_db import SandboxFunds, db_session
+    from sandbox.order_manager import OrderManager
+
+    target = _place(10)
+    funds = SandboxFunds.query.filter_by(user_id=USER).first()
+    funds.used_margin = Decimal("0")
+    db_session.commit()
+    release_sessions()
+
+    ok, response, status = OrderManager(USER).cancel_order(target)
+
+    assert not ok and status == 409, response
+    assert "order remains open" in response["message"].lower()
+    release_sessions()
+    assert _order(target)["status"] == "open"
 
 
 def test_a_cancel_racing_a_fill_leaves_one_outcome(monkeypatch):
