@@ -156,7 +156,20 @@ def _attempt_google_login(page) -> None:
 _FRESH_ENOUGH_SECONDS = 2700   # 45 min — well under the observed 180min TTL
 
 
-def refresh_tf_jwt(headless: bool = True, timeout_s: int = 60) -> str | None:
+def _install_playwright_browsers() -> bool:
+    """Run `playwright install chromium` once, to self-heal a missing browser build."""
+    import subprocess
+    import sys
+    print("[tf_auth] chromium browser missing — running `playwright install chromium` (one-time download)")
+    try:
+        result = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], timeout=300)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"[tf_auth] auto-install failed: {e}")
+        return False
+
+
+def refresh_tf_jwt(headless: bool = True, timeout_s: int = 60, _retried: bool = False) -> str | None:
     """
     Launch the persistent profile, reload TradeFinder, and return a fresh `lt` token.
     Writes the token to TF_JWT_FILE on success. Returns None on any failure.
@@ -232,6 +245,8 @@ def refresh_tf_jwt(headless: bool = True, timeout_s: int = 60) -> str | None:
                   "re-run tf_login_setup.py headed)")
             return None
     except Exception as e:
+        if not _retried and "Executable doesn't exist" in str(e) and _install_playwright_browsers():
+            return refresh_tf_jwt(headless=headless, timeout_s=timeout_s, _retried=True)
         print(f"[tf_auth] refresh error: {e}")
         return None
 
