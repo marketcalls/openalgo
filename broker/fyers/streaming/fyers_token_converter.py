@@ -6,24 +6,21 @@ Uses database lookup for brsymbol mapping
 
 import json
 import logging
-import threading
-from pathlib import Path
 
 import requests
 
-from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-
-logger = get_logger("fyers_token_converter")
 
 # Import database functions
 try:
     from database.token_db import get_br_symbol
+    from database.token_db_enhanced import get_symbol_info
 
     DATABASE_AVAILABLE = True
 except ImportError:
     DATABASE_AVAILABLE = False
     get_br_symbol = None
+    get_symbol_info = None
     logging.warning("Database not available - falling back to manual conversion")
 
 
@@ -47,42 +44,11 @@ class FyersTokenConverter:
     # An index scrip token carries a name ("if|nse_cm|Nifty IT"), not a number.
     # The feed answers to the index's display name, which is what the official
     # SDK sends, and today also to the ticker stem ("NIFTYIT"); the latter is
-    # undocumented, so the display name is used wherever Fyers publishes one.
-    # fyers-apiv3 3.1.18 fetches the table on connect and falls back to a
-    # bundled copy, and so does this. The bundled file is a snapshot of that
-    # URL (121 entries on 2026-09-29); a symbol absent from it keeps the stem.
-    INDEX_MAPPING_URL = "https://public.fyers.in/sym_details/index_hsm_mapping.json"
-    INDEX_MAPPING_FILE = Path(__file__).with_name("index_hsm_mapping.json")
-    INDEX_MAPPINGS: dict[str, str] = json.loads(INDEX_MAPPING_FILE.read_text(encoding="utf-8"))
-
-    _index_mapping_cache: dict[str, str] | None = None
-    _index_mapping_lock = threading.Lock()
-
-    @classmethod
-    def load_index_mapping(cls) -> dict[str, str]:
-        """Return the index name table, fetched from Fyers once per process.
-
-        The live table is laid over the bundled copy so an index missing from
-        either still resolves. A failed fetch uses the bundled copy alone and
-        is retried by the next connect, as the SDK does.
-        """
-        if cls._index_mapping_cache is None:
-            with cls._index_mapping_lock:
-                if cls._index_mapping_cache is None:
-                    try:
-                        response = get_httpx_client().get(cls.INDEX_MAPPING_URL, timeout=10)
-                        response.raise_for_status()
-                        live = response.json()
-                        if not isinstance(live, dict) or not live:
-                            raise ValueError("index mapping is not a non-empty object")
-                        cls._index_mapping_cache = {**cls.INDEX_MAPPINGS, **live}
-                        logger.debug(f"Loaded {len(live)} index names from Fyers")
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not fetch the Fyers index name table, using the bundled copy: {e}"
-                        )
-                        return dict(cls.INDEX_MAPPINGS)
-        return cls._index_mapping_cache
+    # undocumented. The master contract download stores the display name Fyers
+    # publishes in symtoken.name for index rows (see
+    # broker/fyers/database/master_contract_db.fetch_index_hsm_names) and the
+    # stem where none is published, so the name comes from the same lookup as
+    # the broker symbol and no table lives in the streaming code.
 
     def __init__(self, access_token: str):
         """
@@ -98,7 +64,8 @@ class FyersTokenConverter:
 
         self.symbols_token_api = "https://api-t1.fyers.in/data/symbol-token"
         self.database_available = DATABASE_AVAILABLE
-        self.index_mappings = self.load_index_mapping()
+        # brsymbol -> HSM index name, filled from symtoken.name as symbols are resolved
+        self._index_names: dict[str, str] = {}
 
     def get_brsymbols_from_database(
         self, symbol_exchange_pairs: list[tuple[str, str]]
@@ -129,6 +96,10 @@ class FyersTokenConverter:
                 if brsymbol:
                     brsymbol_map[(symbol, exchange)] = brsymbol
                     # self.logger.info(f"Found brsymbol: {symbol}@{exchange} -> {brsymbol}")
+                    if exchange.endswith("_INDEX") and get_symbol_info is not None:
+                        info = get_symbol_info(symbol, exchange)
+                        if info is not None and getattr(info, "name", None):
+                            self._index_names[brsymbol] = info.name
                 else:
                     self.logger.error(f"No brsymbol found in database for {symbol}@{exchange}")
 
@@ -320,8 +291,8 @@ class FyersTokenConverter:
             if is_index:
                 # For indices, always use index feed (if) regardless of data_type
                 # Depth requests for indices will be converted to quote data and then synthetic depth
-                if symbol in self.index_mappings:
-                    token_name = self.index_mappings[symbol]
+                if symbol in self._index_names:
+                    token_name = self._index_names[symbol]
                 else:
                     # Extract index name from symbol
                     token_name = symbol.split(":")[1].replace("-INDEX", "")
@@ -387,8 +358,8 @@ class FyersTokenConverter:
                 if symbol.endswith("-INDEX"):
                     # For indices, always use index feed (if) regardless of data_type
                     prefix = "if"
-                    if symbol in self.index_mappings:
-                        token = self.index_mappings[symbol]
+                    if symbol in self._index_names:
+                        token = self._index_names[symbol]
                     else:
                         token = symbol_name.replace("-INDEX", "")
 

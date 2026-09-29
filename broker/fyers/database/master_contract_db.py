@@ -206,6 +206,48 @@ def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | No
     return success, downloaded_files, error_msg
 
 
+INDEX_HSM_NAMES_URL = "https://public.fyers.in/sym_details/index_hsm_mapping.json"
+
+
+def fetch_index_hsm_names() -> dict[str, str]:
+    """Return Fyers' index display names keyed by ticker, or {} if unavailable.
+
+    The HSM market-data socket subscribes an index by its display name
+    ("if|nse_cm|Nifty IT"), which no master-contract column carries. Fyers
+    publishes the table separately and the official SDK loads it on connect;
+    here it is loaded once per download and stored in symtoken.name, so the
+    streaming side reads it from the database like every other symbol field.
+    """
+    try:
+        response = get_httpx_client().get(INDEX_HSM_NAMES_URL, timeout=30.0)
+        response.raise_for_status()
+        names = response.json()
+        if not isinstance(names, dict):
+            raise ValueError("index name table is not an object")
+        logger.info(f"Loaded {len(names)} Fyers index display names")
+        return {str(k): str(v) for k, v in names.items()}
+    except Exception as e:
+        logger.warning(f"Could not fetch the Fyers index display names, keeping ticker stems: {e}")
+        return {}
+
+
+def _apply_index_names(df: pd.DataFrame, index_names: dict[str, str] | None) -> None:
+    """Set name on index rows of a processed frame to the HSM display name.
+
+    Equity rows keep the company name from Symbol Details. An index row gets
+    the published display name when there is one and otherwise the ticker
+    stem ("NSE:NIFTYIT-INDEX" -> "NIFTYIT"), which the feed also accepts and
+    which the token converter derives the same way, never the "X-INDEX"
+    description that nothing can subscribe with.
+    """
+    if "brsymbol" not in df or "exchange" not in df:
+        return
+    mask = df["exchange"].astype(str).str.endswith("_INDEX")
+    tickers = df.loc[mask, "brsymbol"].astype(str)
+    stems = tickers.str.split(":", n=1).str[-1].str.replace("-INDEX", "", regex=False)
+    df.loc[mask, "name"] = tickers.map(index_names or {}).fillna(stems)
+
+
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
     # Reorder and format the parts to match the OpenAlgo standard symbol format
@@ -379,6 +421,28 @@ def process_fyers_bse_csv(path):
         "SME IPO": "BSESMEIPO",
         "TECK": "BSETECK",
         "TELCOM": "BSETELECOM",
+        # Indices Fyers lists that had no entry above and so fell through to
+        # the raw stem (ALLCAP, UTILS, BHRT22...). Named on the same pattern as
+        # the rest: BSE plus the index's own name, INDEX kept only where S&P's
+        # name ends in it. Listed in docs/prompt/symbol-format.md.
+        "100LARGECAPTMC": "BSE100LARGECAPTMCINDEX",
+        "250SMALLCAP": "BSE250SMALLCAPINDEX",
+        "ALLCAP": "BSEALLCAP",
+        "BASMTR": "BSEBASICMATERIALS",
+        "BHRT22": "BSEBHARAT22INDEX",
+        "BSHOSP": "BSEHOSPITALS",
+        "CDGS": "BSECONSUMERDISCRETIONARYGOODS&SERVICES",
+        "DFRG": "BSEDIVERSIFIEDFINANCIALSREVENUEGROWTHINDEX",
+        "DIVIDENDSTABILITY": "BSEDIVIDENDSTABILITY",
+        "ENHANCEDVALUE": "BSEENHANCEDVALUE",
+        "ESG100": "BSE100ESG",
+        "FOCIT": "BSEFOCUSEDIT",
+        "INDIAMANUFACTURING": "BSEINDIAMANUFACTURING",
+        "LOWVOLATILITY": "BSELOWVOLATILITY",
+        "MOMENTUM": "BSEMOMENTUM",
+        "PRIVATEBANKS": "BSEPRIVATEBANKS",
+        "QUALITY": "BSEQUALITY",
+        "UTILS": "BSEUTILITIES",
     }
     original_bse = df_filtered.loc[bse_idx_mask, "symbol"]
     mapped_bse = original_bse.map(bse_index_map)
@@ -720,10 +784,13 @@ def master_contract_download():
                 "master_contract_download", {"status": "error", "message": message}
             )
 
+        index_names = fetch_index_hsm_names()
         delete_symtoken_table()
         token_df = process_fyers_nse_csv(output_path)
+        _apply_index_names(token_df, index_names)
         copy_from_dataframe(token_df)
         token_df = process_fyers_bse_csv(output_path)
+        _apply_index_names(token_df, index_names)
         copy_from_dataframe(token_df)
         token_df = process_fyers_bfo_csv(output_path)
         copy_from_dataframe(token_df)
