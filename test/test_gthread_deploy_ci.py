@@ -91,6 +91,10 @@ def test_cross_platform_runtime_suite_covers_windows_mac_and_arm64():
         "test_gthread_sandbox_funds.py",
         "test_gthread_sandbox_orders.py",
         "test_gthread_review_funds_cas_cleanup.py",
+        "test_gthread_memory_auth_decrypt.py",
+        "test_gthread_memory_order_updates.py",
+        "test_gthread_memory_streaming.py",
+        "test_gthread_memory_flow.py",
     ):
         assert f"test/{name}" in script
         assert (ROOT / "test" / name).is_file(), name

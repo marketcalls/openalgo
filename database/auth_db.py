@@ -546,13 +546,14 @@ def encrypt_token(token):
     return fernet.encrypt(token.encode()).decode()
 
 
-# Track ciphertext fingerprints we've already failed to decrypt so we log each
-# orphan row's full traceback once, then suppress the noise on every subsequent
-# call. Without this, a single un-migrated row encrypted under a lost salt
+# Track recent ciphertext fingerprints we've failed to decrypt so we log each
+# orphan row's full traceback once per hour, then suppress repeated noise.
+# Bound the cache: malformed tokens have an unbounded key space, and this
+# worker can run indefinitely. Without dedupe, a row encrypted under a lost salt
 # (e.g. the row left as-is after a Fernet salt rotation, see issue #1394)
 # triggers a full ERROR + traceback on every WebSocket re-connect attempt,
 # spamming the logs with hundreds of identical entries.
-_decrypt_failure_fingerprints: set[str] = set()
+_decrypt_failure_fingerprints = LockedTTLCache(maxsize=256, ttl=3600)
 
 
 def decrypt_token(encrypted_token):
@@ -576,12 +577,18 @@ def decrypt_token(encrypted_token):
         except Exception:
             fp = "unknown"
 
-        if fp in _decrypt_failure_fingerprints:
+        # Check and insert together so concurrent requests report one full
+        # traceback for the same bad ciphertext. Keep logging outside the lock.
+        with _decrypt_failure_fingerprints.lock:
+            seen = fp in _decrypt_failure_fingerprints
+            if not seen:
+                _decrypt_failure_fingerprints[fp] = True
+
+        if seen:
             # Already reported the full traceback once — keep the signal
             # but at debug level so it doesn't spam ERROR logs.
             logger.debug(f"Repeat decrypt failure (fingerprint={fp})")
         else:
-            _decrypt_failure_fingerprints.add(fp)
             logger.exception(
                 f"Error decrypting token (fingerprint={fp}): {e}. "
                 "This row may have been encrypted under a previous "

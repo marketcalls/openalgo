@@ -456,6 +456,15 @@ order facade.
 
 See [Flow import format](flow-import-format.md) for supported node JSON.
 
+Flow records the username and broker that own each successful subscription.
+`release_workflow_subscriptions(workflow_id)` retains failed releases for retry
+and removes successful releases only if their ownership version still matches.
+A subscription shared by another Flow workflow remains subscribed. Delete and
+deactivate hold the workflow execution lock through cleanup: a running workflow
+returns HTTP 409, and a failed release returns HTTP 503 without deleting or
+deactivating the workflow. Retry the operation after the run or proxy recovers;
+an already-inactive workflow also retries pending subscription cleanup.
+
 Primary internal entry points:
 
 ```python

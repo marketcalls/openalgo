@@ -51,6 +51,13 @@ _POOL = ThreadPoolExecutor(
     thread_name_prefix="strategy-order-update",
 )
 
+# A fixed worker count does not bound ThreadPoolExecutor's work queue. The
+# upstream event bus cannot apply backpressure if this callback immediately
+# moves every payload into a second unbounded queue. Admit at most 128 here;
+# saturation runs on the bus's already-bounded critical worker, adding no
+# second drop path. The bus still reports overload at its own critical cap.
+_UPDATE_SLOTS = threading.BoundedSemaphore(128)
+
 # Broker vocabularies differ. These are the states that mean "this order is
 # done and it traded", normalised the same way recovery normalises them.
 _FILLED = frozenset({"complete", "completed", "filled", "executed", "traded"})
@@ -555,17 +562,27 @@ def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
 
 
 def _on_order_update(event: Any) -> None:
-    """Bus callback. Returns immediately; the work happens on the pool.
+    """Queue an update, applying backpressure on the critical bus lane if full.
 
-    Kept trivial on purpose. The bus dispatches every subscriber, so anything
-    slow here delays the others, and this one is called for every order the
-    platform places.
+    The quiet path returns immediately. Under overload, processing one update
+    here keeps the upstream queue's bound effective without dropping that fill.
+    This callback runs on a critical bus worker, not the broker's feed thread.
     """
     try:
         order_id = getattr(event, "orderid", "")
         if not order_id:
             return
-        _POOL.submit(_apply_update, order_id, event)
+        if not _UPDATE_SLOTS.acquire(blocking=False):
+            _apply_update(order_id, event)
+            return
+        try:
+            future = _POOL.submit(_apply_update, order_id, event)
+        except BaseException:
+            _UPDATE_SLOTS.release()
+            raise
+        # Future completion covers success, failure and cancellation before the
+        # task starts. Releasing only inside the task would leak cancelled slots.
+        future.add_done_callback(lambda _future: _UPDATE_SLOTS.release())
     except Exception:
         logger.exception("Could not queue an order update")
 

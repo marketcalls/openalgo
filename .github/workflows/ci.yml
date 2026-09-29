@@ -276,6 +276,10 @@ jobs:
           test/test_gthread_sandbox_funds.py
           test/test_gthread_sandbox_orders.py
           test/test_gthread_review_funds_cas_cleanup.py
+          test/test_gthread_memory_auth_decrypt.py
+          test/test_gthread_memory_order_updates.py
+          test/test_gthread_memory_streaming.py
+          test/test_gthread_memory_flow.py
           -o addopts="" --timeout=120 -rs
 
   # Frontend linting

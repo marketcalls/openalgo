@@ -45,6 +45,9 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
         self.heartbeat_thread = None
+        self._heartbeat_stop = None
+        self._connect_thread = None
+        self._reconnect_stop = threading.Event()
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -90,11 +93,31 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        with self.lock:
+            if (
+                self._connect_thread is not None
+                and self._connect_thread.is_alive()
+                and not self._reconnect_stop.is_set()
+            ):
+                return
+            # A prior disconnect can still be finishing its old loop. Give
+            # this connection its own stop signal so a new login cannot revive
+            # the old loop by clearing a shared Event.
+            stop_event = threading.Event()
+            self._reconnect_stop = stop_event
+            self._connect_thread = threading.Thread(
+                target=self._connect_with_retry,
+                args=(stop_event,),
+                daemon=True,
+                name="pocketful-market-reconnect",
+            )
+            self._connect_thread.start()
 
-    def _connect_with_retry(self) -> None:
+    def _connect_with_retry(self, stop_event: threading.Event | None = None) -> None:
         """Connect to Pocketful WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+        if stop_event is None:
+            stop_event = self._reconnect_stop
+        while self.running and not stop_event.is_set() and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
                 self.logger.info(
                     f"Connecting to Pocketful WebSocket (attempt {self.reconnect_attempts + 1})"
@@ -115,20 +138,29 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Build WebSocket URL
                 ws_url = f"{self.BASE_URL}/ws/v1/feeds?login_id={self.user_id}&access_token={self.access_token}"
 
-                # Create WebSocket connection
-                self.ws_client = websocket.WebSocketApp(
-                    ws_url,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open,
-                )
+                # A logout may have landed during the token DB read. Publish
+                # the socket under the same short lock disconnect() uses, so
+                # it cannot appear after disconnect already looked for one.
+                with self.lock:
+                    if not self.running or stop_event.is_set():
+                        break
+                    ws_client = websocket.WebSocketApp(
+                        ws_url,
+                        on_message=self._on_message,
+                        on_error=self._on_error,
+                        on_close=self._on_close,
+                        on_open=self._on_open,
+                    )
+                    self.ws_client = ws_client
 
                 # Run WebSocket connection
-                self.ws_client.run_forever()
+                if not self.running or stop_event.is_set():
+                    ws_client.close()
+                    break
+                ws_client.run_forever()
 
                 # If we get here, the connection was closed
-                if not self.running:
+                if not self.running or stop_event.is_set():
                     break
 
                 self.reconnect_attempts += 1
@@ -136,7 +168,8 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.warning(f"Connection lost. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                if stop_event.wait(delay):
+                    break
 
             except Exception as e:
                 self.reconnect_attempts += 1
@@ -144,16 +177,23 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                if stop_event.wait(delay):
+                    break
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
 
     def disconnect(self) -> None:
         """Disconnect from Pocketful WebSocket"""
-        self.running = False
-        if hasattr(self, "ws_client") and self.ws_client:
-            self.ws_client.close()
+        with self.lock:
+            self.running = False
+            self.connected = False
+            self._reconnect_stop.set()
+            if self._heartbeat_stop is not None:
+                self._heartbeat_stop.set()
+            ws_client = self.ws_client
+        if ws_client is not None:
+            ws_client.close()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
@@ -344,12 +384,32 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_open(self, ws) -> None:
         """Callback when connection is established"""
-        self.logger.info("Connected to Pocketful WebSocket")
-        self.connected = True
-        self.reconnect_attempts = 0
+        with self.lock:
+            # websocket-client may invoke on_open even when disconnect closed
+            # this socket just before run_forever began. Never authenticate or
+            # start a heartbeat for a revoked/obsolete connection.
+            if not self.running or self._reconnect_stop.is_set() or ws is not self.ws_client:
+                stale = True
+            else:
+                stale = False
+                self.connected = True
+                self.reconnect_attempts = 0
+                if self._heartbeat_stop is not None:
+                    self._heartbeat_stop.set()
+                stop_event = threading.Event()
+                self._heartbeat_stop = stop_event
+                current_ws = self.ws_client
+        if stale:
+            ws.close()
+            return
 
-        # Start heartbeat thread
-        self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self.logger.info("Connected to Pocketful WebSocket")
+        self.heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(stop_event, current_ws),
+            daemon=True,
+            name="pocketful-market-heartbeat",
+        )
         self.heartbeat_thread.start()
 
         # Resubscribe to existing subscriptions if reconnecting
@@ -374,7 +434,11 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(
             f"Pocketful WebSocket connection closed: code={close_status_code}, message={close_msg}"
         )
-        self.connected = False
+        with self.lock:
+            if ws is self.ws_client:
+                self.connected = False
+                if self._heartbeat_stop is not None:
+                    self._heartbeat_stop.set()
 
     def _on_message(self, ws, message) -> None:
         """Callback for messages from the WebSocket"""
@@ -590,13 +654,14 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     return sub
         return None
 
-    def _heartbeat_loop(self) -> None:
+    def _heartbeat_loop(self, stop_event: threading.Event, current_ws) -> None:
         """Send periodic heartbeats to keep connection alive"""
-        while self.running and self.connected:
+        while self.running and self.connected and not stop_event.is_set():
             try:
-                if self.ws_client and self.connected:
-                    self.ws_client.send(json.dumps({"a": "h"}))
+                if self.ws_client is current_ws:
+                    current_ws.send(json.dumps({"a": "h"}))
                     self.logger.debug("Heartbeat sent")
             except Exception as e:
                 self.logger.error(f"Error sending heartbeat: {e}")
-            time.sleep(15)  # Send heartbeat every 15 seconds
+            if stop_event.wait(15):
+                break

@@ -8,6 +8,21 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Long-running memory and resource cleanup
+
+- Bound authentication failure fingerprint storage and the Strategy Module's
+  pending order-update work. A slow update worker applies backpressure through
+  the existing bounded event bus instead of retaining an unlimited second queue.
+- Pocketful reconnects stop the previous heartbeat, share one retry loop, and
+  interrupt retry waits on disconnect. Logout during a token read cannot open
+  a replacement feed.
+- Flow retains failed subscription releases for retry. Delete and deactivate
+  return 503 while release is pending, or 409 while the workflow is executing;
+  shared Flow subscriptions remain until their last workflow releases them.
+- Leaving the WebSocket test page closes its socket and cancels reconnects.
+  Master Contract polling stops at completion, permits one status request at a
+  time, and aborts that request when the page closes.
+
 ### Optional gthread web server
 
 OpenAlgo can now run under gunicorn's gthread worker, which gives every request
