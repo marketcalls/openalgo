@@ -492,8 +492,8 @@ class BaseBrokerWebSocketAdapter(ABC):
             if cache_key_feed in feed_token_cache:
                 del feed_token_cache[cache_key_feed]
                 caches_cleared.append("feed_token_cache")
-            # Note: broker_cache is keyed by API key, not user_id, so we skip it here
-            # It only caches broker names which don't affect auth token validation
+            # Note: broker_cache is keyed by user_id (never by API key), and it
+            # only caches broker names which don't affect auth token validation
 
             if caches_cleared:
                 self.logger.info(f"Cleared auth caches for user {user_id}: {', '.join(caches_cleared)}")
