@@ -1,8 +1,10 @@
 # The gthread web server (optional)
 
 OpenAlgo runs inside a web server called gunicorn, and gunicorn can run it in
-two ways. **eventlet** is the default and stays the default: every install
-uses it unless you change one line in `.env`. **gthread** is the other one.
+two ways. **eventlet** is the default and stays the default. **gthread** is
+opt-in: select it in `.env` and start through the supplied launcher. An older
+systemd service also needs the one-time switch command below; editing `.env`
+alone does not change a service that still hardcodes eventlet.
 This page explains what gthread is, who should try it, how to switch on
 Ubuntu and on Docker, how to check that it works, and how to switch back.
 
@@ -11,17 +13,61 @@ switch anything unless you have asked for gthread in `.env`.
 
 ## What gthread is, and why you might want it
 
-- **eventlet** runs everything on one thread that takes turns between
-  requests. It is what OpenAlgo has always used. gunicorn has announced that
-  it will drop eventlet in its next major version, and several past problems
+- **eventlet** schedules request greenlets cooperatively: a request waiting
+  on cooperative I/O lets other requests run. Blocking code that does not
+  cooperate can stall the worker. It is OpenAlgo's existing default. Gunicorn
+  has announced that it will drop eventlet in its next major version, and several past problems
   ("the first order works, the next one hangs the app") came from eventlet
   and ordinary threads meeting inside OpenAlgo.
 - **gthread** gives every request its own thread from a fixed pool of 64. It
-  does not take turns, so one slow broker call cannot hold up everything
-  else, and it avoids that whole family of problems.
+  lets other threads serve requests while one waits on a broker. Shared locks,
+  CPU-heavy work and exhaustion of all 64 slots can still delay requests.
 
 Both run the same OpenAlgo. Orders, strategies, Flow, the charting and
 scalping terminals, Telegram and WhatsApp alerts work the same way on either.
+
+## Installing with gthread
+
+Gthread is built into Gunicorn; there is no separate gthread package to install.
+Keep the project's pinned dependencies, including eventlet for rollback.
+Use a source checkout or container image that includes this implementation;
+an older published image cannot gain support just by setting the variable.
+
+| Installation path | How to select gthread |
+|---|---|
+| Fresh Linux systemd install using `install/install.sh` | Finish the normal eventlet installation, then run the switch commands below. The installer currently has no worker-selection prompt. |
+| Fresh multi-instance install using `install/install-multi.sh` | Finish installation, then switch the chosen service with `--service openalgo1 --to gthread`, or use `--all`. |
+| Existing installer-managed systemd installation | Update to a release containing the launcher, then use `install/switch-worker.sh --to gthread`. |
+| Docker Compose, including `install/install-docker.sh` | Set `OPENALGO_WORKER_CLASS = 'gthread'` in the mounted `.env`, set `stop_grace_period: 45s`, then recreate the container. |
+| Windows/macOS/Linux Docker runner | Use a compatible image, set the same `.env` key, then restart with the updated `install/docker-run.bat` or `install/docker-run.sh`. These runners allow 45 seconds for container shutdown. |
+| Native `uv run app.py` | This is the development server and ignores the Gunicorn worker setting. Use the supported Ubuntu or container path to run gthread. |
+
+The single-instance installer detects Ubuntu, Debian, Raspbian, Arch and several
+RPM-based distributions; the same switch applies to the systemd service it
+generates. The multi-instance installer uses apt and targets Ubuntu/Debian.
+The examples below use Ubuntu and the default installation paths.
+
+After the single-instance installer completes:
+
+```bash
+cd /var/python/openalgo
+sudo bash install/switch-worker.sh --to gthread --dry-run
+sudo bash install/switch-worker.sh --to gthread
+```
+
+The same trading-hours guard applies to new installations. On an empty instance
+with no trading activity, `--force` explicitly allows the switch during that
+window. See [When to switch](#when-to-switch) before using it on an active instance.
+
+For a fresh Docker Compose deployment, complete configuration, add the worker
+setting and shutdown grace below, then run `docker compose up -d --build` when
+building the repository's image locally. An existing local image must also be
+rebuilt when it predates this implementation; `--force-recreate` alone reuses it.
+
+After starting, [check the system report](#check-that-it-works): it must show
+**gthread**, **64 request threads**, and **Started by launcher: True**. The
+launcher enforces one worker process and configures the runtime and shutdown
+hooks; use it instead of replacing only `--worker-class` in an old service file.
 
 ## Who should try it now
 
@@ -43,7 +89,7 @@ threads, see [Known limits](#known-limits)).
 | Host | Runtime and deployment |
 |---|---|
 | Ubuntu desktop or server | The supplied systemd installer and worker switch script, or Linux containers |
-| Other Linux desktops and servers | Linux containers, or a managed Gunicorn process using the launcher; the supplied systemd installer assumes Ubuntu |
+| Other Linux desktops and servers | Linux containers or a managed Gunicorn process using the launcher. The installer detects several Linux distributions; validate the generated systemd service and dependencies on your distribution. Automated Linux checks use Ubuntu runners. |
 | Windows | `uv run app.py` uses native threads and ignores the worker setting. Use a Linux container or Ubuntu in WSL2 for the Gunicorn eventlet/gthread deployment |
 | macOS | `uv run app.py` uses native threads. Linux containers provide the production deployment; the Ubuntu systemd scripts do not apply to macOS |
 | Raspberry Pi | Use a 64-bit Linux OS and ARM64 dependencies. Native Linux ARM64 CI checks compatibility; it does not measure a Pi's memory, thermal limits, or trading-day capacity |
@@ -123,9 +169,10 @@ service at the launcher, restarts OpenAlgo and checks that:
 - the live update channel the browser uses answers, and
 - OpenAlgo is running on the web server `.env` asks for.
 
-If any check fails, it puts the saved service file back, restarts OpenAlgo on
-eventlet, checks it again, and shows you the last lines of the log. Your
-server is then exactly as it was.
+If any check fails, it attempts to restore the previous service file and worker,
+checks the restarted service, and shows the last lines of the log. If that
+restart also fails, it reports the failure and the manual recovery command;
+check its result before resuming trading.
 
 You can also edit `.env` yourself: add (or uncomment) the line
 `OPENALGO_WORKER_CLASS = 'gthread'`, then run
@@ -309,10 +356,10 @@ has finished. On eventlet you can leave the line in place; it does no harm.
 
 ## What gthread refuses that eventlet waits for
 
-Under eventlet a request that cannot go ahead yet simply waits, however long
-that takes, while everything else waits behind it. gthread has a fixed number
-of request threads, so a few kinds of waiting are cut short instead, and the
-request is answered with a sentence saying what happened and when to try
+Under eventlet a cooperative wait releases the worker to serve other greenlets.
+Gthread has a fixed number of request threads, and waiting occupies a slot,
+so a few kinds of waiting are cut short instead. The request is answered
+with a sentence saying what happened and when to try
 again. None of these is a setting, and none of them happens on eventlet.
 
 - **A busy broker.** When a broker's rate limit would keep a request waiting
@@ -351,6 +398,26 @@ again. None of these is a setting, and none of them happens on eventlet.
   as unreachable.
 - **Sandbox square-off.** A square-off sweep that is still busy after 120
   seconds is picked up again by the next minute's check.
+
+## Automated checks and remaining validation
+
+The implementation and resource-cleanup follow-up passed
+[CI on commit `38dbdcb0f`](https://github.com/marketcalls/openalgo/actions/runs/36626204203):
+1,410 migration tests passed (three documentation skips), along with Windows,
+macOS and Linux ARM64 platform checks, eventlet and gthread launcher boots,
+frontend tests/builds, and AMD64/ARM64 container builds. These results apply to
+that commit; check the PR's latest CI result for subsequent changes.
+
+The resource regressions cover bounded authentication-error fingerprints and
+pending strategy updates, Pocketful reconnect threads, retryable Flow
+subscription cleanup, and browser socket/polling teardown. Flow delete and
+deactivate now return 409 while a run is executing and 503 while a subscription
+release needs retry. This cleanup behavior applies to both worker modes.
+
+Still outstanding: a full trading-day broker run, overnight session expiry and
+recovery, a deployment rollback drill, and Raspberry Pi hardware/resource
+qualification. The 64-thread budget remains a limit; automated tests do not
+certify unlimited concurrent streams or absence of every possible memory leak.
 
 ## Brokers verified on gthread
 

@@ -10,6 +10,9 @@ fix, live in [docs/releases](releases/).
 
 ### Long-running memory and resource cleanup
 
+- The Windows and macOS/Linux Docker runners allow 45 seconds for container
+  shutdown, including containers created before the runner update. The gthread
+  guide now covers fresh installations and the required post-install switch.
 - Bound authentication failure fingerprint storage and the Strategy Module's
   pending order-update work. A slow update worker applies backpressure through
   the existing bounded event bus instead of retaining an unlimited second queue.

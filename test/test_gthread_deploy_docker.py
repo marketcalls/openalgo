@@ -81,6 +81,18 @@ def test_the_gthread_stop_fits_the_grace_period_the_guide_requires():
     assert '--env-file "$ENV_FILE"' in launcher
 
 
+@pytest.mark.parametrize("helper", ["docker-run.sh", "docker-run.bat"])
+def test_docker_helpers_preserve_gthread_shutdown_window(helper):
+    """Both helper-driven and external stops must outlast gthread cleanup."""
+    text = (ROOT / "install" / helper).read_text(encoding="utf-8")
+    run_options = text.split("docker run -d", 1)[1].split("--restart unless-stopped", 1)[0]
+    stops = re.findall(r"^\s*docker stop\b[^\r\n]*", text, re.MULTILINE)
+
+    assert "--stop-timeout 45" in run_options
+    assert len(stops) == (3 if helper.endswith(".bat") else 2)
+    assert all("docker stop -t 45" in stop for stop in stops)
+
+
 def test_every_script_start_sh_runs_loses_carriage_returns_in_the_image():
     used = set(re.findall(r"/app/install/[\w./-]+", _start_text()))
     # The launcher itself reads its two helpers.
