@@ -22,6 +22,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
 from database.settings_db import get_security_settings
+from utils.ip_helper import is_unroutable_ip
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +341,10 @@ class Error404Tracker(LogBase):
 
                 # Auto-ban if enabled and threshold reached (configurable via Security Dashboard)
                 if security_settings.get("auto_ban_enabled", False) and tracker.error_count >= threshold_404:
-                    # Don't ban localhost IPs
-                    if ip_address not in ['127.0.0.1', '::1', 'localhost']:
+                    # Only ban addresses on the public internet. Behind Docker or a
+                    # reverse proxy every client shares one private address, so
+                    # banning it locks out everybody including the operator.
+                    if not is_unroutable_ip(ip_address):
                         # Ban the IP (duration 0 = permanent)
                         IPBan.ban_ip(
                             ip_address=ip_address,
@@ -456,8 +459,9 @@ class InvalidAPIKeyTracker(LogBase):
 
                 # Auto-ban if enabled and threshold reached (configurable via Security Dashboard)
                 if security_settings.get("auto_ban_enabled", False) and tracker.attempt_count >= threshold_api:
-                    # Don't ban localhost IPs but keep tracking
-                    if ip_address not in ['127.0.0.1', '::1', 'localhost']:
+                    # Only ban addresses on the public internet, but keep tracking.
+                    # See the note on the 404 auto-ban above.
+                    if not is_unroutable_ip(ip_address):
                         # Ban the IP (duration 0 = permanent)
                         success = IPBan.ban_ip(
                             ip_address=ip_address,
