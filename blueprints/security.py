@@ -8,6 +8,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from database.settings_db import get_security_settings, set_security_settings
 from database.traffic_db import Error404Tracker, InvalidAPIKeyTracker, IPBan, logs_session
 from limiter import limiter
+from utils.ip_helper import is_infrastructure_ip
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,21 @@ def ban_ip():
         # Prevent banning localhost
         if ip_address in ["127.0.0.1", "::1", "localhost"]:
             return jsonify({"error": "Cannot ban localhost"}), 400
+
+        # Private/container-gateway addresses (e.g. 172.17.0.1) often appear as
+        # the request IP inside Docker. Banning them locks out the whole instance.
+        confirm_private = bool(data.get("confirm_private", False))
+        if is_infrastructure_ip(ip_address) and not confirm_private:
+            return jsonify({
+                "error": (
+                    "Refusing to ban a private, loopback, or reserved address "
+                    f"({ip_address}). This is often the Docker/container gateway "
+                    "rather than a client IP and can lock out the whole instance. "
+                    "Pass confirm_private=true only if you are certain."
+                ),
+                "requires_confirmation": True,
+                "ip_address": ip_address,
+            }), 400
 
         success = IPBan.ban_ip(
             ip_address=ip_address,
