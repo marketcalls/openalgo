@@ -115,3 +115,23 @@ def test_queued_sends_still_answer_queued():
     body = _post_body()
     assert '"queued"' in body, "the fire-and-forget answer must keep its queued count"
     assert 'f"Queued for {len(recipients)} recipient(s)"' in body
+
+
+def test_the_not_ready_refusal_names_a_logout_and_keeps_its_409():
+    """WhatsApp logging the device out is named, through the field callers read.
+
+    Every restart used to leave the device logged out while this answered the
+    same "not paired or not connected" as a device never paired, so a trader
+    had nothing to act on. The message now says the device was logged out when
+    the service knows it; the status and the 409 are unchanged, and the old
+    wording remains for every other cause.
+    """
+    body = _post_body()
+    at = body.index("if not whatsapp_bot_service.is_ready():")
+    refusal = body[at : at + 1000]
+    assert "whatsapp_bot_service.unavailable_reason()" in refusal
+    assert '"status": "error"' in refusal
+    assert "409" in refusal, "the refusal must keep the code callers already handle"
+    assert "WhatsApp is not paired or not connected." in refusal, (
+        "the long-standing message stays for every cause the service cannot name"
+    )

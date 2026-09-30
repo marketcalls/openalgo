@@ -129,7 +129,12 @@ export default function WhatsAppIndex() {
         if (!prev) return prev
         return {
           ...prev,
-          config: { ...prev.config, is_running: s.is_running, is_paired: s.is_paired },
+          config: {
+            ...prev.config,
+            is_running: s.is_running,
+            is_paired: s.is_paired,
+            status_message: s.status_message ?? null,
+          },
         }
       })
     }
@@ -256,6 +261,13 @@ export default function WhatsAppIndex() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {cfg?.status_message && (
+            <div className="flex items-center gap-2 rounded border border-destructive/40 bg-destructive/10 p-2 text-sm">
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <span>{cfg.status_message}</span>
+            </div>
+          )}
+
           {!isPaired && (
             <div className="rounded border bg-muted/30 p-4">
               <div className="mb-3 flex items-center justify-between">

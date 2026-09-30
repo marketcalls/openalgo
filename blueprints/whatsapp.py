@@ -40,6 +40,23 @@ WHATSAPP_MESSAGE_RATE_LIMIT = os.getenv("WHATSAPP_MESSAGE_RATE_LIMIT", "10 per m
 
 whatsapp_bp = Blueprint("whatsapp_bp", __name__, url_prefix="/whatsapp")
 
+#: What the send routes say when the bot cannot send and does not know why.
+NOT_READY_MESSAGE = "WhatsApp is not paired. Pair the device first to send messages."
+
+
+def _not_ready_response():
+    """The 409 a send route answers while the bot cannot send.
+
+    The message names the cause when the service knows it (WhatsApp logged the
+    device out); the status and the code are what the page has always read.
+    """
+    return jsonify(
+        {
+            "status": "error",
+            "message": whatsapp_bot_service.unavailable_reason() or NOT_READY_MESSAGE,
+        }
+    ), 409
+
 
 # -------------------------------------------------------------------------
 # Config
@@ -54,6 +71,7 @@ def get_config():
     try:
         cfg = get_bot_config()
         cfg["is_running"] = whatsapp_bot_service.is_running
+        cfg["status_message"] = whatsapp_bot_service.unavailable_reason()
         return jsonify(
             {
                 "status": "success",
@@ -202,6 +220,7 @@ def bot_status():
                     "own_phone": cfg.get("own_phone"),
                     "bot_username": cfg.get("bot_username"),
                     "paired_at": cfg.get("paired_at"),
+                    "status_message": whatsapp_bot_service.unavailable_reason(),
                 },
             }
         )
@@ -254,12 +273,7 @@ def unlink_user(whatsapp_jid):
 def broadcast():
     try:
         if not whatsapp_bot_service.is_ready():
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "WhatsApp is not paired. Pair the device first to send messages.",
-                }
-            ), 409
+            return _not_ready_response()
         data = request.json or {}
         message = data.get("message")
         filters = data.get("filters", {})
@@ -292,12 +306,7 @@ def test_message():
     same way on both channels."""
     try:
         if not whatsapp_bot_service.is_ready():
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "WhatsApp is not paired. Pair the device first to send messages.",
-                }
-            ), 409
+            return _not_ready_response()
         username = session.get("user")
         if not username:
             return jsonify({"status": "error", "message": "Not logged in"}), 401
@@ -341,12 +350,7 @@ def send_to_phone():
     to be linked."""
     try:
         if not whatsapp_bot_service.is_ready():
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "WhatsApp is not paired. Pair the device first to send messages.",
-                }
-            ), 409
+            return _not_ready_response()
         data = request.json or {}
         phone = normalize_phone(data.get("phone") or "")
         message = data.get("message")
