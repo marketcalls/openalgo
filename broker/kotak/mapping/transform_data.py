@@ -166,6 +166,11 @@ def transform_data(data, token):
         "tt": "B" if action == "BUY" else ("S" if action == "SELL" else "None"),
     }
 
+    # Optional order tag field (echoed back as GuiOrdId in order/trade reports)
+    order_tag = data.get("order_tag") or data.get("ig")
+    if order_tag:
+        transformed["ig"] = str(order_tag)
+
     _apply_slm_conversion(transformed, data)
 
     logger.debug(f"Transformed order data: {transformed}")
@@ -190,6 +195,11 @@ def transform_modify_order_data(data, token):
         "no": str(data["orderid"]),
         "tt": "B" if data["action"] == "BUY" else ("S" if data["action"] == "SELL" else "None"),
     }
+
+    # Optional order tag field (echoed back as GuiOrdId in order/trade reports)
+    order_tag = data.get("order_tag") or data.get("ig")
+    if order_tag:
+        transformed["ig"] = str(order_tag)
 
     # A modify must carry the same conversion as the placement, or an SL-M
     # modify would hand Kotak back the pt it already rejected.
