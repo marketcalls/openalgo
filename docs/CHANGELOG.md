@@ -45,26 +45,28 @@ it works and switch back: [docs/gthread/README.md](gthread/README.md).
   at 10), and recreate the container.
 - `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
 
-**Review hardening:** Historify writes now keep the eventlet hub responsive
-during database retries, and cancelling a job paused after its final item no
-longer deadlocks cleanup. Pause and resume status writes cannot overwrite the
-processor's final completion. Failed sandbox funds changes release their SQLite
-write transaction without committing staged order changes; cancellation reports
-a failure if its reserved margin cannot be released. Under gthread, a
-Definedge order answered with HTTP 429 is not resent or labelled as a local
-pre-send refusal. Action Center explains that a delayed split or basket order
-may still be sending. Proxy supervision retries an initial launch failure and
-reaps a child launched during shutdown; Chartink retries failed schedule
-restoration. Worker switching preserves the previous configuration when a
-service-file backup or installation fails. The worker guide now describes
-platform deployment choices and checks for continuous operation.
+**Further fixes from review.** Historify no longer holds up the rest of
+OpenAlgo while it waits to write to its database, cancelling a download paused
+on its last symbol no longer leaves it stuck, and a download that finishes
+while you pause or resume it is still shown as finished. A sandbox funds change
+that fails no longer blocks the sandbox database or saves half of an order
+change, and cancelling a sandbox order says so when its margin could not be
+released. Under gthread, a Definedge order the broker answered with a rate
+limit is not sent a second time, and is not reported as refused before sending,
+because it may have reached the broker. The Action Center explains that a
+delayed split or basket order may still be sending. The market data service is
+started again if its first start fails, and one started while OpenAlgo was
+stopping is shut down with it. Chartink tries again to put back scheduled jobs
+it could not restore after a restart. The switch script leaves your previous
+setup as it was when it cannot back up or write the service file. The guide
+now covers each platform and what to check before running continuously.
 
 **What gthread refuses that eventlet waits for.** A request that would wait too
 long is answered with a sentence instead: a broker rate limit that would hold a
 request more than about 10 seconds (HTTP 429, nothing sent), a second order on
 the same symbol still waiting after 30 seconds, a live and sandbox mode change
 still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
-(Python strategy log views, remote MCP, agent chats). A Flow workflow whose
+(live status on the Python Strategies page, remote MCP, agent chats). A Flow workflow whose
 Delay and Wait Until steps add up to more than 10 seconds answers at once (HTTP
 202) and runs in the background, up to 16 waiting on a Delay and 4 on a Wait
 Until at the same time; a refused one is shown in its execution history. The
@@ -165,11 +167,32 @@ did:**
   keeps updating that one, as before. Run from another OpenAlgo checkout, such
   as a development clone on the same server, it updates that checkout and
   leaves every instance and its service alone, as before.
+- Restarting OpenAlgo no longer writes a false error with a traceback from the
+  market data client. While OpenAlgo is stopping, the client does not try to
+  reconnect. A market data service that is not accepting connections is
+  reported as a one-line warning instead of a traceback, and after 12 attempts
+  in a row, about a minute, as one error saying that live prices and
+  tick-driven stops are not updating until it is back.
+- Upstox: when the Upstox login expires overnight, the market data feed no
+  longer fills the log retrying a link Upstox has already refused. It writes
+  one warning saying to log in to Upstox again, retries quietly, and says so
+  when the feed is back after the next login.
+- Historify gives new watchlist symbols, downloads and schedule runs their IDs
+  from counters kept in its database, so two requests at the same moment can
+  no longer take the same ID. The counters are created for an existing
+  database by the database upgrade (`upgrade/migrate_historify_sequences.py`,
+  run by `migrate_all.py`) and checked again every time OpenAlgo starts. That
+  check also moves a counter past IDs an older version used, so going back to
+  an older release and returning no longer leaves Historify unable to add
+  symbols or store data for new ones. `--status` reports what it would change
+  without changing it.
 
 **Going back to an older release.** A service switched to the launcher starts
 through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
 `sudo bash install/switch-worker.sh --restore` before checking out an older
 revision; it puts the saved service file back and sets `.env` back to eventlet.
+Coming back afterwards needs nothing extra for Historify: its ID counters are
+checked again on the first start.
 
 **Still not modelled.** The sandbox margin reconcile does not count margin held
 by open and trigger-pending orders (unchanged from before).
