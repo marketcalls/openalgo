@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 # cannot work. Anything that thread shares with the greenlets has to be real
 # too, which is what this module is for.
 from utils import real_threading as _original_threading
+from utils import stream_registry
 from utils.logging import get_logger
 from utils.runtime import is_monkey_patched
 
@@ -85,6 +86,17 @@ class WebSocketClient:
     #: Consecutive failed reconnects logged with a traceback before the rest of
     #: the streak is logged as a short warning, now and then.
     RECONNECT_VERBOSE_FAILURES = 5
+
+    #: Pause after the proxy closes the connection before dialling it again.
+    #: systemd stops every process of the service at once, so on a restart the
+    #: proxy vanishes a moment before this process is told to stop; an instant
+    #: redial raced that signal and logged a refused connection as an error.
+    #: The proxy's own supervisor waits longer than this before restarting it.
+    RECONNECT_AFTER_CLOSE_SECONDS = 1
+
+    #: Consecutive refused connections to the proxy after which it is reported
+    #: as down rather than restarting: about a minute at 5 seconds apart.
+    UNREACHABLE_ERROR_AFTER = 12
 
     def __init__(self, api_key: str, host: str = "localhost", port: int = 8765):
         """
@@ -726,8 +738,18 @@ class WebSocketClient:
         that authenticates, and never ends the loop while the client runs.
         """
         failures = 0
+        stopping_noted = False
 
         while self.running:
+            if self._app_stopping():
+                # The proxy goes down with the app, so there is nothing to
+                # reconnect to and nothing wrong. Wait quietly for disconnect().
+                if not stopping_noted:
+                    logger.info("OpenAlgo is stopping; the market data client will not reconnect")
+                    stopping_noted = True
+                await self._sleep_while_running(0.5)
+                continue
+
             authenticated_here = False
             try:
                 async with websockets.connect(self.ws_url) as websocket:
@@ -751,23 +773,53 @@ class WebSocketClient:
                 # is gone either way, so say so before reconnecting.
                 self.connected = False
                 self.authenticated = False
+                if self.running:
+                    await self._sleep_while_running(self.RECONNECT_AFTER_CLOSE_SECONDS)
 
             except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(f"WebSocket connection closed: {e}")
                 self.connected = False
                 self.authenticated = False
 
-                if self.running:
+                if self.running and not self._app_stopping():
+                    logger.warning(f"WebSocket connection closed: {e}")
                     failures += 1
                     wait_time = min(2**failures, self.RECONNECT_MAX_BACKOFF_SECONDS)
                     logger.info(f"Reconnecting in {wait_time} seconds... (attempt {failures})")
+                    await self._sleep_while_running(wait_time)
+
+            except OSError as e:
+                # Refused, reset or timed out: the proxy is not listening, which
+                # is what a proxy restart or an app stop looks like from here.
+                # A traceback adds nothing, and on every restart it filled the
+                # error log with a failure that was not one.
+                self.connected = False
+                self.authenticated = False
+
+                if self.running and not self._app_stopping():
+                    failures += 1
+                    wait_time = (
+                        5
+                        if failures <= self.RECONNECT_VERBOSE_FAILURES
+                        else self.RECONNECT_MAX_BACKOFF_SECONDS
+                    )
+                    if failures == self.UNREACHABLE_ERROR_AFTER:
+                        logger.error(
+                            f"The market data server at {self.ws_url} has not accepted a "
+                            f"connection for {failures} attempts. Live prices and "
+                            "tick-driven stops are not updating until it is back."
+                        )
+                    elif failures <= self.RECONNECT_VERBOSE_FAILURES or failures % 10 == 0:
+                        logger.warning(
+                            f"Market data server at {self.ws_url} is not accepting connections "
+                            f"({e}); retrying in {wait_time} seconds (attempt {failures})"
+                        )
                     await self._sleep_while_running(wait_time)
 
             except Exception as e:
                 self.connected = False
                 self.authenticated = False
 
-                if self.running:
+                if self.running and not self._app_stopping():
                     failures += 1
                     if failures <= self.RECONNECT_VERBOSE_FAILURES:
                         logger.exception(f"Error in WebSocket connection: {e}")
@@ -781,8 +833,16 @@ class WebSocketClient:
                                 f"{failures} attempts; retrying every {wait_time} seconds"
                             )
                     await self._sleep_while_running(wait_time)
+                elif self.running:
+                    logger.info(f"Market data connection ended while OpenAlgo is stopping: {e}")
                 else:
-                    logger.exception(f"Error in WebSocket connection: {e}")
+                    # disconnect() closed the socket on purpose.
+                    logger.debug(f"Market data connection ended after disconnect: {e}")
+
+    @staticmethod
+    def _app_stopping() -> bool:
+        """Whether OpenAlgo has begun to stop, so a lost proxy is expected."""
+        return stream_registry.should_stop()
 
     async def _authenticate(self):
         """Send authentication message"""
