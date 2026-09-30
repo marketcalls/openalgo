@@ -224,26 +224,41 @@ def test_whatsapp_start_send_command_and_stop_on_greenlets(tmp_path):
 
         assert runtime.worker_class() == "eventlet"
 
+        def snap(tag):
+            head = bytearray(b"SQLite format 3\\x00" + bytes(84))
+            head[16:18] = (512).to_bytes(2, "big")
+            return bytes(head) + tag.encode().ljust(1024 - len(head), b"\\x00")
+
         class FakeWhatsApp:
             created = []
 
             def __init__(self):
                 self.sent = []
                 self.connected = False
+                self.session = b""
 
             @classmethod
             def from_bytes(cls, blob):
                 eventlet.sleep(0.1)
-                c = cls(); cls.created.append(c); return c
+                c = cls(); c.session = blob; cls.created.append(c); return c
 
             def on_message(self, fn):
                 self.on_message_cb = fn; return fn
+
+            def on_connected(self, fn):
+                self.on_connected_cb = fn; return fn
 
             def on_disconnect(self, fn):
                 self.on_disconnect_cb = fn; return fn
 
             def connect(self, phone=None):
                 self.connected = True
+
+            def is_connected(self):
+                return self.connected
+
+            def export_session(self):
+                return self.session
 
             def disconnect(self):
                 self.connected = False
@@ -252,11 +267,13 @@ def test_whatsapp_start_send_command_and_stop_on_greenlets(tmp_path):
                 self.sent.append(args); return "id"
 
         sys.modules["wars"] = types.SimpleNamespace(WhatsApp=FakeWhatsApp)
-        wbs.load_session_blob = lambda: b"blob"
+        wbs.load_session_blob = lambda: snap("paired")
+        saves = []
+        wbs.refresh_session_blob = lambda blob, expected=None: saves.append(blob) or True
         wbs.get_bot_config = lambda: {"is_paired": True, "owner_username": "a", "own_jid": None}
         wbs.update_bot_config = lambda values: True
         wbs.log_command = lambda *a, **k: None
-        svc = wbs.WhatsAppBotService()
+        svc = wbs.WhatsAppBotService(first_save_seconds=0.2, save_interval_seconds=0.2)
         svc._emit = lambda event, payload: None
 
         release = eventlet.event.Event()
@@ -288,8 +305,17 @@ def test_whatsapp_start_send_command_and_stop_on_greenlets(tmp_path):
         eventlet.sleep(0.5)
         assert len(FakeWhatsApp.created[0].sent) >= 2
 
+        # The live session is saved from the bot greenlet while the hub turns.
+        before = len(ticks)
+        FakeWhatsApp.created[0].session = snap("live")
+        eventlet.sleep(0.6)
+        assert saves and saves[-1] == snap("live"), saves
+        assert len(ticks) - before > 5, "the hub froze during the save"
+
+        FakeWhatsApp.created[0].session = snap("at stop")
         before = len(ticks)
         assert svc.stop_bot() == (True, "Bot stopped")
+        assert saves[-1] == snap("at stop"), "the stop did not save the session"
         assert len(ticks) - before >= 0
         g.kill()
         assert svc.is_running is False
