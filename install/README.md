@@ -214,6 +214,22 @@ After installation completes, verify each deployment:
    cat install/logs/install_20240101_143000.log  # Zerodha installation
    ```
 
+5. **Telegram /chart Says "Failed to generate charts"**
+   The chart images are drawn by a headless Chrome or Chromium running as the OpenAlgo
+   service account. A snap browser cannot run as that account (it needs a home the account
+   can write), and Ubuntu packages Chromium only as a snap. Older installs set up that snap,
+   so /chart never drew. Running `update.sh` installs a browser that works; to check by hand:
+   ```bash
+   # The log line names the cause
+   sudo journalctl -u openalgo-fyers-yourdomain-fyers | grep -i "browser seemed to close"
+
+   # On amd64, Google Chrome works (it adds Google's apt source, so it updates with the system)
+   wget -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+   sudo apt-get install -y /tmp/chrome.deb fonts-liberation
+   ```
+   No restart is needed. On arm64 Ubuntu no packaged Chromium can run as a service; use
+   Debian, Raspberry Pi OS or the Docker install for /chart.
+
 ### Distribution-Specific Troubleshooting
 
 #### Arch Linux

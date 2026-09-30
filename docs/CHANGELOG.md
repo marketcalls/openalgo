@@ -20,6 +20,20 @@ fix, live in [docs/releases](releases/).
   server were not affected. `requirements.txt` gains the same four, and a CI
   test now fails whenever `pyproject.toml` has a library the requirements files
   lack.
+- **Telegram /chart never drew a chart on most Ubuntu servers.** It answered
+  "Failed to generate charts" every time. The images are drawn by a headless
+  Chrome or Chromium running as the OpenAlgo service account, and the install
+  scripts set up Ubuntu's `chromium-browser`, which installs a snap. A snap
+  cannot start as a service account (it needs a home the account can write),
+  so every render failed with "The browser seemed to close immediately after
+  starting". `install.sh`, `install-multi.sh` and `update.sh` now install
+  Google Chrome on amd64, or the distribution's own Chromium where it is a real
+  package (Debian, Raspberry Pi OS, Fedora, EPEL, Arch), and never the snap.
+  After pulling, run `update.sh` once: it installs a working browser if the
+  server has none, and changes nothing if it already has one. On arm64 Ubuntu
+  no packaged Chromium can run as a service, so /chart still cannot draw there;
+  use Debian, Raspberry Pi OS or the Docker install. Docker installs were not
+  affected.
 
 ## [2.0.2.6] - 2026-09-23
 
