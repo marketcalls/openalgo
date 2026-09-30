@@ -94,6 +94,7 @@ from typing import Any
 
 from services.agent import chatgpt_oauth
 from services.agent.catalog import estimate_cost
+from services.agent.error_messages import trader_message
 from services.agent.frames import (
     Confirm,
     Done,
@@ -265,14 +266,16 @@ def _is_cancellation(exc: BaseException) -> bool:
 
 
 def _message_for_wire(value: Any) -> str:
-    """Prepare a failure message for the browser and the log.
+    """Prepare a failure's own text for the log, and for the browser where it is safe.
 
-    The provider's own wording is kept, because "invalid API key" and "model not
-    found" need different fixes and a generic string helps nobody. It is passed
-    through the audit redactor first, which strips secret-shaped substrings and
-    caps the length: a provider that echoes part of the request in its error
-    text must not put a key on the wire, and an upstream that answers with an
-    HTML error page must not put the page on it either.
+    A provider or internal failure is shown to the trader as a sentence chosen
+    from this text (:func:`_message_for_trader`), and the text itself goes to
+    the log. A tool, input or configuration failure is shown as it is. Either
+    way it passes through the audit redactor first, which strips secret-shaped
+    substrings and caps the length: a provider that echoes part of the request
+    in its error text must not put a key on the wire or in the log, and an
+    upstream that answers with an HTML error page must not put the page there
+    either.
 
     Args:
         value: Any object carrying the failure text.
@@ -285,6 +288,68 @@ def _message_for_wire(value: Any) -> str:
         return "The run failed without reporting a reason."
     redacted = redact(text)
     return redacted if isinstance(redacted, str) else str(redacted)
+
+
+def _exception_names(exc: BaseException) -> list[str]:
+    """Class names of an exception and of the one it wraps, most specific first.
+
+    agno re-raises a LiteLLM failure as its own provider error, so the class
+    that says what went wrong (an `AuthenticationError`, a `RateLimitError`)
+    is often the cause rather than the exception that reached this module.
+    """
+    names = [cls.__name__ for cls in type(exc).__mro__]
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        names.extend(cls.__name__ for cls in type(cause).__mro__)
+    return names
+
+
+def _provider_status(exc: BaseException) -> tuple[str | None, int | None]:
+    """The LiteLLM provider and HTTP status of a failure, when it carries them.
+
+    A status is only trusted from LiteLLM's own exception or from an explicit
+    `provider_status_code`: agno's provider error reports 502 when the provider
+    sent no status at all, and that made-up code must not choose the wording.
+    """
+    for candidate in (exc, exc.__cause__ or exc.__context__):
+        if candidate is None:
+            continue
+        provider = getattr(candidate, "llm_provider", None)
+        status = getattr(candidate, "provider_status_code", None)
+        if status is None and provider is not None:
+            status = getattr(candidate, "status_code", None)
+        if provider is not None or status is not None:
+            return provider, status if isinstance(status, int) else None
+    return None, None
+
+
+def _message_for_trader(
+    kind: str,
+    names: list[str],
+    value: Any,
+    *,
+    provider: str | None = None,
+    status: int | None = None,
+) -> str:
+    """The sentence the browser shows for a failed run.
+
+    A provider or internal failure is described in a trader's words: the cause
+    when the failure states it, and the one thing to do next. The redacted
+    original goes to the log, where whoever runs the instance can read it. A
+    tool, input or configuration failure keeps its own text, which this
+    platform already wrote for the trader.
+    """
+    detail = _message_for_wire(value)
+    sentence = trader_message(kind, names, detail, provider=provider, status=status)
+    if sentence is None:
+        return detail
+    logger.warning(
+        "Agent run failed (%s); shown to the trader as: %s | provider said: %s",
+        kind,
+        sentence,
+        detail,
+    )
+    return sentence
 
 
 # ---------------------------------------------------------------------------
@@ -584,8 +649,12 @@ class EventTranslator:
         if _is_cancellation(exc):
             return [Done(reason=DoneReason.CANCELLED)]
         kind = _kind_for_name(*(cls.__name__ for cls in type(exc).__mro__))
+        provider, status = _provider_status(exc)
+        message = _message_for_trader(
+            kind, _exception_names(exc), exc, provider=provider, status=status
+        )
         return [
-            Error(message=_message_for_wire(exc), kind=kind),
+            Error(message=message, kind=kind),
             Done(reason=DoneReason.INCOMPLETE),
         ]
 
@@ -903,8 +972,10 @@ class EventTranslator:
         class knows, and :meth:`finalise` writes `done(incomplete)` when it
         ends, which keeps "how did this turn end" answered by exactly one place.
         """
-        kind = _kind_for_name(str(getattr(event, "error_type", "") or ""))
-        return [Error(message=_message_for_wire(getattr(event, "content", None)), kind=kind)]
+        error_type = str(getattr(event, "error_type", "") or "")
+        kind = _kind_for_name(error_type)
+        message = _message_for_trader(kind, [error_type], getattr(event, "content", None))
+        return [Error(message=message, kind=kind)]
 
     def _on_run_cancelled(self, event: Any) -> list[Frame]:
         """End a run that was cancelled, by the client or by an operator."""
