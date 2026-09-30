@@ -141,6 +141,82 @@ def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
         conn.close()
 
 
+# Tables whose IDs come from DuckDB sequences. They predate the sequences, and
+# a checkout without them (main, or an older release) assigns MAX(id) + 1 itself,
+# which never advances a sequence left in the file.
+ID_SEQUENCES: tuple[tuple[str, str], ...] = (
+    ("watchlist_id_seq", "watchlist"),
+    ("data_catalog_id_seq", "data_catalog"),
+    ("job_items_id_seq", "job_items"),
+    ("historify_schedule_executions_id_seq", "historify_schedule_executions"),
+)
+
+
+def _next_sequence_value(start: int, last: int | None, step: int) -> int:
+    """The value a sequence hands out next, or one below it, never above.
+
+    ``duckdb_sequences()`` means two things by ``last_value``. Within the
+    session that drew from a sequence it is the value last handed out, so the
+    next is ``last + step``. Once the database is reopened, both ``start_value``
+    and ``last_value`` hold the value still to come. The two look the same when
+    exactly one value has been drawn since the sequence was created or the
+    database opened, and that case is read as the lower one: the worst it can
+    cause is re-creating a sequence at the value it already had, where the
+    higher reading would miss a sequence one behind its table.
+    """
+    if last is None or last == start:
+        return start
+    return last + step
+
+
+def sync_id_sequences(conn, apply: bool = True) -> list[dict[str, Any]]:
+    """Make each ID sequence hand out the next unused ID.
+
+    A missing sequence is created at its table's high-water mark, which is how
+    an existing installation first gains them. A sequence that is behind its
+    table is moved past it: after a return from a checkout without sequences,
+    the one left in the file still points at IDs that code has since used, so
+    every insert collides. Each call here opens its own connection, and a draw
+    made by a failed insert is not kept once the database is reopened, so the
+    collision repeats on every attempt until something moves the sequence. A
+    sequence already ahead of its table is left alone, as is a table that does
+    not exist yet (whatever creates it later runs this again).
+
+    No column default refers to these sequences, so replacing one is safe.
+
+    Args:
+        conn: An open DuckDB connection.
+        apply: False to report what would change without changing anything.
+
+    Returns:
+        One entry per sequence that needed work: ``sequence``, ``action``
+        ("create" or "advance"), ``next_before`` (None when it did not exist)
+        and ``next_after``.
+    """
+    existing_tables = {row[0] for row in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
+    changes: list[dict[str, Any]] = []
+    for sequence, table in ID_SEQUENCES:
+        if table not in existing_tables:
+            continue
+        next_id = conn.execute(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {table}").fetchone()[0]
+        row = conn.execute(
+            "SELECT start_value, last_value, increment_by FROM duckdb_sequences() WHERE sequence_name = ?",
+            [sequence],
+        ).fetchone()
+        if row is None:
+            action, current = "create", None
+        else:
+            current = _next_sequence_value(*row)
+            if current >= next_id:
+                continue
+            action = "advance"
+        if apply:
+            verb = "CREATE SEQUENCE" if action == "create" else "CREATE OR REPLACE SEQUENCE"
+            conn.execute(f"{verb} {sequence} START {next_id}")
+        changes.append({"sequence": sequence, "action": action, "next_before": current, "next_after": next_id})
+    return changes
+
+
 @_serialized_write
 def init_database():
     """
@@ -291,19 +367,20 @@ def init_database():
             )
         """)
 
-        # These tables predate DuckDB sequences.  Create each sequence at the
-        # current high-water mark so existing installations migrate without an
-        # ID collision; new installations begin at one.
-        for sequence, table in (
-            ("watchlist_id_seq", "watchlist"),
-            ("data_catalog_id_seq", "data_catalog"),
-            ("job_items_id_seq", "job_items"),
-            ("historify_schedule_executions_id_seq", "historify_schedule_executions"),
-        ):
-            next_id = conn.execute(
-                f"SELECT COALESCE(MAX(id), 0) + 1 FROM {table}"
-            ).fetchone()[0]
-            conn.execute(f"CREATE SEQUENCE IF NOT EXISTS {sequence} START {next_id}")
+        # These tables predate DuckDB sequences. Create each missing sequence at
+        # the table's high-water mark, and move one that fell behind past it;
+        # upgrade/migrate_historify_sequences.py applies the same step.
+        for change in sync_id_sequences(conn):
+            if change["action"] == "advance":
+                logger.warning(
+                    f"Historify ID sequence {change['sequence']} was behind its table "
+                    f"(next {change['next_before']}); moved to {change['next_after']}"
+                )
+            else:
+                logger.info(
+                    f"Created Historify ID sequence {change['sequence']} "
+                    f"starting at {change['next_after']}"
+                )
 
         # No secondary indexes on market_data: every query leads with
         # `symbol`, DuckDB serves range scans from per-row-group zone maps,
