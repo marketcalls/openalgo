@@ -46,6 +46,85 @@ check_status() {
     fi
 }
 
+# >>> Telegram /chart browser (kept identical in install.sh, install-multi.sh and update.sh)
+# Telegram /chart draws its images with Kaleido, which starts a headless Chrome or
+# Chromium as the OpenAlgo service account. A snap browser cannot start as that
+# account: snap needs a writable home, and a service account's home (/var/www) is not
+# one ("cannot create snap home dir"), so every render fails with "The browser seemed
+# to close immediately after starting". Ubuntu's chromium and chromium-browser packages
+# only install that snap, so they are never used here.
+
+# Prints the browser Kaleido will start and succeeds when it is one the service account
+# can run. Kaleido looks for Google Chrome first, then takes the first Chromium on PATH,
+# so the first name found below is the one it uses.
+chart_browser_path() {
+    local name path real
+    for name in chrome google-chrome google-chrome-stable chromium chromium-browser; do
+        path="$(command -v "$name" 2>/dev/null)" || continue
+        real="$(readlink -f "$path")"
+        # A snap command is /snap/bin/<name>, a link to /usr/bin/snap; Ubuntu's
+        # chromium-browser is a small script that starts the snap.
+        case "$path" in /snap/*) return 1 ;; esac
+        [ "$(basename "$real")" = "snap" ] && return 1
+        if [ "$(head -c 2 "$real" 2>/dev/null)" = "#!" ] && grep -qs "/snap/" "$real"; then
+            return 1
+        fi
+        echo "$real"
+        return 0
+    done
+    return 1
+}
+
+# Installs a browser for Telegram /chart when there is none the service account can run.
+# With apt: Google Chrome's .deb on amd64 (it adds Google's apt source, so Chrome
+# updates with the system), else Debian's own chromium package, never Ubuntu's snap.
+# With dnf or yum: the distribution's chromium, else Google Chrome's rpm on x86_64.
+# With pacman: chromium. Never fatal: OpenAlgo runs without it, only /chart cannot draw.
+ensure_chart_browser() {
+    local found tmp candidate
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart browser: $found" "$GREEN"
+        return 0
+    fi
+    log_message "\nInstalling a browser for Telegram /chart rendering..." "$BLUE"
+    if command -v apt-get >/dev/null 2>&1; then
+        if [ "$(dpkg --print-architecture 2>/dev/null)" = "amd64" ]; then
+            tmp="$(mktemp -d)"
+            if curl -fsSL -o "$tmp/google-chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; then
+                sudo apt-get install -y "$tmp/google-chrome.deb" fonts-liberation || true
+            fi
+            rm -rf "$tmp"
+        fi
+        if ! chart_browser_path >/dev/null; then
+            # On Ubuntu the only candidate is the snap stub, whose version names the snap.
+            candidate="$(apt-cache policy chromium 2>/dev/null | awk '/Candidate:/ {print $2}')"
+            if [ -n "$candidate" ] && [ "$candidate" != "(none)" ] && [[ "$candidate" != *snap* ]]; then
+                sudo apt-get install -y chromium fonts-liberation || true
+            fi
+        fi
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        local pm=dnf
+        command -v dnf >/dev/null 2>&1 || pm=yum
+        sudo "$pm" install -y chromium liberation-fonts || true
+        if ! chart_browser_path >/dev/null && [ "$(uname -m)" = "x86_64" ]; then
+            sudo "$pm" install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm liberation-fonts || true
+        fi
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm --needed chromium ttf-liberation || true
+    fi
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart will use $found" "$GREEN"
+        if command -v snap >/dev/null 2>&1 && snap list chromium >/dev/null 2>&1; then
+            log_message "The chromium snap is not used by OpenAlgo. If nothing else needs it: sudo snap remove chromium" "$YELLOW"
+        fi
+    else
+        log_message "No browser the OpenAlgo service can start was installed, so Telegram /chart will not draw charts" "$YELLOW"
+        log_message "Install Google Chrome (amd64) or your distribution's chromium package; on arm64 Ubuntu, Chromium exists only as a snap, which cannot run as a service" "$YELLOW"
+    fi
+    return 0
+}
+# <<< Telegram /chart browser
+
 # Start logging
 log_message "Starting OpenAlgo update log at: $LOG_FILE" "$BLUE"
 log_message "----------------------------------------" "$BLUE"
@@ -516,6 +595,18 @@ else
     else
         log_message "No migration script found (upgrade/migrate_all.py)" "$YELLOW"
     fi
+fi
+
+# ============================================
+# Telegram /chart browser
+# ============================================
+# Installs made before this check could hold only Ubuntu's chromium snap, which the
+# service account cannot start, so /chart never drew. A server gets a working browser
+# here; a local install, running as its own user, is told what to install.
+if [ "$SERVER_MODE" = true ]; then
+    ensure_chart_browser
+elif ! chart_browser_path >/dev/null; then
+    log_message "Telegram /chart needs Google Chrome or a Chromium that is not a snap, and none was found" "$YELLOW"
 fi
 
 # ============================================
