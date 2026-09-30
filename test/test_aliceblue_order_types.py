@@ -47,6 +47,19 @@ def test_unknown_pricetype_is_logged_rather_than_silently_becoming_market(caplog
     )
 
 
+@pytest.fixture
+def reliance_contract(monkeypatch):
+    """Answer the symbol lookups without the shared test database.
+
+    transform_data resolves the broker symbol and token first. Reading them from
+    the database made these tests pass only when an earlier test had happened
+    to seed a RELIANCE row, and fail when run on their own.
+    """
+    monkeypatch.setattr(td, "get_br_symbol", lambda symbol, exchange: "RELIANCE-EQ")
+    monkeypatch.setattr(td, "get_token", lambda symbol, exchange: "2885")
+
+
+@pytest.mark.usefixtures("reliance_contract")
 def test_sl_carries_both_a_limit_price_and_a_trigger():
     """Stop-limit needs both; losing either changes what the order does."""
     payload = td.transform_data(
@@ -60,6 +73,7 @@ def test_sl_carries_both_a_limit_price_and_a_trigger():
     assert payload["slTriggerPrice"] == "1295"
 
 
+@pytest.mark.usefixtures("reliance_contract")
 def test_sl_m_carries_a_trigger_and_no_limit_price():
     payload = td.transform_data(
         {

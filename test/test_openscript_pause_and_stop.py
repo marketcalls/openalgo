@@ -20,7 +20,10 @@ one the page asks about first. Each test below names the wrong implementation it
 catches.
 """
 
+import importlib.util
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,7 +136,10 @@ def test_stopping_asks_the_run_to_close_and_waits_for_it_to_go():
 
     def ask(run_id, what=commands.CLOSE):
         asked.append(run_id)
-        # What a run does when it has closed what it held.
+        commands.ask(run_id, what)
+        # What a run does when it has closed what it held: it says so, then
+        # leaves.
+        commands.record_closed(run_id)
         child.leaves_on_its_own()
 
     service.ask_to_close = ask
@@ -167,6 +173,46 @@ def test_a_run_that_does_not_close_stays_running_and_says_why():
     assert "Pause" in message, "the refusal does not say what a trader can do instead"
 
 
+def test_a_run_that_leaves_without_confirming_its_close_is_not_reported_closed(monkeypatch):
+    """THE ONE THAT TELLS A TRADER A POSITION IS CLOSED WHEN NOBODY KNOWS.
+
+    A run leaves the same way after closing its position as after being told to
+    stop or crashing, and a run taken over from an earlier worker reports no
+    exit status at all, so its leaving proves nothing. Only its own word that
+    the close is done does. Without it the Stop says so and says what to do.
+    """
+    stopped: list[str] = []
+    monkeypatch.setattr(service, "mark_stopped", stopped.append)
+    child = running(Child(ends_when_asked=False))
+
+    def ask(run_id, what=commands.CLOSE):
+        commands.ask(run_id, what)
+        child.leaves_on_its_own()  # gone, without saying the position is closed
+
+    monkeypatch.setattr(service, "ask_to_close", ask)
+    ok, message = service.stop_run(RUN, close=True)
+
+    assert ok is False
+    assert message == service.CLOSE_UNCONFIRMED_MESSAGE
+    assert "closed and stopped" not in message
+    assert "Check your positions" in message
+    assert RUN not in service.RUNNING_RUNS
+    assert stopped == [RUN], "a Stop that ended the run must still stop the deployment"
+    assert commands.all_commands() == {}
+
+
+def test_the_success_message_is_unchanged_when_the_run_confirms(monkeypatch):
+    child = running(Child(ends_when_asked=False))
+
+    def ask(run_id, what=commands.CLOSE):
+        commands.ask(run_id, what)
+        commands.record_closed(run_id)
+        child.leaves_on_its_own()
+
+    monkeypatch.setattr(service, "ask_to_close", ask)
+    assert service.stop_run(RUN, close=True) == (True, "closed and stopped")
+
+
 def test_an_instruction_that_was_not_carried_out_is_not_left_to_be_retried():
     """Catches a closing order sent on every wake for the rest of the session.
 
@@ -192,6 +238,87 @@ def test_stopping_a_run_that_is_not_running_is_not_reported_as_a_close():
 # ---------------------------------------------------------------------------
 # The instruction file
 # ---------------------------------------------------------------------------
+
+
+def test_a_confirmed_close_is_not_an_instruction():
+    """``closed`` is read by the parent; a run never acts on it."""
+    commands.ask(RUN)
+    commands.record_closed(RUN)
+
+    assert commands.command_for(RUN) == commands.CLOSED
+    assert commands.close_confirmed(RUN) is True
+    assert commands.command_for(RUN) != commands.CLOSE
+
+
+def test_a_close_is_never_written_back_after_the_parent_cleared_it():
+    """A run confirming late must not leave an instruction for its next start."""
+    commands.record_closed(RUN)
+
+    assert commands.all_commands() == {}
+    assert commands.close_confirmed(RUN) is False
+
+
+# ---------------------------------------------------------------------------
+# The run's own side of a close
+# ---------------------------------------------------------------------------
+
+RUNNER_PATH = Path(__file__).resolve().parents[1] / "openscript_host" / "openscript_runner.py"
+
+
+def _child_program():
+    spec = importlib.util.spec_from_file_location("openscript_child_close_under_test", RUNNER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Session:
+    """What the run's loop reads of a session: a close that works, or does not."""
+
+    def __init__(self, flat: bool):
+        self.stopping = False
+        self.options = SimpleNamespace(strategy_name=RUN)
+        self.live = None
+        self._times: list[int] = []
+        self._from_feed: set[int] = set()
+        self.flat = flat
+        self.flattened = 0
+
+    def flatten(self):
+        self.flattened += 1
+        return self.flat
+
+    def cycle(self):
+        return None
+
+
+def _one_wake(child, session):
+    options = SimpleNamespace(cycles=1, poll_seconds=0.0)
+    feed = SimpleNamespace(live=False)
+    return child._loop(session, options, feed, 0)
+
+
+def test_the_run_confirms_a_close_before_it_leaves():
+    child = _child_program()
+    commands.ask(RUN)
+    session = _Session(flat=True)
+
+    code = _one_wake(child, session)
+
+    assert code == child.EXIT_OK and session.flattened == 1
+    assert commands.close_confirmed(RUN) is True
+
+
+def test_the_run_confirms_nothing_when_its_close_did_not_fill():
+    child = _child_program()
+    commands.ask(RUN)
+    session = _Session(flat=False)
+
+    _one_wake(child, session)
+
+    assert session.flattened == 1
+    assert commands.close_confirmed(RUN) is False
+    assert commands.all_commands() == {}, "a close it could not make is left to be retried"
 
 
 def test_an_instruction_survives_the_worker_that_wrote_it(quiet):
@@ -250,13 +377,247 @@ def test_nothing_in_the_command_module_needs_the_platform_to_import():
 
     source = Path(service.__file__).parent / "openscript_commands.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
-    top = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-    ]
+    top = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
     names = {getattr(node, "module", "") or "" for node in top}
 
     assert not {one for one in names if one.startswith("utils.")}, names
     assert not {one for one in names if one.startswith("database.")}, names
     assert not {one for one in names if one.startswith("blueprints.")}, names
+
+
+# ---------------------------------------------------------------------------
+# A close measures the run only once nothing of it is still working
+# ---------------------------------------------------------------------------
+
+
+class _Ledger:
+    """Enough of the engine's ledger for a close: settled fills make the size."""
+
+    def __init__(self, sides):
+        self.sides = sides
+        self.frames = []
+        self.held = 0.0
+
+    def deliver(self, frame):
+        self.frames.append(frame)
+
+    def settle(self):
+        for frame in self.frames:
+            if frame.status == "filled":
+                self.held += self.sides[frame.intent_id] * frame.filled_qty
+        self.frames = []
+        return []
+
+    def size(self):
+        return self.held
+
+
+class _Broker:
+    """The platform as a run's client sees it, for one entry order and a close."""
+
+    def __init__(self, entry_status, cancel_takes=True, readable=True):
+        self.status = {"ENTRY7": entry_status}
+        self.cancel_takes = cancel_takes
+        self.readable = readable
+        self.placed: list[dict] = []
+        self.cancelled: list[str] = []
+
+    def placeorder(self, **order):
+        self.placed.append(order)
+        self.status["CLOSE1"] = "complete"
+        return {"status": "success", "orderid": "CLOSE1"}
+
+    def cancelorder(self, order_id, strategy):
+        self.cancelled.append(order_id)
+        if self.cancel_takes and self.status.get(order_id) == "open":
+            self.status[order_id] = "cancelled"
+        return {"status": "success"}
+
+    def orderstatus(self, order_id, strategy):
+        if not self.readable and order_id != "CLOSE1":
+            raise ConnectionError("the platform did not answer")
+        return {
+            "status": "success",
+            "data": {
+                "order_status": self.status[order_id],
+                "quantity": 50,
+                "average_price": 800.0,
+            },
+        }
+
+
+def _closing_session(child, broker):
+    """A run that sent BUY 50 (intent 7, order ENTRY7) and has not folded it yet."""
+    session = child.Session.__new__(child.Session)
+    session.ledger = _Ledger({7: +1})
+    session._open = {7}
+    session._orders = {7: "ENTRY7"}
+    session._shares = {}
+    session.client = broker
+    session.engine = SimpleNamespace(OrderFrame=lambda **frame: SimpleNamespace(**frame))
+    session.options = SimpleNamespace(strategy_name=RUN, symbol="SBIN", exchange="NSE")
+    session.product = "MIS"
+    return session
+
+
+def test_a_fill_the_run_has_not_folded_yet_is_closed():
+    """THE ONE THAT LEFT 50 SBIN WITH NOTHING MANAGING IT.
+
+    The entry filled a second before Stop, and the run folds a fill only when it
+    next executes, so its size still read 0: it said nothing was open, sent no
+    order, and confirmed a close while the account held the position.
+    """
+    child = _child_program()
+    broker = _Broker("complete")
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=1.0) is True
+
+    assert [(one["action"], one["quantity"]) for one in broker.placed] == [("SELL", 50)]
+    assert broker.cancelled == [], "a filled order was sent a cancellation"
+
+
+def test_a_resting_order_is_cancelled_before_the_run_measures_itself():
+    """A limit or stop order counts as nothing held, and could fill after the run left."""
+    child = _child_program()
+    broker = _Broker("open")
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=1.0) is True
+
+    assert broker.cancelled == ["ENTRY7"]
+    assert broker.placed == [], "nothing had filled, so there was nothing to close"
+    assert session._open == set()
+
+
+def test_an_order_that_does_not_cancel_leaves_the_run_running():
+    child = _child_program()
+    broker = _Broker("open", cancel_takes=False)
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=0.2) is False
+
+    assert broker.placed == []
+    assert session._open == {7}, "the run forgot an order that is still working"
+
+
+def test_an_order_that_cannot_be_read_leaves_the_run_running():
+    child = _child_program()
+    broker = _Broker("complete", readable=False)
+    session = _closing_session(child, broker)
+
+    assert session.flatten(wait_seconds=0.2) is False
+
+    assert broker.placed == []
+
+
+# ---------------------------------------------------------------------------
+# The instruction file is changed by several processes at once
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_WRITER = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import services.openscript_commands as commands
+commands.COMMAND_FILE = Path(sys.argv[2])
+start, action, run_id, rounds = float(sys.argv[3]), sys.argv[4], sys.argv[5], int(sys.argv[6])
+while time.time() < start:
+    pass
+for _ in range(rounds):
+    if action == "closed":
+        commands.record_closed(run_id)
+    else:
+        commands.ask(run_id)
+        commands.clear(run_id)
+"""
+
+
+def _writers(command_file, jobs, rounds=1):
+    """Start one process per (action, run) at the same instant, and wait for all."""
+    import subprocess
+    import sys
+    import time
+
+    start = time.time() + 2.0
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _WRITER,
+                str(REPO_ROOT),
+                str(command_file),
+                str(start),
+                action,
+                run_id,
+                str(rounds),
+            ],
+            cwd=str(command_file.parent),
+        )
+        for action, run_id in jobs
+    ]
+    for proc in procs:
+        assert proc.wait(timeout=60) == 0
+
+
+def _runs(count):
+    return [deployment_id("turn.oscript", f"OTHER{i}", "EXCH1", "1m") for i in range(count)]
+
+
+def test_closes_confirmed_at_the_same_instant_are_all_kept(quiet):
+    """THE ONE THAT REPORTED A STOP THAT WORKED AS UNCONFIRMED.
+
+    Every run writes its ``closed`` from its own process. Two that read the file
+    before either wrote each wrote back what they read plus their own change, so
+    one of the two was lost: measured, one in every round when started together.
+    """
+    runs = _runs(3)
+    for _ in range(2):
+        for run in runs:
+            commands.ask(run)
+
+        _writers(quiet / "commands.json", [("closed", run) for run in runs])
+
+        assert all(commands.close_confirmed(run) for run in runs), commands.all_commands()
+        for run in runs:
+            commands.clear(run)
+
+
+def test_changes_from_other_processes_never_lose_an_outstanding_close(quiet):
+    """A lost ``close`` leaves a Stop waiting out its whole timeout."""
+    waiting = RUN
+    commands.ask(waiting)
+
+    _writers(quiet / "commands.json", [("churn", run) for run in _runs(3)], rounds=20)
+
+    assert commands.command_for(waiting) == commands.CLOSE
+
+
+def test_a_file_that_could_not_be_read_is_not_written_over(quiet, monkeypatch):
+    """Read as holding nothing, the change wrote every other run's instruction away."""
+    other = deployment_id("turn.oscript", "SYM9", "EXCH1", "1m")
+    commands.ask(other)
+    real_read_text = Path.read_text
+
+    def refused(self, *args, **kwargs):
+        if self == commands.COMMAND_FILE:
+            raise PermissionError("in use by another process")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", refused)
+    monkeypatch.setattr(commands, "_READ_RETRY_SECONDS", 0.0)
+    commands.ask(RUN)
+    monkeypatch.setattr(Path, "read_text", real_read_text)
+
+    assert commands.command_for(other) == commands.CLOSE, "an unrelated instruction was wiped"
+
+
+def test_a_change_that_changes_nothing_is_not_written(quiet):
+    """Every write is a moment another process can be refused a read."""
+    commands.record_closed(RUN)
+    commands.clear(RUN)
+
+    assert not (quiet / "commands.json").exists()

@@ -41,7 +41,7 @@ raw hits.
    `broker_factory.py:53` hard-codes a `{name}_adapter` / `{Name}WebSocketAdapter`
    naming convention; `services/` has
    `telegram_bot_service.py`, `telegram_bot_service_fixed.py`,
-   `telegram_bot_service_v2.py`.
+   `telegram_bot_service_v2.py`. (The last two have since been deleted.)
 
 ## Folder impact map
 

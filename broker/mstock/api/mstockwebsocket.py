@@ -16,9 +16,20 @@ from typing import Any
 
 import websocket
 
+from utils import runtime
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# fetch_quote opens a socket per depth request and, as written, may spend 10s
+# on each of up to five blocking steps. Under the gthread worker that holds a
+# request thread from a fixed pool for the whole time, so there each step gets
+# at most _GTHREAD_STEP_TIMEOUT seconds and the call as a whole
+# _GTHREAD_QUOTE_DEADLINE seconds; past that it returns no quote, as it does
+# when the broker does not answer. Under eventlet and the development server
+# the timeouts are unchanged.
+_GTHREAD_STEP_TIMEOUT = 3.0
+_GTHREAD_QUOTE_DEADLINE = 5.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -875,19 +886,34 @@ class MstockWebSocket:
         # disconnect leaked one descriptor per call until the process hit its
         # open-file limit.
         ws = None
+        deadline = time.monotonic() + _GTHREAD_QUOTE_DEADLINE if runtime.gthread_active() else None
+
+        def time_left():
+            # True while the call may wait again. Under gthread it also shortens
+            # the socket timeout to what remains of the deadline.
+            if deadline is None:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            ws.settimeout(min(remaining, _GTHREAD_STEP_TIMEOUT))
+            return True
+
         try:
             import websocket as ws_module
 
             ws = ws_module.create_connection(
                 self.ws_url,
                 sslopt={"cert_reqs": ssl.CERT_NONE},
-                timeout=10,
+                timeout=_GTHREAD_STEP_TIMEOUT if deadline is not None else 10,
             )
 
             # Send LOGIN
             ws.send(f"LOGIN:{self.auth_token}")
 
             # Wait for login response
+            if not time_left():
+                return None
             try:
                 ws.recv()  # Login response
             except Exception:
@@ -905,6 +931,9 @@ class MstockWebSocket:
 
             # Wait for binary response
             for _ in range(3):
+                if not time_left():
+                    logger.debug("mstock quote: no answer within the deadline")
+                    return None
                 try:
                     response = ws.recv()
                     if isinstance(response, bytes) and response:

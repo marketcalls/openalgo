@@ -456,6 +456,15 @@ order facade.
 
 See [Flow import format](flow-import-format.md) for supported node JSON.
 
+Flow records the username and broker that own each successful subscription.
+`release_workflow_subscriptions(workflow_id)` retains failed releases for retry
+and removes successful releases only if their ownership version still matches.
+A subscription shared by another Flow workflow remains subscribed. Delete and
+deactivate hold the workflow execution lock through cleanup: a running workflow
+returns HTTP 409, and a failed release returns HTTP 503 without deleting or
+deactivating the workflow. Retry the operation after the run or proxy recovers;
+an already-inactive workflow also retries pending subscription cleanup.
+
 Primary internal entry points:
 
 ```python
@@ -588,6 +597,14 @@ HistorifyScheduler.delete_schedule(schedule_id)
 Initialize Historify and its scheduler through application startup. Feature
 code should retrieve the initialized scheduler rather than creating a second
 instance.
+
+Historify database mutations are serialized as complete operations. Under
+eventlet their lock is cooperative, and native thread callers enter through
+`real_threading.run_on_hub`; never hold a real bookkeeping lock across a
+database retry or green sleep. Job registry locks protect claims and signals
+only: release them before writing status or calling cleanup, which acquires
+the registry lock itself. A cancellation that loses the processor's terminal
+claim returns 409 rather than overwriting a completed job with `cancelled`.
 
 ### Streaming and market-data state
 
@@ -725,9 +742,8 @@ inside a feature blueprint.
 | `whatsapp_alert_service.py` | Formats and dispatches WhatsApp order/broadcast alerts. |
 | `whatsapp_bot_service.py` | Active WhatsApp pairing state, commands, and synchronous sends. |
 
-`telegram_bot_service_fixed.py` and `telegram_bot_service_v2.py` are not the
-active imports used by `app.py`, the REST namespace, or the Telegram blueprint.
-Do not select them for new integrations.
+The older copies `telegram_bot_service_fixed.py` and `telegram_bot_service_v2.py`
+have been deleted. `telegram_bot_service.py` is the only Telegram bot service.
 
 Alert-service entry points:
 

@@ -557,11 +557,15 @@ def test_a_raising_emit_does_not_reach_the_caller(sio, clock, run):
     assert broadcast.push_terminal(STRATEGY_ID, RUN_ID, "manual", 0.0) is True
 
     assert sio.emits == []
-    assert sio.scheduled == 6
+    # Emitted on the caller's thread, never on a background task of its own.
+    assert sio.scheduled == 0
 
 
-def test_a_failure_to_schedule_the_emit_does_not_reach_the_caller(sio, clock, run):
-    sio.raise_on_schedule = RuntimeError("no async mode")
+def test_a_failure_to_hand_the_emit_over_does_not_reach_the_caller(sio, clock, run, monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError("the hub is too busy")
+
+    monkeypatch.setattr(broadcast, "_hand_to_server", refuse)
 
     assert broadcast.push_delta(run, force=True) is False
     assert broadcast.push_terminal(STRATEGY_ID, RUN_ID, "manual", 0.0) is False
@@ -619,7 +623,7 @@ def test_a_terminal_frame_forgets_the_strategys_throttle_entry(sio, clock, run):
 
 def test_the_throttle_entry_is_dropped_even_when_the_terminal_emit_fails(sio, clock, run):
     broadcast.push_delta(run)
-    sio.raise_on_schedule = RuntimeError("no async mode")
+    sio.raise_on_emit = RuntimeError("socket gone")
 
     broadcast.push_terminal(STRATEGY_ID, RUN_ID, "manual", 0.0)
 

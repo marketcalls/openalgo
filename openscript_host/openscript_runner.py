@@ -845,6 +845,23 @@ def _forget_instruction(run_id: str) -> None:
         return
 
 
+def _record_closed(run_id: str) -> None:
+    """Tell the parent the close is done, before this run leaves.
+
+    The parent cannot tell from the exit alone: a run leaves the same way after
+    closing its position as after being told to stop. What it reads instead is
+    this, so a Stop is reported as done only when the position was. Nothing
+    raises: if it cannot be written, the parent says the close could not be
+    confirmed, which is the safe way round to be wrong.
+    """
+    try:
+        from services.openscript_commands import record_closed
+
+        record_closed(run_id)
+    except Exception:  # noqa: BLE001 - the run leaves either way
+        return
+
+
 def _bar_time_text(time_ms: int) -> str:
     """A bar's open instant as a clock time, in this server's own zone.
 
@@ -1523,7 +1540,20 @@ class Session:
         and exiting is how a position ends up with nothing managing it. That is
         the platform's own rule for a stop whose exit orders were refused, and it
         is why this answers False rather than raising.
+
+        **Nothing of this run may still be working when it measures itself.** Its
+        size is what the fills it has already folded add up to, so an order sent
+        on the last bar that has filled since, or a limit or stop order resting
+        at the broker, is not in it. Every order of this run still out is
+        cancelled first and watched until the broker says it is finished, and
+        what came of each is folded in before the size is read. An order that
+        does not finish, or cannot be read, leaves the run running, for the same
+        reason a close that does not fill does: its fill may still come.
         """
+        until = time.time() + wait_seconds
+        if not self._finish_working_orders(until):
+            return False
+
         held = self._position()
         if not held:
             say("Nothing is open, so this run has nothing to close.")
@@ -1572,7 +1602,8 @@ class Session:
         # Watched to a fill rather than sent and forgotten. An order accepted
         # here and rejected at the broker leaves exactly the position this was
         # pressed to be rid of, and a run that had already exited could not say.
-        until = time.time() + wait_seconds
+        # The same deadline as the cancellations above, so a Stop is answered
+        # within the time the page waits for it.
         while time.time() < until and not self._order_is_done(order_id):
             time.sleep(0.5)
 
@@ -1586,6 +1617,63 @@ class Session:
             "then stop this run again."
         )
         return False
+
+    def _finish_working_orders(self, until: float) -> bool:
+        """Cancel every order of this run still out, and fold what became of them.
+
+        True once none is left working. False when one is still working, or
+        could not be read, at ``until``: its fill may still come, so the size
+        this run would close is not known yet.
+        """
+        if not self._open:
+            return True
+        try:
+            # What the broker has already reported is folded first, so an order
+            # that has filled is counted and is not sent a cancellation.
+            self._fold()
+            asked: set[str] = set()
+            for intent_id in sorted(self._open):
+                order_id = self._orders.get(intent_id)
+                if not order_id or order_id in asked:
+                    continue
+                asked.add(order_id)
+                try:
+                    self.client.cancelorder(order_id=order_id, strategy=self.options.strategy_name)
+                except Exception as unreachable:  # noqa: BLE001 - the fold below decides
+                    say(f"Order {order_id} could not be cancelled this time. ({unreachable})")
+                    continue
+                say(f"Asked for order {order_id} to be cancelled before closing.")
+
+            while True:
+                self._fold()
+                working = self._working_order_ids()
+                if not working or time.time() >= until:
+                    break
+                time.sleep(0.5)
+        except Exception as unreadable:  # noqa: BLE001 - said, and the run stays
+            say(
+                "This run could not settle its own orders before closing, so it has not "
+                f"closed anything and is still here. Check your orders and positions, then "
+                f"stop this run again. ({unreadable})"
+            )
+            return False
+
+        if working:
+            listed = ", ".join(sorted(working))
+            if len(working) == 1:
+                what = f"Order {listed} of this run is still working at the broker or could not be read, so its fill"
+            else:
+                what = f"Orders {listed} of this run are still working at the broker or could not be read, so their fills"
+            say(
+                f"{what} may still come. This run has not closed anything and is still here. "
+                "Check your orders, then stop this run again."
+            )
+            return False
+        return True
+
+    def _working_order_ids(self) -> set[str]:
+        """The broker's ids for the orders of this run that are still out."""
+        return {self._orders[one] for one in self._open if self._orders.get(one)}
 
     def _order_is_done(self, order_id: str) -> bool:
         """Whether this order has filled. Unreadable answers no, deliberately.
@@ -2699,6 +2787,7 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
         asked = _asked_of(session.options.strategy_name)
         if asked == CLOSE:
             if session.flatten():
+                _record_closed(session.options.strategy_name)
                 say("Stopped, holding nothing.")
                 return EXIT_OK
             # Not flat, so this run stays: something has to be able to stop a
@@ -2777,7 +2866,7 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
             # between the press and the closing order. Read every few seconds
             # rather than on every half second, because this is a file and the
             # ordinary case is that there is nothing in it.
-            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name):
+            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name) == CLOSE:
                 break
 
     say("Stopped.")

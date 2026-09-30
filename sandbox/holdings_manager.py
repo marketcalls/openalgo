@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -25,6 +26,13 @@ from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: One T+1 settlement at a time in this process. Every caller (the midnight
+#: job, login and start-up catch-ups, the analyzer toggle) runs on a request
+#: or worker thread, green under eventlet, so a plain lock is the right kind.
+#: Correctness rests on the per-position claims; this only stops two runs from
+#: queueing on the database's write lock behind each other.
+_t1_settlement_lock = threading.Lock()
 
 
 class HoldingsManager:
@@ -125,7 +133,23 @@ class HoldingsManager:
         """
         Process T+1 settlement - move CNC positions to holdings
         Should be called daily after market close
+
+        One settlement at a time per process, and one transaction per run.
+        The midnight job, the catch-up on every login (up to five devices),
+        the start-up catch-up and the analyzer toggle can all start one, and
+        two overlapping runs each folded the same position into its holding
+        and each moved its margin: the holding doubled and used margin fell
+        twice, because the fund moves committed in the middle of the loop.
+        Now each position is claimed before it is folded in (a run that finds
+        it gone skips it), the fund moves are staged, and the holdings, the
+        funds and the deleted positions commit together.
         """
+        with _t1_settlement_lock:
+            return self._process_t1_settlement()
+
+    def _process_t1_settlement(self):
+        from sandbox.position_manager import claim_position_for_settlement
+
         try:
             ist = pytz.timezone("Asia/Kolkata")
             today = datetime.now(ist).date()
@@ -145,6 +169,15 @@ class HoldingsManager:
             settled_count = 0
 
             for position in cnc_positions:
+                # Claim the row before folding it in. A run that loses the
+                # claim (another run settled it, or a fill changed it since
+                # the query) leaves it alone; the claim also re-reads it.
+                if not claim_position_for_settlement(position, position.quantity):
+                    logger.info(
+                        f"T+1: {position.symbol} was settled or changed elsewhere; skipping"
+                    )
+                    continue
+
                 # Skip positions with zero quantity (already squared off)
                 if position.quantity == 0:
                     db_session.delete(position)
@@ -165,7 +198,6 @@ class HoldingsManager:
 
                 if holding:
                     # Update existing holding
-                    old_holding_qty = holding.quantity
 
                     if position.quantity > 0:
                         # Adding to holding (BUY)
@@ -184,7 +216,7 @@ class HoldingsManager:
 
                         # Transfer margin from used_margin to holdings (don't credit available_balance)
                         margin_amount = abs(position.quantity) * position.average_price
-                        fund_manager.transfer_margin_to_holdings(
+                        fund_manager.stage_transfer_margin_to_holdings(
                             margin_amount, f"T+1 settlement: {position.symbol} BUY → Holdings"
                         )
                         logger.debug(
@@ -197,7 +229,7 @@ class HoldingsManager:
 
                         # Credit sale proceeds to available balance
                         sale_proceeds = abs(position.quantity) * position.average_price
-                        fund_manager.credit_sale_proceeds(
+                        fund_manager.stage_credit_sale_proceeds(
                             sale_proceeds, f"T+1 settlement: {position.symbol} SELL from Holdings"
                         )
                         logger.debug(
@@ -230,7 +262,7 @@ class HoldingsManager:
 
                     # Transfer margin from used_margin to holdings (don't credit available_balance)
                     margin_amount = abs(position.quantity) * position.average_price
-                    fund_manager.transfer_margin_to_holdings(
+                    fund_manager.stage_transfer_margin_to_holdings(
                         margin_amount, f"T+1 settlement: {position.symbol} → Holdings"
                     )
                     logger.debug(
@@ -284,7 +316,9 @@ class HoldingsManager:
                 key = (holding.symbol, holding.exchange)
                 if key not in seen:
                     seen.add(key)
-                    symbols_to_fetch.append({"symbol": holding.symbol, "exchange": holding.exchange})
+                    symbols_to_fetch.append(
+                        {"symbol": holding.symbol, "exchange": holding.exchange}
+                    )
 
             if not symbols_to_fetch:
                 return
@@ -310,7 +344,9 @@ class HoldingsManager:
                             if symbol and exchange and data:
                                 quote_cache[(symbol, exchange)] = data
                     else:
-                        logger.debug(f"Multiquotes returned no results: {response.get('message', 'Unknown error')}")
+                        logger.debug(
+                            f"Multiquotes returned no results: {response.get('message', 'Unknown error')}"
+                        )
                 else:
                     logger.warning("No API keys found for fetching multiquotes")
             except Exception as e:
@@ -417,7 +453,7 @@ def process_all_t1_settlements():
             logger.info("No CNC positions to settle")
             return
 
-        users = set(p.user_id for p in positions)
+        users = {p.user_id for p in positions}
         logger.info(f"Processing T+1 settlement for {len(users)} users")
 
         settled_users = 0

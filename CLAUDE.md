@@ -60,20 +60,28 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 
 ## Runtime Constraints
 
-### Eventlet + Gunicorn (production)
+### Two production workers: eventlet (default) and gthread (opt-in)
 
-Production (Ubuntu direct and Docker) runs `gunicorn --worker-class eventlet -w 1`:
+Production (Ubuntu direct and Docker) runs gunicorn with one worker process.
+Which worker class it uses is chosen per install by one `.env` key,
+`OPENALGO_WORKER_CLASS`:
 
-- **No `asyncio`.** Eventlet monkey-patches the stdlib and is incompatible with `asyncio.run()`, `async`/`await`, and `asyncio.get_event_loop()`. Async work must use eventlet green threads or run on a separate real OS thread — see `telegram_bot_service.py:_render_plotly_png` for the pattern.
-- **Single worker (`-w 1`) is mandatory.** Flask-SocketIO state is in-process and cannot be shared across workers.
-- **`threading.local()` maps to green threads**, which is why `scoped_session` works correctly under eventlet.
+- **eventlet is the default and stays the default.** An install that has not set the key runs `gunicorn --worker-class eventlet -w 1` exactly as before, and an update never rewrites its systemd unit, nginx configuration or dependencies. About 4,75,000 installs run this way, so every change must be behaviour-neutral under eventlet.
+- **gthread is opt-in.** `OPENALGO_WORKER_CLASS = 'gthread'` plus `install/switch-worker.sh` (Ubuntu) or a container restart (Docker) starts gunicorn through the repo launcher `install/openalgo-gunicorn.sh` with a fixed pool of 64 threads. It is the only new setting; the thread count is not configurable. Switched systemd units reference the launcher path forever, so never move or rename it. The trader-facing guide is [`docs/gthread/README.md`](docs/gthread/README.md).
+- **Single worker (`-w 1`) is mandatory under both.** Flask-SocketIO state is in-process and cannot be shared across workers.
+- **Code must be correct under eventlet, gthread and the dev server.** A race fix (a lock, a compare-and-set claim, a single flight) may apply in every mode, but the quiet path must stay unchanged. Anything a trader could notice (refusing or timing out a request, capping streams, bounding a broker queue wait) is gated on `utils.runtime.gthread_active()`.
+- **Use the shared helpers instead of writing new ones:** `utils/runtime.py` answers which worker is running (never test `"eventlet" in sys.modules`); `utils/real_threading.py`; `utils/thread_safe_cache.py` (`LockedTTLCache`, never a bare `cachetools.TTLCache`, and a test fails on new ones); `utils/lazy.py`; `utils/keyed_locks.py`; `utils/stream_registry.py` (every long-lived response is admitted and released through it); `utils/shutdown.py`; `utils/db_sessions.py`; `utils/broker_backpressure.py`; `utils/smart_order_guard.py`; `extensions.emit_from_any_thread`.
+- **No `asyncio` in request code while eventlet is the default.** Eventlet monkey-patches the stdlib and is incompatible with `asyncio.run()`, `async`/`await`, and `asyncio.get_event_loop()`. Async work runs on a real OS thread with its own loop (`services/websocket_client.py` and `telegram_bot_service.py:_render_plotly_png` are the patterns). `async def` views wait until eventlet is removed.
+- **`threading.local()` maps to green threads under eventlet and to real threads under gthread.** `scoped_session` works in both, but a gthread pool thread outlives its request, so the session teardown layers are what stop state leaking from one request into the next.
+- **gunicorn 26 removes the eventlet worker** (its own deprecation notice in 25.3.0 says so), which is why the pin `gunicorn>=25.0,<26` stays while eventlet is the default.
 
 ### Development server differs
 
-`uv run app.py` uses standard threading, not eventlet. Code must work in both.
-`asyncio` works fine on the dev server and **breaks in production** — this is the
-single most common way a change passes locally and fails on deploy. SQLite
-locking is also stricter on Windows.
+`uv run app.py` uses standard threading: neither eventlet nor gunicorn, and it
+ignores `OPENALGO_WORKER_CLASS`. Code must work in all three. `asyncio` works
+fine on the dev server and **breaks under eventlet**. That is the single most
+common way a change passes locally and fails on deploy. SQLite locking is also
+stricter on Windows.
 
 ## Invariants — do not break these
 
@@ -87,7 +95,7 @@ and the cache-invalidation publisher (`database/cache_invalidation.py`).
 
 - **Never make a publisher `bind()`.** ZMQ allows many PUBs to connect to one bound SUB, so publishers across processes share one fixed port with no contention.
 - **`ZMQ_PORT` is fixed by config and never drifts.** No port scan, no `5555 -> 5556` fallback, no runtime mutation of `os.environ["ZMQ_PORT"]`. `install-multi.sh` gives each instance its own `ZMQ_PORT` (`5555 + i-1`) and each stays put.
-- **Why:** under gunicorn+eventlet the proxy runs *out of process* (a subprocess via `install.sh`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`) while the cache-invalidation publisher runs inside gunicorn. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays put, so **`subscribe` succeeds but no ticks are delivered**. Works on the single-process dev server, broken only under eventlet — historically very hard to spot. Broker-agnostic.
+- **Why:** under gunicorn, with either worker, the proxy runs *out of process* (a subprocess started by the worker, chosen by `resolve_proxy_mode()` in `websocket_proxy/app_integration.py`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`) while the cache-invalidation publisher runs inside gunicorn. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays put, so **`subscribe` succeeds but no ticks are delivered**. Works on the single-process dev server, broken only under eventlet — historically very hard to spot. Broker-agnostic.
 
 ### Multi-session login must not tear down the shared broker feed
 
@@ -182,7 +190,8 @@ handlers in `blueprints/traffic.py` and `blueprints/security.py`.
 
 ### Nothing may block or be blocked across the eventlet boundary
 
-Production is `gunicorn --worker-class eventlet -w 1`. Eventlet monkey-patches
+These rules govern the default worker, `gunicorn --worker-class eventlet -w 1`,
+and so every install that has not opted in to gthread. Eventlet monkey-patches
 the stdlib **before the app is imported**, so `threading.Lock`, `RLock`,
 `Event`, `Condition` and `queue.Queue` are all **green**: they belong to the hub
 and can only pass a waiter from one greenlet to another. A plain
@@ -219,11 +228,19 @@ arrived in 0.3s still cost the caller its full 10s timeout.
 - **Keep a real lock's critical section to in-memory bookkeeping.** A greenlet waiting on one blocks the hub, so copy what you need out of the dict and do the database and network work after the release.
 - **Never wait on a C-served timeout.** `PRAGMA busy_timeout` was the worst case: SQLite waits inside C, so the greenlet holding the write lock could never be scheduled to commit, and the wait could only ever end in "database is locked". A holder needing 0.5s produced a 16s failure. `database/__init__.py` now waits 100ms in SQLite and retries from Python.
 - **Never hand a result across with `run_coroutine_threadsafe`.** Use `WebSocketClient._run_on_loop`: a real `Event` the loop thread sets, polled by the caller. One boolean is the only thing that crosses.
+- **Reach green code from a real thread through `utils.real_threading.run_on_hub` or `submit_to_hub`**, and emit over Socket.IO with `extensions.emit_from_any_thread`. Both run inline when eventlet is not patched, so the same call is correct under gthread and on the dev server.
 - **Logging counts.** `logging.Handler` builds its lock in `__init__`, which happens after monkey-patching, so it is green, and every real thread in this project logs. `utils/logging.py` patches `Handler.createLock` on the class so ours and third-party handlers all get a real lock. The give-away that this has broken is `AttributeError: 'StreamHandler' object has no attribute 'lock'` appearing on unrelated requests, hours before the hard crash.
 
-**What is exempt.** Under eventlet `app.py` starts the websocket proxy as a
+**What is exempt.** Under gunicorn `app.py` starts the websocket proxy as a
 **child process**, so everything in `websocket_proxy/` and `broker/*/streaming/`
 runs unpatched and its `threading.Lock` is already real. Do not "fix" those.
+
+**Under gthread the hazard changes shape.** Every primitive is real, so A and B
+above cannot happen. What eventlet hid instead is preemption: a check-then-act
+or read-modify-write on shared state with no I/O in between was accidentally
+atomic under eventlet, and under real threads it interleaves. Claim under the
+lock that checks, publish caches as whole generations, and prove a race with a
+barrier-synchronised test that fails on the old code (`test/test_gthread_*.py`).
 
 **It cannot be caught locally.** `uv run app.py` never patches anything, so every
 one of these behaves correctly on the dev server whatever the primitive is made

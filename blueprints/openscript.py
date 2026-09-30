@@ -69,10 +69,22 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, send_from_directory
 
 from services.openscript_instrument_service import get_instrument_facts
+from utils.keyed_locks import KeyedLocks
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
+
+# One save or delete of a given script at a time. The replace sequence below
+# (backup, stage, remove the program, replace the source, replace the program)
+# only keeps a source and its program in step while nothing else runs it for
+# the same file: two saves interleaved could leave source B beside program A,
+# and a deployed strategy would run A while the editor showed B. Under the
+# eventlet worker local file operations never yield, so this is never
+# contended there; under gthread and on the development server it serialises
+# the sequence. Keyed by file name, so different scripts do not wait on each
+# other, and forgotten once no save of that file is in flight.
+_FILE_LOCKS = KeyedLocks(name="openscript-files")
 
 # A script name is matched with the default converter and never with ``path``.
 # ``path`` matches a slash, so ``/<path:filename>`` swallowed every route of
@@ -536,27 +548,28 @@ def save(filename: str):
     program_target = _program_path(directory, filename)
     staged: list[Path] = []
     try:
-        if target.exists():
-            backup = target.with_name(target.name + ".bak")
-            backup.write_bytes(target.read_bytes())
+        with _FILE_LOCKS.hold(filename):
+            if target.exists():
+                backup = target.with_name(target.name + ".bak")
+                backup.write_bytes(target.read_bytes())
 
-        source_temporary = _stage(directory, encoded)
-        staged.append(source_temporary)
-        program_temporary = None
-        if program_bytes is not None:
-            program_temporary = _stage(directory, program_bytes)
-            staged.append(program_temporary)
+            source_temporary = _stage(directory, encoded)
+            staged.append(source_temporary)
+            program_temporary = None
+            if program_bytes is not None:
+                program_temporary = _stage(directory, program_bytes)
+                staged.append(program_temporary)
 
-        # The order from the docstring, in four lines. Nothing here writes
-        # bytes: it is one unlink and two renames, so the window in which the
-        # pair could disagree is as narrow as a filesystem allows, and every
-        # state inside it is a source with no program.
-        program_target.unlink(missing_ok=True)
-        os.replace(source_temporary, target)
-        staged.remove(source_temporary)
-        if program_temporary is not None:
-            os.replace(program_temporary, program_target)
-            staged.remove(program_temporary)
+            # The order from the docstring, in four lines. Nothing here writes
+            # bytes: it is one unlink and two renames, so the window in which
+            # the pair could disagree is as narrow as a filesystem allows, and
+            # every state inside it is a source with no program.
+            program_target.unlink(missing_ok=True)
+            os.replace(source_temporary, target)
+            staged.remove(source_temporary)
+            if program_temporary is not None:
+                os.replace(program_temporary, program_target)
+                staged.remove(program_temporary)
     except OSError as error:
         logger.exception("Could not save OpenScript source %s", filename)
         return jsonify({"status": "error", "message": f"Could not save: {error}"}), 500
@@ -601,9 +614,12 @@ def remove(filename: str):
     directory = _script_dir()
     target = directory / filename
     try:
-        target.unlink(missing_ok=True)
-        target.with_name(target.name + ".bak").unlink(missing_ok=True)
-        _program_path(directory, filename).unlink(missing_ok=True)
+        # Under the same per-file lock as a save, so a delete cannot land in
+        # the middle of one and leave half of it behind.
+        with _FILE_LOCKS.hold(filename):
+            target.unlink(missing_ok=True)
+            target.with_name(target.name + ".bak").unlink(missing_ok=True)
+            _program_path(directory, filename).unlink(missing_ok=True)
     except OSError as error:
         logger.exception("Could not delete OpenScript source %s", filename)
         return jsonify({"status": "error", "message": f"Could not delete: {error}"}), 500

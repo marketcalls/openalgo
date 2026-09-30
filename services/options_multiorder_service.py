@@ -24,6 +24,7 @@ from services.option_symbol_service import (
 )
 from services.place_order_service import place_order
 from services.quotes_service import get_quotes
+from utils.broker_backpressure import BrokerBusyError
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -542,6 +543,19 @@ def resolve_and_place_leg(
                 "message": order_response.get("message", "Order placement failed"),
             }
 
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Options leg {leg_index + 1} not sent, broker busy: {e}")
+        return {
+            "leg": leg_index + 1,
+            "offset": leg_data.get("offset", "Unknown"),
+            "option_type": leg_data.get("option_type", "").upper(),
+            "action": leg_data.get("action", "").upper(),
+            "status": "error",
+            "message": str(e),
+        }
     except Exception as e:
         logger.exception(f"Error processing leg {leg_index + 1}: {e}")
         return {

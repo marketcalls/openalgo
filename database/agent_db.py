@@ -51,7 +51,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from cachetools import TTLCache
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -70,6 +69,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from database.auth_db import encrypt_token, safe_decrypt_token
 from database.engine_factory import create_db_engine
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -86,7 +86,7 @@ Base.query = db_session.query_property()
 # built), and they change only when an operator saves the settings page. Small,
 # short-lived, and invalidated explicitly on every write, so the TTL only covers
 # a path that forgot to invalidate.
-_settings_cache: TTLCache = TTLCache(maxsize=64, ttl=300)
+_settings_cache: LockedTTLCache = LockedTTLCache(maxsize=64, ttl=300)
 
 # Decrypted secrets are deliberately NOT cached. They are read once per agent
 # run, not per token, so a cache would buy nothing and would keep provider
@@ -1239,14 +1239,17 @@ def get_setting(key: str, default: str | None = None) -> str | None:
     Returns:
         The stored Text value, or ``default``.
     """
-    if key in _settings_cache:
-        cached = _settings_cache[key]
+    cached = _settings_cache.get(key, MISSING)
+    if cached is not MISSING:
         return default if cached is None else cached
 
+    # Read before the query, so a write that commits while this read is in
+    # flight is not overwritten in the cache by the value read here.
+    generation = _settings_cache.generation
     try:
         row = db_session.query(AgSetting).filter_by(key=key).first()
         value = row.value if row is not None else None
-        _settings_cache[key] = value
+        _settings_cache.fill(key, value, generation)
         return default if value is None else value
     except Exception:
         logger.exception("Could not read agent setting %s", key)
@@ -1271,9 +1274,10 @@ def set_setting(key: str, value: str | None) -> bool:
         return False
     try:
         text_value = None if value is None else str(value)
+        generation = _settings_cache.generation
         row = db_session.query(AgSetting).filter_by(key=key).first()
         if row is not None and row.value == text_value:
-            _settings_cache[key] = text_value
+            _settings_cache.fill(key, text_value, generation)
             logger.debug("Agent setting %s unchanged, skipping write", key)
             return True
 
@@ -1283,6 +1287,9 @@ def set_setting(key: str, value: str | None) -> bool:
             row.value = text_value
 
         db_session.commit()
+        # Invalidate first, so a read that loaded the old value before this
+        # commit cannot store it over the new one, then write through.
+        _settings_cache.invalidate(key)
         _settings_cache[key] = text_value
         return True
     except Exception:

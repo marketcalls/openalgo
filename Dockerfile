@@ -78,8 +78,12 @@ RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache 
     chmod 700 /app/keys && \
     touch /app/.env && chown appuser:appuser /app/.env && chmod 666 /app/.env
 # 5 – entrypoint script and fix line endings
+#     start.sh runs the web server launcher and its helpers when .env asks for
+#     gthread, so they lose any Windows line endings too (bash cannot run them).
 COPY --chown=appuser:appuser start.sh /app/start.sh
-RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh /app/install/openalgo-gunicorn.sh \
+        /app/install/lib/resolve_runtime.py /app/install/lib/gunicorn_hooks.py && \
+    chmod +x /app/start.sh
 # ---- RUNTIME ENVS --------------------------------------------------------- #
 # Limit OpenBLAS/NumPy threads to prevent RLIMIT_NPROC exhaustion in Docker
 # See: https://github.com/marketcalls/openalgo/issues/822

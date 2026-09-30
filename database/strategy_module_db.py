@@ -36,7 +36,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from cachetools import TTLCache
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -57,6 +56,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.engine_factory import create_db_engine
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -72,19 +72,29 @@ Base.query = db_session.query_property()
 # by token hash on every request, so it is cached the way flow_db caches its
 # own webhook lookups. Bounded and short-lived: a rotated or deleted token must
 # stop working quickly, and the cache is invalidated explicitly on both.
-_webhook_token_cache: TTLCache = TTLCache(maxsize=2000, ttl=300)
+#
+# Both caches are LockedTTLCache: request threads, webhook threads and tick
+# evaluation read them at once under the gthread worker. Readers fill with the
+# generation they read before their query and writers invalidate after their
+# commit, so a read that raced a change is never cached.
+_webhook_token_cache: LockedTTLCache = LockedTTLCache(maxsize=2000, ttl=300)
 
 # What each strategy has banked this session, read on every tick by the daily
 # loss limit. Bounded by strategy count rather than by tick rate, and
 # invalidated whenever a run's realized figure changes, so the TTL only covers
 # a path that forgot to invalidate.
-_session_pnl_cache: TTLCache = TTLCache(maxsize=512, ttl=60)
+_session_pnl_cache: LockedTTLCache = LockedTTLCache(maxsize=512, ttl=60)
 
 
 def _forget_session_pnl(strategy_id: int | None) -> None:
-    """Drop the cached session total for one strategy, or all of them."""
-    for key in [k for k in list(_session_pnl_cache) if strategy_id is None or k[0] == strategy_id]:
-        _session_pnl_cache.pop(key, None)
+    """Drop the cached session total for one strategy, or all of them.
+
+    Called after the commit that changed a run's realized figure. It also
+    moves the cache's generation, so a tick that summed the runs just before
+    that commit cannot store the total that leaves the run out, which would
+    have delayed a daily loss limit by up to the TTL.
+    """
+    _session_pnl_cache.invalidate_where(lambda key: strategy_id is None or key[0] == strategy_id)
 
 
 # Webhook token prefix, so a leaked string is recognisable in a log or a paste.
@@ -956,9 +966,10 @@ def delete_strategy(strategy_id: int, user_id: str) -> tuple[bool, str | None]:
             synchronize_session=False
         )
 
-        _webhook_token_cache.pop(row.webhook_token_hash, None)
+        token_hash = row.webhook_token_hash
         db_session.delete(row)
         db_session.commit()
+        _webhook_token_cache.invalidate(token_hash)
         return True, None
     except Exception:
         db_session.rollback()
@@ -1038,10 +1049,13 @@ def rotate_webhook_token(strategy_id: int, user_id: str) -> tuple[str | None, st
         if not row:
             return None, "Strategy not found"
 
-        _webhook_token_cache.pop(row.webhook_token_hash, None)
+        old_hash = row.webhook_token_hash
         token = generate_webhook_token()
         row.webhook_token_hash = hash_webhook_token(token)
         db_session.commit()
+        # After the commit: a lookup of the old token that read the row before
+        # it cannot then cache the old token as still valid.
+        _webhook_token_cache.invalidate(old_hash)
         return token, None
     except Exception:
         db_session.rollback()
@@ -1074,7 +1088,7 @@ def set_webhook_locked(strategy_id: int, user_id: str, locked: bool) -> tuple[bo
             return False, "Strategy not found"
         row.webhook_locked = bool(locked)
         db_session.commit()
-        _webhook_token_cache.pop(row.webhook_token_hash, None)
+        _webhook_token_cache.invalidate(row.webhook_token_hash)
         return True, None
     except Exception:
         db_session.rollback()
@@ -1091,14 +1105,20 @@ def get_strategy_by_webhook_token(token: str) -> SmStrategy | None:
     """
     try:
         digest = hash_webhook_token(token)
-        if digest in _webhook_token_cache:
-            strategy_id = _webhook_token_cache[digest]
+        # One get with a sentinel, because a cached None (an unknown token) has
+        # to stay distinguishable from a miss. A membership test followed by a
+        # subscript could lose the entry in between, and the KeyError was
+        # swallowed below as an unknown token: a TradingView alert, entry or
+        # exit, rejected for a strategy that exists.
+        strategy_id = _webhook_token_cache.get(digest, MISSING)
+        if strategy_id is not MISSING:
             if strategy_id is None:
                 return None
             return db_session.query(SmStrategy).filter_by(id=strategy_id).first()
 
+        generation = _webhook_token_cache.generation
         row = db_session.query(SmStrategy).filter_by(webhook_token_hash=digest).first()
-        _webhook_token_cache[digest] = row.id if row else None
+        _webhook_token_cache.fill(digest, row.id if row else None, generation)
         return row
     except Exception:
         logger.exception("Could not resolve a webhook token")
@@ -1107,7 +1127,7 @@ def get_strategy_by_webhook_token(token: str) -> SmStrategy | None:
 
 def clear_strategy_module_cache() -> None:
     """Drop the webhook lookup cache. Called on logout and session teardown."""
-    _webhook_token_cache.clear()
+    _webhook_token_cache.invalidate()
 
 
 # ---------------------------------------------------------------------------
@@ -1591,6 +1611,10 @@ def realized_pnl_since(
     if cached is not None:
         return cached
 
+    # Read before the query: a run that finishes while this sum is in flight
+    # invalidates after its commit, and this total, which may leave that run
+    # out, is then returned to this tick but not cached for the next ones.
+    generation = _session_pnl_cache.generation
     try:
         query = db_session.query(SmStrategyRun.pnl_realized).filter(
             SmStrategyRun.strategy_id == strategy_id,
@@ -1599,7 +1623,7 @@ def realized_pnl_since(
         if exclude_run_id is not None:
             query = query.filter(SmStrategyRun.id != exclude_run_id)
         total = float(sum(float(row[0] or 0.0) for row in query.all()))
-        _session_pnl_cache[key] = total
+        _session_pnl_cache.fill(key, total, generation)
         return total
     except Exception:
         logger.exception("Could not total realized P&L for strategy %s", strategy_id)

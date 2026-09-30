@@ -250,6 +250,23 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
   const [autoReconnect, setAutoReconnect] = useState(true)
   const socketRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(false)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+      if (socketRef.current) {
+        const socket = socketRef.current
+        socketRef.current = null
+        socket.close(1000, 'Page unmount')
+      }
+    }
+  }, [])
 
   // Metrics
   const [messageCount, setMessageCount] = useState(0)
@@ -308,6 +325,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
       })
       const configData = await configResponse.json()
 
+      if (!mountedRef.current) return
       if (configData.status !== 'success') throw new Error('Config fetch failed')
 
       const wsUrl = configData.websocket_url
@@ -340,6 +358,8 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
       }
 
       socket.onclose = (event) => {
+        if (!mountedRef.current || socketRef.current !== socket) return
+        socketRef.current = null
         setIsConnected(false)
         setIsConnecting(false)
         setIsAuthenticated(false)

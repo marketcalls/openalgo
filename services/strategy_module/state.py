@@ -19,17 +19,22 @@ that a snapshot round-trips through the database without translation.
 Threading
 ---------
 
-Everything that touches this module runs as a greenlet: the tick consumer, the
-engine, the scheduler jobs and the request handlers. The market-data producer
-is the one thing that may be a real OS thread, and it never comes here - it
-hands a tick to a queue and returns. So the locks below are ordinary
-``threading`` locks, which eventlet makes green, and that is correct.
+The callers are the tick consumer, the engine, the order-update pool, the
+scheduler jobs and the request handlers. Under the gthread worker (and the
+development server) those are real OS threads running truly in parallel, so
+the locks below exclude for real. Under the eventlet worker they are
+greenlets, and the same ``threading`` locks are green. The market-data
+producer is the one thing that is a real OS thread under eventlet as well, and
+it never comes here: it hands a tick to a queue and returns. So the locks
+below are ordinary ``threading`` locks, which is correct in both runtimes; a
+lock that a real thread must also take under eventlet would have to come from
+``utils.real_threading`` instead.
 
 What matters is the rule from CLAUDE.md: **a critical section holds in-memory
-bookkeeping only**. No database call, no broker call, no emit. A greenlet
-waiting on a lock cannot yield to the hub, so any I/O inside one stalls the
-entire worker. Callers read what they need out of the state, release, and then
-do the slow work.
+bookkeeping only**. No database call, no broker call, no emit. Under gthread
+every other thread that wants the run waits for the whole of any I/O done
+inside one; under eventlet every greenlet that wants it does. Callers read what
+they need out of the state, release, and then do the slow work.
 """
 
 from __future__ import annotations

@@ -48,6 +48,13 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+    says_no_positions,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -832,13 +839,42 @@ def get_trade_book(auth):
         }, 500
 
 
-def get_positions(auth):
+def _fno_read_failure(response):
+    """Say why the FNO position read failed, or return None when it worked.
+
+    A SUCCESS answer is a read, whatever it holds, as it is for CASH, and so is
+    an answer whose message says the book is empty. Anything else is a failure.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if response.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
+        return None
+    if says_no_positions(body, ("error.message", "message")):
+        return None
+    shown = body if body is not None else response.text
+    return f"FNO segment: HTTP {response.status_code}, {str(shown)[:200]}"
+
+
+# The query segment that holds each exchange's positions.
+_SEGMENT_BY_EXCHANGE = {"NSE": "CASH", "BSE": "CASH", "NFO": "FNO", "BFO": "FNO"}
+
+
+def get_positions(auth, strict=False):
     """
     Get current positions for the user using direct API calls to Groww API
     Uses the /v1/positions/user endpoint as documented
 
     Args:
         auth (str): Authentication token
+        strict (bool): Report a CASH segment that could not be read as an
+            error instead of an empty book, which is what the smart order needs.
+            An FNO read that fails does not fail the whole read: this code has
+            always expected it to fail on some accounts, and refusing every
+            smart order on an account without F&O would be the wrong trade.
+            The CASH rows come back with "failed_segments": ["FNO"], so a smart
+            order in NFO or BFO is refused while one in NSE or BSE goes ahead.
 
     Returns:
         tuple: (positions data, status code)
@@ -879,6 +915,7 @@ def get_positions(auth):
 
         # Parse the response
         all_positions = []
+        failures = []
 
         try:
             # Parse CASH segment response
@@ -1070,13 +1107,19 @@ def get_positions(auth):
                             "realised": 0,  # Not provided in response
                         }
                         all_positions.append(transformed_position)
+            elif not says_no_positions(response_data):
+                failures.append(
+                    f"CASH segment: HTTP {response_obj.status_code}, {str(response_data)[:200]}"
+                )
 
             # Now try to get FNO segment positions
+            fno_failure = None
             try:
                 params["segment"] = "FNO"
                 logger.debug(f"Fetching FNO positions with params: {params}")
 
                 fno_response = client.get(positions_url, params=params, headers=headers, timeout=30)
+                fno_failure = _fno_read_failure(fno_response)
 
                 if fno_response.status_code == 200:
                     fno_data = fno_response.json()
@@ -1258,6 +1301,11 @@ def get_positions(auth):
             except Exception as fno_error:
                 # Don't fail if FNO segment request fails
                 logger.warning(f"Error fetching FNO positions: {fno_error}")
+                fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
+
+            if strict and failures:
+                logger.error(f"Groww position book incomplete: {'; '.join(failures)}")
+                return {"status": "error", "message": "; ".join(failures), "data": []}, 502
 
             # Create formatted response
             formatted_response = {
@@ -1266,6 +1314,9 @@ def get_positions(auth):
                 "data": all_positions,
                 "raw_response": response_data,  # Include the CASH segment response
             }
+            if strict and fno_failure:
+                logger.warning(f"Groww FNO positions not read: {fno_failure}")
+                formatted_response["failed_segments"] = ["FNO"]
 
             logger.debug(f"Successfully processed {len(all_positions)} total positions")
             return formatted_response, 200
@@ -1419,46 +1470,54 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="groww smart orders")
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """get_positions returns (payload, http status); with strict=True the payload
+    says "success" only when the CASH segment was read."""
+    payload = positions_data
+    if isinstance(positions_data, tuple) and positions_data:
+        payload = positions_data[0]
+    return isinstance(payload, dict) and payload.get("status") == "success"
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book(
+            "groww",
+            lambda: get_positions(auth, strict=True),
+            _position_book_ok,
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
@@ -1478,6 +1537,17 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
     net_qty = "0"
+
+    # A strict read that could not read FNO still holds the whole CASH book. A
+    # symbol in FNO, or in a segment this read does not cover, has no answer.
+    payload = positions_data
+    if isinstance(positions_data, tuple) and positions_data:
+        payload = positions_data[0]
+    failed_segments = payload.get("failed_segments") if isinstance(payload, dict) else None
+    if failed_segments:
+        segment = _SEGMENT_BY_EXCHANGE.get(str(exchange).upper())
+        if segment is None or segment in failed_segments:
+            raise PositionReadError("groww", f"the {failed_segments} position read failed")
 
     # Check if we received positions data in expected format
     # Handle both direct list format and dictionary with data field
@@ -1902,6 +1972,7 @@ def direct_place_order(
         return {"status": "error", "message": str(e)}
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Place a smart order with position management using direct API implementation
@@ -1937,7 +2008,9 @@ def place_smartorder_api(data, auth):
         # Per-symbol lock: serialize smart orders per symbol
         symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        with symbol_lock:
+        with symbol_lock as acquired:
+            if not acquired:
+                return SymbolLocks.busy(symbol)
             position_size = int(raw_position_size)
 
             # Validate input data
@@ -2102,6 +2175,8 @@ def place_smartorder_api(data, auth):
             }
             return None, response, None
 
+    except PositionReadError:
+        raise
     except Exception as e:
         logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}

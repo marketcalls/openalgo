@@ -189,15 +189,12 @@ def revoke_user_tokens(revoke_db_tokens=True):
     if "user" in session:
         username = session.get("user")
         try:
-            from database.auth_db import auth_cache, feed_token_cache, upsert_auth
+            from database.auth_db import invalidate_user_auth_cache, upsert_auth
 
-            # Clear cache entries first to prevent stale data access
-            cache_key_auth = f"auth-{username}"
-            cache_key_feed = f"feed-{username}"
-            if cache_key_auth in auth_cache:
-                del auth_cache[cache_key_auth]
-            if cache_key_feed in feed_token_cache:
-                del feed_token_cache[cache_key_feed]
+            # Clear cache entries first to prevent stale data access. One
+            # call that never raises: a membership test then a delete could
+            # lose the entry to another thread in between and skip the rest.
+            invalidate_user_auth_cache(username)
 
             # Multi-device guard (audit #1): this is the daily-rollover auto-expiry
             # of a STALE cookie. If another device has already re-authenticated

@@ -100,11 +100,13 @@ _HHMM = re.compile(r"^(\d{1,2}):(\d{2})$")
 
 # The scheduler singleton and the lock that guards creating and tearing it down.
 #
-# A plain threading.Lock is correct here: under eventlet every caller is a
-# greenlet (a request handler, boot, or an APScheduler worker, all of which are
-# green once the stdlib is patched), so no real thread ever touches it and the
-# cross-world hazard in CLAUDE.md does not apply. The critical section is
-# in-memory bookkeeping only.
+# A plain threading.Lock is correct here in both runtimes. Under the gthread
+# worker (and the development server) the callers (request handlers, boot and
+# APScheduler's workers) are real threads running in parallel, and the lock
+# excludes for real. Under eventlet every one of them is a greenlet once the
+# stdlib is patched, the lock is green, and no real thread ever touches it, so
+# the cross-world hazard in CLAUDE.md does not apply. The critical section is
+# in-memory bookkeeping only, so no caller waits on another's I/O.
 _scheduler: BackgroundScheduler | None = None
 _lock = threading.Lock()
 

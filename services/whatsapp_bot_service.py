@@ -92,9 +92,59 @@ from database.whatsapp_db import (
     save_session_blob,
     update_bot_config,
 )
+from utils.db_sessions import remove_all_scoped_sessions
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
 logger = get_logger(__name__)
+
+#: What a start is told while the previous connection is still being made.
+CONNECTING_MESSAGE = "WhatsApp is still connecting. Check the status in a few seconds."
+#: What a start is told when the previous connection would not close in time.
+CLOSING_MESSAGE = "WhatsApp is still closing the previous connection. Try again in a few seconds."
+#: The error a queued send reports when its connection ended before sending it.
+SEND_ABANDONED_ERROR = "WhatsApp disconnected before this message was sent."
+#: Seconds a start or stop waits for the previous bot thread to finish.
+BOT_JOIN_SECONDS = 10.0
+#: The shared pool slash commands run on, one at a time and in arrival order.
+_COMMAND_POOL = "whatsapp_commands"
+
+
+def _is_rust_panic(exc: BaseException) -> bool:
+    """True for pyo3's PanicException, which derives from BaseException.
+
+    wars raises it when its client is touched from a thread other than its
+    creator, among other Rust-side failures. ``except Exception`` lets it
+    through, which is how a failed send used to come back as neither sent nor
+    failed while the pump thread died.
+    """
+    return type(exc).__name__ == "PanicException"
+
+
+def _thread_alive(thread: threading.Thread | None) -> bool:
+    """True while ``thread`` runs, or has been registered and not yet started."""
+    return thread is not None and (thread.ident is None or thread.is_alive())
+
+
+class _BotGeneration:
+    """One run of the bot thread, and the channels only that run uses.
+
+    Each start gets fresh ones, so a run that is ending can never take a
+    command, an inbound event or a stop meant for the run after it.
+    """
+
+    __slots__ = ("gen_id", "stop", "ready", "cmd_queue", "inbound", "thread")
+
+    def __init__(self, gen_id: int) -> None:
+        self.gen_id = gen_id
+        self.stop = threading.Event()
+        self.ready = threading.Event()
+        self.cmd_queue: queue.Queue[tuple] = queue.Queue()
+        # Appended to by wars' tokio threads (see _register_handlers), drained
+        # by this run's pump. append/popleft are atomic under the GIL.
+        self.inbound: collections.deque = collections.deque()
+        self.thread: threading.Thread | None = None
+
 
 # wars supports E.164 digit strings as JIDs anywhere a "to" is accepted.
 # We still normalize internally so cached lookups are stable.
@@ -198,9 +248,7 @@ def validate_attachment_path(path: str | None) -> str | None:
             or resolved.lower() == os.path.abspath(r).lower()
             for r in roots
         ):
-            logger.warning(
-                "Attachment path rejected: outside WHATSAPP_ATTACHMENT_ROOTS allowlist"
-            )
+            logger.warning("Attachment path rejected: outside WHATSAPP_ATTACHMENT_ROOTS allowlist")
             return None
         if not os.path.isfile(resolved):
             logger.warning("Attachment path rejected: not a regular file")
@@ -236,6 +284,7 @@ class WarsNotInstalled(RuntimeError):
 def _import_wars():
     try:
         import wars  # type: ignore
+
         return wars
     except Exception as e:  # ImportError or compile errors on first install
         raise WarsNotInstalled() from e
@@ -261,12 +310,18 @@ class WhatsAppBotService:
         self._is_running = False
         self._is_paired = False
 
-        # Worker thread + cross-thread command channel.
+        # Worker thread + cross-thread command channel. One generation at a
+        # time: a start refuses while the current generation's thread is
+        # connecting, and retires it (stop, join) when it is alive but no
+        # longer connected, before a new one is created. Two live generations
+        # meant two wars clients for one device, each pump calling the other's
+        # thread-confined client, and WhatsApp dropping one of the connections.
+        # Plain threading primitives: under eventlet the bot thread is itself
+        # a greenlet, and under gthread every party here is a real thread.
         self._bot_thread: threading.Thread | None = None
         self._bot_thread_id: int | None = None  # used for re-entrancy in send_sync
-        self._cmd_queue: queue.Queue[tuple] = queue.Queue()
-        self._stop_event = threading.Event()
-        self._ready_event = threading.Event()
+        self._gen: _BotGeneration | None = None
+        self._gen_counter = 0
 
         # Inbound channel for wars callbacks. wars fires on_message/on_disconnect
         # (and on_qr/on_pair_code during pairing) from its **own native tokio OS
@@ -274,11 +329,10 @@ class WhatsAppBotService:
         # resource (SocketIO emit, the DB session, a green Event/Queue wait) from
         # those threads poisons the eventlet hub — `greenlet.error: Cannot switch
         # to a different thread` — and hangs the whole gunicorn worker (#1479).
-        # So the callbacks do ONE thing: append raw primitives to this deque
-        # (atomic under the GIL, no green primitive). The bot-loop greenlet drains
-        # it and performs all green work safely on the hub. `deque` is the right
-        # tool — append/popleft are thread-safe without any lock.
-        self._inbound: collections.deque = collections.deque()
+        # So the callbacks do ONE thing: append raw primitives to a deque
+        # (atomic under the GIL, no green primitive), the one belonging to the
+        # generation that registered them (_BotGeneration.inbound). The bot-loop
+        # greenlet drains it and performs all green work safely on the hub.
 
         # Pairing state — read by REST /pair/status, written by the pairing
         # thread. Protected by _lock.
@@ -560,7 +614,10 @@ class WhatsAppBotService:
             # Emit BOTH events. whatsapp_paired carries the identity; the
             # status event re-broadcasts the full pair_state for any client
             # that missed the first one.
-            self._emit("whatsapp_paired", {"own_phone": own_phone, "own_jid": str(own_jid) if own_jid else None})
+            self._emit(
+                "whatsapp_paired",
+                {"own_phone": own_phone, "own_jid": str(own_jid) if own_jid else None},
+            )
             self._emit("whatsapp_pair_status", self.get_pair_state())
             logger.info("WhatsApp pair: emitted whatsapp_paired + whatsapp_pair_status")
 
@@ -599,86 +656,151 @@ class WhatsAppBotService:
     # Long-lived connection — uses the encrypted session blob.
     # ------------------------------------------------------------------
 
+    def _live_generation(self) -> _BotGeneration | None:
+        """The current generation while its thread runs. Call with _lock held."""
+        gen = self._gen
+        if gen is not None and _thread_alive(gen.thread):
+            return gen
+        return None
+
     def start_bot(self) -> tuple[bool, str]:
+        """Connect the paired device on a bot thread of its own.
+
+        Single flight. While the current bot thread is connecting, a second
+        start is refused rather than creating a second wars client from the
+        same session. A thread that is alive but no longer connected (WhatsApp
+        dropped it) is stopped and joined first, on its own thread, so its
+        client is disconnected before the new one exists.
+
+        Returns:
+            ``(success, message)``.
+        """
+        retire: _BotGeneration | None = None
         with self._lock:
-            if self._is_running and self._wa is not None:
-                return True, "Bot already running"
+            live = self._live_generation()
+            if live is not None:
+                if self._is_running and self._wa is not None:
+                    return True, "Bot already running"
+                if not live.ready.is_set():
+                    return False, CONNECTING_MESSAGE
+                live.stop.set()
+                retire = live
 
-            blob = load_session_blob()
-            if not blob:
-                return False, "Device not paired. Pair from /whatsapp first."
+        if retire is not None:
+            self._join_generation(retire)
+            if _thread_alive(retire.thread):
+                return False, CLOSING_MESSAGE
 
-            try:
-                _import_wars()  # presence check; worker thread imports again
-            except WarsNotInstalled as e:
-                return False, str(e)
+        blob = load_session_blob()
+        if not blob:
+            return False, "Device not paired. Pair from /whatsapp first."
 
-            self._stop_event.clear()
-            self._ready_event.clear()
-            self._inbound.clear()
-            # Drain any stale commands from a prior session.
-            while True:
-                try:
-                    self._cmd_queue.get_nowait()
-                except queue.Empty:
-                    break
+        try:
+            _import_wars()  # presence check; worker thread imports again
+        except WarsNotInstalled as e:
+            return False, str(e)
 
-            self._bot_thread = threading.Thread(
+        with self._lock:
+            live = self._live_generation()
+            if live is not None:
+                # Another start won while this one read the session.
+                if self._is_running and self._wa is not None:
+                    return True, "Bot already running"
+                return False, CONNECTING_MESSAGE
+            self._gen_counter += 1
+            gen = _BotGeneration(self._gen_counter)
+            gen.thread = threading.Thread(
                 target=self._bot_loop,
-                args=(blob,),
+                args=(blob, gen),
                 daemon=True,
                 name="WhatsAppBotThread",
             )
-            self._bot_thread.start()
+            self._gen = gen
+            self._bot_thread = gen.thread
+        try:
+            gen.thread.start()
+        except BaseException:
+            with self._lock:
+                if self._gen is gen:
+                    self._gen = None
+                    self._bot_thread = None
+            raise
 
         # Block (outside the lock) until the worker either succeeds or fails.
-        if not self._ready_event.wait(timeout=15):
+        if not gen.ready.wait(timeout=15):
             return False, "Bot thread did not come up within 15s"
-        if not self._is_running:
-            return False, "Bot thread exited during startup — check server logs"
+        with self._lock:
+            up = self._gen is gen and self._is_running
+        if not up:
+            return False, "Bot thread exited during startup. Check the server logs for the cause."
         return True, "Bot started"
 
-    def _bot_loop(self, blob: bytes) -> None:
-        """Long-lived worker. Owns `self._wa` for its entire lifetime so all
-        PyO3 method calls on the wars instance happen on this thread."""
-        wars = None
+    def _join_generation(self, gen: _BotGeneration) -> None:
+        """Wait up to BOT_JOIN_SECONDS for a generation's thread to finish."""
+        thread = gen.thread
+        if thread is None:
+            return
+        deadline = time.monotonic() + 1.0
+        while thread.ident is None and time.monotonic() < deadline:
+            time.sleep(0.01)  # registered, about to start
+        if thread.ident is not None and thread.is_alive():
+            thread.join(timeout=BOT_JOIN_SECONDS)
+            if thread.is_alive():
+                logger.warning("WhatsApp bot thread did not exit within %ss", BOT_JOIN_SECONDS)
+
+    def _bot_loop(self, blob: bytes, gen: _BotGeneration | None = None) -> None:
+        """Long-lived worker. Owns its wars client for its entire lifetime so all
+        PyO3 method calls on the wars instance happen on this thread.
+
+        Its client is the local ``wa``; ``self._wa`` is published only while
+        this is the current generation, and cleared by it only then.
+        """
+        if gen is None:
+            gen = self._gen or _BotGeneration(0)
+        wa = None
+        connected = False
         try:
             wars = _import_wars()
             wa = wars.WhatsApp.from_bytes(blob)
-            self._register_handlers(wa)
+            self._register_handlers(wa, gen.inbound)
             try:
                 wa.connect()
             except Exception:
                 logger.exception("WhatsApp bot loop: wars.connect failed")
-                self._ready_event.set()
                 return
+            connected = True
 
-            self._wa = wa
-            self._bot_thread_id = threading.get_ident()
             with self._lock:
-                self._is_running = True
-                self._is_paired = True
-            update_bot_config({"is_active": True})
-            self._emit("whatsapp_status", {"is_running": True, "is_paired": True})
-            logger.info("WhatsApp bot thread up and connected")
-            self._ready_event.set()
+                publish = self._gen is gen and not gen.stop.is_set()
+                if publish:
+                    self._wa = wa
+                    self._bot_thread_id = threading.get_ident()
+                    self._is_running = True
+                    self._is_paired = True
+            if publish:
+                update_bot_config({"is_active": True})
+                self._emit("whatsapp_status", {"is_running": True, "is_paired": True})
+                logger.info("WhatsApp bot thread up and connected")
+            gen.ready.set()
 
             # Pump loop. Each iteration: (1) drain inbound wars events that the
             # callbacks marshaled here from tokio threads, then (2) wait briefly
             # for an outbound send command. Both halves run on this greenlet, so
             # every green operation (DB, SocketIO, wars.send) is hub-safe.
-            while not self._stop_event.is_set():
+            # Slash commands are handed to their own pool by _handle_inbound,
+            # so a command's broker round trip never holds up a send.
+            while not gen.stop.is_set():
                 # (1) inbound wars events (on_message / on_disconnect)
-                while self._inbound:
+                while gen.inbound:
                     try:
-                        evt = self._inbound.popleft()
+                        evt = gen.inbound.popleft()
                     except IndexError:
                         break
-                    self._handle_inbound(wa, evt)
+                    self._handle_inbound(wa, evt, gen)
 
                 # (2) outbound send commands from request greenlets
                 try:
-                    cmd = self._cmd_queue.get(timeout=0.1)
+                    cmd = gen.cmd_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
                 op, args, kwargs, result_holder, event = cmd
@@ -690,6 +812,14 @@ class WhatsAppBotService:
                 except Exception as e:
                     logger.exception("WhatsApp bot loop: op '%s' raised", op)
                     result_holder["error"] = str(e)
+                except BaseException as e:
+                    if not _is_rust_panic(e):
+                        raise
+                    logger.error("WhatsApp bot loop: op '%s' failed inside wars: %s", op, e)
+                    result_holder["error"] = (
+                        "WhatsApp's connection library failed while sending. "
+                        "Restart the bot from the WhatsApp page."
+                    )
                 finally:
                     event.set()
 
@@ -698,35 +828,70 @@ class WhatsAppBotService:
         finally:
             # Clean shutdown — must happen on this same thread to satisfy
             # PyO3's unsendable check.
-            try:
-                if self._wa is not None:
-                    self._wa.disconnect()
-            except Exception:
-                logger.debug("WhatsApp bot disconnect raised", exc_info=True)
-            self._wa = None
-            self._bot_thread_id = None
+            if connected and wa is not None:
+                try:
+                    wa.disconnect()
+                except Exception:
+                    logger.debug("WhatsApp bot disconnect raised", exc_info=True)
+                except BaseException as e:
+                    if not _is_rust_panic(e):
+                        raise
+                    logger.debug("WhatsApp bot disconnect panicked", exc_info=True)
             with self._lock:
-                self._is_running = False
+                current = self._gen is gen
+                if current:
+                    self._wa = None
+                    self._bot_thread_id = None
+                    self._is_running = False
+            self._fail_pending_sends(gen)
+            if current:
+                try:
+                    update_bot_config({"is_active": False})
+                except Exception:
+                    pass
+                self._emit("whatsapp_status", {"is_running": False, "is_paired": self.is_paired})
+            gen.ready.set()  # unblock any waiter on a failed startup
+
+    @staticmethod
+    def _fail_pending_sends(gen: _BotGeneration) -> None:
+        """Answer every send still queued for a generation that has ended.
+
+        Otherwise each caller sat out the whole SEND_TIMEOUT for a message this
+        connection was never going to send.
+        """
+        while True:
             try:
-                update_bot_config({"is_active": False})
-            except Exception:
-                pass
-            self._emit("whatsapp_status", {"is_running": False, "is_paired": self.is_paired})
-            self._ready_event.set()  # unblock any waiter on a failed startup
+                _op, _args, _kwargs, result_holder, event = gen.cmd_queue.get_nowait()
+            except queue.Empty:
+                return
+            result_holder["error"] = SEND_ABANDONED_ERROR
+            event.set()
 
     def stop_bot(self) -> tuple[bool, str]:
+        """Stop the bot thread, including one that is connecting or disconnected.
+
+        Returns:
+            ``(True, message)``: "Bot stopped" when it was connected, and "Bot is
+            not running" otherwise, as before. A thread still alive in the
+            second case is stopped too, rather than left to run beside the
+            next start.
+        """
         with self._lock:
-            if not self._is_running:
+            was_running = self._is_running
+            live = self._live_generation()
+            if live is None and not was_running:
                 return True, "Bot is not running"
-            self._stop_event.set()
-        thread = self._bot_thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=10)
-            if thread.is_alive():
-                logger.warning("WhatsApp bot thread did not exit within 10s")
-        self._bot_thread = None
+            if live is not None:
+                live.stop.set()
+            elif self._gen is not None:
+                self._gen.stop.set()
+        if live is not None:
+            self._join_generation(live)
+        with self._lock:
+            if self._live_generation() is None:
+                self._bot_thread = None
         logger.info("WhatsApp bot stopped")
-        return True, "Bot stopped"
+        return True, "Bot stopped" if was_running else "Bot is not running"
 
     def unlink(self) -> tuple[bool, str]:
         """Stop, then wipe the encrypted session blob. User must re-pair."""
@@ -772,8 +937,10 @@ class WhatsAppBotService:
             "9198..."      -> single recipient (digits, +91..., JID, or group JID)
             ["a", "b", ...] -> list (capped at MAX_RECIPIENTS)
         """
-        if to is None or (isinstance(to, str) and not to.strip()) or (
-            isinstance(to, list) and not to
+        if (
+            to is None
+            or (isinstance(to, str) and not to.strip())
+            or (isinstance(to, list) and not to)
         ):
             return [self._SELF_MARKER]
         if isinstance(to, str):
@@ -810,27 +977,41 @@ class WhatsAppBotService:
              "failed": [{"to": <jid>, "error": "<msg>"}, ...],
              "skipped": int}
         """
-        if not self._is_running or self._wa is None:
-            logger.warning("WhatsApp send: bot not running, dropping message")
-            return {"sent": [], "failed": [{"to": "<bot>", "error": "Bot not connected"}], "skipped": 0}
-
-        # Re-entrancy: a slash-command handler (running on the bot thread
-        # itself via wars's on_message dispatch) can call send_sync without
-        # deadlocking on its own command queue.
-        if threading.get_ident() == self._bot_thread_id:
-            return self._send_on_bot_thread(to, text, image, document, caption, filename)
-
         result_holder: dict[str, Any] = {}
         event = threading.Event()
-        self._cmd_queue.put(
-            (
-                "send",
-                (to, text, image, document, caption, filename),
-                {},
-                result_holder,
-                event,
-            )
+        command = (
+            "send",
+            (to, text, image, document, caption, filename),
+            {},
+            result_holder,
+            event,
         )
+        on_bot_thread = False
+        with self._lock:
+            gen = self._gen
+            connected = self._is_running and self._wa is not None and gen is not None
+            # Re-entrancy: code running on the bot thread itself can call
+            # send_sync without deadlocking on its own command queue. Slash
+            # commands no longer run there (see _handle_inbound), but anything
+            # that does keeps this path.
+            on_bot_thread = connected and threading.get_ident() == self._bot_thread_id
+            if connected and not on_bot_thread:
+                # Queued for the generation connected now, whose pump alone
+                # touches its wars client. Put under the lock that clears the
+                # connection, so a pump that ends after this answers it on its
+                # way out (SEND_ABANDONED_ERROR) instead of leaving it to time
+                # out. An unbounded queue's put never blocks.
+                gen.cmd_queue.put(command)
+        if not connected:
+            logger.warning("WhatsApp send: bot not running, dropping message")
+            return {
+                "sent": [],
+                "failed": [{"to": "<bot>", "error": "Bot not connected"}],
+                "skipped": 0,
+            }
+        if on_bot_thread:
+            return self._send_on_bot_thread(to, text, image, document, caption, filename)
+
         if not event.wait(timeout=self.SEND_TIMEOUT):
             return {
                 "sent": [],
@@ -843,9 +1024,7 @@ class WhatsAppBotService:
                 "failed": [{"to": "<bot>", "error": result_holder["error"]}],
                 "skipped": 0,
             }
-        return result_holder.get(
-            "result", {"sent": [], "failed": [], "skipped": 0}
-        )
+        return result_holder.get("result", {"sent": [], "failed": [], "skipped": 0})
 
     def _send_on_bot_thread(
         self,
@@ -938,16 +1117,17 @@ class WhatsAppBotService:
     # Inbound command dispatch.
     # ------------------------------------------------------------------
 
-    def _register_handlers(self, wa) -> None:
+    def _register_handlers(self, wa, inbound: collections.deque) -> None:
         # These callbacks run on wars' native tokio OS threads. They must do
         # NOTHING that touches an eventlet-monkey-patched resource (DB, SocketIO,
-        # green Event/Queue) — see the `_inbound` note in __init__. They only
+        # green Event/Queue): see the inbound note in __init__. They only
         # extract plain primitives (reading PyO3 fields is GIL-safe) and append
-        # to the deque; `_handle_inbound` does the real work on the bot greenlet.
+        # to this client's generation's deque; `_handle_inbound` does the real
+        # work on the bot greenlet.
         @wa.on_message
         def _handle(msg) -> None:
             try:
-                self._inbound.append(
+                inbound.append(
                     (
                         "message",
                         bool(getattr(msg, "is_from_me", False)),
@@ -963,22 +1143,27 @@ class WhatsAppBotService:
         @wa.on_disconnect
         def _on_disconnect() -> None:
             try:
-                self._inbound.append(("disconnect",))
+                inbound.append(("disconnect",))
             except Exception:
                 logger.debug("WhatsApp on_disconnect marshal failed", exc_info=True)
 
-    def _handle_inbound(self, wa, evt: tuple) -> None:
+    def _handle_inbound(self, wa, evt: tuple, gen: _BotGeneration | None = None) -> None:
         """Process one marshaled wars event on the bot-loop greenlet, where all
-        green operations (DB, SocketIO, wars.send) are hub-safe."""
+        green operations (DB, SocketIO, wars.send) are hub-safe.
+
+        A slash command is handed to the command pool rather than run here:
+        its handlers call the OpenAlgo API over HTTP and wait on the broker,
+        and while they did that on this thread no send could go out, so a
+        chart alert arriving during a /closeall waited out its whole timeout.
+        """
         try:
             kind = evt[0]
             if kind == "disconnect":
                 logger.warning("WhatsApp wars on_disconnect fired")
                 with self._lock:
-                    self._is_running = False
-                self._emit(
-                    "whatsapp_status", {"is_running": False, "is_paired": self.is_paired}
-                )
+                    if gen is None or self._gen is gen:
+                        self._is_running = False
+                self._emit("whatsapp_status", {"is_running": False, "is_paired": self.is_paired})
                 return
 
             # kind == "message"
@@ -997,9 +1182,28 @@ class WhatsAppBotService:
             if not is_from_me:
                 logger.debug("WhatsApp command from non-owner ignored")
                 return
-            self._dispatch_command(wa, chat, sender, text)
+            self._submit_command(chat, sender, text)
         except Exception:
             logger.exception("WhatsApp inbound handler crashed")
+
+    def _submit_command(self, chat: str, sender_jid: str, text: str) -> None:
+        """Queue a slash command on the command pool, one at a time, in order."""
+        get_executor(_COMMAND_POOL, 1).submit(self._run_command, chat, sender_jid, text)
+
+    def _run_command(self, chat: str, sender_jid: str, text: str) -> None:
+        """Run one slash command on the command pool.
+
+        The handlers never touch the wars client: every reply goes through
+        send_sync, which from this thread queues it for the bot thread's pump.
+        The pool thread outlives the command, so it releases the database
+        sessions the command opened.
+        """
+        try:
+            self._dispatch_command(None, chat, sender_jid, text)
+        except Exception:
+            logger.exception("WhatsApp command failed")
+        finally:
+            remove_all_scoped_sessions()
 
     def _maybe_capture_own_jid(self, sender_jid: str) -> None:
         """Persist sender_jid as the device's own JID + own_phone if we
@@ -1025,8 +1229,8 @@ class WhatsAppBotService:
 
     def _dispatch_command(self, wa, chat: str, sender_jid: str, text: str) -> None:
         """Parse `/cmd arg1 arg2 ...` and route to the matching handler. Runs on
-        the bot-loop greenlet. Caller has already authenticated this as a message
-        from the single-user operator (is_from_me=True)."""
+        the command pool (see _run_command). Caller has already authenticated
+        this as a message from the single-user operator (is_from_me=True)."""
         parts = text.split()
         cmd = parts[0].lower().lstrip("/")
         args = parts[1:]
@@ -1110,6 +1314,7 @@ class WhatsAppBotService:
             )
         try:
             from database.auth_db import get_api_key_for_tradingview
+
             api_key = get_api_key_for_tradingview(owner_username)
         except Exception:
             logger.exception("Failed to load owner api_key from auth_db")
