@@ -1,0 +1,14 @@
+# HTTP service: Flask/gunicorn (UI, REST API, Socket.IO under /socket.io/).
+apiVersion: v1
+kind: Service
+metadata:
+  name: openalgo-http
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 5000
+    targetPort: http
+    appProtocol: http
+  selector:
+    app.kubernetes.io/name: openalgo

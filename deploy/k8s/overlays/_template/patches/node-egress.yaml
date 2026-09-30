@@ -1,0 +1,31 @@
+# SEBI static-IP egress pin (NOT enabled by default).
+#
+# The SEBI static-IP mandate (and Delta Exchange) requires broker API calls to
+# originate from a whitelisted IP. Kubernetes ingress (Ingress/Gateway) does not
+# pin egress. On a bare-metal k3s node, pin broker egress to one node:
+#
+#   1. Label the node whose IP is whitelisted at the broker:
+#        kubectl label node <node> openalgo/egress=whitelisted
+#      (Optionally taint it so only OpenAlgo schedules there:
+#        kubectl taint node <node> openalgo/egress=whitelisted:NoSchedule )
+#   2. Add to the overlay's kustomization.yaml:
+#        - path: patches/node-egress.yaml
+#      and uncomment the tolerations below if you tainted the node.
+#
+# Caveat: k3s local-path volumes are node-bound. The PVC of this instance will
+# live on the egress node, and the pod can only be scheduled there — instance
+# and data move together, by design.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openalgo
+spec:
+  template:
+    spec:
+      nodeSelector:
+        openalgo/egress: whitelisted
+      # tolerations:
+      # - key: openalgo/egress
+      #   operator: Equal
+      #   value: whitelisted
+      #   effect: NoSchedule

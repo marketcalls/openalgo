@@ -1,0 +1,221 @@
+# OpenAlgo instance workload.
+#
+# One broker account = one instance = one single-replica StatefulSet. OpenAlgo is
+# architecturally single-user / single-broker / single-process: six SQLite DBs,
+# in-process SocketIO, one shared broker WebSocket feed, a loopback-only ZeroMQ
+# bus, and gunicorn with exactly one eventlet worker. Multi-broker = N instances
+# (one overlay each), never N replicas.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openalgo
+spec:
+  serviceName: openalgo-http
+  # MANDATORY: never raise. More than one replica corrupts SQLite, double-logs
+  # into the broker session, and races the ZMQ bus.
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  # RollingUpdate deletes the single pod before recreating it. There is always a
+  # short outage; schedule upgrades off-hours and never inside the ~03:00 IST
+  # broker token-refresh window (SESSION_EXPIRY_TIME).
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openalgo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openalgo
+    spec:
+      # start.sh execs gunicorn (--graceful-timeout 30) after trapping SIGTERM to
+      # kill the WS proxy child; 120s covers web drain + WS client drain + ZMQ
+      # binder shutdown.
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        # Match the image's non-root appuser (Dockerfile UID/GID 1000).
+        runAsUser: 1000
+        runAsGroup: 1000
+        # Makes the PVC group-writable (k3s local-path provisions root-owned dirs).
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      # A Kubernetes volume mount shadows the image's /app/strategies content
+      # (Docker named volumes copy on first use; k8s volumes do not), so seed
+      # the bundled strategy example and chart-indicator example into the PVC.
+      # Seeds only when the volume is completely empty — never touches an
+      # instance that already has content. The mount is the strategies subPath.
+      - name: seed-bundled-strategies
+        # MUST stay the same image string as the app container below: an
+        # overlay pins releases via the `images:` transformer in its
+        # kustomization.yaml, which rewrites both containers — patching the
+        # app container's image alone would seed from a different release.
+        image: marketcalls/openalgo:latest
+        imagePullPolicy: Always
+        command: ["sh", "-c", "if [ -z \"$(ls -A /seed 2>/dev/null)\" ]; then cp -rn /app/strategies/. /seed/; fi"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - name: data
+          mountPath: /seed
+          subPath: strategies
+      containers:
+      - name: openalgo
+        image: marketcalls/openalgo:latest
+        # Always pairs with the mutable :latest tag (a node would otherwise run
+        # the first latest it pulled forever). Pin a tag per release in the
+        # overlay and switch this to IfNotPresent then.
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          # Do NOT enable readOnlyRootFilesystem: start.sh and
+          # utils/env_check.py write /app/.env into the container layer. A
+          # read-only root pushes env_check into its in-memory-salt path and
+          # silently breaks Fernet decryption of the persistent database.
+          readOnlyRootFilesystem: false
+        ports:
+        - name: http
+          containerPort: 5000
+        - name: ws
+          containerPort: 8765
+        # The ZeroMQ bus port (5555) is deliberately absent. It is loopback-only
+        # inside the pod and must never be exposed as a container port or Service.
+        envFrom:
+        # Provided by the overlay's secretGenerator (APP_KEY, API_KEY_PEPPER,
+        # FERNET_SALT, broker credentials). These three keys MUST be pinned in
+        # the Secret: /app/.env is ephemeral in k8s, and utils/env_check.py
+        # auto-rotates placeholder FERNET_SALT there — an unpinned salt is
+        # re-rotated on every pod restart, making the Fernet-encrypted broker
+        # tokens in the persistent DB undecryptable.
+        - secretRef:
+            name: openalgo-env
+        - configMapRef:
+            name: openalgo-config
+        env:
+        # Invariant layer — these explicit values win over envFrom and must not
+        # be overridden by overlays.
+        - name: ZMQ_HOST
+          value: "127.0.0.1"        # loopback only; never expose the tick feed
+        - name: ZMQ_PORT
+          value: "5555"
+        - name: FLASK_HOST_IP
+          value: "0.0.0.0"
+        - name: FLASK_PORT
+          value: "5000"
+        - name: WEBSOCKET_HOST
+          value: "0.0.0.0"
+        - name: WEBSOCKET_PORT
+          value: "8765"
+        # The edge (Ingress/Gateway) is the sole route to this pod. Without this,
+        # IP bans and rate limits would see the proxy's IP instead of the client's.
+        - name: TRUST_PROXY_HEADERS
+          value: "TRUE"
+        - name: TZ
+          value: "Asia/Kolkata"
+        - name: LOG_DIR
+          value: "log"
+        - name: STRATEGY_MEMORY_LIMIT_MB
+          value: "1024"
+        # Thread caps match docker-compose (issue #822, RLIMIT_NPROC exhaustion).
+        - name: OPENBLAS_NUM_THREADS
+          value: "2"
+        - name: OMP_NUM_THREADS
+          value: "2"
+        - name: MKL_NUM_THREADS
+          value: "2"
+        - name: NUMEXPR_NUM_THREADS
+          value: "2"
+        - name: NUMBA_NUM_THREADS
+          value: "2"
+        # Do NOT set PORT here or in any ConfigMap/Secret: start.sh prefers it
+        # over FLASK_PORT for the gunicorn bind.
+        startupProbe:
+          # Migrations (upgrade/migrate_all.py) and numba JIT cold start run
+          # before gunicorn binds; 10s x 30 gives a 300s budget.
+          httpGet:
+            path: /health/status
+            port: http
+          periodSeconds: 10
+          failureThreshold: 30
+        readinessProbe:
+          # Gate BOTH Services at the edge: require the WS proxy to accept
+          # connections on 8765 AND the app's DB-checking health endpoint.
+          # (Kubernetes allows one probe per type and this container is shared,
+          # hence the combined exec form.)
+          exec:
+            command:
+            - /app/.venv/bin/python
+            - -c
+            - >-
+              import socket, urllib.request;
+              socket.create_connection(('127.0.0.1', 8765), 3).close();
+              urllib.request.urlopen('http://127.0.0.1:5000/health/check', timeout=5).read()
+          periodSeconds: 15
+          failureThreshold: 3
+        livenessProbe:
+          # Same combined check against /health/status: restarts the pod if
+          # either gunicorn or the WS proxy process dies. A plain tcpSocket on
+          # 8765 would leave a hung gunicorn undetected.
+          exec:
+            command:
+            - /app/.venv/bin/python
+            - -c
+            - >-
+              import socket, urllib.request;
+              socket.create_connection(('127.0.0.1', 8765), 3).close();
+              urllib.request.urlopen('http://127.0.0.1:5000/health/status', timeout=5).read()
+          periodSeconds: 20
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1.5Gi
+          limits:
+            # Memory-only limit: a CPU limit throttles tick processing. Memory
+            # sizing accounts for numba/scipy plus headless Chromium used by
+            # chart export.
+            memory: 4Gi
+        volumeMounts:
+        - name: data
+          mountPath: /app/db
+          subPath: db           # six SQLite DBs + Historify DuckDB (critical)
+        - name: data
+          mountPath: /app/log
+          subPath: log
+        - name: data
+          mountPath: /app/strategies
+          subPath: strategies
+        - name: data
+          mountPath: /app/keys
+          subPath: keys         # image re-applies chmod 700 at boot
+        - name: tmp
+          mountPath: /app/tmp   # numba/matplotlib caches only (ephemeral)
+        - name: shm
+          mountPath: /dev/shm   # scipy/numba shared memory (compose shm_size)
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      # k3s default StorageClass. storageClassName and size are IMMUTABLE after
+      # first apply — set an overlay storage patch before the first apply, not
+      # after (see overlays/_template/patches/storage.yaml).
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 10Gi

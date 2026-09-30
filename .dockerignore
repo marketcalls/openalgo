@@ -30,6 +30,14 @@ secrets.*
 *.key
 *.pem
 
+# Kubernetes deployment secret inputs (deploy/k8s/overlays/<broker>/). The
+# patterns above are root-anchored ('*' does not cross '/'), so a nested
+# secret.env would otherwise ride `COPY . .` into locally built images.
+# Recursive; templates (*.env.example, .sample.env above) stay usable.
+**/secret.env
+**/secret.yaml
+**/*.secret.env
+
 # SQLite, DuckDB and runtime files
 *.sqlite
 *.sqlite3
