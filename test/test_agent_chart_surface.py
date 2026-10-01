@@ -619,8 +619,8 @@ class TestTheDrawingToolsDraw:
 class TestTheIndicatorToolsKnowWhichTierANameLivesIn:
     """Two catalogues share a domain and neither contains the other.
 
-    `openalgo-charts` draws 102 and the Python `openalgo.ta` computes 127, with
-    only 34 names in common. Asked to add AlphaTrend the agent consulted the
+    `openalgo-charts` draws 112 and the Python `openalgo.ta` computes 127, with
+    only 40 names in common. Asked to add AlphaTrend the agent consulted the
     only list it had, the Python one, and told the operator the chart did not
     have it. It does. Everything here exists so a refusal names the right tier.
     """
@@ -672,7 +672,10 @@ class TestTheIndicatorToolsKnowWhichTierANameLivesIn:
         quoted = [
             int(n) for n in re.findall(r"\b(\d+)\b", ChartToolkit.list_chart_indicators.__doc__)
         ]
-        assert quoted == [len(chart), len(REGISTRY), len(chart & set(REGISTRY))], (
+        # The chart spells a name with a hyphen where Python uses an underscore
+        # (aroon-oscillator, aroon_oscillator): one indicator, in both tiers.
+        both = {name.replace("-", "_") for name in chart} & set(REGISTRY)
+        assert quoted == [len(chart), len(REGISTRY), len(both)], (
             "the docstring quotes the chart tier, the Python tier and the overlap, "
             "in that order, and one of the three has drifted"
         )

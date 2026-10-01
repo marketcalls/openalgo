@@ -188,9 +188,61 @@ const CASES = [
   },
   {
     page: 'a declaration option cannot be an expression over an input',
+    code: 'OS3025',
+    wrong: [...STUDY, 'n = input(2, "N")', 'plot(close, "c", aqua, width = n + 1)'],
+    right: [...STUDY, 'n = input(3, "N")', 'plot(close, "c", aqua, width = n)'],
+  },
+  {
+    // Before 0.6.0 this was the only code the mistake above produced. The
+    // emitter still reports it beside OS3025, and the page says what it means
+    // there, because read alone its message calls itself a compiler defect.
+    page: 'OS6018 is reported beside OS3025 on the same line',
     code: 'OS6018',
     wrong: [...STUDY, 'n = input(2, "N")', 'plot(close, "c", aqua, width = n + 1)'],
     right: [...STUDY, 'n = input(3, "N")', 'plot(close, "c", aqua, width = n)'],
+  },
+  {
+    page: 'a plot style cannot be a setting at all',
+    code: 'OS3026',
+    wrong: [...STUDY, 'st = input("line", "Style", options = ["line", "step"])', 'plot(close, "c", aqua, style = st)'],
+    right: [...STUDY, 'plot(close, "c", aqua, style = "step")'],
+  },
+  {
+    // A WARNING. From 0.8.1 the third positional argument is the mode; before,
+    // it was ignored, so this line ran confirmed and said nothing.
+    page: 'a lookahead read, written positionally',
+    code: 'OS8005',
+    wrong: [...STRATEGY, 'dayHigh = req.timeframe("1D", high, "lookahead")', 'plot(dayHigh, "Day high", aqua)'],
+    right: [...STRATEGY, 'dayHigh = req.timeframe("1D", high)', 'plot(dayHigh, "Day high", aqua)'],
+  },
+  {
+    page: 'a positional mode must be one of the three words written out',
+    code: 'OS3003',
+    wrong: [...STUDY, 'm = input("confirmed", "Mode")', 'd = req.timeframe("1D", high, m)', 'plot(d, "d", aqua)'],
+    right: [...STUDY, 'd = req.timeframe("1D", high, "developing")', 'plot(d, "d", aqua)'],
+  },
+  {
+    // A WARNING: the script compiles, and the next setter to reach the stale
+    // object stops the bar, usually many bars later.
+    page: 'a deleted drawing is still held',
+    code: 'OS8019',
+    wrong: [
+      ...STUDY,
+      'plot(close, "c", aqua)',
+      'var zones: array<box> = []',
+      'push(zones, draw.box(time, low, time, high))',
+      'if size(zones) > 20',
+      '    draw.delete(element(zones, 0))',
+    ],
+    right: [
+      ...STUDY,
+      'plot(close, "c", aqua)',
+      'var zones: array<box> = []',
+      'push(zones, draw.box(time, low, time, high))',
+      'if size(zones) > 20',
+      '    draw.delete(element(zones, 0))',
+      '    shift(zones)',
+    ],
   },
   {
     // Reported beside OS2002 on the same line: the shadowed name then being

@@ -8,6 +8,96 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Charting terminal on openalgo-charts 2.6.0 and OpenScript 0.8.1
+
+`/trading` moves from openalgo-charts 2.5.1 to 2.6.0, and OpenScript from 0.5.0
+to 0.8.1, both the compiler in the browser (`openalgo-script`) and the engine
+that runs strategies on the server (`openscript`).
+
+- **Heikin Ashi, Renko, Range Bars and Line Break are formed by the chart from
+  the time bars**, so a brick appears the moment the tick that completes it
+  arrives, and a tick back takes it away again until the bar closes. They used
+  to be rebuilt from scratch on every tick. **Point & Figure and Kagi** join the
+  chart type menu. The brick, range or reversal is still sized from the
+  instrument's price when the chart opens (about 0.15 percent of the last
+  close), and the Price tab of the chart settings now shows it with the
+  transform's other options (reversal boxes, lines to break, box size mode). A
+  size you set is kept for that instrument and chart type, not for the pane, so
+  it never follows the pane onto another symbol. Saved charts and workspaces
+  open as before.
+- **Replay on these chart types steps through the time bars**, and the bricks
+  form as each bar is revealed. The replay starts from the bar that completed
+  the brick you picked, and the volume under a brick counts only bars already
+  revealed.
+- **Compute on.** A study on a transformed chart has a Compute on row in its
+  settings: Chart bars (the bricks or candles drawn, as before) or Underlying
+  bars (the time bars, each value shown at the brick it was read on). The
+  choice is saved with the study and survives a chart type change.
+- **A Timeframe row on 29 built-in studies**: the moving averages, Bollinger,
+  Keltner, Donchian, Envelope, Supertrend, Parabolic SAR, ATR, RSI, MACD,
+  Stochastic, Stochastic RSI, Williams %R, CCI and ADX. It offers Chart interval
+  and your broker's intervals; set, the study is computed on the chart's bars
+  folded into that interval, a value appears once its period closes and never
+  moves, and the legend names the interval (`EMA 9 close 1h`). The broker's
+  monthly interval is not offered there, because the chart cannot fold to it.
+  A setting the chart refuses, such as a timeframe on a Renko chart's own
+  bricks, keeps the study on the chart without drawing it, and says why.
+- **Seven new studies**: ZigZag, 52 Week High/Low, Zero Lag EMA, Variable Index
+  Dynamic Average, Elder-Ray Index, Schaff Trend Cycle and Volatility Squeeze
+  (112 built-ins).
+- **Two drawing tools** in a new Volume studies group on the rail: Anchored
+  VWAP and Fixed Range Volume Profile (87 tools). Objects panel rows name every
+  drawing as the rail does ("Anchored VWAP", "Trend Line").
+- **OpenScript studies draw what 0.5.0 could not**: a band whose colour the
+  script computes per bar, and every grid a study declares, each in the corner
+  its own `position` names.
+- **Loads lighter.** The side panels (watchlist, option chain, alerts,
+  strategies, scripts) and the chart's forms (alerts, chart settings, study
+  settings, study picker, symbol search, order ticket) load when first opened.
+  Less JavaScript loads before `/trading` draws its first chart than before
+  this update, although the chart engine itself grew.
+- An alert on a transformed chart can now fire on several bricks that one bar
+  completes, each delivered with its own numbers.
+- The chart's right-click menu no longer closes when the toolbar's own row
+  scrolls, which could take it away the moment it opened; a scroll that moves
+  the chart still closes it.
+
+**OpenScript 0.6.0 to 0.8.1, what a script author meets.** A mode written as
+the third argument of `req.timeframe` (or the fifth of `req.symbol`) is now
+read; it used to be ignored and run as `"confirmed"`. A `"lookahead"` read in
+a backtest reads a higher timeframe bar's final value from its first bar. A few
+spellings that compiled are now refused with a code and a fix: an `input()`
+inside a field fixed before bar 0 that is not the whole value (OS3025), and a
+plot `style` written from an input (OS3026). Results can differ in their final
+bits from 0.5.0's, from the engines' exact arithmetic.
+
+**On the server.** A strategy that reads a minute or hour timeframe with
+`req.timeframe` now runs; 0.5.0 refused every such program. A daily, weekly or
+monthly read, and `session.isLastBar`, are refused at start with a sentence
+naming them, because the server cannot answer them yet; before, they would
+have read nothing on every bar.
+
+**What to do after pulling.**
+- Open and save again, in `/trading`, any OpenScript strategy that writes a
+  request's mode positionally. The server runs the program saved with the
+  script, which keeps the mode the older compiler gave it.
+- On Ubuntu, run `update.sh` once; it installs `openscript` 0.8.1 from the
+  requirements.
+
+**Still not modelled.**
+- An OpenScript alert that waits for its bar to close is not announced on a
+  transformed chart, as before this update.
+- A study alert with no frequency judges a bar once, when the bar first
+  appears; a crossing later inside the same bar waits for a frequency that
+  watches for it (on bar close, or every update). This is the chart's rule on
+  every chart type.
+- On a transformed chart whose loaded history has formed no element at all,
+  the first bar to complete one is not judged by a study's alerts; every bar
+  after it is. The chart library fixes this in its next patch.
+
+**Dependencies.** `openalgo-charts` 2.5.1 to 2.6.0, `openalgo-script` 0.5.0 to
+0.8.1, `openscript` 0.5.0 to 0.8.1.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
@@ -199,6 +289,14 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **An update left your secrets readable by every account on the server.**
+  `install/update.sh` opens the whole install with `chmod -R 755` and never
+  closed `.env` again, so after each update your `.env` (app keys, broker
+  credentials) and the databases in `db/` could be read by any local account.
+  This hit every server layout, and since this release also instances made by
+  `install-multi.sh`, which the updater now recognises. The updater now sets
+  `.env` and every file in `db/` back to owner-only, as a fresh install does.
+  Running the updater once fixes an existing server.
 - **WhatsApp logged out after every restart.** The paired session was saved
   once, at pairing, so each restart brought back the pairing-day copy and
   WhatsApp logged the device out a few seconds later. Alerts then failed with

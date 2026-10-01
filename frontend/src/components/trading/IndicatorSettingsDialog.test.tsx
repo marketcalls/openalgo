@@ -148,3 +148,54 @@ describe('an OpenScript interval input', () => {
     expect(onApply).toHaveBeenCalledWith('openscript:higher-1', { tf: '5m' })
   })
 })
+
+describe('which bars a study computes on', () => {
+  const EMA: IndicatorField[] = [
+    { key: 'length', type: 'number', label: 'Length' },
+    { key: 'timeframe', type: 'interval', label: 'Timeframe', options: INTERVALS },
+  ]
+
+  it('offers no choice on a chart drawn from its own bars', () => {
+    // Catches the row drawn everywhere. On a plain chart both choices are the
+    // same bars, so a control there changes nothing and asks a question that
+    // has no answer.
+    mount(request('ema-1', EMA, { length: 9, timeframe: '' }))
+    expect(screen.queryByLabelText('Compute on')).not.toBeInTheDocument()
+  })
+
+  it('leads with Compute on when the chart transforms its bars, and hands the choice back', async () => {
+    const { onApply } = mount({
+      ...request('ema-1', EMA, { length: 9, timeframe: '' }),
+      barSource: 'chart',
+    })
+    const labels = [...document.querySelectorAll('label, h4')].map((one) => one.textContent)
+    expect(labels).toEqual(['Compute on', 'Length', 'Timeframe'])
+    const select = screen.getByLabelText('Compute on')
+    expect(optionsOf(select)).toEqual([
+      { label: 'Chart bars', value: 'chart' },
+      { label: 'Underlying bars', value: 'underlying' },
+    ])
+    await userEvent.selectOptions(select, 'underlying')
+    await userEvent.selectOptions(screen.getByLabelText('Timeframe'), '15m')
+    await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith('ema-1', { length: 9, timeframe: '15m' }, 'underlying')
+  })
+
+  it('puts Compute on back to the chart bars with Defaults', async () => {
+    const { onApply } = mount({
+      ...request('ema-1', EMA, { length: 9, timeframe: '' }),
+      barSource: 'underlying',
+    })
+    expect(screen.getByLabelText('Compute on')).toHaveValue('underlying')
+    await userEvent.click(screen.getByRole('button', { name: /Defaults/ }))
+    expect(screen.getByLabelText('Compute on')).toHaveValue('chart')
+    await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply.mock.calls[0]?.[2]).toBe('chart')
+  })
+
+  it('passes no bar source when the form did not offer one', async () => {
+    const { onApply } = mount(request('ema-1', EMA, { length: 9, timeframe: '' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply.mock.calls[0]).toHaveLength(2)
+  })
+})

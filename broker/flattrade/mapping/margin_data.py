@@ -2,23 +2,44 @@
 # Mapping Flattrade GetBasketMargin API
 
 from broker.flattrade.mapping.transform_data import map_order_type, map_product_type
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
 from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
 
 logger = get_logger(__name__)
 
 
+class MarginPriceUnavailable(ValueError):
+    """No positive price could be found for a MARKET/SL-M leg.
+
+    GetBasketMargin needs a non-zero prc, so such a leg cannot be priced.
+    Raised rather than skipped: dropping one leg of a basket would silently
+    report the margin of a different basket.
+    """
+
+
+def _positive(value):
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if number > 0 else 0.0
+
+
 def _apply_mpp(position, auth_token):
     """
     Convert MARKET/SL-M to LMT/SL-LMT with a protected price for basket margin.
 
-    GetBasketMargin rejects MKT/SL-MKT price types, so for MARKET/SL-M inputs we
-    always return a converted order type (LMT or SL-LMT) even when MPP can't
-    fetch an LTP. Fallback price:
-      - MARKET -> position.price (user-supplied limit, may be 0)
-      - SL-M   -> position.trigger_price (at trigger, SL-LMT becomes a LIMIT
-                  at this level)
+    GetBasketMargin rejects MKT/SL-MKT price types and a zero price, so
+    MARKET/SL-M legs go out as LMT/SL-LMT with a positive protected price:
+      - MARKET -> protected off the LTP; if no LTP, the caller's own price.
+      - SL-M   -> protected off the trigger, so the limit stays on the correct
+                  side of trgprc (below it for a SELL, above it for a BUY);
+                  the LTP is used only when no trigger was given. If the
+                  protection cannot be computed, the trigger itself is used.
+    The protection is rounded to the quote's tick size, else the SymToken
+    tick size; with neither, the base price is sent unprotected.
+    Raises MarginPriceUnavailable when none of these is positive.
     """
     pricetype = position.get("pricetype", "MARKET")
     action = position["action"].upper()
@@ -30,63 +51,77 @@ def _apply_mpp(position, auth_token):
 
     original_type = pricetype
     converted_order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
-    fallback_price = (
-        str(position.get("price", 0) or 0)
-        if original_type == "MARKET"
-        else str(position.get("trigger_price", 0) or 0)
-    )
+    trigger = _positive(position.get("trigger_price"))
+    fallback = _positive(position.get("price")) if original_type == "MARKET" else trigger
 
     logger.info(
         f"Margin MPP: {original_type} detected Symbol={position['symbol']}, "
         f"Exchange={position['exchange']}, Action={action}"
     )
+
+    reference = trigger if original_type == "SL-M" else 0.0
+    tick_size = None
+    instrument_type = get_instrument_type_from_symbol(position["symbol"])
     try:
-        if not auth_token:
-            logger.warning(
-                f"Margin MPP: no auth token for Symbol={position['symbol']}; "
-                f"converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
+        if auth_token:
+            from broker.flattrade.api.data import BrokerData
+
+            quote = BrokerData(auth_token).get_quotes(position["symbol"], position["exchange"])
+            ltp = _positive(quote.get("ltp"))
+            tick_size = quote.get("tick_size")
+            logger.info(
+                f"Margin MPP Quote: Symbol={position['symbol']}, LTP={ltp}, "
+                f"TickSize={tick_size}, InstrumentType={instrument_type}"
             )
-            return converted_order_type, fallback_price
+            if not reference:
+                reference = ltp
+        else:
+            logger.warning(f"Margin MPP: no auth token for Symbol={position['symbol']}")
 
-        from broker.flattrade.api.data import BrokerData
+        if not tick_size:
+            # The quote omits "ti" at times. calculate_protected_price would
+            # then round to paise, which is off-tick on a 0.05-tick contract
+            # and gets the basket rejected, so read the tick from SymToken.
+            info = get_symbol_info(position["symbol"], position["exchange"])
+            tick_size = getattr(info, "tick_size", None)
 
-        broker_data = BrokerData(auth_token)
-        quote = broker_data.get_quotes(position["symbol"], position["exchange"])
-        ltp = float(quote.get("ltp", 0))
-        tick_size = quote.get("tick_size")
-        instrument_type = get_instrument_type_from_symbol(position["symbol"])
+        if reference and not tick_size:
+            # No tick size anywhere: send the base price unprotected. An LTP
+            # or a caller's trigger is already a valid tick.
+            logger.warning(
+                f"Margin MPP: no tick size for Symbol={position['symbol']}; "
+                f"converting {original_type}->{converted_order_type} at {reference} unprotected"
+            )
+            return converted_order_type, str(reference)
 
-        logger.info(
-            f"Margin MPP Quote: Symbol={position['symbol']}, LTP={ltp}, "
-            f"TickSize={tick_size}, InstrumentType={instrument_type}"
-        )
-
-        if ltp > 0:
+        if reference:
             protected = calculate_protected_price(
-                price=ltp,
+                price=reference,
                 action=action,
                 symbol=position["symbol"],
                 instrument_type=instrument_type,
                 tick_size=tick_size,
             )
-            logger.info(
-                f"Margin MPP Converted: {original_type}->{converted_order_type}, "
-                f"FinalPrice={protected}"
-            )
-            return converted_order_type, str(protected)
-
-        logger.warning(
-            f"Margin MPP: LTP<=0 for Symbol={position['symbol']}; "
-            f"converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
-        )
-        return converted_order_type, fallback_price
-
+            if _positive(protected):
+                logger.info(
+                    f"Margin MPP Converted: {original_type}->{converted_order_type}, "
+                    f"Base={reference}, FinalPrice={protected}"
+                )
+                return converted_order_type, str(protected)
     except Exception as e:
-        logger.error(
-            f"Margin MPP Error: Symbol={position['symbol']}, Error={e}. "
-            f"Converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
+        logger.error(f"Margin MPP Error: Symbol={position['symbol']}, Error={e}")
+
+    if fallback:
+        logger.warning(
+            f"Margin MPP: no protected price for Symbol={position['symbol']}; "
+            f"converting {original_type}->{converted_order_type} at supplied price={fallback}"
         )
-        return converted_order_type, fallback_price
+        return converted_order_type, str(fallback)
+
+    raise MarginPriceUnavailable(
+        f"Could not get a live price for {position['symbol']}. "
+        "Enter a price for this leg, or try again in a moment."
+    )
 
 
 def _build_order(position, auth_token):
@@ -120,6 +155,8 @@ def transform_margin_positions(positions, userid, auth_token=None):
             order = _build_order(position, auth_token)
             if order:
                 orders.append(order)
+        except MarginPriceUnavailable:
+            raise
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
             continue
@@ -155,12 +192,19 @@ def parse_margin_response(response_data):
             )
             return {"status": "error", "message": error_message}
         # Flattrade doc semantics:
-        #   marginused      -> "Total margin"        (pre-hedge basket total)
-        #   marginusedtrade -> "Margin after trade"  (post-hedge account total)
+        #   marginused      -> "Total margin"        (pre-hedge basket total,
+        #                                             "Basket Margin" in the web UI)
+        #   marginusedtrade -> "Margin after trade"  (post-hedge, spread benefit
+        #                                             applied, "Post Trade Margin")
         # Parallels Zerodha's initial.total vs final.total. Map total to
-        # marginused (matches Zerodha impl using initial.total) and set
-        # span/exposure to 0 since Flattrade gives no breakdown.
-        margin_used = float(response_data.get("marginused", 0) or 0)
+        # marginusedtrade (matches Zerodha impl using final.total) so hedged
+        # baskets such as calendar spreads are not reported at naked-leg
+        # margin. Fall back to marginused only when marginusedtrade is absent.
+        # span/exposure are 0 since Flattrade gives no breakdown.
+        margin_used = response_data.get("marginusedtrade")
+        if margin_used in (None, ""):
+            margin_used = response_data.get("marginused")
+        margin_used = float(margin_used or 0)
         return {
             "status": "success",
             "data": {

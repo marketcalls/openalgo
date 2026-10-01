@@ -223,6 +223,7 @@ describe('chart pane preparation ownership', () => {
         subIndex: 0,
         subSteps: 1,
         bar: null,
+        simulated: false,
       })
     )
     fireEvent.click(view.getByRole('button', { name: 'Replay', exact: true }))
@@ -321,6 +322,28 @@ describe('chart pane preparation ownership', () => {
     fireEvent.click(view.getByRole('button', { name: 'Create price alert', exact: true }))
     expect(owner.createAlertAt).toHaveBeenCalledWith(source)
     expect(owner.openAlerts).not.toHaveBeenCalled()
+  })
+
+  it('keeps the menu open while the toolbar row scrolls, and closes it when the page does', async () => {
+    // The toolbar's row can settle a scroll just after the menu opens, when a
+    // control in it had focus. Closing on that took the menu away under the
+    // pointer; only a scroll that moves the chart moves the price it is about.
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    act(() =>
+      owner.options.callbacks.onContextMenu?.({
+        x: 100,
+        y: 100,
+        items: [],
+        profile: null,
+        alert: { label: 'Create price alert', source: { kind: 'price' as const, price: 105 } },
+      })
+    )
+    fireEvent.scroll(view.getByRole('toolbar', { name: 'Chart controls' }))
+    expect(view.getByRole('button', { name: 'Create price alert', exact: true })).toBeVisible()
+    fireEvent.scroll(window)
+    expect(view.queryByRole('button', { name: 'Create price alert', exact: true })).toBeNull()
   })
 
   it('offers no second alert entry in the menu', async () => {
@@ -495,6 +518,7 @@ describe('the indicator catalogue', () => {
     await act(async () => {})
 
     expect(terminal.indicatorCatalog).toHaveBeenCalledTimes(2)
-    expect(view.getByText('My new study')).toBeInTheDocument()
+    // The picker's code loads on its first opening.
+    expect(await view.findByText('My new study')).toBeInTheDocument()
   })
 })
