@@ -2,7 +2,7 @@
 # Mapping Flattrade GetBasketMargin API
 
 from broker.flattrade.mapping.transform_data import map_order_type, map_product_type
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
 from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
 
@@ -37,6 +37,8 @@ def _apply_mpp(position, auth_token):
                   side of trgprc (below it for a SELL, above it for a BUY);
                   the LTP is used only when no trigger was given. If the
                   protection cannot be computed, the trigger itself is used.
+    The protection is rounded to the quote's tick size, else the SymToken
+    tick size; with neither, the base price is sent unprotected.
     Raises MarginPriceUnavailable when none of these is positive.
     """
     pricetype = position.get("pricetype", "MARKET")
@@ -75,6 +77,22 @@ def _apply_mpp(position, auth_token):
                 reference = ltp
         else:
             logger.warning(f"Margin MPP: no auth token for Symbol={position['symbol']}")
+
+        if not tick_size:
+            # The quote omits "ti" at times. calculate_protected_price would
+            # then round to paise, which is off-tick on a 0.05-tick contract
+            # and gets the basket rejected, so read the tick from SymToken.
+            info = get_symbol_info(position["symbol"], position["exchange"])
+            tick_size = getattr(info, "tick_size", None)
+
+        if reference and not tick_size:
+            # No tick size anywhere: send the base price unprotected. An LTP
+            # or a caller's trigger is already a valid tick.
+            logger.warning(
+                f"Margin MPP: no tick size for Symbol={position['symbol']}; "
+                f"converting {original_type}->{converted_order_type} at {reference} unprotected"
+            )
+            return converted_order_type, str(reference)
 
         if reference:
             protected = calculate_protected_price(
