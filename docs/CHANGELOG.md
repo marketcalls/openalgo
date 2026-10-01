@@ -153,6 +153,20 @@ have read nothing on every bar.
 - Zoom and autoscale animations are off when your system asks for reduced
   motion.
 
+### Charting terminal: price scale
+
+- **Right-click the price scale** for its own menu: auto-fit, fit to the main
+  prices only, invert, reset, Linear, Logarithmic, Percent or Indexed to 100,
+  and move the scale to the left or right.
+- **Price level lines with tags on the scale**: previous close, day high, day
+  low, bid and ask, each switched on separately (all off by default, so charts
+  look as before). Bid and ask come from the depth the chart already receives.
+  A level with nothing behind it says "no data" instead of drawing a wrong line.
+- **Shortcuts** on the chart under the pointer: Alt+A auto-fit, Alt+L
+  logarithmic, Alt+P percent, Alt+1 indexed to 100, Alt+I invert, Alt+R reset.
+- A chart whose saved settings had auto-fit off no longer opens on an empty
+  scale.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
