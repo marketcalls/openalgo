@@ -33,11 +33,34 @@ describe('RightRail', () => {
     expect(screen.getByRole('button', { name: 'Option chain' })).toBeInTheDocument()
   })
 
+  it('opens Objects from a glyph, not a word down the rail', async () => {
+    const onSelect = rail()
+    const button = screen.getByRole('button', { name: 'Objects' })
+    // The rail is glyphs in identical 32px boxes. Spelling this one out made
+    // its button twice the height of the three beside it, so the name reaches
+    // a reader through the button and the hover tip instead of the rail.
+    expect(button.textContent).toBe('')
+    expect(button.querySelector('svg')).not.toBeNull()
+
+    await userEvent.click(button)
+    expect(onSelect).toHaveBeenCalledWith('objects')
+  })
+
+  it('opens Alerts from the rail, beside the objects it lists', async () => {
+    const onSelect = rail()
+    const button = screen.getByRole('button', { name: 'Alerts' })
+    expect(button.textContent).toBe('')
+    await userEvent.click(button)
+    expect(onSelect).toHaveBeenCalledWith('alerts')
+  })
+
   it('recognises only the panels the rail actually renders', () => {
     // Storage outlives a release. A remembered name that no longer resolves
     // has to read as "no panel", not as one.
     expect(isPanelId('agent')).toBe(true)
     expect(isPanelId('watchlist')).toBe(true)
+    expect(isPanelId('objects')).toBe(true)
+    expect(isPanelId('alerts')).toBe(true)
     expect(isPanelId('depth')).toBe(false)
     expect(isPanelId(null)).toBe(false)
   })

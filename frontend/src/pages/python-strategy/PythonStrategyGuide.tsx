@@ -881,7 +881,7 @@ export default function PythonStrategyGuide() {
                   <div className="flex items-center gap-3 p-2 bg-muted rounded">
                     <Badge className="bg-blue-500 text-white">Scheduled</Badge>
                     <div className="text-sm">
-                      <p>Strategy is armed and will auto-start at the scheduled time</p>
+                      <p>Strategy is waiting and will start on its own at the scheduled time</p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Shows context: "Starts today at 9:15 IST" or "Next: Mon, Tue at 9:15 IST"
                       </p>
@@ -917,11 +917,11 @@ export default function PythonStrategyGuide() {
                       <strong>Within schedule:</strong> Strategy starts running immediately
                     </li>
                     <li>
-                      <strong>Outside schedule:</strong> Strategy is "armed" &mdash; status changes
-                      to "Scheduled"
+                      <strong>Outside schedule:</strong> Strategy waits, and its status changes to
+                      "Scheduled"
                     </li>
                     <li>
-                      Button changes to <strong>Cancel</strong> after arming
+                      Button changes to <strong>Cancel</strong> once it is scheduled
                     </li>
                   </ul>
                 </div>
@@ -940,7 +940,7 @@ export default function PythonStrategyGuide() {
                   <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
                     <li>Cancels the scheduled auto-start</li>
                     <li>Sets "manually stopped" flag</li>
-                    <li>Click Start again to re-arm</li>
+                    <li>Click Start again to schedule it once more</li>
                   </ul>
                 </div>
 

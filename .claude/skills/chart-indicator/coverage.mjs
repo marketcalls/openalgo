@@ -46,6 +46,9 @@ const AUTHOR_FACING = [
   'stoch', 'cci', 'roc', 'change', 'connorsStreak', 'nulls',
   // ohlc studies
   'trueRange', 'atr', 'rsi', 'supertrend', 'pivotHigh', 'pivotLow',
+  // 2.4.0: the higher-timeframe fold, and the error a calc throws for an
+  // input the user can fix.
+  'securitySeries', 'IndicatorInputError',
   // sessions and calendar
   'parseSessionSpec', 'inSessionAt', 'sessionFlags', 'sessionStartFlags',
   'calendarPeriodFlags', 'utcSecondsToZonedParts', 'zonedDayIndex',
@@ -115,11 +118,29 @@ const CAPABILITIES = [
   ["input 'text'", "type: 'text'"],
   ["input 'select'", "type: 'select'"],
   ["input 'source'", "type: 'source'"],
-  ["input 'session'", "type: 'session'"],
-  ["input 'timeframe'", "type: 'timeframe'"],
-  ["input 'symbol'", "type: 'symbol'"],
-  ["input 'price'", "type: 'price'"],
+  // The five types this list used to demand -- 'session', 'timeframe', 'symbol',
+  // 'price', 'time' -- were never in the library. Requiring them here is what
+  // kept them in the docs, and the widget drops an unknown type in silence, so
+  // a study written from that example installed and lost its control.
+  ["input tooltip", "tooltip:"],
+  ["plot priceFormat", "priceFormat:"],
+  // 2.4.0. Listed for the same reason as everything above: the library gaining
+  // a way to express something a ported study needs is only half the work, and
+  // the half an author sees is the example.
+  ["a higher timeframe of the chart's own bars", "securitySeries("],
+  ["the non-repainting reading (last completed bucket)", "offset: 1"],
+  ["session-anchored higher-timeframe buckets", "session:"],
+  ["a plot painted ahead of its data", "offset:"],
+  ["refusing an input the user can fix", "IndicatorInputError"],
+  ["an alert message built from the firing bar", "message: ("],
+  ["marker shape 'cross'", "shape: 'cross'"],
+  ["a marker pinned to the pane edge", "'paneBottom'"],
+  ["a band on the price pane from a pane study", "overlay: true }"],
+  ["a candle's wick coloured apart from its body", "colorParts"],
+  ["a drawn zone that explains itself on hover", "tooltip: `"],
+  ["input 'interval'", "type: 'interval'"],
   ["input 'time'", "type: 'time'"],
+  ["a table that fits its own type", "fontSize: 'auto'"],
 ]
 
 const DOCS = ['SKILL.md', 'reference/contract.md', 'reference/api.md',

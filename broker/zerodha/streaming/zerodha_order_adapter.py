@@ -19,9 +19,19 @@ zerodha_websocket.py::_refresh_access_token, which splits on ":").
 
 import json
 
+from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
 from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
+
+
+def _units(value, data, exchange):
+    """Kite contract count -> OpenAlgo units, keyed on Kite's own tradingsymbol.
+
+    The stream is read before the symbol is translated, and an MCX root reads
+    the same in either convention, so Kite's tradingsymbol resolves it.
+    """
+    return int(from_kite_quantity(value, data.get("tradingsymbol", ""), exchange))
 
 logger = get_logger(__name__)
 
@@ -95,15 +105,18 @@ class ZerodhaOrderUpdateAdapter(BaseOrderUpdateAdapter):
             "symbol": symbol,
             "exchange": exchange,
             "action": str(data.get("transaction_type", "")).upper(),
-            "quantity": int(data.get("quantity") or 0),
+            # Kite streams MCX quantity in contracts, like its REST responses.
+            "quantity": _units(data.get("quantity") or 0, data, exchange),
             "price": float(data.get("price") or 0),
             "trigger_price": float(data.get("trigger_price") or 0),
             "pricetype": data.get("order_type", ""),
             "product": data.get("product", ""),
             "order_status": order_status,
-            "filled_quantity": int(data.get("filled_quantity") or 0),
-            "pending_quantity": int(
-                data.get("pending_quantity") or data.get("unfilled_quantity") or 0
+            "filled_quantity": _units(data.get("filled_quantity") or 0, data, exchange),
+            "pending_quantity": _units(
+                data.get("pending_quantity") or data.get("unfilled_quantity") or 0,
+                data,
+                exchange,
             ),
             "average_price": float(data.get("average_price") or 0),
             "rejection_reason": data.get("status_message") or "" if order_status == "rejected" else "",

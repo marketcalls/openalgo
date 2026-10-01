@@ -17,6 +17,27 @@ def test_calendar_service_rejects_invalid_date_values(service, invalid_date):
     assert response == {"status": "error", "message": "Invalid date format. Use YYYY-MM-DD"}
 
 
+@pytest.mark.parametrize(
+    ("date_value", "expected_success"),
+    [("2019-12-31", False), ("2020-01-01", True), ("2050-12-31", True), ("2051-01-01", False)],
+)
+@pytest.mark.parametrize(
+    "service", [market_calendar_service.get_timings, market_calendar_service.check_holiday]
+)
+def test_calendar_services_apply_supported_date_range(
+    monkeypatch, service, date_value, expected_success
+):
+    monkeypatch.setattr(market_calendar_service, "get_market_timings_for_date", lambda _date: [])
+    monkeypatch.setattr(market_calendar_service, "is_market_holiday", lambda *_args: False)
+
+    success, response, status_code = service(date_value)
+
+    assert success is expected_success
+    assert status_code == (200 if expected_success else 400)
+    if not expected_success:
+        assert response["message"] == "Date must be between 2020-01-01 and 2050-12-31"
+
+
 def test_get_timings_accepts_valid_iso_date(monkeypatch):
     monkeypatch.setattr(market_calendar_service, "get_market_timings_for_date", lambda _date: [])
 

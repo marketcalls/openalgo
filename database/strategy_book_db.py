@@ -259,7 +259,13 @@ def record_order_tag(
     if not orderid or not strategy:
         return False
     with _fill_lock:
-        return _record_order_tag_locked(orderid, user_id, strategy, symbol, exchange, product)
+        # Fresh reads, and the session released afterwards, for the reason
+        # given in apply_fill.
+        db_session.expire_all()
+        try:
+            return _record_order_tag_locked(orderid, user_id, strategy, symbol, exchange, product)
+        finally:
+            db_session.remove()
 
 
 def _record_order_tag_locked(
@@ -403,9 +409,21 @@ def apply_fill(
     updates for the same order can run concurrently. Reading the watermark,
     booking the delta and writing the watermark back must be one critical
     section or a duplicate event double-books the fill.
+
+    The lock alone is not enough. The bus runs callbacks on long-lived pool
+    threads, each with its own scoped session, and SQLAlchemy does not refresh
+    an object already in a session's identity map when it is queried again. A
+    worker that loaded this order's tag earlier (a duplicate event that booked
+    nothing and never committed) would read its old watermark, inside the lock,
+    and book the same quantity a second time. So the session is expired before
+    the watermark is read and released afterwards, whichever thread runs this.
     """
     with _fill_lock:
-        return _apply_fill_locked(orderid, filled_quantity, average_price, action)
+        db_session.expire_all()
+        try:
+            return _apply_fill_locked(orderid, filled_quantity, average_price, action)
+        finally:
+            db_session.remove()
 
 
 def _apply_fill_locked(

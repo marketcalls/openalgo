@@ -85,8 +85,7 @@ A fixed number of points looks right on one symbol and wrong on every other.
 
 *Validator: WARNING on `aboveBar`/`belowBar` for an `onchart` indicator.*
 
-Marker text is multi-line since 1.7.1: `
-` splits it into stacked rows. Earlier
+Marker text is multi-line since 1.7.1: `\n` splits it into stacked rows. Earlier
 guidance that it was single-line no longer applies.
 
 ---
@@ -124,11 +123,16 @@ consistent rule, so check `reference/api.md`.
 
 ---
 
-## 8. Do not declare width inputs, and declare colour inputs only for fills
+## 8. Do not declare width or colour inputs for plots; declare them for what has no generated control
 
 The chart generates colour, opacity, thickness, line style and plot style for
 every plot, seeded from `plot.style`. A hand-rolled `lineWidth` input gives the
 user two width fields that disagree, and only one of them works.
+
+That rule is about **plots**. Nothing is generated for the colours `markers()`,
+`draws()` and `background()` read, so a `type: 'color'` input for a marker or a
+zone is right, and a source's `input.color` for one maps to exactly that. Read
+it from `settings` inside the hook.
 
 Set defaults on the plot instead:
 
@@ -141,11 +145,12 @@ column, since 1.7.1. The two-plot split-and-null trick is still the way to make 
 line *recolour at a trend flip*, because that also breaks the line at the flip,
 but a simple colour ramp no longer needs it.
 
-**The exception is `fills`.** A fill takes `colorUpKey` / `colorDownKey`, and
-those name an **input** key, not a plot style. A shaded indicator therefore has
-to declare its colours as inputs, and its plots should reference the same ones
-via `colorKey` so a line and its ribbon cannot drift apart. This is what every
-built-in with a band does. See `examples/shaded_trend_zone.js`.
+**`fills` are the case that touches plots.** A fill takes `colorUpKey` /
+`colorDownKey`, and those name an **input** key, not a plot style. A shaded
+indicator therefore has to declare its band colours as inputs, and its plots
+should reference the same ones via `colorKey` so a line and its ribbon cannot
+drift apart. This is what every built-in with a band does. See
+`examples/shaded_trend_zone.js`.
 
 *Validator: ERROR if a fill names a colour key with no matching input.*
 
@@ -206,8 +211,12 @@ never draws.
 ## 13. Reusing a built-in id overrides it
 
 Custom modules register after the built-in tier, so a duplicate id replaces the
-built-in for the whole app. There are 102 of them; `sma`, `rsi`, `macd`,
+built-in for the whole app. There are 105 of them; `sma`, `rsi`, `macd`,
 `supertrend`, `vwap`, `range-analysis` are all taken.
+
+**2.4.5 adds three more reserved ids:** `open-interest`, `open-interest-change`
+and `open-interest-buildup`. Check an existing custom file against those ids
+before upgrading; prefix your own ids when an override is not intended.
 
 **The catalogue grew from 91 to 102 in 1.8.3, so a file written before that can
 shadow a built-in that did not exist when it was named.** The ids added were

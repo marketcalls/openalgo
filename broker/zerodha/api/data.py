@@ -39,6 +39,24 @@ def _kite_quote_exchange(oa_exchange: str, brexchange: str | None) -> str:
     return _OA_INDEX_TO_KITE.get(oa_exchange, oa_exchange)
 
 
+def _best_depth(quote: dict) -> tuple[dict, dict]:
+    """Top of book from a Kite /quote entry, as ``(best_bid, best_ask)``.
+
+    Each depth entry carries ``price``, ``quantity`` and ``orders`` together,
+    so reading the two sides once gives every caller the price and the size
+    resting behind it without walking the structure twice.
+
+    An instrument with no depth (an index, a permission-restricted feed, a
+    pre-open snapshot) yields empty dicts rather than raising, so the caller's
+    ``.get(..., 0)`` supplies the zero. That is the one case where a zero is
+    honest: there genuinely is no book.
+    """
+    depth = quote.get("depth") or {}
+    buy = depth.get("buy") or []
+    sell = depth.get("sell") or []
+    return (buy[0] if buy else {}), (sell[0] if sell else {})
+
+
 class ZerodhaPermissionError(Exception):
     """Custom exception for Zerodha API permission errors"""
 
@@ -220,10 +238,24 @@ class BrokerData:
             if not quote:
                 raise ZerodhaAPIError("No quote data found")
 
+            # Best bid and ask, with the size resting at each.
+            #
+            # Kite's /quote carries the size beside the price in the same depth
+            # entry (quantity + price + orders), and `get_market_depth` below
+            # already reads it from this very response. Reading only the price
+            # here is what made `bid_qty` and `ask_qty` absent, so every
+            # consumer's `.get("bid_qty", 0)` defaulted and the option chain
+            # reported a confident 0 on every leg. A 0 reads as "nothing on
+            # offer" rather than "not reported", which is the wrong answer to
+            # give a strategy sizing an order against the book.
+            best_bid, best_ask = _best_depth(quote)
+
             # Return quote data
             return {
-                "ask": quote.get("depth", {}).get("sell", [{}])[0].get("price", 0),
-                "bid": quote.get("depth", {}).get("buy", [{}])[0].get("price", 0),
+                "ask": best_ask.get("price", 0),
+                "bid": best_bid.get("price", 0),
+                "ask_qty": best_ask.get("quantity", 0),
+                "bid_qty": best_bid.get("quantity", 0),
                 "high": quote.get("ohlc", {}).get("high", 0),
                 "low": quote.get("ohlc", {}).get("low", 0),
                 "ltp": quote.get("last_price", 0),
@@ -392,13 +424,21 @@ class BrokerData:
                 )
                 continue
 
+            # Same mapping as `get_quotes`, including the size at the best bid
+            # and ask. The two are kept in step deliberately: a caller cannot
+            # tell whether it reached one symbol or many, so a field present in
+            # one and absent in the other is a difference it cannot act on.
+            best_bid, best_ask = _best_depth(quote)
+
             # Parse and format quote data
             result_item = {
                 "symbol": original["symbol"],
                 "exchange": original["exchange"],
                 "data": {
-                    "ask": quote.get("depth", {}).get("sell", [{}])[0].get("price", 0),
-                    "bid": quote.get("depth", {}).get("buy", [{}])[0].get("price", 0),
+                    "ask": best_ask.get("price", 0),
+                    "bid": best_bid.get("price", 0),
+                    "ask_qty": best_ask.get("quantity", 0),
+                    "bid_qty": best_bid.get("quantity", 0),
                     "high": quote.get("ohlc", {}).get("high", 0),
                     "low": quote.get("ohlc", {}).get("low", 0),
                     "ltp": quote.get("last_price", 0),

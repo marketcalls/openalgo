@@ -40,6 +40,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import time
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
@@ -55,11 +56,14 @@ from services.agent import attachments as agent_attachments
 from services.agent import builder, catalog, chatgpt_oauth, providers
 from services.agent import settings as agent_settings
 from services.agent import stream as agent_stream
+from services.agent import tools as tools_module
 from services.agent import viz_sink as viz_sink_module
+from services.agent import voice as agent_voice
 from services.agent.frames import SSE_HEADERS
 from services.agent.providers import litellm_model_id, reasoning_capable
 from services.agent.safety import audit
 from services.agent.tools import ToolContext
+from utils import stream_registry
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -80,6 +84,18 @@ AGENT_RATE_LIMIT = "240 per minute"
 # should be reachable at the browsing rate of a settings page.
 AGENT_STREAM_RATE_LIMIT = "30 per minute"
 AGENT_TEST_RATE_LIMIT = "12 per minute"
+
+#: Answers streaming at once. Every chat and confirm stream is counted in
+#: ``utils.stream_registry`` under :data:`AGENT_STREAM_KIND`, and under the
+#: gthread worker, where each one holds a pool thread for the whole turn, a
+#: stream over this many is refused with :data:`STREAMS_BUSY_MESSAGE`. Under
+#: eventlet and on the development server nothing is refused. A constant, like
+#: the budgets above.
+MAX_CONCURRENT_STREAMS = 6
+AGENT_STREAM_KIND = "agent_stream"
+STREAMS_BUSY_MESSAGE = (
+    "Several answers are already being written. Wait for one to finish, then send this again."
+)
 
 _api_limit = limiter.shared_limit(AGENT_RATE_LIMIT, scope="agent_api")
 _stream_limit = limiter.shared_limit(AGENT_STREAM_RATE_LIMIT, scope="agent_stream")
@@ -1324,6 +1340,331 @@ def chatgpt_forget():
 
 
 # ---------------------------------------------------------------------------
+# Voice
+#
+# Shaped like the web search block above, for the same reason: one credential,
+# a handful of tunables, a write-only key and a separate explicit test.
+#
+# The mint route is the one egress surface this module adds, and it is
+# deliberately the narrowest one in the blueprint. It takes an SDP offer and
+# nothing else: the model, the voice, the instructions and the vendor URL all
+# come from stored settings and module constants, so no request can point the
+# server at an endpoint of its choosing or reshape what the speech model is
+# told. That is what keeps voice off the SSRF surface described in
+# `docs/design/55-agent/README.md`.
+# ---------------------------------------------------------------------------
+
+#: The largest SDP offer this blueprint will read. A WebRTC audio offer with a
+#: data channel is a couple of kilobytes; this leaves generous room for ICE
+#: candidates and still refuses a body that is plainly not an offer before it is
+#: buffered, which `MAX_REQUEST_BYTES` alone would not do for a text body.
+MAX_SDP_BYTES = 256_000
+
+
+@agent_bp.route("/api/voice", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_voice():
+    """The voice configuration, with the key described and never shown.
+
+    Carries the tunables, the selectable speakers, whether a key is stored with
+    its fingerprint, and ``trading_effective`` - whether a spoken order could
+    actually reach a mutating tool once the master trading switch is taken into
+    account. The shipped defaults travel inside the same payload.
+    """
+    try:
+        return _ok({"data": agent_settings.get_voice_config()})
+    except Exception:
+        logger.exception("Could not read the voice configuration")
+        return _error("Could not read the voice configuration", 500)
+
+
+@agent_bp.route("/api/voice", methods=["PUT"])
+@check_session_validity
+@_api_limit
+def put_voice():
+    """Update the voice configuration.
+
+    Every value is validated before anything is written, so a request carrying
+    one bad field changes nothing. The agent name and the order phrase are
+    validated together against the same rules the approval matcher uses, which
+    is why a phrase that would be unreachable next to a given name is refused
+    here rather than accepted and then never matched.
+
+    This route never accepts a key. The key has its own route below.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+    if not body:
+        return _error("Nothing to update", 400)
+
+    try:
+        return _ok({"data": agent_settings.update_voice(body)})
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        logger.exception("Could not write the voice configuration")
+        return _error("Could not save the voice configuration", 500)
+
+
+@agent_bp.route("/api/voice/key", methods=["PUT"])
+@check_session_validity
+@_api_limit
+def put_voice_key():
+    """Store the OpenAI key the voice session is minted with.
+
+    Separate from any ``openai`` provider key in the model registry on purpose:
+    an operator may run their intelligence on Claude or a local model and still
+    want OpenAI's ears, and revoking one must not disturb the other.
+
+    Blank is refused rather than read as "clear it", because this route takes
+    only a key. Clearing one is the DELETE below, which says so.
+
+    Returns:
+        The refreshed configuration. The key is not in it.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+
+    api_key = body.get("api_key")
+    try:
+        data = agent_settings.set_voice_key(api_key)
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        # logger.error and no traceback: the submitted key is a local in this
+        # frame, and str(exc) from a storage or encryption failure can quote the
+        # material it choked on, where utils.logging's redaction patterns -- all
+        # of which key off a "token=" or "secret:" style label -- do not match it.
+        logger.error("Could not store the voice key")
+        return _error("Could not store the voice key", 500)
+    finally:
+        # The plaintext lives no longer than the call it was needed for.
+        api_key = None
+
+    logger.info("Voice key stored")
+    return _ok({"data": data, "message": "Voice key stored"})
+
+
+@agent_bp.route("/api/voice/key", methods=["DELETE"])
+@check_session_validity
+@_api_limit
+def delete_voice_key():
+    """Remove the stored OpenAI voice key.
+
+    Idempotent: clearing a key that is not there succeeds, because the operator
+    asked for no key to be stored and none is. The microphone stops working and
+    the rest of the agent is untouched.
+    """
+    try:
+        data = agent_settings.clear_voice_key()
+    except Exception:
+        logger.exception("Could not clear the voice key")
+        return _error("Could not clear the voice key", 500)
+
+    return _ok({"data": data, "message": "Voice key cleared"})
+
+
+@agent_bp.route("/api/voice/test", methods=["POST"])
+@check_session_validity
+@_test_limit
+def test_voice():
+    """Prove the stored key and the configured model can open a session.
+
+    The same rule as every other test route here: a real call, or it is not a
+    test. A throwaway session is minted against a placeholder offer and then
+    abandoned, which is enough to exercise the credential **and** the model,
+    because the vendor validates the key before the offer and the model after
+    it.
+
+    Unlike the mint route this does not require ``voice_enabled``: an operator
+    has to be able to prove a key works before switching the feature on.
+
+    Returns:
+        ``{ok, message, latency_ms, model}`` alongside the refreshed
+        configuration, since a passing test updates the key's last use.
+    """
+    try:
+        result = agent_voice.probe()
+    except Exception:
+        # logger.error and no traceback: the probe path holds the key.
+        logger.error("The voice test could not be run")
+        return _error("Could not run the voice test", 500)
+
+    message = result.message[:MAX_TEST_ERROR_CHARS]
+    if result.ok:
+        logger.info("Voice provider passed its test in %sms", result.latency_ms)
+    else:
+        logger.error("Voice provider failed its test: %s", message)
+
+    return _ok(
+        {
+            "ok": result.ok,
+            "message": message,
+            "latency_ms": result.latency_ms,
+            "model": result.model,
+            "data": agent_settings.get_voice_config(),
+        }
+    )
+
+
+@agent_bp.route("/api/voice/transcript", methods=["POST"])
+@check_session_validity
+@_api_limit
+def post_voice_transcript():
+    """Record one finalised line of a spoken conversation.
+
+    Every line is kept, including the ones that never became an agent turn.
+    A speech model handles plenty of an exchange itself - acknowledgements,
+    asking which expiry was meant - and none of that reaches the message list,
+    so without this the record of a spoken session would be the subset of it
+    that happened to need a tool.
+
+    The row goes to `ag_audit` rather than `ag_message` because it is evidence
+    rather than conversation: the speech model paraphrases what it is given, so
+    what was said out loud and what the agent wrote are two different records of
+    one turn, and flattening them into the same table would lose that.
+
+    Never fails a caller. A line that cannot be recorded is logged; refusing the
+    page would stop a conversation over a failed write.
+    """
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
+    body, error = _json_body()
+    if error:
+        return error
+
+    role = "agent" if str(body.get("role") or "") == "agent" else "trader"
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return _ok({"data": {"recorded": False}})
+
+    conversation_id = body.get("conversation_id")
+    try:
+        conversation_id = int(conversation_id) if conversation_id is not None else None
+    except (TypeError, ValueError):
+        conversation_id = None
+
+    # A spoken session that never needs the agent still happened, and until now
+    # it left no thread: a conversation was only created when a question
+    # delegated, so an exchange the speech model handled itself lived in
+    # `ag_audit` and nowhere an operator could find it. The first line of a
+    # session opens the thread, so every spoken session has somewhere to be.
+    if conversation_id is None:
+        created, error = agent_db.create_conversation(
+            username, title=text[:60], surface=tools_module.SURFACE_VOICE
+        )
+        if created:
+            conversation_id = created.get("id")
+        else:
+            logger.warning("Could not open a conversation for a spoken line: %s", error)
+
+    audit.record_transcript(
+        role,
+        text,
+        conversation_id=conversation_id,
+        run_id=str(body.get("run_id") or "") or None,
+    )
+    return _ok({"data": {"recorded": True, "conversation_id": conversation_id}})
+
+
+@agent_bp.route("/api/voice/approve", methods=["POST"])
+@check_session_validity
+@_api_limit
+def post_voice_approve():
+    """Decide whether one spoken utterance approves one paused run.
+
+    **The decision is made here, not in the browser.** The page reports what it
+    heard and which run it heard it against; everything that decides - that
+    order tools are reachable on the voice surface, that a run really is
+    waiting, that the window is still open, and whether the words are the
+    configured phrase - is read from stored settings and from a registry the
+    page cannot write.
+
+    This is not what stands between a sentence and a broker. The risk guard
+    inside the tool body runs after any approval and reads no prompt, and it is
+    still the control. This narrows a different hazard: a word said out loud in
+    a room that contains other people, and a page that could otherwise decide
+    for itself what counted as that word.
+
+    An approval consumes the window, so the same utterance cannot approve the
+    same run twice. Approving the run itself remains `/chat/confirm`, which is
+    the same route the on-screen card uses.
+
+    Returns:
+        ``{"approved": bool, "reason": str}``. A refusal is a 200 carrying
+        `approved: false` and a reason, because "that was not the phrase" is an
+        ordinary outcome of a trader talking near a pending order, not an error.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+
+    run_id = str(body.get("run_id") or "").strip()
+    if not run_id:
+        return _error("A run_id is required", 400)
+
+    verdict = agent_voice.judge_approval(run_id, body.get("transcript"))
+    return _ok({"data": {"approved": verdict.approved, "reason": verdict.reason}})
+
+
+@agent_bp.route("/api/voice/session", methods=["POST"])
+@check_session_validity
+@_stream_limit
+def post_voice_session():
+    """Exchange the browser's SDP offer for the vendor's answer.
+
+    **The request body is the offer and nothing else.** This route accepts no
+    model, no voice, no instructions, no base URL and no other provider
+    parameter, by request or by header. The model, the speaker, the persona, the
+    order phrase and the endpoint are read from stored settings and module
+    constants inside :mod:`services.agent.voice`. A caller can therefore start a
+    session or fail to; it can never steer one, and it cannot name the host the
+    server posts to.
+
+    The body arrives as ``application/sdp`` text and the answer goes back the
+    same way, so the browser can hand it straight to
+    ``setRemoteDescription``. Nothing about the audio itself passes through this
+    process: the WebRTC connection, once answered, is between the browser and
+    the vendor.
+
+    It carries the stream rate limit rather than the settings one. A mint is one
+    real upstream call against a billed credential, in the same cost class as
+    opening a turn, and a settings-page budget would let a reconnect loop spend
+    against the key far faster than a person could.
+
+    Returns:
+        The answer SDP with an ``application/sdp`` mimetype, or a JSON error.
+    """
+    declared = request.content_length
+    if declared is not None and declared > MAX_SDP_BYTES:
+        return _error("That connection offer is too large", 413)
+    request.max_content_length = MAX_SDP_BYTES
+    try:
+        offer = request.get_data(as_text=True)
+    except RequestEntityTooLarge:
+        return _error("That connection offer is too large", 413)
+    if not offer.strip():
+        return _error("A connection offer is required", 400)
+
+    try:
+        answer = agent_voice.mint_session(offer)
+    except agent_voice.VoiceUnavailable as exc:
+        # The message is written for an operator by the voice module and never
+        # carries the key or the vendor's raw body, so it is safe to return.
+        return _error(str(exc), 400)
+    except Exception:
+        logger.exception("Could not mint a voice session")
+        return _error("Could not start the voice session", 500)
+
+    return Response(answer, mimetype="application/sdp")
+
+
+# ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
 
@@ -1337,9 +1678,15 @@ def list_conversations():
     if not username:
         return _error("Not authenticated", 401)
 
-    surface = (request.args.get("surface") or "").strip() or None
-    if surface and surface not in agent_db.SURFACES:
+    # A page that serves more than one surface asks for them together. `/agent`
+    # answers both typed and spoken questions into the same thread list, and
+    # listing only one of them hid every spoken session an operator had had.
+    requested = [part.strip() for part in (request.args.get("surface") or "").split(",")]
+    surfaces = [part for part in requested if part]
+    unknown = [part for part in surfaces if part not in agent_db.SURFACES]
+    if unknown:
         return _error(f"surface must be one of: {', '.join(agent_db.SURFACES)}", 400)
+    surface = surfaces or None
 
     try:
         limit = min(max(int(request.args.get("limit", 100)), 1), 200)
@@ -1645,7 +1992,13 @@ class _TurnRecorder:
         return bool(self.text or self.tools or self.notices or self._viz or self._ui or self._usage)
 
 
-def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, username: str):
+def _record_stream(
+    chunks,
+    recorder: _TurnRecorder,
+    conversation_id: int,
+    username: str,
+    ticket: stream_registry.StreamTicket | None = None,
+):
     """Pass SSE text through untouched while recording what it carried.
 
     The persist happens in a ``finally``, so a client that hangs up mid-answer
@@ -1658,6 +2011,9 @@ def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, userna
         recorder: The recorder to fold each frame into.
         conversation_id: The conversation being appended to.
         username: The owner, for the owner-scoped session binding.
+        ticket: The stream's slot, released once the turn is persisted. The
+            route also releases it when the response closes, which covers a
+            client that left before this generator ever started.
 
     Yields:
         Each chunk exactly as it arrived.
@@ -1673,7 +2029,54 @@ def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, userna
                     logger.exception("Could not record an agent frame")
             yield chunk
     finally:
-        _persist_turn(recorder, conversation_id, username)
+        try:
+            _persist_turn(recorder, conversation_id, username)
+        finally:
+            if ticket is not None:
+                ticket.release()
+
+
+def _with_stream_slot(body: Callable[[stream_registry.StreamTicket], Any]):
+    """Run a streaming route's body holding one of the agent's stream slots.
+
+    The slot is taken before anything else, so a refused turn builds no agent
+    and writes no conversation. Every answer that is not the stream itself
+    (a validation error, a missing conversation, a build failure) gives the
+    slot back here; the stream gives it back when it ends, through
+    :func:`_record_stream` and the response's close.
+
+    Args:
+        body: The route's work, given the slot it holds.
+
+    Returns:
+        The route's response, or 429 with :data:`STREAMS_BUSY_MESSAGE` under
+        the gthread worker when :data:`MAX_CONCURRENT_STREAMS` are open.
+    """
+    ticket = stream_registry.admit(
+        AGENT_STREAM_KIND, stream_registry.enforced_limit(MAX_CONCURRENT_STREAMS)
+    )
+    if ticket is None:
+        return _error(STREAMS_BUSY_MESSAGE, 429, {"kind": "busy"})
+    try:
+        result = body(ticket)
+    except BaseException:
+        ticket.release()
+        raise
+    if not (isinstance(result, Response) and result.is_streamed):
+        ticket.release()
+    return result
+
+
+def _stream_response(chunks, recorder, conversation_id, username, ticket) -> Response:
+    """The SSE response for one turn, holding ``ticket`` until it closes."""
+    response = Response(
+        stream_with_context(_record_stream(chunks, recorder, conversation_id, username, ticket)),
+        mimetype="text/event-stream",
+    )
+    response.call_on_close(ticket.release)
+    for header, value in SSE_HEADERS.items():
+        response.headers[header] = value
+    return response
 
 
 def _persist_turn(recorder: _TurnRecorder, conversation_id: int, username: str) -> None:
@@ -1862,11 +2265,46 @@ def _build_context(
         conversation_id=conversation_id,
         surface=surface,
         user_id=username,
-        trading_enabled=bool(body.get("trading_enabled", False)),
+        trading_enabled=_trading_capability(body, surface),
         web_search_enabled=bool(web_search),
         analyzer_mode=_analyzer_mode(),
         extras=extras,
     )
+
+
+def _trading_capability(body: dict, surface: str) -> bool:
+    """Whether this run may build a mutating toolkit.
+
+    The request asks, and on the chat surface the request is the whole answer:
+    the switch narrows which toolkits are built, and the risk guard inside the
+    tool body is what actually stands between a sentence and a broker.
+
+    The spoken surface adds a second, server-side narrowing. `voice_trading_enabled`
+    is read here rather than trusted from the body, because the body is written
+    by a browser and this is the only place that can refuse to widen. It can
+    only ever remove the capability: a run that did not ask for trading does not
+    acquire it by being spoken.
+
+    Args:
+        body: The request body.
+        surface: The run's surface.
+
+    Returns:
+        True when mutating toolkits may be built for this run.
+    """
+    asked = bool(body.get("trading_enabled", False))
+    if not asked or surface != tools_module.SURFACE_VOICE:
+        return asked
+    try:
+        from services.agent import settings as agent_settings
+
+        config = agent_settings.get_voice_config()
+        return bool(config.get("trading_effective"))
+    except Exception:
+        # Fail closed: an unreadable setting withholds the capability rather
+        # than handing a spoken run an order toolkit by accident.
+        logger.exception("Could not read voice trading configuration; withholding order tools")
+        return False
 
 
 def _web_search_of(body: dict) -> bool:
@@ -2124,6 +2562,11 @@ def chat_stream():
     frame with **no** ``done`` after it, and the client resumes it at
     ``/chat/confirm``.
     """
+    return _with_stream_slot(_chat_stream_body)
+
+
+def _chat_stream_body(ticket: stream_registry.StreamTicket):
+    """The work of :func:`chat_stream`, holding a stream slot."""
     username, api_key, error = _chat_preconditions()
     if error:
         return error
@@ -2251,13 +2694,7 @@ def chat_stream():
         user_message_id=user_message_id,
     )
 
-    response = Response(
-        stream_with_context(_record_stream(chunks, recorder, conversation_id, username)),
-        mimetype="text/event-stream",
-    )
-    for header, value in SSE_HEADERS.items():
-        response.headers[header] = value
-    return response
+    return _stream_response(chunks, recorder, conversation_id, username, ticket)
 
 
 @agent_bp.route("/api/chat/confirm", methods=["POST"])
@@ -2274,6 +2711,11 @@ def chat_confirm():
     is left undecided and agno pauses on it again, which is the right outcome
     for a partial answer rather than a silent approval.
     """
+    return _with_stream_slot(_chat_confirm_body)
+
+
+def _chat_confirm_body(ticket: stream_registry.StreamTicket):
+    """The work of :func:`chat_confirm`, holding a stream slot."""
     username, api_key, error = _chat_preconditions()
     if error:
         return error
@@ -2379,13 +2821,7 @@ def chat_confirm():
         tool_frames=viz_sink_module.frame_hook(viz_sink),
     )
 
-    response = Response(
-        stream_with_context(_record_stream(chunks, recorder, conversation_id, username)),
-        mimetype="text/event-stream",
-    )
-    for header, value in SSE_HEADERS.items():
-        response.headers[header] = value
-    return response
+    return _stream_response(chunks, recorder, conversation_id, username, ticket)
 
 
 def _read_decisions(raw: Any) -> tuple[dict[str, bool], dict[str, str], str | None]:

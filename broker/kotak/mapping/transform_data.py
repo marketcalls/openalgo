@@ -140,6 +140,11 @@ def _fmt_price(value):
     return str(value)
 
 
+# Kotak echoes `ig` back as GuiOrdId and rejects a blank one, so it is always
+# set. Place Order only - the modify payload takes no `ig`.
+ORDER_TAG = "openalgo"
+
+
 def transform_data(data, token):
     """
     Transforms the new API request structure to the current expected structure.
@@ -165,6 +170,8 @@ def transform_data(data, token):
         "ts": symbol,
         "tt": "B" if action == "BUY" else ("S" if action == "SELL" else "None"),
     }
+
+    transformed["ig"] = ORDER_TAG
 
     _apply_slm_conversion(transformed, data)
 

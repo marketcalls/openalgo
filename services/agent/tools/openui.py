@@ -129,9 +129,24 @@ class OpenUiToolkit(OpenAlgoToolkit):
         interest ladder or a Greek gets ``plot_price_chart``,
         ``plot_open_interest``, ``plot_gamma_exposure`` or
         ``plot_volatility_surface``, because those fetch their own data and
-        this one draws whatever you type. Every number you put in this markup
-        must come from a tool result you actually received in this
-        conversation.
+        this one draws whatever you type.
+
+        **Never draw a number you made up.** A chart of invented figures reads
+        as authoritative and is worse than no chart at all. Every number must
+        come from one of two places, and they are not the same:
+
+        * A tool result you actually received in this conversation. Draw it and
+          say what it is.
+        * A figure the operator gave you in their own message - "twenty percent
+          gold, thirty percent nifty bees, the rest in silver". That is their
+          number, not yours, and drawing it is the point of asking. Draw it, and
+          title the card so it cannot be mistaken for their account: "Example
+          allocation", not "Your allocation". If it could be read as a holding,
+          a position or a valuation, say in the card that it is illustrative.
+
+        Refusing the second case is a real failure, not caution: the operator
+        asked for a sketch of their own figures and got a paragraph explaining
+        why it could not be drawn, followed by the same figures as plain text.
 
         Ordinary answers stay markdown. Rendering is a deliberate act, not a
         wrapper around every reply.

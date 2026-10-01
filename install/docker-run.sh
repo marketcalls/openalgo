@@ -385,7 +385,7 @@ do_start() {
     fi
 
     # Stop and remove existing container if exists
-    docker stop "$CONTAINER" >/dev/null 2>&1
+    docker stop -t 45 "$CONTAINER" >/dev/null 2>&1
     docker rm "$CONTAINER" >/dev/null 2>&1
 
     # Calculate dynamic resource limits based on available RAM
@@ -430,6 +430,7 @@ do_start() {
     log_info "Starting container..."
     if docker run -d \
         --name "$CONTAINER" \
+        --stop-timeout 45 \
         --shm-size=${SHM_SIZE_MB}m \
         -p 5000:5000 \
         -p 8765:8765 \
@@ -480,7 +481,7 @@ do_start() {
 # Stop function
 do_stop() {
     log_info "Stopping OpenAlgo..."
-    docker stop "$CONTAINER" >/dev/null 2>&1
+    docker stop -t 45 "$CONTAINER" >/dev/null 2>&1
     docker rm "$CONTAINER" >/dev/null 2>&1
     log_ok "OpenAlgo stopped."
 }

@@ -706,6 +706,7 @@ def _build() -> None:
     # to the wrong endpoint rather than merely going unlisted. See
     # services/agent/chatgpt_models.py.
     chatgpt_models.register(litellm)
+    chatgpt_models.quieten_usage_warning()
 
     entries = _read_cost_entries(litellm)
     _entries = entries

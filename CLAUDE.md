@@ -46,6 +46,7 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
 - **`chart-indicator`** — building a custom indicator for the `/trading` chart. These are plain JavaScript descriptors on `openalgo-charts`, unrelated to the Python `openalgo.ta` indicators used from strategies and scanners.
+- **`openscript`**: writing a study or strategy in OpenScript, the language compiled by `openalgo-script` and run from `strategies/openscript/`. A third unrelated thing called an indicator: not the JavaScript chart descriptors above, and not `openalgo.ta`.
 
 ## Security and Deployment Model
 
@@ -59,20 +60,28 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 
 ## Runtime Constraints
 
-### Eventlet + Gunicorn (production)
+### Two production workers: eventlet (default) and gthread (opt-in)
 
-Production (Ubuntu direct and Docker) runs `gunicorn --worker-class eventlet -w 1`:
+Production (Ubuntu direct and Docker) runs gunicorn with one worker process.
+Which worker class it uses is chosen per install by one `.env` key,
+`OPENALGO_WORKER_CLASS`:
 
-- **No `asyncio`.** Eventlet monkey-patches the stdlib and is incompatible with `asyncio.run()`, `async`/`await`, and `asyncio.get_event_loop()`. Async work must use eventlet green threads or run on a separate real OS thread — see `telegram_bot_service.py:_render_plotly_png` for the pattern.
-- **Single worker (`-w 1`) is mandatory.** Flask-SocketIO state is in-process and cannot be shared across workers.
-- **`threading.local()` maps to green threads**, which is why `scoped_session` works correctly under eventlet.
+- **eventlet is the default and stays the default.** An install that has not set the key runs `gunicorn --worker-class eventlet -w 1` exactly as before, and an update never rewrites its systemd unit, nginx configuration or dependencies. About 4,75,000 installs run this way, so every change must be behaviour-neutral under eventlet.
+- **gthread is opt-in.** `OPENALGO_WORKER_CLASS = 'gthread'` plus `install/switch-worker.sh` (Ubuntu) or a container restart (Docker) starts gunicorn through the repo launcher `install/openalgo-gunicorn.sh` with a fixed pool of 64 threads. It is the only new setting; the thread count is not configurable. Switched systemd units reference the launcher path forever, so never move or rename it. The trader-facing guide is [`docs/gthread/README.md`](docs/gthread/README.md).
+- **Single worker (`-w 1`) is mandatory under both.** Flask-SocketIO state is in-process and cannot be shared across workers.
+- **Code must be correct under eventlet, gthread and the dev server.** A race fix (a lock, a compare-and-set claim, a single flight) may apply in every mode, but the quiet path must stay unchanged. Anything a trader could notice (refusing or timing out a request, capping streams, bounding a broker queue wait) is gated on `utils.runtime.gthread_active()`.
+- **Use the shared helpers instead of writing new ones:** `utils/runtime.py` answers which worker is running (never test `"eventlet" in sys.modules`); `utils/real_threading.py`; `utils/thread_safe_cache.py` (`LockedTTLCache`, never a bare `cachetools.TTLCache`, and a test fails on new ones); `utils/lazy.py`; `utils/keyed_locks.py`; `utils/stream_registry.py` (every long-lived response is admitted and released through it); `utils/shutdown.py`; `utils/db_sessions.py`; `utils/broker_backpressure.py`; `utils/smart_order_guard.py`; `extensions.emit_from_any_thread`.
+- **No `asyncio` in request code while eventlet is the default.** Eventlet monkey-patches the stdlib and is incompatible with `asyncio.run()`, `async`/`await`, and `asyncio.get_event_loop()`. Async work runs on a real OS thread with its own loop (`services/websocket_client.py` and `telegram_bot_service.py:_render_plotly_png` are the patterns). `async def` views wait until eventlet is removed.
+- **`threading.local()` maps to green threads under eventlet and to real threads under gthread.** `scoped_session` works in both, but a gthread pool thread outlives its request, so the session teardown layers are what stop state leaking from one request into the next.
+- **gunicorn 26 removes the eventlet worker** (its own deprecation notice in 25.3.0 says so), which is why the pin `gunicorn>=25.0,<26` stays while eventlet is the default.
 
 ### Development server differs
 
-`uv run app.py` uses standard threading, not eventlet. Code must work in both.
-`asyncio` works fine on the dev server and **breaks in production** — this is the
-single most common way a change passes locally and fails on deploy. SQLite
-locking is also stricter on Windows.
+`uv run app.py` uses standard threading: neither eventlet nor gunicorn, and it
+ignores `OPENALGO_WORKER_CLASS`. Code must work in all three. `asyncio` works
+fine on the dev server and **breaks under eventlet**. That is the single most
+common way a change passes locally and fails on deploy. SQLite locking is also
+stricter on Windows.
 
 ## Invariants — do not break these
 
@@ -86,7 +95,7 @@ and the cache-invalidation publisher (`database/cache_invalidation.py`).
 
 - **Never make a publisher `bind()`.** ZMQ allows many PUBs to connect to one bound SUB, so publishers across processes share one fixed port with no contention.
 - **`ZMQ_PORT` is fixed by config and never drifts.** No port scan, no `5555 -> 5556` fallback, no runtime mutation of `os.environ["ZMQ_PORT"]`. `install-multi.sh` gives each instance its own `ZMQ_PORT` (`5555 + i-1`) and each stays put.
-- **Why:** under gunicorn+eventlet the proxy runs *out of process* (a subprocess via `install.sh`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`) while the cache-invalidation publisher runs inside gunicorn. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays put, so **`subscribe` succeeds but no ticks are delivered**. Works on the single-process dev server, broken only under eventlet — historically very hard to spot. Broker-agnostic.
+- **Why:** under gunicorn, with either worker, the proxy runs *out of process* (a subprocess started by the worker, chosen by `resolve_proxy_mode()` in `websocket_proxy/app_integration.py`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`) while the cache-invalidation publisher runs inside gunicorn. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays put, so **`subscribe` succeeds but no ticks are delivered**. Works on the single-process dev server, broken only under eventlet — historically very hard to spot. Broker-agnostic.
 
 ### Multi-session login must not tear down the shared broker feed
 
@@ -181,7 +190,8 @@ handlers in `blueprints/traffic.py` and `blueprints/security.py`.
 
 ### Nothing may block or be blocked across the eventlet boundary
 
-Production is `gunicorn --worker-class eventlet -w 1`. Eventlet monkey-patches
+These rules govern the default worker, `gunicorn --worker-class eventlet -w 1`,
+and so every install that has not opted in to gthread. Eventlet monkey-patches
 the stdlib **before the app is imported**, so `threading.Lock`, `RLock`,
 `Event`, `Condition` and `queue.Queue` are all **green**: they belong to the hub
 and can only pass a waiter from one greenlet to another. A plain
@@ -218,11 +228,19 @@ arrived in 0.3s still cost the caller its full 10s timeout.
 - **Keep a real lock's critical section to in-memory bookkeeping.** A greenlet waiting on one blocks the hub, so copy what you need out of the dict and do the database and network work after the release.
 - **Never wait on a C-served timeout.** `PRAGMA busy_timeout` was the worst case: SQLite waits inside C, so the greenlet holding the write lock could never be scheduled to commit, and the wait could only ever end in "database is locked". A holder needing 0.5s produced a 16s failure. `database/__init__.py` now waits 100ms in SQLite and retries from Python.
 - **Never hand a result across with `run_coroutine_threadsafe`.** Use `WebSocketClient._run_on_loop`: a real `Event` the loop thread sets, polled by the caller. One boolean is the only thing that crosses.
+- **Reach green code from a real thread through `utils.real_threading.run_on_hub` or `submit_to_hub`**, and emit over Socket.IO with `extensions.emit_from_any_thread`. Both run inline when eventlet is not patched, so the same call is correct under gthread and on the dev server.
 - **Logging counts.** `logging.Handler` builds its lock in `__init__`, which happens after monkey-patching, so it is green, and every real thread in this project logs. `utils/logging.py` patches `Handler.createLock` on the class so ours and third-party handlers all get a real lock. The give-away that this has broken is `AttributeError: 'StreamHandler' object has no attribute 'lock'` appearing on unrelated requests, hours before the hard crash.
 
-**What is exempt.** Under eventlet `app.py` starts the websocket proxy as a
+**What is exempt.** Under gunicorn `app.py` starts the websocket proxy as a
 **child process**, so everything in `websocket_proxy/` and `broker/*/streaming/`
 runs unpatched and its `threading.Lock` is already real. Do not "fix" those.
+
+**Under gthread the hazard changes shape.** Every primitive is real, so A and B
+above cannot happen. What eventlet hid instead is preemption: a check-then-act
+or read-modify-write on shared state with no I/O in between was accidentally
+atomic under eventlet, and under real threads it interleaves. Claim under the
+lock that checks, publish caches as whole generations, and prove a race with a
+barrier-synchronised test that fails on the old code (`test/test_gthread_*.py`).
 
 **It cannot be caught locally.** `uv run app.py` never patches anything, so every
 one of these behaves correctly on the dev server whatever the primitive is made
@@ -278,9 +296,63 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 (`frontend/src/lib/trading/customIndicators.ts`).
 
 - **Never bundle them.** `frontend/dist/` is built by CI from what is committed, so a bundled indicator would need committing first and the next `git pull` would erase it. Runtime loading keeps them outside the build: no Node.js, no rebuild, untouched by upgrades.
-- **They register after the built-ins**, so a custom id that collides with one of the 102 built-ins overrides it.
+- **They register after the built-ins**, so a custom id that collides with one of the 105 built-ins overrides it.
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
+
+### Bumping openalgo-charts also updates the chart-indicator skill
+
+The skill documents a specific build. `reference/api.md` carries the full export
+index and `pitfalls.md` carries the built-in ids a custom module can shadow, so
+a version bump that touches neither leaves the skill describing a library that
+is no longer installed. **Upgrading the pin and updating the skill are one
+change, not two.**
+
+```sh
+cd frontend && npm install openalgo-charts@<version> --save-exact
+node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
+node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
+```
+
+Then read the upstream changelog for the range you skipped and update the prose
+by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
+after* table in `api.md`, and the id-collision list in `pitfalls.md` if the
+registry grew. The generator only owns the export index; nothing generates the
+teaching.
+
+The `chart-indicator-skill` CI job runs both checks, so a stale skill fails the
+build. It exists because both scripts were already in the repo and nothing ran
+them: the index sat on 1.8.1 advertising "337 names" while `/trading` shipped
+2.1.5 with 363, and the eleven studies added in 1.8.3 were absent from the
+reference an indicator author reads.
+
+### Bumping openalgo-script also updates the openscript skill
+
+The same rule as the chart above, for the same reason: `reference/library.md`
+carries all 350 names with their warmups and marks the 95 that are **planned and
+not implemented**, so a bump that leaves it behind has an author reading a page
+about a compiler that is no longer installed. The marking is the part that
+matters most, because reaching for a planned name is refused at the call with
+`OS2020` and nothing warns first.
+
+```sh
+cd frontend && npm install openalgo-script@<version> --save-exact
+node .claude/skills/openscript/generate-reference.mjs    # rewrites the name table
+node .claude/skills/openscript/coverage.mjs              # must print COVERAGE COMPLETE
+node .claude/skills/openscript/check-pitfalls.mjs        # must print PITFALLS VERIFIED
+```
+
+The third is specific to this skill. `reference/pitfalls.md` teaches by naming
+diagnostic codes, and an author trusts a code; the script compiles both halves
+of every entry, so the wrong spelling must still produce the code named and the
+fix offered must still come out clean. It also holds the page and the script to
+the same set of codes, so neither drifts alone.
+
+The `openscript-skill` CI job runs all three. The generator owns the name table
+and nothing generates the teaching: after a bump, read the upstream changelog
+and update the prose in `SKILL.md`, `pitfalls.md` and `strategies.md` by hand,
+particularly wherever they say a name is planned. A version that implements one
+turns three pages stale at once.
 
 Two built-in pages exercise the streaming stack end to end: **`/websocket/test`**
 (market data; `/20`, `/30`, `/50` variants request those depth levels) and
@@ -292,6 +364,21 @@ verify a broker feed rather than writing a throwaway client.
 The reason to still register a route in `blueprints/react_app.py` is that
 unregistered paths hit `Error404Tracker` for *unauthenticated* visitors and
 count toward an IP ban.
+
+### Architecture changes also update the docs diagrams
+
+The architecture and flow diagrams on https://docs.openalgo.in are illustrated
+images in the separate `openalgo-docs` repository, each rendered from an HTML
+source (`diagrams/<slug>.html` -> `.gitbook/assets/diagram-<slug>.png`, tooling in
+`diagrams/_tools/`, rules in that repo's `CLAUDE.md`). **A change that adds a
+feature or changes a component, flow, process, port, database, thread model or
+integration is not done until the affected diagrams are updated in the same
+piece of work.** Find them with `grep -rl "diagram-" --include=*.md` in
+`openalgo-docs` and by reading the sources for the components you touched; edit
+the source, re-render, check the PNG, and fix any prose the change made wrong.
+Most readers are traders who trust the picture, so a stale diagram misleads more
+than a missing one. The Market Data diagram had silently lost the ZeroMQ bus this
+way before the September 2026 refresh.
 
 ### Adding a page: the three registrations
 
@@ -380,6 +467,51 @@ open files". Preventing one at creation is far cheaper than hunting it later:
 After a change touching any of these, run the **`fd-audit`** skill before calling
 it done.
 
+**Every message a user reads is written for a trader, not a developer.** The
+people running this are traders self-hosting a platform. They cannot act on a
+status code, a protocol name or the internals of a request, and showing them one
+is not neutral: it reads as a fault they caused, and sends them looking through
+their own settings for something that was never wrong.
+
+- **Name the cause and the next action.** "Your OpenAI account has no credits
+  left. Add credits under billing." Not "HTTP 500", not "invalid_offer", not
+  "SDP parse failed". If there is no action, say who is fixing it and that
+  waiting is the whole of it.
+- **Never put a status code, an exception class, a protocol term or an endpoint
+  in front of a user.** `logger.exception()` already keeps the technical detail
+  where it belongs, which is `log/errors.jsonl`.
+- **Do not guess the cause in the message.** A confidently wrong message is
+  worse than a vague one: it sends someone to the wrong place with conviction.
+  Where a symptom has more than one cause, lead with the one the operator can
+  check themselves. A provider that answers an exhausted balance with a bare
+  500 taught this the expensive way.
+- **The audience is the same on every surface.** A spoken error is heard by
+  someone who cannot see a log, so it has to be a sentence, not a code.
+
+**The words this platform uses for its own ideas, and the words it never uses.**
+Two of these have already been fixed once. A word that comes back costs the
+rename again, so they are written down rather than remembered.
+
+- **Sandbox mode** and **analyzer mode**, never "paper trading" or "virtual
+  trading". The database is `sandbox.db`, the blueprint is `blueprints/sandbox.py`,
+  the endpoints are `/api/v1/sandbox/*`, and the strategy module's own column
+  reads `RUN_MODES = ("live", "sandbox")`. Release 2.0.1.0 renamed the display
+  strings to match the schema; the two words above are the result, and a third
+  term invented in a document, a comment or a commit message undoes it. Three
+  words for two ideas is how somebody ships a strategy believing it is safe.
+- **Never "arm", "armed" or "arming" anywhere a trader reads.** Not a label, a
+  button, a toggle, a toast, a tooltip, an empty state or a status badge. It
+  reads as a military or machine term rather than a trading one. Say what a
+  trader would say: an alert is **Active** or **Stopped**, a toggle is **on** or
+  **off**, a destination is **Live** or **Sandbox**. Internal identifiers,
+  storage keys and library state names are not covered, because nobody trading
+  reads those; the moment one reaches a screen it is.
+- **A specification's internal vocabulary is not this platform's vocabulary.**
+  Where OpenAlgo hosts another project, that project's spec may use a word for
+  its own purposes, and it stays in the spec. OpenScript's `stdlib.md` says
+  "paper" for the simulated destination and "arming" for the act of switching a
+  strategy to live; on a screen here those are **Sandbox** and **Live**.
+
 **Database access** goes through the SQLAlchemy ORM, not raw SQL.
 
 **Schema changes need a migration script, not just a startup hook.** Users
@@ -411,6 +543,24 @@ Biome (`frontend/biome.json`), functional components with hooks, PascalCase
 component files, TanStack Query for server state.
 
 **Commits.** Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`.
+
+**Nothing is published without a changelog entry, and the entry is part of the
+publish rather than a follow-up.** Whatever is going out (a platform release, a
+version bump, a package pushed to a registry) carries its own stanza in
+`docs/CHANGELOG.md` before it leaves, written for somebody deciding whether to
+upgrade rather than for whoever wrote it. The **`version-bump`** skill owns the
+procedure and the exact paths.
+
+A consumer reads the changelog at the one moment it matters to them, and they
+read it once. "Various fixes" answers nothing, and a version with no entry tells
+them to diff two tags, which they will not do: they will simply not upgrade. An
+entry written after the publish is an entry written for nobody, because the
+people who needed it have already decided.
+
+Say what a reader has to act on: what changed, what it breaks, what is now
+refused that used to be accepted, and what is still not modelled. A limitation
+somebody finds inside a report they had already believed cost more than it would
+have cost to write it down.
 
 **No icons or emojis anywhere** — source, comments, log messages, commit
 messages, PR descriptions, changelogs, release notes, or any generated text

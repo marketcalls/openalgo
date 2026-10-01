@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 from datetime import datetime, time
 from decimal import Decimal
 
@@ -23,8 +24,22 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.sandbox_db import SandboxPositions, db_session, get_config
 from sandbox.position_manager import PositionManager
 from utils.logging import get_logger
+from utils.runtime import gthread_active
 
 logger = get_logger(__name__)
+
+#: Longest a sweep waits for one already running before it gives up, under the
+#: gthread worker only. The backup job runs every minute, so a sweep skipped
+#: here is retried within one.
+SWEEP_WAIT_SECONDS = 120.0
+
+#: One square-off sweep at a time in this process. The exchange's own job and
+#: the one-minute backup both fire at the square-off minute on two scheduler
+#: threads (max_instances is per job, not per function), and two sweeps side
+#: by side each loaded the same MIS positions and each sent a closing order.
+#: Taken only by scheduler threads, which are green under eventlet, so a
+#: plain lock is the right kind.
+_sweep_lock = threading.Lock()
 
 
 class SquareOffManager:
@@ -58,7 +73,26 @@ class SquareOffManager:
         """
         Check if it's time to square-off positions and execute
         Should be called frequently (e.g., every minute)
+
+        Sweeps run one after another, never side by side: a sweep that finds
+        another running waits for it and then works from what that one left,
+        so each due position is closed by exactly one of them.
         """
+        # Bounded under gthread only; elsewhere a sweep waits as long as the
+        # one before it takes, so it is never skipped where it used to run.
+        wait = SWEEP_WAIT_SECONDS if gthread_active() else -1
+        if not _sweep_lock.acquire(timeout=wait):
+            logger.warning(
+                "Square-off sweep skipped: the previous sweep is still running; "
+                "the next scheduled check retries"
+            )
+            return
+        try:
+            self._check_and_square_off()
+        finally:
+            _sweep_lock.release()
+
+    def _check_and_square_off(self):
         try:
             now = datetime.now(self.ist)
             current_time = now.time()
@@ -193,9 +227,7 @@ class SquareOffManager:
                     )
 
             if cancelled_count > 0:
-                logger.info(
-                    f"Auto-cancelled {cancelled_count} open orders on expired contracts"
-                )
+                logger.info(f"Auto-cancelled {cancelled_count} open orders on expired contracts")
         except Exception as e:
             logger.exception(f"Error in _cancel_expired_contract_orders: {e}")
 
@@ -291,6 +323,11 @@ class SquareOffManager:
 
     def force_square_off_all_mis(self):
         """Force square-off all MIS positions immediately"""
+        # Same one-at-a-time rule as the scheduled sweep it would otherwise race.
+        with _sweep_lock:
+            return self._force_square_off_all_mis()
+
+    def _force_square_off_all_mis(self):
         try:
             mis_positions = (
                 SandboxPositions.query.filter_by(product="MIS")

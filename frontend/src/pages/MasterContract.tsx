@@ -9,7 +9,7 @@ import {
   RefreshCw,
   Server,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -124,33 +124,62 @@ export default function MasterContract() {
   const [isLoading, setIsLoading] = useState(true)
   const [isDownloading, setIsDownloading] = useState(false)
   const [isReloadingCache, setIsReloadingCache] = useState(false)
-  const [pollingInterval, setPollingInterval] = useState<ReturnType<typeof setInterval> | null>(
-    null
-  )
+  const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const statusControllerRef = useRef<AbortController | null>(null)
+  const pollingRequestedRef = useRef(false)
+  const forceProbePendingRef = useRef(false)
+  const refreshQueuedRef = useRef(false)
+  const mountedRef = useRef(false)
 
   const fetchStatus = useCallback(async () => {
+    if (!mountedRef.current) return
+    if (statusControllerRef.current) {
+      refreshQueuedRef.current = true
+      return
+    }
+    if (pollingTimeoutRef.current) {
+      clearTimeout(pollingTimeoutRef.current)
+      pollingTimeoutRef.current = null
+    }
+    const controller = new AbortController()
+    statusControllerRef.current = controller
     try {
       const response = await fetch('/api/master-contract/smart-status', {
         credentials: 'include',
+        signal: controller.signal,
       })
       if (response.ok) {
         const data = await response.json()
+        if (!mountedRef.current || statusControllerRef.current !== controller) return
         setStatus(data)
-
-        // If downloading, continue polling
-        if (data.status === 'downloading' && !pollingInterval) {
-          const interval = setInterval(fetchStatus, 2000)
-          setPollingInterval(interval)
-        } else if (data.status !== 'downloading' && pollingInterval) {
-          clearInterval(pollingInterval)
-          setPollingInterval(null)
+        if (data.status === 'downloading') {
+          forceProbePendingRef.current = false
+          pollingRequestedRef.current = true
+        } else if (forceProbePendingRef.current) {
+          // A new download may not yet appear in the immediate status response.
+          forceProbePendingRef.current = false
+          pollingRequestedRef.current = true
+        } else {
+          pollingRequestedRef.current = false
         }
       }
     } catch (_error) {
     } finally {
-      setIsLoading(false)
+      if (statusControllerRef.current === controller && mountedRef.current) {
+        statusControllerRef.current = null
+        setIsLoading(false)
+        if (refreshQueuedRef.current) {
+          refreshQueuedRef.current = false
+          void fetchStatus()
+        } else if (pollingRequestedRef.current) {
+          pollingTimeoutRef.current = setTimeout(() => {
+            pollingTimeoutRef.current = null
+            void fetchStatus()
+          }, 2000)
+        }
+      }
     }
-  }, [pollingInterval])
+  }, [])
 
   const fetchCacheHealth = useCallback(async () => {
     try {
@@ -164,20 +193,24 @@ export default function MasterContract() {
     } catch (_error) {}
   }, [])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time load on mount; fetchStatus is recreated when pollingInterval changes, so adding it would refire the initial load during polling start/stop and cause duplicate fetches.
+  // Each poll starts only after the previous response; leaving aborts that response.
   useEffect(() => {
+    mountedRef.current = true
     fetchStatus()
     fetchCacheHealth()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
     return () => {
-      if (pollingInterval) {
-        clearInterval(pollingInterval)
+      mountedRef.current = false
+      pollingRequestedRef.current = false
+      forceProbePendingRef.current = false
+      refreshQueuedRef.current = false
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current)
+        pollingTimeoutRef.current = null
       }
+      statusControllerRef.current?.abort()
+      statusControllerRef.current = null
     }
-  }, [pollingInterval])
+  }, [fetchStatus, fetchCacheHealth])
 
   const handleForceDownload = async () => {
     setIsDownloading(true)
@@ -197,10 +230,9 @@ export default function MasterContract() {
 
       if (data.status === 'success' || data.started) {
         showToast.success('Master contract download started')
-        // Start polling
-        const interval = setInterval(fetchStatus, 2000)
-        setPollingInterval(interval)
-        fetchStatus()
+        pollingRequestedRef.current = true
+        forceProbePendingRef.current = true
+        void fetchStatus()
       } else if (data.status === 'skipped') {
         showToast.info(data.message)
       } else {

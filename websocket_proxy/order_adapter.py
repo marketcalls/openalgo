@@ -95,6 +95,13 @@ class BaseOrderUpdateAdapter(ABC):
         self._shutting_down = False
         self._auth_rejected = False
         self._lock = threading.Lock()
+        # Bumped under _lock by every connect() and disconnect(). A run loop
+        # and its socket belong to the generation that started them and stop
+        # as soon as it is no longer current, so a disconnect that lands while
+        # a loop is fetching its URL and headers (which can read the database)
+        # cannot be followed by a socket opened with the superseded token, and
+        # a connect() after disconnect() never leaves two loops running.
+        self._generation = 0
 
     # -- broker-specific hooks -------------------------------------------------
 
@@ -148,11 +155,14 @@ class BaseOrderUpdateAdapter(ABC):
         with self._lock:
             if self._running:
                 return
+            self._generation += 1
+            generation = self._generation
             self._shutting_down = False
             self._auth_rejected = False
             self._running = True
             self._thread = threading.Thread(
                 target=self._run_forever,
+                args=(generation,),
                 daemon=True,
                 name=f"order-adapter-{self.broker_name}-{self.user_id}",
             )
@@ -162,6 +172,7 @@ class BaseOrderUpdateAdapter(ABC):
         """Stop the adapter and close the socket. FD-safe: close-before-reconnect,
         idempotent."""
         with self._lock:
+            self._generation += 1
             self._shutting_down = True
             self._running = False
             if self._ws is not None:
@@ -177,11 +188,17 @@ class BaseOrderUpdateAdapter(ABC):
 
     # -- internals -----------------------------------------------------------
 
-    def _run_forever(self) -> None:
+    def _is_current(self, generation: int) -> bool:
+        """True while the loop started for ``generation`` should keep running."""
+        return not self._shutting_down and self._generation == generation
+
+    def _run_forever(self, generation: int | None = None) -> None:
+        if generation is None:
+            generation = self._generation
         attempt = 0
-        while not self._shutting_down:
+        while self._is_current(generation):
             try:
-                self._connect_once()
+                self._connect_once(generation)
             except Exception as e:
                 if _is_auth_rejection(e):
                     self._auth_rejected = True
@@ -189,14 +206,15 @@ class BaseOrderUpdateAdapter(ABC):
                     self.logger.warning(
                         f"Order-update connection error ({self.broker_name}/{self.user_id}): {e}"
                     )
-            if self._shutting_down:
+            if not self._is_current(generation):
                 break
             if self._auth_rejected:
                 # Stand down rather than retry. Leaving _running False lets a
                 # later login restart this same object; in practice the service
                 # builds a fresh adapter, which is also fine.
                 with self._lock:
-                    self._running = False
+                    if self._generation == generation:
+                        self._running = False
                 self.logger.info(
                     f"Order-update adapter idle for {self.broker_name}/{self.user_id}: "
                     "the broker rejected the stored token. It reconnects on the "
@@ -210,14 +228,16 @@ class BaseOrderUpdateAdapter(ABC):
                 f"({self.broker_name}/{self.user_id})"
             )
             slept = 0.0
-            while slept < delay and not self._shutting_down:
+            while slept < delay and self._is_current(generation):
                 time.sleep(0.2)
                 slept += 0.2
         self.logger.info(
             f"Order-update adapter stopped for {self.broker_name}/{self.user_id}"
         )
 
-    def _connect_once(self) -> None:
+    def _connect_once(self, generation: int | None = None) -> None:
+        if generation is None:
+            generation = self._generation
         url = self.get_ws_url()
         headers = self.get_headers()
         header_list = [f"{k}: {v}" for k, v in headers.items()] if headers else None
@@ -226,6 +246,11 @@ class BaseOrderUpdateAdapter(ABC):
             self._handle_message(message)
 
         def on_open(ws):
+            if not self._is_current(generation):
+                # A disconnect landed between publishing this socket and
+                # run_forever starting, where its close() had nothing to close.
+                ws.close()
+                return
             self.logger.info(
                 f"Order-update WS connected: {self.broker_name}/{self.user_id}"
             )
@@ -235,6 +260,8 @@ class BaseOrderUpdateAdapter(ABC):
                 self._start_heartbeat_thread(interval)
 
         def on_error(ws, error):
+            if not self._is_current(generation):
+                return  # a superseded socket; its session is no longer ours to judge
             if _is_auth_rejection(error):
                 # Logged once here, then _run_forever stands the adapter down.
                 # Kept at warning: an expired token at startup is routine, not
@@ -258,7 +285,7 @@ class BaseOrderUpdateAdapter(ABC):
                 f"{close_status_code} {close_reason}"
             )
 
-        self._ws = websocket.WebSocketApp(
+        ws = websocket.WebSocketApp(
             url,
             header=header_list,
             on_message=on_message,
@@ -267,18 +294,31 @@ class BaseOrderUpdateAdapter(ABC):
             on_close=on_close,
         )
 
+        # Publish the socket only if this loop is still the current one. The
+        # URL and headers above can take a database round trip, and a
+        # disconnect() (logout, revoke) that landed meanwhile found no socket
+        # to close; opening one now would hold a broker order feed with the
+        # superseded token next to the one the next login starts.
+        with self._lock:
+            if not self._is_current(generation):
+                return
+            self._ws = ws
+
         # Blocks until the connection closes or errors; on_close/on_error above
         # return control to _run_forever's reconnect loop. ping_timeout must be
         # strictly less than ping_interval (websocket-client requirement).
         ping_interval = max(2, int(self.ws_ping_interval()))
         ping_timeout = min(10, max(1, ping_interval - 1))
         try:
-            self._ws.run_forever(ping_interval=ping_interval, ping_timeout=ping_timeout)
+            ws.run_forever(ping_interval=ping_interval, ping_timeout=ping_timeout)
         finally:
             # The socket is dead once run_forever returns — clear the handle so
             # `connected` reads False between reconnect attempts and the old
-            # heartbeat thread (generation-guarded on this object) exits.
-            self._ws = None
+            # heartbeat thread (generation-guarded on this object) exits. Only
+            # our own handle: a newer loop may already have published its own.
+            with self._lock:
+                if self._ws is ws:
+                    self._ws = None
 
     def _start_heartbeat_thread(self, interval: int) -> None:
         # Generation guard: bind this thread to the ws it was started for, so
@@ -358,15 +398,21 @@ class PollingOrderUpdateAdapter:
         self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
+        # As in BaseOrderUpdateAdapter: a poll loop stops once its generation
+        # is superseded, so disconnect() then connect() never leaves the old
+        # loop running beside the new one, publishing every change twice.
+        self._generation = 0
 
     def connect(self) -> None:
         """Start the polling thread. Idempotent."""
         with self._lock:
             if self._running:
                 return
+            self._generation += 1
             self._running = True
             self._thread = threading.Thread(
                 target=self._poll_loop,
+                args=(self._generation,),
                 daemon=True,
                 name=f"order-poller-{self.broker_name}-{self.user_id}",
             )
@@ -375,23 +421,29 @@ class PollingOrderUpdateAdapter:
     def disconnect(self) -> None:
         """Stop the polling thread. Idempotent; no sockets held between polls."""
         with self._lock:
+            self._generation += 1
             self._running = False
 
     @property
     def connected(self) -> bool:
         return self._running
 
-    def _poll_loop(self) -> None:
+    def _is_current(self, generation: int) -> bool:
+        return self._running and self._generation == generation
+
+    def _poll_loop(self, generation: int | None = None) -> None:
         from database.auth_db import get_auth_token
         from services.orderbook_service import get_orderbook
 
+        if generation is None:
+            generation = self._generation
         baseline: dict[str, tuple] | None = None
         self.logger.info(
             f"Order-update poller started for {self.broker_name}/{self.user_id} "
             f"(interval {self.poll_interval}s)"
         )
 
-        while self._running:
+        while self._is_current(generation):
             try:
                 auth_token = get_auth_token(self.user_id)
                 if not auth_token:
@@ -429,7 +481,7 @@ class PollingOrderUpdateAdapter:
                 self.logger.debug(f"Order poll cycle error: {e}")
 
             slept = 0.0
-            while slept < self.poll_interval and self._running:
+            while slept < self.poll_interval and self._is_current(generation):
                 time.sleep(0.5)
                 slept += 0.5
 

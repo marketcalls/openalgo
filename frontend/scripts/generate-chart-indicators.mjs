@@ -3,8 +3,8 @@
  *
  * The chart draws with `openalgo-charts`, a JavaScript library, while the agent
  * computes values with `openalgo.ta`, a Python one. They are different
- * catalogues that happen to share a domain: measured here, 102 names against
- * 127, with only 39 in common once naming is normalised. So `alphatrend` and
+ * catalogues that happen to share a domain, with only some names in common
+ * once naming is normalised. So `alphatrend` and
  * `halftrend` can be DRAWN and never tabulated, and `bbands` and `adxr` can be
  * tabulated and never drawn.
  *

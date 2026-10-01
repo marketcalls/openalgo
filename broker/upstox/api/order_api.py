@@ -1,10 +1,16 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.upstox.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from broker.upstox.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -13,13 +19,63 @@ from broker.upstox.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.broker_backpressure import (
+    BrokerBusyError,
+    BusyResponse,
+    busy_response,
+    cap_server_delay,
+)
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
+UPSTOX_BASE_URL = "https://api.upstox.com"
+# Order place/modify/cancel use the v3 API, which Upstox serves only from the
+# low-latency api-hft host. Every other endpoint (order book, trade book,
+# positions, holdings) has no v3 equivalent and stays on UPSTOX_BASE_URL.
+UPSTOX_HFT_BASE_URL = "https://api-hft.upstox.com"
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+# Order-mutating path fragments. Upstox's rate-limit table (04-rate-limits.md)
+# scopes the tighter order budget to Place, Modify, Cancel and Multi Order; the
+# order book, trade book, positions and holdings reads below are Standard APIs
+# even though they live in this file, and must not be charged to the order
+# bucket or a squareoff would be queued behind the polling the UI does anyway.
+_ORDER_PATH_FRAGMENTS = (
+    "/order/place",
+    "/order/modify",
+    "/order/cancel",
+    "/order/multi",
+    "/order/exit",
+    "/order/gtt",
+)
+
+
+def _rate_limit_category(endpoint, base_url):
+    """Which of Upstox's two published budgets this request draws on.
+
+    Order place/modify/cancel are the only endpoints served from the api-hft
+    host, so the host alone answers it today; the path check is kept so a v2
+    order endpoint added later is categorised correctly rather than silently
+    charged to the standard budget.
+    """
+    if base_url == UPSTOX_HFT_BASE_URL:
+        return "order"
+    lowered = (endpoint or "").lower()
+    if any(fragment in lowered for fragment in _ORDER_PATH_FRAGMENTS):
+        return "order"
+    return "standard"
+
+
+def get_api_response(
+    endpoint, auth, method="GET", payload="", base_url=UPSTOX_BASE_URL, retry_count=0
+):
     """
     A wrapper to send requests to the Upstox API and handle responses.
     Args:
@@ -27,10 +83,14 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         auth (str): The authentication token.
         method (str): The HTTP method (GET, POST, PUT, DELETE).
         payload (str): The JSON payload for POST and PUT requests.
+        base_url (str): The API host, only overridden for the v3 api-hft endpoints.
+        retry_count (int): Internal; how many 429 retries have already been spent.
     Returns:
         dict: The JSON response from the API, or an error dictionary.
     """
     logger.debug(f"Requesting {method} on endpoint: {endpoint}")
+    category = _rate_limit_category(endpoint, base_url)
+    apply_rate_limit(category)
     try:
         api_key = os.getenv("BROKER_API_KEY")
         if not api_key:
@@ -43,7 +103,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        url = f"https://api.upstox.com{endpoint}"
+        url = f"{base_url}{endpoint}"
 
         if method == "GET":
             response = client.get(url, headers=headers)
@@ -64,6 +124,39 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     except httpx.HTTPStatusError as e:
         error_response = e.response.text
+        # Reactive rate-limit handling. Only the read endpoints retry: this
+        # function also carries order modify and cancel, and a 429 cannot be
+        # distinguished from a response lost after Upstox accepted the request,
+        # so a mutation surfaces the error and lets the caller decide. The
+        # proactive pacer is what is meant to keep mutations out of this branch.
+        if is_rate_limited(e.response.status_code):
+            delay = None
+            if category == "standard" and retry_count < MAX_RETRIES:
+                # Under gthread a delay past the data ceiling is not slept out.
+                delay = cap_server_delay(
+                    retry_delay_from_headers(e.response.headers, retry_count), "data"
+                )
+            if delay is not None:
+                logger.warning(
+                    f"Upstox rate limit hit on {endpoint}; retrying in {delay:.2f}s "
+                    f"(attempt {retry_count + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(delay)
+                return get_api_response(
+                    endpoint, auth, method, payload, base_url, retry_count + 1
+                )
+            if category == "standard" and retry_count < MAX_RETRIES:
+                # gthread only (cap_server_delay never answers None elsewhere):
+                # Upstox asked for a wait past the ceiling. Handing its throttle
+                # body back as data would read as an empty book, and an empty
+                # position book sizes a smart order as if flat.
+                raise BrokerBusyError(
+                    retry_after=retry_delay_from_headers(e.response.headers, retry_count)
+                ) from e
+            logger.warning(
+                f"Upstox rate limit hit on {endpoint} (category={category}); not retrying"
+            )
+
         logger.exception(f"HTTP error on {endpoint}: {error_response}")
         try:
             return e.response.json()
@@ -97,46 +190,48 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the cache is returned to its
+# own caller but never cached, so the next order cannot read the book from
+# before the previous fill (utils/smart_order_guard.py).
+_POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """Upstox wraps a position book it read as {"status": "success", ...}."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book("upstox", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
-    """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data.
+
+    Also stops a fetch that started before this order from caching the book
+    it read.
+    """
+    _POSITION_BOOK.invalidate(auth)
 
 
 
@@ -168,6 +263,10 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             logger.error(f"Failed to get positions: {positions_data.get('message')}")
 
         return net_qty
+    except (BrokerBusyError, PositionReadError):
+        # A refused or failed read says nothing about the position. Reading it
+        # as flat would send an order sized against a position that may be open.
+        raise
     except Exception:
         logger.exception(f"Error getting open position for {tradingsymbol}")
         return "0"
@@ -205,6 +304,25 @@ def _extract_error(response):
     return body
 
 
+def _extract_order_id(data):
+    """Reads the order id out of a v3 order response body.
+
+    v3 place returns a list under "order_ids" (a sliced order yields one id per
+    slice) while modify and cancel kept v2's singular "order_id", so both shapes
+    are accepted rather than silently returning None if the other one arrives.
+    """
+    if not isinstance(data, dict):
+        return None
+
+    order_ids = data.get("order_ids")
+    if isinstance(order_ids, (list, tuple)):
+        return order_ids[0] if order_ids else None
+    if order_ids:
+        return order_ids
+
+    return data.get("order_id")
+
+
 def place_order_api(data, auth):
     """
     Places an order using the Upstox API.
@@ -223,21 +341,27 @@ def place_order_api(data, auth):
             return None, {"status": "error", "message": "Instrument token not found"}, None
 
         newdata = transform_data(data, token)
-        payload = json.dumps(
-            {
-                "quantity": newdata["quantity"],
-                "product": newdata.get("product", "I"),
-                "validity": newdata.get("validity", "DAY"),
-                "price": newdata.get("price", "0"),
-                "tag": newdata.get("tag", "string"),
-                "instrument_token": newdata["instrument_token"],
-                "order_type": newdata.get("order_type", "MARKET"),
-                "transaction_type": newdata["transaction_type"],
-                "disclosed_quantity": newdata.get("disclosed_quantity", "0"),
-                "trigger_price": newdata.get("trigger_price", "0"),
-                "is_amo": newdata.get("is_amo", False),
-            }
-        )
+        order_payload = {
+            "quantity": newdata["quantity"],
+            "product": newdata.get("product", "I"),
+            "validity": newdata.get("validity", "DAY"),
+            "price": newdata.get("price", "0"),
+            "tag": newdata.get("tag", "string"),
+            "instrument_token": newdata["instrument_token"],
+            "order_type": newdata.get("order_type", "MARKET"),
+            "transaction_type": newdata["transaction_type"],
+            "disclosed_quantity": newdata.get("disclosed_quantity", "0"),
+            "trigger_price": newdata.get("trigger_price", "0"),
+            "is_amo": newdata.get("is_amo", False),
+        }
+
+        # transform_data only sets market_protection when the caller supplied a
+        # usable value; leaving the key out is what selects Upstox's own -1
+        # default, so existing orders keep behaving exactly as before.
+        if "market_protection" in newdata:
+            order_payload["market_protection"] = newdata["market_protection"]
+
+        payload = json.dumps(order_payload)
         logger.debug(f"Placing order with payload: {payload}")
 
         client = get_httpx_client()
@@ -246,8 +370,15 @@ def place_order_api(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        # Order budget: 10/sec, 500/min, 2000/30min, five times tighter than
+        # the standard one. close_all_positions() loops straight through here,
+        # one call per open position, so this is the pacer that matters most.
+        # No 429 retry: a rejected place is indistinguishable from a response
+        # lost after Upstox accepted it, and a duplicate order is far worse
+        # than a failed one.
+        apply_rate_limit("order")
         response = client.post(
-            "https://api.upstox.com/v2/order/place", headers=headers, content=payload
+            f"{UPSTOX_HFT_BASE_URL}/v3/order/place", headers=headers, content=payload
         )
         response.raise_for_status()
 
@@ -259,7 +390,9 @@ def place_order_api(data, auth):
         logger.debug(f"Place order API response: {response_data}")
 
         if response_data.get("status") == "success":
-            order_id = response_data.get("data", {}).get("order_id")
+            order_id = _extract_order_id(response_data.get("data"))
+            if not order_id:
+                logger.error(f"Order placed but no order id in response: {response_data}")
             logger.debug(f"Successfully placed order. Order ID: {order_id}")
             return response, response_data, order_id
         else:
@@ -267,6 +400,9 @@ def place_order_api(data, auth):
             logger.error(f"Failed to place order: {error_msg} | Response: {response_data}")
             return response, response_data, None
 
+    except BrokerBusyError as exc:
+        # Refused by the pacer before anything was sent (gthread only).
+        return busy_response(str(exc))
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error placing order: {e.response.text}")
         # Preserve the .status contract expected by place_order_service.py
@@ -277,6 +413,7 @@ def place_order_api(data, auth):
         return _ErrorResponse(500), {"status": "error", "message": str(e)}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Places a smart order by comparing the desired position size with the current open position.
@@ -287,9 +424,9 @@ def place_smartorder_api(data, auth):
         exchange = data.get("exchange")
         product = data.get("product")
         # Per-symbol lock: serialize smart orders per symbol
-        symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-        with symbol_lock:
+        with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+            if not symbol_lock:
+                return SymbolLocks.busy(symbol)
             position_size = int(data.get("position_size", "0"))
 
             current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
@@ -299,7 +436,11 @@ def place_smartorder_api(data, auth):
 
             if position_size == 0 and current_position == 0 and int(data.get("quantity", 0)) != 0:
                 logger.debug("No existing position and quantity is specified. Placing a new order.")
-                return place_order_api(data, auth)
+                res, response, orderid = place_order_api(data, auth)
+                # Like every other placement here: the next smart order for this
+                # symbol must not read the book from before this one.
+                _invalidate_position_cache(auth)
+                return res, response, orderid
 
             if position_size == current_position:
                 msg = "No action needed. Position size matches current position."
@@ -324,6 +465,12 @@ def place_smartorder_api(data, auth):
             _invalidate_position_cache(auth)
             return res, response, orderid
 
+    except BrokerBusyError as exc:
+        # The position read or the order was refused by the pacer (gthread
+        # only), so nothing was sent.
+        return busy_response(str(exc))
+    except PositionReadError:
+        raise
     except Exception as e:
         logger.exception("Unexpected error in place_smartorder_api")
         return None, {"status": "error", "message": str(e)}, None
@@ -340,6 +487,8 @@ def close_all_positions(current_api_key, auth):
             logger.debug("No open positions found to close.")
             return {"message": "No Open Positions Found"}, 200
 
+        refused = 0
+        attempted = 0
         for position in positions_response["data"]:
             if int(position.get("quantity", 0)) == 0:
                 continue
@@ -365,12 +514,33 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
             logger.debug(f"Closing position with payload: {place_order_payload}")
-            _, api_response, _ = place_order_api(place_order_payload, auth)
+            res, api_response, _ = place_order_api(place_order_payload, auth)
+            attempted += 1
+            if isinstance(res, BusyResponse):
+                refused += 1
             logger.debug(f"Close position response for {symbol}: {api_response}")
+
+        if refused:
+            # Only under the gthread worker, where the order window refuses a
+            # square-off whose turn is too far away instead of sending it late.
+            # Reporting success here would leave those positions unwatched.
+            return {
+                "status": "error",
+                "message": (
+                    f"{refused} of {attempted} open positions were not squared off, because "
+                    "Upstox allows only a limited number of orders per minute and their "
+                    "turn was too far away. Check your positions and square off the rest "
+                    "again."
+                ),
+            }, 429
 
         logger.debug("Successfully initiated closing of all open positions.")
         return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
+    except BrokerBusyError:
+        # The positions read was refused (gthread only). The service answers
+        # with the busy sentence; a generic failure would hide why.
+        raise
     except Exception:
         logger.exception("An error occurred while closing all positions.")
         return {"status": "error", "message": "Failed to close all positions"}, 500
@@ -383,11 +553,14 @@ def cancel_order(orderid, auth):
     logger.debug(f"Attempting to cancel order ID: {orderid}")
     try:
         response_data = get_api_response(
-            f"/v2/order/cancel?order_id={orderid}", auth, method="DELETE"
+            f"/v3/order/cancel?order_id={orderid}",
+            auth,
+            method="DELETE",
+            base_url=UPSTOX_HFT_BASE_URL,
         )
 
         if response_data.get("status") == "success":
-            canceled_id = response_data.get("data", {}).get("order_id")
+            canceled_id = _extract_order_id(response_data.get("data"))
             logger.debug(f"Successfully canceled order ID: {canceled_id}")
             return {"status": "success", "orderid": canceled_id}, 200
         else:
@@ -397,6 +570,8 @@ def cancel_order(orderid, auth):
             )
             return {"status": "error", "message": error_msg}, 400
 
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
     except Exception as e:
         logger.exception(f"Unexpected error canceling order {orderid}")
         return {"status": "error", "message": str(e)}, 500
@@ -412,10 +587,16 @@ def modify_order(data, auth):
         payload = json.dumps(transformed_order_data)
         logger.debug(f"Modify order payload: {payload}")
 
-        response_data = get_api_response("/v2/order/modify", auth, method="PUT", payload=payload)
+        response_data = get_api_response(
+            "/v3/order/modify",
+            auth,
+            method="PUT",
+            payload=payload,
+            base_url=UPSTOX_HFT_BASE_URL,
+        )
 
         if response_data.get("status") == "success":
-            modified_id = response_data.get("data", {}).get("order_id")
+            modified_id = _extract_order_id(response_data.get("data"))
             logger.debug(f"Successfully modified order. New Order ID: {modified_id}")
             return {"status": "success", "orderid": modified_id}, 200
         else:
@@ -423,6 +604,8 @@ def modify_order(data, auth):
             logger.error(f"Failed to modify order: {error_msg} | Response: {response_data}")
             return {"status": "error", "message": error_msg}, 400
 
+    except BrokerBusyError as exc:
+        return {"status": "error", "message": str(exc)}, 429
     except Exception as e:
         logger.exception("Unexpected error modifying order")
         return {"status": "error", "message": str(e)}, 500
@@ -469,6 +652,11 @@ def cancel_all_orders_api(data, auth):
         )
         return canceled_orders, failed_cancellations
 
+    except BrokerBusyError:
+        # The order book read was refused (gthread only), so nothing was
+        # cancelled. Returning two empty lists would report a successful
+        # cancel-all while every open order is still working.
+        raise
     except Exception:
         logger.exception("An error occurred while canceling all orders.")
         return [], []

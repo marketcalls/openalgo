@@ -169,9 +169,9 @@ def evaluate_aggregate(
         if armed_now and risk.lock_profit_at is not None and lock_floor > risk.lock_profit_at:
             return decide(
                 BreachReason.LOCK_PROFIT,
-                f"lock profit floor {format_price(lock_floor)} is above its arming "
+                f"lock profit floor {format_price(lock_floor)} is above its activation "
                 f"threshold {format_price(risk.lock_profit_at)}, so it triggered on "
-                "the tick it armed; the floor must be below the threshold",
+                "the tick it became active; the floor must be below the threshold",
             )
         return decide(
             BreachReason.LOCK_PROFIT,
@@ -199,7 +199,7 @@ def evaluate_aggregate(
     detail = ""
     if armed_now:
         detail = (
-            f"lock profit armed at {format_price(total)}, floor set to {format_price(lock_floor)}"
+            f"lock profit active at {format_price(total)}, floor set to {format_price(lock_floor)}"
         )
     elif floor_raised and lock_floor is not None:
         detail = (

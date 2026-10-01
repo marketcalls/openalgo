@@ -137,3 +137,60 @@ describe('IndicatorPickerDialog', () => {
     expect(screen.queryByText('Indicators')).not.toBeInTheDocument()
   })
 })
+
+describe('the trader\'s own studies', () => {
+  /** The shipped library, plus two studies written in the scripts panel. */
+  const WITH_MINE: CatalogEntry[] = [
+    ...CATALOG,
+    { id: 'openscript:supertrend', name: 'Supertrend', category: 'OpenScript' },
+    { id: 'openscript:indicator-table', name: 'Indicator table', category: 'OpenScript' },
+  ]
+
+  it('gives them a section of their own, above the library', async () => {
+    renderPicker({ catalog: WITH_MINE })
+    const mine = screen.getByRole('button', { name: /My scripts, 2 indicators/ })
+    expect(mine).toBeInTheDocument()
+    await userEvent.click(mine)
+    expect(within(list()).getByText('Supertrend')).toBeInTheDocument()
+    expect(within(list()).getByText('Indicator table')).toBeInTheDocument()
+    // The shipped library is not in this section.
+    expect(within(list()).queryByText('Relative Strength Index')).toBeNull()
+  })
+
+  it('does not also list them as a library category', () => {
+    // Listed in both places, a reader has to check twice to know they have
+    // seen everything once, and the library's counts stop describing what
+    // shipped.
+    renderPicker({ catalog: WITH_MINE })
+    expect(screen.queryByRole('button', { name: /^OpenScript, / })).toBeNull()
+  })
+
+  it('keeps them out of the library categories they happen to name', async () => {
+    // A study is free to call itself Trend. It still belongs to the trader,
+    // and the Trend row still counts three because that is what shipped.
+    const labelled: CatalogEntry[] = [
+      ...CATALOG,
+      { id: 'openscript:mine', name: 'My trend study', category: 'Trend' },
+    ]
+    renderPicker({ catalog: labelled })
+    expect(screen.getByRole('button', { name: /Trend, 3 indicators/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Trend, 3 indicators/ }))
+    expect(within(list()).queryByText('My trend study')).toBeNull()
+  })
+
+  it('says where to write one when there are none', async () => {
+    // The section exists before anything is in it, so it has to explain
+    // itself rather than read as a feature that is broken.
+    renderPicker()
+    await userEvent.click(screen.getByRole('button', { name: /My scripts, 0 indicators/ }))
+    expect(within(list()).getByText(/Nothing written yet/)).toBeInTheDocument()
+  })
+
+  it('still finds one by search from All', async () => {
+    // Search runs over the chosen section, and All is still everything.
+    renderPicker({ catalog: WITH_MINE })
+    await userEvent.click(screen.getByRole('button', { name: /All, 9 indicators/ }))
+    await userEvent.type(screen.getByLabelText('Search indicators'), 'supertrend')
+    expect(within(list()).getByText('Supertrend')).toBeInTheDocument()
+  })
+})

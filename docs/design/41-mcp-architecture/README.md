@@ -9,7 +9,7 @@ OpenAlgo has two MCP deployment modes:
 | Local stdio | `mcp/mcpserver.py` | Spawned by a desktop/client config | OpenAlgo API key and host passed to local process |
 | Remote HTTP/SSE | `blueprints/mcp_http.py` | Opt-in during Flask startup | OAuth 2.1 access token and scopes |
 
-Both modes expose trading and research tools backed by OpenAlgo services/SDK behavior. The Python application currently pins the OpenAlgo SDK at `2.0.2`.
+Both modes expose trading and research tools backed by OpenAlgo services/SDK behavior. The Python application currently pins the OpenAlgo SDK at `2.0.5` (see `pyproject.toml`).
 
 ## Local Stdio
 

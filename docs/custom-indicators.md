@@ -3,7 +3,7 @@
 Write your own indicators for the `/trading` charting terminal.
 
 Drop a `.js` file into `strategies/indicators/`, open the indicator picker, and
-it is there alongside the 102 built-ins. No build step, no Node.js, no restart of
+it is there alongside the 105 built-ins. No build step, no Node.js, no restart of
 OpenAlgo, no page reload.
 
 ## Only add indicators you have read
@@ -55,7 +55,7 @@ The chart loads your files over HTTP at runtime rather than compiling them in:
 
 ```
 /trading  ->  terminal.ts loadIndicators()
-                 1. import 'openalgo-charts/indicators'      (the 102 built-ins)
+                 1. import 'openalgo-charts/indicators'      (the 105 built-ins)
                  2. GET /custom-indicators/index.json        (your file list)
                  3. import each /custom-indicators/<file>.js
                  4. call its default export with the charting API
@@ -210,6 +210,9 @@ arrives as `''`.
 | `table(ctx)` | A summary grid pinned in the pane corner |
 | `calcTail(...)` | Incremental recompute for live ticks, see below |
 | `attach(ctx)` | Per-instance lifecycle for indicators with their own data |
+
+An indicator `range()` is fixed. The chart's automatic price range may ease as
+navigation reveals new values, but it does not override that fixed range.
 
 **On `calcTail`.** Without it every live tick costs a full `calc`. That is a few
 hundred microseconds over 50k bars, so it only matters for something running in a
@@ -373,6 +376,15 @@ crossing the moment you add the indicator. Listen with:
 ```js
 chart.on('indicator:alert', ({ indicatorId, alertId, title, message, time, index }) => { ... })
 ```
+
+The terminal's **Alerts** editor also lets a trader select a particular study
+instance and one of its plots. Its default **Bar close** policy evaluates the
+confirmed candle when the next candle arrives. **Intrabar touch** may fire for
+a reading that disappears before the candle closes. Missing plot readings do
+not become zero. These trader-created conditions use `alert:triggered` and
+share `alertId`, `title`, `message`, `time` and `index` with descriptor alerts.
+The terminal displays local notices and suppresses delivery during replay and
+primary-history transitions. Alert events do not submit orders.
 
 ## Candles as a plot
 

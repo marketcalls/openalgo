@@ -42,13 +42,15 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Bot, SlidersHorizontal } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import {
   agentErrorMessage,
   agentQueryKeys,
   getSettings,
+  getVoiceConfig,
   type ReasoningEffort,
+  recordVoiceTranscript,
   truncateConversation,
 } from '@/api/agent'
 import { Composer, type ComposerTurn } from '@/components/agent/Composer'
@@ -56,10 +58,12 @@ import { ConversationSidebar } from '@/components/agent/ConversationSidebar'
 import { Message } from '@/components/agent/Message'
 import { ModelPicker } from '@/components/agent/ModelPicker'
 import { ConversationUsageBadge, sumUsage } from '@/components/agent/UsageBadge'
+import { VoiceButton } from '@/components/agent/VoiceButton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
+import type { VoiceController, VoiceTranscriptLine } from '@/lib/agent/voice'
 import { cn } from '@/lib/utils'
 
 /**
@@ -69,6 +73,15 @@ import { cn } from '@/lib/utils'
  * the answers it produces.
  */
 const COLUMN = 'mx-auto w-full max-w-3xl'
+
+/**
+ * The surfaces this page serves, and therefore lists.
+ *
+ * A spoken question and a typed one land in the same thread list, so listing
+ * only `chat` here hid every voice session an operator had ever had - including
+ * the ones that never reached the agent at all.
+ */
+const AGENT_SURFACES = ['chat', 'voice'] as const
 
 export default function AgentChat() {
   const [modelId, setModelId] = useState<number | null>(null)
@@ -94,7 +107,141 @@ export default function AgentChat() {
       // never set and the order tools could not be offered at all, so an order
       // request came back as a refusal rather than an approval prompt.
       tradingEnabled: settings.data?.data.trading_enabled ?? false,
+      // Watched only while a spoken turn is running. The frames still drive the
+      // message list the ordinary way; this reads two things off the side of
+      // them - the words to speak, and the fact that a tool is taking a while.
+      onFrame: (frame) => {
+        if (!spokenAnswer.current) return
+        if (frame.type === 'token') spokenAnswer.current.text += frame.delta
+        else if (frame.type === 'tool_start') voiceController.current?.sayWorking(frame.name)
+        else if (frame.type === 'confirm') {
+          // A spoken turn paused for approval. The card renders as it always
+          // does; this additionally lets the trader answer it out loud, with
+          // the server deciding whether what they said was the phrase.
+          const runId = frame.run_id
+          const ids = frame.requirements.map((requirement) => requirement.id)
+          voiceController.current?.awaitApproval(runId, () => {
+            void confirm(Object.fromEntries(ids.map((id) => [id, true])))
+          })
+          spokenAnswer.current.text ||= awaitingApprovalLine.current
+        }
+      },
     })
+
+  /**
+   * Where a spoken turn's answer is collected while it streams.
+   *
+   * Null except while one is running, which is also what keeps `onFrame` free
+   * for typed turns. Read after the send resolves rather than from `messages`,
+   * because React state has not necessarily flushed by then and the words are
+   * wanted the instant the turn ends.
+   */
+  const spokenAnswer = useRef<{ text: string } | null>(null)
+  const voiceController = useRef<VoiceController | null>(null)
+
+  /**
+   * Every line of the spoken conversation, in order.
+   *
+   * Kept beside `messages` rather than folded into them because they are
+   * different records: a message is what the agent decided, a line is what was
+   * said out loud, and a speech model paraphrases the one into the other. Both
+   * are worth seeing, and only one of them is a turn.
+   */
+  const [spokenLines, setSpokenLines] = useState<VoiceTranscriptLine[]>([])
+
+  // The same cache entry the config panel and the mic button read, so renaming
+  // the agent over there reaches the transcript labels without a reload.
+  const voiceConfig = useQuery({
+    queryKey: agentQueryKeys.voice(),
+    queryFn: getVoiceConfig,
+    staleTime: 30_000,
+  })
+  const voiceName = voiceConfig.data?.data.voice_agent_name || 'Agent'
+
+  /**
+   * How many messages existed when each spoken line was first seen.
+   *
+   * Speech and messages are interleaved by **anchoring**, not by sorting on a
+   * clock. Sorting was the first attempt and it was wrong: a message carries no
+   * timestamp, so one had to be invented at first render, and any drift between
+   * that and the moment a line opened reordered the thread. Messages now render
+   * in exactly the order `messages` holds them, which is the order that was
+   * always correct, and each line is placed after the message that had just
+   * been said when it was heard.
+   */
+  const lineAnchors = useRef(new Map<string, number>())
+
+  /** Spoken lines grouped by the message index they follow. */
+  const linesByAnchor = useMemo(() => {
+    const grouped = new Map<number, VoiceTranscriptLine[]>()
+    for (const line of spokenLines) {
+      let anchor = lineAnchors.current.get(line.id)
+      if (anchor === undefined) {
+        anchor = messages.length
+        lineAnchors.current.set(line.id, anchor)
+      }
+      const bucket = grouped.get(anchor)
+      if (bucket) bucket.push(line)
+      else grouped.set(anchor, [line])
+    }
+    // The controller keeps only the most recent lines, so an anchor for a line
+    // that has scrolled out of it will never be read again. Dropping them here
+    // keeps this map the same size as the transcript instead of growing for as
+    // long as the page is open.
+    if (lineAnchors.current.size > spokenLines.length) {
+      const live = new Set(spokenLines.map((line) => line.id))
+      for (const id of lineAnchors.current.keys()) {
+        if (!live.has(id)) lineAnchors.current.delete(id)
+      }
+    }
+    return grouped
+  }, [messages.length, spokenLines])
+
+  /** What to speak while a run waits for approval, read at frame time. */
+  const awaitingApprovalLine = useRef('That needs your approval before I can place it.')
+
+  const handleSpokenLine = useCallback(
+    (role: 'trader' | 'agent', text: string) => {
+      void recordVoiceTranscript(role, text, conversationIdRef.current).then((opened) => {
+        // The first line of a spoken session opens a thread. Adopting it here
+        // is what keeps the whole session - the lines the agent never saw, and
+        // the turns it did - in one place an operator can open again later.
+        if (opened != null && conversationIdRef.current == null) {
+          conversationIdRef.current = opened
+          setConversation(opened)
+        }
+      })
+    },
+    [setConversation]
+  )
+
+  const conversationIdRef = useRef<number | null>(null)
+  conversationIdRef.current = conversationId ?? null
+
+  /**
+   * Run one spoken question as an ordinary turn and return what to say.
+   *
+   * This is what puts a spoken exchange on screen. The question goes through
+   * the same `send` a typed one uses, so it appears as a user message, the
+   * answer streams into the same list, and the tool timeline and any chart
+   * render exactly as they do for typing. Only the words come back here.
+   */
+  const askByVoice = useCallback(
+    async (question: string): Promise<string> => {
+      const collector = { text: '' }
+      spokenAnswer.current = collector
+      try {
+        // The voice surface for this turn only: it decides the tools and asks
+        // for an answer short enough to listen to. The conversation, the model
+        // and the message list are shared with the typed surface.
+        await send(question, { surface: 'voice', webSearch: lastWebSearch.current })
+      } finally {
+        spokenAnswer.current = null
+      }
+      return collector.text
+    },
+    [send]
+  )
 
   const threadRef = useRef<HTMLDivElement>(null)
 
@@ -226,7 +373,7 @@ export default function AgentChat() {
           than pushing the page sideways. */}
       <ConversationSidebar
         activeId={conversationId}
-        surface="chat"
+        surface={AGENT_SURFACES}
         busy={running}
         onNewChat={reset}
         onSelect={handleSelectConversation}
@@ -272,7 +419,11 @@ export default function AgentChat() {
             backstop: a message that cannot break scrolls inside its own
             container rather than widening the body. */}
         <div ref={threadRef} className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-          {messages.length === 0 ? (
+          {/* Spoken lines count as content. A conversation that is only
+              speech - "hi Ava", an acknowledgement, a question the speech model
+              answered itself - produces no messages at all, and showing the
+              empty state over it loses the whole exchange. */}
+          {messages.length === 0 && spokenLines.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <Bot className="h-10 w-10 text-muted-foreground/50" aria-hidden />
               {conversationId === null ? (
@@ -301,19 +452,30 @@ export default function AgentChat() {
             </div>
           ) : (
             <div className={cn(COLUMN, 'space-y-6 px-4 py-4')}>
-              {messages.map((message) => (
-                <Message
-                  key={message.id}
-                  message={message}
-                  onConfirm={handleConfirm}
-                  onEdit={message.role === 'user' ? handleEdit : undefined}
-                  onRetry={
-                    message.role === 'assistant' && message.id === lastAssistantId
-                      ? handleRetry
-                      : undefined
-                  }
-                  busy={running}
-                />
+              {/* A quiet record of what was actually said out loud, placed
+                  after the message that had just been said when it was heard.
+                  Messages themselves render in the order `messages` holds them
+                  and are never reordered. */}
+              {(linesByAnchor.get(0) ?? []).map((line) => (
+                <SpokenLine key={line.id} line={line} agentName={voiceName} />
+              ))}
+              {messages.map((message, index) => (
+                <Fragment key={message.id}>
+                  <Message
+                    message={message}
+                    onConfirm={handleConfirm}
+                    onEdit={message.role === 'user' ? handleEdit : undefined}
+                    onRetry={
+                      message.role === 'assistant' && message.id === lastAssistantId
+                        ? handleRetry
+                        : undefined
+                    }
+                    busy={running}
+                  />
+                  {(linesByAnchor.get(index + 1) ?? []).map((line) => (
+                    <SpokenLine key={line.id} line={line} agentName={voiceName} />
+                  ))}
+                </Fragment>
               ))}
               {/* Lets the newest question reach the top of the viewport even
                   when the answer under it is only a line long. */}
@@ -339,18 +501,59 @@ export default function AgentChat() {
               // the turn agree about which model has to read the file.
               modelId={modelId}
               controls={
-                <ModelPicker
-                  value={modelId}
-                  onChange={setModelId}
-                  effort={effort}
-                  onEffortChange={setEffort}
-                  disabled={running}
-                />
+                <>
+                  <ModelPicker
+                    value={modelId}
+                    onChange={setModelId}
+                    effort={effort}
+                    onEffortChange={setEffort}
+                    disabled={running}
+                  />
+                  {/* Renders nothing unless voice is configured and switched
+                      on. A spoken turn runs on the same model the picker beside
+                      it is showing, so the answer does not change character
+                      when the question is spoken instead of typed. */}
+                  <VoiceButton
+                    modelId={modelId}
+                    tradingEnabled={settings.data?.data.trading_enabled ?? false}
+                    ask={askByVoice}
+                    onSpokenLine={handleSpokenLine}
+                    onTranscript={setSpokenLines}
+                    onController={(controller) => {
+                      voiceController.current = controller
+                    }}
+                    disabled={running}
+                  />
+                </>
               }
             />
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * One line of the spoken conversation.
+ *
+ * Deliberately quieter than a message: it is a record of what was said in the
+ * room, not of what the agent decided, and the two are different things even
+ * when they describe the same turn.
+ */
+function SpokenLine({ line, agentName }: { line: VoiceTranscriptLine; agentName: string }) {
+  return (
+    <p
+      className={cn(
+        'border-l-2 border-muted pl-3 text-xs leading-relaxed',
+        line.role === 'trader' ? 'text-foreground/80' : 'text-muted-foreground',
+        !line.final && 'opacity-60'
+      )}
+    >
+      <span className="mr-1.5 font-medium opacity-70">
+        {line.role === 'trader' ? 'You' : agentName}
+      </span>
+      {line.text}
+    </p>
   )
 }

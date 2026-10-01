@@ -8,6 +8,684 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Long-running memory and resource cleanup
+
+- The Windows and macOS/Linux Docker runners allow 45 seconds for container
+  shutdown, including containers created before the runner update. The gthread
+  guide now covers fresh installations and the required post-install switch.
+- Bound authentication failure fingerprint storage and the Strategy Module's
+  pending order-update work. A slow update worker applies backpressure through
+  the existing bounded event bus instead of retaining an unlimited second queue.
+- Pocketful reconnects stop the previous heartbeat, share one retry loop, and
+  interrupt retry waits on disconnect. Logout during a token read cannot open
+  a replacement feed.
+- Flow retains failed subscription releases for retry. Delete and deactivate
+  return 503 while release is pending, or 409 while the workflow is executing;
+  shared Flow subscriptions remain until their last workflow releases them.
+- Leaving the WebSocket test page closes its socket and cancels reconnects.
+  Master Contract polling stops at completion, permits one status request at a
+  time, and aborts that request when the page closes.
+
+### Optional gthread web server
+
+OpenAlgo can now run under gunicorn's gthread worker, which gives every request
+its own thread from a fixed pool of 64, instead of eventlet. **eventlet stays
+the default.** An install that does not add `OPENALGO_WORKER_CLASS = 'gthread'`
+to `.env` keeps its service file, nginx configuration and dependencies exactly
+as they are, and an update does not switch anything. How to switch, check that
+it works and switch back: [docs/gthread/README.md](gthread/README.md).
+
+- **Ubuntu:** after 23:30 IST, `sudo bash install/switch-worker.sh --to gthread`.
+  The script backs up the service file, checks the result and puts the old one
+  back if OpenAlgo does not come up. It refuses to restart during the trading
+  day unless given `--force`.
+- **Docker:** set the line in `.env`, add `stop_grace_period: 45s` to the
+  OpenAlgo service in `docker-compose.yaml` (a gthread stop gives open requests
+  and running strategies up to 30 seconds, and Docker would otherwise cut it off
+  at 10), and recreate the container.
+- `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
+
+**Further fixes from review.** Historify no longer holds up the rest of
+OpenAlgo while it waits to write to its database, cancelling a download paused
+on its last symbol no longer leaves it stuck, and a download that finishes
+while you pause or resume it is still shown as finished. A sandbox funds change
+that fails no longer blocks the sandbox database or saves half of an order
+change, and cancelling a sandbox order says so when its margin could not be
+released. Under gthread, a Definedge order the broker answered with a rate
+limit is not sent a second time, and is not reported as refused before sending,
+because it may have reached the broker. The Action Center explains that a
+delayed split or basket order may still be sending. The market data service is
+started again if its first start fails, and one started while OpenAlgo was
+stopping is shut down with it. Chartink tries again to put back scheduled jobs
+it could not restore after a restart. The switch script leaves your previous
+setup as it was when it cannot back up or write the service file. The guide
+now covers each platform and what to check before running continuously.
+
+**What gthread refuses that eventlet waits for.** A request that would wait too
+long is answered with a sentence instead: a broker rate limit that would hold a
+request more than about 10 seconds (HTTP 429, nothing sent), a second order on
+the same symbol still waiting after 30 seconds, a live and sandbox mode change
+still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
+(live status on the Python Strategies page, remote MCP, agent chats). A Flow workflow whose
+Delay and Wait Until steps add up to more than 10 seconds answers at once (HTTP
+202) and runs in the background, up to 16 waiting on a Delay and 4 on a Wait
+Until at the same time; a refused one is shown in its execution history. The
+full list is in the guide above. None of this happens on eventlet.
+
+**Only under gthread, as eventlet already behaved or as the web page already
+did:**
+
+- Python strategies that were running when the server stopped are started
+  again when it comes back, as after an eventlet restart.
+- The Telegram live and sandbox mode buttons start or stop the sandbox engine
+  and square-off, as the web toggle does.
+- Chartink intraday square-off jobs are put back after a restart, for
+  strategies that are switched on, and scheduled starts, stops and square-offs
+  still run when they reach a thread up to five minutes late.
+- Action Center: approving an order another screen already approved or
+  rejected answers 409 with a sentence, and an order the broker pacer refused
+  before sending goes back to the pending list to be approved again.
+- IIFL: an order write answered with a rate limit is not sent a second time,
+  and a cancel or modify whose failure came back inside an HTTP 200 is reported
+  as a failure.
+- Docker: the container starts the market data service again if it stops
+  (after 1 second, then longer if it keeps stopping, up to 30 seconds), and
+  stops it within 5 seconds of OpenAlgo stopping. The container's first process
+  is now the start script, which passes a stop or an interrupt on to OpenAlgo;
+  other signals no longer reach it.
+
+**Changes on every install, eventlet included:**
+
+- The in-process market data client keeps reconnecting after a drop, every 30
+  seconds at most, instead of giving up for good on the fifth; it logs a short
+  warning every ten failed attempts.
+- Telegram: a bot token Telegram rejects is reported in a sentence instead of
+  an HTTP status, a check that gets no readable answer from Telegram counts as
+  failed instead of storing the token unchecked, and Start while the bot is
+  still starting or stopping is refused instead of starting a second copy.
+- Force master contract download while the login download is still running
+  answers 409 with a sentence instead of starting a second download over it.
+  Historify refuses to retry a download that is still running, or was
+  cancelled a moment ago and has not stopped yet.
+- Action Center: an approval whose send could not be recorded is put back in
+  the pending list and the operator is told it was not sent.
+- Action Center: an approved order that a restart or crash cut off while it was
+  being sent is shown as not confirmed, with a note that it may or may not have
+  reached the broker and to check the broker's order book before placing it
+  again. OpenAlgo never sends it again, and the page offers no way to. An order
+  still being sent is shown as Sending, with no note; only one still unanswered
+  two minutes after its approval, longer than any send takes, is shown as not
+  confirmed. The All Orders tab lists every order, not only the pending ones.
+- Each browser tab keeps one live update connection, shared by every page in
+  it. The Action Center, WhatsApp and Historify pages used to open a second
+  one, and Historify showed every order alert twice while it was open.
+- A sandbox GTT leg whose position has another order in progress fires on the
+  next tick instead of holding up every other tick until that order finishes.
+- The system report shows the web server, the one `.env` asks for, the request
+  threads, where the market data proxy runs and whether it is running. The
+  admin Diagnostics page shows the same details in a Web server card, in plain
+  words, and its uptime in hours and days. Threads free counts the request
+  threads that are idle, and none while requests are waiting.
+- The option chain, Greeks, IV, OI, max pain, volatility surface, straddle,
+  GEX and Strategy Builder tools, the Arbitrage spread order and the portfolio
+  tearsheet download show the server's own sentence when a request is refused
+  because the broker is busy or a limit was reached, instead of a generic
+  error or a status code. Every other failure shows what it showed before.
+- On a stop, the server waits up to 15 seconds for the market data proxy
+  process to exit before it exits itself, instead of leaving it to systemd.
+- Saving broker credentials refuses a value containing a line break (HTTP 400)
+  instead of writing it into `.env` as two lines.
+- Jainam XTS and Wisdom: the order book, trade book, positions and holdings no
+  longer fail on a server whose Python has no Tk.
+- A master contract reload clears the cached option strikes, and an empty
+  strike lookup is no longer cached.
+- Many races that could double a sandbox fill, a settlement or an alert are
+  closed. When requests do not overlap, the outcome is exactly as before.
+- Removed `services/telegram_bot_service_fixed.py` and
+  `services/telegram_bot_service_v2.py`, which nothing imported.
+- Motilal Oswal, Pocketful, Tradejini and Nubra: quote and market depth
+  requests answer as soon as the broker has sent everything they read, instead
+  of always waiting a fixed time. The answers are the same; they come sooner.
+- Pocketful: other requests no longer queue behind the market data feed while
+  it connects. A quote asked for after the feed dropped is answered from a new
+  packet, never from one left behind by an earlier request.
+- OpenScript: Stop reports "closed and stopped" only when the run confirms that
+  its position was closed. A run that crashed, or was stopped before its
+  closing order filled, is still marked stopped, and Stop now says it could not
+  confirm the close and asks you to check your positions. A run started before
+  this update cannot confirm, so its first Stop afterwards says so even when it
+  did close. Before it measures what it holds, Stop now cancels every order of
+  the run still working at the broker and counts the fills that came of them,
+  so an entry that filled a moment before Stop is closed, and a resting limit
+  or stop order cannot fill after the run has gone. If an order will not
+  finish, the run keeps running and says which order to check. Two Stops at
+  the same moment no longer lose each other's confirmation.
+- `install/update.sh` updates an instance made by `install-multi.sh` when run
+  from inside it, and restarts that instance's service. It used to treat such
+  an instance as a development checkout and never stopped or started its
+  service. A server that also has a single install at `/var/python/openalgo`
+  keeps updating that one, as before. Run from another OpenAlgo checkout, such
+  as a development clone on the same server, it updates that checkout and
+  leaves every instance and its service alone, as before.
+- Restarting OpenAlgo no longer writes a false error with a traceback from the
+  market data client. While OpenAlgo is stopping, the client does not try to
+  reconnect. A market data service that is not accepting connections is
+  reported as a one-line warning instead of a traceback, and after 12 attempts
+  in a row, about a minute, as one error saying that live prices and
+  tick-driven stops are not updating until it is back.
+- Upstox: when the Upstox login expires overnight, the market data feed no
+  longer fills the log retrying a link Upstox has already refused. It writes
+  one warning saying to log in to Upstox again, retries quietly, and says so
+  when the feed is back after the next login.
+- Historify gives new watchlist symbols, downloads and schedule runs their IDs
+  from counters kept in its database, so two requests at the same moment can
+  no longer take the same ID. The counters are created for an existing
+  database by the database upgrade (`upgrade/migrate_historify_sequences.py`,
+  run by `migrate_all.py`) and checked again every time OpenAlgo starts. That
+  check also moves a counter past IDs an older version used, so going back to
+  an older release and returning no longer leaves Historify unable to add
+  symbols or store data for new ones. `--status` reports what it would change
+  without changing it.
+
+**Going back to an older release.** A service switched to the launcher starts
+through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
+`sudo bash install/switch-worker.sh --restore` before checking out an older
+revision; it puts the saved service file back and sets `.env` back to eventlet.
+Coming back afterwards needs nothing extra for Historify: its ID counters are
+checked again on the first start.
+
+**Still not modelled.** The sandbox margin reconcile does not count margin held
+by open and trigger-pending orders (unchanged from before).
+
+### Fixed
+
+- **A smart order could double or reverse a position when the broker did not
+  answer the position check.** A smart order reads your open position from the
+  broker, compares it with the position size you asked for, and places the
+  difference. On every supported broker, a read that failed (a network error,
+  an expired session, the broker answering with an error, a reply that could
+  not be read) was taken to mean "no position". The order was then sized as if
+  you were flat: an entry or a flip placed its full quantity on top of the
+  position you really held, and an exit reported "no open position" and closed
+  nothing. Now a failed read sends no order and answers "OpenAlgo could not
+  read your open position from your broker, so no order was sent. Check your
+  positions and try again.", with your broker's name in it. An empty position
+  book is still read as flat, and a read that works places exactly the order
+  it placed before. An error from the broker is read as an empty book only
+  on brokers that answer an empty book with an error message, and only from
+  that message: on Dhan, Zerodha, Upstox, Angel One and Fyers, among others,
+  an error always refuses. On IndMoney and Groww, an F&O read that
+  fails refuses F&O smart orders while equity smart orders go ahead. On
+  Alice Blue, "Failed to retrieve the position book" now refuses, the same as
+  its code EC919. This covers `/api/v1/placesmartorder` and everything that
+  calls it (TradingView and other alerts, the order nodes in Flow that place
+  a smart order, Python strategies), and the close button on the Positions
+  page. Sandbox mode is not affected: it reads positions from the sandbox.
+  Not changed by this fix: a check that only reads your position and places
+  nothing (`/api/v1/openposition`, and the Open Position and Position Check
+  nodes in Flow) still reads a failed read as no position on most brokers, so
+  do not let such a check decide an order while your broker is not answering.
+  On CompositEdge, 5 Paisa (XTS), IIFL, Wisdom Capital and Groww the smart
+  order reads every position as flat even when the read works, so on those
+  brokers do not rely on a smart order to adjust or close a position you
+  already hold until that is fixed separately. Nothing to do after pulling.
+
+- **Ubuntu installs on 2.0.2.6 could not run OpenScript strategies or the
+  agent.** `requirements-nginx.txt`, which `install.sh`, `install-multi.sh` and
+  `update.sh` install from, was missing `openscript`, `litellm`, `agno` and
+  `ddgs`. The OpenScript editor worked, but running a strategy on the server
+  failed, and so did the first agent chat, while the site itself looked
+  healthy. After pulling, run `update.sh` once more: it installs the four
+  packages and changes no version you already have. Docker and the development
+  server were not affected. `requirements.txt` gains the same four, and a CI
+  test now fails whenever `pyproject.toml` has a library the requirements files
+  lack.
+- **Telegram /chart never drew a chart on most Ubuntu servers.** It answered
+  "Failed to generate charts" every time. The images are drawn by a headless
+  Chrome or Chromium running as the OpenAlgo service account, and the install
+  scripts set up Ubuntu's `chromium-browser`, which installs a snap. A snap
+  cannot start as a service account (it needs a home the account can write),
+  so every render failed with "The browser seemed to close immediately after
+  starting". `install.sh`, `install-multi.sh` and `update.sh` now install
+  Google Chrome on amd64, or the distribution's own Chromium where it is a real
+  package (Debian, Raspberry Pi OS, Fedora, EPEL, Arch), and never the snap.
+  After pulling, run `update.sh` once: it installs a working browser if the
+  server has none, and changes nothing if it already has one. On arm64 Ubuntu
+  no packaged Chromium can run as a service, so /chart still cannot draw there;
+  use Debian, Raspberry Pi OS or the Docker install. Docker installs were not
+  affected.
+
+## [2.0.2.6] - 2026-09-23
+
+### OpenScript and Chart Alerts Release
+
+48 commits since 2.0.2.5, excluding automated frontend build commits. Full
+notes: [version-2.0.2.6-released.md](releases/version-2.0.2.6-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling.
+
+**Zerodha MCX quantity is now in units.** A script sending MCX orders through
+`/api/v1/` on Zerodha must send 100 for one lot of CRUDEOIL, not 1, as on every
+other broker. Re-download the master contract after upgrading (#1998).
+
+### Highlights
+
+- OpenScript arrives on `/trading`: a language for studies and strategies,
+  written in a panel on the chart, compiled on every save, backtested in the
+  browser beside the editor, and run on the server as one deployment per
+  instrument and interval, with Pause, Stop and restart. A script can only name
+  what the language gives it, so it has no way to make a network call or reach
+  into the page.
+- Chart alerts reach somebody who is not looking at the chart: a sound, a
+  desktop notification, Telegram or WhatsApp chosen per alert, a log that
+  survives the tab being closed, and firing when the price is reached rather
+  than when the candle closes.
+- The charting terminal moves from openalgo-charts 2.2.0 to 2.5.1, with chart
+  arithmetic over instruments, saved workspaces, comparisons, replay and open
+  interest studies.
+- An unconfigured freeze quantity no longer refuses every scalping order on
+  MCX, BFO and CDS, and five Noren-based feeds that could go silent while still
+  answering heartbeats now reconnect.
+
+### Added
+
+- Scripts panel on the `/trading` right rail for writing OpenScript studies and
+  strategies. Every save compiles and shows the diagnostic's code, line and fix
+  against the line. Scripts live in `strategies/openscript/`, gitignored and
+  inside the Docker volume, and are served as plain text, never as JavaScript.
+  A study written here has its own section in the indicator picker, and its
+  legend row opens its source.
+- Backtest a strategy from the right rail, in the browser, on the chart's own
+  instrument and interval, with equity and drawdown on one time axis.
+- Run a compiled strategy on the server. Orders go through the platform's own
+  order path, so the platform-wide analyzer setting decides where they go; a
+  run whose destination changes while it holds a position stops and names what
+  is open.
+- Deploy one strategy on many instruments. Pause ends the process and leaves the
+  position; Stop closes what the run holds and then ends it. A strategy left
+  running comes back after a restart.
+- Choose per alert how to be told: a sound and a desktop notification, both on
+  by default and neither leaving the machine, and Telegram or WhatsApp, both off
+  unless asked for. A channel that refuses names itself and the others still go.
+- Fill values into an alert's message from the bar that fired it: `{{ticker}}`,
+  `{{price}}`, `{{close}}`, `{{interval}}` and seven more. A placeholder spelled
+  wrong is left as typed rather than blanked.
+- Keep the alert log after the tab is closed. Each row names the channels that
+  accepted the message; firings are kept for 90 days and Clear empties the log.
+  Alerts are still evaluated by the chart that is open.
+- Make an alert by right-clicking the chart at the price to watch: it is created
+  there and then, once-only, on the instrument's tick. The toolbar's Alerts
+  button opens the form for one that needs a condition, a trigger or an expiry.
+- Chart arithmetic from the symbol search: `NIFTY/RELIANCE`,
+  `2*CE25000 - CE25200` or a straddle as one live series. A computed chart is
+  never tradeable.
+- Saved chart workspaces, study templates, comparison symbols on price or
+  percentage scales, replay across one chart or all of them, CSV export of the
+  displayed bars and studies, and open interest studies (#2077).
+- Delete or Backspace removes the drawing or alert under the pointer, taking an
+  alert last because its line spans the pane.
+- `average_price_basis` on a Kotak carried-forward position whose average is
+  the overnight valuation rather than an entry price (#2061).
+- A broker QA audit suite of 364 checks, run in sandbox and live modes (#2074,
+  #2089).
+- An `openscript` Claude Code skill that installs a script only after the
+  pinned compiler accepts it, with three CI gates keeping it in step.
+- `upgrade/migrate_alert_log.py`, idempotent and supporting `--status`.
+
+### Changed
+
+- Zerodha MCX quantity is counted in units, like every other broker, and the
+  adapter converts to Kite's contracts at every boundary. A quantity that is not
+  a whole number of contracts is refused rather than rounded (#1998).
+- A new alert fires when the price is reached rather than at bar close. Bar
+  close is still a field on the form, and an existing alert keeps its setting.
+- A fired or expired alert's line is no longer drawn. Its row, state and record
+  stay, so a once-only alert cannot fire again after a reload.
+- An alert set on one timeframe is visible on the others for the same
+  instrument, labelled with its interval and evaluated only there.
+- The alert list moved from its modal to the right rail, with a Log tab.
+- Dragging the chart pans through price as well as time; the choice is under
+  Mouse drag in the Axes tab.
+- Alert channels send at the same time rather than one after another.
+- `/api/v1/whatsapp/notify` answers `"status": "error"` when a send reached
+  nobody. The HTTP code is still 200.
+- Historify and Strategy Builder charts are drawn with the OpenAlgo chart
+  engine, with indicators, drawings and scroll-back history.
+- Kotak history requests are paced at the measured 1 per second.
+- OpenScript strategies run on engine 0.5.0, matching the browser compiler.
+- Trader-facing wording follows the platform's vocabulary: the One-Click toggle
+  says ON, an alert is Active, the trailing-stop readout on `/strategy` says
+  trailing or pending. The vocabulary rules are written down in `CLAUDE.md`.
+
+### Fixed
+
+- An unconfigured freeze quantity returned a limit of 1, so the scalping
+  terminal refused every order on MCX, BFO and CDS on every broker (#1998).
+- The strategy wizard's underlying picker listed company names on cash and
+  index exchanges, which resolved to nothing at run start (#1998).
+- Zerodha close-all reported success when an exit was refused; it now names the
+  symbols still held (#1998).
+- Zerodha quotes left out best bid and ask size, so the option chain showed 0
+  on every leg (#2045).
+- Kotak valued a carried-forward position at the overnight settlement price
+  rather than its cost where Kotak sends one (#2061).
+- Kotak intraday charts failed with "History contains an invalid candle", and a
+  lookback at the five-year horizon failed the whole pull (#2062, #2094).
+- Flattrade, Shoonya, Zebu, Tradesmart and Definedge feeds could stay silently
+  dead for a session while still answering heartbeats. Market data now has its
+  own liveness clock (#2075, #2089, #2094).
+- Delta Exchange read history dates as UTC and padded the future with flat
+  synthetic bars (#2074).
+- A deployment made where another was removed inherited its orders, fills and
+  position (#2106).
+- Every deployment showed the account's P&L as its own, and switching between
+  live and analyzer mode silently stopped every idle strategy (#2103).
+- A saved script did not appear in the indicator list until the page was
+  reloaded.
+- `BAJAJ-AUTO` and other hyphenated symbols could not be searched, picked or
+  charted (#2091).
+- A candle vanished for a few seconds after it closed.
+- A dragged alert was stored at the pointer's raw price and kept a name quoting
+  where it used to be.
+- The paired WhatsApp owner was told their own username was not linked, and a
+  send that reached nobody reported success.
+- A chart alert refused by a channel showed a hardcoded guess instead of the
+  server's reason.
+- A position already squared off showed a Close button (#2064).
+- A spoken approval window stayed open after its run was decided, cancelled or
+  abandoned.
+- `update.bat` misparsed on unescaped parentheses (#2080), and on Windows 11
+  without WMIC reported a backup it had not made; `docker-run.bat` sized the
+  container at its lowest tier.
+- Historify charts crashed on monthly, quarterly and yearly intervals and opened
+  empty on a store whose newest candle was days old.
+
+### Dependencies
+
+- `openalgo-charts` 2.2.0 to 2.5.1.
+- `openalgo-script` 0.5.0 (npm, the OpenScript compiler), new.
+- `openscript` 0.5.0 (PyPI, the OpenScript engine), new. Not yet in
+  `requirements-nginx.txt`: on an Ubuntu server install it by hand after
+  `update.sh`, as the release notes describe.
+- The pinned `openalgo` SDK is unchanged at 2.0.5.
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - OpenScript on `/trading` end to end: the
+  Scripts panel, the backtest panel, the server-side runner, deployments and
+  deployment identity, engine 0.5.0 and the `openscript` skill; chart alerts:
+  the stored log and its migration, per-alert channels, right-click creation,
+  firing at the price and the fired-line option; openalgo-charts 2.2.1 through
+  2.5.1; chart arithmetic, the chart workspace (#2077) and hyphenated symbols;
+  Historify, Strategy Builder and agent charts on the OpenAlgo engine; Zerodha
+  bid and ask size (#2045); Kotak carried-forward valuation (#2061); the
+  WhatsApp notify fixes; the spoken approval window; the installer fixes; the
+  wording sweep.
+- **@Kalaiviswa** - Zerodha MCX quantity in units, with the freeze quantity and
+  underlying picker fixes (#1998); Kotak history repair and pacing (#2094,
+  #2062); the heartbeat-without-ticks watchdog for Flattrade (#2089, #2075),
+  Shoonya, Zebu, Tradesmart and Definedge (#2094); Delta Exchange IST history
+  (#2074); the broker QA audit suite (#2074, #2089).
+- **@anishkun (Anish kunda)** - no Close button on a position already squared
+  off (#2064).
+- **@nimchand87** - escaped parentheses in `update.bat` (#2080).
+
+## [2.0.2.5] - 2026-09-14
+
+### Voice Agent Release
+
+29 commits since 2.0.2.4, excluding automated frontend build commits. Full
+notes: [version-2.0.2.5-released.md](releases/version-2.0.2.5-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling.
+
+### Highlights
+
+- The agent at `/agent` gains a third surface beside chat and chart: a spoken
+  one. The speech model hears and speaks and decides nothing; every answer it
+  reads out comes from the model configured at `/agent/config`, through the same
+  toolkits, the same risk guard and the same audit rows a typed question goes
+  through. No audio passes through the server.
+- Order placement by the agent is now opt-in. It shipped on, so a fresh install
+  could reach an order tool by typing a sentence with nobody having chosen that
+  (#2036).
+- The charting terminal moves from openalgo-charts 2.1.7 to 2.2.0, exposing all
+  85 drawing tools.
+- The 5paisa XTS, Tradejini and 5paisa feeds survive a full symbol book, and
+  Kotak depth payloads stop the trading chart polling REST (#2038, #2042, #2044).
+
+### Added
+
+- Voice surface on `/agent` and `/agent/config`, configured per installation
+  with the provider credential stored in the database. `Permissions-Policy`
+  relaxes `microphone` to `self` only while voice is enabled; an operator who
+  sets `PERMISSIONS_POLICY` explicitly still owns the whole string.
+- Every finalised spoken line is recorded under a `transcript` phase and
+  rendered in the thread beside the messages a delegated turn produces. The
+  first line of a session opens the thread, so a spoken-only exchange is no
+  longer unreachable once it ends.
+- A voice session with nobody speaking for three minutes hangs up, since an open
+  microphone is billed for as long as it is open. The interval is a setting.
+- The agent's spoken name defaults to Vega, chosen to sit far from an order
+  instruction phonetically. An operator's own name is left alone.
+- `upgrade/migrate_agent_voice.py` and
+  `upgrade/migrate_agent_voice_phrase_removal.py`, both idempotent and both
+  supporting `--status`.
+
+### Changed
+
+- Upgrade `/trading` to openalgo-charts 2.2.0 and expose all 85 drawing tools,
+  including advanced channels, pitchforks, Fibonacci and Gann geometry,
+  wavefronts and manual patterns. Saved drawing IDs and version 2 documents
+  remain compatible.
+- Drawing menu labels and glyphs follow the installed package through generated
+  metadata, keeping the drawing renderer lazy. Registry checks catch omitted
+  tools and stale metadata during future upgrades.
+- Notes, balloons, comments, signposts, price notes and tables use the existing
+  content editor. Tables explain column separators and multiline row entry.
+  Font colours reach the rendered letters; content edits preserve table grids
+  and theme defaults. Editors show only controls supported by each tool.
+- The TPO chart display defaults to letters rather than letters and blocks. A
+  stored choice is kept.
+- The Objects button on the `/trading` right rail is a glyph in the same 32px
+  box as every other panel, instead of its label spelled down the rail.
+- The spoken approval phrase is removed. An order is approved by answering a
+  full read-back, decided server-side, rather than by a configured secret word
+  that had to be remembered, was read aloud by the speech model, and was written
+  to the audit trail in plaintext.
+- Every message the voice surface can put in front of someone names the cause
+  and the next action in plain words, on the browser half too. No status codes,
+  no protocol terms. The rule is recorded in `CLAUDE.md` under Conventions.
+- Refresh the custom chart indicator skill and generated API index for 2.2.0.
+
+### Fixed
+
+- Restore **Time Price Opportunity** and **Session Volume Profile** in the
+  `/trading` chart-type menu. Both can be selected again, with their existing
+  settings, saved layouts, live updates and intraday interval handling.
+- A spoken order request resolved the contract and then announced the order
+  without calling the tool, so no pause, no approval prompt and no order, while
+  the trader had just been told one was on its way.
+- The voice surface could not draw. A spoken turn renders on screen exactly as a
+  typed one does, so withholding `render_ui` removed the half of the answer the
+  surface was designed around. `render_ui` also draws figures the operator
+  supplied in their own message, titled so they cannot be mistaken for an
+  account.
+- The thread sidebar only ever listed chat threads, making every past voice
+  conversation unreachable, and a spoken thread rendered typed turns above
+  earlier speech.
+- 5paisa XTS sent one blocking HTTP POST per symbol, so a 1000-symbol startup
+  was 1000 sequential round-trips and every reconnect replayed the book the same
+  way. Subscriptions are batched into one request per mode; every LTP and depth
+  unsubscribe had been targeting the quote feed, and the tick filter compared an
+  int against a string so it dropped every depth tick (#2042).
+- 5paisa XTS `unsubscribe()` called `disconnect()` on every invocation, so
+  dropping one symbol killed the feed for every other subscribed symbol, with
+  nothing able to bring it back (#2042).
+- Kotak dropped `ltp` from quote and depth payloads when the price was zero, and
+  suppressed the mode 2 publish entirely. The trading chart subscribes depth
+  alone for tradeable symbols, so a payload without the key read as "keep
+  polling" and nothing could ever clear the REST fallback (#2038).
+- Tradejini re-sent the complete symbol list once per symbol change, since a
+  subscribe replaces the server-side list rather than appending to it. Feed
+  syncs are coalesced into one request per feed (part of #1350, #2044).
+- The 5paisa `last_snapshot` cache was never pruned, so it grew for the life of
+  the Gunicorn worker and resurfaced stale prices on re-subscribe and across the
+  3 AM token rollover (#2044).
+- Ctrl+C on the development server printed a scheduler traceback every five
+  seconds and needed several presses. Six APScheduler instances were never
+  stopped, the websocket proxy thread was non-daemon with its cleanup registered
+  through `atexit`, and the health collector slept its whole sampling interval
+  in one call.
+- The LiteLLM pydantic serializer warning no longer prints on every `chatgpt/`
+  plan turn.
+- Replace the retired YouTube subscriber badge in the README, and sync SDK pin
+  references to 2.0.5 across the API and MCP architecture documentation (#2050).
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - the voice surface and everything that
+  followed it, including order placement made opt-in (#2036), the removal of the
+  spoken approval phrase and its audit-trail leak, spoken orders that place
+  rather than being announced, drawing from the voice surface, transcripts
+  captured and threaded, the idle hangup, the plain-language voice errors and
+  the two migrations; openalgo-charts 2.1.8, 2.1.9 and 2.2.0 with the generated
+  drawing metadata; TPO and session volume profile restored, the TPO letters
+  default and the Objects rail icon; the Ctrl+C shutdown fix; the LiteLLM
+  warning filter.
+- **@Kalaiviswa** - 5paisa XTS subscription batching and the unsubscribe
+  teardown, Kotak `ltp` in quote and depth payloads (#2038), Tradejini feed sync
+  coalescing (part of #1350) and the bounded 5paisa `last_snapshot` cache
+  (#2042, #2044).
+- **@Ayush7614** - SDK pin references synced to 2.0.5 in the documentation
+  (#2050).
+
+## [2.0.2.4] - 2026-09-11
+
+### Charting Profiles and Broker Correctness Release
+
+37 commits since 2.0.2.3, excluding automated frontend build commits. Full
+notes: [version-2.0.2.4-released.md](releases/version-2.0.2.4-released.md).
+
+### Highlights
+
+- The charting terminal moves from openalgo-charts 2.0.2 to 2.1.7 across four
+  engine upgrades, adding TPO and session volume profiles, a per-pane Objects
+  panel and the engine's data loading controller.
+- The Upstox V3 migration is complete, with CAS data, shared rate limiting and
+  WebSocket leak fixes (#2028).
+- Kotak market data now streams over SFeed with per-data-centre routing (#2016).
+- GTT history appears in the order book, and sandbox GTT no longer reports 501.
+
+### Changed
+
+- `/trading` drawings extend into empty chart space: a trend line, rectangle or
+  freehand stroke that reaches past the latest candle or before the first loaded
+  bar keeps its preview and commits where it was drawn, instead of disappearing
+  mid-gesture. Magnet snapping still requires an actual candle, and saved
+  drawings load unchanged.
+- Mouse and pen plot drags pan time and price by default. Horizontal-only
+  panning remains optional and preserves price autoscale; existing saved
+  preferences stay intact. Dragging the time axis left expands candle spacing
+  and dragging right compresses it. The bottom controls include Reset view, and
+  Axes settings retain the default visible-bar preference.
+- The profile entries were removed from the chart type menu, where they did not
+  belong, now that profiles are their own studies.
+
+### Fixed
+
+- Upstox reported tick size in paise rather than rupees, so every tick-derived
+  value was off by a factor of a hundred (#2026).
+- The Upstox synthetic daily candle was stamped in host local time rather than
+  IST, placing it on the wrong day for anyone not running in IST (#2030).
+- Upstox multiquotes never populated `prev_close`, breaking percentage-change
+  reporting wherever it was displayed (#1725).
+- Kotak holdings did not report `average_price` (#2001), and tradebook fills
+  were keyed on `order_timestamp` instead of `fill_timestamp`, losing per-fill
+  `trade_id` (#2007).
+- Samco kept reconnecting after a rejected session token (#2035), and a
+  Flattrade WebSocket close stalled the reconnect (#1965).
+- Groww tradebook prices are reported in the rupees Groww actually sends (#1995).
+- Holiday checks now apply the requested date range (#1938).
+- The central CORS policy is applied to blueprint decorators, which were
+  bypassing it (#1927).
+- Ctrl+C on the development server stops the health collector and releases its
+  sessions before exit, so a stopped instance no longer keeps writing to
+  `health.db` (#2031).
+- `/trading` keeps price and volume isolated during replay when a periodic
+  history refresh or an older history page completes. Leaving replay restores
+  the updated live session. A refresh from an earlier symbol, interval or load
+  is discarded, and a destroyed terminal cannot restart its refresh timer.
+- Symbol loads that finish after switching instruments or closing a pane no
+  longer overwrite the active history or rebuild a destroyed chart.
+- Older history pages discard obsolete symbol, interval and chart responses
+  without exhausting the new session or releasing another page's loading state.
+- Closing a pane during interval lookup no longer starts its WebSocket and
+  polling timer after teardown.
+- Custom indicators wait for concurrent registration to finish before they are
+  added or restored, preventing missing indicators during pane startup.
+- Negative Net GEX values are abbreviated with K/L/Cr suffixes (#1911); SIP
+  inputs are validated before prices load (#1884); backtester controls are
+  labelled for assistive technology (#1877); the Docker installer no longer
+  starts a container from a failed build (#2005).
+
+### Security
+
+- Cleared every open Dependabot advisory on the lockfiles. `npm audit` and the
+  Python resolve both report no known vulnerabilities.
+- GitPython raised to 3.1.62 (advisories through 3.1.58 cover config-injection
+  RCE, arbitrary file read and git-directory creation). It arrives transitively
+  through streamlit in the opt-in `analysis` group, so it never reaches a
+  production install; the floor in `pyproject.toml` keeps the lockfile clear.
+- maplibre-gl forced to 6.9.0 for the `DOM.sanitize()` XSS bypass. It is pulled
+  in only to satisfy the `plotly.js` peer dependency of `react-plotly.js`; the
+  app renders through `plotly.js-dist-min`, so the vulnerable code was never in
+  the shipped bundle and is still absent from it.
+- svgo raised to 4.1.0 (`removeScripts` sanitizer bypasses), vitest and
+  `@vitest/mocker` to 4.1.11 (path traversal via the mocker redirect), and
+  colord to 2.10.0 (slow rejection of malformed colour strings). All four are
+  build and test tooling, not runtime code.
+
+### Dependencies
+
+- `openalgo-charts`: 2.0.2 to 2.1.7
+- The pinned `openalgo` SDK: 2.0.3 to 2.0.5, with `requirements-nginx.txt`
+  realigned after it was left a version behind
+- `docker/login-action`: 3 to 4.5.2 (#1719)
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; the charting terminal
+  through four engine upgrades, TPO and session volume profiles, the pane
+  Objects panel, the data loading controller and replay isolation; GTT history
+  in the order book; ordered shutdown on Ctrl+C (#2031); clearing every open
+  Dependabot advisory; the `chart-indicator` skill regeneration and its CI gate.
+- **@Kalaiviswa** - the Upstox V3 migration and the Flattrade reconnect stall
+  (#2028, #1965); Kotak SFeed market data (#2016); the Upstox daily candle
+  stamped in IST (#2030); the Samco reconnect loop (#2035).
+- **@arsalanansari17** - tradebook fills keyed on `fill_timestamp` with per-fill
+  `trade_id` preserved (#2007); Kotak average price on holdings (#2001).
+- **@anishkun (Anish kunda)** - Upstox tick size normalized from paise to rupees
+  (#2026), and the root-cause analysis on #2029.
+- **@linuxsmiths** - Upstox multiquotes never populating `prev_close` (#1725).
+- **@nightcityblade** - holiday checks applying the requested date range (#1938).
+- **@WilliamK112 (Ching Wei Kang)** - central CORS policy applied to blueprint
+  decorators (#1927).
+- **@vibecoding-skills (Harsh Dattani)** - Groww tradebook prices in rupees
+  (#1995).
+- **@srajbr (Samiran Raj Boro)** - negative Net GEX abbreviations (#1911).
+- **@siddharthg2309 (Siddharth Gouthaman)** - SIP input validation (#1884).
+- **@hafzism (Hafeez)** - backtester control labelling (#1877).
+- **@aravindgandavadi (Aravind Gandavadi)** - the Docker installer no longer
+  starting a container from a failed build (#2005).
+- **@Mr-Neutr0n (hari)** - frontend test coverage for the Footer (#1964).
+- **@Pragitics (Pragit R V)** - the strategy-builder Greeks tab awaited rather
+  than queried synchronously (#1903).
+- **@santhiprakash (Santhi Prakash)** - README quick-contribution example
+  aligned with Conventional Commits (#1935).
+
 ## [2.0.2.3] - 2026-09-06
 
 ### Strategy Module, Agent and Charting Release

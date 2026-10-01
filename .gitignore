@@ -135,3 +135,16 @@ workspace/**/.sample.env
 # there) creates the tilde as a real folder here instead of in the profile.
 # It holds credentials, so it must never be committed.
 /~/
+
+# Broker QA audit run artefacts (docs/audit/qa_audit/broker/). The runner
+# scripts are tracked; what a run produces is not. The .xlsx reports are
+# per-run output, and qa_shapes.json is the response-shape fingerprint the
+# sandbox and live runs hand to each other for the cross-mode parity checks -
+# it is regenerated on every run.
+docs/audit/qa_audit/**/qa_shapes.json
+docs/audit/qa_audit/**/qa_sandbox_*.xlsx
+docs/audit/qa_audit/**/qa_live_*.xlsx
+docs/audit/qa_audit/**/qa_sandbox_*.csv
+docs/audit/qa_audit/**/qa_live_*.csv
+# Excel writes a ~$-prefixed lock file next to any workbook left open.
+docs/audit/qa_audit/**/~$*

@@ -5,7 +5,7 @@
 [![PyPI Downloads](https://static.pepy.tech/badge/openalgo)](https://pepy.tech/projects/openalgo)
 [![PyPI Downloads](https://static.pepy.tech/badge/openalgo/month)](https://pepy.tech/projects/openalgo)
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/openalgoHQ)](https://twitter.com/openalgoHQ)
-[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCw7eVneIEyiTApy4RtxrJsQ)](https://www.youtube.com/@openalgo)
+[![YouTube: Subscribe](https://img.shields.io/badge/YouTube-Subscribe-FF0000)](https://www.youtube.com/@openalgo)
 [![Discord](https://img.shields.io/discord/1219847221055455263)](https://discord.com/invite/UPh7QPsNhP)
 
 </div>
@@ -262,6 +262,8 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 - **ZeroMQ** - High-performance message bus
 - **Argon2-CFFI** - Password hashing
 - **Cryptography** - Fernet encryption for tokens
+- **Agno** - Agentic framework for the `/agent` reasoning loop and tool calling
+- **LiteLLM** - LLM-agnostic provider layer the agent calls every model through
 
 ### Frontend
 - **React 19** - UI library
@@ -384,7 +386,10 @@ We welcome contributions! To contribute:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
+3. Commit your changes using [Conventional Commits](CONTRIBUTING.md#commit-messages), for example:
+   ```bash
+   git commit -m "feat: add amazing feature"
+   ```
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
@@ -407,6 +412,12 @@ OpenAlgo is built upon the shoulders of giants. We extend our gratitude to all t
 - **[Flask](https://flask.palletsprojects.com)** - BSD License - Python web microframework
 - **[React](https://react.dev)** - MIT License - UI library for building user interfaces
 - **[SQLAlchemy](https://www.sqlalchemy.org)** - MIT License - Python SQL toolkit and ORM
+
+### AI & Agent Frameworks
+The AI Agent at `/agent` is deliberately LLM-agnostic. The agent loop and the provider layer are separate pieces, so moving between model vendors, or to a local model, is a configuration change rather than a code change. Both of these projects are what make that possible.
+
+- **[Agno](https://github.com/agno-agi/agno)** - Apache 2.0 - Agentic framework behind the `/agent` reasoning loop, tool calling, session persistence and image attachments
+- **[LiteLLM](https://litellm.ai)** - MIT License - Unified model layer giving one interface across every supported provider, plus the model catalogue and per-model metadata the agent's provider picker is built from
 
 ### UI Components & Styling
 - **[shadcn/ui](https://ui.shadcn.com)** - MIT License - Beautifully designed components built with Radix UI and Tailwind CSS

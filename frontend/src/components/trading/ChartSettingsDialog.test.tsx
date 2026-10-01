@@ -101,6 +101,37 @@ const REQ_DEVIATED: ChartSettingsRequest = {
 }
 
 describe('ChartSettingsDialog', () => {
+  it('keeps an unsupported OI preference visible and disabled', async () => {
+    const onApply = renderDialog(vi.fn(), {
+      tabs: [
+        {
+          id: 'readout',
+          label: 'Readout',
+          inputs: [
+            {
+              key: 'statusLine.openInterest',
+              type: 'boolean',
+              label: 'Open interest',
+              unavailable: 'Open interest is unavailable for this instrument.',
+            },
+          ],
+        },
+      ],
+      values: { 'statusLine.openInterest': true },
+      defaults: { 'statusLine.openInterest': false },
+    })
+    const checkbox = screen.getByRole('checkbox', { name: 'Open interest' })
+    expect(checkbox).toBeChecked()
+    expect(checkbox).toBeDisabled()
+    expect(screen.getByText('Open interest')).toHaveAttribute(
+      'title',
+      'Open interest is unavailable for this instrument.'
+    )
+    await userEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+    expect(onApply).not.toHaveBeenCalled()
+  })
+
   it('renders a tab per schema entry and opens on the first', () => {
     renderDialog()
     expect(screen.getByRole('button', { name: 'Price' })).toBeInTheDocument()

@@ -421,13 +421,13 @@ class TestLockProfit:
         assert not decision.lock_floor_raised
         assert not decision.breached
 
-    def test_a_floor_above_its_arming_threshold_says_so(self):
-        # Self triggering on the arming tick is a configuration error, not a
+    def test_a_floor_above_its_activation_threshold_says_so(self):
+        # Self triggering on the activation tick is a configuration error, not a
         # market event, and the caller has to be able to tell the user which.
         risk = AggregateRisk(lock_profit_at=5000.0, lock_profit_floor=6000.0)
         decision = evaluate_aggregate(risk, 0.0, 5000.0)
         assert decision.reason is BreachReason.LOCK_PROFIT
-        assert "above its arming threshold" in decision.detail
+        assert "above its activation threshold" in decision.detail
 
     def test_a_removed_configuration_does_not_keep_firing(self):
         # lock_armed persisted from a configuration the user has since deleted.

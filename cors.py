@@ -52,12 +52,17 @@ def get_cors_config():
 
 
 def init_cors(app):
-    """Initialize Flask-CORS when it has been explicitly enabled."""
-    if not is_cors_enabled():
+    """Apply one CORS policy to the API extension and blueprint decorators."""
+    enabled = is_cors_enabled()
+    cors_config = get_cors_config() if enabled else {"origins": []}
+    # @cross_origin() reads app.config independently of the API extension.
+    # An empty origin list also keeps its automatic OPTIONS handling fail-closed.
+    app.config.update({f"CORS_{key.upper()}": value for key, value in cors_config.items()})
+
+    if not enabled:
         logger.debug("CORS is disabled")
         return
 
-    cors_config = get_cors_config()
     if cors_config["origins"]:
         logger.debug("CORS enabled for origins: %s", ", ".join(cors_config["origins"]))
     else:

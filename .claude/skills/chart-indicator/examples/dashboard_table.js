@@ -43,7 +43,7 @@ export default function ({
   /**
    * Run a built-in and hand back its columns.
    *
-   * The 91 built-ins are descriptors, and a descriptor is data plus a `calc`,
+   * The 102 built-ins are descriptors, and a descriptor is data plus a `calc`,
    * so any of them doubles as a calculation. `indicatorDefaults` fills in every
    * key the descriptor declares, and `overrides` changes only the periods this
    * table exposes, which keeps working if the built-in gains a setting later.

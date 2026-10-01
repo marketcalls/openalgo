@@ -1,6 +1,9 @@
+import concurrent.futures
+import functools
 import json
 import threading
 import time
+from contextlib import nullcontext
 from datetime import timedelta
 
 import pandas as pd
@@ -12,12 +15,126 @@ from broker.nubra.api.baseurl import (
     get_url,
 )
 from database.token_db import get_br_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError, max_queue_wait
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
 from .nubrawebsocket import NubraWebSocket
 
 logger = get_logger(__name__)
+
+# --- How many requests may wait on the Nubra feed at once, under gthread ---
+# A quote or depth request here subscribes on a WebSocket and then waits
+# seconds for the data, holding its thread the whole time. Under the gthread
+# worker those are request threads from a fixed pool, so at most
+# _FEED_WAITERS_MAX requests wait at once. The next waits at most the data
+# ceiling of utils.broker_backpressure for a place, and falls back to the REST
+# API, as it does when the feed is down.
+# Under eventlet and the development server nothing is capped, as before.
+_FEED_WAITERS_MAX = 8
+_feed_waiters = threading.BoundedSemaphore(_FEED_WAITERS_MAX)
+_feed_gate_held = threading.local()
+_FEED_BUSY_MESSAGE = (
+    "Too many live quote and depth requests are already waiting on the Nubra "
+    "feed. Try again in a few seconds."
+)
+
+
+def _feed_gated(on_busy=None):
+    """Decorate a method that waits on the feed; a no-op outside gthread.
+
+    Args:
+        on_busy: Called with the method's arguments instead of raising when no
+            place frees up in time, for a method that has another way to answer.
+    """
+
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapper(*args, **kwargs):
+            # Nested gated calls on one thread already hold a place.
+            if not runtime.gthread_active() or getattr(_feed_gate_held, "held", False):
+                return method(*args, **kwargs)
+            if not _feed_waiters.acquire(timeout=max_queue_wait("data")):
+                logger.warning(f"Nubra feed: {method.__name__} refused, all places taken")
+                if on_busy is not None:
+                    return on_busy(*args, **kwargs)
+                raise BrokerBusyError(_FEED_BUSY_MESSAGE)
+            _feed_gate_held.held = True
+            try:
+                return method(*args, **kwargs)
+            finally:
+                _feed_gate_held.held = False
+                _feed_waiters.release()
+
+        return wrapper
+
+    return decorate
+
+
+# --- Waiting on the feed ---------------------------------------------------
+# A quote or depth request subscribes and then waits for its data. It used to
+# wait a fixed time, or look every half second for a book; it now looks every
+# _FEED_POLL_SECONDS and stops as soon as what it reads is complete. What it
+# reads, and how, is unchanged, so the answer is the same one, only sooner.
+#
+# Complete means, per channel:
+# * an orderbook: five priced levels on each side (the depth request itself is
+#   what turns five levels on, so an earlier, shallower book can come first),
+#   plus the greeks channel's open interest, which arrives separately;
+# * an instrument's quote on the index channel: its first message, which
+#   carries every field the answer reads. That channel is read before the
+#   orderbook, so only it can end a quote's wait early.
+# An index quote comes from one minute candles, and nothing shows the first
+# candle is the current one, so index quotes keep the full wait.
+_FEED_POLL_SECONDS = 0.05
+_QUOTE_WAIT_SECONDS = 2.0
+_DEPTH_STEP_SECONDS = 0.5
+_DEPTH_STEPS = 10
+
+
+def _wait_for_feed(ready, seconds: float) -> bool:
+    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
+
+    True as soon as it is, False once the time is up. time.sleep yields to the
+    other requests under eventlet and holds only this request's thread elsewhere.
+    """
+    deadline = time.monotonic() + seconds
+    while not ready():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_FEED_POLL_SECONDS, remaining))
+    return True
+
+
+def _book_complete(depth) -> bool:
+    """Whether a cached orderbook entry has five priced levels a side and its open interest."""
+    if not depth or not depth.get("ltp", 0) > 0 or "oi" not in depth:
+        return False
+    bids = depth.get("bids") or []
+    asks = depth.get("asks") or []
+    if len(bids) < 5 or len(asks) < 5:
+        return False
+    return all(level.get("price", 0) > 0 for level in bids[:5] + asks[:5])
+
+
+# Workers for the quote fan-out when no WebSocket is available.
+_QUOTE_FANOUT_WORKERS = 5
+
+
+def _quote_fanout_pool():
+    """The executor for one quote fan-out, as a context manager.
+
+    Under eventlet and the dev server this is a pool of its own per call,
+    exactly as before. Under the gthread worker, where those would be new real
+    OS threads on every request, it is one process-wide pool of the same size,
+    which the ``with`` block must not shut down.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("nubra-quotes", _QUOTE_FANOUT_WORKERS))
+    return concurrent.futures.ThreadPoolExecutor(max_workers=_QUOTE_FANOUT_WORKERS)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
@@ -224,6 +341,7 @@ class BrokerData:
             logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
 
+    @_feed_gated(on_busy=lambda self, symbol, exchange: None)
     def _get_quotes_via_websocket(self, symbol: str, exchange: str) -> dict:
         """
         Try to get quotes via WebSocket channels.
@@ -290,8 +408,16 @@ class BrokerData:
             if not success:
                 return None
 
-            # Single wait for all channels to deliver data
-            time.sleep(2.0)
+            # Single wait for all channels to deliver data. For an instrument it
+            # ends as soon as the index channel, which is read first below, has
+            # its quote; otherwise it lasts the full time, as before.
+            def index_quote_arrived():
+                if is_index_request:
+                    return False
+                quote = websocket.get_quote(ws_exchange, br_symbol)
+                return bool(quote) and quote.get("ltp", 0) > 0
+
+            _wait_for_feed(index_quote_arrived, _QUOTE_WAIT_SECONDS)
 
             # Check index/OHLCV channel first
             quote = websocket.get_quote(ws_exchange, br_symbol)
@@ -436,6 +562,9 @@ class BrokerData:
             logger.error(f"REST quote error for {symbol} on {exchange}: {str(e)}")
             return None
 
+    @_feed_gated(
+        on_busy=lambda self, symbols: self._get_multiquotes_sequential(symbols, use_ws=False)
+    )
     def get_multiquotes(self, symbols: list) -> list:
         """
         Get real-time quotes for multiple symbols using batch WebSocket subscriptions.
@@ -460,7 +589,11 @@ class BrokerData:
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
                 logger.info("WebSocket not available, using REST fallback for multiquotes")
-                return self._get_multiquotes_sequential(symbols)
+                # Under gthread a per-symbol feed attempt would queue at the
+                # feed gate for a socket that is not there; go straight to REST.
+                return self._get_multiquotes_sequential(
+                    symbols, use_ws=not runtime.gthread_active()
+                )
 
             results = []
             failed_symbols = []
@@ -501,7 +634,17 @@ class BrokerData:
                 websocket.subscribe_ohlcv(br_syms, "1m", ws_exchange)
 
             # --- Single wait for all data to arrive ---
-            time.sleep(2.0)
+            # Up to the same two seconds, ending as soon as every instrument's
+            # book is complete. A batch with an index waits the full time.
+            def batch_arrived():
+                if index_items:
+                    return False
+                return all(
+                    _book_complete(websocket.get_market_depth(token_int))
+                    for _symbol, _exchange, token_int in orderbook_items
+                )
+
+            _wait_for_feed(batch_arrived, _QUOTE_WAIT_SECONDS)
 
             # --- Collect orderbook results ---
             for symbol, exchange, token_int in orderbook_items:
@@ -606,20 +749,29 @@ class BrokerData:
                 except Exception:
                     pass
 
-    def _get_multiquotes_sequential(self, symbols: list) -> list:
+    def _get_multiquotes_sequential(self, symbols: list, use_ws: bool = True) -> list:
         """
         Fallback: fetch quotes one-by-one when WebSocket is not available.
         Uses REST API with thread pool for concurrency.
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys.
+            use_ws: False skips the per-symbol feed attempt. The feed gate's
+                refusal passes False (gthread only): each pool worker would
+                otherwise wait the whole ceiling at the same gate again before
+                reaching REST, holding the request far past the bound the gate
+                exists to keep.
         """
         import concurrent.futures
 
         results = []
+        fetch = self.get_quotes if use_ws else self._get_quotes_rest_only
 
         def fetch_single_quote(item):
             symbol = item["symbol"]
             exchange = item["exchange"]
             try:
-                quote_data = self.get_quotes(symbol, exchange)
+                quote_data = fetch(symbol, exchange)
                 return {"symbol": symbol, "exchange": exchange, "data": quote_data}
             except NubraSessionExpired:
                 # Let it out of the worker so the batch fails as a whole rather
@@ -629,7 +781,7 @@ class BrokerData:
                 logger.warning(f"Failed to fetch quote for {symbol}: {e}")
                 return {"symbol": symbol, "exchange": exchange, "error": str(e)}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with _quote_fanout_pool() as executor:
             future_to_symbol = {executor.submit(fetch_single_quote, item): item for item in symbols}
             for future in concurrent.futures.as_completed(future_to_symbol):
                 try:
@@ -640,6 +792,31 @@ class BrokerData:
                     logger.error(f"Generate quote exception: {e}")
 
         return results
+
+    def _get_quotes_rest_only(self, symbol: str, exchange: str) -> dict:
+        """get_quotes without the feed attempt: REST, then zeros, as get_quotes falls back."""
+        try:
+            if not exchange.endswith("_INDEX"):
+                rest_quote = self._get_quotes_via_rest(symbol, exchange)
+                if rest_quote:
+                    return rest_quote
+            logger.info(f"No quote data available for {symbol} on {exchange}")
+            return {
+                "bid": 0,
+                "ask": 0,
+                "open": 0,
+                "high": 0,
+                "low": 0,
+                "ltp": 0,
+                "prev_close": 0,
+                "volume": 0,
+                "oi": 0,
+            }
+        except NubraSessionExpired:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
+            raise Exception(f"Error fetching quotes: {str(e)}") from e
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
@@ -1042,6 +1219,7 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
+    @_feed_gated(on_busy=lambda self, symbol, exchange: None)
     def _get_depth_via_websocket(self, symbol: str, exchange: str) -> dict:
         """
         Try to get market depth via WebSocket orderbook channel.
@@ -1077,10 +1255,17 @@ class BrokerData:
             websocket.change_orderbook_depth(5)
             websocket.subscribe_greeks([token_int])
 
-            # Poll for data (check every 0.5s, up to 5s)
+            # Poll for data (check every 0.5s, up to 5s). Within each half
+            # second, a complete book ends the wait at once; otherwise the book
+            # is read at the half second as before.
             depth = None
-            for _ in range(10):
-                time.sleep(0.5)
+            for _ in range(_DEPTH_STEPS):
+                if _wait_for_feed(
+                    lambda: _book_complete(websocket.get_market_depth(token_int)),
+                    _DEPTH_STEP_SECONDS,
+                ):
+                    depth = websocket.get_market_depth(token_int)
+                    break
                 depth = websocket.get_market_depth(token_int)
                 if depth and depth.get("ltp", 0) > 0:
                     break

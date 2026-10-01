@@ -8,6 +8,7 @@ Note: The /historify page is served by react_app.py (React frontend).
 
 import os
 import tempfile
+import uuid
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
 
@@ -164,7 +165,8 @@ def download_watchlist():
     """Download data for all symbols in the watchlist."""
     try:
         from database.auth_db import get_api_key_for_tradingview
-        from services.historify_service import download_watchlist_data
+        from database.historify_db import get_watchlist
+        from services.historify_service import create_and_start_job
 
         data = request.get_json()
         interval = data.get("interval", "D")
@@ -183,8 +185,17 @@ def download_watchlist():
                 }
             ), 400
 
-        success, response, status_code = download_watchlist_data(
-            interval=interval, start_date=start_date, end_date=end_date, api_key=api_key
+        symbols = [
+            {"symbol": item["symbol"], "exchange": item["exchange"]}
+            for item in get_watchlist()
+        ]
+        success, response, status_code = create_and_start_job(
+            job_type="watchlist",
+            symbols=symbols,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            api_key=api_key,
         )
         return jsonify(response), status_code
     except Exception as e:
@@ -455,10 +466,11 @@ def bulk_export():
 
         # Generate filename
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_id = uuid.uuid4().hex[:10]
         if symbols and len(symbols) == 1:
-            base_name = f"historify_{symbols[0]['symbol']}_{timestamp_str}"
+            base_name = f"historify_{symbols[0]['symbol']}_{timestamp_str}_{export_id}"
         else:
-            base_name = f"historify_export_{timestamp_str}"
+            base_name = f"historify_export_{timestamp_str}_{export_id}"
 
         # Force ZIP format when:
         # 1. Multiple intervals are selected (single-table formats can't carry

@@ -104,7 +104,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from services import depth_service, quotes_service
@@ -119,7 +119,10 @@ from services.agent.tools.base import (
 from services.agent.tools.instrument import depth_levels, normalise_quote, quote_move
 from services.agent.tools.market import IST, is_listed, symbol_pairs
 from services.agent.tools.option_viz import (
+    DEFAULT_EXPIRY_CHOICE,
+    EXPIRY_CHOICES,
     MAX_LEGS,
+    choose_expiry,
     leg_entries,
     leg_label,
     leg_lots,
@@ -130,7 +133,7 @@ from services.agent.tools.option_viz import (
     resolve_underlying_exchange,
     signed_multiplier,
 )
-from services.agent.tools.options import normalise_expiry, normalise_int, normalise_symbol
+from services.agent.tools.options import normalise_int, normalise_symbol
 from services.agent.tools.symbols import DERIVATIVE_EXCHANGES, INDEX_EXCHANGES
 from services.agent.tools.viz import tool_answer
 from services.agent.viz_sink import emit, no_sink_message, sink_of
@@ -320,17 +323,12 @@ STRUCTURES: Mapping[str, Structure] = {
 #: What ``structure`` becomes when the operator named the contracts themselves.
 CUSTOM_STRUCTURE = "custom"
 
-#: How the model may spell "the nearest listed expiry", and the rest of the
-#: expiry vocabulary. Every one of these resolves against the **listed**
-#: expiries, so the tool always names a real date back.
-_EXPIRY_CHOICES: tuple[str, ...] = (
-    "current_week",
-    "next_week",
-    "current_month",
-    "next_month",
-)
-
-_DEFAULT_EXPIRY_CHOICE = "current_week"
+#: The expiry vocabulary, which lives in :mod:`services.agent.tools.option_viz`
+#: with the rest of the shared option language. It was written twice once, and
+#: the copies disagreed: the live card understood "current month" while the
+#: premium chart refused it.
+_EXPIRY_CHOICES = EXPIRY_CHOICES
+_DEFAULT_EXPIRY_CHOICE = DEFAULT_EXPIRY_CHOICE
 
 
 # ---------------------------------------------------------------------------
@@ -412,25 +410,6 @@ def strike_spacing(strikes: Sequence[Any]) -> float | None:
     if not gaps:
         return None
     return min(gaps, key=lambda gap: (-gaps[gap], gap))
-
-
-def _within_this_week(expiry: str) -> bool:
-    """Whether a ``DDMMMYY`` expiry falls inside the current calendar week.
-
-    Args:
-        expiry: The expiry, as every OpenAlgo symbol spells it.
-
-    Returns:
-        True when the date is on or before the coming Sunday. An unparseable
-        date answers False, so the card says "the nearest listed one" rather
-        than claiming a week it could not check.
-    """
-    try:
-        moment = datetime.strptime(expiry, "%d%b%y").date()
-    except ValueError:
-        return False
-    today = datetime.now(IST).date()
-    return today <= moment <= today + timedelta(days=6 - today.weekday())
 
 
 def _epoch_ms(value: Any) -> int | None:
@@ -916,7 +895,7 @@ class LiveToolkit(OpenAlgoToolkit):
                 "Confirm the underlying has listed options, or watch the instruments "
                 "themselves with stream_quotes.",
             )
-        settled = self._settle_expiry(listed, expiry, notices)
+        settled = choose_expiry(listed, expiry, notices)
 
         steps = normalise_int(width, "width", 1, 20) if chosen.needs_width else 1
         if not chosen.needs_width and as_number(width) not in (None, 1):
@@ -1033,91 +1012,6 @@ class LiveToolkit(OpenAlgoToolkit):
         )
 
     # -- tool two: resolution ------------------------------------------------
-
-    def _settle_expiry(self, listed: Sequence[str], value: Any, notices: list[str]) -> str:
-        """Turn an expiry choice into one of the expiries actually listed.
-
-        "Current week" has to come out as a real date or the card is naming a
-        contract that does not exist, so every branch here picks from
-        ``listed`` and says which date it picked.
-
-        Args:
-            listed: The listed expiries in ``DDMMMYY`` form, nearest first.
-            value: The model's choice or an exact date.
-            notices: Collected notices, appended to.
-
-        Returns:
-            One of ``listed``.
-
-        Raises:
-            RetryAgentRun: If an exact date was named and is not listed.
-        """
-        text = str(value or _DEFAULT_EXPIRY_CHOICE).strip().lower().replace(" ", "_")
-        text = text.replace("-", "_")
-
-        if text in ("", "current_week", "nearest", "weekly", "this_week"):
-            picked = listed[0]
-            if _within_this_week(picked):
-                notices.append(f"{picked} is this week's expiry and was used.")
-            else:
-                # "Current week" has to come out as a contract that exists. A
-                # stock lists monthly expiries only, and this week's index
-                # expiry is behind us by Wednesday evening, so saying "the
-                # current week" back would name a date nothing trades on.
-                notices.append(
-                    f"No expiry is listed inside the current week, so {picked}, the nearest "
-                    "listed one, was used."
-                )
-            return picked
-
-        if text in ("next_week", "next"):
-            picked = listed[1] if len(listed) > 1 else listed[0]
-            if picked == listed[0]:
-                notices.append(
-                    f"{picked} is the only listed expiry, so the next one could not be used."
-                )
-            else:
-                notices.append(f"{picked} is the next listed expiry after {listed[0]}.")
-            return picked
-
-        if text in ("current_month", "monthly", "this_month", "next_month"):
-            picked = self._monthly(listed, later=text == "next_month")
-            notices.append(
-                f"{picked} is the last expiry listed in "
-                f"{'the following' if text == 'next_month' else 'the current'} contract month."
-            )
-            return picked
-
-        exact = normalise_expiry(text.upper(), "", allow_embedded=False)
-        if exact not in listed:
-            invalid_argument(
-                "expiry",
-                f"{exact} is not a listed expiry",
-                "The listed ones are " + ", ".join(listed[:8]) + ". Pass one of those, or one "
-                f"of {', '.join(_EXPIRY_CHOICES)}.",
-            )
-        return exact
-
-    @staticmethod
-    def _monthly(listed: Sequence[str], *, later: bool) -> str:
-        """The last expiry listed in a contract month.
-
-        Args:
-            listed: The listed expiries, nearest first.
-            later: True for the month after the nearest expiry's month.
-
-        Returns:
-            The last expiry of that month, falling back to the last listed
-            expiry when the month has none.
-        """
-        months: list[str] = []
-        for entry in listed:
-            month = entry[2:]
-            if month not in months:
-                months.append(month)
-        wanted = months[1] if later and len(months) > 1 else months[0]
-        matching = [entry for entry in listed if entry[2:] == wanted]
-        return matching[-1] if matching else listed[-1]
 
     def _spot_instrument(self, base: str, venue: str) -> tuple[str, str]:
         """The instrument the underlying is actually quoted on.

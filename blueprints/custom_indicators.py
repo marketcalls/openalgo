@@ -21,7 +21,7 @@ container rebuilds for free.
 import re
 from pathlib import Path
 
-from flask import Blueprint, jsonify, send_from_directory
+from flask import Blueprint, jsonify, request, send_from_directory
 
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -68,7 +68,11 @@ def index():
             # A file that vanished between listing and stat is not an error
             # worth failing the whole picker over.
             logger.exception("Could not stat custom indicator %s", entry.name)
-    return jsonify(modules)
+    response = jsonify(modules)
+    # Always revalidated: the list is what tells the chart a file was added,
+    # removed or edited, so a cached copy would hide exactly those changes.
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @custom_indicators_bp.route("/<path:filename>", methods=["GET"])
@@ -87,4 +91,15 @@ def module(filename: str):
     if not directory.is_dir():
         return jsonify({"error": "No indicators directory"}), 404
 
-    return send_from_directory(directory, filename, mimetype="text/javascript")
+    response = send_from_directory(directory, filename, mimetype="text/javascript")
+    # The chart asks for ``?v=<mtime>``, so the bytes behind a versioned URL
+    # never change: an edit changes the mtime and with it the URL. That makes
+    # the module safe to keep for good, and a page reload then reads a folder of
+    # hundreds of modules from the browser cache instead of fetching every one
+    # again. ``private`` because the route is behind the session. A request
+    # without a version is served fresh, so nothing unversioned goes stale.
+    if request.args.get("v"):
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "no-cache"
+    return response

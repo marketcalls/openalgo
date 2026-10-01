@@ -150,11 +150,20 @@ describe('the component subset', () => {
 
 describe('the committed prompt file', () => {
   it('matches a fresh regeneration', () => {
+    // Line endings are normalized on both sides because they are a checkout
+    // artifact, not content. The repository has core.autocrlf enabled and no
+    // .gitattributes, so a Windows working tree holds this file with CRLF
+    // while the generator always emits LF. Comparing raw therefore failed on
+    // every Windows checkout and passed in CI, which is the worst shape a
+    // drift guard can have: it cries wolf where people work and stays silent
+    // where it is enforced. What the test is actually for, a component
+    // signature that changed under the committed prompt, survives this.
+    const eol = (text: string) => text.replace(/\r\n/g, '\n')
     const onDisk = readFileSync(promptFilePath(), 'utf8')
     expect(
-      onDisk,
+      eol(onDisk),
       `${AGENT_UI_PROMPT_PATH} is stale. Regenerate it: cd frontend && node scripts/generate-openui-prompt.mjs`
-    ).toBe(renderAgentUiPromptFile())
+    ).toBe(eol(renderAgentUiPromptFile()))
   })
 
   it('is ASCII, so it can live in this repository', () => {

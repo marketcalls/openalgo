@@ -1,9 +1,48 @@
 import json
 
+from broker.zerodha.mapping.mcx_contract_size import (
+    from_kite_quantity,
+    price_multiplier,
+    units_per_contract,
+)
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Kite fields carrying a quantity, which on MCX arrives counted in contracts.
+#: Rupee fields (buy_value, sell_value, pnl) and per-unit prices are already
+#: correct as Kite reports them and must not be scaled.
+_ORDER_QTY_FIELDS = (
+    "quantity",
+    "filled_quantity",
+    "pending_quantity",
+    "disclosed_quantity",
+    "cancelled_quantity",
+)
+_POSITION_QTY_FIELDS = (
+    "quantity",
+    "overnight_quantity",
+    "buy_quantity",
+    "sell_quantity",
+    "day_buy_quantity",
+    "day_sell_quantity",
+)
+
+
+def _to_openalgo_quantities(row, fields):
+    """Rewrite a Kite row's quantity fields from contracts into OpenAlgo units.
+
+    MCX only, and only here: this is the single point where a Kite orderbook,
+    tradebook or positionbook response is normalised, so every consumer
+    downstream reads the same units convention the other brokers report.
+    Applying it twice would multiply a crude position by 10,000.
+    """
+    exchange = row.get("exchange")
+    symbol = row.get("tradingsymbol")
+    for field in fields:
+        if field in row:
+            row[field] = from_kite_quantity(row[field], symbol, exchange)
 
 
 def _to_float(value, default=0.0):
@@ -48,6 +87,11 @@ def map_order_data(order_data):
             # Extract the instrument_token and exchange for the current order
             exchange = order["exchange"]
             symbol = order["tradingsymbol"]
+
+            # Convert before the symbol is rewritten -- both forms resolve the
+            # same underlying, but keeping the two rewrites together makes the
+            # boundary obvious.
+            _to_openalgo_quantities(order, _ORDER_QTY_FIELDS)
 
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
@@ -151,6 +195,18 @@ def map_trade_data(trade_data):
     return map_order_data(trade_data)
 
 
+def _trade_value(trade):
+    """Rupee value of a trade. Identical to quantity * price outside MCX."""
+    symbol = trade.get("symbol") or trade.get("tradingsymbol")
+    exchange = trade.get("exchange", "")
+    quantity = _to_float(trade.get("quantity", 0))
+    price = _to_float(trade.get("average_price", 0.0))
+
+    lot = units_per_contract(symbol, exchange)
+    contracts = quantity / lot if lot else quantity
+    return contracts * price_multiplier(symbol, exchange) * price
+
+
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
@@ -161,7 +217,12 @@ def transform_tradebook_data(tradebook_data):
             "action": trade.get("transaction_type", ""),
             "quantity": trade.get("quantity", 0),
             "average_price": trade.get("average_price", 0.0),
-            "trade_value": trade.get("quantity", 0) * trade.get("average_price", 0.0),
+            # Quantity times price only values a trade where the instrument is
+            # quoted in the unit it trades in. On MCX the gold family and the
+            # base metals are not: GOLDGUINEA is 8 grams quoted per 8 grams, so
+            # its 8 units times its price counts the contract eight times over.
+            # Value the contracts instead, each by its quotation multiplier.
+            "trade_value": _trade_value(trade),
             "orderid": trade.get("order_id", ""),
             # Kite's own docs (kite.trade/docs/connect/v3/orders/) document
             # three separate timestamps on a trade: order_timestamp ("when
@@ -219,6 +280,8 @@ def map_position_data(position_data):
             # Extract the instrument_token and exchange for the current order
             exchange = position["exchange"]
             symbol = position["tradingsymbol"]
+
+            _to_openalgo_quantities(position, _POSITION_QTY_FIELDS)
 
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:

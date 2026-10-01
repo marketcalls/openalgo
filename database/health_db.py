@@ -18,28 +18,24 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
+
+from database.engine_factory import create_db_engine
 
 logger = logging.getLogger(__name__)
 
 # Use a separate database for health monitoring
 HEALTH_DATABASE_URL = os.getenv("HEALTH_DATABASE_URL", "sqlite:///db/health.db")
 
-# Conditionally create engine based on DB type
-if HEALTH_DATABASE_URL and "sqlite" in HEALTH_DATABASE_URL:
-    # SQLite: Use NullPool to prevent connection pool exhaustion
-    health_engine = create_engine(
-        HEALTH_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
-    )
-else:
-    # For other databases like PostgreSQL, use connection pooling
-    health_engine = create_engine(
-        HEALTH_DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10
-    )
+# Built by the shared factory, like every other engine in the project. The
+# inline create_engine this replaces produced an identical engine, but being the
+# one module that did it by hand is what made health.db look as though it had
+# opted out of the project's SQLite policy (issue #2031 read it that way). The
+# policy is applied process-wide by database/__init__, not here.
+health_engine = create_db_engine(HEALTH_DATABASE_URL)
 
 health_session = scoped_session(
     sessionmaker(autocommit=False, autoflush=False, bind=health_engine)

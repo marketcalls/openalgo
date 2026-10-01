@@ -128,21 +128,32 @@ const err = once(errors)
 const warn = once(warnings)
 const note = once(notes)
 
-// The library's IndicatorInput union. The last five are 1.8.1: 'session',
-// 'timeframe' and 'symbol' are strings the indicator parses itself, 'price' and
-// 'time' are numbers a host may also resolve from a chart click.
-const INPUT_TYPES = new Set([
-  'number', 'boolean', 'color', 'text', 'select', 'source',
-  'session', 'timeframe', 'symbol', 'price', 'time',
-])
-const STRING_INPUTS = new Set(['text', 'select', 'source', 'session', 'timeframe', 'symbol'])
-const NUMBER_INPUTS = new Set(['number', 'price', 'time'])
+// The library's IndicatorInput union, which has exactly EIGHT members.
+//
+// This set once also listed 'session', 'timeframe', 'symbol' and 'price',
+// described as added in 1.8.1. They were never added, and whitelisting them
+// here let a file that declared one pass the gate and install: a renderer
+// switches on `input.type` with no default case, so an unrecognised type is
+// dropped without a word. The default still applies and the indicator computes
+// correctly, while the control never renders and the user cannot change it.
+//
+// 2.4.0 genuinely added two, `interval` and `time`, and they are rendered by
+// both the packaged widget and OpenAlgo's own settings dialog. A session
+// remains a `text` input the indicator parses itself; a fixed set of choices
+// remains a `select`.
+const INPUT_TYPES = new Set(['number', 'boolean', 'color', 'text', 'select', 'source', 'interval', 'time'])
+const STRING_INPUTS = new Set(['text', 'select', 'source', 'interval', 'time'])
+const NUMBER_INPUTS = new Set(['number'])
 const SOURCES = new Set(['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume'])
 const PLACEMENTS = new Set(['onchart', 'pane'])
-const MARKER_POSITIONS = new Set(['aboveBar', 'belowBar', 'inBar', 'atPrice'])
+// `paneTop` and `paneBottom` (2.4.0) pin a marker to the plot edge, so unlike
+// the other four they need neither a bar under them nor a `price`.
+const MARKER_POSITIONS = new Set(['aboveBar', 'belowBar', 'inBar', 'atPrice', 'paneTop', 'paneBottom'])
 const MARKER_SHAPES = new Set([
   'arrowUp', 'arrowDown', 'circle', 'square', 'triangleUp', 'triangleDown',
   'diamond', 'flag', 'text', 'labelUp', 'labelDown',
+  // 2.4.0
+  'cross', 'xcross',
 ])
 const MARKER_SIZES = new Set(['tiny', 'small', 'medium', 'big'])
 const DRAW_KINDS = new Set(['line', 'box', 'label', 'polyline'])
@@ -604,11 +615,46 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
       const store = {}
       let values
       try {
+        // Called WITHOUT the 4th argument on purpose. The context is optional,
+        // so a descriptor that reads `ctx.tickSize` instead of `ctx?.tickSize`
+        // must fail here rather than in a browser.
         values = d.calc(fixture.bars, variant.settings, store)
       } catch (e) {
         err(`${id}: calc threw on ${ctx}: ${e.message}`, `${id}|calc-throw|${e.message}`)
         continue
       }
+      // ...and once more WITH a context, twice over.
+      //
+      // `timezone` and `now` are always supplied by the runtime. `symbol`,
+      // `interval` and `tickSize` are NOT: they are undefined whenever the host
+      // has not declared an instrument or a minMove, which is the ordinary case
+      // for a chart handed bare bars. A study that reads `ctx.tickSize.toFixed()`
+      // works on a configured chart and throws on an unconfigured one, so both
+      // shapes have to run here or that study reaches the browser unchallenged.
+      const baseCtx = {
+        barState: {
+          isNew: true, isConfirmed: true, isRealtime: false,
+          lastIndex: fixture.bars.length - 1,
+        },
+        timezone: 'Asia/Kolkata',
+        now: () => (fixture.bars.at(-1)?.time ?? 0) + 300,
+      }
+      const contexts = [
+        ['a bare calc context (no symbol, interval or tick size)', baseCtx],
+        ['a full calc context', { ...baseCtx, symbol: 'RELIANCE', interval: '5m', tickSize: 0.05 }],
+      ]
+      let ctxThrew = false
+      for (const [what, cc] of contexts) {
+        try {
+          d.calc(fixture.bars, variant.settings, {}, cc)
+        } catch (e) {
+          err(`${id}: calc threw on ${ctx} given ${what}: ${e.message}`,
+            `${id}|calc-ctx-throw|${what}|${e.message}`)
+          ctxThrew = true
+          break
+        }
+      }
+      if (ctxThrew) continue
       // Hand the hooks a recording view of the values so a read of a column
       // that was never produced is caught here rather than rendering a blank.
       const missedReads = new Set()
@@ -847,7 +893,7 @@ function report(install, candidate, registered = []) {
     const dest = join(INSTALL_DIR, name)
     copyFileSync(candidate, dest)
     console.log(`Installed to strategies/indicators/${name}`)
-    console.log('Hard-refresh /trading to pick it up.')
+    console.log('Reopen the indicator picker on /trading to pick it up.')
   } else {
     console.log('Re-run with --install to copy it into strategies/indicators/.')
   }

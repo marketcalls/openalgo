@@ -20,6 +20,7 @@
  * on the way into a dialog.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { fileForScriptId } from '@/lib/trading/openscriptFiles'
 import { cn } from '@/lib/utils'
 
 export interface CatalogEntry {
@@ -104,12 +105,33 @@ export function IndicatorPickerDialog({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  /** Categories the registry actually uses, in descending size. */
+  /**
+   * The studies this trader wrote, told apart from the shipped library.
+   *
+   * Asked of `fileForScriptId`, which is the inverse of the id the scripts
+   * panel registers them under, rather than matched on the category label. A
+   * label is a display string and somebody will reword it; the id is the thing
+   * that has to keep working, and it is already the pair that opens the source
+   * from the legend.
+   */
+  const mine = useMemo(() => catalog.filter((d) => fileForScriptId(d.id) !== null), [catalog])
+  const mineIds = useMemo(() => new Set(mine.map((d) => d.id)), [mine])
+
+  /**
+   * Categories the shipped library uses, in descending size.
+   *
+   * The trader's own studies are excluded: they have a section of their own
+   * above, and a study listed in both places is one a reader has to check
+   * twice to know they have seen everything once.
+   */
   const categories = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const d of catalog) counts.set(d.category, (counts.get(d.category) ?? 0) + 1)
+    for (const d of catalog) {
+      if (mineIds.has(d.id)) continue
+      counts.set(d.category, (counts.get(d.category) ?? 0) + 1)
+    }
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  }, [catalog])
+  }, [catalog, mineIds])
 
   const byId = useMemo(() => new Map(catalog.map((d) => [d.id, d])), [catalog])
   const favSet = useMemo(() => new Set(favourites), [favourites])
@@ -120,15 +142,23 @@ export function IndicatorPickerDialog({
    */
   const rows = useMemo(() => {
     const alpha = (list: CatalogEntry[]) => [...list].sort((a, b) => a.name.localeCompare(b.name))
-    if (section === 'favourites') return alpha(favourites.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d))
-    if (section === 'recent') return recent.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d)
+    if (section === 'favourites')
+      return alpha(favourites.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d))
+    if (section === 'recent')
+      return recent.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d)
+    if (section === 'mine') return alpha(mine)
     if (section === 'all') return alpha(catalog)
-    return alpha(catalog.filter((d) => d.category === section))
-  }, [section, catalog, favourites, recent, byId])
+    // Excluding the trader's own for the same reason the rail does: a library
+    // category is what shipped, and theirs is listed above it.
+    return alpha(catalog.filter((d) => d.category === section && !mineIds.has(d.id)))
+  }, [section, catalog, favourites, recent, byId, mine, mineIds])
 
   const filter = query.trim().toLowerCase()
   const shown = useMemo(
-    () => (filter ? rows.filter((d) => d.name.toLowerCase().includes(filter) || d.id.includes(filter)) : rows),
+    () =>
+      filter
+        ? rows.filter((d) => d.name.toLowerCase().includes(filter) || d.id.includes(filter))
+        : rows,
     [rows, filter]
   )
 
@@ -233,6 +263,8 @@ export function IndicatorPickerDialog({
             {railRow('active', 'Active', active.length)}
             {railRow('favourites', 'Favourites', favourites.length)}
             {railRow('recent', 'Recent', recent.length)}
+            {heading('Yours')}
+            {railRow('mine', 'My scripts', mine.length)}
             {heading('Library')}
             {railRow('all', 'All', catalog.length)}
             {categories.map(([cat, n]) => railRow(cat, cat, n))}
@@ -250,7 +282,9 @@ export function IndicatorPickerDialog({
                     ? 'Nothing matches that.'
                     : section === 'favourites'
                       ? 'Star an indicator to keep it here.'
-                      : 'Nothing here yet.'}
+                      : section === 'mine'
+                        ? 'Nothing written yet. Open the scripts panel to write a study, and it appears here the moment it compiles.'
+                        : 'Nothing here yet.'}
               </p>
             ) : (
               shown.map((d) => (
