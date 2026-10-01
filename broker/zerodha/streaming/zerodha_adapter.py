@@ -604,9 +604,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": exchange,  # Preserve index exchange (NSE_INDEX/BSE_INDEX/MCX_INDEX/GLOBAL_INDEX)
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
-                "ltt": tick.get(
-                    "exchange_timestamp", tick.get("timestamp", int(time.time() * 1000))
-                ),
+                "ltt": tick.get("exchange_timestamp"),
                 "timestamp": tick.get("timestamp", int(time.time() * 1000)),
             }
 
@@ -617,9 +615,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": exchange,  # Keep original exchange
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
-                "ltt": tick.get(
-                    "exchange_timestamp", tick.get("timestamp", int(time.time() * 1000))
-                ),
+                "ltt": tick.get("exchange_timestamp"),
                 "timestamp": tick.get("timestamp", int(time.time() * 1000)),
                 "volume": tick.get("volume_traded", tick.get("volume", 0)),  # Even if 0 for index
                 "price_change": tick.get("price_change", 0),
@@ -659,7 +655,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": exchange,  # Keep original exchange
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
-                "ltt": tick.get("timestamp", int(time.time() * 1000)),
+                "ltt": tick.get("exchange_timestamp"),
             }
 
         return transformed
@@ -674,9 +670,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": exchange,
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
-                "ltt": tick.get(
-                    "exchange_timestamp", tick.get("timestamp", int(time.time() * 1000))
-                ),
+                "ltt": tick.get("exchange_timestamp"),
                 "timestamp": tick.get("timestamp", int(time.time() * 1000)),
             }
 
@@ -687,9 +681,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": exchange,
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
-                "ltt": tick.get(
-                    "exchange_timestamp", tick.get("timestamp", int(time.time() * 1000))
-                ),
+                "ltt": tick.get("exchange_timestamp"),
                 "timestamp": tick.get("timestamp", int(time.time() * 1000)),
                 "volume": tick.get("volume_traded", tick.get("volume", 0)),
                 "last_quantity": tick.get("last_traded_quantity", 0),
@@ -754,7 +746,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": exchange,
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
-                "ltt": tick.get("timestamp", int(time.time() * 1000)),
+                "ltt": tick.get("exchange_timestamp"),
             }
 
         return transformed

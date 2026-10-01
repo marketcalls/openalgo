@@ -7,6 +7,7 @@ conflicts with eventlet in gunicorn+eventlet deployments.
 """
 import json
 import threading
+import time
 from typing import Any
 
 from database.auth_db import get_auth_token
@@ -772,7 +773,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         "ltq": int(cached.get("ltq", 0) or 0),
                         "ltt": int(cached.get("ltt", 0) or 0),
                         "cp": float(cached.get("cp", 0) or 0),
-                        "timestamp": current_ts,
+                        "timestamp": self._published_ts(current_ts),
                     }
                 )
         elif not result.get("ltp"):
@@ -819,6 +820,29 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _read_epoch_ms(value: Any) -> int | None:
+        """Read an int64 epoch-milliseconds field out of a protobuf-as-dict.
+
+        `MessageToDict` renders int64 as a string, and leaves out a field that
+        holds 0, so an absent, zero or unreadable value all mean "the feed did
+        not carry it" and come back as None rather than a made-up time.
+        """
+        try:
+            ms = int(value)
+        except (TypeError, ValueError):
+            return None
+        return ms if ms > 0 else None
+
+    def _published_ts(self, current_ts: Any) -> int:
+        """The time this tick is published at, in epoch ms.
+
+        The feed's own `currentTs` when it sent one, otherwise the local clock.
+        This is when the message left Upstox, not when the trade happened; the
+        trade time is `ltt`.
+        """
+        return self._read_epoch_ms(current_ts) or int(time.time() * 1000)
 
     def _extract_cas_fields(self, ff: dict[str, Any]) -> dict[str, Any]:
         """Extract the Closing Auction Session / pre-open extras from a
@@ -922,7 +946,12 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "average_price": float(avg_price),
                 "total_buy_quantity": int(total_buy_qty),
                 "total_sell_quantity": int(total_sell_qty),
-                "timestamp": int(ohlc.get("ts", current_ts)),
+                # The exchange time of the last trade, None when the feed did not
+                # carry one. `timestamp` used to be the `ts` of the 1d OHLC bar,
+                # which is the bar's start and so the same value all day.
+                "ltt": self._read_epoch_ms(ltpc.get("ltt")),
+                "cp": float(ltpc.get("cp", 0)),
+                "timestamp": self._published_ts(current_ts),
             }
         )
 
@@ -934,7 +963,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _extract_depth_data(self, feed_data: dict[str, Any], current_ts: int) -> dict[str, Any]:
         """Extract depth data from feed."""
         if "fullFeed" not in feed_data:
-            return {"buy": [], "sell": [], "timestamp": current_ts, "ltp": 0}
+            return {"buy": [], "sell": [], "timestamp": self._published_ts(current_ts), "ltp": 0}
 
         full_feed = feed_data["fullFeed"]
         market_ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
@@ -967,8 +996,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         depth_data = {
             "buy": buy_levels[:5],
             "sell": sell_levels[:5],
-            "timestamp": current_ts,
+            "timestamp": self._published_ts(current_ts),
             "ltp": ltp,
+            "ltt": self._read_epoch_ms(ltpc.get("ltt")),
         }
 
         # Additive CAS/pre-open extras — an empty merge outside an auction window.
