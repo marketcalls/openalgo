@@ -207,6 +207,37 @@ describe('SymbolSearchDialog', () => {
     expect(box.value).toBe('NIFTY100EW+NSE_INDEX:NIFTY100QUALTY30')
     expect(picked).toHaveLength(0)
   })
+
+  it('assigns EQ to cash equities ending in CE/PE and preserves badges on derivatives', async () => {
+    const TEST_ROWS: SearchRow[] = [
+      { symbol: 'RELIANCECE', exchange: 'NSE', name: 'RELIANCE' },
+      { symbol: 'NIFTYOPTCE', exchange: 'NFO', name: 'NIFTY' },
+      { symbol: 'NIFTYOPTFUT', exchange: 'NFO', name: 'NIFTY' },
+    ]
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async () => TEST_ROWS}
+        onPick={() => {}}
+      />
+    )
+
+    const box = await focusedBox()
+    await userEvent.type(box, 'R')
+    await waitFor(() => expect(screen.getByText('RELIANCECE')).toBeInTheDocument())
+
+    const getBadge = (symbol: string) => {
+      const row = Array.from(document.querySelectorAll('button[data-idx]')).find(
+        (btn) => btn.querySelector('span:first-child')?.textContent === symbol
+      )
+      return row?.querySelector('span:nth-child(3) > span:first-child')?.textContent
+    }
+
+    expect(getBadge('RELIANCECE')).toBe('EQ')
+    expect(getBadge('NIFTYOPTCE')).toBe('CE')
+    expect(getBadge('NIFTYOPTFUT')).toBe('FUT')
+  })
 })
 
 /**
