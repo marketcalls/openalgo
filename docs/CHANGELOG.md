@@ -98,6 +98,24 @@ have read nothing on every bar.
 **Dependencies.** `openalgo-charts` 2.5.1 to 2.6.0, `openalgo-script` 0.5.0 to
 0.8.1, `openscript` 0.5.0 to 0.8.1.
 
+### Charting terminal: bottom bar and trading hours
+
+- **A bottom bar under the chart grid**, one for the whole grid, following the
+  chart you last clicked. It costs 28 pixels of height in any layout.
+  - **Ranges** 1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y and All pick the nearest
+    interval your broker offers and load the history needed. When the broker
+    has less history, a message says from which date the chart starts.
+  - **Go to** jumps to a date or a date range, loading older history if it is
+    needed.
+  - **Auto-fit, Log and Percent** in one click, saved with the chart's settings.
+  - **Market status** (open, pre-open, closed, holiday, and when it next opens)
+    and a live IST clock, which also opens the timezone choice.
+- **The time axis follows trading hours and holidays** from your admin's market
+  timings and OpenAlgo's holiday calendar, including MCX's evening session and
+  special sessions, with pre-open shaded. Crypto runs round the clock. If the
+  timings cannot be read, the chart draws exactly as before.
+- Nothing to do after pulling. Saved charts and workspaces open as before.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
