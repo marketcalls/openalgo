@@ -353,6 +353,18 @@ by open and trigger-pending orders (unchanged from before).
   use Debian, Raspberry Pi OS or the Docker install. Docker installs were not
   affected.
 
+### Dependencies
+
+Security updates for every open advisory. Nothing to do beyond the usual
+update; no behaviour change is expected.
+
+- `PyJWT` 2.13.0 to 2.15.1 (HMAC key validation, JWKS fetching, malformed and
+  deeply nested tokens). OpenAlgo itself calls none of these: its remote MCP
+  tokens are signed and checked with `joserfc`.
+- `tornado` 6.5.8 to 6.5.10.
+- `urllib3` 2.7.0 to 2.8.0.
+- `axios` 1.18 to 1.20.0 in the frontend.
+
 ## [2.0.2.6] - 2026-09-23
 
 ### OpenScript and Chart Alerts Release
