@@ -137,6 +137,22 @@ have read nothing on every bar.
 - **Double-click a rail tool to keep it** until Esc, and each tool group shows
   the tool you last used there.
 
+### Charting terminal: data window, chart states and replay
+
+- **Data window** on the right rail: the bar's open, high, low, close, volume
+  and open interest, and every study's values, at the crosshair (or the latest
+  bar). It takes width only while open.
+- **A chart says what is happening, on the chart.** Loading dots appear only
+  when a load takes more than a moment. "No data for SYMBOL on INTERVAL" and
+  "Could not load SYMBOL on INTERVAL" cards explain the cause in plain words and
+  offer Try again, while the previous chart stays usable. These replace the
+  pop-up messages for those cases.
+- **Replay:** the start bar's date and time while you pick it, a clock showing
+  the replayed bar's date and time in IST, and a step count while a bar forms.
+  Esc cancels picking a start bar.
+- Zoom and autoscale animations are off when your system asks for reduced
+  motion.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
