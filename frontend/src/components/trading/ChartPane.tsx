@@ -15,7 +15,17 @@ import {
 import type { ChartObjects, LinkGroup } from 'openalgo-charts'
 import type { MagnetMode } from 'openalgo-charts/draw'
 import type { WorkspacePane } from 'openalgo-charts/workspace'
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { GridIcon, PencilIcon, VolumeIcon } from '@/components/chart/menuIcons'
 import { Button } from '@/components/ui/button'
 import {
@@ -65,6 +75,16 @@ import { ComparisonMenu } from './ComparisonMenu'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { PriceScaleMenu } from './PriceScaleMenu'
+import { ChartOrderBridgeContext } from './dock/chartOrderBridge'
+import {
+  type ChartOrderAction,
+  chartOrderRows,
+  confirmationFor,
+  type PositionRow,
+  reverseTicket,
+  stillHeld,
+} from './dock/chartOrderRows'
+import { cancelDockOrder, closeDockPosition } from './dock/orderActions'
 
 // The forms a chart opens on request: none is needed to paint it. Mounted only
 // while open, so their code is fetched on the first opening rather than with
@@ -491,6 +511,10 @@ export function ChartPane({
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
   /** Remove all drawings, waiting for the trader to confirm it. */
   const [removeAll, setRemoveAll] = useState<{ count: number; symbol: string } | null>(null)
+  /** An order action from the right-click menu, waiting for the trader to confirm it. */
+  const [pendingOrder, setPendingOrder] = useState<ChartOrderAction | null>(null)
+  /** The dock's books and order actions; null where there is no dock. */
+  const orderBridge = useContext(ChartOrderBridgeContext)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<TerminalContextMenu | null>(null)
@@ -703,13 +727,14 @@ export function ChartPane({
   }, [mode, appMode])
 
   /* ── toolbar actions ──────────────────────────────────────────────────── */
+  // The toolbar's switches are undo steps; the terminal records them.
   const changeInterval = (iv: string) => {
     onBeforeSourceChange?.()
-    setIntervalState(terminalRef.current?.setInterval(iv) ?? iv)
+    setIntervalState(terminalRef.current?.chooseInterval(iv) ?? iv)
   }
   const changeChartType = (v: string) => {
     onBeforeSourceChange?.()
-    setChartTypeState(terminalRef.current?.setChartType(v) ?? v)
+    setChartTypeState(terminalRef.current?.chooseChartType(v) ?? v)
   }
   const downloadCsv = () => {
     const terminal = terminalRef.current
@@ -840,6 +865,101 @@ export function ChartPane({
     setCtx(null)
   }
   /**
+   * The order rows for the symbol on this chart, read from the dock's books
+   * as the menu opens. Null when it has no working order and no position,
+   * and the menu then shows none.
+   */
+  const orderRows = useMemo(() => {
+    if (!ctx || !sym || sym.quoteOnly || sym.synthetic) return null
+    const bridge = orderBridge?.current
+    return bridge ? chartOrderRows(sym, bridge.book()) : null
+  }, [ctx, sym, orderBridge])
+  /** The lot size a position row is counted in: 1 where quantity is in units. */
+  const lotSizeOf = (row: PositionRow) =>
+    sym?.lots
+      ? row.position.lot_size && row.position.lot_size > 0
+        ? row.position.lot_size
+        : sym.lotsize
+      : 1
+
+  /**
+   * Send what the trader just confirmed. Cancel and Close are the dock's own
+   * functions; Close half is the chart's ticket path; Reverse is the dock's
+   * Close followed by the ticket, filled in and not sent. Each refuses while
+   * trading is locked, and the server decides analyzer or live, as it does
+   * for the dock.
+   */
+  const runOrderAction = async (action: ChartOrderAction) => {
+    const bridge = orderBridge?.current
+    if (!bridge) return
+    const { actions } = bridge
+    if (action.kind === 'cancel') {
+      if (actions.refuse()) return
+      for (const order of action.orders) await cancelDockOrder(order, actions)
+      return
+    }
+    const { row } = action
+    const p = row.position
+    if (action.kind === 'close') {
+      await closeDockPosition(p, actions)
+      return
+    }
+    if (action.kind === 'reverse') {
+      const closed = await closeDockPosition(p, actions)
+      if (closed && sym) setTicket(reverseTicket(row, sym.tick, action.lotSize))
+      return
+    }
+    if (actions.refuse()) return
+    const terminal = terminalRef.current
+    if (!terminal) return
+    try {
+      // Half of a position is a fixed quantity, so it is sent only against
+      // the position as the server holds it now, not as the menu saw it.
+      if (!stillHeld(p, await bridge.freshPositions())) {
+        showToast.error(
+          `The ${p.symbol} ${p.product} position changed since the menu opened. Nothing was sent. Check the position and try again.`
+        )
+        actions.refresh()
+        return
+      }
+    } catch {
+      showToast.error('The position could not be read, so nothing was sent. Try again.')
+      return
+    }
+    try {
+      await terminal.placeTicket({
+        symbol: p.symbol,
+        exchange: p.exchange,
+        action: row.side,
+        quantity: row.half,
+        pricetype: 'MARKET',
+        product: p.product as 'MIS' | 'NRML' | 'CNC',
+      })
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : 'The order could not be placed')
+    }
+    actions.refresh()
+  }
+  // The mode the dock acts in, so the confirmation and the action agree.
+  const pendingText = pendingOrder
+    ? confirmationFor(pendingOrder, orderBridge?.current?.actions.appMode ?? appMode)
+    : null
+
+  /**
+   * Keep the open menu on screen. Its rows depend on what was under the
+   * pointer, so its height is read once it is drawn rather than guessed.
+   */
+  const ctxRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = ctxRef.current
+    if (!ctx || !el) return
+    const bottom = el.getBoundingClientRect().bottom
+    if (bottom > window.innerHeight - 4) {
+      el.style.top = `${Math.max(4, ctx.y - (bottom - window.innerHeight + 4))}px`
+    }
+  }, [ctx])
+
+  /**
    * The right-click menu's drawing rows. On a drawing: copy, cut and delete
    * it. On empty space: paste, when something was copied on this page, and
    * remove all, when there is anything to remove. Each row shows its key.
@@ -922,6 +1042,7 @@ export function ChartPane({
     alertsHandle !== null ||
     textReq !== null ||
     removeAll !== null ||
+    pendingOrder !== null ||
     ticket !== null ||
     confirmLeave
 
@@ -1188,22 +1309,23 @@ export function ChartPane({
             acts on this chart, with the divider saying so. */}
           {!fullscreen && layoutPicker}
 
-          {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
+          {/* Undo / redo for the chart. Also on the drawing rail, and deliberately
             here as well: the rail can be hidden, and these two are reached far
             more often than the tool that made the shape. Both stay mounted and
             go disabled rather than disappearing, so the toolbar does not reflow
-            as you draw. The engine's history is drawing-only, so the labels say
-            so -- a bare "Undo" next to a Replay button would imply it could
-            take back an order. */}
+            as you draw. They walk the chart's changes (drawings, studies,
+            panes, scales, chart type, interval), and the labels say "chart
+            change" so that, next to a Replay button and an order panel, they
+            cannot read as taking back an order. */}
           <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
           <Button
             variant="ghost"
             size="icon"
             className="h-8 w-8 shrink-0"
-            onClick={() => terminalRef.current?.undoDraw()}
+            onClick={() => terminalRef.current?.historyPress('undo')}
             disabled={!history.canUndo}
-            title="Undo drawing (Ctrl + Z)"
-            aria-label="Undo drawing"
+            title={`Undo chart change (${MOD_KEY} + Z). Orders are never undone.`}
+            aria-label="Undo chart change"
           >
             <UndoIcon className="h-[17px] w-[17px]" />
           </Button>
@@ -1211,10 +1333,10 @@ export function ChartPane({
             variant="ghost"
             size="icon"
             className="h-8 w-8 shrink-0"
-            onClick={() => terminalRef.current?.redoDraw()}
+            onClick={() => terminalRef.current?.historyPress('redo')}
             disabled={!history.canRedo}
-            title="Redo drawing (Ctrl + Shift + Z)"
-            aria-label="Redo drawing"
+            title={`Redo chart change (${MOD_KEY} + Y)`}
+            aria-label="Redo chart change"
           >
             <UndoIcon className="h-[17px] w-[17px]" flip />
           </Button>
@@ -1454,6 +1576,47 @@ export function ChartPane({
           </div>
         )}
 
+        {pendingOrder && pendingText && (
+          <div
+            role="alertdialog"
+            aria-label={pendingText.title}
+            className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45"
+          >
+            <div className="w-[360px] max-h-[calc(100%-24px)] max-w-[calc(100%-24px)] overflow-y-auto rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">{pendingText.title}</h4>
+              {pendingText.body.map((line) => (
+                <p key={line} className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                  {line}
+                </p>
+              ))}
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  // Focus starts on the button that sends nothing, so an Enter
+                  // pressed out of habit keeps the position as it is.
+                  // biome-ignore lint/a11y/noAutofocus: a confirmation must take focus, and it must be the safe choice.
+                  autoFocus
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setPendingOrder(null)}
+                >
+                  {pendingText.keep}
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:opacity-90"
+                  onClick={() => {
+                    const action = pendingOrder
+                    setPendingOrder(null)
+                    void runOrderAction(action)
+                  }}
+                >
+                  {pendingText.confirm}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {removeAll && (
           <div
             role="alertdialog"
@@ -1627,6 +1790,7 @@ export function ChartPane({
         )}
         {ctx && !ctx.axis && (
           <div
+            ref={ctxRef}
             className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
             style={{ left: ctx.x, top: ctx.y }}
           >
@@ -1638,6 +1802,93 @@ export function ChartPane({
                 <button type="button" className={ctxRow} onClick={() => run(ctx.profile!.run)}>
                   {ctx.profile.label}
                 </button>
+                <div className="my-1 h-px bg-border" />
+              </>
+            )}
+            {ctx.study && (
+              <>
+                {ctx.study.study && (
+                  <>
+                    <button
+                      type="button"
+                      className={cn(
+                        ctxRow,
+                        !ctx.study.study.configurable && 'cursor-not-allowed opacity-40'
+                      )}
+                      disabled={!ctx.study.study.configurable}
+                      title={
+                        ctx.study.study.configurable ? undefined : 'This study keeps its settings'
+                      }
+                      onClick={() => {
+                        const id = ctx.study?.study?.id
+                        if (id) run(() => terminalRef.current?.openIndicatorSettings(id))
+                      }}
+                    >
+                      <Settings className="h-3.5 w-3.5 opacity-70" />
+                      <span className="truncate">{ctx.study.study.name} settings...</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        ctxRow,
+                        ctx.study.study.removable
+                          ? 'text-destructive hover:text-destructive'
+                          : 'cursor-not-allowed opacity-40'
+                      )}
+                      disabled={!ctx.study.study.removable}
+                      title={
+                        ctx.study.study.removable ? undefined : 'This study stays on the chart'
+                      }
+                      onClick={() => {
+                        const id = ctx.study?.study?.id
+                        if (id) run(() => terminalRef.current?.removeIndicatorById(id))
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 opacity-70" />
+                      <span className="truncate">Remove {ctx.study.study.name}</span>
+                    </button>
+                  </>
+                )}
+                {ctx.study.pane && (
+                  <>
+                    {(
+                      [
+                        ['Move pane up', -1, ctx.study.pane.up],
+                        ['Move pane down', 1, ctx.study.pane.down],
+                      ] as const
+                    ).map(([label, direction, move]) => (
+                      <button
+                        type="button"
+                        key={label}
+                        className={cn(ctxRow, move.disabled && 'cursor-not-allowed opacity-40')}
+                        disabled={move.disabled}
+                        title={move.reason}
+                        onClick={() => {
+                          const index = ctx.study?.pane?.index
+                          if (index !== undefined)
+                            run(() => terminalRef.current?.moveStudyPane(index, direction))
+                        }}
+                      >
+                        <span className="w-3.5" aria-hidden="true" />
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className={ctxRow}
+                      onClick={() => {
+                        const pane = ctx.study?.pane
+                        if (pane)
+                          run(() =>
+                            terminalRef.current?.setStudyPaneCollapsed(pane.index, !pane.collapsed)
+                          )
+                      }}
+                    >
+                      <span className="w-3.5" aria-hidden="true" />
+                      {ctx.study.pane.collapsed ? 'Expand pane' : 'Collapse pane'}
+                    </button>
+                  </>
+                )}
                 <div className="my-1 h-px bg-border" />
               </>
             )}
@@ -1687,6 +1938,70 @@ export function ChartPane({
               </button>
             ))}
 
+            {/* What is open on this symbol: its working orders and positions.
+                Only rows with something to act on; each asks first. */}
+            {orderRows && (
+              <>
+                <div className="my-1 h-px bg-border" />
+                {orderRows.working.length > 0 && (
+                  <button
+                    type="button"
+                    className={ctxRow}
+                    onClick={() =>
+                      run(() =>
+                        setPendingOrder({
+                          kind: 'cancel',
+                          symbol: orderRows.symbol,
+                          exchange: orderRows.exchange,
+                          orders: orderRows.working,
+                        })
+                      )
+                    }
+                  >
+                    <span className="truncate">
+                      Cancel orders on {orderRows.symbol} ({orderRows.working.length})
+                    </span>
+                  </button>
+                )}
+                {orderRows.positions.map((row) => {
+                  const lotSize = lotSizeOf(row)
+                  const tag = row.suffix ? ` ${row.suffix}` : ''
+                  const key = `${row.position.product}`
+                  return (
+                    <div key={key}>
+                      <button
+                        type="button"
+                        className={ctxRow}
+                        onClick={() => run(() => setPendingOrder({ kind: 'close', row, lotSize }))}
+                      >
+                        {row.suffix ? `Close ${row.suffix} position` : 'Close position'}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(ctxRow, row.half === 0 && 'cursor-not-allowed opacity-40')}
+                        disabled={row.half === 0}
+                        title={row.halfReason}
+                        onClick={() => run(() => setPendingOrder({ kind: 'half', row, lotSize }))}
+                      >
+                        Close half{tag}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(ctxRow, row.reverseReason && 'cursor-not-allowed opacity-40')}
+                        disabled={!!row.reverseReason}
+                        title={row.reverseReason}
+                        onClick={() =>
+                          run(() => setPendingOrder({ kind: 'reverse', row, lotSize }))
+                        }
+                      >
+                        {row.suffix ? `Reverse ${row.suffix} position` : 'Reverse position'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </>
+            )}
+
             {/* Drawing rows, only where they apply: on a drawing, what can be
                 done to it; on empty space, paste and remove all. */}
             {(ctx.items.length > 0 || ctx.alert) && ctxDrawingRows.length > 0 && (
@@ -1733,6 +2048,15 @@ export function ChartPane({
             >
               <Settings className="h-3.5 w-3.5 opacity-70" />
               Chart settings...
+            </button>
+            {/* The alerts list, the same one the toolbar's Alerts opens. */}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() => run(() => void terminalRef.current?.openAlerts())}
+            >
+              <span className="w-3.5" aria-hidden="true" />
+              Alerts...
             </button>
             {onToggleRail && (
               <button type="button" className={ctxRow} onClick={() => run(onToggleRail)}>

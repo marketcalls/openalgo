@@ -45,6 +45,10 @@ import {
 } from '@/components/trading/ChartBottomBar'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
+import {
+  type ChartOrderBridgeRef,
+  ChartOrderBridgeContext,
+} from '@/components/trading/dock/chartOrderBridge'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
 import {
   type DockTab,
@@ -76,6 +80,8 @@ import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
 import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
+import { historyChord } from '@/lib/trading/chartHistory'
+import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { MagnetMode } from 'openalgo-charts/draw'
@@ -527,21 +533,24 @@ function TradingWorkspace({ account }: { account: string | null }) {
     [focusedPane]
   )
 
-  const focusPane = useCallback((t: TradingTerminal | null, paneId?: string) => {
-    if (workspacePending.current) return
-    activeRef.current = t
-    if (visibleGrid.current && t) {
-      setMagnet(t.drawStats().magnetMode)
-      setStay(t.drawStats().stay)
-    }
-    if (paneId) {
-      setFocusedPane(paneId)
-      // The context follows the focused pane, so focusing another one changes
-      // the answer without any chart having changed.
-      noteChartChanged()
-    }
-    if (t) setStats(t.drawStats())
-  }, [noteChartChanged])
+  const focusPane = useCallback(
+    (t: TradingTerminal | null, paneId?: string) => {
+      if (workspacePending.current) return
+      activeRef.current = t
+      if (visibleGrid.current && t) {
+        setMagnet(t.drawStats().magnetMode)
+        setStay(t.drawStats().stay)
+      }
+      if (paneId) {
+        setFocusedPane(paneId)
+        // The context follows the focused pane, so focusing another one changes
+        // the answer without any chart having changed.
+        noteChartChanged()
+      }
+      if (t) setStats(t.drawStats())
+    },
+    [noteChartChanged]
+  )
 
   const noteSymbol = useCallback(
     (paneId: string, key: string | null) => {
@@ -705,6 +714,33 @@ function TradingWorkspace({ account }: { account: string | null }) {
     setStats(t.drawStats())
     return true
   }, [])
+
+  /**
+   * Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z walk the focused chart's undo timeline:
+   * drawings, studies, panes, scales, the chart type and the interval, in the
+   * order they were made. Captured on the window so it is one press whether
+   * the drawing rail is shown or not, and never taken from a field, a dialog,
+   * an open menu or the order ticket (chartMayTakeKey). Nothing on the
+   * timeline is an order, so no press can place, change or cancel one.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const direction = historyChord(e)
+      if (!direction || e.repeat || workspacePending.current) return
+      if (!chartMayTakeKey(e)) return
+      const t = activeRef.current
+      if (!t) return
+      e.preventDefault()
+      e.stopPropagation()
+      t.historyPress(direction)
+      setStats(t.drawStats())
+    }
+    window.addEventListener('keydown', onKey, { capture: true })
+    return () => window.removeEventListener('keydown', onKey, { capture: true })
+  }, [])
+
+  /** The dock fills this; each chart's right-click menu reads it as it opens. */
+  const orderBridge = useRef<ChartOrderBridgeRef['current']>(null)
 
   const act = (fn: (t: TradingTerminal) => void) => {
     if (workspacePending.current) return
@@ -1311,7 +1347,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
   )
 
   return (
-    <>
+    <ChartOrderBridgeContext.Provider value={orderBridge}>
       {/* Full-bleed page: the nav must match the chart width, not
           Layout's centred container. See NavbarProps.fluid. */}
       <Navbar fluid />
@@ -1349,8 +1385,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
               stats={railStats}
               latched={latched}
               onPick={pickTool}
-              onUndo={() => act((t) => t.undoDraw())}
-              onRedo={() => act((t) => t.redoDraw())}
+              onUndo={() => act((t) => t.historyPress('undo'))}
+              onRedo={() => act((t) => t.historyPress('redo'))}
               onDeleteSelected={() => act((t) => t.removeDrawings(false))}
               onRemoveAll={() => act((t) => t.requestRemoveAllDrawings())}
               onSelectAll={() => act((t) => t.selectAllDrawings())}
@@ -1673,9 +1709,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
             onPick={sendToFocusedPane}
             activeSymbol={paneSymbols[focusedPane] ?? null}
             tradingLocked={tradingLocked}
+            bridge={orderBridge}
           />
         )}
       </div>
-    </>
+    </ChartOrderBridgeContext.Provider>
   )
 }

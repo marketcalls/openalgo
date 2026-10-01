@@ -211,6 +211,14 @@ import {
   resolveCssColor,
   volumeColor,
 } from './chartTheme'
+import { type HistoryDirection, TerminalHistory } from './chartHistory'
+import {
+  foldedStudyIds,
+  panesToFold,
+  readFoldedStudyIds,
+  type StudyMenu,
+  studyMenuAt,
+} from './chartPaneActions'
 import { CHART_TYPES, volumeUnderElements } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
 import {
@@ -825,6 +833,11 @@ export interface TerminalContextMenu {
   drawing?: { id: string | null; removable: number; paste: boolean }
   /** Set when the price scale was right-clicked: the menu is the scale's own. */
   axis?: PriceAxisMenu
+  /**
+   * The study rows: its settings and removal, and for a study pane its moves
+   * and its fold. Absent where there is no study under the pointer.
+   */
+  study?: StudyMenu
 }
 
 // CRYPTO is the broker-agnostic exchange for crypto derivatives (utils/constants.py); a
@@ -880,7 +893,7 @@ export function sameIndicatorInstances(
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
-const STRATEGY = 'chart-trading'
+export const STRATEGY = 'chart-trading'
 /**
  * Minimum gap between two armed fires, the scalping terminal's figure. A
  * double-click on the on-chart Buy, or a click that lands as the canvas
@@ -985,6 +998,16 @@ export class TradingTerminal {
   private alertRuntimeScope: string | null = null
   private restoringAlertRuntime = false
   private chartToolsReady: Promise<void> = Promise.resolve()
+  /**
+   * The pane's undo timeline (chartHistory.ts). It outlives every chart
+   * rebuild: each rebuilt chart is followed again once its content is back.
+   */
+  private readonly undoHistory = new TerminalHistory({
+    onChange: () => {
+      if (!this.destroyed) this.cb.onDrawChange?.(this.drawStats())
+    },
+    onError: (message) => this.toast(message, 'err'),
+  })
   private historyPending = false
   private historyFailed = false
   private readonly apiKey: string
@@ -2357,6 +2380,9 @@ export class TradingTerminal {
   }
 
   private buildChart() {
+    // The timeline stops following the chart about to go; the new one is
+    // followed once its studies and drawings are back (restoreChartContent).
+    this.undoHistory.pause()
     this.legendTime = null
     this.stopReplay()
     this.comparisons?.detach()
@@ -2686,6 +2712,13 @@ export class TradingTerminal {
     // list still held it — so the next rebuild (timeframe, chart type, theme)
     // brought the deleted indicator back.
     this.chart.on('indicatorRemoved', () => this.syncIndicators())
+    // A pane moved carries its studies to another slot: their saved pane
+    // index follows. A fold is kept beside the saved studies.
+    this.chart.on('paneMoved', () => {
+      this.syncIndicators()
+      this.storeFoldedPanes()
+    })
+    this.chart.on('paneCollapsed', () => this.storeFoldedPanes())
     // Visibility changes made from the Objects panel stay with the pane on a
     // chart rebuild, just like settings and removal from the canvas legend.
     this.chart.on('objects:change', () => this.syncIndicators())
@@ -3141,6 +3174,9 @@ export class TradingTerminal {
     this.chart.on('draw:update', () => this.afterDrawChange())
     this.syncToolCursor()
     this.objects?.refresh()
+    // The drawings join the timeline the studies are already on, unless a
+    // rebuild is still restoring (it follows the chart once it has).
+    if (this.undoHistory.following(this.chart)) this.followHistory()
   }
 
   /** Put the rail's tool on a controller: a drawing tool, the eraser, or neither. */
@@ -3521,11 +3557,9 @@ export class TradingTerminal {
         d.removeMany(targets)
         break
       case 'undo':
-        d.undo()
-        break
       case 'redo':
-        d.redo()
-        break
+        this.historyPress(action.type)
+        return true
       case 'duplicate':
         if (targets.length === 0) return false
         d.duplicate(targets)
@@ -3550,8 +3584,8 @@ export class TradingTerminal {
       // A 1.9.x save counts its raw entries until the tier lifts it: the same
       // number the rail showed for that save before the upgrade.
       count: d ? d.drawings().length : (this.drawLegacy?.length ?? this.drawJson.drawings.length),
-      canUndo: d ? d.canUndo() : false,
-      canRedo: d ? d.canRedo() : false,
+      canUndo: this.historyReady('undo'),
+      canRedo: this.historyReady('redo'),
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
       magnetMode: this.drawMagnetMode,
@@ -3564,13 +3598,11 @@ export class TradingTerminal {
   }
 
   undoDraw(): void {
-    this.draw?.undo()
-    this.afterDrawChange()
+    this.historyPress('undo')
   }
 
   redoDraw(): void {
-    this.draw?.redo()
-    this.afterDrawChange()
+    this.historyPress('redo')
   }
 
   /** Remove every selected drawing, or every drawing when `all` is set. */
@@ -3890,8 +3922,131 @@ export class TradingTerminal {
     if (this.destroyed || chart !== this.chart) return
     chart.setAlertState(this.alertJson)
     this.attachAlerts(chart)
+    this.restoreFoldedPanes(chart)
+    this.followHistory()
     // The restore needed only its own studies; the picker needs everything.
     this.completeIndicatorCatalogue()
+  }
+
+  /* ── folded study panes, kept beside the saved studies ───────────────── */
+
+  /** Remember which study panes are folded, by the studies they hold. */
+  private storeFoldedPanes(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.applyingIndicators || this.restoringIndicatorsOn === chart)
+      return
+    const ids = foldedStudyIds(chart)
+    const raw = this.lsGet('panes-folded')
+    if (ids.length === 0) {
+      if (raw !== null && raw !== '[]') this.lsSet('panes-folded', '[]')
+      return
+    }
+    const next = JSON.stringify(ids)
+    if (raw !== next) this.lsSet('panes-folded', next)
+  }
+
+  /**
+   * Fold again the panes that were folded when the chart was last saved. A
+   * save from before panes could fold has no entry and opens every pane, as
+   * it always did.
+   */
+  private restoreFoldedPanes(chart: ChartInstance): void {
+    if (this.destroyed || chart !== this.chart) return
+    for (const index of panesToFold(chart, readFoldedStudyIds(this.lsGet('panes-folded')))) {
+      if (!chart.paneCollapsed(index)) chart.setPaneCollapsed(index, true)
+    }
+  }
+
+  /* ── chart-wide undo and redo ─────────────────────────────────────────── */
+
+  /** Follow the chart on screen with the undo timeline, keeping its steps. */
+  private followHistory(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.preparingWorkspace) return
+    void this.undoHistory.follow(chart, this.draw)
+  }
+
+  /**
+   * One undo or redo press on this chart. Walks drawings, studies, panes,
+   * scales, the chart type and the interval in the order they were made.
+   * Orders are not on the timeline: no press reaches one.
+   */
+  historyPress(direction: HistoryDirection): boolean {
+    if (this.destroyed) return false
+    const moved = this.undoHistory.press(direction, this.chart, this.draw)
+    if (moved) {
+      this.syncIndicators()
+      this.storeFoldedPanes()
+      if (this.draw) this.afterDrawChange()
+      else this.cb.onDrawChange?.(this.drawStats())
+      this.cb.onWorkspaceChange?.()
+    }
+    return moved
+  }
+
+  /** Whether that press would do anything, for a button's enabled state. */
+  historyReady(direction: HistoryDirection): boolean {
+    return this.undoHistory.ready(direction, this.chart, this.draw)
+  }
+
+  /**
+   * The toolbar's interval switch, recorded as one undo step. The link
+   * group's own propagation calls `setInterval` and is not a step here: it
+   * is the step of the chart where the trader made it.
+   */
+  chooseInterval(iv: string): string {
+    const before = this.interval
+    const recorded = this.undoHistory.following(this.chart)
+    const after = this.setInterval(iv)
+    if (recorded && after !== before) {
+      this.undoHistory.push({
+        label: 'Interval',
+        undo: () => this.setInterval(before) === before,
+        redo: () => this.setInterval(after) === after,
+      })
+    }
+    return after
+  }
+
+  /** The toolbar's chart type switch, recorded as one undo step. */
+  chooseChartType(v: string): string {
+    const before = { type: this.ctype, interval: this.interval }
+    const recorded = this.undoHistory.following(this.chart)
+    const type = this.setChartType(v)
+    if (recorded && type !== before.type) {
+      const after = { type, interval: this.interval }
+      const apply = (to: { type: string; interval: string }) => {
+        if (this.setChartType(to.type) !== to.type) return false
+        // A profile type can have moved the interval with it.
+        return to.interval === this.interval || this.setInterval(to.interval) === to.interval
+      }
+      this.undoHistory.push({
+        label: 'Chart type',
+        undo: () => apply(before),
+        redo: () => apply(after),
+      })
+    }
+    return type
+  }
+
+  /* ── study rows of the right-click menu ───────────────────────────────── */
+
+  /** Move a study pane one slot up or down. */
+  moveStudyPane(paneIndex: number, direction: -1 | 1): boolean {
+    const chart = this.chart
+    if (!chart || this.destroyed) return false
+    const moved = chart.movePane(paneIndex, direction)
+    if (moved) this.cb.onWorkspaceChange?.()
+    return moved
+  }
+
+  /** Fold a study pane to its header strip, or open it again. */
+  setStudyPaneCollapsed(paneIndex: number, collapsed: boolean): boolean {
+    const chart = this.chart
+    if (!chart || this.destroyed || paneIndex === chart.primaryPaneIndex()) return false
+    const changed = chart.setPaneCollapsed(paneIndex, collapsed)
+    if (changed) this.cb.onWorkspaceChange?.()
+    return changed
   }
 
   private attachAlerts(chart: ChartInstance): void {
@@ -4459,8 +4614,15 @@ export class TradingTerminal {
   ): void {
     const inst = this.chart?.indicators().find((i) => i.id === instanceId)
     if (!inst) return
-    if (barSource !== undefined && barSource !== inst.barSource()) inst.setBarSource(barSource)
-    inst.setSettings(patch)
+    // One Ok is one undo step, the bar source and the settings together.
+    this.undoHistory.transact(
+      this.chart,
+      () => {
+        if (barSource !== undefined && barSource !== inst.barSource()) inst.setBarSource(barSource)
+        inst.setSettings(patch)
+      },
+      'Study settings'
+    )
     this.reportRefusedStudies(instanceId, true)
     this.syncIndicators()
   }
@@ -4943,14 +5105,18 @@ export class TradingTerminal {
   }
 
   removeComparison(id: string): void {
-    this.comparisons?.remove(id)
+    // The comparison owns a temporary scale mode; its scale change is not a
+    // step of its own, or an undo would leave a comparison on a price scale.
+    this.undoHistory.ignore(() => this.comparisons?.remove(id))
   }
 
   setComparisonMode(mode: 'price' | 'percentage'): void {
     if (mode !== 'price' && mode !== 'percentage') throw new Error('Invalid comparison mode')
     const selected = mode === 'percentage' ? 'percent' : 'price'
-    if (this.comparisons) this.comparisons.setMode(selected)
-    else {
+    if (this.comparisons) {
+      const comparisons = this.comparisons
+      this.undoHistory.ignore(() => comparisons.setMode(selected))
+    } else {
       this.comparisonPreferences.mode = selected
       this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
       this.cb.onComparisonsChange?.(this.comparisonState())
@@ -7170,6 +7336,12 @@ export class TradingTerminal {
           : [],
       profile: this.profileContextMenuAt(event.point.x, event.point.y),
       alert,
+      study:
+        studyMenuAt(
+          chart,
+          event.paneIndex,
+          target.kind === 'indicator' ? (target.instanceId ?? null) : null
+        ) ?? undefined,
       drawing: this.draw
         ? {
             id: clicked,
@@ -7531,6 +7703,7 @@ export class TradingTerminal {
       this.initialWorkspacePane = null
       this.preparingWorkspace = false
       this.syncAlertPause()
+      this.followHistory()
       return
     }
 
@@ -7562,6 +7735,8 @@ export class TradingTerminal {
 
   destroy() {
     if (this.destroyed) return
+    // Optional: a terminal built without its fields (a test double) has none.
+    this.undoHistory?.destroy()
     this.replayInvalidation?.()
     this.replayInvalidation = null
     if (this.workspaceReplayMember || this.workspaceReplayPick) this.stopReplay()

@@ -451,7 +451,7 @@ export function DrawingRail({
       <div className="group relative">
         <button
           type="button"
-          aria-label="Undo drawing"
+          aria-label="Undo chart change"
           disabled={!stats.canUndo}
           onClick={onUndo}
           className={btn}
@@ -470,12 +470,12 @@ export function DrawingRail({
             <path d="M3 5v5h5" />
           </svg>
         </button>
-        <RailTip text="Undo" chord={`${MOD_KEY} + Z`} />
+        <RailTip text="Undo chart change. Orders are never undone." chord={`${MOD_KEY} + Z`} />
       </div>
       <div className="group relative">
         <button
           type="button"
-          aria-label="Redo drawing"
+          aria-label="Redo chart change"
           disabled={!stats.canRedo}
           onClick={onRedo}
           className={btn}
