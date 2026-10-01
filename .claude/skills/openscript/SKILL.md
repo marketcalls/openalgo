@@ -68,6 +68,11 @@ The compiler accepted the text: the names resolve, the types agree, the calls
 exist, the limits hold. **Nothing here runs a single bar.** It does not mean the
 strategy is any good, that its numbers are right, or that it will make money.
 
+Some refusals wait for a bar, and a pass rules out none of them: a cell written
+outside its grid is `OS4008` on the bar that writes it. `OS6025`, a bar handed
+over with no time, is the platform's data and not the script: report the
+instrument and timeframe rather than changing the script.
+
 `reference/strategies.md` ends with the four steps between a compile and money,
 and they are not optional.
 
@@ -84,6 +89,23 @@ and they are not optional.
 and the dangerous failure is not reaching for a name that does not exist: it is
 reaching for a neighbour that computes something else, which compiles and
 reports a different strategy than the one that was meant.
+
+## Porting from another chart language
+
+The installed compiler carries an importer for the widely used chart language
+whose scripts open with `//@version=5` or `//@version=6`. Each statement comes
+across with its original meaning, or with a warning stating the difference, or
+as a comment with an error, all in the range `OS9001` to `OS9012`, and what it
+hands back has been compiled. From the repository root:
+
+```bash
+node --input-type=module -e "import { importScript } from './frontend/node_modules/openalgo-script/dist/core/index.js'; import { readFileSync } from 'node:fs'; const r = importScript(readFileSync(process.argv[1], 'utf8')); process.stdout.write(r.source); for (const f of r.findings) console.error(f.code, f.message)" <original.txt> > <scratch>/ported.oscript
+```
+
+The output is a draft, not a port. Read every finding: a warning marks a place
+where the numbers can differ from the original, and a line kept as a comment is
+behaviour that did not come across. Then take it through `validate.mjs` like
+any other draft.
 
 ## Three things that cost the most time
 
@@ -107,7 +129,7 @@ of bars and looks like it works.
 
 ## Keeping the skill honest
 
-Two scripts, both of which must pass, and both of which the CI job runs:
+The generator and two checks, all three of which the CI job runs:
 
 ```bash
 node .claude/skills/openscript/generate-reference.mjs   # rewrites reference/library.md
