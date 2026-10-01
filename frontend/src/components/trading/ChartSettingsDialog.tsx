@@ -40,7 +40,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
 
   useEffect(() => {
     setValues(req ? { ...req.values } : {})
-    setTabId(req?.tabs[0]?.id ?? '')
+    setTabId(req?.initialTab ?? req?.tabs[0]?.id ?? '')
   }, [req])
 
   // Attached before the form is painted. The form mounts on its first opening,

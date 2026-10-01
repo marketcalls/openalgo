@@ -64,6 +64,7 @@ import { ChartToolbar } from './ChartToolbar'
 import { ComparisonMenu } from './ComparisonMenu'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
+import { PriceScaleMenu } from './PriceScaleMenu'
 
 // The forms a chart opens on request: none is needed to paint it. Mounted only
 // while open, so their code is fetched on the first opening rather than with
@@ -527,7 +528,8 @@ export function ChartPane({
             0,
             Math.min(
               menu.y,
-              window.innerHeight - (menu.profile ? 490 : 430) - (menu.drawing ? 105 : 0)
+              window.innerHeight -
+                (menu.axis ? 470 : (menu.profile ? 490 : 430) + (menu.drawing ? 105 : 0))
             )
           ),
         })
@@ -1596,7 +1598,34 @@ export function ChartPane({
           </div>
         )}
 
-        {ctx && (
+        {ctx?.axis && (
+          <PriceScaleMenu
+            menu={ctx.axis}
+            x={ctx.x}
+            y={ctx.y}
+            onCommand={(command, keepOpen) => {
+              const t = terminalRef.current
+              if (!t) return
+              const done = t.priceAxisCommand(command)
+              if (!keepOpen) {
+                setCtx(null)
+                return
+              }
+              // Read back once the choice has landed, so the switch shows it.
+              void done.then(() => {
+                const next = t.priceAxisMenu()
+                setCtx((c) => (c?.axis && next ? { ...c, axis: next } : c))
+              })
+            }}
+            onSettings={() => {
+              setCtx(null)
+              void terminalRef.current
+                ?.chartSettings()
+                .then((cs) => cs && setChartSettings({ ...cs, initialTab: 'axes' }))
+            }}
+          />
+        )}
+        {ctx && !ctx.axis && (
           <div
             className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
             style={{ left: ctx.x, top: ctx.y }}

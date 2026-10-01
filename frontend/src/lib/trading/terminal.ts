@@ -102,6 +102,17 @@ import {
 import { chartMotionOptions } from './chartMotion'
 import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
 import { openInterestCapability } from './openInterest'
+import {
+  isPriceAxisSetting,
+  PRICE_AXIS_DEFAULTS,
+  PriceAxisController,
+  type PriceAxisCommand,
+  pinOnceMeasured,
+  type PriceAxisMenu,
+  priceAxisPatch,
+  priceAxisSettingsView,
+  priceAxisShortcuts,
+} from './priceAxis'
 import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
 import { replayTiming } from './replayTiming'
 import { applySessionHours } from './sessionHours'
@@ -688,6 +699,8 @@ export interface ChartSettingsRequest {
    * switch off chrome the user never asked to lose.
    */
   defaults: Record<string, string | number | boolean>
+  /** The tab the dialog opens on; the first when absent. */
+  initialTab?: string
 }
 
 /**
@@ -810,6 +823,8 @@ export interface TerminalContextMenu {
    * are not drawings and never appear here.
    */
   drawing?: { id: string | null; removable: number; paste: boolean }
+  /** Set when the price scale was right-clicked: the menu is the scale's own. */
+  axis?: PriceAxisMenu
 }
 
 // CRYPTO is the broker-agnostic exchange for crypto derivatives (utils/constants.py); a
@@ -1131,6 +1146,8 @@ export class TradingTerminal {
    * onto what is already saved rather than replacing it.
    */
   private chartSettingsSaved: Record<string, string | number | boolean> = {}
+  /** The price scale's levels and side, re-pointed at every chart this builds. */
+  private readonly priceAxis = new PriceAxisController(() => !this.replayOwnsDisplay())
   /**
    * The chart as this terminal builds it, captured once per build. See
    * {@link snapshotChartDefaults}.
@@ -2354,6 +2371,7 @@ export class TradingTerminal {
     this.offBranding?.()
     this.offBranding = null
     if (this.chart) this.chart.destroy()
+    this.priceAxis.detach()
     // The primitives registered here belonged to the chart just destroyed.
     this.screenshotExcluded.length = 0
     this.container.innerHTML = ''
@@ -2410,6 +2428,7 @@ export class TradingTerminal {
               void this.screenshot()
             },
           },
+          ...priceAxisShortcuts((command) => void this.priceAxisCommand(command)),
         ],
       },
       // The pane's top-left already holds this terminal's own OHLC readout (and
@@ -2509,6 +2528,7 @@ export class TradingTerminal {
     // write to this chart, and an awaited snapshot would land after them.
     this.snapshotChartDefaults()
     if (!this.preparingWorkspace) void this.restoreChartSettings()
+    this.syncPriceAxis()
     // A theme or chart-type switch throws the old Chart away, so membership has
     // to be re-established against the new one or the pane silently drops out
     // of the group it still believes it is in.
@@ -4510,14 +4530,17 @@ export class TradingTerminal {
             }
       ),
     }))
-    return volumeSettingsView(
-      profileSettingsView(
-        {
-          tabs,
-          values: { ...readChartSettings(chart) },
-          defaults: { ...this.chartDefaults },
-        },
-        this.ctype,
+    return priceAxisSettingsView(
+      volumeSettingsView(
+        profileSettingsView(
+          {
+            tabs,
+            values: { ...readChartSettings(chart) },
+            defaults: { ...this.chartDefaults },
+          },
+          this.ctype,
+          this.chartSettingsSaved
+        ),
         this.chartSettingsSaved
       ),
       this.chartSettingsSaved
@@ -4584,7 +4607,8 @@ export class TradingTerminal {
     const transformChanged = Object.keys(given).some(transformSetting)
     const enginePatch = Object.fromEntries(
       Object.entries(given).filter(
-        ([key]) => !key.startsWith('profiles.') && !key.startsWith('volume.')
+        ([key]) =>
+          !key.startsWith('profiles.') && !key.startsWith('volume.') && !isPriceAxisSetting(key)
       )
     )
     const merged = { ...this.chartSettingsSaved, ...patch }
@@ -4612,6 +4636,7 @@ export class TradingTerminal {
       ...profileDefaults('tpo'),
       ...profileDefaults('session-volume-profile'),
       ...VOLUME_DEFAULTS,
+      ...PRICE_AXIS_DEFAULTS,
     }
     for (const kind of ['tpo', 'session-volume-profile'] as const) {
       const normalized = profileValues(kind, merged)
@@ -4630,6 +4655,7 @@ export class TradingTerminal {
     }
     this.chartSettingsSaved = kept
     this.lsSet('chartsettings', JSON.stringify(kept))
+    this.syncPriceAxis()
     this.adoptGridFromPatch(patch)
     this.refreshDisplayedVolume()
     this.refreshLegend(this.drawnBars())
@@ -4684,10 +4710,18 @@ export class TradingTerminal {
         Object.fromEntries(
           Object.entries(this.chartSettingsSaved).filter(
             ([key]) =>
-              !key.startsWith('profiles.') && !key.startsWith('volume.') && !transformSetting(key)
+              !key.startsWith('profiles.') &&
+              !key.startsWith('volume.') &&
+              !transformSetting(key) &&
+              !isPriceAxisSetting(key) &&
+              // Pinned once measured, below: pinned now it would hold no range.
+              !(key === 'scales.autoScale' && this.chartSettingsSaved[key] === false)
           )
         )
       )
+      if (this.chartSettingsSaved['scales.autoScale'] === false)
+        pinOnceMeasured(chart, () => chart === this.chart && !this.destroyed)
+      this.syncPriceAxis()
       this.installProfile()
       this.refreshDisplayedVolume()
       this.refreshLegend(this.drawnBars())
@@ -6034,6 +6068,7 @@ export class TradingTerminal {
         const q = j.data || {}
         if (typeof q.ltp === 'number' && q.ltp > 0)
           this.onTick({ symbol: this.sym.symbol, ltp: q.ltp, timeSec: nowSec() })
+        if (!this.sym.quoteOnly) this.priceAxis.setQuote(q.bid, q.ask)
         if (
           this.tradeBtns &&
           typeof q.bid === 'number' &&
@@ -6124,6 +6159,8 @@ export class TradingTerminal {
       this.builder.seed(this.rawBars[this.rawBars.length - 1])
     }
     this.depthActive = false
+    // A new subscription starts with no book: the last one's bid and ask belong to another symbol.
+    this.priceAxis.setQuote(null, null)
     if (this.offLtp) {
       this.offLtp()
       this.offLtp = null
@@ -6141,6 +6178,7 @@ export class TradingTerminal {
       if (!this.sym || symbol !== this.sym.symbol) return
       const bid = depth.bids?.[0]?.price
       const ask = depth.asks?.[0]?.price
+      this.priceAxis.setQuote(bid, ask)
       if (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0) {
         this.depthActive = true
         if (this.tradeBtns) this.tradeBtns.setPrices(bid, ask)
@@ -6194,6 +6232,8 @@ export class TradingTerminal {
       if (last) this.legLtp.set(leg, last.close)
     }
     this.depthActive = false
+    // A new subscription starts with no book: the last one's bid and ask belong to another symbol.
+    this.priceAxis.setQuote(null, null)
     if (this.offLtp) {
       this.offLtp()
       this.offLtp = null
@@ -7061,6 +7101,18 @@ export class TradingTerminal {
     if (!chart || this.destroyed) return
     event.preventDefault()
     const { target } = event
+    // The price scale has a menu of its own: what the scale shows, not orders.
+    if (target.kind === 'price-scale' && event.paneIndex === chart.primaryPaneIndex()) {
+      const box = this.container.getBoundingClientRect()
+      this.cb.onContextMenu?.({
+        x: box.left + event.point.x,
+        y: box.top + event.point.y,
+        items: [],
+        profile: null,
+        axis: this.priceAxis.menu(chart, this.chartSettingsSaved),
+      })
+      return
+    }
     let alert: TerminalContextMenu['alert']
     let clicked: string | null = null
     if (target.kind === 'drawing' && target.id?.startsWith('draw:')) {
@@ -7127,6 +7179,45 @@ export class TradingTerminal {
         : undefined,
     })
   }
+  /** The price scale menu as it reads now, or null with no chart. */
+  priceAxisMenu(): PriceAxisMenu | null {
+    const chart = this.chart
+    if (!chart || this.destroyed) return null
+    return this.priceAxis.menu(chart, this.chartSettingsSaved)
+  }
+
+  /**
+   * Run one price scale action from its menu or a chord. It goes through the
+   * settings path, so the choice is kept with the pane and a rebuild, a reload
+   * or a workspace brings it back.
+   */
+  async priceAxisCommand(command: PriceAxisCommand): Promise<void> {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    const patch = priceAxisPatch(command, chart, this.chartSettingsSaved)
+    if (patch) await this.applyChartSettings(patch)
+  }
+
+  /** Bring the price scale's levels and side in line with the saved settings. */
+  private syncPriceAxis(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    this.priceAxis.sync(chart, this.chartSettingsSaved)
+    // The OHLC readout sits over the plot's top-left corner, so a scale moved
+    // to the left would print it over the axis. It moves right by the axis
+    // width, read after the frame that lays the axis out.
+    const box = this.legendEl.parentElement
+    if (!box) return
+    requestAnimationFrame(() => {
+      if (chart !== this.chart || this.destroyed) return
+      let inset = 0
+      for (const slot of chart.priceAxisLayout(chart.primaryPaneIndex())) {
+        if (slot.side === 'left') inset += slot.width
+      }
+      box.style.left = inset > 0 ? `${Math.round(inset) + 12}px` : ''
+    })
+  }
+
   /** Per-session profile actions are available for quote-only instruments too. */
   profileContextMenuAt(localX: number, localY: number) {
     const chart = this.chart
