@@ -53,11 +53,13 @@ that runs strategies on the server (`openscript`).
   its own `position` names.
 - **Loads lighter.** The side panels (watchlist, option chain, alerts,
   strategies, scripts) and the chart's forms (alerts, chart settings, study
-  settings, study picker, symbol search, order ticket, drawing text) load when
-  first opened. The JavaScript `/trading` needs before its first chart is
+  settings, study picker, symbol search, order ticket) load when first opened. The JavaScript `/trading` needs before its first chart is
   smaller than before this update, although the chart engine itself grew.
 - An alert on a transformed chart can now fire on several bricks that one bar
   completes, each delivered with its own numbers.
+- The chart's right-click menu no longer closes when the toolbar's own row
+  scrolls, which could take it away the moment it opened; a scroll that moves
+  the chart still closes it.
 
 **OpenScript 0.6.0 to 0.8.1, what a script author meets.** A mode written as
 the third argument of `req.timeframe` (or the fifth of `req.symbol`) is now
