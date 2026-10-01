@@ -138,6 +138,61 @@ export function natureOf(marker: ReportMarker): string {
 }
 
 /**
+ * Fold each reversal into one fill: the close of one side and the opening of
+ * the other, made by orders of the same direction in the same bar.
+ *
+ * A sell that exits a long and a sell that opens a short on one bar are one
+ * decision, a reversal, and drew as two marks stacked on the bar ("Exit long
+ * -1" under it, "Short -1" over it). Now it is one mark, "Short -2", at the
+ * entry's price: the position the bar ended in and the units it took to get
+ * there. A buy that covers a short and goes long reads "Long +2".
+ *
+ * Only an exit paired with an entry is folded. Two entries in one bar
+ * (pyramiding) and a lone exit are separate decisions and keep their marks.
+ */
+export function foldReversals(markers: readonly ReportMarker[]): ReportMarker[] {
+  const out: ReportMarker[] = []
+  const used = new Set<number>()
+  const barOf = (marker: ReportMarker) => {
+    const ms = finite(marker.time)
+    return ms === null ? null : Math.floor(ms / 1000)
+  }
+
+  for (let i = 0; i < markers.length; i++) {
+    if (used.has(i)) continue
+    const first = markers[i]
+    const bar = barOf(first)
+    if (bar === null) {
+      out.push(first)
+      continue
+    }
+    // The other half of a reversal: same bar, same direction, the other kind.
+    const firstExits = first.kind === 'exit'
+    let partner = -1
+    for (let j = i + 1; j < markers.length; j++) {
+      const other = markers[j]
+      if (used.has(j) || barOf(other) !== bar) continue
+      if (other.side === first.side && (other.kind === 'exit') !== firstExits) {
+        partner = j
+        break
+      }
+    }
+    if (partner === -1) {
+      out.push(first)
+      continue
+    }
+    used.add(partner)
+    const second = markers[partner]
+    const entry = firstExits ? second : first
+    const a = finite(first.units)
+    const b = finite(second.units)
+    out.push({ ...entry, units: a !== null && b !== null ? Math.abs(a) + Math.abs(b) : entry.units })
+  }
+
+  return out
+}
+
+/**
  * The report's fills as the chart's markers, in the order they filled.
  *
  * `size` is `small` on purpose. A run over a long history puts many marks on one
@@ -150,7 +205,7 @@ export function chartMarkersFrom(
 ): ChartMarker[] {
   const out: ChartMarker[] = []
 
-  for (const marker of markers) {
+  for (const marker of foldReversals(markers)) {
     const ms = finite(marker.time)
     if (ms === null) continue
     const price = finite(marker.price)

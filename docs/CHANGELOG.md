@@ -226,6 +226,11 @@ format gains the other two in its next patch.
   equity is green above the capital the run started with and red below it,
   and drawdown fills downward from zero in red, so the deepest point of a run
   is the lowest point of its chart. The tab you last chose is remembered.
+- **A reversal is one mark.** When a strategy closes one side and opens the
+  other on the same bar, the chart shows "Short -2" (or "Long +2") instead of
+  "Exit long -1" and "Short -1" stacked on one candle: the position the bar
+  ended in, and the units it took to get there. Two entries on one bar and
+  exits on their own keep their own marks.
 - **Written the way a trader reads them.** The equity axis is in rupees grouped
   the Indian way and compacted to lakh and crore (₹1.08L), the drawdown axis
   is a percentage of the high it fell from, and times are in the instrument's

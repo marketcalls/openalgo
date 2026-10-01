@@ -99,7 +99,9 @@ describe('the marks', () => {
     // two runs of marks on one chart, the second leaves the old ones behind.
     const twice = chartMarkersFrom([
       fill({ tradeIndex: 1, kind: 'entry' }),
-      fill({ tradeIndex: 1, kind: 'exit' }),
+      // The next bar: on the same bar a buy exit and a buy entry are a
+      // reversal and fold into one mark.
+      fill({ tradeIndex: 1, kind: 'exit', time: AT + 60_000 }),
     ])
     expect(new Set(twice.map((m) => m.id)).size).toBe(2)
     expect(chartMarkersFrom([fill()])[0].id).toBe(chartMarkersFrom([fill()])[0].id)
@@ -143,28 +145,40 @@ describe('a reversal, which puts two fills on one bar', () => {
     expect(natureOf({ kind: 'exit', side: 'buy' })).toBe('Exit short')
   })
 
-  it('makes the pair on one bar read as two orders and not a contradiction', () => {
-    // Both fills are real and both belong on the chart: a reversal is a close
-    // and an open, and the broker will report two orders.
+  it('draws a reversal as one mark: the new position and the units it took', () => {
+    // A sell that exits a long and a sell that opens a short on one bar are one
+    // decision. Two marks stacked on the bar ("Exit long -1" under it, "Short
+    // -1" over it) made the reader add them up; the chart now does.
     const marks = chartMarkersFrom([closingLong, openingShort])
 
-    expect(marks).toHaveLength(2)
-    expect(marks[0].text).toContain('Exit long')
-    expect(marks[1].text).toContain('Short')
-    expect(marks[1].text).not.toContain('Exit')
-    // Separated on the price, so the pair does not overprint at one point.
-    expect(marks[0].position).not.toBe(marks[1].position)
+    expect(marks).toHaveLength(1)
+    expect(marks[0].text).toBe('-2\nShort')
+    expect(marks[0].position).toBe('aboveBar')
+    expect(marks[0].shape).toBe('arrowDown')
   })
 
-  it('still ids the two fills of one reversal apart', () => {
-    // They share a bar, a price and a side. An id that collided would let one
-    // replace the other and the chart would draw a reversal as a single order.
-    const marks = chartMarkersFrom([
-      { ...closingLong, tradeIndex: 1 },
-      { ...openingShort, tradeIndex: 2 },
-    ])
+  it('draws the mirror reversal as one Long mark', () => {
+    const closingShort = { ...closingLong, side: 'buy' }
+    const openingLong = { ...openingShort, side: 'buy' }
+    const marks = chartMarkersFrom([closingShort, openingLong])
 
-    expect(marks[0].id).not.toBe(marks[1].id)
+    expect(marks).toHaveLength(1)
+    expect(marks[0].text).toBe('Long\n+2')
+    expect(marks[0].position).toBe('belowBar')
+  })
+
+  it('folds a reversal whichever fill the report lists first', () => {
+    const marks = chartMarkersFrom([openingShort, closingLong])
+    expect(marks.map((m) => m.text)).toEqual(['-2\nShort'])
+  })
+
+  it('keeps fills that are not a reversal apart', () => {
+    // Two entries in one bar are pyramiding, two decisions.
+    expect(chartMarkersFrom([openingShort, { ...openingShort, tradeIndex: 2 }])).toHaveLength(2)
+    // An exit and an entry on different bars are a close and a later open.
+    expect(chartMarkersFrom([closingLong, { ...openingShort, time: 60_000 }])).toHaveLength(2)
+    // A close in one direction and an open in the other is not a reversal.
+    expect(chartMarkersFrom([closingLong, { ...openingShort, side: 'buy' }])).toHaveLength(2)
   })
 
   it('needs no tag at all, since it never used one', () => {
