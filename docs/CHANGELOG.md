@@ -199,6 +199,15 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **WhatsApp logged out after every restart.** The paired session was saved
+  once, at pairing, so each restart brought back the pairing-day copy and
+  WhatsApp logged the device out a few seconds later. Alerts then failed with
+  "WhatsApp is not paired or not connected" until you paired again. The bot now
+  saves its session after each login, every 5 minutes and when OpenAlgo stops.
+  A save never brings back a device you unlinked. When WhatsApp does log the
+  device out, the /whatsapp page, alerts and Flow's WhatsApp node say so and
+  ask you to pair again, and the bot no longer retries the rejected session on
+  every start.
 - **A smart order could double or reverse a position when the broker did not
   answer the position check.** A smart order reads your open position from the
   broker, compares it with the position size you asked for, and places the
