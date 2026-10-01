@@ -223,6 +223,7 @@ describe('chart pane preparation ownership', () => {
         subIndex: 0,
         subSteps: 1,
         bar: null,
+        simulated: false,
       })
     )
     fireEvent.click(view.getByRole('button', { name: 'Replay', exact: true }))

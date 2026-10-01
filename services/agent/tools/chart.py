@@ -760,9 +760,9 @@ class ChartToolkit(OpenAlgoToolkit):
         """List the indicators this chart can DRAW.
 
         These are not the indicators that compute values. The chart draws with
-        ``openalgo-charts``, a JavaScript library of 102 indicators, while
+        ``openalgo-charts``, a JavaScript library of 112 indicators, while
         ``compute_indicator`` and its siblings use the Rust-backed Python
-        library of 127. Only 34 names exist in both, so AlphaTrend and HalfTrend
+        library of 127. Only 36 names exist in both, so AlphaTrend and HalfTrend
         can be drawn and never tabulated, and ``bbands`` and ``adxr`` can be
         tabulated and never drawn. Consult THIS list before saying an indicator
         is unavailable on the chart, because the other one will not have it.

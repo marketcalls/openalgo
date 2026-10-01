@@ -59,6 +59,53 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.5.2 to 2.6.0: seven more built-ins, a timeframe on 29 of them, and a
+  wider descriptor.** Every existing descriptor keeps working, and all twelve
+  examples below pass the validator on 2.6.0 unchanged. The index below grew
+  from 387 names to 433 and lost none.
+
+  **2.6.0.** `zigzag`, `high-low-52-week`, `zlema`, `vidya`, `elder-ray`,
+  `schaff-trend-cycle` and `volatility-squeeze` take the registry to 112, so a
+  custom file that already used one of those ids now overrides it (pitfall
+  13). Twenty-nine built-ins (most averages, the bands, `supertrend`, `atr`,
+  `rsi`, `macd`, `stochastic`, `cci`, `adx` and others) gain an input
+  `{ key: 'timeframe', type: 'interval', default: '' }`: `indicatorDefaults()`
+  of those now includes `timeframe: ''`, their `calc` folds to a timeframe set
+  there, and a descriptor that copies their `inputs` copies a row only their
+  `calc` honours (pitfall 24). `withTimeframe(descriptor)` gives your own study
+  the same input. Every built-in now rounds a fractional window length (14.5
+  reads as 15); the exported helpers still do not, so coerce before calling
+  `sma` and friends (pitfall 6). An alert's `when` and `message` run once for
+  each bar a pass appended, each seeing the bars and values through the bar it
+  judges. On a reload, a study whose first pass throws `IndicatorInputError`
+  comes back in its error status, while any other throw still stops the
+  restore. The in-chart transforms, `barSource: 'underlying'` and
+  `ctx.transformed` do not reach a study on `/trading`: the terminal builds its
+  Renko, Heikin Ashi and other transformed bars itself, so `calc` receives the
+  bricks and `ctx.transformed` stays absent (pitfall 20).
+
+  **2.5.4 to 2.5.8.** Optional fields, all usable here unless noted: an
+  `overlay: true` or `plot: key` target on a `draws()` shape or a marker, which
+  is how a study in its own pane puts a signal under the candle's low; font,
+  size, emphasis and alignment on labels, box captions and marker text;
+  `curve: 'smooth'` on a polyline; `tooltip`, spans and font fields on table
+  cells, and a `tables()` hook for several named grids; `gradient`,
+  `gradientBy` and `colorBy` on a fill; `frequency` on an alert (all 2.5.4).
+  New helpers `crossesAbove`, `crossesBelow`, `crosses`, `rising` and
+  `falling` read a missing value as no signal, which is pitfall 4 done for
+  you. What the library has and `/trading` does not take is in pitfall 25: the
+  input types `symbol`, `session`, `multiline`, `price` and `timestamp`
+  (2.5.4), `visibleWhen`, `activeWhen` and `inline` on inputs, and
+  `background` returned as a list of targeted columns (2.5.6). 2.5.8 gave
+  sixteen built-ins a `calcTail` that a spread does not copy. 2.5.4 and 2.5.5
+  corrected several calculations around missing data, and HMA at odd lengths,
+  so a study measured against a built-in re-derives its expectations.
+
+  **2.5.2, 2.5.3, 2.5.7, 2.5.9 and 2.5.10** changed nothing an indicator
+  declares. From 2.5.10, text markers on neighbouring bars are laid out in
+  lanes instead of overlapping, and `roc` and `williams-vix-fix` carry new
+  display names, so match a built-in by id, never by name.
+
 - **2.5.1: a finished alert can stop drawing its line.** Nothing an indicator
   declares changed and no export was added or removed: the index below counts
   the same 387 names it counted on 2.5.0.
@@ -268,7 +315,7 @@ changed, newest first:
    resets per day or per session.
 2. **Before writing a formula, check `reference/cookbook.md`.** Every
    author-facing call is demonstrated there, and the first section is the one
-   that saves the most work: the 105 built-ins are descriptors, so
+   that saves the most work: the 112 built-ins are descriptors, so
    `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
    rather than a reimplementation that can drift from the chart's.
 3. **Load the context you need.** `reference/contract.md` for the descriptor
