@@ -20,6 +20,11 @@ const AgentPanel = lazy(() =>
 const AlertsPanel = lazy(() =>
   import('@/components/trading/AlertsPanel').then((m) => ({ default: m.AlertsPanel }))
 )
+// Brings the widget tier's data window with it, which nothing else needs to
+// paint a chart.
+const DataWindowPanel = lazy(() =>
+  import('@/components/trading/DataWindowPanel').then((m) => ({ default: m.DataWindowPanel }))
+)
 const OptionChainPanel = lazy(() =>
   import('@/components/trading/OptionChainPanel').then((m) => ({ default: m.OptionChainPanel }))
 )
@@ -56,7 +61,7 @@ import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
-import { WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
+import { type ReplayPickSource, WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -340,6 +345,26 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const replaySnapshotRef = useRef(replaySnapshot)
   const [replayError, setReplayError] = useState<string | null>(null)
   const [confirmReplayExit, setConfirmReplayExit] = useState(false)
+  /**
+   * The start bar under the pointer while one is chosen, for the replay bar's
+   * label. A listener set here rather than page state, so a crosshair sweep
+   * re-renders the bar alone and not every pane. Held by the page because the
+   * bar subscribes before the coordinator below exists.
+   */
+  const replayPickListeners = useRef(new Set<() => void>())
+  const replayPick = useRef<ReplayPickSource>({
+    subscribe: (listener) => {
+      replayPickListeners.current.add(listener)
+      return () => {
+        replayPickListeners.current.delete(listener)
+      }
+    },
+    time: () => {
+      const owner = replaySnapshotRef.current.ownerId
+      const terminal = owner ? terminalsRef.current[owner] : null
+      return terminal?.replayPickingBar() ? (terminal.replayPickBar()?.time ?? null) : null
+    },
+  }).current
   const replayPaneIds = useCallback(
     () =>
       visibleGrid.current
@@ -373,9 +398,13 @@ function TradingWorkspace({ account }: { account: string | null }) {
       },
     })
     replayCoordinator.current = coordinator
+    const offPick = coordinator.subscribePick(() => {
+      for (const listener of [...replayPickListeners.current]) listener()
+    })
     updateReplayMembers()
     return () => {
       current = false
+      offPick()
       coordinator.destroy()
       if (replayCoordinator.current === coordinator) replayCoordinator.current = null
     }
@@ -1470,6 +1499,12 @@ function TradingWorkspace({ account }: { account: string | null }) {
                     confirmExit={confirmReplayExit}
                     onCancelExit={() => setConfirmReplayExit(false)}
                     onConfirmExit={stopWorkspaceReplay}
+                    pick={replayPick}
+                    interval={
+                      replaySnapshot.ownerId
+                        ? terminalsRef.current[replaySnapshot.ownerId]?.currentInterval()
+                        : undefined
+                    }
                   />
                 </div>
                 <ChartBottomBar
@@ -1535,6 +1570,21 @@ function TradingWorkspace({ account }: { account: string | null }) {
           )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
+          )}
+          {apiKey && wsUrl && panel === 'data' && (
+            <Suspense fallback={null}>
+              {/* Same pane rule as Objects. A pane builds a new chart and a new
+                  inventory together, so the inventory changing is what brings
+                  the panel onto the new chart. */}
+              <DataWindowPanel
+                chart={
+                  paneObjects[objectsPaneId]
+                    ? (terminalsRef.current[objectsPaneId]?.liveChart() ?? null)
+                    : null
+                }
+                paneLabel={objectsPaneLabel}
+              />
+            </Suspense>
           )}
           {apiKey && wsUrl && panel === 'strategies' && (
             <Suspense fallback={null}>

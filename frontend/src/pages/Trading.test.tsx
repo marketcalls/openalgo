@@ -26,7 +26,13 @@ const fake = vi.hoisted(() => ({
   start: vi.fn(),
   stop: vi.fn(),
   destroy: vi.fn(),
-  terminal: { setWorkspaceTransitionLocked: vi.fn(), setArmed: vi.fn(), drawStats: () => ({}) },
+  terminal: {
+    setWorkspaceTransitionLocked: vi.fn(),
+    setArmed: vi.fn(),
+    drawStats: () => ({}),
+    currentInterval: () => '5m',
+    replayPickingBar: () => false,
+  },
   publish: null as null | ((grid: PreparedChartGrid) => void),
   lock: null as null | ((pending: boolean) => void),
   changed: vi.fn(),
@@ -68,6 +74,7 @@ vi.mock('@/lib/trading/workspaceReplay', () => ({
     start = fake.start
     stop = fake.stop
     destroy = fake.destroy
+    subscribePick = () => () => {}
   },
 }))
 vi.mock('@/components/trading/ChartPane', () => ({

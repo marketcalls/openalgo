@@ -54,6 +54,30 @@ describe('RightRail', () => {
     expect(onSelect).toHaveBeenCalledWith('alerts')
   })
 
+  it('opens the data window from a glyph on the rail', async () => {
+    const onSelect = rail()
+    const button = screen.getByRole('button', { name: 'Data window' })
+    expect(button.textContent).toBe('')
+    await userEvent.click(button)
+    expect(onSelect).toHaveBeenCalledWith('data')
+  })
+
+  it('still opens every panel a trader had open before the data window existed', () => {
+    for (const saved of [
+      'watchlist',
+      'options',
+      'objects',
+      'alerts',
+      'scripts',
+      'backtest',
+      'strategies',
+      'agent',
+    ]) {
+      expect(isPanelId(saved)).toBe(true)
+    }
+    expect(isPanelId('data')).toBe(true)
+  })
+
   it('recognises only the panels the rail actually renders', () => {
     // Storage outlives a release. A remembered name that no longer resolves
     // has to read as "no panel", not as one.

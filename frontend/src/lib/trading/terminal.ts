@@ -99,6 +99,8 @@ import {
   readStoredIndicators,
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
+import { chartMotionOptions } from './chartMotion'
+import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
 import { openInterestCapability } from './openInterest'
 import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
 import { replayTiming } from './replayTiming'
@@ -452,6 +454,11 @@ export interface TerminalCallbacks {
    * chart is live again, which is the transport bar's cue to hide itself.
    */
   onReplayChange?(state: ReplayState | null): void
+  /**
+   * A load started, finished, came back empty or failed. The pane draws it
+   * over the chart, with Try again calling `retryLoad`.
+   */
+  onChartState?(state: ChartStateView): void
   /** The volume histogram was switched from the legend readout. */
   onVolumeChange?(on: boolean): void
   /**
@@ -2413,6 +2420,9 @@ export class TradingTerminal {
       // the SELL/qty/BUY panel (44 + 42*0.72 ~= 75). Indicator legend rows have
       // to start under both or they land on top of the buttons.
       legendOffset: { top: 80 },
+      // Zoom and autoscale snap instead of easing when the system asks for
+      // less motion.
+      ...chartMotionOptions(),
     })
     this.chart.setDataContext(
       this.sym
@@ -6350,6 +6360,10 @@ export class TradingTerminal {
 
   /** Monotonic id for the most recent loadSymbol; older loads abandon. */
   private loadTicket = 0
+  /** The instrument last asked for, so the overlay's Try again repeats it. */
+  private lastPick: SearchRow | null = null
+  /** Why the current load drew no chart, for the overlay. Null when it did. */
+  private loadOutcome: ChartStateView | null = null
 
   /* ── symbol selection ─────────────────────────────────────────────────── */
   /**
@@ -6396,7 +6410,8 @@ export class TradingTerminal {
     } catch (e) {
       if (this.destroyed || ticket !== this.loadTicket) return false
       this.rawBars = []
-      if (!opts.silent) this.toast(`${source}: ${this.cleanError(e)}`, 'err')
+      if (!opts.silent)
+        this.loadOutcome = chartLoadFailed(source, this.interval, this.cleanError(e))
       return false
     }
     if (this.destroyed || ticket !== this.loadTicket) return false
@@ -6407,10 +6422,9 @@ export class TradingTerminal {
       this.rawBars = []
       const error = this.data?.getState().error
       if (!opts.silent) {
-        this.toast(
-          `${source}: ${error ? this.cleanError(error) : `the legs share no bars on ${this.interval}`}`,
-          'err'
-        )
+        this.loadOutcome = error
+          ? chartLoadFailed(source, this.interval, this.cleanError(error))
+          : chartNoData(source, this.interval, 'The instruments in this chart share no bars')
       }
       return false
     }
@@ -6453,6 +6467,9 @@ export class TradingTerminal {
   ): Promise<boolean> {
     if (this.destroyed || !this.rest) return false
     const ticket = ++this.loadTicket
+    this.lastPick = pick
+    this.loadOutcome = null
+    this.cb.onChartState?.({ kind: 'loading', symbol: pick.symbol, interval: this.interval })
     this.historyPending = true
     this.historyFailed = false
     this.syncAlertPause()
@@ -6470,6 +6487,8 @@ export class TradingTerminal {
         this.historyFailed = !loaded
         this.syncAlertPause()
         this.showTradeButtons(loaded)
+        // A silent load that fails says nothing: its caller falls back.
+        this.cb.onChartState?.(loaded ? CHART_READY : (this.loadOutcome ?? CHART_READY))
         if (loaded && !this.preparingWorkspace) this.cb.onWorkspaceChange?.()
       }
     }
@@ -6614,7 +6633,8 @@ export class TradingTerminal {
     } catch (e) {
       if (this.destroyed || ticket !== this.loadTicket) return false
       this.rawBars = []
-      if (!opts.silent) this.toast(`history error: ${this.cleanError(e)}`, 'err')
+      if (!opts.silent)
+        this.loadOutcome = chartLoadFailed(this.sym.symbol, this.interval, this.cleanError(e))
       return false // caller may fall back (e.g. to the default symbol)
     }
     // Validate before assigning: an older response must neither overwrite the
@@ -6624,12 +6644,9 @@ export class TradingTerminal {
     if (!this.rawBars.length) {
       if (!opts.silent) {
         const error = this.data?.getState().error
-        this.toast(
-          error
-            ? `history error: ${this.cleanError(error)}`
-            : `no history for ${this.sym.symbol} ${this.sym.exchange} ${this.interval}`,
-          'err'
-        )
+        this.loadOutcome = error
+          ? chartLoadFailed(this.sym.symbol, this.interval, this.cleanError(error))
+          : chartNoData(this.sym.symbol, this.interval)
       }
       return false
     }
@@ -6737,6 +6754,12 @@ export class TradingTerminal {
     const muted = mutedTradeColors(this.chartTheme)
     this.tradeBtns.setColors(muted.buy, muted.sell)
   }
+  /** The overlay's Try again: repeat the load that drew no chart. */
+  retryLoad(): void {
+    if (this.destroyed || !this.lastPick) return
+    void this.loadSymbol(this.lastPick)
+  }
+
   private reloadCurrent() {
     if (!this.sym) return
     this.loadSymbol({ symbol: this.sym.symbol, exchange: this.sym.exchange, name: this.sym.name })

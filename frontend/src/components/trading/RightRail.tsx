@@ -8,7 +8,17 @@
  * closes it.
  */
 
-import { Activity, Bell, Bot, FileCode2, FlaskConical, List, Shapes, Table2 } from 'lucide-react'
+import {
+  Activity,
+  Bell,
+  Bot,
+  Crosshair,
+  FileCode2,
+  FlaskConical,
+  List,
+  Shapes,
+  Table2,
+} from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
@@ -29,6 +39,9 @@ const PANELS = [
   // Beside the objects panel, because both answer "what is on this chart" and
   // an alert line is one of the things drawn on it.
   { id: 'alerts', label: 'Alerts', icon: Bell },
+  // The values under the crosshair: the bar and every study on it. With the
+  // two above because it too reads the chart rather than the market.
+  { id: 'data', label: 'Data window', icon: Crosshair },
   { id: 'scripts', label: 'Scripts', icon: FileCode2 },
   // Beside the editor, because writing a strategy and asking what it would
   // have done are one activity seen twice, and a trader moves between the two

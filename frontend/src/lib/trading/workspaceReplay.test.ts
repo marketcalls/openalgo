@@ -533,3 +533,29 @@ describe('workspace replay coordination with the published engine', () => {
     expect(b.previewTime).toBeNull()
   })
 })
+
+describe('the start bar label while choosing', () => {
+  it('tells listeners as the hovered bar moves and once more when choosing ends', async () => {
+    const a = new Terminal('a')
+    const { owner, changed } = setup(a)
+    const moved = vi.fn()
+    const off = owner.subscribePick(moved)
+    owner.start('a')
+    // The picker announces its first bar as it opens.
+    expect(moved).toHaveBeenCalledOnce()
+    const published = changed.mock.calls.length
+    a.preview?.(T + 120)
+    expect(moved).toHaveBeenCalledTimes(2)
+    // The panes are not re-rendered for a pointer moving over the chart.
+    expect(changed).toHaveBeenCalledTimes(published)
+    a.pick?.(T + 120)
+    await flush()
+    expect(owner.state().phase).toBe('active')
+    expect(moved).toHaveBeenCalledTimes(3)
+    owner.stop()
+    expect(moved).toHaveBeenCalledTimes(4)
+    off()
+    owner.start('a')
+    expect(moved).toHaveBeenCalledTimes(4)
+  })
+})

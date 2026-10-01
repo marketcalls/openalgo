@@ -26,6 +26,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import {
+  type ChartStateGate,
+  type ChartStateView,
+  createChartStateGate,
+  LOADING_DELAY_MS,
+} from '@/lib/trading/chartState'
 import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
 import { MOD_KEY } from '@/lib/trading/drawingKeys'
 import type { IntervalGroup } from '@/lib/trading/intervals'
@@ -53,6 +59,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { ChartStateOverlay } from './ChartStateOverlay'
 import { ChartToolbar } from './ChartToolbar'
 import { ComparisonMenu } from './ComparisonMenu'
 import { DrawingStyleBar } from './DrawingStyleBar'
@@ -385,6 +392,31 @@ export function ChartPane({
   const { mode, appMode } = useThemeStore()
 
   const [ready, setReady] = useState(false)
+  /**
+   * The load state drawn over the chart: dots for a slow load, a card for no
+   * data or a failure. The gate holds the dots back for a fast load.
+   */
+  const [chartState, setChartState] = useState<ChartStateView | null>(null)
+  const chartStateGate = useRef<ChartStateGate | null>(null)
+  // Before the terminal boots below, so its first load has somewhere to go.
+  useEffect(() => {
+    const gate = createChartStateGate(setChartState)
+    chartStateGate.current = gate
+    return () => {
+      gate.destroy()
+      if (chartStateGate.current === gate) chartStateGate.current = null
+    }
+  }, [])
+  /** True once the first build has taken long enough to show the dots for. */
+  const [bootSlow, setBootSlow] = useState(false)
+  useEffect(() => {
+    if (ready) {
+      setBootSlow(false)
+      return
+    }
+    const timer = setTimeout(() => setBootSlow(true), LOADING_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [ready])
   const [intervalGroups, setIntervalGroups] = useState<IntervalGroup[]>([])
   const [interval, setIntervalState] = useState('5m')
   const [chartType, setChartTypeState] = useState('candlestick')
@@ -552,6 +584,9 @@ export function ChartPane({
       // The legend readout is a second switch for the same thing as the context
       // menu row, so the menu label has to follow it.
       onVolumeChange: (on) => current && setVolumeOn(on),
+      onChartState: (state) => {
+        if (current) chartStateGate.current?.set(state)
+      },
       onReplayChange: (state) => {
         if (!current) return
         setReplay(state)
@@ -1376,11 +1411,16 @@ export function ChartPane({
             sets --tool-cursor while a tool is armed and clears it after. */}
         <div ref={chartRef} className="absolute inset-0 [cursor:var(--tool-cursor,auto)]" />
 
-        {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-            Loading…
-          </div>
-        )}
+        {/* Nothing on this pane takes input until it has been built. */}
+        {!ready && <div className="absolute inset-0" aria-hidden="true" />}
+        <ChartStateOverlay
+          view={
+            chartState ??
+            (!ready && bootSlow ? { kind: 'loading', symbol: '', interval: '' } : null)
+          }
+          onRetry={() => terminalRef.current?.retryLoad()}
+          onDismiss={() => chartStateGate.current?.dismiss()}
+        />
 
         {/*
           Replay transport. The engine's controller is headless by design, so the
