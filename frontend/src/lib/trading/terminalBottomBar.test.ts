@@ -55,8 +55,12 @@ describe('bottom bar preferences on a pane', () => {
     expect(terminal.currentInterval()).toBe('15m')
     expect(terminal.activeRange()).toBeNull()
     expect(terminal.gridState()).toEqual({ vertical: true, horizontal: false })
-    // Reading old state writes nothing back and reports nothing.
-    expect(storage.setItem).not.toHaveBeenCalled()
+    // Reading old state writes nothing back and reports nothing. The one key
+    // allowed is the drawing tier's one-time per-symbol marker, which is its
+    // own migration and leaves every existing value as it was.
+    const written = storage.setItem.mock.calls.map(([key]) => key)
+    expect(written.filter((key) => !key.endsWith('-draw-scoped'))).toEqual([])
+    values.delete('oa-trading-p0-draw-scoped')
     expect(values).toEqual(before)
     expect(callbacks.onToast).not.toHaveBeenCalled()
   })

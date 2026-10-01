@@ -116,6 +116,27 @@ have read nothing on every bar.
   timings cannot be read, the chart draws exactly as before.
 - Nothing to do after pulling. Saved charts and workspaces open as before.
 
+### Charting terminal: drawing tools
+
+- **The active drawing tool's icon follows the pointer**, so you always know
+  what a click will draw.
+- **Drawings stay with the symbol they were drawn on.** Switch a chart to
+  another symbol and back, and your lines come back. Drawings saved before this
+  update move to the symbol each chart was showing, once, by themselves.
+- **Copy, cut and paste drawings** with Ctrl+C, Ctrl+X and Ctrl+V, across
+  charts and browser tabs, also from the right-click menu. Text boxes, dialogs
+  and the order ticket keep these keys.
+- **Remove all drawings** asks first and one Ctrl+Z brings them back. Hide,
+  lock, delete and select all are in the trash button's menu. Order and
+  position lines are never touched by any of these.
+- **Eraser** (in the cursor button's menu), and **magnet weak and strong**.
+- **A properties bar beside the selected drawing**: colour, thickness, style,
+  fill and opacity, extend left and right, Fibonacci and Gann levels, bring to
+  front, send to back, duplicate, hide and lock. It floats over the chart and
+  takes no space from it.
+- **Double-click a rail tool to keep it** until Esc, and each tool group shows
+  the tool you last used there.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
