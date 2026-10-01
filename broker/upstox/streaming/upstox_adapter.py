@@ -963,7 +963,15 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _extract_depth_data(self, feed_data: dict[str, Any], current_ts: int) -> dict[str, Any]:
         """Extract depth data from feed."""
         if "fullFeed" not in feed_data:
-            return {"buy": [], "sell": [], "timestamp": self._published_ts(current_ts), "ltp": 0}
+            # An LTPC-only update still carries the trade time; keep the same
+            # keys as a full depth tick so a client sees one shape.
+            return {
+                "buy": [],
+                "sell": [],
+                "timestamp": self._published_ts(current_ts),
+                "ltp": 0,
+                "ltt": self._read_epoch_ms((feed_data.get("ltpc") or {}).get("ltt")),
+            }
 
         full_feed = feed_data["fullFeed"]
         market_ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})

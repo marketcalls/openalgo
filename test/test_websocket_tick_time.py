@@ -117,6 +117,22 @@ def test_upstox_depth_timestamp_is_a_number_and_carries_the_trade_time(upstox):
     assert depth["ltt"] == TRADE_MS
 
 
+def test_upstox_depth_tick_without_a_full_feed_still_carries_the_trade_time(upstox):
+    """An LTPC-only update on a depth subscription has the same keys as a full one."""
+    response = pb.FeedResponse(type=pb.live_feed, currentTs=SENT_MS)
+    response.feeds[KEY].ltpc.ltp = 102.25
+    response.feeds[KEY].ltpc.ltt = TRADE_MS
+    message = MessageToDict(response)
+    depth = upstox._extract_depth_data(message["feeds"][KEY], message["currentTs"])
+    assert depth["ltt"] == TRADE_MS
+    assert depth["timestamp"] == SENT_MS
+
+
+def test_upstox_depth_tick_with_neither_feed_says_so(upstox):
+    depth = upstox._extract_depth_data({}, str(SENT_MS))
+    assert depth["ltt"] is None
+
+
 # --- Zerodha --------------------------------------------------------------
 
 QUOTE_FIELDS = (
