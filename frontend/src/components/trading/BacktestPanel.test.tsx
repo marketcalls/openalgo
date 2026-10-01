@@ -28,7 +28,10 @@ vi.mock('@/hooks/useLivePrice', () => ({
 }))
 
 // A canvas chart, which has nothing to say about either of these.
-vi.mock('./BacktestChart', () => ({ BacktestChart: () => null }))
+vi.mock('./BacktestChart', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./BacktestChart')>()),
+  BacktestChart: () => null,
+}))
 
 const { BacktestPanel } = await import('./BacktestPanel')
 

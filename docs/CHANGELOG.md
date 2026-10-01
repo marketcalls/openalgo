@@ -217,6 +217,16 @@ as Price or Percentage: Price reopens as Own scale and Indexed to 100 as
 Percentage. The unnamed grid keeps all four. The chart library's workspace
 format gains the other two in its next patch.
 
+### Charting terminal: backtest equity and drawdown
+
+- **A backtest's results now sit right under Run backtest**, above the
+  settings, so a run's figures are visible without scrolling.
+- **Equity, Drawdown and Trades tabs** under the figures. Each curve gets the
+  panel's full chart height, drawn by the same chart engine as the terminal:
+  equity is green above the capital the run started with and red below it,
+  and drawdown fills downward from zero in red, so the deepest point of a run
+  is the lowest point of its chart. The tab you last chose is remembered.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container

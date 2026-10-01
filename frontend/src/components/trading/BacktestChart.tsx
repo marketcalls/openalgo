@@ -1,6 +1,6 @@
 /**
- * The equity curve and the drawdown beneath it, drawn with this platform's own
- * charting engine.
+ * The equity curve or the drawdown of a backtest, drawn with this platform's
+ * own charting engine.
  *
  * **The same engine the terminal draws prices with**, driven the way
  * `CandleViz` drives it for an agent answer: `createChart` on a host div, the
@@ -8,17 +8,15 @@
  * trader who never opens the backtest panel never pays for the charting bundle.
  * Nothing here is a second way to drive the library.
  *
- * **Two panes and not two charts.** The engine creates a higher pane on demand,
- * so the drawdown sits under the equity on one shared time axis. Two separate
- * charts would need their time axes kept in step by hand, and the first thing a
- * reader does with these two series is look down from a peak to the trough
- * underneath it.
+ * **One series per chart, one chart per tab.** The panel shows equity and
+ * drawdown on tabs of their own, so each gets the panel's full chart height
+ * instead of half of a small box.
  *
- * **Drawdown is drawn as an area under zero**, which is the sign the report
- * already carries: `drawdown` is zero or negative and never positive, so the
- * series needs no transformation and the shape on screen is the shape in the
- * record. Flipping it to draw upward would put the worst moment of a run at the
- * top of its own pane.
+ * **Both are baseline series.** Equity is measured from where the run started:
+ * green above the starting capital, red below it, which is the first thing a
+ * reader looks for. Drawdown is measured from zero and is zero or negative, the
+ * sign the report already carries, so it fills downward in red and the worst
+ * moment of a run is the lowest point of its pane, not the highest.
  *
  * **A point with no time is dropped rather than placed.** A bar can arrive
  * without one, and the engine's time axis would put it at the epoch, dragging
@@ -37,8 +35,13 @@ export interface CurvePoint {
   drawdown?: unknown
 }
 
+/** Which of the report's two curves to draw. */
+export type CurveKind = 'equity' | 'drawdown'
+
 interface Props {
   points: readonly CurvePoint[]
+  /** Equity by default. */
+  show?: CurveKind
   className?: string
 }
 
@@ -91,7 +94,7 @@ export function seriesFrom(points: readonly CurvePoint[]): {
   return { equity, drawdown }
 }
 
-export function BacktestChart({ points, className }: Props) {
+export function BacktestChart({ points, show = 'equity', className }: Props) {
   const host = useRef<HTMLDivElement | null>(null)
   const mode = useThemeStore((state) => state.mode)
   const appMode = useThemeStore((state) => state.appMode)
@@ -100,8 +103,8 @@ export function BacktestChart({ points, className }: Props) {
     const container = host.current
     if (!container) return
 
-    const { equity, drawdown } = seriesFrom(points)
-    if (equity.length < 2) return
+    const data = seriesFrom(points)[show]
+    if (data.length < 2) return
 
     let disposed = false
     let instance: Chart | null = null
@@ -120,7 +123,7 @@ export function BacktestChart({ points, className }: Props) {
         const created = core.createChart(container, {
           theme: theme.buildChartTheme(mode, appMode),
           priceAxisWidth: 56,
-          ariaLabel: 'Equity curve and drawdown',
+          ariaLabel: show === 'equity' ? 'Equity curve' : 'Drawdown',
           // This panel is a report and not a workspace. The keyboard belongs to
           // the page, and a hover rail on a chart this size is more chrome than
           // chart.
@@ -137,10 +140,22 @@ export function BacktestChart({ points, className }: Props) {
           return
         }
 
-        created.addSeries('area', { paneIndex: 0 }).setData(equity)
-        if (drawdown.length >= 2) {
-          created.addSeries('area', { paneIndex: 1 }).setData(drawdown)
-        }
+        const colours = created.theme()
+        const fill = (colour: string) => core.withAlpha(colour, 0.22)
+        created
+          .addSeries('baseline', {
+            style: {
+              // Equity from the capital it started with; drawdown from zero.
+              baseValue: show === 'equity' ? data[0].value : 0,
+              topColor: colours.upColor,
+              bottomColor: colours.downColor,
+              areaTopColor: fill(colours.upColor),
+              areaBottomColor: fill(colours.downColor),
+              lineWidth: 1.5,
+            },
+          })
+          .setData(data)
+        created.fitContent()
       } catch {
         // An exception thrown from an effect unmounts the tree above it, which
         // here would take the whole panel down over a chart. A report with no
@@ -157,19 +172,19 @@ export function BacktestChart({ points, className }: Props) {
       instance?.destroy()
       instance = null
     }
-  }, [points, mode, appMode])
+  }, [points, show, mode, appMode])
 
   // Memoised, because this runs on every render and the run above it may hold
   // fifty thousand points: walking all of them to find out whether there are at
   // least two is work repeated for nothing on every unrelated state change in
   // the panel.
-  const drawable = useMemo(() => seriesFrom(points).equity.length >= 2, [points])
+  const drawable = useMemo(() => seriesFrom(points)[show].length >= 2, [points, show])
   if (!drawable) return null
 
   return (
     <div
       ref={host}
-      className={cn('h-48 w-full overflow-hidden rounded border border-border', className)}
+      className={cn('h-60 w-full overflow-hidden rounded border border-border', className)}
     />
   )
 }
