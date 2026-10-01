@@ -62,6 +62,14 @@ describe('seriesFrom', () => {
   })
 
   it('answers empty series for an empty curve rather than throwing', () => {
-    expect(seriesFrom([])).toEqual({ equity: [], drawdown: [] })
+    expect(seriesFrom([])).toEqual({ equity: [], drawdown: [], drawdownPercent: [] })
+  })
+})
+
+describe('drawdown as a share of its peak', () => {
+  it('measures each drawdown against the high it fell from', () => {
+    // Equity 90,000 after falling 10,000 from a 1,00,000 high is -10%.
+    const { drawdownPercent } = seriesFrom([point(0, 100000, 0), point(1000, 90000, -10000)])
+    expect(drawdownPercent.map((p) => p.value)).toEqual([0, -10])
   })
 })

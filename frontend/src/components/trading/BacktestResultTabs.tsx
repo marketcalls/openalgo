@@ -11,7 +11,8 @@
 import { type ReactNode, useState } from 'react'
 import type { BacktestOutcome } from '@/lib/trading/backtestRun'
 import { cn } from '@/lib/utils'
-import { BacktestChart, type CurvePoint, seriesFrom } from './BacktestChart'
+import { momentText, moneyText, signedMoney, signedPercent } from '@/lib/trading/backtestFormat'
+import { BacktestChart, type CurveKind, type CurvePoint, seriesFrom } from './BacktestChart'
 
 type Tab = 'equity' | 'drawdown' | 'trades'
 
@@ -50,6 +51,8 @@ export function BacktestResultTabs({ outcome, money }: Props) {
   const [tab, setTab] = useState<Tab>(storedTab)
   const points = (outcome.equity ?? []) as readonly CurvePoint[]
   const trades = outcome.trades ?? []
+  const currency = outcome.contract?.currency ?? 'INR'
+  const timeZone = outcome.instrument?.timezone ?? 'Asia/Kolkata'
 
   const choose = (next: Tab) => {
     setTab(next)
@@ -104,7 +107,20 @@ export function BacktestResultTabs({ outcome, money }: Props) {
     )
   } else {
     // Keyed by tab, so switching builds the chart afresh for the series shown.
-    body = <BacktestChart key={tab} points={points} show={tab} />
+    body = (
+      <div className="flex flex-col gap-1">
+        <p className="text-[11px] tabular-nums text-muted-foreground">
+          {headline(points, tab, currency, timeZone)}
+        </p>
+        <BacktestChart
+          key={tab}
+          points={points}
+          show={tab}
+          currency={currency}
+          timeZone={timeZone}
+        />
+      </div>
+    )
   }
 
   return (
@@ -141,5 +157,49 @@ function Empty({ children }: { children: ReactNode }) {
     <p className="flex h-24 items-center justify-center rounded border border-dashed border-border px-3 text-center text-[11px] text-muted-foreground">
       {children}
     </p>
+  )
+}
+
+/**
+ * One line over a curve, in words: where equity ended and how far it moved,
+ * or how deep the worst drawdown went and when.
+ */
+export function headline(
+  points: readonly CurvePoint[],
+  show: CurveKind,
+  currency: string,
+  timeZone: string
+): ReactNode {
+  const series = seriesFrom(points)
+  if (show === 'equity') {
+    const first = series.equity[0]
+    const last = series.equity[series.equity.length - 1]
+    if (!first || !last) return null
+    const change = last.value - first.value
+    const pct = first.value !== 0 ? (change / first.value) * 100 : 0
+    return (
+      <>
+        <span className="font-medium text-foreground">Equity {moneyText(last.value, currency)}</span>
+        <span className={change >= 0 ? 'text-emerald-500' : 'text-destructive'}>
+          {` ${signedMoney(change, currency)} (${signedPercent(pct)})`}
+        </span>
+        {` from ${moneyText(first.value, currency)} at the start`}
+      </>
+    )
+  }
+  let deepest: { time: number; value: number } | null = null
+  for (const point of series.drawdown) if (!deepest || point.value < deepest.value) deepest = point
+  if (!deepest || deepest.value >= 0) return 'No drawdown: equity never fell below an earlier high.'
+  const at = deepest.time
+  const pct = series.drawdownPercent.find((point) => point.time === at)?.value
+  return (
+    <>
+      <span className="font-medium text-foreground">Deepest drawdown </span>
+      <span className="text-destructive">
+        {moneyText(deepest.value, currency)}
+        {pct !== undefined ? ` (${signedPercent(pct)})` : ''}
+      </span>
+      {` on ${momentText(at, timeZone)}`}
+    </>
   )
 }

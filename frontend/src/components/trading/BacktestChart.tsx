@@ -25,6 +25,7 @@
 
 import type { Chart } from 'openalgo-charts'
 import { useEffect, useMemo, useRef } from 'react'
+import { compactMoney } from '@/lib/trading/backtestFormat'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -42,6 +43,10 @@ interface Props {
   points: readonly CurvePoint[]
   /** Equity by default. */
   show?: CurveKind
+  /** The run's currency, so the axis reads in rupees (or dollars for crypto). */
+  currency?: string
+  /** The run's zone, so the time axis reads in the instrument's own hours. */
+  timeZone?: string
   className?: string
 }
 
@@ -75,9 +80,11 @@ function finite(value: unknown): number | null {
 export function seriesFrom(points: readonly CurvePoint[]): {
   equity: Plottable[]
   drawdown: Plottable[]
+  drawdownPercent: Plottable[]
 } {
   const equity: Plottable[] = []
   const drawdown: Plottable[] = []
+  const drawdownPercent: Plottable[] = []
 
   for (const point of points) {
     const ms = finite(point.time)
@@ -88,13 +95,31 @@ export function seriesFrom(points: readonly CurvePoint[]): {
     if (value !== null) equity.push({ time, value })
 
     const under = finite(point.drawdown)
-    if (under !== null) drawdown.push({ time, value: under })
+    if (under !== null) {
+      drawdown.push({ time, value: under })
+      // Drawdown as a share of the peak it fell from, which is how it is read:
+      // the peak is the equity now less the (negative) drawdown.
+      const peak = value === null ? null : value - under
+      if (peak !== null && peak > 0) drawdownPercent.push({ time, value: (under / peak) * 100 })
+    }
   }
 
-  return { equity, drawdown }
+  return { equity, drawdown, drawdownPercent }
 }
 
-export function BacktestChart({ points, show = 'equity', className }: Props) {
+/** The series a tab draws: equity in money, drawdown in percent of the peak. */
+function plotted(points: readonly CurvePoint[], show: CurveKind): Plottable[] {
+  const series = seriesFrom(points)
+  return show === 'equity' ? series.equity : series.drawdownPercent
+}
+
+export function BacktestChart({
+  points,
+  show = 'equity',
+  currency = 'INR',
+  timeZone = 'Asia/Kolkata',
+  className,
+}: Props) {
   const host = useRef<HTMLDivElement | null>(null)
   const mode = useThemeStore((state) => state.mode)
   const appMode = useThemeStore((state) => state.appMode)
@@ -103,7 +128,7 @@ export function BacktestChart({ points, show = 'equity', className }: Props) {
     const container = host.current
     if (!container) return
 
-    const data = seriesFrom(points)[show]
+    const data = plotted(points, show)
     if (data.length < 2) return
 
     let disposed = false
@@ -120,15 +145,26 @@ export function BacktestChart({ points, show = 'equity', className }: Props) {
       if (disposed) return
 
       try {
+        const colours = theme.buildChartTheme(mode, appMode)
+        const base = show === 'equity' ? data[0].value : 0
+        const last = data[data.length - 1].value
+        // The current-value tag says where the run stands, not which way the
+        // last bar moved: green above the starting capital (or at a new high
+        // for drawdown), red below it. The engine colours that tag from the
+        // theme's last-price colours, so this chart's theme carries it.
+        const standing = last >= base ? colours.upColor : colours.downColor
         const created = core.createChart(container, {
-          theme: theme.buildChartTheme(mode, appMode),
+          theme: { ...colours, lastPriceUp: standing, lastPriceDown: standing },
           priceAxisWidth: 56,
           ariaLabel: show === 'equity' ? 'Equity curve' : 'Drawdown',
+          ...(core.isValidTimezone(timeZone) ? { timezone: timeZone } : {}),
           // This panel is a report and not a workspace. The keyboard belongs to
           // the page, and a hover rail on a chart this size is more chrome than
           // chart.
           shortcuts: false,
           timeNavigator: false,
+          // The corner mark sits on the curve in a chart this small.
+          branding: false,
         })
         instance = created
 
@@ -140,18 +176,28 @@ export function BacktestChart({ points, show = 'equity', className }: Props) {
           return
         }
 
-        const colours = created.theme()
         const fill = (colour: string) => core.withAlpha(colour, 0.22)
         created
           .addSeries('baseline', {
             style: {
               // Equity from the capital it started with; drawdown from zero.
-              baseValue: show === 'equity' ? data[0].value : 0,
-              topColor: colours.upColor,
+              baseValue: base,
+              // Drawdown is never above zero; a touch of zero is not a gain, so
+              // its line stays red rather than flecking green at each new high.
+              topColor: show === 'equity' ? colours.upColor : colours.downColor,
               bottomColor: colours.downColor,
-              areaTopColor: fill(colours.upColor),
+              areaTopColor: fill(show === 'equity' ? colours.upColor : colours.downColor),
               areaBottomColor: fill(colours.downColor),
               lineWidth: 1.5,
+            },
+            // Read as money and as a percentage on the axis and the crosshair,
+            // not as bare numbers with two decimals.
+            priceFormat: {
+              type: 'custom',
+              formatter:
+                show === 'equity'
+                  ? (value: number) => compactMoney(value, currency)
+                  : (value: number) => `${value.toFixed(2)}%`,
             },
           })
           .setData(data)
@@ -172,13 +218,13 @@ export function BacktestChart({ points, show = 'equity', className }: Props) {
       instance?.destroy()
       instance = null
     }
-  }, [points, show, mode, appMode])
+  }, [points, show, currency, timeZone, mode, appMode])
 
   // Memoised, because this runs on every render and the run above it may hold
   // fifty thousand points: walking all of them to find out whether there are at
   // least two is work repeated for nothing on every unrelated state change in
   // the panel.
-  const drawable = useMemo(() => seriesFrom(points)[show].length >= 2, [points, show])
+  const drawable = useMemo(() => plotted(points, show).length >= 2, [points, show])
   if (!drawable) return null
 
   return (

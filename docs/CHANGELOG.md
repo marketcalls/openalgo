@@ -226,6 +226,13 @@ format gains the other two in its next patch.
   equity is green above the capital the run started with and red below it,
   and drawdown fills downward from zero in red, so the deepest point of a run
   is the lowest point of its chart. The tab you last chose is remembered.
+- **Written the way a trader reads them.** The equity axis is in rupees grouped
+  the Indian way and compacted to lakh and crore (₹1.08L), the drawdown axis
+  is a percentage of the high it fell from, and times are in the instrument's
+  hours. A line above each chart says it in words: "Equity ₹1,10,968
+  +₹11,400 (+11.45%) from ₹99,568 at the start", "Deepest drawdown -₹2,283
+  (-2.09%) on 04 Sept 2026, 09:00". The current-value tag is green above the
+  starting capital and red below it.
 
 ### Long-running memory and resource cleanup
 

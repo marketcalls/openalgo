@@ -68,3 +68,21 @@ describe('BacktestResultTabs', () => {
     expect(screen.getByText('This run took no trades.')).toBeInTheDocument()
   })
 })
+
+describe('the line over each curve', () => {
+  it('says where equity ended and how far it moved, in rupees', () => {
+    render(<BacktestResultTabs outcome={outcome()} money={money} />)
+    const line = screen.getByText(/Equity ₹1,00,800/).closest('p')
+    expect(line?.textContent).toContain('+₹800 (+0.80%)')
+    expect(line?.textContent).toContain('from ₹1,00,000 at the start')
+  })
+
+  it('names the deepest drawdown, its share and when, in the run zone', async () => {
+    const run = outcome({ instrument: { timezone: 'UTC' } } as Partial<BacktestOutcome>)
+    render(<BacktestResultTabs outcome={run} money={money} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Drawdown' }))
+    const line = screen.getByText(/Deepest drawdown/).closest('p')
+    expect(line?.textContent).toContain('-₹500 (-0.50%)')
+    expect(line?.textContent).toMatch(/on 15 Sept? 2026, 09:01/)
+  })
+})
