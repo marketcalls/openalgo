@@ -858,6 +858,18 @@ describe('built-in volume and average', () => {
     expect(state.chart.primaryBars()).toHaveLength(back.length)
   })
 
+  it('reads the volume under a Kagi element, not the thickness the element carries', () => {
+    const { state, legendEl } = mount()
+    state.ctype = 'kagi'
+    state.rawBars = state.rawBars.map((b, i) => ({ ...b, volume: [10, 20, 30, 60][i] }))
+    state.buildChart()
+    const last = state.chart.primaryBars().at(-1)
+    expect(last?.volume === 0 || last?.volume === 1).toBe(true)
+    const under = state.volume.getData().at(-1)?.close
+    expect(under).toBeGreaterThan(1)
+    expect(legendEl.textContent).toContain(`V ${under}`)
+  })
+
   it('replays a transformed chart from the raw bar that completed the picked element', async () => {
     const { terminal, state } = mount()
     state.ctype = 'renko'

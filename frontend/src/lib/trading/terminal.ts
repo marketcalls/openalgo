@@ -564,7 +564,7 @@ export interface IndicatorSettingsRequest {
   name: string
   /**
    * Which bars the study computes on, present only while the chart transforms
-   * its bars (Heikin Ashi, Renko, range bars, line break): the elements drawn
+   * its bars (Heikin Ashi, Renko, Point & Figure and the rest): the elements drawn
    * (`'chart'`) or the raw bars under them (`'underlying'`). On a plain chart
    * the two are the same bars, so the form offers no choice.
    */
@@ -1533,8 +1533,8 @@ export class TradingTerminal {
 
   /**
    * Whether the chart applies a transform to the price series (Heikin Ashi,
-   * Renko, range bars, line break). Read from the chart rather than from
-   * `ctype`, which moves before the chart is rebuilt for it.
+   * Renko, range bars, line break, Point & Figure, Kagi). Read from the chart
+   * rather than from `ctype`, which moves before the chart is rebuilt for it.
    */
   private transformed(): boolean {
     return (
@@ -1563,6 +1563,27 @@ export class TradingTerminal {
   private drawnBars(replaying = this.replayActive()): readonly Bar[] {
     if (this.chart && this.transformed()) return this.chart.primaryBars()
     return replaying ? (this.price?.getData() ?? []) : this.rawBars
+  }
+
+  /**
+   * A drawn element with the volume the volume bars show under it.
+   *
+   * On a transformed chart an element's own `volume` is not traded volume: a
+   * Kagi line keeps its thickness there (1 or 0) and a brick carries none. The
+   * readout reads the volume summed under the element instead, as it is drawn.
+   */
+  private withDrawnVolume(bar: Bar | null): Bar | null {
+    if (!bar || !this.transformed()) return bar
+    const points = this.displayedVolume
+    let lo = 0
+    let hi = points.length - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1
+      if (points[mid].time === bar.time) return { ...bar, volume: points[mid].close }
+      if (points[mid].time < bar.time) lo = mid + 1
+      else hi = mid - 1
+    }
+    return { ...bar, volume: undefined }
   }
 
   /** Volume on the elements drawn: each element sums the raw bars it was formed from. */
@@ -1886,7 +1907,8 @@ export class TradingTerminal {
       interval: this.interval,
       exchange: sym.exchange,
       lotsize: sym.lots ? sym.lotsize : null,
-      bar: bar && !this.volumeAvailable() ? { ...bar, volume: undefined } : bar,
+      bar:
+        bar && !this.volumeAvailable() ? { ...bar, volume: undefined } : this.withDrawnVolume(bar),
       prevClose: this.closeBefore(bar),
       fmt: (n) => this.fmt(n),
       fmtVolume: compactVolume,
