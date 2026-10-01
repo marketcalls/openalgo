@@ -23,7 +23,15 @@
  * them. It is not one of the study's own inputs, so it is held apart from them
  * and handed back beside the patch.
  */
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { isScriptInstance } from '@/lib/trading/openscriptFiles'
 import { scriptIntervalChoices } from '@/lib/trading/openscriptIntervals'
 import type { IndicatorField, IndicatorSettingsRequest } from '@/lib/trading/terminal'
@@ -128,7 +136,10 @@ export function IndicatorSettingsDialog({
     setTab(req && req.inputs.length === 0 && req.barSource === undefined ? 'style' : 'inputs')
   }, [req, normalise])
 
-  useEffect(() => {
+  // Attached before the form is painted. The form mounts on its first opening,
+  // and a passive effect can run after the first paint, so an Escape pressed
+  // the moment the form appeared went unheard.
+  useLayoutEffect(() => {
     if (!req) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()

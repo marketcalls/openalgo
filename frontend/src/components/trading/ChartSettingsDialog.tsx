@@ -13,7 +13,7 @@
  * it as two stacked colour rows costs three times the height for the property a
  * trader changes most.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type {
   ChartSettingsField,
   ChartSettingsPairField,
@@ -43,7 +43,10 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
     setTabId(req?.tabs[0]?.id ?? '')
   }, [req])
 
-  useEffect(() => {
+  // Attached before the form is painted. The form mounts on its first opening,
+  // and a passive effect can run after the first paint, so an Escape pressed
+  // the moment the form appeared went unheard.
+  useLayoutEffect(() => {
     if (!req) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()

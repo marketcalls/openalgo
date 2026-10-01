@@ -45,7 +45,7 @@ import { showToast } from '@/utils/toast'
 import { ChartToolbar } from './ChartToolbar'
 import { ComparisonMenu } from './ComparisonMenu'
 import { DrawingStyleBar } from './DrawingStyleBar'
-import type { TextRequest } from './DrawingTextDialog'
+import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 
 // The forms a chart opens on request: none is needed to paint it. Mounted only
 // while open, so their code is fetched on the first opening rather than with
@@ -53,9 +53,6 @@ import type { TextRequest } from './DrawingTextDialog'
 const AlertsDialog = lazy(() => import('./AlertsDialog').then((m) => ({ default: m.AlertsDialog })))
 const ChartSettingsDialog = lazy(() =>
   import('./ChartSettingsDialog').then((m) => ({ default: m.ChartSettingsDialog }))
-)
-const DrawingTextDialog = lazy(() =>
-  import('./DrawingTextDialog').then((m) => ({ default: m.DrawingTextDialog }))
 )
 const IndicatorSettingsDialog = lazy(() =>
   import('./IndicatorSettingsDialog').then((m) => ({ default: m.IndicatorSettingsDialog }))
@@ -1212,15 +1209,11 @@ export function ChartPane({
           onDelete={() => terminalRef.current?.removeDrawings(false)}
           onEditText={() => drawSel && terminalRef.current?.requestDrawTextEdit(drawSel.id)}
         />
-        {textReq && (
-          <Suspense fallback={null}>
-            <DrawingTextDialog
-              req={textReq}
-              onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
-              onClose={() => setTextReq(null)}
-            />
-          </Suspense>
-        )}
+        <DrawingTextDialog
+          req={textReq}
+          onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
+          onClose={() => setTextReq(null)}
+        />
         {pickerOpen && (
           <Suspense fallback={null}>
             <IndicatorPickerDialog
