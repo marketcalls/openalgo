@@ -149,6 +149,9 @@ class OptionSymbolSchema(Schema):
     option_type = fields.Str(
         required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"])
     )  # Call or Put option
+    include_quotes = fields.Bool(
+        required=False, load_default=False
+    )  # Include the selected option quote in the response
 
 
 class OptionGreeksSchema(Schema):
