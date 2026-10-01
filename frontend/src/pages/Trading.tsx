@@ -12,7 +12,27 @@ const AgentPanel = lazy(() =>
   import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
 )
 
-import { AlertsPanel } from '@/components/trading/AlertsPanel'
+// The other side panels are lazy for the same reason: each is shown only once
+// its rail button is pressed, and none is needed to paint a chart. Loaded with
+// the page they cost every trader their code before the first candle, and the
+// Strategies panel alone brought the Flow editor's instrument constants with
+// it. A remembered open panel is fetched beside the chart rather than before it.
+const AlertsPanel = lazy(() =>
+  import('@/components/trading/AlertsPanel').then((m) => ({ default: m.AlertsPanel }))
+)
+const OptionChainPanel = lazy(() =>
+  import('@/components/trading/OptionChainPanel').then((m) => ({ default: m.OptionChainPanel }))
+)
+const ScriptPanel = lazy(() =>
+  import('@/components/trading/ScriptPanel').then((m) => ({ default: m.ScriptPanel }))
+)
+const StrategiesPanel = lazy(() =>
+  import('@/components/trading/StrategiesPanel').then((m) => ({ default: m.StrategiesPanel }))
+)
+const WatchlistPanel = lazy(() =>
+  import('@/components/trading/WatchlistPanel').then((m) => ({ default: m.WatchlistPanel }))
+)
+
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
@@ -25,14 +45,10 @@ import {
 import { TradingDock } from '@/components/trading/dock/TradingDock'
 import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
-import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
 import { idForScript } from '@/lib/trading/openscriptFiles'
 import { BacktestPanel } from '@/components/trading/BacktestPanel'
-import { StrategiesPanel } from '@/components/trading/StrategiesPanel'
-import { ScriptPanel } from '@/components/trading/ScriptPanel'
 import { TickBox } from '@/components/trading/TickBox'
-import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
 import { WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
@@ -1416,19 +1432,23 @@ function TradingWorkspace({ account }: { account: string | null }) {
               Both are page-level: they act on the focused pane rather than
               belonging to one, so repeating them per pane would be wrong. */}
           {apiKey && wsUrl && panel === 'watchlist' && (
-            <WatchlistPanel
-              apiKey={apiKey}
-              onPick={sendToFocusedPane}
-              search={searchFromFocusedPane}
-              activeSymbol={paneSymbols[focusedPane] ?? null}
-            />
+            <Suspense fallback={null}>
+              <WatchlistPanel
+                apiKey={apiKey}
+                onPick={sendToFocusedPane}
+                search={searchFromFocusedPane}
+                activeSymbol={paneSymbols[focusedPane] ?? null}
+              />
+            </Suspense>
           )}
           {apiKey && wsUrl && panel === 'options' && (
-            <OptionChainPanel
-              apiKey={apiKey}
-              onPick={sendToFocusedPane}
-              activeSymbol={paneSymbols[focusedPane] ?? null}
-            />
+            <Suspense fallback={null}>
+              <OptionChainPanel
+                apiKey={apiKey}
+                onPick={sendToFocusedPane}
+                activeSymbol={paneSymbols[focusedPane] ?? null}
+              />
+            </Suspense>
           )}
           {apiKey && wsUrl && panel === 'agent' && (
             <Suspense fallback={null}>
@@ -1440,20 +1460,24 @@ function TradingWorkspace({ account }: { account: string | null }) {
             </Suspense>
           )}
           {apiKey && wsUrl && panel === 'alerts' && (
-            <AlertsPanel
-              view={paneAlerts[alertsPaneId] ?? null}
-              log={alertLog}
-              paneLabel={alertsPaneLabel}
-              onEdit={openAlertEditor}
-              onClearLog={clearAlertLog}
-              revision={alertRevision}
-            />
+            <Suspense fallback={null}>
+              <AlertsPanel
+                view={paneAlerts[alertsPaneId] ?? null}
+                log={alertLog}
+                paneLabel={alertsPaneLabel}
+                onEdit={openAlertEditor}
+                onClearLog={clearAlertLog}
+                revision={alertRevision}
+              />
+            </Suspense>
           )}
           {apiKey && wsUrl && panel === 'objects' && (
             <ObjectsPanel model={paneObjects[objectsPaneId] ?? null} paneLabel={objectsPaneLabel} />
           )}
           {apiKey && wsUrl && panel === 'strategies' && (
-            <StrategiesPanel getChartContext={readChartContext} />
+            <Suspense fallback={null}>
+              <StrategiesPanel getChartContext={readChartContext} />
+            </Suspense>
           )}
           {apiKey && wsUrl && panel === 'backtest' && (
             <BacktestPanel
@@ -1476,49 +1500,51 @@ function TradingWorkspace({ account }: { account: string | null }) {
             />
           )}
           {apiKey && wsUrl && panel === 'scripts' && (
-            <ScriptPanel
-              // `panelTarget`, not `act`. Both reach a chart, but `act` wants
-              // the pane a toolbar button was pressed over and answers null
-              // until one has been focused, so adding a study did nothing at
-              // all until the trader happened to click the chart first. This is
-              // the helper written for a panel: the focused pane, else any pane
-              // that is up. It is the same one the watchlist and the assistant
-              // use for the same reason.
-              onAddToChart={(indicatorId) => {
-                const target = panelTarget()
-                if (!target) return false
-                void target.addIndicatorById(indicatorId)
-                return true
-              }}
-              openFile={scriptSource}
-              onOpened={() => setScriptSource(null)}
-              // **Applying a strategy does both halves, because it is one act.**
-              //
-              // A strategy has two things to show and they used to arrive by
-              // different doors. Adding it from the indicator list drew its
-              // plots and gave it a legend row and a settings dialog, and drew
-              // no trades. Applying it from the editor marked every entry and
-              // exit on the price, and drew no lines and no legend, so there
-              // was nothing on the chart to open settings on or to remove. A
-              // trader wanting both had to do both, and had no way of knowing
-              // that.
-              //
-              // So this adds it to the chart and runs it. The study is what
-              // carries the name, the band and the settings; the run is what
-              // knows the trades, because an order is not a marker the language
-              // declares and only the report has them.
-              onBacktest={(file) => {
-                const pane = panelTarget()
-                if (!pane) return false
-                // The plots first, so the legend is there while the run works.
-                // A strategy that will not register is not a reason to refuse
-                // the run: the marks are the half a trader asked for by name.
-                void pane.addIndicatorById(idForScript(file))
-                setBacktestFile(file)
-                setPanel('backtest')
-                return true
-              }}
-            />
+            <Suspense fallback={null}>
+              <ScriptPanel
+                // `panelTarget`, not `act`. Both reach a chart, but `act` wants
+                // the pane a toolbar button was pressed over and answers null
+                // until one has been focused, so adding a study did nothing at
+                // all until the trader happened to click the chart first. This is
+                // the helper written for a panel: the focused pane, else any pane
+                // that is up. It is the same one the watchlist and the assistant
+                // use for the same reason.
+                onAddToChart={(indicatorId) => {
+                  const target = panelTarget()
+                  if (!target) return false
+                  void target.addIndicatorById(indicatorId)
+                  return true
+                }}
+                openFile={scriptSource}
+                onOpened={() => setScriptSource(null)}
+                // **Applying a strategy does both halves, because it is one act.**
+                //
+                // A strategy has two things to show and they used to arrive by
+                // different doors. Adding it from the indicator list drew its
+                // plots and gave it a legend row and a settings dialog, and drew
+                // no trades. Applying it from the editor marked every entry and
+                // exit on the price, and drew no lines and no legend, so there
+                // was nothing on the chart to open settings on or to remove. A
+                // trader wanting both had to do both, and had no way of knowing
+                // that.
+                //
+                // So this adds it to the chart and runs it. The study is what
+                // carries the name, the band and the settings; the run is what
+                // knows the trades, because an order is not a marker the language
+                // declares and only the report has them.
+                onBacktest={(file) => {
+                  const pane = panelTarget()
+                  if (!pane) return false
+                  // The plots first, so the legend is there while the run works.
+                  // A strategy that will not register is not a reason to refuse
+                  // the run: the marks are the half a trader asked for by name.
+                  void pane.addIndicatorById(idForScript(file))
+                  setBacktestFile(file)
+                  setPanel('backtest')
+                  return true
+                }}
+              />
+            </Suspense>
           )}
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}

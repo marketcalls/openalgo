@@ -496,6 +496,7 @@ describe('the indicator catalogue', () => {
     await act(async () => {})
 
     expect(terminal.indicatorCatalog).toHaveBeenCalledTimes(2)
-    expect(view.getByText('My new study')).toBeInTheDocument()
+    // The picker's code loads on its first opening.
+    expect(await view.findByText('My new study')).toBeInTheDocument()
   })
 })
