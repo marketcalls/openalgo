@@ -236,6 +236,28 @@ def test_hooks_share_one_overall_budget(quiet_shutdown, monkeypatch):
     assert ran == [], "a hook past the overall budget must be skipped"
 
 
+def test_a_join_that_wakes_early_does_not_start_a_hook_past_the_budget(quiet_shutdown, monkeypatch):
+    """A timed join can return a few milliseconds before its timeout (coarse
+    timers on Windows). The hook after one that overran the shared deadline is
+    still skipped, rather than started in the sliver that is left."""
+    monkeypatch.setattr(shutdown_mod, "SHUTDOWN_BUDGET_S", 0.4)
+    real_join = threading.Thread.join
+
+    def early_join(self, timeout=None):
+        return real_join(self, None if timeout is None else max(0.0, timeout - 0.05))
+
+    monkeypatch.setattr(threading.Thread, "join", early_join)
+    ran = []
+    release = threading.Event()
+    shutdown_mod.register_shutdown_hook(
+        lambda: release.wait(30), name="slow", budget_s=10, early=True
+    )
+    shutdown_mod.register_shutdown_hook(lambda: ran.append("late"), name="skipped", early=True)
+    shutdown_mod.shutdown_runtime()
+    release.set()
+    assert ran == [], "a hook started in the sliver an early join left"
+
+
 # --- shared executors ---------------------------------------------------------
 
 

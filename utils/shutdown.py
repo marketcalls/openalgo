@@ -325,9 +325,13 @@ def _run_hooks(hooks: list[_Hook], deadline: float) -> None:
     A hook runs on a plain thread (green under eventlet) and is joined with a
     timeout, so one that hangs costs its budget and no more. Never raises.
     """
+    # Set once a hook overran the shared deadline. A timed join can wake a few
+    # milliseconds early (coarse timers on Windows), which would otherwise
+    # leave a sliver of budget and start the next hook after the time was up.
+    spent = False
     for hook in hooks:
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if spent or remaining <= 0:
             logger.warning(f"Shutdown hook {hook.name} skipped: the shutdown time budget is spent")
             continue
 
@@ -342,6 +346,7 @@ def _run_hooks(hooks: list[_Hook], deadline: float) -> None:
             worker.start()
             worker.join(min(hook.budget_s, remaining))
             if worker.is_alive():
+                spent = remaining <= hook.budget_s
                 logger.warning(
                     f"Shutdown hook {hook.name} did not finish within its time "
                     "budget; continuing teardown without it"

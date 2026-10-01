@@ -159,7 +159,11 @@ describe('workspace replay page ownership', () => {
   it('publishes visible members, pauses autosave for every replay phase and resumes on cancellation', async () => {
     const view = render(<Trading />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
-    expect(fake.members).toHaveBeenLastCalledWith([{ id: 'p0', terminal: fake.terminal }])
+    // The members are published by an effect that can run just after the
+    // button appears; on a loaded runner the check used to land in between.
+    await waitFor(() =>
+      expect(fake.members).toHaveBeenLastCalledWith([{ id: 'p0', terminal: fake.terminal }])
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Replay p0' }))
     expect(fake.start).toHaveBeenCalledExactlyOnceWith('p0')
     for (const phase of ['picking', 'loading', 'active'] as const) {
