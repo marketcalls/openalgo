@@ -17,6 +17,11 @@
  * One place where a study has to be told apart from a JavaScript indicator: an
  * OpenScript interval input takes only the language's timeframes, so its
  * choices are rebuilt from the terminal's (see `openscriptIntervals.ts`).
+ *
+ * On a transformed chart (Heikin Ashi, Renko, range bars, line break) the
+ * Inputs tab leads with Compute on: the elements drawn, or the raw bars under
+ * them. It is not one of the study's own inputs, so it is held apart from them
+ * and handed back beside the patch.
  */
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { isScriptInstance } from '@/lib/trading/openscriptFiles'
@@ -25,6 +30,21 @@ import type { IndicatorField, IndicatorSettingsRequest } from '@/lib/trading/ter
 import { cn } from '@/lib/utils'
 import { PlotStyleRow } from './PlotStyleRow'
 import { TickBox } from './TickBox'
+
+type BarSource = NonNullable<IndicatorSettingsRequest['barSource']>
+
+/** The Compute on row, drawn by the same control as the study's own selects. */
+const BAR_SOURCE_FIELD: IndicatorField = {
+  key: 'barSource',
+  type: 'select',
+  label: 'Compute on',
+  options: [
+    { label: 'Chart bars', value: 'chart' },
+    { label: 'Underlying bars', value: 'underlying' },
+  ],
+  tooltip:
+    'Chart bars are the bricks or candles drawn. Underlying bars are the time bars they are built from, read at the bar each one completed on.',
+}
 
 interface Props {
   req: IndicatorSettingsRequest | null
@@ -36,7 +56,8 @@ interface Props {
    * is left out rather than guessed.
    */
   chartInterval?: string
-  onApply(instanceId: string, patch: Record<string, unknown>): void
+  /** `barSource` is passed only when the form offered the choice. */
+  onApply(instanceId: string, patch: Record<string, unknown>, barSource?: BarSource): void
   onDefaults(instanceId: string): Promise<Record<string, unknown> | null>
   onClose(): void
 }
@@ -75,6 +96,7 @@ export function IndicatorSettingsDialog({
   onClose,
 }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>({})
+  const [barSource, setBarSource] = useState<BarSource | undefined>(undefined)
   const [tab, setTab] = useState<'inputs' | 'style'>('inputs')
   const script = req !== null && isScriptInstance(req.instanceId)
 
@@ -102,7 +124,8 @@ export function IndicatorSettingsDialog({
 
   useEffect(() => {
     setValues(req ? normalise({ ...req.values }) : {})
-    setTab(req && req.inputs.length === 0 ? 'style' : 'inputs')
+    setBarSource(req?.barSource)
+    setTab(req && req.inputs.length === 0 && req.barSource === undefined ? 'style' : 'inputs')
   }, [req, normalise])
 
   useEffect(() => {
@@ -129,16 +152,22 @@ export function IndicatorSettingsDialog({
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v }))
   const apply = () => {
-    onApply(req.instanceId, values)
+    if (barSource === undefined) onApply(req.instanceId, values)
+    else onApply(req.instanceId, values, barSource)
     onClose()
   }
   const reset = async () => {
     const d = await onDefaults(req.instanceId)
     if (d) setValues(normalise(d))
+    if (barSource !== undefined) setBarSource('chart')
   }
 
   const tabs: { key: 'inputs' | 'style'; label: string; n: number }[] = [
-    { key: 'inputs', label: 'Inputs', n: req.inputs.length },
+    {
+      key: 'inputs',
+      label: 'Inputs',
+      n: req.inputs.length + (req.barSource === undefined ? 0 : 1),
+    },
     { key: 'style', label: 'Style', n: req.styleInputs.length },
   ]
 
@@ -211,6 +240,14 @@ export function IndicatorSettingsDialog({
             </div>
           ) : (
             <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
+              {barSource !== undefined && (
+                <SettingsField
+                  field={BAR_SOURCE_FIELD}
+                  id={`${req.instanceId}-barSource`}
+                  value={barSource}
+                  onChange={(v) => setBarSource(v === 'underlying' ? 'underlying' : 'chart')}
+                />
+              )}
               {inputGroupsOf(fields).map(([heading, group]) => (
                 <Fragment key={heading}>
                   {heading !== '' && (
@@ -231,7 +268,7 @@ export function IndicatorSettingsDialog({
               ))}
             </div>
           )}
-          {fields.length === 0 && (
+          {fields.length === 0 && (tab === 'style' || barSource === undefined) && (
             <p className="py-3 text-[13px] text-muted-foreground">Nothing to configure here.</p>
           )}
         </div>

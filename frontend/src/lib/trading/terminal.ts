@@ -15,6 +15,7 @@
 
 import type {
   ChartObjectSnapshot,
+  IndicatorBarSource,
   IndicatorInputCondition,
   IndicatorState,
   SeriesTransformSpec,
@@ -41,8 +42,10 @@ import {
   exportChartDataCsv,
   getIndicator,
   getSeriesTransform,
+  IndicatorInputError,
   type IPrimitive,
   indicatorDefaults,
+  isKnownInterval,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
@@ -205,7 +208,7 @@ import {
   legendToneStyle,
   lotInfoText,
 } from './legend'
-import { fileForScriptId } from './openscriptFiles'
+import { fileForScriptId, isScriptInstance } from './openscriptFiles'
 import { loadOpenScriptStudies, SCRIPT_ALERT_EVENT } from './openscriptStudies'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
 import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
@@ -559,6 +562,13 @@ export interface AlertFire {
 export interface IndicatorSettingsRequest {
   instanceId: string
   name: string
+  /**
+   * Which bars the study computes on, present only while the chart transforms
+   * its bars (Heikin Ashi, Renko, range bars, line break): the elements drawn
+   * (`'chart'`) or the raw bars under them (`'underlying'`). On a plain chart
+   * the two are the same bars, so the form offers no choice.
+   */
+  barSource?: IndicatorBarSource
   /** The descriptor's own value inputs — the "Inputs" tab. */
   inputs: IndicatorField[]
   /** Generated per-plot colour / width / dash inputs — the "Style" tab. */
@@ -1071,6 +1081,8 @@ export class TradingTerminal {
    * differ from `transformBase`. Per instrument because a box is a price.
    */
   private transformChoices: Record<string, Record<string, Record<string, string | number>>> = {}
+  /** The refusal last said for each study, so a rebuild does not say it again. */
+  private readonly reportedRefusals = new Map<string, string>()
   private profileLayer: ProfileLayer | null = null
   private availableIntervals: string[] = ['1m', '5m', '15m', '1h', 'D']
   /** The workspace link group this pane belongs to, if sync is on. */
@@ -3962,6 +3974,7 @@ export class TradingTerminal {
       } finally {
         this.applyingIndicators = false
       }
+      this.reportRefusedStudies()
     } catch (error) {
       if (!this.destroyed && this.chart === chart) {
         this.toast(`Indicators could not be restored: ${this.cleanError(error)}`, 'err')
@@ -3987,10 +4000,11 @@ export class TradingTerminal {
     this.cb.onIndicatorSettings({
       instanceId,
       name: inst.name,
+      ...(this.transformed() ? { barSource: inst.barSource() } : {}),
       values: { ...inst.settings() },
       inputs: descriptor.inputs
         .map(toField)
-        .map((f) => this.fillIntervalOptions(f, inst.settings())),
+        .map((f) => this.fillIntervalOptions(f, inst.settings(), !isScriptInstance(instanceId))),
       styleInputs: indicatorStyleInputs(descriptor).map(toField),
     })
   }
@@ -4010,24 +4024,31 @@ export class TradingTerminal {
    * broker that lists `D` would otherwise show a select reading "Chart
    * interval" while the study computed on `1d`: a control disagreeing with the
    * value behind it, which is worse than no control.
+   *
+   * A study the chart runs (every built-in, and the Timeframe of the 29 that
+   * have one since 2.6.0) is offered only the codes the chart can fold to. A
+   * broker's monthly `M` is not one, and a study set to it would be refused and
+   * draw nothing. An OpenScript study reads its intervals in its own language,
+   * which does have a month, so its list is left whole for the dialog to
+   * respell (`openscriptIntervals.ts`).
    */
   private fillIntervalOptions(
     field: IndicatorField,
-    values: Record<string, unknown>
+    values: Record<string, unknown>,
+    chartRuns: boolean
   ): IndicatorField {
     if (field.type !== 'interval' || field.options !== undefined) return field
+    const offered = chartRuns
+      ? this.availableIntervals.filter((code) => isKnownInterval(code))
+      : this.availableIntervals
     // The empty entry is "the chart's own interval", which is how a study says
     // it is not folding at all.
     const options = [
       { label: 'Chart interval', value: '' as unknown },
-      ...this.availableIntervals.map((code) => ({ label: code, value: code as unknown })),
+      ...offered.map((code) => ({ label: code, value: code as unknown })),
     ]
     const current = values[field.key]
-    if (
-      typeof current === 'string' &&
-      current !== '' &&
-      !this.availableIntervals.includes(current)
-    ) {
+    if (typeof current === 'string' && current !== '' && !offered.includes(current)) {
       options.push({ label: current, value: current })
     }
     return { ...field, options }
@@ -4042,12 +4063,58 @@ export class TradingTerminal {
     return d ? { ...indicatorDefaults(d) } : null
   }
 
-  /** Apply a settings patch to a live indicator. */
-  updateIndicatorSettings(instanceId: string, patch: Record<string, unknown>): void {
+  /**
+   * Apply a settings patch to a live indicator, and the bars it computes on
+   * when the form offered that choice.
+   *
+   * The bar source goes first: a timeframe is refused on a transformed chart's
+   * own elements and accepted on the bars under them, so applying both in the
+   * other order would report a refusal the same press then cleared.
+   *
+   * A setting the study refuses (a timeframe the chart cannot fold, say) does
+   * not throw: the study keeps the setting and stops drawing, with the reason
+   * on its data status, which is said where the trader just pressed Ok.
+   */
+  updateIndicatorSettings(
+    instanceId: string,
+    patch: Record<string, unknown>,
+    barSource?: IndicatorBarSource
+  ): void {
     const inst = this.chart?.indicators().find((i) => i.id === instanceId)
     if (!inst) return
+    if (barSource !== undefined && barSource !== inst.barSource()) inst.setBarSource(barSource)
     inst.setSettings(patch)
+    this.reportRefusedStudies(instanceId, true)
     this.syncIndicators()
+  }
+
+  /**
+   * Say why a study is on the chart and drawing nothing.
+   *
+   * A setting a study's inputs refuse (a timeframe on a transformed chart's own
+   * bricks, a timeframe the chart cannot fold) does not throw: the chart keeps
+   * the study, with the reason on its data status, and draws nothing. Said
+   * where it happens, a press of Ok or a rebuild that restored the study, or the
+   * study simply vanishes. The engine's sentence names the study and the fix.
+   * Only input refusals: a study that failed for another reason has its own
+   * report. A rebuild says it once: a theme or interval switch restoring the
+   * same refused study again is not news, a press of Ok is (`again`).
+   */
+  private reportRefusedStudies(only?: string, again = false): void {
+    for (const inst of this.chart?.indicators() ?? []) {
+      if (only !== undefined && inst.id !== only) continue
+      // Reading the values settles a recompute the edit left pending.
+      inst.values()
+      const status = inst.dataStatus()
+      if (status?.state !== 'error' || !(status.error instanceof IndicatorInputError)) {
+        this.reportedRefusals.delete(inst.id)
+        continue
+      }
+      const message = status.error.message
+      if (!again && this.reportedRefusals.get(inst.id) === message) continue
+      this.reportedRefusals.set(inst.id, message)
+      this.toast(message, 'err')
+    }
   }
 
   /** Open the settings form for an indicator from the host's own UI. */
@@ -4288,6 +4355,9 @@ export class TradingTerminal {
       settings: { ...i.settings() },
       visible: i.visible(),
       paneIndex: i.paneIndex,
+      // Kept so a chart type switch, which rebuilds the chart, brings the
+      // study back on the bars it was set to compute on.
+      ...(i.barSource() === 'underlying' ? { barSource: 'underlying' as const } : {}),
     }))
     if (!sameIndicatorRecords(this.activeIndicators, next)) {
       this.activeIndicators = next

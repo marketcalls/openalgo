@@ -1220,7 +1220,9 @@ export function ChartPane({
         <IndicatorSettingsDialog
           req={indSettings}
           chartInterval={interval}
-          onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
+          onApply={(id, patch, barSource) =>
+            terminalRef.current?.updateIndicatorSettings(id, patch, barSource)
+          }
           onDefaults={(id) =>
             terminalRef.current
               ? terminalRef.current.indicatorDefaultsFor(id)

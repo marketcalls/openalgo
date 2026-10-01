@@ -880,6 +880,69 @@ describe('built-in volume and average', () => {
     expect(state.price.getData()).toHaveLength(state.rawBars.length)
   })
 
+  it('says why a study with a timeframe draws nothing on Renko, and computes it on the underlying bars', async () => {
+    await import('openalgo-charts/indicators')
+    const { terminal, state } = mount()
+    state.ctype = 'renko'
+    state.buildChart()
+    const ema = state.chart.addIndicator('ema', { length: 2 })
+    const toast = vi.spyOn(terminal as unknown as { toast(m: string, k: string): void }, 'toast')
+    terminal.updateIndicatorSettings(ema.id, { timeframe: '5m' })
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/underlying bars/), 'err')
+    expect(ema.dataStatus()?.state).toBe('error')
+    toast.mockClear()
+    terminal.updateIndicatorSettings(ema.id, { timeframe: '5m' }, 'underlying')
+    expect(toast).not.toHaveBeenCalled()
+    expect(ema.barSource()).toBe('underlying')
+    expect(ema.dataStatus()?.state).not.toBe('error')
+    // Kept with the study, so the rebuild a chart type switch makes brings it back.
+    const saved = (state as unknown as { activeIndicators: { barSource?: string }[] })
+      .activeIndicators
+    expect(saved.map((record) => record.barSource)).toEqual(['underlying'])
+    state.buildChart()
+    await vi.waitFor(() => expect(state.chart.indicators()).toHaveLength(1))
+    expect(state.chart.indicators()[0].barSource()).toBe('underlying')
+    expect(state.chart.indicators()[0].settings().timeframe).toBe('5m')
+  })
+
+  it('offers a built-in study the intervals the chart folds to, and Compute on only on a transformed chart', async () => {
+    await import('openalgo-charts/indicators')
+    const { terminal, state } = mount()
+    const settings = vi.fn()
+    const host = terminal as unknown as {
+      cb: Record<string, unknown>
+      availableIntervals: string[]
+    }
+    host.cb.onIndicatorSettings = settings
+    host.availableIntervals = ['1m', '5m', '1h', 'D', 'W', 'M']
+    const request = async () => {
+      settings.mockClear()
+      const ema = state.chart.indicators().find((one) => one.indicatorId === 'ema')
+      terminal.openIndicatorSettings(ema?.id ?? '')
+      await vi.waitFor(() => expect(settings).toHaveBeenCalled())
+      return settings.mock.calls[0][0] as {
+        barSource?: string
+        inputs: { key: string; options?: { value: unknown }[] }[]
+      }
+    }
+    state.chart.addIndicator('ema', { length: 2 })
+    const plain = await request()
+    // The broker's monthly code is not one the chart can fold to.
+    expect(plain.inputs.find((f) => f.key === 'timeframe')?.options?.map((o) => o.value)).toEqual([
+      '',
+      '1m',
+      '5m',
+      '1h',
+      'D',
+      'W',
+    ])
+    expect(plain.barSource).toBeUndefined()
+    state.ctype = 'renko'
+    state.buildChart()
+    state.chart.addIndicator('ema', { length: 2 })
+    expect((await request()).barSource).toBe('chart')
+  })
+
   it('offers the transform options in chart settings and keeps a choice per instrument', async () => {
     const { terminal, state } = mount()
     const choices = () => (state as unknown as { transformChoices: unknown }).transformChoices
