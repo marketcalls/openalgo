@@ -297,6 +297,14 @@ by open and trigger-pending orders (unchanged from before).
   `install-multi.sh`, which the updater now recognises. The updater now sets
   `.env` and every file in `db/` back to owner-only, as a fresh install does.
   Running the updater once fixes an existing server.
+- **A service switched to gthread could not start after going back to an
+  older release.** The switched service file started OpenAlgo only through
+  `install/openalgo-gunicorn.sh`, which older releases do not have, so a
+  rollback without `install/switch-worker.sh --restore` first left the service
+  restarting in a loop. A service switched from now on starts OpenAlgo on
+  eventlet exactly as before the switch when the launcher is missing, and says
+  so in the service log. A service switched earlier gets this by running
+  `--restore` and switching again.
 - **WhatsApp logged out after every restart.** The paired session was saved
   once, at pairing, so each restart brought back the pairing-day copy and
   WhatsApp logged the device out a few seconds later. Alerts then failed with
@@ -361,6 +369,18 @@ by open and trigger-pending orders (unchanged from before).
   no packaged Chromium can run as a service, so /chart still cannot draw there;
   use Debian, Raspberry Pi OS or the Docker install. Docker installs were not
   affected.
+
+### Dependencies
+
+Security updates for every open advisory. Nothing to do beyond the usual
+update; no behaviour change is expected.
+
+- `PyJWT` 2.13.0 to 2.15.1 (HMAC key validation, JWKS fetching, malformed and
+  deeply nested tokens). OpenAlgo itself calls none of these: its remote MCP
+  tokens are signed and checked with `joserfc`.
+- `tornado` 6.5.8 to 6.5.10.
+- `urllib3` 2.7.0 to 2.8.0.
+- `axios` 1.18 to 1.20.0 in the frontend.
 
 ## [2.0.2.6] - 2026-09-23
 
