@@ -124,6 +124,9 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+/** Whether runs mark their trades on the chart, per browser. */
+const MARKS_KEY = 'trading.panel.backtest.marks'
+
 function money(value: unknown, digits = 2): string {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
@@ -213,11 +216,44 @@ export function BacktestPanel({
   onRan,
 }: Props) {
   const [marked, setMarked] = useState<number | null>(null)
+  // Whether a run marks its trades on the chart. Remembered in this browser:
+  // a trader reading the report alone turns it off once, not once per run.
+  const [showMarks, setShowMarks] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(MARKS_KEY) !== 'off'
+    } catch {
+      return true
+    }
+  })
   // Closing the panel takes its marks off the chart: they are this panel's
   // report, and with the panel gone nothing on screen would explain them.
   const markChart = useRef(onMarkChart)
   markChart.current = onMarkChart
   useEffect(() => () => void markChart.current?.([]), [])
+
+  const clearMarks = () => {
+    onMarkChart?.([])
+    setMarked(0)
+  }
+
+  /** Off clears the marks now; on puts this run's marks back without running again. */
+  const toggleMarks = (on: boolean) => {
+    setShowMarks(on)
+    try {
+      window.localStorage.setItem(MARKS_KEY, on ? 'on' : 'off')
+    } catch {
+      // Not remembered; the choice still applies now.
+    }
+    if (!onMarkChart) return
+    if (!on) {
+      clearMarks()
+      return
+    }
+    if (outcome?.ok && file) {
+      const marks = chartMarkersFrom(outcome.markers ?? [])
+      setMarked(onMarkChart(marks, { file, onCleared: () => setMarked(0) }) ? marks.length : null)
+    }
+  }
   /** What the trader typed into an input box, by key. Only what they changed. */
   const [edited, setEdited] = useState<Record<string, string>>({})
   /**
@@ -469,11 +505,16 @@ export function BacktestPanel({
       // are replaced rather than added to, and a run that produced none clears
       // them, so what is on the chart is always this run and only this run.
       if (onMarkChart) {
-        const marks = result.ok ? chartMarkersFrom(result.markers ?? []) : []
-        // Tied to the strategy, so removing it from the chart takes these
-        // marks down with it, and the note below stops counting them.
-        const owner = { file: which, onCleared: () => setMarked(0) }
-        setMarked(onMarkChart(marks, owner) ? marks.length : null)
+        if (showMarks) {
+          const marks = result.ok ? chartMarkersFrom(result.markers ?? []) : []
+          // Tied to the strategy, so removing it from the chart takes these
+          // marks down with it, and the count beside the button stops.
+          const owner = { file: which, onCleared: () => setMarked(0) }
+          setMarked(onMarkChart(marks, owner) ? marks.length : null)
+        } else {
+          onMarkChart([])
+          setMarked(0)
+        }
       }
     } catch {
       if (!controller.signal.aborted) {
@@ -483,7 +524,7 @@ export function BacktestPanel({
       if (!controller.signal.aborted) setRunning(false)
     }
     },
-    [apiKey, declarations, edited, from, getChartContext, onMarkChart, to]
+    [apiKey, declarations, edited, from, getChartContext, onMarkChart, showMarks, to]
   )
 
   const run = useCallback(() => runNamed(file), [file, runNamed])
@@ -607,6 +648,29 @@ export function BacktestPanel({
           {running ? 'Running' : 'Run backtest'}
         </button>
 
+        {onMarkChart && (
+          <div className="flex items-center gap-2 text-[11px]">
+            <label className="flex cursor-pointer items-center gap-1.5 text-muted-foreground">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-primary"
+                checked={showMarks}
+                onChange={(event) => toggleMarks(event.target.checked)}
+              />
+              Show trades on chart
+            </label>
+            {marked !== null && marked > 0 && (
+              <button
+                type="button"
+                className="ml-auto rounded border border-border px-2 py-0.5 hover:bg-accent"
+                onClick={clearMarks}
+              >
+                Clear marks ({marked})
+              </button>
+            )}
+          </div>
+        )}
+
         {/* The results first: what a run found is what a trader opened the
             panel to see, so it sits under the button, above the settings. */}
         {summary && (
@@ -637,22 +701,9 @@ export function BacktestPanel({
             {outcome && <BacktestResultTabs outcome={outcome} money={money} />}
 
             <p className="text-[10px] text-muted-foreground">
-              {marked !== null && marked > 0 ? (
-                <>
-                  {`${marked} fills marked on the chart. `}
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 hover:text-foreground"
-                    onClick={() => {
-                      onMarkChart?.([])
-                      setMarked(0)
-                    }}
-                  >
-                    Clear from chart
-                  </button>
-                  {'. '}
-                </>
-              ) : marked === null && onMarkChart
+              {marked !== null && marked > 0
+                ? `${marked} fills marked on the chart. `
+                : marked === null && onMarkChart
                   ? 'The chart has no price series to mark yet. '
                   : ''}
               {outcome?.barCount?.toLocaleString()} bars, {Math.round(outcome?.ranMs ?? 0)}ms

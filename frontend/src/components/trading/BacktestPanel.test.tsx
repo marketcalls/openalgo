@@ -6,7 +6,7 @@
  * engine to producing these outcomes for real.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BacktestOutcome } from '@/lib/trading/backtestRun'
 import { act, cleanup, render, screen } from '@/test/test-utils'
 
@@ -126,6 +126,8 @@ describe('a run with no trading hours', () => {
 })
 
 describe('the marks a run puts on the chart', () => {
+  beforeEach(() => localStorage.clear())
+
   function markedRun(): BacktestOutcome {
     return stoppedRun({
       stopped: undefined,
@@ -143,37 +145,78 @@ describe('the marks a run puts on the chart', () => {
     )
   }
 
-  it('ties the marks to the strategy, and clears them from the link', async () => {
+  it('ties the marks to the strategy, and clears them from the button', async () => {
     runBacktest.mockResolvedValue(markedRun())
     const onMarkChart = vi.fn(() => true)
     openWithMarks(onMarkChart)
 
-    const clear = await screen.findByRole('button', { name: 'Clear from chart' })
+    const clear = await screen.findByRole('button', { name: /Clear marks/ })
     const [marks, owner] = onMarkChart.mock.calls[0] as unknown as [unknown[], { file: string }]
     expect(marks.length).toBeGreaterThan(0)
     expect(owner.file).toBe('probe.oscript')
 
     await act(async () => clear.click())
     expect(onMarkChart).toHaveBeenLastCalledWith([])
-    expect(screen.queryByRole('button', { name: 'Clear from chart' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Clear marks/ })).toBeNull()
   })
 
   it('stops counting the marks once removing the strategy took them down', async () => {
     runBacktest.mockResolvedValue(markedRun())
     const onMarkChart = vi.fn(() => true)
     openWithMarks(onMarkChart)
-    await screen.findByRole('button', { name: 'Clear from chart' })
+    await screen.findByRole('button', { name: /Clear marks/ })
 
     const [, owner] = onMarkChart.mock.calls[0] as unknown as [unknown[], { onCleared(): void }]
     await act(async () => owner.onCleared())
     expect(screen.queryByText(/fills marked on the chart/)).toBeNull()
   })
 
+  it('shows the count on the button beside Run backtest', async () => {
+    runBacktest.mockResolvedValue(markedRun())
+    openWithMarks(vi.fn(() => true))
+    expect(await screen.findByRole('button', { name: 'Clear marks (1)' })).toBeInTheDocument()
+  })
+
+  it('draws nothing on the chart with the switch off, and remembers it', async () => {
+    runBacktest.mockResolvedValue(markedRun())
+    const onMarkChart = vi.fn(() => true)
+    const first = openWithMarks(onMarkChart)
+    await screen.findByRole('button', { name: /Clear marks/ })
+
+    const toggle = screen.getByRole('checkbox', { name: 'Show trades on chart' })
+    await act(async () => toggle.click())
+    expect(onMarkChart).toHaveBeenLastCalledWith([])
+    expect(screen.queryByRole('button', { name: /Clear marks/ })).toBeNull()
+    first.unmount()
+
+    // The next panel, and its automatic run, keep the chart clean.
+    onMarkChart.mockClear()
+    openWithMarks(onMarkChart)
+    expect(await screen.findByRole('checkbox', { name: 'Show trades on chart' })).not.toBeChecked()
+    await screen.findByText(/bars, /)
+    expect(onMarkChart.mock.calls.every(([marks]) => (marks as unknown[]).length === 0)).toBe(true)
+  })
+
+  it('puts the marks back when the switch is turned on, without running again', async () => {
+    localStorage.setItem('trading.panel.backtest.marks', 'off')
+    runBacktest.mockResolvedValue(markedRun())
+    const onMarkChart = vi.fn(() => true)
+    openWithMarks(onMarkChart)
+    await screen.findByText(/bars, /)
+    const runs = runBacktest.mock.calls.length
+
+    await act(async () => screen.getByRole('checkbox', { name: 'Show trades on chart' }).click())
+    const [marks] = onMarkChart.mock.calls.at(-1) as unknown as [unknown[]]
+    expect(marks.length).toBe(1)
+    expect(runBacktest.mock.calls.length).toBe(runs)
+    expect(await screen.findByRole('button', { name: 'Clear marks (1)' })).toBeInTheDocument()
+  })
+
   it('takes its marks off the chart when the panel closes', async () => {
     runBacktest.mockResolvedValue(markedRun())
     const onMarkChart = vi.fn(() => true)
     const view = openWithMarks(onMarkChart)
-    await screen.findByRole('button', { name: 'Clear from chart' })
+    await screen.findByRole('button', { name: /Clear marks/ })
 
     view.unmount()
     expect(onMarkChart).toHaveBeenLastCalledWith([])

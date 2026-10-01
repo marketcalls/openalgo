@@ -429,8 +429,9 @@ by open and trigger-pending orders (unchanged from before).
   strategy was removed.** Backtest from the Scripts panel adds the strategy to
   the chart and marks the run's fills on it; removing the strategy took its
   lines away but left the marks. Now removing it takes its marks down too, and
-  so does closing the Backtest panel. "Clear from chart" beside the fill count
-  removes them at any time.
+  so does closing the Backtest panel. Under Run backtest, "Clear marks (N)"
+  removes them at any time, and "Show trades on chart" (remembered in this
+  browser) runs the report without drawing on the chart at all.
 - **The assistant could fail part way through an answer when a reasoning level
   was set on GPT-5.4 or newer models** (#2081), with "Cannot run the event loop
   while another loop is running", and only sometimes. It happened on the
