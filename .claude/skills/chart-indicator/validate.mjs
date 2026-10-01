@@ -128,7 +128,7 @@ const err = once(errors)
 const warn = once(warnings)
 const note = once(notes)
 
-// The library's IndicatorInput union, which has exactly EIGHT members.
+// The input types /trading renders: eight of the library's IndicatorInput union.
 //
 // This set once also listed 'session', 'timeframe', 'symbol' and 'price',
 // described as added in 1.8.1. They were never added, and whitelisting them
@@ -141,6 +141,11 @@ const note = once(notes)
 // both the packaged widget and OpenAlgo's own settings dialog. A session
 // remains a `text` input the indicator parses itself; a fixed set of choices
 // remains a `select`.
+//
+// 2.5.4 then added `symbol`, `session`, `multiline`, `price` and `timestamp`
+// to the library. They stay out of this set because OpenAlgo's loader
+// (frontend/src/lib/trading/customIndicators.ts) still accepts only these
+// eight, so the gate refuses what the terminal would refuse at load.
 const INPUT_TYPES = new Set(['number', 'boolean', 'color', 'text', 'select', 'source', 'interval', 'time'])
 const STRING_INPUTS = new Set(['text', 'select', 'source', 'interval', 'time'])
 const NUMBER_INPUTS = new Set(['number'])

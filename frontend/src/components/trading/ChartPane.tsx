@@ -5,7 +5,7 @@
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
 import type { ChartObjects, LinkGroup } from 'openalgo-charts'
 import type { WorkspacePane } from 'openalgo-charts/workspace'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { GridIcon, PencilIcon, VolumeIcon } from '@/components/chart/menuIcons'
 import { Button } from '@/components/ui/button'
 import {
@@ -42,16 +42,30 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
-import { AlertsDialog } from './AlertsDialog'
-import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { ChartToolbar } from './ChartToolbar'
 import { ComparisonMenu } from './ComparisonMenu'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
-import { IndicatorPickerDialog } from './IndicatorPickerDialog'
-import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
-import { PlaceOrderDialog } from './PlaceOrderDialog'
-import { SymbolSearchDialog } from './SymbolSearchDialog'
+
+// The forms a chart opens on request: none is needed to paint it. Mounted only
+// while open, so their code is fetched on the first opening rather than with
+// every chart.
+const AlertsDialog = lazy(() => import('./AlertsDialog').then((m) => ({ default: m.AlertsDialog })))
+const ChartSettingsDialog = lazy(() =>
+  import('./ChartSettingsDialog').then((m) => ({ default: m.ChartSettingsDialog }))
+)
+const IndicatorSettingsDialog = lazy(() =>
+  import('./IndicatorSettingsDialog').then((m) => ({ default: m.IndicatorSettingsDialog }))
+)
+const IndicatorPickerDialog = lazy(() =>
+  import('./IndicatorPickerDialog').then((m) => ({ default: m.IndicatorPickerDialog }))
+)
+const PlaceOrderDialog = lazy(() =>
+  import('./PlaceOrderDialog').then((m) => ({ default: m.PlaceOrderDialog }))
+)
+const SymbolSearchDialog = lazy(() =>
+  import('./SymbolSearchDialog').then((m) => ({ default: m.SymbolSearchDialog }))
+)
 
 /** Camera (screenshot) glyph. */
 /** Hand-drawn to sit at the same 1.7 stroke as the camera beside them. */
@@ -675,12 +689,21 @@ export function ChartPane({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
     }
+    // A scroll that moves the chart moves the price under the menu, so the
+    // menu goes. One that does not, such as the toolbar's own row settling
+    // after a control took focus, leaves the chart and the menu where they
+    // are: closing on it took the menu away the moment it opened.
+    const onScroll = (e: Event) => {
+      const target = e.target
+      const chart = chartRef.current
+      if (!(target instanceof Node) || !chart || target.contains(chart)) close()
+    }
     window.addEventListener('click', close)
-    window.addEventListener('scroll', close, true)
+    window.addEventListener('scroll', onScroll, true)
     window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('click', close)
-      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [ctx])
@@ -1200,34 +1223,52 @@ export function ChartPane({
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
         />
-        <IndicatorPickerDialog
-          open={pickerOpen}
-          catalog={catalog}
-          active={indicators}
-          onAdd={(id) => void terminalRef.current?.addIndicatorById(id)}
-          onRemove={(id) => terminalRef.current?.removeIndicatorById(id)}
-          onSettings={(id) => terminalRef.current?.openIndicatorSettings(id)}
-          onClose={() => setPickerOpen(false)}
-        />
-        <ChartSettingsDialog
-          req={chartSettings}
-          onApply={(patch) => {
-            void terminalRef.current?.applyChartSettings(patch)
-          }}
-          onClose={() => setChartSettings(null)}
-        />
-        <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
-        <IndicatorSettingsDialog
-          req={indSettings}
-          chartInterval={interval}
-          onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
-          onDefaults={(id) =>
-            terminalRef.current
-              ? terminalRef.current.indicatorDefaultsFor(id)
-              : Promise.resolve(null)
-          }
-          onClose={() => setIndSettings(null)}
-        />
+        {pickerOpen && (
+          <Suspense fallback={null}>
+            <IndicatorPickerDialog
+              open={pickerOpen}
+              catalog={catalog}
+              active={indicators}
+              onAdd={(id) => void terminalRef.current?.addIndicatorById(id)}
+              onRemove={(id) => terminalRef.current?.removeIndicatorById(id)}
+              onSettings={(id) => terminalRef.current?.openIndicatorSettings(id)}
+              onClose={() => setPickerOpen(false)}
+            />
+          </Suspense>
+        )}
+        {chartSettings && (
+          <Suspense fallback={null}>
+            <ChartSettingsDialog
+              req={chartSettings}
+              onApply={(patch) => {
+                void terminalRef.current?.applyChartSettings(patch)
+              }}
+              onClose={() => setChartSettings(null)}
+            />
+          </Suspense>
+        )}
+        {alertsHandle && (
+          <Suspense fallback={null}>
+            <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
+          </Suspense>
+        )}
+        {indSettings && (
+          <Suspense fallback={null}>
+            <IndicatorSettingsDialog
+              req={indSettings}
+              chartInterval={interval}
+              onApply={(id, patch, barSource) =>
+                terminalRef.current?.updateIndicatorSettings(id, patch, barSource)
+              }
+              onDefaults={(id) =>
+                terminalRef.current
+                  ? terminalRef.current.indicatorDefaultsFor(id)
+                  : Promise.resolve(null)
+              }
+              onClose={() => setIndSettings(null)}
+            />
+          </Suspense>
+        )}
         <div className="pointer-events-none absolute left-3 top-1.5 z-10 flex flex-col gap-0.5">
           <div ref={legendRef} className="text-xs font-medium text-foreground" />
           {sym && lotInfoText(sym, qty) && (
@@ -1542,18 +1583,22 @@ export function ChartPane({
         )}
       </div>
 
-      <SymbolSearchDialog
-        open={searchOpen}
-        onOpenChange={setSearchOpen}
-        search={(q, ex, limit) =>
-          terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
-        }
-        onPick={(row) => {
-          onBeforeSourceChange?.()
-          void terminalRef.current?.loadSymbol(row)
-        }}
-        initialQuery={sym?.symbol}
-      />
+      {searchOpen && (
+        <Suspense fallback={null}>
+          <SymbolSearchDialog
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            search={(q, ex, limit) =>
+              terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
+            }
+            onPick={(row) => {
+              onBeforeSourceChange?.()
+              void terminalRef.current?.loadSymbol(row)
+            }}
+            initialQuery={sym?.symbol}
+          />
+        </Suspense>
+      )}
 
       {/* The order ticket One-Click off opens: the same dialog the option chain
           and pages/OptionChain.tsx use, so quantity, product and price are
@@ -1564,28 +1609,32 @@ export function ChartPane({
           feed asserts the page's mode against the server first, the way the
           armed path does. Portalled into the pane while it is the fullscreen
           element, as the menus are, or it would open unseen behind it. */}
-      <PlaceOrderDialog
-        open={ticket !== null}
-        onOpenChange={(next) => !next && setTicket(null)}
-        container={menuHost}
-        place={(order) => {
-          const terminal = terminalRef.current
-          if (!terminal) return Promise.reject(new Error('chart is not ready'))
-          return terminal.placeTicket(order)
-        }}
-        symbol={ticket?.symbol}
-        exchange={ticket?.exchange}
-        action={ticket?.action}
-        quantity={ticket?.quantity}
-        lotSize={ticket?.lotSize}
-        tickSize={ticket?.tickSize}
-        product={ticket?.product}
-        priceType={ticket?.priceType}
-        price={ticket?.price}
-        triggerPrice={ticket?.triggerPrice}
-        strategy={ticket?.strategy}
-        onSuccess={() => setTicket(null)}
-      />
+      {ticket !== null && (
+        <Suspense fallback={null}>
+          <PlaceOrderDialog
+            open={ticket !== null}
+            onOpenChange={(next) => !next && setTicket(null)}
+            container={menuHost}
+            place={(order) => {
+              const terminal = terminalRef.current
+              if (!terminal) return Promise.reject(new Error('chart is not ready'))
+              return terminal.placeTicket(order)
+            }}
+            symbol={ticket?.symbol}
+            exchange={ticket?.exchange}
+            action={ticket?.action}
+            quantity={ticket?.quantity}
+            lotSize={ticket?.lotSize}
+            tickSize={ticket?.tickSize}
+            product={ticket?.product}
+            priceType={ticket?.priceType}
+            price={ticket?.price}
+            triggerPrice={ticket?.triggerPrice}
+            strategy={ticket?.strategy}
+            onSuccess={() => setTicket(null)}
+          />
+        </Suspense>
+      )}
     </section>
   )
 }

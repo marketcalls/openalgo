@@ -55,9 +55,8 @@ export function useChartReplay(widget: Widget | null): ChartReplay {
   /**
    * Read by the crosshair listener.
    *
-   * `subscribeCrosshairMove` returns nothing to unsubscribe with, so the
-   * listener is registered once for the chart's life and asks this whether it
-   * is wanted, rather than being added and removed around the pick.
+   * The listener is registered once for the chart's life and asks this whether
+   * it is wanted, rather than being added and removed around the pick.
    */
   const picking = useRef(false)
 
@@ -91,13 +90,16 @@ export function useChartReplay(widget: Widget | null): ChartReplay {
     const primitive = new ReplayShade({ index: null })
     shade.current = primitive
     widget.chart.addPrimitive(primitive)
-    widget.chart.subscribeCrosshairMove((event) => {
+    // The chart keeps every subscriber, so the one added here is removed with
+    // the effect, or a remount (and a development double run) would leave two.
+    const unsubscribe = widget.chart.subscribeCrosshairMove((event) => {
       if (!picking.current) return
       hovered.current = event.index
       setPickIndex(event.index)
       shade.current?.setOptions({ index: event.index })
     })
     return () => {
+      unsubscribe()
       try {
         widget.chart.removePrimitive?.(primitive)
       } catch {
