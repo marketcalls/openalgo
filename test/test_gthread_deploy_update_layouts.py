@@ -431,3 +431,41 @@ def test_a_development_clone_beside_several_instances_asks_nothing(box, tmp_path
     assert "Select instance" not in result.stdout
     assert "Detected local development setup" in result.stdout
     assert _systemctl(box) == []
+
+
+# ---------------------------------------------------------------- permissions after an update
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+@pytest.mark.parametrize("layout", ["simple", "legacy", "multi"])
+def test_secrets_stay_owner_only_after_an_update(box, layout):
+    """Step 6 runs chmod -R 755 over the install. On every layout it used to
+    leave .env (APP_KEY, API_KEY_PEPPER, broker credentials) and the databases
+    readable by every local account, though install.sh, install-multi.sh and
+    step 4b of the updater set .env to 600."""
+    path = {
+        "simple": box.simple,
+        "legacy": lambda: box.legacy("acme"),
+        "multi": lambda: box.multi(1),
+    }[layout]()
+    (path / ".env").chmod(0o600)
+    databases = [
+        path / "db" / name for name in ("openalgo.db", "openalgo.db-wal", "historify.duckdb")
+    ]
+    for database in databases:
+        database.parent.mkdir(exist_ok=True)
+        database.write_bytes(b"data")
+        database.chmod(0o644)
+    box.advance()
+
+    result = box.run(path / "install" / "update.sh", cwd=path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _mode(path / ".env") == 0o600, f".env left at {oct(_mode(path / '.env'))}"
+    for database in databases:
+        assert _mode(database) == 0o600, f"{database.name} left at {oct(_mode(database))}"
+    assert _mode(path / "keys") == 0o700
+    assert _mode(path / "app.py") == 0o755, "the application code is no longer readable"

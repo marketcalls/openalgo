@@ -199,6 +199,14 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **An update left your secrets readable by every account on the server.**
+  `install/update.sh` opens the whole install with `chmod -R 755` and never
+  closed `.env` again, so after each update your `.env` (app keys, broker
+  credentials) and the databases in `db/` could be read by any local account.
+  This hit every server layout, and since this release also instances made by
+  `install-multi.sh`, which the updater now recognises. The updater now sets
+  `.env` and every file in `db/` back to owner-only, as a fresh install does.
+  Running the updater once fixes an existing server.
 - **A smart order could double or reverse a position when the broker did not
   answer the position check.** A smart order reads your open position from the
   broker, compares it with the position size you asked for, and places the
