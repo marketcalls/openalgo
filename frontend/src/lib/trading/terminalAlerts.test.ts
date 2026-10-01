@@ -366,6 +366,39 @@ describe('terminal alert integration', () => {
     expect(b.onToast).not.toHaveBeenCalled()
   })
 
+  it('delivers every alert event one update raises, each from its own bar', async () => {
+    // Since 2.6.0 an update that appends several elements (a bar that completes
+    // two Renko bricks) has each judged, so one update can raise several
+    // `alert:triggered` events, each dated at its own element. Each is its own
+    // delivery: its own notice, its own log entry, its own numbers.
+    const { terminal, state, onToast } = await mount()
+    const fired = vi.fn()
+    ;(terminal as unknown as { cb: Record<string, unknown> }).cb.onAlertFired = fired
+    const host = state as unknown as { rawBars: Bar[]; setPriceData(): void }
+    host.rawBars = [bar(60, 100), bar(120, 101), bar(180, 102), bar(240, 103)]
+    host.setPriceData()
+    onToast.mockClear()
+    for (const [time, index] of [
+      [180, 2],
+      [240, 3],
+    ]) {
+      state.chart.emit('alert:triggered', {
+        alertId: 'every',
+        title: 'Every',
+        message: 'closed at {{close}}',
+        time,
+        index,
+      })
+    }
+    expect(onToast.mock.calls.map((call) => call[0])).toEqual([
+      'closed at 102.00',
+      'closed at 103.00',
+    ])
+    expect(fired).toHaveBeenCalledTimes(2)
+    expect(new Set(fired.mock.calls.map((call) => call[0].key)).size).toBe(2)
+    expect(fired.mock.calls.map((call) => call[0].firedAt)).toEqual([180, 240])
+  })
+
   it('preserves a study anchor through rebuild and reload without evaluating history', async () => {
     const a = await mount()
     const study = a.state.chart.addIndicator('ema', { length: 1 })

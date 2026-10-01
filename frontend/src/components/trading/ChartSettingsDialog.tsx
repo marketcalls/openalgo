@@ -19,6 +19,7 @@ import type {
   ChartSettingsPairField,
   ChartSettingsRequest,
 } from '@/lib/trading/terminal'
+import { conditionHolds } from '@/lib/trading/inputConditions'
 import { cn } from '@/lib/utils'
 import { SettingsField } from './IndicatorSettingsDialog'
 import { TickBox } from './TickBox'
@@ -176,7 +177,13 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
             <p className="mb-4 text-xs leading-relaxed text-muted-foreground">{tab.description}</p>
           )}
           <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
-            {groupsOf(tab.inputs).map(([heading, group]) => (
+            {groupsOf(
+              // A control that means something only beside another one (a
+              // point and figure box size in fixed mode) shows only then.
+              tab.inputs.filter(
+                (f) => isPair(f) || !f.visibleWhen || conditionHolds(f.visibleWhen, values)
+              )
+            ).map(([heading, group]) => (
               <FieldGroup
                 key={`${tab.id}-${heading}`}
                 heading={heading}

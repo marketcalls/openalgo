@@ -262,11 +262,11 @@ export function CandleViz({ spec, title, source, variant = 'figure', className }
       // Every one of these is dynamic so a chat with no chart never loads the
       // charting engine. `chartTheme` and `chartTypes` both import the library
       // themselves, so importing either statically would pull it in anyway.
-      const [core, theme, types, transform] = await Promise.all([
+      // `chartTypes` also registers the transforms its chart types name.
+      const [core, theme, types] = await Promise.all([
         import('openalgo-charts'),
         import('@/lib/trading/chartTheme'),
         import('@/lib/trading/chartTypes'),
-        import('openalgo-charts/transform'),
       ])
       if (disposed) return
 
@@ -321,16 +321,23 @@ export function CandleViz({ spec, title, source, variant = 'figure', className }
       const definition = types.CHART_TYPES[chartSpec.chartType] ?? types.CHART_TYPES.candlestick
       // Only Heikin Ashi is reachable from the backend's list and it ignores
       // the box size, but the movement-driven types share one signature, so
-      // one is computed rather than the map being read a second way.
-      const bars = definition.transform
-        ? transform.runTransform(definition.transform(boxSize(chartSpec.bars)), chartSpec.bars)
-        : chartSpec.bars
+      // one is computed rather than the map being read a second way. The chart
+      // applies it to the bars it is fed, as `/trading` does.
+      const transform = definition.transform?.(boxSize(chartSpec.bars))
 
       const style: SeriesStyle = definition.baseline
-        ? { baseValue: bars.reduce((sum, bar) => sum + bar.close, 0) / bars.length }
+        ? {
+            baseValue:
+              chartSpec.bars.reduce((sum, bar) => sum + bar.close, 0) / chartSpec.bars.length,
+          }
         : {}
-      const price = created.addSeries(definition.series as SeriesType, { style })
-      price.setData(bars)
+      const price = created.addSeries(definition.series as SeriesType, {
+        style,
+        ...(transform ? { transform } : {}),
+      })
+      price.setData(chartSpec.bars)
+      // What the chart draws: the transform's elements, or the bars as given.
+      const bars = created.primaryBars()
 
       // Volume rides an overlay scale inside the price pane, as it does on
       // `/trading`: it autoscales on its own and draws no second axis, so the

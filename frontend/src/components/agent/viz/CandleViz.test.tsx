@@ -33,6 +33,8 @@ interface ChartStub {
   addSeries: (type: string, options?: Record<string, unknown>) => SeriesStub
   addPrimitive: (primitive: unknown, pane: number) => void
   addIndicator: (id: string) => void
+  /** The price series' bars as drawn: what it was last fed, as no transform runs here. */
+  primaryBars: () => unknown[]
   fitContent: () => void
   timeScale: { barSpacing: number; setBarSpacing: (value: number) => void }
   destroy: () => void
@@ -76,6 +78,7 @@ const harness = vi.hoisted(() => {
         if (id === 'not-an-indicator') throw new Error('unknown indicator')
         chart.indicators.push(id)
       },
+      primaryBars: () => (chart.series[0]?.setData.mock.calls.at(-1)?.[0] as unknown[]) ?? [],
       fitContent: () => {
         chart.fitted += 1
       },
@@ -106,13 +109,8 @@ vi.mock('openalgo-charts', () => ({
   LogoWatermark: harness.LogoWatermark,
 }))
 
-vi.mock('openalgo-charts/transform', () => ({
-  runTransform: (_transform: unknown, bars: unknown) => bars,
-  HeikinAshiTransform: class {},
-  LineBreakTransform: class {},
-  RangeBarsTransform: class {},
-  RenkoTransform: class {},
-}))
+// Imported for its registration only: the chart applies a transform itself.
+vi.mock('openalgo-charts/transform', () => ({}))
 
 vi.mock('openalgo-charts/indicators', () => ({}))
 

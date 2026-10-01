@@ -74,7 +74,6 @@ function mount(saved: unknown) {
     price,
     interval: '1m',
     rawBars: bars,
-    shownBars: bars,
     rest: { getBars },
   })
   return { terminal, chart, getBars, onToast }

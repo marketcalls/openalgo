@@ -15,7 +15,9 @@
 
 import type {
   ChartObjectSnapshot,
+  IndicatorInputCondition,
   IndicatorState,
+  SeriesTransformSpec,
   LinkGroup,
   SeriesMarker,
   SeriesMarkers,
@@ -38,6 +40,7 @@ import {
   type DataLoadingSnapshot,
   exportChartDataCsv,
   getIndicator,
+  getSeriesTransform,
   type IPrimitive,
   indicatorDefaults,
   type LtpEvent,
@@ -69,7 +72,6 @@ import type {
 import {
   evaluateExpression,
   parseExpression,
-  runTransform,
   type SymbolExpression,
 } from 'openalgo-charts/transform'
 import type { AlertUi } from 'openalgo-charts/widget'
@@ -578,6 +580,8 @@ export interface IndicatorField {
   step?: number
   /** A disabled control keeps its saved value and explains the missing capability. */
   unavailable?: string
+  /** Shown only while this holds over the form's values (a box size read only in fixed mode). */
+  visibleWhen?: IndicatorInputCondition
 }
 
 /**
@@ -643,7 +647,39 @@ function toField(f: { key: string; type: string; label?: string; group?: string 
     min: (f as { min?: number }).min,
     max: (f as { max?: number }).max,
     step: (f as { step?: number }).step,
+    visibleWhen: (f as { visibleWhen?: IndicatorInputCondition }).visibleWhen,
   }
+}
+
+/**
+ * A chart setting the engine offers for a transformed chart's own options
+ * (`transform.boxSize`, `transform.reversal`, `transform.lines`).
+ *
+ * The dialog shows them, but they are not kept with the rest of the chart
+ * settings. Those are per pane and follow it from symbol to symbol, and a box
+ * is a price: a 30 rupee Renko brick chosen on NIFTY would draw nothing on a
+ * 100 rupee stock. A choice is kept per instrument and chart type instead (see
+ * `transformChoices`).
+ */
+function transformSetting(key: string): boolean {
+  return key.startsWith('transform.')
+}
+
+/** Instruments whose transform choices are kept, newest first out. */
+const TRANSFORM_CHOICES_KEPT = 64
+
+/** Each option of a transform spec, with the transform's own default where the spec is silent. */
+function transformValues(spec: SeriesTransformSpec): Record<string, string | number> {
+  const out: Record<string, string | number> = {}
+  for (const input of getSeriesTransform(spec.type).inputs) {
+    const value = spec.options?.[input.key] ?? input.default
+    if (typeof value === 'number' || typeof value === 'string') out[input.key] = value
+  }
+  return out
+}
+
+function withoutTransformSettings<T>(values: Readonly<Record<string, T>>): Record<string, T> {
+  return Object.fromEntries(Object.entries(values).filter(([key]) => !transformSetting(key)))
 }
 
 /** The selected drawing's editable style. */
@@ -1013,13 +1049,6 @@ export class TradingTerminal {
 
   private rawBars: Bar[] = []
   /**
-   * What the price series is actually showing: `rawBars`, or the output of the
-   * chart type's transform (Heikin Ashi, Renko, ...). Replay has to walk this
-   * rather than `rawBars`, because on a transformed chart the two differ in
-   * both values and length.
-   */
-  private shownBars: Bar[] = []
-  /**
    * The persisted chart-settings patch, kept as the flat dotted-key record the
    * engine reads and writes. Held here as well as in storage so an apply merges
    * onto what is already saved rather than replacing it.
@@ -1030,6 +1059,18 @@ export class TradingTerminal {
    * {@link snapshotChartDefaults}.
    */
   private chartDefaults: Record<string, string | number | boolean> = {}
+  /**
+   * The transform this chart was built with before any stored choice: the box
+   * sized from the instrument's price, and the transform's defaults. What a
+   * reset returns to, and what a choice is measured against.
+   */
+  private transformBase: SeriesTransformSpec | null = null
+  /**
+   * Transform options a trader set in chart settings, by instrument
+   * (`NFO:NIFTY29SEP26FUT`) and then chart type, holding only the options that
+   * differ from `transformBase`. Per instrument because a box is a price.
+   */
+  private transformChoices: Record<string, Record<string, Record<string, string | number>>> = {}
   private profileLayer: ProfileLayer | null = null
   private availableIntervals: string[] = ['1m', '5m', '15m', '1h', 'D']
   /** The workspace link group this pane belongs to, if sync is on. */
@@ -1473,22 +1514,57 @@ export class TradingTerminal {
     return Math.max(t, Number((Math.round((c * 0.0015) / t) * t).toFixed(this.dp())))
   }
 
+  /**
+   * Whether the chart applies a transform to the price series (Heikin Ashi,
+   * Renko, range bars, line break). Read from the chart rather than from
+   * `ctype`, which moves before the chart is rebuilt for it.
+   */
+  private transformed(): boolean {
+    return (
+      this.chart !== null && this.price !== null && this.chart.seriesTransform(this.price) !== null
+    )
+  }
+
+  /**
+   * What the price series is actually showing: `rawBars`, or the elements the
+   * chart formed from them for the chart type's transform. The replay picker,
+   * the legend's change and an alert's message read this rather than
+   * `rawBars`, because on a transformed chart the two differ in both values
+   * and length. The price series itself is always fed `rawBars`: the chart
+   * forms the elements, again on every tick.
+   */
+  private get shownBars(): readonly Bar[] {
+    return this.chart && this.transformed() ? this.chart.primaryBars() : this.rawBars
+  }
+
+  /**
+   * The bars on screen: the elements on a transformed chart, the revealed
+   * prefix during replay, the live bars otherwise. What the legend reads.
+   * A replay frame says it is one: the first frame arrives while the replay
+   * is still being constructed, before `replayActive` can know.
+   */
+  private drawnBars(replaying = this.replayActive()): readonly Bar[] {
+    if (this.chart && this.transformed()) return this.chart.primaryBars()
+    return replaying ? (this.price?.getData() ?? []) : this.rawBars
+  }
+
+  /** Volume on the elements drawn: each element sums the raw bars it was formed from. */
+  private setTransformedVolume(raw: readonly Bar[]): void {
+    if (!this.chart) return
+    const drawn = this.chart.primaryBars()
+    this.setVolumeData(drawn, this.bucketVolume(drawn, raw))
+  }
+
   private setPriceData() {
     // History can finish during replay. Keep its live snapshot up to date,
     // but leave both displayed series and their timeline to the playhead.
     if (this.replayOwnsDisplay()) return
     if (!this.price || !this.volume || !this.rawBars.length) return
-    const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
-    if (cfg.transform) {
-      const t = runTransform(cfg.transform(this.boxOf()), this.rawBars)
-      this.price.setData(t)
-      this.setVolumeData(t, this.bucketVolume(t))
-      this.shownBars = t
-    } else {
-      this.price.setData(this.rawBars)
-      this.setVolumeData(this.rawBars)
-      this.shownBars = this.rawBars
-    }
+    // Always the raw bars. On a transformed chart type the chart forms the
+    // elements from them, so a tick, history paging and replay all speak bars.
+    this.price.setData(this.rawBars)
+    if (this.transformed()) this.setTransformedVolume(this.rawBars)
+    else this.setVolumeData(this.rawBars)
     this.shownCount = this.shownBars.length
     this.profileLayer?.refresh(true)
     this.refreshLegend()
@@ -1569,20 +1645,24 @@ export class TradingTerminal {
    * loaded rather than with what changed. A one-bar update is O(1) and the chart
    * splices it.
    *
-   * Only valid without a transform. Renko, Range, Point and Figure and Kagi
-   * re-derive their whole series from the raw bars, so one new raw bar can
-   * change the count and the shape of the output and the transform has to run
-   * again. Those fall back to the full path.
+   * A transformed chart takes the bar the same way: the chart forms the
+   * elements again from its last closed bar and writes only the ones that
+   * moved. One raw bar can add, change or take back several bricks, so the
+   * volume under them is summed again from the raw bars.
    *
    * Returns false when the caller must rebuild instead.
    */
   private updateLiveBar(bar: Bar): boolean {
     if (!this.price || !this.volume) return false
-    const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
-    if (cfg.transform) return false
     // `update` appends or replaces by time on its own, which is exactly the
     // append-or-replace the caller has already applied to `rawBars`.
     this.price.update(bar)
+    if (this.transformed()) {
+      this.setTransformedVolume(this.rawBars)
+      this.shownCount = this.shownBars.length
+      this.profileLayer?.refresh()
+      return true
+    }
     const settings = volumeValues(this.chartSettingsSaved)
     const point = volumePoint(
       bar,
@@ -1607,7 +1687,6 @@ export class TradingTerminal {
     }
     // Untransformed, the shown series *is* rawBars, which the caller mutated in
     // place, so only the count can have moved.
-    this.shownBars = this.rawBars
     this.shownCount = this.rawBars.length
     this.profileLayer?.refresh()
     return true
@@ -1667,23 +1746,29 @@ export class TradingTerminal {
   }
 
   private refreshDisplayedVolume(): void {
-    if (this.price && this.volume) this.setVolumeData(this.price.getData(), this.volume.getData())
+    if (!this.price || !this.volume) return
+    // A transformed series hands back the raw bars it was fed, which during
+    // replay is the revealed prefix: summing those keeps the volume of bars
+    // not yet replayed out of the last element.
+    if (this.transformed()) this.setTransformedVolume(this.price.getData())
+    else this.setVolumeData(this.price.getData(), this.volume.getData())
   }
 
-  private bucketVolume(tbars: Bar[]): Bar[] {
+  /** Sum the raw bars' volume onto each element they formed, keyed by the element's time. */
+  private bucketVolume(tbars: readonly Bar[], raw: readonly Bar[]): Bar[] {
     const out: Bar[] = []
     let ri = 0
     for (const tb of tbars) {
       let v = 0
-      while (ri < this.rawBars.length && this.rawBars[ri].time <= tb.time) {
-        v += this.rawBars[ri].volume || 0
+      while (ri < raw.length && raw[ri].time <= tb.time) {
+        v += raw[ri].volume || 0
         ri++
       }
       out.push({ time: tb.time, open: 0, high: v, low: 0, close: v })
     }
     let rest = 0
-    while (ri < this.rawBars.length) {
-      rest += this.rawBars[ri].volume || 0
+    while (ri < raw.length) {
+      rest += raw[ri].volume || 0
       ri++
     }
     if (out.length && rest) {
@@ -2272,10 +2357,26 @@ export class TradingTerminal {
     // vanish and nothing can take them down or put them back. Dropped here so
     // the next run makes a fresh one against the series that now exists.
     this.btMarkers = null
-    this.price = this.chart.addSeries(cfg.series as SeriesType, {
-      style,
-      priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
-    })
+    // A movement-driven type has the chart apply its transform to the raw bars
+    // this series is fed, forming the elements again on every tick. The box is
+    // sized once per build from the instrument's price, so bricks keep their
+    // size through ticks, history refreshes and older pages, unless the trader
+    // chose options for this instrument in chart settings.
+    const base = cfg.transform?.(this.boxOf()) ?? null
+    this.transformBase = base
+    const priceSeries = (transform: SeriesTransformSpec | null) =>
+      this.chart!.addSeries(cfg.series as SeriesType, {
+        style,
+        priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
+        ...(transform ? { transform } : {}),
+      })
+    try {
+      this.price = priceSeries(base ? this.chosenTransform(base) : null)
+    } catch {
+      // A kept choice this build refuses throws before the series exists. The
+      // chart opens on the base instead; the choice goes when one is next saved.
+      this.price = priceSeries(base)
+    }
     // Tell the engine the instrument's tick. Without it the price scale treats
     // `minMove: 0` as "infer precision from the visible range", so RELIANCE at a
     // 0.05 tick renders a decimal short, drawings snap to an invented grid, and
@@ -2360,7 +2461,7 @@ export class TradingTerminal {
 
     this.chart.subscribeCrosshairMove((e) => {
       this.legendTime = e.bar?.time ?? null
-      this.refreshLegend(this.replayActive() ? (this.price?.getData() ?? []) : this.shownBars)
+      this.refreshLegend(this.drawnBars())
       if (e.source !== 'linked') this.moveReplayPick(e.index ?? null)
     })
 
@@ -2586,6 +2687,65 @@ export class TradingTerminal {
     } catch {
       /* ignore */
     }
+    try {
+      const raw = this.lsGet('transforms')
+      const parsed: unknown = raw ? JSON.parse(raw) : null
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        this.transformChoices = parsed as typeof this.transformChoices
+      }
+    } catch {
+      /* A malformed entry costs the choices, never the chart. */
+    }
+  }
+
+  /** Where this chart's transform choices are kept: its instrument, or nothing yet. */
+  private transformChoiceKey(): string | null {
+    return this.sym ? `${this.sym.exchange}:${this.sym.symbol}` : null
+  }
+
+  /** The spec to build with: the base, with the choice kept for this instrument and type. */
+  private chosenTransform(base: SeriesTransformSpec): SeriesTransformSpec {
+    const key = this.transformChoiceKey()
+    const chosen = key ? this.transformChoices[key]?.[this.ctype] : undefined
+    if (!chosen || typeof chosen !== 'object') return base
+    return { type: base.type, options: { ...base.options, ...chosen } }
+  }
+
+  /**
+   * Keep what the chart's transform now differs from its base by, for this
+   * instrument and chart type, after a settings edit or a restored workspace.
+   * An edit back to the base drops the entry, so a reset leaves nothing behind.
+   */
+  private rememberTransformChoice(): void {
+    const key = this.transformChoiceKey()
+    const base = this.transformBase
+    const spec = this.chart && this.price ? this.chart.seriesTransform(this.price) : null
+    if (!key || !base || !spec || spec.type !== base.type) return
+    const before = transformValues(base)
+    const now = transformValues(spec)
+    const differs: Record<string, string | number> = {}
+    for (const [option, value] of Object.entries(now)) {
+      if (before[option] !== value) differs[option] = value
+    }
+    const forInstrument = { ...this.transformChoices[key] }
+    if (Object.keys(differs).length) forInstrument[this.ctype] = differs
+    else delete forInstrument[this.ctype]
+    const next = { ...this.transformChoices }
+    // Re-inserted last, so the oldest instrument is the first to go.
+    delete next[key]
+    if (Object.keys(forInstrument).length) next[key] = forInstrument
+    const keys = Object.keys(next)
+    for (const old of keys.slice(0, Math.max(0, keys.length - TRANSFORM_CHOICES_KEPT)))
+      delete next[old]
+    this.transformChoices = next
+    this.lsSet('transforms', JSON.stringify(next))
+  }
+
+  /** The elements were formed again from the same bars: their count and their volume moved. */
+  private afterTransformChange(): void {
+    this.shownCount = this.shownBars.length
+    this.refreshDisplayedVolume()
+    this.refreshLegend(this.drawnBars())
   }
 
   /**
@@ -3960,7 +4120,15 @@ export class TradingTerminal {
    */
   private snapshotChartDefaults(): void {
     if (!this.chart) return
-    this.chartDefaults = { ...readChartSettings(this.chart) }
+    const defaults: Record<string, string | number | boolean> = { ...readChartSettings(this.chart) }
+    // The transform's baseline is the box this terminal sized, not whatever a
+    // kept choice built the chart with.
+    if (this.transformBase) {
+      for (const [option, value] of Object.entries(transformValues(this.transformBase))) {
+        defaults[`transform.${option}`] = value
+      }
+    }
+    this.chartDefaults = defaults
   }
 
   /**
@@ -3981,13 +4149,17 @@ export class TradingTerminal {
    * deviations lets an untouched control keep following the theme, which is
    * what "default" has to mean for the reset to be worth having.
    */
-  async applyChartSettings(patch: Record<string, string | number | boolean>): Promise<void> {
+  async applyChartSettings(given: Record<string, string | number | boolean>): Promise<void> {
     const chart = this.chart
     if (!chart) return
     const { applyChartSettings } = await import('openalgo-charts')
     if (chart !== this.chart || this.destroyed) return
+    // Transform options reach the chart with the rest, and are kept per
+    // instrument rather than with the pane's settings (see `transformSetting`).
+    const patch = withoutTransformSettings(given)
+    const transformChanged = Object.keys(given).some(transformSetting)
     const enginePatch = Object.fromEntries(
-      Object.entries(patch).filter(
+      Object.entries(given).filter(
         ([key]) => !key.startsWith('profiles.') && !key.startsWith('volume.')
       )
     )
@@ -4007,6 +4179,10 @@ export class TradingTerminal {
     if ('time.timezone' in enginePatch && enginePatch['time.timezone'] !== chart.timezone())
       this.stopReplay()
     applyChartSettings(chart, enginePatch)
+    if (transformChanged) {
+      this.rememberTransformChoice()
+      this.afterTransformChange()
+    }
     const defaults = {
       ...this.chartDefaults,
       ...profileDefaults('tpo'),
@@ -4032,7 +4208,7 @@ export class TradingTerminal {
     this.lsSet('chartsettings', JSON.stringify(kept))
     this.adoptGridFromPatch(patch)
     this.refreshDisplayedVolume()
-    this.refreshLegend(this.replayActive() ? (this.price?.getData() ?? []) : this.shownBars)
+    this.refreshLegend(this.drawnBars())
     if (isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval && interval !== this.interval) {
@@ -4083,13 +4259,14 @@ export class TradingTerminal {
         chart,
         Object.fromEntries(
           Object.entries(this.chartSettingsSaved).filter(
-            ([key]) => !key.startsWith('profiles.') && !key.startsWith('volume.')
+            ([key]) =>
+              !key.startsWith('profiles.') && !key.startsWith('volume.') && !transformSetting(key)
           )
         )
       )
       this.installProfile()
       this.refreshDisplayedVolume()
-      this.refreshLegend(this.replayActive() ? (this.price?.getData() ?? []) : this.shownBars)
+      this.refreshLegend(this.drawnBars())
     } catch (error) {
       if (strict) throw error
       /* ignore */
@@ -4871,7 +5048,7 @@ export class TradingTerminal {
               if (!member.isCurrent() || !member.active) return
               member.state = state
               this.refreshDisplayedVolume()
-              this.refreshLegend(price.getData())
+              this.refreshLegend(this.drawnBars(true))
               this.profileLayer?.refresh(true)
               this.cb.onReplayChange?.(state)
             },
@@ -4906,9 +5083,14 @@ export class TradingTerminal {
     if (state) {
       member.state = state
       if (!member.positioned) {
-        const to = state.index + 4
+        // A logical index on the chart: elements formed so far on a transformed one.
+        const head =
+          member.chart.seriesTransform(member.price) === null
+            ? state.index
+            : member.chart.primaryBars().length - 1
+        const to = head + 4
         member.chart.setVisibleLogicalRange(
-          state.index > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+          head > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
         )
         member.positioned = true
       }
@@ -5161,17 +5343,28 @@ export class TradingTerminal {
     this.setReplayShade(null)
     const driven = this.volume ? [this.price, this.volume] : [this.price]
     if (this.volumeMA) driven.push(this.volumeMA)
-    // Walk what the price series is showing, not the raw feed: on Heikin Ashi
-    // or Renko those are different arrays of different lengths, so replaying
-    // rawBars would repaint the chart as plain candles and put the playhead at
-    // the wrong bar.
-    // Copied, not aliased. Untransformed, `shownBars` *is* `rawBars`, which
-    // the tick path pushes to, so handing it over directly let the replay set
-    // grow while it was being walked: the total moved and the end of the session
-    // receded with every tick that arrived.
-    const bars = this.shownBars.slice()
-    const from = Math.max(0, Math.min(bars.length - 1, Math.floor(startIndex)))
-    const sub = await this.loadReplaySubBars()
+    // Walk the raw bars the price series is fed. On a transformed chart type
+    // the chart forms the elements from each revealed prefix, so a brick
+    // appears at the bar that completed it. The pick is made on the elements
+    // drawn, so it is carried to the raw bar its element was completed on: the
+    // newest raw bar at or before the element's time.
+    // Copied, not aliased. `rawBars` is what the tick path pushes to, so
+    // handing it over directly let the replay set grow while it was being
+    // walked: the total moved and the end of the session receded with every
+    // tick that arrived.
+    const transformed = this.transformed()
+    const bars = this.rawBars.slice()
+    let from = Math.max(0, Math.min(bars.length - 1, Math.floor(startIndex)))
+    if (transformed) {
+      const shown = this.shownBars
+      const picked = shown[Math.max(0, Math.min(shown.length - 1, Math.floor(startIndex)))]
+      from = 0
+      if (picked) while (from < bars.length - 1 && bars[from + 1].time <= picked.time) from++
+    }
+    // Intra-bar steps fold finer bars into the displayed one, which on a
+    // transformed chart is not an element of the chart: those step a bar at a
+    // time, as a workspace replay of one does.
+    const sub = transformed ? null : await this.loadReplaySubBars()
     // The await above yields, and the user may have left in the meantime.
     if (
       this.destroyed ||
@@ -5202,7 +5395,7 @@ export class TradingTerminal {
       subBars: sub ?? undefined,
       onFrame: (state) => {
         this.refreshDisplayedVolume()
-        this.refreshLegend(price.getData())
+        this.refreshLegend(this.drawnBars(true))
         this.profileLayer?.refresh(true)
         this.cb.onReplayChange?.(state)
       },
@@ -5215,10 +5408,13 @@ export class TradingTerminal {
     // on the newest bars, hundreds of bars past the end of that prefix and at a
     // price the prefix never trades at. The result is an apparently empty chart
     // with the candles clipped off the top. Put the view on the playhead and
-    // re-measure the axis, the same way the initial load does.
-    const to = from + 4
+    // re-measure the axis, the same way the initial load does. The playhead is
+    // a logical index on the chart, which on a transformed chart counts the
+    // elements formed so far rather than the raw bars.
+    const head = transformed ? this.chart.primaryBars().length - 1 : from
+    const to = head + 4
     this.chart.timeScale.setVisibleLogicalRange(
-      from > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+      head > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
     )
     // Remembered so a hand-pinned axis is not silently lost: replay has to
     // autoscale to stay readable as it walks, but that is replay's state, not
@@ -6483,6 +6679,19 @@ export class TradingTerminal {
           series.type === CHART_TYPES[pane.chartType].series
       )
       if (primary) this.price?.applyOptions(primary.style)
+      // A workspace saved by 2.6.0 records the transform's options with the
+      // series. The chart type already chose the transform; its options come
+      // back too, and are kept for this instrument like a settings edit.
+      const savedTransform = primary?.transform
+      if (savedTransform && this.price && savedTransform.type === this.transformBase?.type) {
+        try {
+          chart.setSeriesTransform(this.price, savedTransform)
+          this.rememberTransformChoice()
+          this.afterTransformChange()
+        } catch {
+          // Options this build refuses: the chart keeps the box it sized.
+        }
+      }
       const volume = report.series.find(
         (series) =>
           series.paneIndex === 0 && series.priceScaleId === '' && series.type === 'histogram'
