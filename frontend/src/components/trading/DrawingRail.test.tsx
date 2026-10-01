@@ -185,9 +185,9 @@ describe('tool groups', () => {
 
   it('labels a disabled button too, and hides the label on a press', async () => {
     rail({ canRedo: false })
-    const redo = screen.getByRole('button', { name: 'Redo drawing' })
+    const redo = screen.getByRole('button', { name: 'Redo chart change' })
     fireEvent.pointerEnter(redo.parentElement as Element)
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Redo drawing')
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Redo chart change')
     fireEvent.pointerDown(redo.parentElement as Element)
     expect(screen.queryByRole('tooltip')).toBeNull()
   })

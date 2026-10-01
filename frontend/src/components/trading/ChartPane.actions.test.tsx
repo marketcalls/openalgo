@@ -403,7 +403,8 @@ describe('study rows and Alerts in the chart menu', () => {
   it('undoes chart changes from the toolbar, never naming an order', async () => {
     const { view, owner } = await mount(null)
     const undo = view.getByRole('button', { name: 'Undo chart change' })
-    expect(undo.getAttribute('title')).toContain('Orders are never undone')
+    fireEvent.pointerEnter(undo.parentElement as Element)
+    expect(await view.findByRole('tooltip')).toHaveTextContent('Orders are never undone')
     fireEvent.click(undo)
     expect(owner.historyPress).toHaveBeenCalledWith('undo')
   })

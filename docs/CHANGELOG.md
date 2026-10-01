@@ -187,6 +187,36 @@ have read nothing on every bar.
   added, removed or edited, pane moves, scale, chart type and interval. Orders
   are never undone.
 
+### Charting terminal: faster everyday work
+
+- **Type on a chart to change it.** A letter opens symbol search with that
+  letter typed; a digit opens a small interval box ("5" then Enter is 5m, also
+  1h, D, W, M), accepting only your broker's intervals. Fields, dialogs and the
+  order ticket keep their keys.
+- **Comparisons:** each compared symbol shows its value and change in the
+  legend, can be hidden without removing it, and has Retry if its history
+  failed. Four scales: Price (on the chart's own price axis), Percentage,
+  Indexed to 100 and Own scale. Comparisons saved before this update open as
+  Own scale and look exactly as before, because that is how the old "Price"
+  drew them.
+- **Resize the charts in a grid** by dragging the gaps between them (or with
+  the arrow keys); double-click a gap to go back to the layout's sizes. Sizes
+  are saved with the layout, and older layouts open at their usual sizes.
+- **Clearer button labels** on the toolbar and the rails: the name, the
+  shortcut and one line on what it does, also on buttons that are greyed out.
+- **Delete asks first** for study templates and saved workspaces, and a study
+  template can be updated from the current chart.
+- **Download CSV** lets you choose all loaded bars or only those on screen,
+  which studies to include, and comparison closes. Pressing Download straight
+  away writes the same file as before.
+- **Study inputs:** prices and times can be picked by clicking the chart, and a
+  number outside the allowed range is explained beside the field.
+
+**Still not modelled.** A saved named workspace keeps a comparison scale only
+as Price or Percentage: Price reopens as Own scale and Indexed to 100 as
+Percentage. The unnamed grid keeps all four. The chart library's workspace
+format gains the other two in its next patch.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
