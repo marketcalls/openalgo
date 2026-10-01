@@ -200,3 +200,40 @@ describe('bottom bar', () => {
     expect((grid as HTMLElement).style.bottom).toBe('28px')
   })
 })
+
+describe('chart grid dividers', () => {
+  const gridOf = (container: HTMLElement) =>
+    container.querySelector('[data-trading-bottombar]')?.previousElementSibling
+      ?.firstElementChild as HTMLElement
+
+  it('opens a layout with nothing stored at equal sizes, with a divider in each gap', async () => {
+    localStorage.setItem('oa-trading-layout', 'grid4')
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(gridOf(container).style.gridTemplateColumns).toBe('1fr 1fr')
+    expect(gridOf(container).style.gridTemplateRows).toBe('1fr 1fr')
+    expect(screen.getAllByRole('separator')).toHaveLength(2)
+  })
+
+  it('draws a stored split, and a double-click puts the layout back and forgets it', async () => {
+    localStorage.setItem('oa-trading-layout', 'grid4')
+    localStorage.setItem(
+      'oa-trading-layout-sizes',
+      JSON.stringify({ grid4: { columns: [1.5, 0.5], rows: [1, 1] } })
+    )
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(gridOf(container).style.gridTemplateColumns).toBe('1.5fr 0.5fr')
+    fireEvent.doubleClick(screen.getByRole('separator', { name: 'Resize chart columns' }))
+    expect(gridOf(container).style.gridTemplateColumns).toBe('1fr 1fr')
+    expect(JSON.parse(localStorage.getItem('oa-trading-layout-sizes')!)).toEqual({})
+    expect(fake.changed).toHaveBeenCalled()
+  })
+
+  it('offers no divider on a single chart', async () => {
+    localStorage.setItem('oa-trading-layout', 'single')
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(screen.queryByRole('separator')).toBeNull()
+  })
+})

@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import type { IndicatorField, IndicatorSettingsRequest } from '@/lib/trading/terminal'
-import { cleanup, render, screen, userEvent, within } from '@/test/test-utils'
+import type { IndicatorField, IndicatorSettingsRequest, InputPick } from '@/lib/trading/terminal'
+import { act, cleanup, fireEvent, render, screen, userEvent, within } from '@/test/test-utils'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 
 /** What the terminal fills an interval input with. */
@@ -197,5 +197,103 @@ describe('which bars a study computes on', () => {
     const { onApply } = mount(request('ema-1', EMA, { length: 9, timeframe: '' }))
     await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
     expect(onApply.mock.calls[0]).toHaveLength(2)
+  })
+})
+
+describe('typed numbers', () => {
+  const LENGTH: IndicatorField[] = [
+    { key: 'length', type: 'number', label: 'Length', min: 1, max: 500, step: 1 },
+  ]
+
+  it('says what is wrong under the box as it is typed, and keeps Ok from applying it', async () => {
+    const { onApply, onClose } = mount(request('ema-1', LENGTH, { length: 14 }))
+    const box = screen.getByLabelText('Length')
+    fireEvent.change(box, { target: { value: '0' } })
+    expect(screen.getByText('The lowest allowed is 1')).toBeVisible()
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    fireEvent.change(box, { target: { value: '900' } })
+    expect(screen.getByText('The highest allowed is 500')).toBeVisible()
+    fireEvent.change(box, { target: { value: '14.5' } })
+    expect(screen.getByText('Use a whole number')).toBeVisible()
+    fireEvent.change(box, { target: { value: '' } })
+    expect(screen.getByText('Enter a number')).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.change(box, { target: { value: '21' } })
+    expect(screen.queryByText('Enter a number')).toBeNull()
+    expect(box).not.toHaveAttribute('aria-invalid')
+    await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith('ema-1', { length: 21 })
+  })
+})
+
+describe('picking an input on the chart', () => {
+  const ANCHORED: IndicatorField[] = [
+    { key: 'level', type: 'price', label: 'Level', timeKey: 'at' },
+    { key: 'at', type: 'time', label: 'At' },
+    { key: 'length', type: 'number', label: 'Length' },
+  ]
+
+  function mountPicking() {
+    const onApply = vi.fn()
+    const onClose = vi.fn()
+    const cancel = vi.fn()
+    let answer: ((value: InputPick | null) => void) | null = null
+    const onPick = vi.fn((_field: IndicatorField, onValue: (value: InputPick | null) => void) => {
+      answer = onValue
+      return () => {
+        cancel()
+        onValue(null)
+      }
+    })
+    render(
+      <IndicatorSettingsDialog
+        req={request('anchored-1', ANCHORED, { level: 100, at: '', length: 9 })}
+        onApply={onApply}
+        onDefaults={async () => null}
+        onClose={onClose}
+        onPick={onPick}
+      />
+    )
+    return { onApply, onClose, onPick, cancel, answer: (value: InputPick | null) => answer?.(value) }
+  }
+
+  it('offers Pick for price and time inputs only', () => {
+    mountPicking()
+    expect(screen.getByRole('button', { name: 'Pick Level on the chart' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Pick At on the chart' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Pick Length on the chart' })).toBeNull()
+  })
+
+  it('steps aside for the click, then fills the price and its paired time', async () => {
+    const { onPick, onApply, answer } = mountPicking()
+    await userEvent.click(screen.getByRole('button', { name: 'Pick Level on the chart' }))
+    expect(onPick).toHaveBeenCalledOnce()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Click the chart to pick the price for Level'
+    )
+    act(() => answer({ price: 24567.834, time: 1_700_000_000, clock: '2023-11-15 03:43' }))
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByLabelText('Level')).toHaveValue(24567.83)
+    expect(screen.getByLabelText('At')).toHaveValue('2023-11-15 03:43')
+    await userEvent.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith('anchored-1', {
+      level: 24567.83,
+      at: '2023-11-15 03:43',
+      length: 9,
+    })
+  })
+
+  it('puts the form back on Escape without closing it or changing anything', async () => {
+    const { cancel, onClose } = mountPicking()
+    await userEvent.click(screen.getByRole('button', { name: 'Pick At on the chart' }))
+    expect(screen.getByRole('status')).toHaveTextContent('pick the time for At')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByLabelText('At')).toHaveValue('')
   })
 })

@@ -1,7 +1,7 @@
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
 
 // Lazy, because the panel pulls the markdown renderer and the syntax
@@ -49,6 +49,7 @@ import {
   type ChartOrderBridgeRef,
   ChartOrderBridgeContext,
 } from '@/components/trading/dock/chartOrderBridge'
+import { GridDividers } from '@/components/trading/GridDividers'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
 import {
   type DockTab,
@@ -63,6 +64,7 @@ import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRa
 import { idForScript } from '@/lib/trading/openscriptFiles'
 import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import { TickBox } from '@/components/trading/TickBox'
+import { Tip } from '@/components/trading/Tip'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
 import { type ReplayPickSource, WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
@@ -78,11 +80,19 @@ import { useChartWorkspaceCatalog } from '@/hooks/useChartWorkspaceCatalog'
 import { useWorkspaceAutosave } from '@/hooks/useWorkspaceAutosave'
 import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
-import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
+import { LAYOUTS, LayoutIcon, type LayoutPreset } from '@/lib/chart/layouts'
 import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
 import { historyChord } from '@/lib/trading/chartHistory'
 import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
+import {
+  type GridWeights,
+  parseAreas,
+  parseTracks,
+  readGridWeights,
+  tracksTemplate,
+  writeGridWeights,
+} from '@/lib/trading/gridSizes'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { MagnetMode } from 'openalgo-charts/draw'
 import type {
@@ -182,6 +192,11 @@ interface SyncState {
   interval: boolean
 }
 const SYNC_DEFAULT: SyncState = { crosshair: true, viewport: true, symbol: false, interval: false }
+
+/** A preset's own split, which a layout opens with until somebody drags it. */
+function presetWeights(preset: LayoutPreset): GridWeights {
+  return { columns: parseTracks(preset.cols), rows: parseTracks(preset.rows) }
+}
 
 function readSync(): SyncState {
   try {
@@ -872,6 +887,28 @@ function TradingWorkspace({ account }: { account: string | null }) {
   }, [])
 
   const layout = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0]
+  /**
+   * The unnamed grid's split. Read once per layout from this browser, and held
+   * here while a divider is dragged so the charts follow the pointer before
+   * anything is written.
+   */
+  const storedWeights = useMemo(
+    () => readGridWeights(localStorage, layout.id, presetWeights(layout)),
+    [layout]
+  )
+  const [liveWeights, setLiveWeights] = useState<{ id: string; weights: GridWeights } | null>(null)
+  const gridWeights = liveWeights?.id === layout.id ? liveWeights.weights : storedWeights
+  const keepGridWeights = (weights: GridWeights) => {
+    setLiveWeights({ id: layout.id, weights })
+    writeGridWeights(localStorage, layout.id, weights, presetWeights(layout))
+    autosave.changed()
+  }
+  /** The preset with the dragged split, which is what a save captures. */
+  const sizedLayout: LayoutPreset = {
+    ...layout,
+    cols: tracksTemplate(gridWeights.columns),
+    rows: tracksTemplate(gridWeights.rows),
+  }
 
   const lockWorkspace = useCallback(
     (pending: boolean) => {
@@ -932,7 +969,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
       return terminal.captureWorkspacePane(id)
     })
     return capturePresetWorkspace(
-      layout,
+      sizedLayout,
       panes,
       panes.some((pane) => pane.id === focusedPane) ? focusedPane : panes[0].id,
       sync
@@ -1138,17 +1175,23 @@ function TradingWorkspace({ account }: { account: string | null }) {
   /** Workspace controls share one row with the selected chart's controls. */
   const layoutPicker = (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          title={`Layout: ${activeLayoutLabel}`}
-          aria-label={`Chart layout: ${activeLayoutLabel}`}
-        >
-          <LayoutGrid className="h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
+      <Tip
+        tip={{
+          title: `Layout: ${activeLayoutLabel}`,
+          sub: 'How many charts, and how they sit. Drag the gap between two charts to resize them; double-click the gap to put the sizes back.',
+        }}
+      >
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            aria-label={`Chart layout: ${activeLayoutLabel}`}
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+      </Tip>
       <DropdownMenuContent align="start" className="w-56">
         <div className="grid grid-cols-4 gap-1 p-1">
           {LAYOUTS.map((l) => (
@@ -1185,24 +1228,32 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const syncOn = sync.crosshair || sync.viewport || sync.symbol || sync.interval
   const syncPicker = (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="icon"
-          disabled={paneCount < 2}
-          className={cn('h-8 w-8 shrink-0', syncOn && paneCount > 1 && 'text-primary')}
-          title={
+      <Tip
+        tip={{
+          title:
             paneCount < 2
-              ? 'Chart sync needs more than one pane'
+              ? 'Chart sync needs more than one chart'
               : syncOn
                 ? 'Chart sync is on'
-                : 'Chart sync is off'
-          }
-          aria-label="Chart sync"
-        >
-          <LinkIcon className="h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
+                : 'Chart sync is off',
+          sub: 'Link the crosshair, time range, symbol or interval across charts',
+        }}
+      >
+        {/* Wrapped, so the label still shows while the button is disabled. */}
+        <span className="inline-flex shrink-0">
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              disabled={paneCount < 2}
+              className={cn('h-8 w-8 shrink-0', syncOn && paneCount > 1 && 'text-primary')}
+              aria-label="Chart sync"
+            >
+              <LinkIcon className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+        </span>
+      </Tip>
       <DropdownMenuContent align="start" className="w-56">
         <div className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
           Sync across panes
@@ -1255,31 +1306,34 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * switch fires twice.
    */
   const armedControl = (
-    <label
-      className={cn(
-        'flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md border px-2 text-xs font-medium transition-colors',
-        armed
-          ? 'border-destructive/60 bg-destructive/10 text-destructive'
-          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-      )}
-      title={
-        armed
-          ? 'One-Click is on: a click on the chart sends a live order'
-          : 'One-Click is off: a click on the chart opens the order ticket'
-      }
+    <Tip
+      tip={{
+        title: armed ? 'One-Click is on' : 'One-Click is off',
+        sub: armed
+          ? 'Buy and Sell on the chart send a live order at once'
+          : 'Buy and Sell on the chart open the order ticket first',
+      }}
     >
-      <Switch
-        checked={armed}
-        onCheckedChange={setArmed}
-        aria-label="One-Click"
-        // Switched on, the track carries the same red as the border and the
-        // word.
-        // Left on the app's accent it was a pale switch inside a red control
-        // saying two different things about one state, and the accent is what
-        // every harmless toggle on the page is already wearing.
-        className={cn(armed && 'data-[state=checked]:bg-destructive')}
-      />
-      {/* One control, not two. The switch and a badge beside it were the same
+      <label
+        className={cn(
+          'flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md border px-2 text-xs font-medium transition-colors',
+          armed
+            ? 'border-destructive/60 bg-destructive/10 text-destructive'
+            : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+        )}
+      >
+        <Switch
+          checked={armed}
+          onCheckedChange={setArmed}
+          aria-label="One-Click"
+          // Switched on, the track carries the same red as the border and the
+          // word.
+          // Left on the app's accent it was a pale switch inside a red control
+          // saying two different things about one state, and the accent is what
+          // every harmless toggle on the page is already wearing.
+          className={cn(armed && 'data-[state=checked]:bg-destructive')}
+        />
+        {/* One control, not two. The switch and a badge beside it were the same
           state said twice, and the badge said it in the loudest colour in the
           row while sitting at a different height from every button around it.
           The border makes it one control at the row's own height and the
@@ -1290,14 +1344,15 @@ function TradingWorkspace({ account }: { account: string | null }) {
           and the red are what do the shouting. The word itself only has to
           say which way the switch is thrown, and a trader should not have to
           learn a second vocabulary to read a toggle. */}
-      <span className="whitespace-nowrap">
-        {/* The name goes below lg, as Indicators and Replay drop their labels:
+        <span className="whitespace-nowrap">
+          {/* The name goes below lg, as Indicators and Replay drop their labels:
             with it the single-pane toolbar at 1024px pushed the LED and the
             camera into hidden horizontal scroll. */}
-        <span className="hidden lg:inline">One-Click </span>
-        {armed ? 'ON' : 'off'}
-      </span>
-    </label>
+          <span className="hidden lg:inline">One-Click </span>
+          {armed ? 'ON' : 'off'}
+        </span>
+      </label>
+    </Tip>
   )
 
   const chartIds =
@@ -1425,8 +1480,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       key="unnamed"
                       className="grid h-full min-h-0 gap-2 p-2"
                       style={{
-                        gridTemplateColumns: layout.cols,
-                        gridTemplateRows: layout.rows,
+                        gridTemplateColumns: sizedLayout.cols,
+                        gridTemplateRows: sizedLayout.rows,
                         gridTemplateAreas: layout.areas,
                       }}
                     >
@@ -1478,6 +1533,16 @@ function TradingWorkspace({ account }: { account: string | null }) {
                         />
                       ))}
                     </div>
+                  )}
+                  {!workspace.current && layout.cells.length > 1 && !workspace.pending && (
+                    <GridDividers
+                      key={layout.id}
+                      cells={parseAreas(layout.areas)}
+                      weights={gridWeights}
+                      onChange={(weights) => setLiveWeights({ id: layout.id, weights })}
+                      onCommit={keepGridWeights}
+                      onReset={() => keepGridWeights(presetWeights(layout))}
+                    />
                   )}
                   {workspace.grids.map((owner) => (
                     <WorkspaceGrid

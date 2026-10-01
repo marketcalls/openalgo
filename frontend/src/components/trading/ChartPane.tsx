@@ -64,6 +64,7 @@ import {
   type TerminalContextMenu,
   TradingTerminal,
 } from '@/lib/trading/terminal'
+import type { DataExportOptions } from '@/lib/trading/chartDataExport'
 import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -85,11 +86,16 @@ import {
   stillHeld,
 } from './dock/chartOrderRows'
 import { cancelDockOrder, closeDockPosition } from './dock/orderActions'
+import { QuickIntervalBox, useQuickEntry, useSeedBuffer } from './QuickEntry'
+import { Tip } from './Tip'
 
 // The forms a chart opens on request: none is needed to paint it. Mounted only
 // while open, so their code is fetched on the first opening rather than with
 // every chart.
 const AlertsDialog = lazy(() => import('./AlertsDialog').then((m) => ({ default: m.AlertsDialog })))
+const ChartDataDialog = lazy(() =>
+  import('./ChartDataDialog').then((m) => ({ default: m.ChartDataDialog }))
+)
 const ChartSettingsDialog = lazy(() =>
   import('./ChartSettingsDialog').then((m) => ({ default: m.ChartSettingsDialog }))
 )
@@ -464,6 +470,13 @@ export function ChartPane({
 
   // symbol search modal (per-pane; opened from the toolbar symbol pill)
   const [searchOpen, setSearchOpen] = useState(false)
+  /**
+   * What quick entry typed into the search, or null when the pill opened it.
+   * `live` while the box is still opening and keys are being kept for it.
+   */
+  const [searchSeed, setSearchSeed] = useState<{ text: string; live: boolean } | null>(null)
+  /** The interval box a digit typed on the chart opens, holding that digit. */
+  const [intervalBox, setIntervalBox] = useState<string | null>(null)
 
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
@@ -509,6 +522,11 @@ export function ChartPane({
   // schema depends on the live series type, theme and timezone.
   const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
+  /** The CSV download's choices, while its dialog is open. */
+  const [dataExport, setDataExport] = useState<{
+    studies: { id: string; name: string }[]
+    comparisons: number
+  } | null>(null)
   /** Remove all drawings, waiting for the trader to confirm it. */
   const [removeAll, setRemoveAll] = useState<{ count: number; symbol: string } | null>(null)
   /** An order action from the right-click menu, waiting for the trader to confirm it. */
@@ -736,25 +754,22 @@ export function ChartPane({
     onBeforeSourceChange?.()
     setChartTypeState(terminalRef.current?.chooseChartType(v) ?? v)
   }
-  const downloadCsv = () => {
+  /** Write the CSV. Throws with a sentence the download dialog shows. */
+  const downloadCsv = (options: DataExportOptions) => {
     const terminal = terminalRef.current
-    if (!terminal) return
+    if (!terminal) throw new Error('The chart is not ready')
+    const url = URL.createObjectURL(
+      new Blob([terminal.exportDataCsv(options)], { type: 'text/csv;charset=utf-8' })
+    )
+    const link = document.createElement('a')
     try {
-      const url = URL.createObjectURL(
-        new Blob([terminal.exportDataCsv()], { type: 'text/csv;charset=utf-8' })
-      )
-      const link = document.createElement('a')
-      try {
-        link.href = url
-        link.download = `${sym?.symbol ?? paneId}-${interval}.csv`.replace(/[^a-zA-Z0-9._-]/g, '_')
-        document.body.append(link)
-        link.click()
-      } finally {
-        link.remove()
-        URL.revokeObjectURL(url)
-      }
-    } catch (error) {
-      showToast.error(error instanceof Error ? error.message : 'Unable to export chart data')
+      link.href = url
+      link.download = `${sym?.symbol ?? paneId}-${interval}.csv`.replace(/[^a-zA-Z0-9._-]/g, '_')
+      document.body.append(link)
+      link.click()
+    } finally {
+      link.remove()
+      URL.revokeObjectURL(url)
     }
   }
   const changeProduct = (p: string) => {
@@ -1044,7 +1059,50 @@ export function ChartPane({
     removeAll !== null ||
     pendingOrder !== null ||
     ticket !== null ||
-    confirmLeave
+    confirmLeave ||
+    intervalBox !== null ||
+    dataExport !== null
+
+  const replayTitle =
+    workspaceReplay && workspaceReplay.phase !== 'idle'
+      ? 'Stop workspace replay'
+      : replay
+        ? 'Leave replay'
+        : replayLoading
+          ? 'Cancel replay loading'
+          : picking
+            ? 'Cancel bar selection'
+            : 'Replay'
+
+  useQuickEntry({
+    enabled:
+      focused &&
+      ready &&
+      !transitionLocked &&
+      !paneDialogOpen &&
+      ctx === null &&
+      !snapOpen &&
+      !picking &&
+      !replayLoading,
+    onStart: (kind, text) => {
+      if (kind === 'interval') {
+        setIntervalBox(text)
+        return
+      }
+      setSearchSeed({ text, live: true })
+      setSearchOpen(true)
+    },
+  })
+  useSeedBuffer(
+    searchOpen && searchSeed?.live === true,
+    (update) => setSearchSeed((seed) => (seed ? { ...seed, text: update(seed.text) } : seed)),
+    () => setSearchSeed((seed) => (seed?.live ? { ...seed, live: false } : seed))
+  )
+  // The search is fetched on its first opening. A selected chart fetches it
+  // ahead of time, so a letter typed onto the chart opens it at once.
+  useEffect(() => {
+    if (focused && ready) void import('./SymbolSearchDialog')
+  }, [focused, ready])
 
   return (
     <section
@@ -1093,33 +1151,52 @@ export function ChartPane({
             <div className="sticky left-0 z-10 shrink-0 bg-background pr-1">{chartSelector}</div>
           )}
           {/* Symbol pill — opens the search modal for this pane */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0 gap-2 font-medium"
-            onClick={() => setSearchOpen(true)}
-            title="Search symbol"
+          <Tip
+            tip={{
+              title: 'Symbol search',
+              chord: 'Type a letter',
+              sub: 'Find an instrument, or build an expression such as NIFTY/BANKNIFTY',
+            }}
           >
-            <Search className="h-3.5 w-3.5 opacity-60" />
-            <span className="max-w-[10rem] truncate">{sym?.symbol ?? 'Search symbol'}</span>
-            {sym && (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {sym.exchange}
-              </span>
-            )}
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 gap-2 font-medium"
+              onClick={() => {
+                setSearchSeed(null)
+                setSearchOpen(true)
+              }}
+            >
+              <Search className="h-3.5 w-3.5 opacity-60" />
+              <span className="max-w-[10rem] truncate">{sym?.symbol ?? 'Search symbol'}</span>
+              {sym && (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {sym.exchange}
+                </span>
+              )}
+            </Button>
+          </Tip>
 
           {/* Timeframe */}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 min-w-12 shrink-0 gap-1 font-medium"
-              >
-                {interval || '—'}
-              </Button>
-            </DropdownMenuTrigger>
+            <Tip
+              tip={{
+                title: 'Interval',
+                chord: 'Type a number',
+                sub: '5 then Enter is 5 minutes; 1h, D and W work too',
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 min-w-12 shrink-0 gap-1 font-medium"
+                  aria-label={`Interval ${interval}`}
+                >
+                  {interval || '—'}
+                </Button>
+              </DropdownMenuTrigger>
+            </Tip>
             <DropdownMenuContent container={menuHost} align="start" className="w-64">
               {intervalGroups.map((g) => (
                 <div key={g.label} className="px-1 pb-1">
@@ -1147,16 +1224,18 @@ export function ChartPane({
 
           {/* Chart type */}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 shrink-0 gap-1"
-                title={chartTypeDef.label}
-              >
-                <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
-              </Button>
-            </DropdownMenuTrigger>
+            <Tip tip={{ title: 'Chart type', sub: chartTypeDef.label }}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0 gap-1"
+                  aria-label={`Chart type: ${chartTypeDef.label}`}
+                >
+                  <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
+                </Button>
+              </DropdownMenuTrigger>
+            </Tip>
             <DropdownMenuContent container={menuHost} align="start" className="w-60">
               {CHART_TYPE_GROUPS.map((group, gi) => (
                 <div key={group[0].value}>
@@ -1180,15 +1259,16 @@ export function ChartPane({
             for derivatives), so a segmented control spends double the width to
             show one you are not using — this toggles and names the other. */}
           {sym && !sym.quoteOnly && sym.productOptions.length > 0 && (
-            <button
-              type="button"
-              onClick={() => changeProduct(nextProduct)}
-              title={`Product ${sym.product} — click for ${nextProduct}`}
-              aria-label={`Product ${sym.product}, click for ${nextProduct}`}
-              className="h-8 shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
-            >
-              {sym.product}
-            </button>
+            <Tip tip={{ title: `Product ${sym.product}`, sub: `Click for ${nextProduct}` }}>
+              <button
+                type="button"
+                onClick={() => changeProduct(nextProduct)}
+                aria-label={`Product ${sym.product}, click for ${nextProduct}`}
+                className="h-8 shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+              >
+                {sym.product}
+              </button>
+            </Tip>
           )}
 
           {/* Quantity */}
@@ -1212,34 +1292,37 @@ export function ChartPane({
           {/* Indicators. A dialog rather than a dropdown: 105 built-ins in a
             264px column was a scroll race, with no way to jump to a category
             and no memory of what you reach for daily. */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0 gap-1"
-            title="Indicators"
-            onClick={() => {
-              setPickerOpen(true)
-              void openIndicators()
-            }}
-          >
-            <IndicatorIcon className="h-4 w-4" />
-            <span className="hidden sm:inline">Indicators</span>
-            {indicators.length > 0 && (
-              <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-                {indicators.length}
-              </span>
-            )}
-          </Button>
+          <Tip tip={{ title: 'Indicators', sub: 'Add studies and saved scripts to this chart' }}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 gap-1"
+              aria-label="Indicators"
+              onClick={() => {
+                setPickerOpen(true)
+                void openIndicators()
+              }}
+            >
+              <IndicatorIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Indicators</span>
+              {indicators.length > 0 && (
+                <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+                  {indicators.length}
+                </span>
+              )}
+            </Button>
+          </Tip>
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0"
-            title="Alerts"
-            onClick={() => void terminalRef.current?.openAlerts()}
-          >
-            Alerts
-          </Button>
+          <Tip tip={{ title: 'Alerts', sub: 'Create and manage price alerts for this chart' }}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0"
+              onClick={() => void terminalRef.current?.openAlerts()}
+            >
+              Alerts
+            </Button>
+          </Tip>
 
           <ComparisonMenu
             state={comparisons}
@@ -1259,46 +1342,48 @@ export function ChartPane({
               Promise.reject(new Error('Chart is not ready'))
             }
             onRemove={(id) => terminalRef.current?.removeComparison(id)}
+            onToggle={(id, visible) => terminalRef.current?.setComparisonVisible(id, visible)}
+            onRetry={(id) =>
+              terminalRef.current?.retryComparison(id) ??
+              Promise.reject(new Error('Chart is not ready'))
+            }
             onModeChange={(value) => terminalRef.current?.setComparisonMode(value)}
           />
 
           {/* Replay. A toolbar action rather than a context-menu entry: it changes
             what the whole chart is showing, and the transport bar it opens has
             to be discoverable without a right-click. */}
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(
-              'h-8 shrink-0 gap-1',
-              (workspaceReplay
-                ? workspaceReplay.phase !== 'idle'
-                : replay || picking || replayLoading) && 'border-primary text-primary'
-            )}
-            onClick={() => {
-              if (onReplayStart) {
-                onReplayStart(paneId)
-                return
-              }
-              if (replay) setConfirmLeave(true)
-              else if (replayLoading) terminalRef.current?.stopReplay()
-              else if (picking) terminalRef.current?.cancelReplayPick()
-              else terminalRef.current?.startReplay()
+          <Tip
+            tip={{
+              title: replayTitle,
+              sub: 'Play the session back bar by bar from a bar you pick',
             }}
-            title={
-              workspaceReplay && workspaceReplay.phase !== 'idle'
-                ? 'Stop workspace replay'
-                : replay
-                  ? 'Leave replay'
-                  : replayLoading
-                    ? 'Cancel replay loading'
-                    : picking
-                      ? 'Cancel bar selection'
-                      : 'Replay this session from a bar you pick'
-            }
           >
-            <ReplayIcon className="h-4 w-4" />
-            <span className="hidden sm:inline">Replay</span>
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Replay"
+              className={cn(
+                'h-8 shrink-0 gap-1',
+                (workspaceReplay
+                  ? workspaceReplay.phase !== 'idle'
+                  : replay || picking || replayLoading) && 'border-primary text-primary'
+              )}
+              onClick={() => {
+                if (onReplayStart) {
+                  onReplayStart(paneId)
+                  return
+                }
+                if (replay) setConfirmLeave(true)
+                else if (replayLoading) terminalRef.current?.stopReplay()
+                else if (picking) terminalRef.current?.cancelReplayPick()
+                else terminalRef.current?.startReplay()
+              }}
+            >
+              <ReplayIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Replay</span>
+            </Button>
+          </Tip>
 
           {/* Workspace controls share the selected chart's row, but they are not
             about this chart: they are the grid, its templates and whether a
@@ -1318,28 +1403,36 @@ export function ChartPane({
             change" so that, next to a Replay button and an order panel, they
             cannot read as taking back an order. */}
           <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={() => terminalRef.current?.historyPress('undo')}
-            disabled={!history.canUndo}
-            title={`Undo chart change (${MOD_KEY} + Z). Orders are never undone.`}
-            aria-label="Undo chart change"
-          >
-            <UndoIcon className="h-[17px] w-[17px]" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={() => terminalRef.current?.historyPress('redo')}
-            disabled={!history.canRedo}
-            title={`Redo chart change (${MOD_KEY} + Y)`}
-            aria-label="Redo chart change"
-          >
-            <UndoIcon className="h-[17px] w-[17px]" flip />
-          </Button>
+          {/* Wrapped, so the label still shows while the button is disabled: a
+              disabled button takes no pointer events of its own. */}
+          <Tip tip={{ title: 'Undo chart change', chord: `${MOD_KEY}+Z`, sub: 'Orders are never undone' }}>
+            <span className="inline-flex shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => terminalRef.current?.historyPress('undo')}
+                disabled={!history.canUndo}
+                aria-label="Undo chart change"
+              >
+                <UndoIcon className="h-[17px] w-[17px]" />
+              </Button>
+            </span>
+          </Tip>
+          <Tip tip={{ title: 'Redo chart change', chord: `${MOD_KEY}+Y` }}>
+            <span className="inline-flex shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => terminalRef.current?.historyPress('redo')}
+                disabled={!history.canRedo}
+                aria-label="Redo chart change"
+              >
+                <UndoIcon className="h-[17px] w-[17px]" flip />
+              </Button>
+            </span>
+          </Tip>
 
           {/* Right side: connection LED + actions */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -1359,38 +1452,53 @@ export function ChartPane({
               title={`WebSocket ${wsState}`}
             />
             {/* Full screen chart (additive) */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn('h-8 w-8', fullscreen && 'text-primary')}
-              onClick={toggleFullscreen}
-              title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen chart'}
-              aria-label="Toggle full screen chart"
+            <Tip
+              tip={
+                fullscreen
+                  ? { title: 'Exit full screen', chord: 'Esc' }
+                  : { title: 'Full screen chart', sub: 'This chart alone, with its toolbar' }
+              }
             >
-              <FullscreenIcon className="h-[17px] w-[17px]" />
-            </Button>
-            {/* Positioned, so the menu below anchors to the camera and not to
-              whatever ancestor happens to be relative. */}
-            <div className="relative">
               <Button
                 variant="ghost"
                 size="icon"
-                className={cn('h-8 w-8', snapOpen && 'text-primary')}
-                ref={snapBtnRef}
-                onClick={(e) => {
-                  // Shift skips the menu and saves, for anyone who only ever saves.
-                  if (e.shiftKey) {
-                    void terminalRef.current?.screenshot()
-                    return
-                  }
-                  if (snapOpen) setSnapOpen(false)
-                  else openSnapMenu()
-                }}
-                title="Chart snapshot"
-                aria-label="Chart snapshot"
+                className={cn('h-8 w-8', fullscreen && 'text-primary')}
+                onClick={toggleFullscreen}
+                aria-label="Toggle full screen chart"
               >
-                <CameraIcon className="h-[17px] w-[17px]" />
+                <FullscreenIcon className="h-[17px] w-[17px]" />
               </Button>
+            </Tip>
+            {/* Positioned, so the menu below anchors to the camera and not to
+              whatever ancestor happens to be relative. */}
+            <div className="relative">
+              <Tip
+                disabled={snapOpen}
+                tip={{
+                  title: 'Chart snapshot',
+                  chord: 'Alt+Shift+S',
+                  sub: 'Save or copy an image, or download the data. Shift-click saves the image.',
+                }}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('h-8 w-8', snapOpen && 'text-primary')}
+                  ref={snapBtnRef}
+                  onClick={(e) => {
+                    // Shift skips the menu and saves, for anyone who only ever saves.
+                    if (e.shiftKey) {
+                      void terminalRef.current?.screenshot()
+                      return
+                    }
+                    if (snapOpen) setSnapOpen(false)
+                    else openSnapMenu()
+                  }}
+                  aria-label="Chart snapshot"
+                >
+                  <CameraIcon className="h-[17px] w-[17px]" />
+                </Button>
+              </Tip>
               {snapOpen && (
                 <>
                   {/* Catches the click that dismisses, so the menu closes on any
@@ -1434,7 +1542,8 @@ export function ChartPane({
                       }
                       onClick={() => {
                         setSnapOpen(false)
-                        downloadCsv()
+                        const terminal = terminalRef.current
+                        if (terminal) setDataExport(terminal.dataExportChoices())
                       }}
                     >
                       <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
@@ -1474,6 +1583,28 @@ export function ChartPane({
           readLevels={() => terminalRef.current?.drawLevels() ?? null}
           onLevels={(levels) => terminalRef.current?.setDrawLevels(levels)}
         />
+        {dataExport && (
+          <Suspense fallback={null}>
+            <ChartDataDialog
+              source={`${sym ? `${sym.exchange}:${sym.symbol}` : 'This chart'}, ${interval}`}
+              studies={dataExport.studies}
+              comparisons={dataExport.comparisons}
+              onDownload={downloadCsv}
+              onClose={() => setDataExport(null)}
+            />
+          </Suspense>
+        )}
+        {intervalBox !== null && (
+          <QuickIntervalBox
+            initial={intervalBox}
+            available={intervalGroups.flatMap((group) => group.items)}
+            onApply={(code) => {
+              setIntervalBox(null)
+              if (code !== interval) changeInterval(code)
+            }}
+            onClose={() => setIntervalBox(null)}
+          />
+        )}
         <DrawingTextDialog
           req={textReq}
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
@@ -1522,6 +1653,12 @@ export function ChartPane({
                   : Promise.resolve(null)
               }
               onClose={() => setIndSettings(null)}
+              onPick={(field, onValue) => {
+                const terminal = terminalRef.current
+                if (terminal) return terminal.pickInput(field, onValue)
+                onValue(null)
+                return () => {}
+              }}
             />
           </Suspense>
         )}
@@ -2138,7 +2275,10 @@ export function ChartPane({
         <Suspense fallback={null}>
           <SymbolSearchDialog
             open={searchOpen}
-            onOpenChange={setSearchOpen}
+            onOpenChange={(next) => {
+              setSearchOpen(next)
+              if (!next) setSearchSeed(null)
+            }}
             search={(q, ex, limit) =>
               terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
             }
@@ -2146,7 +2286,8 @@ export function ChartPane({
               onBeforeSourceChange?.()
               void terminalRef.current?.loadSymbol(row)
             }}
-            initialQuery={sym?.symbol}
+            initialQuery={searchSeed ? searchSeed.text : sym?.symbol}
+            selectInitial={searchSeed === null}
           />
         </Suspense>
       )}

@@ -27,7 +27,8 @@ import { chartMayTakeKey, MOD_KEY } from '@/lib/trading/drawingKeys'
 import { DRAW_GROUPS, drawToolIcon } from '@/lib/trading/drawTools'
 import type { DrawStats } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
-import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
+import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE } from './railStyles'
+import { Tip } from './Tip'
 
 interface Props {
   stats: DrawStats
@@ -242,25 +243,34 @@ export function DrawingRail({
     <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 no-scrollbar overflow-y-auto border-r bg-background/40 py-1">
       {/* Cursor, with the eraser in its flyout */}
       <DropdownMenu {...menu('cursor')}>
-        <div className="group relative">
-          <button
-            type="button"
-            aria-label={erasing ? 'Eraser' : 'Cursor'}
-            aria-pressed={erasing || !stats.tool}
-            onClick={() => onPick(null)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setOpen('cursor')
-            }}
-            className={cn(btn, (erasing || !stats.tool) && on)}
-          >
-            <span className={iconBox}>{erasing ? ERASER_GLYPH : drawToolIcon('cursor')}</span>
-          </button>
-          <Caret label="Cursor menu" shown={erasing || open === 'cursor'} accent={erasing} />
-          {open !== 'cursor' && (
-            <RailTip text={erasing ? 'Eraser' : 'Cursor'} chord={erasing ? 'Esc to stop' : 'Esc'} />
-          )}
-        </div>
+        <Tip
+          side="right"
+          disabled={open === 'cursor'}
+          tip={{
+            title: erasing ? 'Eraser' : 'Cursor',
+            chord: 'Esc',
+            sub: erasing
+              ? 'Click a drawing to delete it. Esc returns to the cursor.'
+              : 'Select and move drawings. Right-click for the eraser.',
+          }}
+        >
+          <div className="group relative">
+            <button
+              type="button"
+              aria-label={erasing ? 'Eraser' : 'Cursor'}
+              aria-pressed={erasing || !stats.tool}
+              onClick={() => onPick(null)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setOpen('cursor')
+              }}
+              className={cn(btn, (erasing || !stats.tool) && on)}
+            >
+              <span className={iconBox}>{erasing ? ERASER_GLYPH : drawToolIcon('cursor')}</span>
+            </button>
+            <Caret label="Cursor menu" shown={erasing || open === 'cursor'} accent={erasing} />
+          </div>
+        </Tip>
         {menuContent(
           <>
             <DropdownMenuItem
@@ -295,44 +305,50 @@ export function DrawingRail({
         const held = active && latched
         return (
           <DropdownMenu key={g.key} {...menu(g.key)}>
-            <div className="group relative">
-              <button
-                type="button"
-                aria-label={g.label}
-                aria-pressed={active}
-                onClick={() => {
-                  // Re-arm the group's last tool; open the list if there is none.
-                  if (lastTool) onPick(lastTool)
-                  else setOpen(g.key)
-                }}
-                // A double-click holds the tool after each drawing until Escape.
-                onDoubleClick={() => {
-                  if (lastTool) onPick(lastTool, true)
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  setOpen(g.key)
-                }}
-                className={cn(btn, active && on)}
-              >
-                <span className={iconBox}>{drawToolIcon(lastTool ?? g.iconKey)}</span>
-              </button>
-              {held && (
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-1 top-1 h-1.5 w-1.5 rounded-full bg-primary"
-                />
-              )}
-              <Caret label={`${g.label} menu`} shown={active || open === g.key} accent={active} />
-              {open !== g.key && (
-                <RailTip
-                  text={lastTool ? toolLabel(lastTool) : g.label}
-                  chord={
-                    lastTool ? (held ? 'Held until Esc' : 'Double-click to keep it') : undefined
-                  }
-                />
-              )}
-            </div>
+            <Tip
+              side="right"
+              disabled={open === g.key}
+              tip={{
+                title: lastTool ? toolLabel(lastTool) : g.label,
+                chord: lastTool ? stats.shortcuts[lastTool]?.replace('+', ' + ') : undefined,
+                sub: lastTool
+                  ? held
+                    ? 'Held until Esc'
+                    : 'Double-click to keep it for several drawings. Right-click for the list.'
+                  : 'Choose a tool from the list',
+              }}
+            >
+              <div className="group relative">
+                <button
+                  type="button"
+                  aria-label={g.label}
+                  aria-pressed={active}
+                  onClick={() => {
+                    // Re-arm the group's last tool; open the list if there is none.
+                    if (lastTool) onPick(lastTool)
+                    else setOpen(g.key)
+                  }}
+                  // A double-click holds the tool after each drawing until Escape.
+                  onDoubleClick={() => {
+                    if (lastTool) onPick(lastTool, true)
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setOpen(g.key)
+                  }}
+                  className={cn(btn, active && on)}
+                >
+                  <span className={iconBox}>{drawToolIcon(lastTool ?? g.iconKey)}</span>
+                </button>
+                {held && (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-1 top-1 h-1.5 w-1.5 rounded-full bg-primary"
+                  />
+                )}
+                <Caret label={`${g.label} menu`} shown={active || open === g.key} accent={active} />
+              </div>
+            </Tip>
 
             {menuContent(
               g.sections.map((sec, si) => (
@@ -378,37 +394,44 @@ export function DrawingRail({
 
       {/* Magnet: the button turns it on and off, the flyout picks how hard */}
       <DropdownMenu {...menu('magnet')}>
-        <div className="group relative">
-          <button
-            type="button"
-            aria-label="Magnet"
-            aria-pressed={stats.magnetMode !== 'off'}
-            onClick={() => onMagnet(stats.magnetMode === 'off' ? magnetOn : 'off')}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setOpen('magnet')
-            }}
-            className={cn(btn, stats.magnetMode !== 'off' && on)}
-          >
-            <span className={iconBox}>{drawToolIcon('magnet')}</span>
-          </button>
-          {stats.magnetMode !== 'off' && (
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute right-0.5 top-0 text-[9px] font-bold leading-none text-primary"
+        <Tip
+          side="right"
+          disabled={open === 'magnet'}
+          tip={{
+            title: MAGNET_LABEL[stats.magnetMode],
+            chord: `Hold ${MOD_KEY}`,
+            sub: `${MAGNET_HINT[stats.magnetMode]}. Hold ${MOD_KEY} to snap with it off.`,
+          }}
+        >
+          <div className="group relative">
+            <button
+              type="button"
+              aria-label="Magnet"
+              aria-pressed={stats.magnetMode !== 'off'}
+              onClick={() => onMagnet(stats.magnetMode === 'off' ? magnetOn : 'off')}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setOpen('magnet')
+              }}
+              className={cn(btn, stats.magnetMode !== 'off' && on)}
             >
-              {stats.magnetMode === 'weak' ? 'W' : 'S'}
-            </span>
-          )}
-          <Caret
-            label="Magnet menu"
-            shown={open === 'magnet'}
-            accent={stats.magnetMode !== 'off'}
-          />
-          {open !== 'magnet' && (
-            <RailTip text={MAGNET_LABEL[stats.magnetMode]} chord={`Hold ${MOD_KEY} to snap`} />
-          )}
-        </div>
+              <span className={iconBox}>{drawToolIcon('magnet')}</span>
+            </button>
+            {stats.magnetMode !== 'off' && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute right-0.5 top-0 text-[9px] font-bold leading-none text-primary"
+              >
+                {stats.magnetMode === 'weak' ? 'W' : 'S'}
+              </span>
+            )}
+            <Caret
+              label="Magnet menu"
+              shown={open === 'magnet'}
+              accent={stats.magnetMode !== 'off'}
+            />
+          </div>
+        </Tip>
         {menuContent(
           <>
             {(['off', 'weak', 'strong'] as const).map((mode) => (
@@ -436,79 +459,32 @@ export function DrawingRail({
         three trips to the rail. This latches the armed tool instead, and the
         cursor button is still one press away.
       */}
-      <div className="group relative">
-        <button
-          type="button"
-          aria-label="Keep tool selected"
-          aria-pressed={stats.stay}
-          onClick={() => onStay(!stats.stay)}
-          className={cn(btn, stats.stay && on)}
-        >
-          <span className={iconBox}>{drawToolIcon('lock')}</span>
-        </button>
-        <RailTip text="Keep the tool selected after drawing" />
-      </div>
-      <div className="group relative">
-        <button
-          type="button"
-          aria-label="Undo chart change"
-          disabled={!stats.canUndo}
-          onClick={onUndo}
-          className={btn}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            className={iconBox}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.6}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M4 10a7 7 0 1 1 2.5 5.3" />
-            <path d="M3 5v5h5" />
-          </svg>
-        </button>
-        <RailTip text="Undo chart change. Orders are never undone." chord={`${MOD_KEY} + Z`} />
-      </div>
-      <div className="group relative">
-        <button
-          type="button"
-          aria-label="Redo chart change"
-          disabled={!stats.canRedo}
-          onClick={onRedo}
-          className={btn}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            className={iconBox}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.6}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M20 10a7 7 0 1 0-2.5 5.3" />
-            <path d="M21 5v5h-5" />
-          </svg>
-        </button>
-        <RailTip text="Redo" chord={`${MOD_KEY} + Shift + Z`} />
-      </div>
-
-      {/* Trash: deletes the selection, and holds every other drawing action */}
-      <DropdownMenu {...menu('trash')}>
+      <Tip
+        side="right"
+        tip={{
+          title: 'Keep tool selected',
+          sub: 'The tool stays picked after each drawing, until Esc',
+        }}
+      >
         <div className="group relative">
           <button
             type="button"
-            aria-label={stats.hasSelection ? 'Delete selected drawings' : 'Drawing actions'}
-            disabled={stats.count === 0}
-            onClick={() => (stats.hasSelection ? onDeleteSelected() : setOpen('trash'))}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setOpen('trash')
-            }}
+            aria-label="Keep tool selected"
+            aria-pressed={stats.stay}
+            onClick={() => onStay(!stats.stay)}
+            className={cn(btn, stats.stay && on)}
+          >
+            <span className={iconBox}>{drawToolIcon('lock')}</span>
+          </button>
+        </div>
+      </Tip>
+      <Tip side="right" tip={{ title: 'Undo chart change', chord: `${MOD_KEY} + Z`, sub: 'Orders are never undone' }}>
+        <div className="group relative">
+          <button
+            type="button"
+            aria-label="Undo chart change"
+            disabled={!stats.canUndo}
+            onClick={onUndo}
             className={btn}
           >
             <svg
@@ -521,19 +497,86 @@ export function DrawingRail({
               strokeLinejoin="round"
               aria-hidden="true"
             >
-              <path d="M3.5 6.5h17M9.5 6.5v-3h5v3M6 6.5l1 14h10l1-14" />
+              <path d="M4 10a7 7 0 1 1 2.5 5.3" />
+              <path d="M3 5v5h5" />
             </svg>
           </button>
-          {stats.count > 0 && (
-            <Caret label="Drawing actions menu" shown={open === 'trash'} accent={false} />
-          )}
-          {open !== 'trash' && (
-            <RailTip
-              text={stats.hasSelection ? 'Delete selected' : 'Remove drawings'}
-              chord={stats.hasSelection ? 'Del' : undefined}
-            />
-          )}
         </div>
+      </Tip>
+      <Tip side="right" tip={{ title: 'Redo chart change', chord: `${MOD_KEY} + Y` }}>
+        <div className="group relative">
+          <button
+            type="button"
+            aria-label="Redo chart change"
+            disabled={!stats.canRedo}
+            onClick={onRedo}
+            className={btn}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className={iconBox}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.6}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M20 10a7 7 0 1 0-2.5 5.3" />
+              <path d="M21 5v5h-5" />
+            </svg>
+          </button>
+        </div>
+      </Tip>
+
+      {/* Trash: deletes the selection, and holds every other drawing action */}
+      <DropdownMenu {...menu('trash')}>
+        <Tip
+          side="right"
+          disabled={open === 'trash'}
+          tip={
+            stats.hasSelection
+              ? {
+                  title: 'Delete selected',
+                  chord: 'Del',
+                  sub: 'Right-click to hide or lock them instead',
+                }
+              : {
+                  title: 'Drawing actions',
+                  sub: 'Select all drawings, or remove every drawing on this chart',
+                }
+          }
+        >
+          <div className="group relative">
+            <button
+              type="button"
+              aria-label={stats.hasSelection ? 'Delete selected drawings' : 'Drawing actions'}
+              disabled={stats.count === 0}
+              onClick={() => (stats.hasSelection ? onDeleteSelected() : setOpen('trash'))}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setOpen('trash')
+              }}
+              className={btn}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className={iconBox}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.6}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3.5 6.5h17M9.5 6.5v-3h5v3M6 6.5l1 14h10l1-14" />
+              </svg>
+            </button>
+            {stats.count > 0 && (
+              <Caret label="Drawing actions menu" shown={open === 'trash'} accent={false} />
+            )}
+          </div>
+        </Tip>
         {menuContent(
           <>
             {stats.hasSelection && (

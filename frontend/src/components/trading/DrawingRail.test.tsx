@@ -147,11 +147,12 @@ describe('trash', () => {
 })
 
 describe('tool groups', () => {
-  it('shows the last tool used and re-arms it; a double-click holds it', () => {
+  it('shows the last tool used and re-arms it; a double-click holds it', async () => {
     localStorage.setItem(RAIL_LAST_KEY, JSON.stringify({ lines: 'ray' }))
     const { onPick } = rail()
     const lines = screen.getByRole('button', { name: 'Lines' })
-    expect(lines.parentElement).toHaveTextContent('Ray')
+    fireEvent.pointerEnter(lines.parentElement as Element)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Ray')
 
     fireEvent.click(lines)
     expect(onPick).toHaveBeenLastCalledWith('ray')
@@ -166,17 +167,29 @@ describe('tool groups', () => {
     })
   })
 
-  it('ignores a remembered tool that no longer belongs to the group', () => {
+  it('ignores a remembered tool that no longer belongs to the group', async () => {
     localStorage.setItem(RAIL_LAST_KEY, JSON.stringify({ lines: 'gartley' }))
     rail()
-    expect(screen.getByRole('button', { name: 'Lines' }).parentElement).toHaveTextContent('Lines')
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Lines' }).parentElement as Element)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Choose a tool from the list')
   })
 
-  it('marks a held tool and says Escape releases it', () => {
+  it('marks a held tool and says Escape releases it, with its shortcut', async () => {
     rail({ tool: 'trend-line' }, { latched: true })
-    expect(screen.getByRole('button', { name: 'Lines' }).parentElement).toHaveTextContent(
-      'Held until Esc'
-    )
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Lines' }).parentElement as Element)
+    const tip = await screen.findByRole('tooltip')
+    expect(tip).toHaveTextContent('Trend Line')
+    expect(tip).toHaveTextContent('Alt + T')
+    expect(tip).toHaveTextContent('Held until Esc')
+  })
+
+  it('labels a disabled button too, and hides the label on a press', async () => {
+    rail({ canRedo: false })
+    const redo = screen.getByRole('button', { name: 'Redo drawing' })
+    fireEvent.pointerEnter(redo.parentElement as Element)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Redo drawing')
+    fireEvent.pointerDown(redo.parentElement as Element)
+    expect(screen.queryByRole('tooltip')).toBeNull()
   })
 })
 

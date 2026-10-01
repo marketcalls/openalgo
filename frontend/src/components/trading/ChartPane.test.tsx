@@ -35,6 +35,8 @@ const fake = vi.hoisted(() => ({
   toast: vi.fn(),
   /** What the terminal is currently offering. A test may grow it mid-run. */
   catalogue: [] as { id: string; name: string; category: string }[],
+  /** The broker's intervals the fake terminal reports when it boots. */
+  intervalGroups: [] as { label: string; items: string[] }[],
 }))
 vi.mock('@/utils/toast', () => ({
   showToast: { success: fake.toast, error: fake.toast, info: fake.toast },
@@ -60,6 +62,13 @@ vi.mock('@/lib/trading/terminal', () => ({
     setComparisonMode = vi.fn()
     exportDataCsv = vi.fn(() => 'time,close\n1,10')
     startReplay = vi.fn()
+    dataExportChoices = vi.fn(() => ({
+      studies: [
+        { id: 'ema-1', name: 'EMA 20' },
+        { id: 'rsi-1', name: 'RSI 14' },
+      ],
+      comparisons: 1,
+    }))
     indicatorCatalog = vi.fn(async () => fake.catalogue)
     copyDrawings = vi.fn(async () => true)
     cutDrawings = vi.fn(async () => true)
@@ -68,6 +77,7 @@ vi.mock('@/lib/trading/terminal', () => ({
     removeDrawings = vi.fn()
     requestRemoveAllDrawings = vi.fn()
     setDrawLatch = vi.fn()
+    setInterval = vi.fn((iv: string) => iv)
     replayPickingBar = () => false
     replayLoadingBars = () => false
     search = async () => []
@@ -92,7 +102,7 @@ vi.mock('@/lib/trading/terminal', () => ({
     }
     init() {
       this.options.callbacks.onReady({
-        intervalGroups: [],
+        intervalGroups: fake.intervalGroups,
         interval: '5m',
         chartType: 'candlestick',
       })
@@ -119,6 +129,7 @@ beforeEach(() => {
   fake.owners.length = 0
   fake.toast.mockClear()
   fake.catalogue = [{ id: 'sma', name: 'Moving average', category: 'Moving Averages' }]
+  fake.intervalGroups = []
 })
 afterEach(cleanup)
 
@@ -171,8 +182,17 @@ describe('chart pane preparation ownership', () => {
       view.rerender(panes('right'))
       fireEvent.click(within(host).getByRole('button', { name: 'Chart snapshot' }))
       fireEvent.click(view.getByRole('button', { name: 'Download CSV' }))
+      // The menu opens the choices; everything starts ticked, so Download at
+      // once writes the same file the menu always wrote.
+      const dialog = await view.findByRole('dialog', { name: 'Download chart data' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Download CSV' }))
       expect(fake.owners[0].exportDataCsv).not.toHaveBeenCalled()
-      expect(fake.owners[1].exportDataCsv).toHaveBeenCalledOnce()
+      expect(fake.owners[1].exportDataCsv).toHaveBeenCalledExactlyOnceWith({
+        range: 'all',
+        studies: ['ema-1', 'rsi-1'],
+        comparisons: true,
+      })
+      expect(view.queryByRole('dialog', { name: 'Download chart data' })).toBeNull()
       expect(create).toHaveBeenCalledWith(expect.any(Blob))
       expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:chart-csv')
       expect(click).toHaveBeenCalledOnce()
@@ -204,6 +224,7 @@ describe('chart pane preparation ownership', () => {
             label: 'NSE:INFY',
             color: '#4488ff',
             status: 'ready',
+            visible: true,
           },
         ],
       })
@@ -211,9 +232,9 @@ describe('chart pane preparation ownership', () => {
     view.rerender(panes('right'))
     expect(view.getAllByRole('button', { name: 'Comparisons' })).toHaveLength(1)
     fireEvent.click(within(host).getByRole('button', { name: 'Comparisons' }))
-    fireEvent.change(view.getByLabelText('Comparison scale'), { target: { value: 'percentage' } })
+    fireEvent.change(view.getByLabelText('Comparison scale'), { target: { value: 'percent' } })
     fireEvent.click(view.getByRole('button', { name: 'Remove NSE:INFY' }))
-    expect(fake.owners[1].setComparisonMode).toHaveBeenCalledExactlyOnceWith('percentage')
+    expect(fake.owners[1].setComparisonMode).toHaveBeenCalledExactlyOnceWith('percent')
     expect(fake.owners[1].removeComparison).toHaveBeenCalledExactlyOnceWith('right-comparison')
     expect(fake.owners[0].setComparisonMode).not.toHaveBeenCalled()
   })
@@ -622,5 +643,54 @@ describe('drawings in the right-click menu', () => {
     await act(async () => owner.resolve())
     rerender(<ChartPane {...props} sharedLatch />)
     expect(owner.setDrawLatch).toHaveBeenLastCalledWith(true)
+  })
+})
+
+describe('typing on the chart', () => {
+  it('opens the symbol search holding the letter typed, with the caret after it', async () => {
+    const view = render(<ChartPane {...props} />)
+    await act(async () => fake.owners[0].resolve())
+    fireEvent.keyDown(document.body, { key: 'r' })
+    const box = (await view.findByLabelText('Search symbol')) as HTMLInputElement
+    expect(box.value).toBe('r')
+  })
+
+  it('opens the interval box on a digit and changes the interval on Enter', async () => {
+    fake.intervalGroups = [{ label: 'minutes', items: ['1m', '5m', '15m'] }]
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0] as Owner & { setInterval: ReturnType<typeof vi.fn> }
+    await act(async () => owner.resolve())
+    fireEvent.keyDown(document.body, { key: '1' })
+    const box = view.getByLabelText('Interval') as HTMLInputElement
+    expect(box.value).toBe('1')
+    fireEvent.change(box, { target: { value: '15' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(owner.setInterval).toHaveBeenCalledWith('15m')
+    expect(view.queryByLabelText('Interval')).toBeNull()
+  })
+
+  it('leaves keys typed into a field, and a chart that is not selected, alone', async () => {
+    const view = render(<ChartPane {...props} />)
+    await act(async () => fake.owners[0].resolve())
+    const qty = view.getByLabelText('Qty')
+    fireEvent.keyDown(qty, { key: '5' })
+    fireEvent.keyDown(qty, { key: 'r' })
+    expect(view.queryByLabelText('Interval')).toBeNull()
+    expect(view.queryByLabelText('Search symbol')).toBeNull()
+    cleanup()
+
+    const other = render(<ChartPane {...props} focused={false} />)
+    await act(async () => fake.owners.at(-1)?.resolve())
+    fireEvent.keyDown(document.body, { key: '5' })
+    expect(other.queryByLabelText('Interval')).toBeNull()
+  })
+
+  it('does not open while a chord is held', async () => {
+    const view = render(<ChartPane {...props} />)
+    await act(async () => fake.owners[0].resolve())
+    fireEvent.keyDown(document.body, { key: 'h', altKey: true })
+    fireEvent.keyDown(document.body, { key: '5', ctrlKey: true })
+    expect(view.queryByLabelText('Interval')).toBeNull()
+    expect(view.queryByLabelText('Search symbol')).toBeNull()
   })
 })

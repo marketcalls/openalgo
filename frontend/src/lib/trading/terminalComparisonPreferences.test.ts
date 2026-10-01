@@ -105,7 +105,7 @@ describe('saved comparison preference recovery', () => {
     expect(getBars).toHaveBeenCalledOnce()
     expect(getBars.mock.calls[0][0]).toMatchObject({ symbol: 'VALID', exchange: 'NSE' })
     expect(terminal.comparisonState()).toMatchObject({
-      mode: 'percentage',
+      mode: 'percent',
       items: [{ symbol: 'VALID', exchange: 'NSE', status: 'ready' }],
     })
     expect(comparisonController(chart).list()).toHaveLength(1)
@@ -122,19 +122,21 @@ describe('saved comparison preference recovery', () => {
     await terminal.addComparison('VALID', 'NSE')
     expect(getBars).toHaveBeenCalledOnce()
     expect(terminal.comparisonState()).toMatchObject({
-      mode: 'percentage',
+      mode: 'percent',
       items: [{ symbol: 'VALID', status: 'ready' }],
     })
     expect(onToast).toHaveBeenCalledOnce()
   })
 
-  it('retains valid saved definitions, visibility, color and price mode', async () => {
+  it('retains valid saved definitions, visibility, color and the saved price mode as Own scale', async () => {
     const item = { ...savedItem, visible: false, color: '#4f8cff' }
     const { terminal, chart, getBars, onToast } = mount({ items: [item], mode: 'price' })
     await terminal.addComparison('VALID', 'NSE')
     expect(getBars).toHaveBeenCalledTimes(2)
+    // A chart saved before the four scales recorded `price` for a line on its
+    // own scale, so that is what it opens as.
     expect(terminal.comparisonState()).toMatchObject({
-      mode: 'price',
+      mode: 'own',
       items: [
         { id: item.id, symbol: item.symbol, color: item.color, status: 'ready' },
         { symbol: 'VALID', status: 'ready' },
@@ -143,5 +145,47 @@ describe('saved comparison preference recovery', () => {
     expect(comparisonController(chart).list()).toHaveLength(2)
     expect(JSON.parse(localStorage.getItem(`${storageKey}-comparisons`)!).items[0]).toEqual(item)
     expect(onToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('the comparison scale a chart remembers', () => {
+  it('keeps a newer scale beside the old field, so an older build still reads its mode', async () => {
+    const { terminal } = mount({ items: [savedItem], mode: 'price' })
+    await terminal.addComparison('VALID', 'NSE')
+    terminal.setComparisonMode('indexed')
+    expect(JSON.parse(localStorage.getItem(`${storageKey}-comparisons`)!)).toMatchObject({
+      mode: 'percent',
+      scale: 'indexed',
+    })
+    terminal.setComparisonMode('price')
+    expect(JSON.parse(localStorage.getItem(`${storageKey}-comparisons`)!)).toMatchObject({
+      mode: 'price',
+      scale: 'price',
+    })
+  })
+
+  it('reopens each saved scale as it was chosen', async () => {
+    for (const [saved, expected] of [
+      [{ mode: 'percent', scale: 'indexed' }, 'indexed'],
+      [{ mode: 'price', scale: 'price' }, 'price'],
+      [{ mode: 'price' }, 'own'],
+      [{ mode: 'percent' }, 'percent'],
+      // A scale that disagrees with the old field is not trusted over it.
+      [{ mode: 'price', scale: 'indexed' }, 'own'],
+    ] as const) {
+      const { terminal } = mount({ items: [savedItem], ...saved })
+      await terminal.addComparison('VALID', 'NSE')
+      expect(terminal.comparisonState().mode).toBe(expected)
+    }
+  })
+
+  it('shows and hides one line and says so in its state', async () => {
+    const { terminal } = mount({ items: [savedItem], mode: 'percent' })
+    await terminal.addComparison('VALID', 'NSE')
+    terminal.setComparisonVisible('saved', false)
+    expect(terminal.comparisonState().items[0]).toMatchObject({ id: 'saved', visible: false })
+    expect(JSON.parse(localStorage.getItem(`${storageKey}-comparisons`)!).items[0].visible).toBe(
+      false
+    )
   })
 })

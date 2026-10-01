@@ -535,7 +535,7 @@ describe('terminal comparison workspace integration', () => {
     await terminal.addComparison('THIRD', 'NSE')
     terminal.setComparisonMode('percentage')
     expect(terminal.comparisonState()).toMatchObject({
-      mode: 'percentage',
+      mode: 'percent',
       items: [
         { symbol: 'OTHER', exchange: 'NSE', status: 'ready' },
         { symbol: 'THIRD', exchange: 'NSE', status: 'ready' },
@@ -550,6 +550,14 @@ describe('terminal comparison workspace integration', () => {
     expect(after.comparisons.map((item) => item.symbol)).toEqual(['THIRD'])
     expect(before.comparisons).toHaveLength(2)
     expect(terminal.exportDataCsv().split('\r\n')[0]).toContain('comparison:1:THIRD:close')
+    // The download dialog's choices narrow the same file.
+    expect(terminal.dataExportChoices()).toEqual({ studies: [], comparisons: 1 })
+    expect(terminal.exportDataCsv({ comparisons: false }).split('\r\n')[0]).not.toContain(
+      'comparison:'
+    )
+    expect(terminal.exportDataCsv({ range: 'all', studies: [], comparisons: true })).toBe(
+      terminal.exportDataCsv()
+    )
     expect(state.price.getData().map((row) => row.close)).toEqual([100, 101, 102, 103])
   })
 })

@@ -40,6 +40,7 @@ import {
   DataLoadingController,
   type DataLoadingSnapshot,
   exportChartDataCsv,
+  formatZonedTime,
   getIndicator,
   getSeriesTransform,
   IndicatorInputError,
@@ -52,6 +53,7 @@ import {
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
   type PriceLine,
+  type PriceScaleId,
   parseAlertsDocument,
   ReplayController,
   ReplayShade,
@@ -63,6 +65,7 @@ import {
   type SeriesType,
   TextWatermark,
   tryResolveInterval,
+  utcSecondsToZonedDateString,
   withBarCache,
 } from 'openalgo-charts'
 import type {
@@ -116,7 +119,14 @@ import {
 import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
 import { replayTiming } from './replayTiming'
 import { applySessionHours } from './sessionHours'
+import { csvOptions, type DataExportOptions } from './chartDataExport'
 import { TerminalComparisons } from './terminalComparisons'
+import {
+  type ComparisonScale,
+  comparisonScaleOf,
+  isComparisonScale,
+  storedComparisonMode,
+} from './comparisonScale'
 import type { PreparedReplayMember } from './workspaceReplay'
 import {
   createWorkspacePanePreferences,
@@ -502,10 +512,16 @@ export interface TerminalComparisonItem {
   color: string
   status: 'loading' | 'ready' | 'error'
   error?: string
+  /** False while the trader has hidden the line; it stays on the chart. */
+  visible: boolean
+  /** The latest close, while one is drawn. */
+  close?: number
+  /** Percent change of that close from the bar before. */
+  change?: number
 }
 
 export interface TerminalComparisonState {
-  mode: 'price' | 'percentage'
+  mode: ComparisonScale
   items: readonly TerminalComparisonItem[]
 }
 
@@ -663,6 +679,19 @@ export interface IndicatorField {
   unavailable?: string
   /** Shown only while this holds over the form's values (a box size read only in fixed mode). */
   visibleWhen?: IndicatorInputCondition
+  /** A price input paired with a time: a pick on the chart sets both from one click. */
+  timeKey?: string
+  /** Where a price is picked: a study pane or scale other than the price axis. */
+  pick?: boolean | { paneIndex?: number; priceScaleId?: PriceScaleId }
+}
+
+/** What one click on the chart answered while a study input was being picked. */
+export interface InputPick {
+  price?: number
+  /** UTC seconds of the bar clicked. */
+  time?: number
+  /** The same bar as a wall clock in the chart's timezone, as a `time` input stores it. */
+  clock?: string
 }
 
 /**
@@ -731,6 +760,12 @@ function toField(f: { key: string; type: string; label?: string; group?: string 
     max: (f as { max?: number }).max,
     step: (f as { step?: number }).step,
     visibleWhen: (f as { visibleWhen?: IndicatorInputCondition }).visibleWhen,
+    ...((f as { timeKey?: string }).timeKey
+      ? { timeKey: (f as { timeKey?: string }).timeKey }
+      : {}),
+    ...((f as { pick?: IndicatorField['pick'] }).pick !== undefined
+      ? { pick: (f as { pick?: IndicatorField['pick'] }).pick }
+      : {}),
   }
 }
 
@@ -1274,7 +1309,12 @@ export class TradingTerminal {
   private workspaceTransitionLocked = false
   private comparisons: TerminalComparisons | null = null
   private comparisonLoad: Promise<void> = Promise.resolve()
-  private comparisonPreferences: { items: WorkspaceComparison[]; mode: 'price' | 'percent' } = {
+  private comparisonPreferences: {
+    items: WorkspaceComparison[]
+    mode: 'price' | 'percent'
+    /** The finer choice of four, kept beside `mode` (see `comparisonScale.ts`). */
+    scale?: ComparisonScale
+  } = {
     items: [],
     mode: 'percent',
   }
@@ -1515,7 +1555,11 @@ export class TradingTerminal {
             throw new Error('Invalid comparison preferences')
           sources.add(source)
         }
-        this.comparisonPreferences = { items: pane.comparisons, mode: pane.comparisonMode }
+        this.comparisonPreferences = {
+          items: pane.comparisons,
+          mode: pane.comparisonMode,
+          scale: comparisonScaleOf(pane.comparisonMode, saved.scale),
+        }
       } catch {
         this.reportPreferenceFailure(
           'Saved comparisons could not be read. Add them again to this chart.'
@@ -1928,6 +1972,8 @@ export class TradingTerminal {
       return
     }
     this.legendEl.innerHTML = legendHtml(this.legendModel(bar))
+    // Comparison rows read the same bar as the readout above them.
+    this.comparisons?.setReadout(bar?.time ?? null)
   }
 
   /** Resolve the selected time again after history replacement or pagination. */
@@ -4982,7 +5028,12 @@ export class TradingTerminal {
     return indicators
   }
 
-  exportDataCsv(): string {
+  /**
+   * The chart's data as CSV. With no options it is every loaded bar, every
+   * study and every comparison close, which is what this always wrote; the
+   * download dialog narrows it (see `chartDataExport.ts`).
+   */
+  exportDataCsv(options: DataExportOptions = {}): string {
     if (this.destroyed || !this.chart || this.dataUnavailable())
       throw new Error('Chart history is unavailable for export')
     if (
@@ -4991,20 +5042,75 @@ export class TradingTerminal {
       (this.workspaceReplayLocked && !this.workspaceReplayMember)
     )
       throw new Error('Finish replay selection and loading before exporting data')
-    return exportChartDataCsv(this.chart)
+    return exportChartDataCsv(this.chart, csvOptions(this.chart, options))
+  }
+
+  /**
+   * Take the next click on the chart as a study input's value: a price, a bar
+   * time, or both from one click for a price paired with a time. Returns the
+   * cancel; `onValue` gets null when the pick ends without a click.
+   */
+  pickInput(field: IndicatorField, onValue: (value: InputPick | null) => void): () => void {
+    const chart = this.chart
+    if (!chart || this.destroyed) {
+      onValue(null)
+      return () => {}
+    }
+    const zone = chart.timezone()
+    const clock = (time: number) =>
+      `${utcSecondsToZonedDateString(time, zone)} ${formatZonedTime(time, zone)}`
+    let settled = false
+    const done = (value: InputPick | null) => {
+      if (settled) return
+      settled = true
+      offEnd()
+      onValue(value)
+    }
+    // The engine says a pick ended without a value (another pick, a cancel) on
+    // `pick:end`, so a form waiting on one is never left waiting.
+    const offEnd = chart.on('pick:end', (event) => {
+      if (event.value === null) done(null)
+    })
+    const where = typeof field.pick === 'object' ? field.pick : undefined
+    let cancel: () => void
+    if (field.type === 'price' && field.timeKey) {
+      cancel = chart.beginPick(
+        'point',
+        (point) => done({ price: point.price, time: point.time, clock: clock(point.time) }),
+        where
+      )
+    } else if (field.type === 'price') {
+      cancel = chart.beginPick('price', (price) => done({ price }), where)
+    } else {
+      cancel = chart.beginPick('time', (time) => done({ time, clock: clock(time) }))
+    }
+    return () => {
+      cancel()
+      done(null)
+    }
+  }
+
+  /** What the download dialog offers: the studies by name, and how many comparisons. */
+  dataExportChoices(): { studies: { id: string; name: string }[]; comparisons: number } {
+    return {
+      studies: this.listIndicators().map(({ id, name }) => ({ id, name })),
+      comparisons: this.comparisons?.specs().length ?? 0,
+    }
   }
 
   comparisonState(): TerminalComparisonState {
     return {
       mode:
-        (this.comparisons?.mode ?? this.comparisonPreferences?.mode) === 'percent'
-          ? 'percentage'
-          : 'price',
+        this.comparisons?.scale ??
+        comparisonScaleOf(this.comparisonPreferences.mode, this.comparisonPreferences.scale),
       items: (this.comparisons?.rows() ?? []).map((row) => ({
         id: row.id,
         symbol: row.symbol,
         exchange: row.exchange,
         label: `${row.exchange}:${row.symbol}`,
+        visible: row.visible,
+        ...(row.close === null ? {} : { close: row.close }),
+        ...(row.change === null ? {} : { change: row.change }),
         // Always set by the time a row exists; the palette entry keeps a
         // swatch from being blank if that ever stops being true, and keeps it
         // from being the one colour a comparison is not allowed to be.
@@ -5032,13 +5138,21 @@ export class TradingTerminal {
         now: () => this.gridNow(),
         onChange: () => {
           if (this.destroyed || this.comparisons !== comparisons) return
-          this.comparisonPreferences = { items: comparisons.specs(), mode: comparisons.mode }
+          this.comparisonPreferences = {
+            items: comparisons.specs(),
+            mode: comparisons.mode,
+            scale: comparisons.scale,
+          }
           this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
           this.cb.onComparisonsChange?.(this.comparisonState())
         },
       })
       this.comparisons = comparisons
-      setup = comparisons.replace(this.comparisonPreferences.items, this.comparisonPreferences.mode)
+      setup = comparisons.replace(
+        this.comparisonPreferences.items,
+        this.comparisonPreferences.mode,
+        this.comparisonPreferences.scale
+      )
     }
     const comparisons = this.comparisons
     const interval = this.interval
@@ -5110,14 +5224,31 @@ export class TradingTerminal {
     this.undoHistory.ignore(() => this.comparisons?.remove(id))
   }
 
-  setComparisonMode(mode: 'price' | 'percentage'): void {
-    if (mode !== 'price' && mode !== 'percentage') throw new Error('Invalid comparison mode')
-    const selected = mode === 'percentage' ? 'percent' : 'price'
+  /** Show or hide one comparison's line, keeping it on the chart. */
+  setComparisonVisible(id: string, visible: boolean): void {
+    this.comparisons?.setVisible(id, visible)
+  }
+
+  /** Load a comparison whose history failed again. */
+  async retryComparison(id: string): Promise<void> {
+    if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
+      throw new Error('Leave replay before loading a comparison again')
+    await this.comparisons?.retry(id)
+  }
+
+  /**
+   * How comparisons are scaled: `price`, `percent`, `indexed` or `own`.
+   * `percentage` is still read as `percent`, the name this took before.
+   */
+  setComparisonMode(mode: ComparisonScale | 'percentage'): void {
+    const selected = mode === 'percentage' ? 'percent' : mode
+    if (!isComparisonScale(selected)) throw new Error('Invalid comparison mode')
     if (this.comparisons) {
       const comparisons = this.comparisons
       this.undoHistory.ignore(() => comparisons.setMode(selected))
     } else {
-      this.comparisonPreferences.mode = selected
+      this.comparisonPreferences.mode = storedComparisonMode(selected)
+      this.comparisonPreferences.scale = selected
       this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
       this.cb.onComparisonsChange?.(this.comparisonState())
     }
