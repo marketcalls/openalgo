@@ -193,10 +193,12 @@ const MAX_ROWS = 150
 function typeBadge(row: SearchRow): string {
   const ex = String(row.exchange)
   if (ex.endsWith('_INDEX')) return 'INDEX'
-  const s = String(row.symbol).toUpperCase()
-  if (s.endsWith('CE')) return 'CE'
-  if (s.endsWith('PE')) return 'PE'
-  if (s.endsWith('FUT')) return 'FUT'
+  if (['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCDEX', 'NCO'].includes(ex)) {
+    const s = String(row.symbol).toUpperCase()
+    if (s.endsWith('CE')) return 'CE'
+    if (s.endsWith('PE')) return 'PE'
+    if (s.endsWith('FUT')) return 'FUT'
+  }
   const it = String(row.instrumenttype ?? '').toUpperCase()
   return it && it !== 'EQ' ? it : 'EQ'
 }
