@@ -2,8 +2,18 @@
 // toolbar buttons carry no caret: a chevron on every control is dead
 // weight when the whole row opens menus, and it reads as a dated form
 // control. Reserve the glyph for where it distinguishes something.
-import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
+import {
+  ChevronDown,
+  ClipboardPaste,
+  Copy,
+  RefreshCw,
+  Scissors,
+  Search,
+  Settings,
+  Trash2,
+} from 'lucide-react'
 import type { ChartObjects, LinkGroup } from 'openalgo-charts'
+import type { MagnetMode } from 'openalgo-charts/draw'
 import type { WorkspacePane } from 'openalgo-charts/workspace'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { GridIcon, PencilIcon, VolumeIcon } from '@/components/chart/menuIcons'
@@ -17,6 +27,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
+import { MOD_KEY } from '@/lib/trading/drawingKeys'
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import { isProfileKind } from '@/lib/trading/profileSettings'
@@ -228,8 +239,10 @@ interface Props {
    * each arms the same tool and whichever pane you draw in gets the shape.
    */
   sharedTool?: string | null
-  sharedMagnet?: boolean
+  sharedMagnet?: MagnetMode
   sharedStay?: boolean
+  /** The armed tool is held after each placement until Escape (a rail double-click). */
+  sharedLatch?: boolean
   /** This pane became the drawing target (pointer went down inside it). */
   onFocusPane?(terminal: TradingTerminal | null, paneId?: string): void
   /**
@@ -312,6 +325,7 @@ export function ChartPane({
   sharedTool,
   sharedMagnet,
   sharedStay,
+  sharedLatch,
   onFocusPane,
   onSymbolChange,
   onIntervalChange,
@@ -442,6 +456,8 @@ export function ChartPane({
   // schema depends on the live series type, theme and timezone.
   const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
+  /** Remove all drawings, waiting for the trader to confirm it. */
+  const [removeAll, setRemoveAll] = useState<{ count: number; symbol: string } | null>(null)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<TerminalContextMenu | null>(null)
@@ -475,7 +491,13 @@ export function ChartPane({
         setCtx({
           ...menu,
           x: Math.max(0, Math.min(menu.x, window.innerWidth - 240)),
-          y: Math.max(0, Math.min(menu.y, window.innerHeight - (menu.profile ? 490 : 430))),
+          y: Math.max(
+            0,
+            Math.min(
+              menu.y,
+              window.innerHeight - (menu.profile ? 490 : 430) - (menu.drawing ? 105 : 0)
+            )
+          ),
         })
       },
       onWorkspaceChange: () => {
@@ -526,6 +548,7 @@ export function ChartPane({
       onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
       onOpenScriptSource: (file) => current && scriptSourceCbRef.current?.(file),
       onDrawSelect: (sel) => current && setDrawSel(sel),
+      onDrawRemoveAll: (req) => current && setRemoveAll(req),
       // The legend readout is a second switch for the same thing as the context
       // menu row, so the menu label has to follow it.
       onVolumeChange: (on) => current && setVolumeOn(on),
@@ -626,6 +649,10 @@ export function ChartPane({
     if (sharedStay === undefined || (initialWorkspacePane && !preparedRef.current)) return
     terminalRef.current?.setDrawStay(sharedStay)
   }, [sharedStay, initialWorkspacePane])
+  useEffect(() => {
+    if (sharedLatch === undefined || (initialWorkspacePane && !preparedRef.current)) return
+    terminalRef.current?.setDrawLatch(sharedLatch)
+  }, [sharedLatch, initialWorkspacePane])
   /* ── follow the page-level One-Click switch ───────────────────────────── */
   useEffect(() => {
     terminalRef.current?.setWorkspaceTransitionLocked(transitionLocked)
@@ -775,6 +802,68 @@ export function ChartPane({
     setGridSub(false)
     setCtx(null)
   }
+  /**
+   * The right-click menu's drawing rows. On a drawing: copy, cut and delete
+   * it. On empty space: paste, when something was copied on this page, and
+   * remove all, when there is anything to remove. Each row shows its key.
+   */
+  const drawingRows = (d: NonNullable<TerminalContextMenu['drawing']>) => {
+    const t = terminalRef.current
+    if (!t) return []
+    const id = d.id
+    const rows: {
+      label: string
+      icon: typeof Copy
+      shortcut?: string
+      keys?: string
+      danger?: boolean
+      run(): void
+    }[] = []
+    const mod = MOD_KEY === 'Cmd' ? 'Meta' : 'Control'
+    if (id) {
+      rows.push(
+        {
+          label: 'Copy',
+          icon: Copy,
+          shortcut: `${MOD_KEY}+C`,
+          keys: `${mod}+C`,
+          run: () => void t.copyDrawings(id),
+        },
+        {
+          label: 'Cut',
+          icon: Scissors,
+          shortcut: `${MOD_KEY}+X`,
+          keys: `${mod}+X`,
+          run: () => void t.cutDrawings(id),
+        },
+        {
+          label: 'Delete drawing',
+          icon: Trash2,
+          shortcut: 'Del',
+          keys: 'Delete',
+          run: () => t.removeDrawing(id),
+        }
+      )
+    } else {
+      if (d.paste)
+        rows.push({
+          label: 'Paste',
+          icon: ClipboardPaste,
+          shortcut: `${MOD_KEY}+V`,
+          keys: `${mod}+V`,
+          run: () => void t.pasteDrawings(),
+        })
+      if (d.removable > 0)
+        rows.push({
+          label: `Remove all drawings (${d.removable})`,
+          icon: Trash2,
+          danger: true,
+          run: () => t.requestRemoveAllDrawings(),
+        })
+    }
+    return rows
+  }
+  const ctxDrawingRows = ctx?.drawing ? drawingRows(ctx.drawing) : []
 
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
@@ -795,6 +884,7 @@ export function ChartPane({
     indSettings !== null ||
     alertsHandle !== null ||
     textReq !== null ||
+    removeAll !== null ||
     ticket !== null ||
     confirmLeave
 
@@ -1211,12 +1301,19 @@ export function ChartPane({
       </ChartToolbar>
 
       {/* Chart area */}
-      <div className="relative min-h-0 flex-1 bg-card">
+      {/* A size container, so the drawing properties bar fits the pane it is in. */}
+      <div className="@container relative min-h-0 flex-1 bg-card">
         <DrawingStyleBar
           sel={drawSel}
           onStyle={(patch) => terminalRef.current?.styleSelectedDrawing(patch)}
+          onSettings={(values) => terminalRef.current?.setSelectedDrawingSettings(values)}
           onDelete={() => terminalRef.current?.removeDrawings(false)}
           onEditText={() => drawSel && terminalRef.current?.requestDrawTextEdit(drawSel.id)}
+          onDuplicate={() => terminalRef.current?.duplicateSelectedDrawings()}
+          onOrder={(where) => terminalRef.current?.orderSelectedDrawings(where)}
+          onHide={() => terminalRef.current?.hideSelectedDrawings()}
+          readLevels={() => terminalRef.current?.drawLevels() ?? null}
+          onLevels={(levels) => terminalRef.current?.setDrawLevels(levels)}
         />
         <DrawingTextDialog
           req={textReq}
@@ -1275,7 +1372,9 @@ export function ChartPane({
             <span className="text-[10px] text-muted-foreground">{lotInfoText(sym, qty)}</span>
           )}
         </div>
-        <div ref={chartRef} className="absolute inset-0" />
+        {/* The armed drawing tool's glyph follows the pointer: the terminal
+            sets --tool-cursor while a tool is armed and clears it after. */}
+        <div ref={chartRef} className="absolute inset-0 [cursor:var(--tool-cursor,auto)]" />
 
         {!ready && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
@@ -1310,6 +1409,44 @@ export function ChartPane({
             >
               Cancel
             </button>
+          </div>
+        )}
+
+        {removeAll && (
+          <div
+            role="alertdialog"
+            aria-label="Remove all drawings"
+            className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45"
+          >
+            <div className="w-[340px] max-w-[calc(100%-24px)] rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">
+                Remove all {removeAll.count} {removeAll.count === 1 ? 'drawing' : 'drawings'}
+                {removeAll.symbol ? ` from ${removeAll.symbol}` : ''}?
+              </h4>
+              <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+                Every drawing on this chart goes, hidden ones included. Order and position lines
+                stay. Undo ({MOD_KEY} + Z) brings the drawings back.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setRemoveAll(null)}
+                >
+                  Keep them
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:opacity-90"
+                  onClick={() => {
+                    setRemoveAll(null)
+                    terminalRef.current?.removeDrawings(true)
+                  }}
+                >
+                  Remove all
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1481,9 +1618,30 @@ export function ChartPane({
               </button>
             ))}
 
+            {/* Drawing rows, only where they apply: on a drawing, what can be
+                done to it; on empty space, paste and remove all. */}
+            {(ctx.items.length > 0 || ctx.alert) && ctxDrawingRows.length > 0 && (
+              <div className="my-1 h-px bg-border" />
+            )}
+            {ctxDrawingRows.map((r) => (
+              <button
+                type="button"
+                key={r.label}
+                className={cn(ctxRow, r.danger && 'text-destructive hover:text-destructive')}
+                aria-keyshortcuts={r.keys}
+                onClick={() => run(r.run)}
+              >
+                <r.icon className="h-3.5 w-3.5 opacity-70" />
+                <span className="flex-1">{r.label}</span>
+                {r.shortcut && <span className="text-xs text-muted-foreground">{r.shortcut}</span>}
+              </button>
+            ))}
+
             {/* View actions live here rather than in the toolbar — they are
                 occasional, and the row they used to occupy is chart height. */}
-            {ctx.items.length > 0 && <div className="my-1 h-px bg-border" />}
+            {(ctx.items.length > 0 || ctxDrawingRows.length > 0) && (
+              <div className="my-1 h-px bg-border" />
+            )}
             <button
               type="button"
               className={ctxRow}

@@ -71,6 +71,8 @@ import type {
   DrawingsDocument,
   DrawingText,
   DrawingTool,
+  FibLevel,
+  MagnetMode,
 } from 'openalgo-charts/draw'
 import {
   evaluateExpression,
@@ -147,6 +149,12 @@ export interface DrawStats {
    */
   hasSelection: boolean
   magnet: boolean
+  /** The snap mode behind `magnet`: off, weak (near a value) or strong (always). */
+  magnetMode: MagnetMode
+  /** What Remove all would take: every drawing the trader may delete. */
+  removable: number
+  /** What Select all would pick: shown, unlocked and selectable on this interval. */
+  selectable: number
   /**
    * Whether the armed tool survives a placement. Off, the tier disarms after
    * one drawing and the rail returns to the cursor, which is the tier's
@@ -192,6 +200,35 @@ import {
 } from './chartTheme'
 import { CHART_TYPES, volumeUnderElements } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
+import {
+  type DrawLevels,
+  type DrawSelectionDetails,
+  type DrawTier,
+  describeSelection,
+  drawingCounts,
+  drawingToolName,
+  ERASER_TOOL,
+  levelsOf,
+  levelsPatches,
+  selectableIds,
+  settingsPatches,
+  toolCursorValue,
+} from './drawingActions'
+import {
+  clipboardMessage,
+  drawingClipboardPort,
+  drawingsLabel,
+  drawingsOnClipboard,
+  noteDrawingsCopied,
+} from './drawingClipboard'
+import { pageHasTextSelection } from './drawingKeys'
+import {
+  adoptUnscopedDrawings,
+  drawingsKey,
+  openingDrawings,
+  savedInstrument,
+  UNSCOPED_DRAWINGS,
+} from './drawingScope'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import { factsFor } from './instrumentFacts'
@@ -404,6 +441,12 @@ export interface TerminalCallbacks {
   onChartSettings?(req: ChartSettingsRequest): void
   /** A drawing was selected (or deselected), for the style popover. */
   onDrawSelect?(sel: DrawSelection | null): void
+  /**
+   * Remove all drawings was asked for. The host confirms first, over this
+   * pane, and then calls `removeDrawings(true)`: one press must never take
+   * every level off a chart.
+   */
+  onDrawRemoveAll?(req: { count: number; symbol: string }): void
   /**
    * The replay playhead moved, or replay was entered or left. Null means the
    * chart is live again, which is the transport bar's cue to hide itself.
@@ -694,13 +737,8 @@ function withoutTransformSettings<T>(values: Readonly<Record<string, T>>): Recor
   return Object.fromEntries(Object.entries(values).filter(([key]) => !transformSetting(key)))
 }
 
-/** The engine's own name for a drawing tool it has no display name for: the id, spaced. */
-function drawingIdName(tool: string): string {
-  return tool.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase())
-}
-
 /** The selected drawing's editable style. */
-export interface DrawSelection {
+export interface DrawSelection extends DrawSelectionDetails {
   id: string
   tool: string
   /** Content is typed, so the style bar offers an edit button. */
@@ -759,6 +797,12 @@ export interface TerminalContextMenu {
   items: CtxItem[]
   profile: ProfileMenuAction | null
   alert?: { label: string; source: AlertSource; disabled?: boolean; reason?: string }
+  /**
+   * The drawing rows, once the draw tier is in. `id` is the drawing that was
+   * right-clicked, or null for empty chart space; order and position lines
+   * are not drawings and never appear here.
+   */
+  drawing?: { id: string | null; removable: number; paste: boolean }
 }
 
 // CRYPTO is the broker-agnostic exchange for crypto derivatives (utils/constants.py); a
@@ -956,10 +1000,19 @@ export class TradingTerminal {
    * Null once it has, or when the save was already a document.
    */
   private drawLegacy: readonly unknown[] | null = null
+  /**
+   * The storage entry `drawJson` belongs to: the instrument whose drawings
+   * they are (see drawingScope.ts). Null until the pane knows its symbol.
+   */
+  private drawOwner: string | null = null
+  /** The draw tier's helpers the drawing actions use, once the tier is fetched. */
+  private drawTier: DrawTier | null = null
   private drawTool: string | null = null
   private drawMagnet = false
-  private drawMagnetMode: 'off' | 'weak' | 'strong' = 'off'
+  private drawMagnetMode: MagnetMode = 'off'
   private drawStay = false
+  /** A tool held by a double-click on the rail: kept armed until Escape, never saved. */
+  private drawLatch = false
   /** True once a drawing control has been touched — gates the lazy tier fetch. */
   private drawEnabled = false
   private activeIndicators: SavedIndicatorRecord[] = []
@@ -1201,7 +1254,7 @@ export class TradingTerminal {
     const at = this.withDrawnVolume(
       (typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
         ? bars[event.index]
-        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)) ?? null,
+        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)) ?? null
     )
     return {
       ticker: this.sym?.symbol ?? '',
@@ -2263,7 +2316,7 @@ export class TradingTerminal {
       // A drawing's row reads as the drawing rail names its tool ("Anchored
       // VWAP"), rather than as the engine spells an id it cannot look up
       // ("Anchored vwap"). A tool the rail does not list keeps that spelling.
-      drawingName: (tool) => DRAW_TOOL_METADATA[tool]?.name ?? drawingIdName(tool),
+      drawingName: drawingToolName,
     })
     this.objects = objects
     this.cb.onObjectsChange?.(objects)
@@ -2287,8 +2340,10 @@ export class TradingTerminal {
     this.detachObjects()
     this.profileLayer?.dispose()
     this.profileLayer = null
-    // Snapshot drawings before the chart they live on goes away.
+    // Snapshot drawings before the chart they live on goes away, and hand them
+    // to their own instrument before the next chart restores any.
     this.detachDrawing()
+    this.followDrawingScope()
     this.offBranding?.()
     this.offBranding = null
     if (this.chart) this.chart.destroy()
@@ -2662,28 +2717,10 @@ export class TradingTerminal {
     } catch {
       this.toast('Saved alerts could not be restored. Check the saved document.', 'err')
     }
-    try {
-      const raw = this.lsGet('draw')
-      const parsed: unknown = raw ? JSON.parse(raw) : null
-      if (Array.isArray(parsed)) {
-        // A 1.9.x save. The migration lives in the draw tier, which is fetched
-        // on first use, so the array cannot be lifted here without bundling the
-        // tier for every pane. It is held apart from `drawJson` so nothing reads
-        // its entries through the version 2 type (their text still sits in the
-        // style bag, where `describeDrawings` would not find it) until
-        // `attachDrawing` migrates it. The migration reads the array as-is, so
-        // wrapping it in a version 2 envelope would gain nothing.
-        if (parsed.length) {
-          this.drawLegacy = parsed
-          this.drawEnabled = true
-        }
-      } else if (isDrawingsDocument(parsed) && parsed.drawings.length) {
-        this.drawJson = parsed
-        this.drawEnabled = true
-      }
-    } catch {
-      /* ignore */
-    }
+    // Drawings belong to the instrument they were drawn on. The pane's saved
+    // symbol names it; a save from before that rule is filed under it once.
+    this.drawOwner = drawingsKey(savedInstrument(this.lsGet('symbol')))
+    this.takeDrawings(openingDrawings(this.drawingsStorage(), this.drawOwner))
     try {
       const raw = this.lsGet('indicators')
       this.activeIndicators = readStoredIndicators(raw ? JSON.parse(raw) : [])
@@ -2726,6 +2763,83 @@ export class TradingTerminal {
     } catch {
       /* A malformed entry costs the choices, never the chart. */
     }
+  }
+
+  /** The pane's preference storage as the drawing scope reads and writes it. */
+  private drawingsStorage() {
+    return {
+      get: (key: string) => this.lsGet(key),
+      set: (key: string, value: string) => this.lsSet(key, value),
+    }
+  }
+
+  /**
+   * Hold one instrument's stored drawings: a document in `drawJson`, or a
+   * 1.9.x array in `drawLegacy` for the draw tier to migrate when it attaches.
+   * Anything malformed is an empty chart rather than a pane that will not boot.
+   */
+  private takeDrawings(raw: string | null): void {
+    this.drawJson = emptyDrawings()
+    this.drawLegacy = null
+    try {
+      const parsed: unknown = raw ? JSON.parse(raw) : null
+      if (Array.isArray(parsed)) {
+        // A 1.9.x save. The migration lives in the draw tier, which is fetched
+        // on first use, so the array cannot be lifted here without bundling the
+        // tier for every pane. It is held apart from `drawJson` so nothing reads
+        // its entries through the version 2 type (their text still sits in the
+        // style bag, where `describeDrawings` would not find it) until
+        // `attachDrawing` migrates it. The migration reads the array as-is, so
+        // wrapping it in a version 2 envelope would gain nothing.
+        if (parsed.length) {
+          this.drawLegacy = parsed
+          this.drawEnabled = true
+        }
+      } else if (isDrawingsDocument(parsed) && parsed.drawings.length) {
+        this.drawJson = parsed
+        this.drawEnabled = true
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * Write the drawings on screen to their instrument's entry. An instrument
+   * with nothing drawn and nothing stored writes nothing, so browsing symbols
+   * leaves no empty entries behind; one whose drawings were all deleted keeps
+   * its emptied entry, which is what stops an old pane-level save ever being
+   * adopted for it again.
+   */
+  private storeDrawings(): void {
+    const key = this.drawOwner ?? UNSCOPED_DRAWINGS
+    const doc = this.drawLegacy ?? this.drawJson
+    const drawn = this.drawLegacy ? this.drawLegacy.length > 0 : this.drawJson.drawings.length > 0
+    if (drawn || this.lsGet(key) !== null) this.lsSet(key, JSON.stringify(doc))
+  }
+
+  /**
+   * Hand the drawings over when the pane changes instrument. Called from
+   * `buildChart` between the snapshot that ends the old chart and the restore
+   * that fills the new one, the one moment no controller is rendering them. A
+   * rebuild on the same instrument (an interval, a chart type, a theme) keeps
+   * them where they are.
+   */
+  private followDrawingScope(): void {
+    const key = drawingsKey(this.sym)
+    if (key === null || key === this.drawOwner) return
+    if (this.drawOwner === null) {
+      // The pane had no saved symbol: what it restored was on screen for
+      // whatever loaded first, which is this instrument, unless that
+      // instrument already has drawings of its own.
+      this.drawOwner = key
+      if (this.lsGet(key) === null) this.storeDrawings()
+      adoptUnscopedDrawings(this.drawingsStorage(), key)
+    } else {
+      this.storeDrawings()
+      this.drawOwner = key
+    }
+    this.takeDrawings(this.lsGet(key))
   }
 
   /** Where this chart's transform choices are kept: its instrument, or nothing yet. */
@@ -2904,20 +3018,48 @@ export class TradingTerminal {
     if (this.draw || !this.chart) return
     const chart = this.chart
     const {
+      applyDrawingSettings,
+      boundsOf,
+      cloneLevels,
+      DEFAULT_FIB,
+      DRAWING_TOOL_ICONS,
       DrawingController,
+      drawingSettingsSchema,
       drawingShortcuts,
+      formatRatio,
+      gannLabel,
       getDrawingTool,
       keyToDrawingAction,
+      levelColor,
       matchDrawingShortcut,
       migrateDrawings,
+      readDrawingSetting,
+      toolCursor,
     } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || this.chart !== chart || this.draw) return
     const draw = new DrawingController(this.chart, {
       magnet: this.drawMagnetMode,
-      stayInDrawingMode: this.drawStay,
+      stayInDrawingMode: this.drawStay || this.drawLatch,
+      // Copy and paste go through the system clipboard, so they reach another
+      // tab, with a read that cannot hang on a permission prompt.
+      clipboard: drawingClipboardPort(),
     })
+    this.drawTier = {
+      applyDrawingSettings,
+      boundsOf,
+      cloneLevels,
+      DEFAULT_FIB,
+      DRAWING_TOOL_ICONS,
+      drawingSettingsSchema,
+      formatRatio,
+      gannLabel,
+      getDrawingTool,
+      levelColor,
+      readDrawingSetting,
+      toolCursor,
+    }
     this.draw = draw
     this.objectDrawings.attach(draw)
     this.drawShortcuts = drawingShortcuts()
@@ -2938,8 +3080,13 @@ export class TradingTerminal {
         this.drawJson = emptyDrawings() // a shape from an older build; better empty than broken
       }
     }
-    if (this.drawTool) draw.setTool(this.drawTool)
+    this.applyDrawTool(draw, this.drawTool)
     this.chart.on('draw:tool', () => this.afterDrawChange())
+    this.chart.on('draw:eraser', () => this.afterDrawChange())
+    // A z-order move is the one edit that reports no add, update or remove.
+    this.chart.on('drawing:change', (p) => {
+      if ((p as { kind?: string }).kind === 'reorder') this.afterDrawChange()
+    })
     this.chart.on('draw:select', () => this.afterDrawChange())
     // A text tool is useless until it has text, so placing one asks straight
     // away rather than leaving an empty box on the chart.
@@ -2962,14 +3109,39 @@ export class TradingTerminal {
       if (this.editSelectedText()) (p as { handled?: boolean }).handled = true
     })
     this.chart.on('draw:update', () => this.afterDrawChange())
+    this.syncToolCursor()
     this.objects?.refresh()
+  }
+
+  /** Put the rail's tool on a controller: a drawing tool, the eraser, or neither. */
+  private applyDrawTool(draw: DrawingControllerInstance, tool: string | null): void {
+    if (tool === ERASER_TOOL) {
+      draw.setEraser(true)
+      return
+    }
+    if (draw.erasing()) draw.setEraser(false)
+    draw.setTool(tool)
+  }
+
+  /**
+   * The armed tool's glyph as the pointer over this chart, and the chart's own
+   * pointer back when nothing is armed. Set on the container as a CSS variable
+   * so the engine's hover hints (a grab hand over a handle) still win.
+   */
+  private syncToolCursor(): void {
+    const cursor = this.drawTier ? toolCursorValue(this.drawTier, this.drawTool) : null
+    if (cursor) this.container.style.setProperty('--tool-cursor', cursor)
+    else this.container.style.removeProperty('--tool-cursor')
   }
 
   private afterDrawChange(): void {
     if (!this.draw) return
-    this.drawTool = this.draw.activeTool()
+    const tool = this.draw.erasing() ? ERASER_TOOL : this.draw.activeTool()
+    const toolChanged = tool !== this.drawTool
+    this.drawTool = tool
+    if (toolChanged) this.syncToolCursor()
     this.drawJson = this.draw.toJSON()
-    this.lsSet('draw', JSON.stringify(this.drawJson))
+    this.storeDrawings()
     this.cb.onDrawChange?.(this.drawStats())
     this.cb.onDrawSelect?.(this.drawSelection())
   }
@@ -2980,6 +3152,7 @@ export class TradingTerminal {
     if (!this.draw || !id) return null
     const d = this.draw.get(id)
     if (!d) return null
+    if (!this.drawTier) return null
     return {
       id: d.id,
       tool: d.tool,
@@ -2988,6 +3161,7 @@ export class TradingTerminal {
       lineWidth: d.style.lineWidth ?? 1.5,
       lineStyle: d.style.lineStyle ?? 'solid',
       locked: d.locked === true,
+      ...describeSelection(this.draw, this.drawTier, d),
     }
   }
 
@@ -3135,12 +3309,137 @@ export class TradingTerminal {
     this.afterDrawChange()
   }
 
-  /** Arm a drawing tool, or pass null to return to the cursor. */
+  /**
+   * Write settings by path (`style.fill`, `style.fillOpacity`,
+   * `style.extendRight`, `style.showLabels`) to every selected drawing whose
+   * tool reads them, as one undo step.
+   */
+  setSelectedDrawingSettings(values: Record<string, unknown>): void {
+    if (!this.draw || !this.drawTier) return
+    const patches = settingsPatches(this.draw, this.drawTier, values)
+    if (patches.length > 0) this.draw.updateMany(patches)
+    this.afterDrawChange()
+  }
+
+  /** The primary selection's level ladder, for the levels editor; null for any other tool. */
+  drawLevels(): DrawLevels | null {
+    return this.draw && this.drawTier ? levelsOf(this.draw, this.drawTier) : null
+  }
+
+  /** Give every selected ladder drawing these levels, as one undo step. */
+  setDrawLevels(levels: readonly FibLevel[]): void {
+    if (!this.draw || !this.drawTier) return
+    const patches = levelsPatches(this.draw, this.drawTier, levels)
+    if (patches.length > 0) this.draw.updateMany(patches)
+    this.afterDrawChange()
+  }
+
+  /** Copies of the selection, offset so they read as new, and selected. One undo step. */
+  duplicateSelectedDrawings(): void {
+    const ids = this.draw?.selection() ?? []
+    if (!this.draw || ids.length === 0) return
+    this.draw.duplicate(ids)
+    this.afterDrawChange()
+  }
+
+  /** In front of, or behind, every other drawing on its side of the price series. */
+  orderSelectedDrawings(where: 'front' | 'back'): void {
+    const draw = this.draw
+    if (!draw) return
+    for (const id of draw.selection()) {
+      if (where === 'front') draw.bringToFront(id)
+      else draw.sendToBack(id)
+    }
+    this.afterDrawChange()
+  }
+
+  /** Hide the selection. It stays saved, and the Objects panel shows it again. */
+  hideSelectedDrawings(): void {
+    const ids = this.draw?.selection() ?? []
+    if (!this.draw || ids.length === 0) return
+    this.draw.updateMany(ids.map((id) => ({ id, patch: { visible: false } })))
+    this.afterDrawChange()
+    const them = ids.length === 1 ? 'it' : 'them'
+    this.toast(
+      `${drawingsLabel(ids.length)} hidden. Show ${them} again from the Objects panel.`,
+      'ok'
+    )
+  }
+
+  /** Select every drawing a click could select. */
+  selectAllDrawings(): void {
+    if (!this.draw) return
+    this.draw.select(selectableIds(this.draw))
+    this.afterDrawChange()
+  }
+
+  /** Delete one drawing, as the right-click menu's Delete drawing does. */
+  removeDrawing(id: string): void {
+    if (!this.draw) return
+    this.draw.removeMany([id])
+    this.afterDrawChange()
+  }
+
+  /**
+   * Ask the host to confirm removing every drawing on this chart. Nothing is
+   * removed here; the host calls `removeDrawings(true)` once the trader says so.
+   */
+  requestRemoveAllDrawings(): void {
+    const count = this.draw ? drawingCounts(this.draw).removable : 0
+    if (count === 0) return
+    this.cb.onDrawRemoveAll?.({ count, symbol: this.sym?.symbol ?? '' })
+  }
+
+  /** Put drawings on the clipboard: `target`, else the selection. */
+  async copyDrawings(target?: string | null): Promise<boolean> {
+    return this.clipboardWrite('copied', target)
+  }
+
+  /** Copy drawings, then delete them once the copy has landed. */
+  async cutDrawings(target?: string | null): Promise<boolean> {
+    return this.clipboardWrite('cut', target)
+  }
+
+  private async clipboardWrite(kind: 'copied' | 'cut', target?: string | null): Promise<boolean> {
+    const draw = this.draw
+    if (!draw) return false
+    const count = target ? 1 : draw.selection().length
+    if (count === 0) return false
+    const ok = await (kind === 'cut' ? draw.cut(target) : draw.copy(target))
+    if (this.destroyed || this.draw !== draw) return ok
+    if (!ok) {
+      this.toast('The drawing could not be copied. Try again.', 'err')
+      return false
+    }
+    noteDrawingsCopied()
+    if (kind === 'cut') this.afterDrawChange()
+    this.toast(clipboardMessage(kind, count, draw.clipboard().lastError() !== null), 'ok')
+    return true
+  }
+
+  /** Paste copied drawings onto this chart, selected, as one undo step. */
+  async pasteDrawings(): Promise<number> {
+    this.drawEnabled = true
+    await this.attachDrawing()
+    const draw = this.draw
+    if (!draw) return 0
+    const pasted = await draw.paste()
+    if (this.destroyed || this.draw !== draw) return pasted.length
+    // A paste that finds nothing of ours is only worth a word when a drawing
+    // was copied here: otherwise the key was likely meant for something else.
+    if (pasted.length > 0) this.afterDrawChange()
+    else if (drawingsOnClipboard())
+      this.toast('The copied drawing could not be read back. Copy it again.', 'err')
+    return pasted.length
+  }
+
+  /** Arm a drawing tool, or the eraser, or pass null to return to the cursor. */
   async setDrawTool(id: string | null): Promise<void> {
     this.drawEnabled = true
     this.drawTool = id
     await this.attachDrawing()
-    this.draw?.setTool(id)
+    if (this.draw) this.applyDrawTool(this.draw, id)
+    this.syncToolCursor()
     this.cb.onDrawChange?.(this.drawStats())
   }
 
@@ -3177,6 +3476,16 @@ export class TradingTerminal {
     if (!action) return false
     const targets = [...d.selection()]
     switch (action.type) {
+      // Copy and cut need a selection, which the key mapping already checked;
+      // with text highlighted on the page the keys are the text's.
+      case 'copy':
+      case 'cut':
+        if (targets.length === 0 || pageHasTextSelection()) return false
+        void (action.type === 'copy' ? this.copyDrawings() : this.cutDrawings())
+        return true
+      case 'paste':
+        void this.pasteDrawings()
+        return true
       case 'delete':
         if (targets.length === 0) return false
         d.removeMany(targets)
@@ -3196,7 +3505,7 @@ export class TradingTerminal {
         d.nudge(targets, action.dx ?? 0, action.dy ?? 0)
         break
       // cancel, finish and popAnchor belong to placement, which the rail's
-      // own Escape already ends; copy, cut and paste are the clipboard's.
+      // own Escape already ends.
       default:
         return false
     }
@@ -3206,6 +3515,7 @@ export class TradingTerminal {
 
   drawStats(): DrawStats {
     const d = this.draw
+    const counts = d ? drawingCounts(d) : null
     return {
       // A 1.9.x save counts its raw entries until the tier lifts it: the same
       // number the rail showed for that save before the upgrade.
@@ -3214,6 +3524,9 @@ export class TradingTerminal {
       canRedo: d ? d.canRedo() : false,
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
+      magnetMode: this.drawMagnetMode,
+      removable: counts?.removable ?? 0,
+      selectable: counts?.selectable ?? 0,
       stay: this.drawStay,
       tool: this.drawTool,
       shortcuts: this.drawShortcuts,
@@ -3241,13 +3554,19 @@ export class TradingTerminal {
     this.afterDrawChange()
   }
 
-  /** Snap drawing anchors to the hovered bar's O/H/L/C. */
-  setMagnet(on: boolean): void {
-    this.drawMagnet = on
-    this.drawMagnetMode = on ? 'strong' : 'off'
-    this.draw?.setOptions({ magnet: on })
-    this.lsSet('magnet', on ? '1' : '0')
-    this.lsSet('magnet-mode', this.drawMagnetMode)
+  /**
+   * Snap drawing anchors to the hovered bar's O/H/L/C: always (strong), only
+   * near one (weak), or never. `true` and `false` are strong and off, which is
+   * what the switch meant before the modes. Ctrl held while placing snaps
+   * whatever the mode.
+   */
+  setMagnet(mode: MagnetMode | boolean): void {
+    const next: MagnetMode = mode === true ? 'strong' : mode === false ? 'off' : mode
+    this.drawMagnetMode = next
+    this.drawMagnet = next !== 'off'
+    this.draw?.setOptions({ magnet: next })
+    this.lsSet('magnet', this.drawMagnet ? '1' : '0')
+    this.lsSet('magnet-mode', next)
     this.cb.onDrawChange?.(this.drawStats())
   }
 
@@ -3259,9 +3578,19 @@ export class TradingTerminal {
    */
   setDrawStay(on: boolean): void {
     this.drawStay = on
-    this.draw?.setOptions({ stayInDrawingMode: on })
+    this.draw?.setOptions({ stayInDrawingMode: on || this.drawLatch })
     this.lsSet('stay', on ? '1' : '0')
     this.cb.onDrawChange?.(this.drawStats())
+  }
+
+  /**
+   * Hold the armed tool after each placement until Escape, as a double-click
+   * on the rail asks. Unlike `setDrawStay` it is never saved: it ends with the
+   * tool it was asked for.
+   */
+  setDrawLatch(on: boolean): void {
+    this.drawLatch = on
+    this.draw?.setOptions({ stayInDrawingMode: this.drawStay || on })
   }
 
   /* The agent view of this chart, and the markup it puts on it. */
@@ -6710,9 +7039,11 @@ export class TradingTerminal {
     event.preventDefault()
     const { target } = event
     let alert: TerminalContextMenu['alert']
+    let clicked: string | null = null
     if (target.kind === 'drawing' && target.id?.startsWith('draw:')) {
       const drawingId = target.id.slice(5).split('#')[0]
       if (this.draw?.get(drawingId)) {
+        clicked = drawingId
         const info = this.draw.alertInfo(drawingId)
         alert = {
           label: 'Create drawing alert',
@@ -6764,6 +7095,13 @@ export class TradingTerminal {
           : [],
       profile: this.profileContextMenuAt(event.point.x, event.point.y),
       alert,
+      drawing: this.draw
+        ? {
+            id: clicked,
+            removable: drawingCounts(this.draw).removable,
+            paste: drawingsOnClipboard(),
+          }
+        : undefined,
     })
   }
   /** Per-session profile actions are available for quote-only instruments too. */

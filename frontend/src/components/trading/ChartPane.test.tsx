@@ -22,6 +22,13 @@ interface Owner {
   exportDataCsv: ReturnType<typeof vi.fn>
   startReplay: ReturnType<typeof vi.fn>
   indicatorCatalog: ReturnType<typeof vi.fn>
+  copyDrawings: ReturnType<typeof vi.fn>
+  cutDrawings: ReturnType<typeof vi.fn>
+  pasteDrawings: ReturnType<typeof vi.fn>
+  removeDrawing: ReturnType<typeof vi.fn>
+  removeDrawings: ReturnType<typeof vi.fn>
+  requestRemoveAllDrawings: ReturnType<typeof vi.fn>
+  setDrawLatch: ReturnType<typeof vi.fn>
 }
 const fake = vi.hoisted(() => ({
   owners: [] as Owner[],
@@ -54,6 +61,13 @@ vi.mock('@/lib/trading/terminal', () => ({
     exportDataCsv = vi.fn(() => 'time,close\n1,10')
     startReplay = vi.fn()
     indicatorCatalog = vi.fn(async () => fake.catalogue)
+    copyDrawings = vi.fn(async () => true)
+    cutDrawings = vi.fn(async () => true)
+    pasteDrawings = vi.fn(async () => 1)
+    removeDrawing = vi.fn()
+    removeDrawings = vi.fn()
+    requestRemoveAllDrawings = vi.fn()
+    setDrawLatch = vi.fn()
     replayPickingBar = () => false
     replayLoadingBars = () => false
     search = async () => []
@@ -446,15 +460,15 @@ describe('chart pane preparation ownership', () => {
 
   it('preserves saved drawing preferences during preparation and applies later explicit changes', async () => {
     const { rerender } = render(
-      <ChartPane {...props} initialWorkspacePane={pane} sharedMagnet={false} sharedStay={false} />
+      <ChartPane {...props} initialWorkspacePane={pane} sharedMagnet="off" sharedStay={false} />
     )
     const owner = fake.owners[0]
     expect(owner.setMagnet).not.toHaveBeenCalled()
     expect(owner.setDrawStay).not.toHaveBeenCalled()
     await act(async () => owner.resolve())
-    rerender(<ChartPane {...props} initialWorkspacePane={pane} sharedMagnet sharedStay />)
+    rerender(<ChartPane {...props} initialWorkspacePane={pane} sharedMagnet="weak" sharedStay />)
     expect(fake.owners).toHaveLength(1)
-    expect(owner.setMagnet).toHaveBeenCalledWith(true)
+    expect(owner.setMagnet).toHaveBeenCalledWith('weak')
     expect(owner.setDrawStay).toHaveBeenCalledWith(true)
   })
 
@@ -520,5 +534,93 @@ describe('the indicator catalogue', () => {
     expect(terminal.indicatorCatalog).toHaveBeenCalledTimes(2)
     // The picker's code loads on its first opening.
     expect(await view.findByText('My new study')).toBeInTheDocument()
+  })
+})
+
+describe('drawings in the right-click menu', () => {
+  const menu = (drawing: { id: string | null; removable: number; paste: boolean }) => ({
+    x: 100,
+    y: 100,
+    items: [],
+    profile: null,
+    drawing,
+  })
+
+  it('offers copy, cut and delete on a drawing, each with its key', async () => {
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    act(() =>
+      owner.options.callbacks.onContextMenu?.(menu({ id: 'd1', removable: 2, paste: true }))
+    )
+
+    const copy = view.getByRole('button', { name: /^Copy/ })
+    expect(copy).toHaveTextContent('Ctrl+C')
+    expect(view.getByRole('button', { name: /^Cut/ })).toHaveTextContent('Ctrl+X')
+    // On a drawing, paste and remove all are not what was pointed at.
+    expect(view.queryByRole('button', { name: /^Paste/ })).toBeNull()
+    expect(view.queryByRole('button', { name: /^Remove all drawings/ })).toBeNull()
+    fireEvent.click(copy)
+    expect(owner.copyDrawings).toHaveBeenCalledWith('d1')
+
+    act(() =>
+      owner.options.callbacks.onContextMenu?.(menu({ id: 'd1', removable: 2, paste: true }))
+    )
+    fireEvent.click(view.getByRole('button', { name: /^Delete drawing/ }))
+    expect(owner.removeDrawing).toHaveBeenCalledWith('d1')
+  })
+
+  it('offers paste only once something was copied, and remove all only with drawings', async () => {
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    act(() =>
+      owner.options.callbacks.onContextMenu?.(menu({ id: null, removable: 0, paste: false }))
+    )
+    expect(view.queryByRole('button', { name: /^Paste/ })).toBeNull()
+    expect(view.queryByRole('button', { name: /^Remove all drawings/ })).toBeNull()
+
+    act(() =>
+      owner.options.callbacks.onContextMenu?.(menu({ id: null, removable: 4, paste: true }))
+    )
+    fireEvent.click(view.getByRole('button', { name: /^Paste/ }))
+    expect(owner.pasteDrawings).toHaveBeenCalled()
+    act(() =>
+      owner.options.callbacks.onContextMenu?.(menu({ id: null, removable: 4, paste: true }))
+    )
+    fireEvent.click(view.getByRole('button', { name: 'Remove all drawings (4)' }))
+    expect(owner.requestRemoveAllDrawings).toHaveBeenCalled()
+    expect(owner.removeDrawings).not.toHaveBeenCalled()
+  })
+
+  it('removes every drawing only once the trader confirms', async () => {
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+
+    act(() => owner.options.callbacks.onDrawRemoveAll?.({ count: 5, symbol: 'INFY' }))
+    const ask = view.getByRole('alertdialog', { name: 'Remove all drawings' })
+    expect(ask).toHaveTextContent('Remove all 5 drawings from INFY?')
+    expect(ask).toHaveTextContent('Order and position lines stay')
+    fireEvent.click(view.getByRole('button', { name: 'Keep them' }))
+    expect(owner.removeDrawings).not.toHaveBeenCalled()
+
+    act(() => owner.options.callbacks.onDrawRemoveAll?.({ count: 5, symbol: 'INFY' }))
+    fireEvent.click(view.getByRole('button', { name: 'Remove all' }))
+    expect(owner.removeDrawings).toHaveBeenCalledWith(true)
+  })
+
+  it('lets the active tool set the pointer over the chart', async () => {
+    render(<ChartPane {...props} />)
+    const container = fake.owners[0].options.container
+    expect(container.className).toContain('[cursor:var(--tool-cursor,auto)]')
+  })
+
+  it('holds a double-clicked tool in this pane too', async () => {
+    const { rerender } = render(<ChartPane {...props} sharedLatch={false} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    rerender(<ChartPane {...props} sharedLatch />)
+    expect(owner.setDrawLatch).toHaveBeenLastCalledWith(true)
   })
 })

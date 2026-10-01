@@ -73,6 +73,7 @@ import { LAYOUTS, LayoutIcon } from '@/lib/chart/layouts'
 import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
+import type { MagnetMode } from 'openalgo-charts/draw'
 import type {
   AlertFire,
   AlertsView,
@@ -95,6 +96,9 @@ const NO_DRAW: DrawStats = {
   canRedo: false,
   hasSelection: false,
   magnet: false,
+  magnetMode: 'off',
+  removable: 0,
+  selectable: 0,
   stay: false,
   tool: null,
   shortcuts: {},
@@ -225,8 +229,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
 
   /* ── one drawing rail for every pane ─────────────────────────────────── */
   const [tool, setTool] = useState<string | null>(null)
-  const [magnet, setMagnet] = useState(false)
+  const [magnet, setMagnet] = useState<MagnetMode>('off')
   const [stay, setStay] = useState(false)
+  /** A tool held by a double-click on the rail, until Escape or another pick. */
+  const [latched, setLatched] = useState(false)
   const [showRail, setShowRail] = useState(true)
   const [stats, setStats] = useState<DrawStats>(NO_DRAW)
   // Undo / delete act on the pane you last drew in; arming a tool hits them all,
@@ -496,7 +502,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
     if (workspacePending.current) return
     activeRef.current = t
     if (visibleGrid.current && t) {
-      setMagnet(t.drawStats().magnet)
+      setMagnet(t.drawStats().magnetMode)
       setStay(t.drawStats().stay)
     }
     if (paneId) {
@@ -631,7 +637,31 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const objectsPaneLabel = `Pane ${objectsPaneNumber}${
     paneSymbols[objectsPaneId] ? ` · ${paneSymbols[objectsPaneId]}` : ''
   }`
-  const railStats: DrawStats = { ...stats, tool, magnet, stay }
+  const railStats: DrawStats = {
+    ...stats,
+    tool,
+    magnet: magnet !== 'off',
+    magnetMode: magnet,
+    stay,
+  }
+  /**
+   * A pane's drawing state, for the rail. When the pane being drawn in drops
+   * its tool (the shape is placed and nothing holds the tool, or Escape ended
+   * the eraser there), the rail and every other pane return to the cursor
+   * with it, rather than the rail showing a tool no pane is using.
+   */
+  const onPaneDrawStats = useCallback((value: DrawStats) => {
+    setStats(value)
+    if (activeRef.current?.drawStats().tool === null) {
+      setTool(null)
+      setLatched(false)
+    }
+  }, [])
+  /** Pick a tool from the rail; `latch` holds it after each placement until Escape. */
+  const pickTool = useCallback((id: string | null, latch = false) => {
+    setTool(id)
+    setLatched(id !== null && latch)
+  }, [])
   /**
    * Hand a key event to the focused pane; it reports whether the drawing tier
    * claimed it, as a chord arming a tool or as an edit of the selection
@@ -802,9 +832,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
       setSync(grid.payload.sync)
       setArmed(false)
       setTool(null)
+      setLatched(false)
       const draw = focused?.drawStats() ?? NO_DRAW
       setStats(draw)
-      setMagnet(draw.magnet)
+      setMagnet(draw.magnetMode)
       setStay(draw.stay)
     },
     [updateReplayMembers]
@@ -1287,10 +1318,15 @@ function TradingWorkspace({ account }: { account: string | null }) {
           {showRail && apiKey && wsUrl && (
             <DrawingRail
               stats={railStats}
-              onPick={(id) => setTool(id)}
+              latched={latched}
+              onPick={pickTool}
               onUndo={() => act((t) => t.undoDraw())}
               onRedo={() => act((t) => t.redoDraw())}
-              onRemove={(all) => act((t) => t.removeDrawings(all))}
+              onDeleteSelected={() => act((t) => t.removeDrawings(false))}
+              onRemoveAll={() => act((t) => t.requestRemoveAllDrawings())}
+              onSelectAll={() => act((t) => t.selectAllDrawings())}
+              onHideSelected={() => act((t) => t.hideSelectedDrawings())}
+              onLockSelected={() => act((t) => t.styleSelectedDrawing({ locked: true }))}
               onMagnet={(v) => {
                 setMagnet(v)
                 if (visibleGrid.current)
@@ -1343,6 +1379,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                           sharedTool={tool}
                           sharedMagnet={magnet}
                           sharedStay={stay}
+                          sharedLatch={latched}
                           onWorkspaceChange={autosave.changed}
                           onReplayStart={startWorkspaceReplay}
                           workspaceReplay={replaySnapshot}
@@ -1365,7 +1402,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                           onAlertFired={noteAlertFired}
                           onAlertsChanged={() => setAlertRevision((n) => n + 1)}
                           onDrawStats={(value) => {
-                            if (!visibleGrid.current) setStats(value)
+                            if (!visibleGrid.current) onPaneDrawStats(value)
                           }}
                           onToggleRail={() => setShowRail((v) => !v)}
                           railVisible={showRail}
@@ -1388,6 +1425,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       apiKey={apiKey}
                       wsUrl={wsUrl}
                       sharedTool={tool}
+                      sharedLatch={latched}
                       transitionLocked={workspace.pending}
                       armed={armed}
                       railVisible={showRail}
@@ -1404,7 +1442,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       onAlertsReady={noteAlerts}
                       onAlertFired={noteAlertFired}
                       onAlertsChanged={() => setAlertRevision((n) => n + 1)}
-                      onDrawStats={setStats}
+                      onDrawStats={onPaneDrawStats}
                       onTerminalChange={(id, terminal) => {
                         if (visibleGrid.current !== owner) return
                         if (terminal) terminalsRef.current[id] = terminal
