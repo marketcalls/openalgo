@@ -188,7 +188,7 @@ import {
   resolveCssColor,
   volumeColor,
 } from './chartTheme'
-import { CHART_TYPES } from './chartTypes'
+import { CHART_TYPES, volumeUnderElements } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
@@ -1190,10 +1190,13 @@ export class TradingTerminal {
    */
   private alertFacts(event: { time?: number; index?: number; price?: number }): AlertFacts {
     const bars = this.shownBars
-    const at =
-      typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
+    // On a transformed chart an element's own volume is not traded volume (a
+    // Kagi line keeps its thickness there), so read what the volume bars show.
+    const at = this.withDrawnVolume(
+      (typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
         ? bars[event.index]
-        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)
+        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)) ?? null,
+    )
     return {
       ticker: this.sym?.symbol ?? '',
       exchange: this.sym?.exchange ?? '',
@@ -1590,7 +1593,7 @@ export class TradingTerminal {
   private setTransformedVolume(raw: readonly Bar[]): void {
     if (!this.chart) return
     const drawn = this.chart.primaryBars()
-    this.setVolumeData(drawn, this.bucketVolume(drawn, raw))
+    this.setVolumeData(drawn, volumeUnderElements(drawn, raw))
   }
 
   private setPriceData() {
@@ -1790,31 +1793,6 @@ export class TradingTerminal {
     // not yet replayed out of the last element.
     if (this.transformed()) this.setTransformedVolume(this.price.getData())
     else this.setVolumeData(this.price.getData(), this.volume.getData())
-  }
-
-  /** Sum the raw bars' volume onto each element they formed, keyed by the element's time. */
-  private bucketVolume(tbars: readonly Bar[], raw: readonly Bar[]): Bar[] {
-    const out: Bar[] = []
-    let ri = 0
-    for (const tb of tbars) {
-      let v = 0
-      while (ri < raw.length && raw[ri].time <= tb.time) {
-        v += raw[ri].volume || 0
-        ri++
-      }
-      out.push({ time: tb.time, open: 0, high: v, low: 0, close: v })
-    }
-    let rest = 0
-    while (ri < raw.length) {
-      rest += raw[ri].volume || 0
-      ri++
-    }
-    if (out.length && rest) {
-      const last = out[out.length - 1]
-      last.high += rest
-      last.close += rest
-    }
-    return out
   }
 
   /* ── legend (imperative; high-frequency, kept off React state) ────────── */

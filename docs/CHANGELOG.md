@@ -26,9 +26,9 @@ that runs strategies on the server (`openscript`).
   it never follows the pane onto another symbol. Saved charts and workspaces
   open as before.
 - **Replay on these chart types steps through the time bars**, and the bricks
-  form as each bar is revealed. The bar replay starts from is the one that
-  completed the brick you picked, and the volume under a brick counts only bars
-  already revealed.
+  form as each bar is revealed. The replay starts from the bar that completed
+  the brick you picked, and the volume under a brick counts only bars already
+  revealed.
 - **Compute on.** A study on a transformed chart has a Compute on row in its
   settings: Chart bars (the bricks or candles drawn, as before) or Underlying
   bars (the time bars, each value shown at the brick it was read on). The
@@ -53,8 +53,9 @@ that runs strategies on the server (`openscript`).
   its own `position` names.
 - **Loads lighter.** The side panels (watchlist, option chain, alerts,
   strategies, scripts) and the chart's forms (alerts, chart settings, study
-  settings, study picker, symbol search, order ticket) load when first opened. The JavaScript `/trading` needs before its first chart is
-  smaller than before this update, although the chart engine itself grew.
+  settings, study picker, symbol search, order ticket) load when first opened.
+  Less JavaScript loads before `/trading` draws its first chart than before
+  this update, although the chart engine itself grew.
 - An alert on a transformed chart can now fire on several bricks that one bar
   completes, each delivered with its own numbers.
 - The chart's right-click menu no longer closes when the toolbar's own row

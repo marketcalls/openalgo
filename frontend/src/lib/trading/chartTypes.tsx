@@ -4,7 +4,7 @@
  * movement-driven types) the transform the chart applies to the raw bars.
  */
 
-import type { SeriesTransformSpec } from 'openalgo-charts'
+import type { Bar, SeriesTransformSpec } from 'openalgo-charts'
 // Registers the in-chart transforms the specs below name, and the point and
 // figure and Kagi renderers. Imported here, beside the catalogue that names
 // them, so every chart reading this catalogue can apply them.
@@ -121,6 +121,37 @@ export const CHART_TYPES: Record<string, ChartTypeDef> = Object.fromEntries(
  */
 export function widgetChartType(value: string): string {
   return CHART_TYPES[value]?.transform?.(0).type ?? value
+}
+
+/**
+ * Volume under each element of a transformed chart: the raw bars' volume summed
+ * onto the element they formed, keyed by the element's time. An element's own
+ * `volume` is not traded volume (a Kagi line keeps its thickness there and a
+ * brick carries none), so this is what a volume histogram under one draws.
+ * Raw bars after the last element (a brick still forming) count toward it.
+ */
+export function volumeUnderElements(elements: readonly Bar[], raw: readonly Bar[]): Bar[] {
+  const out: Bar[] = []
+  let ri = 0
+  for (const element of elements) {
+    let v = 0
+    while (ri < raw.length && raw[ri].time <= element.time) {
+      v += raw[ri].volume || 0
+      ri++
+    }
+    out.push({ time: element.time, open: 0, high: v, low: 0, close: v })
+  }
+  let rest = 0
+  while (ri < raw.length) {
+    rest += raw[ri].volume || 0
+    ri++
+  }
+  if (out.length && rest) {
+    const last = out[out.length - 1]
+    last.high += rest
+    last.close += rest
+  }
+  return out
 }
 
 const s = {

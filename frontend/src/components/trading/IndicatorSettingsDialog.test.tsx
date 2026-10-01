@@ -168,6 +168,8 @@ describe('which bars a study computes on', () => {
       ...request('ema-1', EMA, { length: 9, timeframe: '' }),
       barSource: 'chart',
     })
+    const labels = [...document.querySelectorAll('label, h4')].map((one) => one.textContent)
+    expect(labels).toEqual(['Compute on', 'Length', 'Timeframe'])
     const select = screen.getByLabelText('Compute on')
     expect(optionsOf(select)).toEqual([
       { label: 'Chart bars', value: 'chart' },

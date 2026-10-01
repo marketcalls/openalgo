@@ -164,6 +164,9 @@ export async function checkTradingWorkspace({ page, check, expect, report, reloa
         assert.equal(last.close, close);
         assert.equal(last.high, Math.max(final.open, hold(Math.max(...available.map(bar => Math.max(bar.high, bar.open, bar.close)))), close));
         assert.equal(last.low, Math.min(final.open, hold(Math.min(...available.map(bar => Math.min(bar.low, bar.open, bar.close)))), close));
+        // Volume is the finer bars' sum, capped at the displayed bar's own.
+        const finerVolume = available.reduce((sum, bar) => sum + (bar.volume ?? 0), 0);
+        assert.equal(last.volume, Number.isFinite(final.volume) ? Math.min(finerVolume, final.volume) : finerVolume, 'A forming bar\'s volume must be the finer sum, capped at the displayed bar\'s');
       }
       assert.deepEqual(last ?? null, member.state.bar);
       for (const comparison of member.comparisons) {

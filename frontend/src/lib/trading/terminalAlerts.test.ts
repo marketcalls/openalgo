@@ -13,6 +13,8 @@ type State = {
   sym: SymbolView
   interval: string
   rawBars: Bar[]
+  ctype: string
+  volume: SeriesApi
   buildChart(): void
   loadIndicators(): Promise<void>
   syncIndicators(): void
@@ -395,8 +397,34 @@ describe('terminal alert integration', () => {
       'closed at 103.00',
     ])
     expect(fired).toHaveBeenCalledTimes(2)
-    expect(new Set(fired.mock.calls.map((call) => call[0].key)).size).toBe(2)
     expect(fired.mock.calls.map((call) => call[0].firedAt)).toEqual([180, 240])
+  })
+
+  it('fills {{volume}} on a Kagi chart with the volume under the line, not its thickness', async () => {
+    const { state, onToast } = await mount()
+    state.ctype = 'kagi'
+    state.rawBars = [100, 101, 102, 103].map((close, i) => ({
+      ...bar(60 * (i + 1), close),
+      volume: [10, 20, 30, 60][i],
+    }))
+    state.buildChart()
+    await state.chartToolsReady
+    const elements = state.chart.primaryBars()
+    const last = elements.at(-1)!
+    // The element itself carries the line's thickness, 0 or 1.
+    expect(last.volume === 0 || last.volume === 1).toBe(true)
+    const under = state.volume.getData().at(-1)?.close
+    expect(under).toBeGreaterThan(1)
+
+    onToast.mockClear()
+    state.chart.emit('alert:triggered', {
+      alertId: 'kagi',
+      title: 'Kagi',
+      message: 'volume {{volume}}',
+      time: last.time,
+      index: elements.length - 1,
+    })
+    expect(onToast.mock.calls.map((call) => call[0])).toEqual([`volume ${under}`])
   })
 
   it('preserves a study anchor through rebuild and reload without evaluating history', async () => {

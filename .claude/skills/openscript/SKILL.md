@@ -96,10 +96,11 @@ The installed compiler carries an importer for the widely used chart language
 whose scripts open with `//@version=5` or `//@version=6`. Each statement comes
 across with its original meaning, or with a warning stating the difference, or
 as a comment with an error, all in the range `OS9001` to `OS9012`, and what it
-hands back has been compiled. From the repository root:
+hands back has been compiled. Save the original as `<scratch>/original.txt`,
+then from the repository root (the file is an argument, not standard input):
 
 ```bash
-node --input-type=module -e "import { importScript } from './frontend/node_modules/openalgo-script/dist/core/index.js'; import { readFileSync } from 'node:fs'; const r = importScript(readFileSync(process.argv[1], 'utf8')); process.stdout.write(r.source); for (const f of r.findings) console.error(f.code, f.message)" <original.txt> > <scratch>/ported.oscript
+node --input-type=module -e "import { importScript } from './frontend/node_modules/openalgo-script/dist/core/index.js'; import { readFileSync } from 'node:fs'; const r = importScript(readFileSync(process.argv[1], 'utf8')); process.stdout.write(r.source); for (const f of r.findings) console.error(f.code, f.message)" <scratch>/original.txt > <scratch>/ported.oscript
 ```
 
 The output is a draft, not a port. Read every finding: a warning marks a place

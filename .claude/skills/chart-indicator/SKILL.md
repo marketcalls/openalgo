@@ -327,6 +327,9 @@ changed, newest first:
    something in it.
 4. **Pick the closest example** in `examples/` and work from it:
    - `simple_zscore.js` — one pane, one plot, rolling window, levels, range
+   - `ema_cross_signals.js` (2.5.4) — `crossesAbove`, `crossesBelow`,
+     `crosses`, `rising` and `falling` turning two averages into filtered
+     Buy and Sell markers
    - `intermediate_keltner_squeeze.js` — several plots, `fills`, `colorBy`, a
      second price scale, a boolean that hides part of the drawing
    - `shaded_trend_zone.js` — shading between two series, where the ribbon

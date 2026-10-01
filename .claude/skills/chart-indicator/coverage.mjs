@@ -46,6 +46,8 @@ const AUTHOR_FACING = [
   'stoch', 'cci', 'roc', 'change', 'connorsStreak', 'nulls',
   // ohlc studies
   'trueRange', 'atr', 'rsi', 'supertrend', 'pivotHigh', 'pivotLow',
+  // 2.5.4: crossings and slope, where a missing value reads as no signal
+  'crossesAbove', 'crossesBelow', 'crosses', 'rising', 'falling',
   // 2.4.0: the higher-timeframe fold, and the error a calc throws for an
   // input the user can fix.
   'securitySeries', 'IndicatorInputError',

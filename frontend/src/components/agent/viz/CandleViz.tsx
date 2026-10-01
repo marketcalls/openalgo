@@ -337,12 +337,19 @@ export function CandleViz({ spec, title, source, variant = 'figure', className }
       })
       price.setData(chartSpec.bars)
       // What the chart draws: the transform's elements, or the bars as given.
-      const bars = created.primaryBars()
+      // Under a transform the volume is the raw bars' summed onto the element
+      // they formed, as on `/trading`: a brick carries no volume of its own
+      // and a Kagi line keeps its thickness there.
+      const elements = created.primaryBars()
+      const bars = transform
+        ? types
+            .volumeUnderElements(elements, chartSpec.bars)
+            .map((under, i) => ({ ...elements[i], volume: under.close }))
+        : elements
 
       // Volume rides an overlay scale inside the price pane, as it does on
       // `/trading`: it autoscales on its own and draws no second axis, so the
-      // card keeps one price ladder. A transform carries its own volume, so a
-      // Heikin Ashi chart still gets it and a type that drops it draws none.
+      // card keeps one price ladder. Bars with no traded volume draw none.
       if (bars.some((bar) => typeof bar.volume === 'number' && bar.volume > 0)) {
         const volume = created.addSeries('histogram', {
           paneIndex: 0,

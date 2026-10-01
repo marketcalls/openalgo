@@ -91,6 +91,13 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v as Value }))
 
+  // A control that means something only beside another one (a point and
+  // figure box size in fixed mode) shows only then. The empty state reads this
+  // list too, so a tab whose every control is hidden says so.
+  const shownInputs = tab.inputs.filter(
+    (f) => isPair(f) || !f.visibleWhen || conditionHolds(f.visibleWhen, values)
+  )
+
   /**
    * Send only what changed. The engine writes exactly the keys it is handed, so
    * a one-control edit stays a one-key patch -- which is also what gets
@@ -180,13 +187,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
             <p className="mb-4 text-xs leading-relaxed text-muted-foreground">{tab.description}</p>
           )}
           <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
-            {groupsOf(
-              // A control that means something only beside another one (a
-              // point and figure box size in fixed mode) shows only then.
-              tab.inputs.filter(
-                (f) => isPair(f) || !f.visibleWhen || conditionHolds(f.visibleWhen, values)
-              )
-            ).map(([heading, group]) => (
+            {groupsOf(shownInputs).map(([heading, group]) => (
               <FieldGroup
                 key={`${tab.id}-${heading}`}
                 heading={heading}
@@ -197,7 +198,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
               />
             ))}
           </div>
-          {tab.inputs.length === 0 && (
+          {shownInputs.length === 0 && (
             <p className="py-3 text-[13px] text-muted-foreground">Nothing to configure here.</p>
           )}
         </div>
