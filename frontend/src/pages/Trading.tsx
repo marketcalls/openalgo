@@ -33,6 +33,11 @@ const WatchlistPanel = lazy(() =>
   import('@/components/trading/WatchlistPanel').then((m) => ({ default: m.WatchlistPanel }))
 )
 
+import {
+  BOTTOM_BAR_PX,
+  type BottomBarControl,
+  ChartBottomBar,
+} from '@/components/trading/ChartBottomBar'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
@@ -315,6 +320,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * builds, so the panels work from the first paint.
    */
   const terminalsRef = useRef<Record<string, TradingTerminal | null>>({})
+  /** The bottom bar once its code has loaded; told when a pane finishes loading. */
+  const bottomBar = useRef<BottomBarControl | null>(null)
   const layoutIdRef = useRef(layoutId)
   layoutIdRef.current = layoutId
   const replayCoordinator = useRef<WorkspaceReplayCoordinator | null>(null)
@@ -505,6 +512,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
     (paneId: string, key: string | null) => {
       setPaneSymbols((prev) => (prev[paneId] === key ? prev : { ...prev, [paneId]: key }))
       noteChartChanged()
+      // A pane on a preset range shows the same span of its new bars.
+      const terminal = terminalsRef.current[paneId]
+      if (terminal && !workspacePending.current) bottomBar.current?.paneLoaded(terminal)
     },
     [noteChartChanged]
   )
@@ -1306,119 +1316,133 @@ function TradingWorkspace({ account }: { account: string | null }) {
               </div>
             ) : apiKey && wsUrl && linkGroup ? (
               <div className="relative h-full">
-                {!workspace.current && (
-                  <div
-                    key="unnamed"
-                    className="grid h-full min-h-0 gap-2 p-2"
-                    style={{
-                      gridTemplateColumns: layout.cols,
-                      gridTemplateRows: layout.rows,
-                      gridTemplateAreas: layout.areas,
-                    }}
-                  >
-                    {layout.cells.map((cell, i) => (
-                      <ChartPane
-                        key={`p${i}`}
-                        paneId={`p${i}`}
-                        paneLabel={`Chart ${i + 1}`}
-                        toolbarHost={toolbarHost}
-                        focused={focusedPane === `p${i}`}
-                        chartSelector={chartSelector}
-                        apiKey={apiKey}
-                        wsUrl={wsUrl}
-                        style={{ gridArea: cell }}
-                        sharedTool={tool}
-                        sharedMagnet={magnet}
-                        sharedStay={stay}
-                        onWorkspaceChange={autosave.changed}
-                        onReplayStart={startWorkspaceReplay}
-                        workspaceReplay={replaySnapshot}
-                        onBeforeSourceChange={stopWorkspaceReplay}
-                        onFocusPane={focusPane}
-                        onSymbolChange={(id, key) => {
-                          if (!visibleGrid.current) noteSymbol(id, key)
-                        }}
-                        onIntervalChange={() => {
-                          if (!visibleGrid.current) noteChartChanged()
-                        }}
-                        onTerminalChange={noteTerminal}
-                        onObjectsChange={(id, objects) => {
-                          if (!visibleGrid.current) noteObjects(id, objects)
-                        }}
-                        onOpenScriptSource={showScriptSource}
-                        onAlertsReady={(id, view) => {
-                          if (!visibleGrid.current) noteAlerts(id, view)
-                        }}
-                        onAlertFired={noteAlertFired}
-                        onAlertsChanged={() => setAlertRevision((n) => n + 1)}
-                        onDrawStats={(value) => {
-                          if (!visibleGrid.current) setStats(value)
-                        }}
-                        onToggleRail={() => setShowRail((v) => !v)}
-                        railVisible={showRail}
-                        linkGroup={linkGroup}
-                        armed={armed}
-                        transitionLocked={workspace.pending}
-                        layoutPicker={workspaceControls}
-                      />
-                    ))}
-                  </div>
-                )}
-                {workspace.grids.map((owner) => (
-                  <WorkspaceGrid
-                    key={owner.key}
-                    owner={owner}
-                    active={workspace.current === owner}
-                    toolbarHost={toolbarHost}
-                    focusedPaneId={focusedPane}
-                    chartSelector={chartSelector}
-                    apiKey={apiKey}
-                    wsUrl={wsUrl}
-                    sharedTool={tool}
-                    transitionLocked={workspace.pending}
-                    armed={armed}
-                    railVisible={showRail}
-                    onToggleRail={() => setShowRail((value) => !value)}
-                    onWorkspaceChange={autosave.changed}
-                    onReplayStart={startWorkspaceReplay}
-                    workspaceReplay={replaySnapshot}
-                    onBeforeSourceChange={stopWorkspaceReplay}
-                    onFocusPane={focusPane}
-                    onSymbolChange={noteSymbol}
-                    onIntervalChange={noteChartChanged}
-                    onObjectsChange={noteObjects}
-                    onOpenScriptSource={showScriptSource}
-                    onAlertsReady={noteAlerts}
-                    onAlertFired={noteAlertFired}
-                    onAlertsChanged={() => setAlertRevision((n) => n + 1)}
-                    onDrawStats={setStats}
-                    onTerminalChange={(id, terminal) => {
-                      if (visibleGrid.current !== owner) return
-                      if (terminal) terminalsRef.current[id] = terminal
-                      else delete terminalsRef.current[id]
-                      updateReplayMembers()
-                    }}
-                    layoutPicker={workspaceControls}
+                {/* The grid stops above the bottom bar's strip, kept clear from
+                    the first render so nothing moves when the bar arrives. */}
+                <div className="absolute inset-x-0 top-0" style={{ bottom: BOTTOM_BAR_PX }}>
+                  {!workspace.current && (
+                    <div
+                      key="unnamed"
+                      className="grid h-full min-h-0 gap-2 p-2"
+                      style={{
+                        gridTemplateColumns: layout.cols,
+                        gridTemplateRows: layout.rows,
+                        gridTemplateAreas: layout.areas,
+                      }}
+                    >
+                      {layout.cells.map((cell, i) => (
+                        <ChartPane
+                          key={`p${i}`}
+                          paneId={`p${i}`}
+                          paneLabel={`Chart ${i + 1}`}
+                          toolbarHost={toolbarHost}
+                          focused={focusedPane === `p${i}`}
+                          chartSelector={chartSelector}
+                          apiKey={apiKey}
+                          wsUrl={wsUrl}
+                          style={{ gridArea: cell }}
+                          sharedTool={tool}
+                          sharedMagnet={magnet}
+                          sharedStay={stay}
+                          onWorkspaceChange={autosave.changed}
+                          onReplayStart={startWorkspaceReplay}
+                          workspaceReplay={replaySnapshot}
+                          onBeforeSourceChange={stopWorkspaceReplay}
+                          onFocusPane={focusPane}
+                          onSymbolChange={(id, key) => {
+                            if (!visibleGrid.current) noteSymbol(id, key)
+                          }}
+                          onIntervalChange={() => {
+                            if (!visibleGrid.current) noteChartChanged()
+                          }}
+                          onTerminalChange={noteTerminal}
+                          onObjectsChange={(id, objects) => {
+                            if (!visibleGrid.current) noteObjects(id, objects)
+                          }}
+                          onOpenScriptSource={showScriptSource}
+                          onAlertsReady={(id, view) => {
+                            if (!visibleGrid.current) noteAlerts(id, view)
+                          }}
+                          onAlertFired={noteAlertFired}
+                          onAlertsChanged={() => setAlertRevision((n) => n + 1)}
+                          onDrawStats={(value) => {
+                            if (!visibleGrid.current) setStats(value)
+                          }}
+                          onToggleRail={() => setShowRail((v) => !v)}
+                          railVisible={showRail}
+                          linkGroup={linkGroup}
+                          armed={armed}
+                          transitionLocked={workspace.pending}
+                          layoutPicker={workspaceControls}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {workspace.grids.map((owner) => (
+                    <WorkspaceGrid
+                      key={owner.key}
+                      owner={owner}
+                      active={workspace.current === owner}
+                      toolbarHost={toolbarHost}
+                      focusedPaneId={focusedPane}
+                      chartSelector={chartSelector}
+                      apiKey={apiKey}
+                      wsUrl={wsUrl}
+                      sharedTool={tool}
+                      transitionLocked={workspace.pending}
+                      armed={armed}
+                      railVisible={showRail}
+                      onToggleRail={() => setShowRail((value) => !value)}
+                      onWorkspaceChange={autosave.changed}
+                      onReplayStart={startWorkspaceReplay}
+                      workspaceReplay={replaySnapshot}
+                      onBeforeSourceChange={stopWorkspaceReplay}
+                      onFocusPane={focusPane}
+                      onSymbolChange={noteSymbol}
+                      onIntervalChange={noteChartChanged}
+                      onObjectsChange={noteObjects}
+                      onOpenScriptSource={showScriptSource}
+                      onAlertsReady={noteAlerts}
+                      onAlertFired={noteAlertFired}
+                      onAlertsChanged={() => setAlertRevision((n) => n + 1)}
+                      onDrawStats={setStats}
+                      onTerminalChange={(id, terminal) => {
+                        if (visibleGrid.current !== owner) return
+                        if (terminal) terminalsRef.current[id] = terminal
+                        else delete terminalsRef.current[id]
+                        updateReplayMembers()
+                      }}
+                      layoutPicker={workspaceControls}
+                    />
+                  ))}
+                  <WorkspaceReplayBar
+                    snapshot={replaySnapshot}
+                    error={replayError}
+                    ownerLabel={
+                      replaySnapshot.ownerId
+                        ? (paneSymbols[replaySnapshot.ownerId] ?? replaySnapshot.ownerId)
+                        : undefined
+                    }
+                    onScopeChange={(scope) => replayCoordinator.current?.setScope(scope)}
+                    onPlay={(speed) => replayCoordinator.current?.play(speed)}
+                    onPause={() => replayCoordinator.current?.pause()}
+                    onStep={() => replayCoordinator.current?.step()}
+                    onStepBack={() => replayCoordinator.current?.stepBack()}
+                    onSeek={(index) => replayCoordinator.current?.seek(index)}
+                    onStop={requestReplayExit}
+                    confirmExit={confirmReplayExit}
+                    onCancelExit={() => setConfirmReplayExit(false)}
+                    onConfirmExit={stopWorkspaceReplay}
                   />
-                ))}
-                <WorkspaceReplayBar
-                  snapshot={replaySnapshot}
-                  error={replayError}
-                  ownerLabel={
-                    replaySnapshot.ownerId
-                      ? (paneSymbols[replaySnapshot.ownerId] ?? replaySnapshot.ownerId)
-                      : undefined
+                </div>
+                <ChartBottomBar
+                  pane={panelTarget}
+                  panes={() =>
+                    Object.values(terminalsRef.current).filter(
+                      (terminal): terminal is TradingTerminal => terminal !== null
+                    )
                   }
-                  onScopeChange={(scope) => replayCoordinator.current?.setScope(scope)}
-                  onPlay={(speed) => replayCoordinator.current?.play(speed)}
-                  onPause={() => replayCoordinator.current?.pause()}
-                  onStep={() => replayCoordinator.current?.step()}
-                  onStepBack={() => replayCoordinator.current?.stepBack()}
-                  onSeek={(index) => replayCoordinator.current?.seek(index)}
-                  onStop={requestReplayExit}
-                  confirmExit={confirmReplayExit}
-                  onCancelExit={() => setConfirmReplayExit(false)}
-                  onConfirmExit={stopWorkspaceReplay}
+                  focusKey={focusedPane}
+                  control={bottomBar}
                 />
               </div>
             ) : (

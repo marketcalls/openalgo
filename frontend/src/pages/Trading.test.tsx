@@ -180,3 +180,16 @@ describe('workspace replay page ownership', () => {
     expect(fake.destroy).toHaveBeenCalledOnce()
   })
 })
+
+describe('bottom bar', () => {
+  it('spends one strip on the whole grid, however many charts it holds', async () => {
+    const widest = LAYOUTS.reduce((a, b) => (b.cells.length > a.cells.length ? b : a))
+    localStorage.setItem('oa-trading-layout', widest.id)
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(screen.getAllByRole('button', { name: /^Replay p/ })).toHaveLength(widest.cells.length)
+    expect(container.querySelectorAll('[data-trading-bottombar]')).toHaveLength(1)
+    const grid = container.querySelector('[data-trading-bottombar]')?.previousElementSibling
+    expect((grid as HTMLElement).style.bottom).toBe('28px')
+  })
+})

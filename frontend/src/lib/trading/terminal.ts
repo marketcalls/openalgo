@@ -98,7 +98,9 @@ import {
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
 import { openInterestCapability } from './openInterest'
+import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
 import { replayTiming } from './replayTiming'
+import { applySessionHours } from './sessionHours'
 import { TerminalComparisons } from './terminalComparisons'
 import type { PreparedReplayMember } from './workspaceReplay'
 import {
@@ -1090,6 +1092,10 @@ export class TradingTerminal {
   private readonly reportedRefusals = new Map<string, string>()
   private profileLayer: ProfileLayer | null = null
   private availableIntervals: string[] = ['1m', '5m', '15m', '1h', 'D']
+  /** The bottom bar's preset range for this pane, kept while its interval holds. */
+  private rangeChoice: RangeChoice | null = null
+  /** The load in flight, or the last one: what `showInterval` waits on. */
+  private loading: Promise<boolean> = Promise.resolve(true)
   /** The workspace link group this pane belongs to, if sync is on. */
   private link: LinkGroup | null = null
   /** Non-null only while the chart is showing a replayed prefix. */
@@ -1374,6 +1380,7 @@ export class TradingTerminal {
     this.preferences = initial ? createWorkspacePanePreferences(initial, this.sk) : opts.preferences
     this.interval = this.lsGet('interval') || '5m'
     this.ctype = this.lsGet('ctype') || 'candlestick'
+    this.rangeChoice = parseRangeChoice(this.lsGet('range'))
     this.restoreChartTools()
     const comparisons = this.lsGet('comparisons')
     if (comparisons) {
@@ -2364,6 +2371,8 @@ export class TradingTerminal {
           }
         : { interval: this.interval }
     )
+    // Trading hours for the axis past the last bar and the bottom bar's status.
+    applySessionHours(this.chart, this.sym?.exchange ?? '', this.apiKey)
     this.offBranding = this.chart.on('branding:changed', () => {
       this.cb.onBrandingChange?.(this.brandingLink())
     })
@@ -6103,9 +6112,15 @@ export class TradingTerminal {
     return true
   }
 
-  async loadSymbol(
+  loadSymbol(pick: SearchRow, opts: { silent?: boolean; strict?: boolean } = {}): Promise<boolean> {
+    const run = this.runLoadSymbol(pick, opts)
+    this.loading = run
+    return run
+  }
+
+  private async runLoadSymbol(
     pick: SearchRow,
-    opts: { silent?: boolean; strict?: boolean } = {}
+    opts: { silent?: boolean; strict?: boolean }
   ): Promise<boolean> {
     if (this.destroyed || !this.rest) return false
     const ticket = ++this.loadTicket
@@ -6332,6 +6347,8 @@ export class TradingTerminal {
     }
     this.stopReplay() // same reason as loadSymbol: the bars are about to change
     this.interval = iv
+    // A preset range holds while its interval does; any other change ends it.
+    if (this.rangeChoice) this.setActiveRange(null)
     this.lsSet('interval', iv)
     this.cb.onIntervalChange?.(iv)
     if (this.link && this.chart) this.link.setInterval(this.chart, iv)
@@ -6435,6 +6452,81 @@ export class TradingTerminal {
     if (!this.chart) return
     this.chart.resetScale()
     this.applyDefaultViewport()
+  }
+
+  /* ── bottom bar hooks: the logic is in bottomBar.ts ───────────────────── */
+
+  /** The chart on screen, or null before the first load and after teardown. */
+  liveChart(): ChartInstance | null {
+    return this.destroyed || !this.chart || this.chart.isDestroyed ? null : this.chart
+  }
+  /** Where the chart draws: a press or a wheel there is the trader moving the view. */
+  chartElement(): HTMLElement {
+    return this.container
+  }
+  currentInterval(): string {
+    return this.interval
+  }
+  supportedIntervals(): readonly string[] {
+    return this.availableIntervals
+  }
+  activeRange(): string | null {
+    return this.rangeChoice?.interval === this.interval ? this.rangeChoice.id : null
+  }
+  setActiveRange(id: string | null): void {
+    this.rangeChoice = id === null ? null : { id, interval: this.interval }
+    this.lsSet('range', serializeRangeChoice(this.rangeChoice))
+  }
+
+  /** Switch to `iv` when it differs, and resolve once the pane's bars have settled. */
+  async showInterval(iv: string): Promise<boolean> {
+    if (iv !== this.interval && this.setInterval(iv) !== iv) return false
+    for (let i = 0; i < 4 && this.historyPending; i++) await this.loading.catch(() => false)
+    return !this.destroyed && this.interval === iv && !this.dataUnavailable()
+  }
+
+  /**
+   * One older page reaching back to `time`, for Go to and the range presets.
+   * Never while replay or a workspace switch owns the bars, or while a load is
+   * replacing them.
+   */
+  async loadHistoryBack(time: number): Promise<'loaded' | 'empty' | 'exhausted' | 'unavailable'> {
+    const data = this.data
+    const chart = this.chart
+    const sym = this.sym
+    const interval = this.interval
+    const ticket = this.loadTicket
+    if (
+      this.destroyed ||
+      !data ||
+      !chart ||
+      !sym ||
+      this.dataUnavailable() ||
+      this.replayActive() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      this.preparingWorkspace ||
+      this.workspaceTransitionLocked
+    )
+      return 'unavailable'
+    if (this.noMoreHistory) return 'exhausted'
+    const before = this.rawBars[0]?.time
+    await data.loadMore(time)
+    if (
+      this.destroyed ||
+      chart !== this.chart ||
+      ticket !== this.loadTicket ||
+      sym !== this.sym ||
+      interval !== this.interval ||
+      data !== this.data
+    )
+      return 'unavailable'
+    const state = data.getState()
+    this.applyDataSnapshot(state)
+    if (state.historyError) throw state.historyError
+    const first = this.rawBars[0]?.time
+    if (first !== undefined && (before === undefined || first < before)) return 'loaded'
+    return state.hasMore === false ? 'exhausted' : 'empty'
   }
 
   /* ── PNG export ───────────────────────────────────────────────────────── */
