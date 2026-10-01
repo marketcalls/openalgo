@@ -958,11 +958,16 @@ def master_contract_download():
         download_and_unzip_shoonya_data(output_path)
         delete_symtoken_table()
 
-        # Process exchange data
-        token_df = process_shoonya_nse_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_shoonya_bse_data(output_path)
-        copy_from_dataframe(token_df)
+        # Process exchange data. The order is deliberate: cash (NSE, then BSE
+        # with BSE_INDEX) goes in last. Shoonya reuses tokens across
+        # exchanges - NSE INFY and CDS EURINR26NOV26113CE are both 1594, and
+        # about 2,300 NSE stocks collide with a CDS contract - and the
+        # unfiltered symbol search is keyed by token alone, so whichever row
+        # is inserted later is the one it can find. Inserting NSE first hid
+        # INFY, ADANIGREEN, 360ONE and the rest from the chart's search.
+        # BSE goes after NSE so SENSEX (BSE_INDEX, token 1) is not hidden by
+        # the NSE SME stock that also uses token 1. Lookups by token AND
+        # exchange are unaffected either way.
         token_df = process_shoonya_nfo_data(output_path)
         copy_from_dataframe(token_df)
         token_df = process_shoonya_cds_data(output_path)
@@ -970,6 +975,10 @@ def master_contract_download():
         token_df = process_shoonya_mcx_data(output_path)
         copy_from_dataframe(token_df)
         token_df = process_shoonya_bfo_data(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_shoonya_nse_data(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_shoonya_bse_data(output_path)
         copy_from_dataframe(token_df)
 
         delete_shoonya_temp_data(output_path)
