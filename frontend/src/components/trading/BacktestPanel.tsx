@@ -76,7 +76,10 @@ interface Props {
    * loading its history reaches, so the panel can say the chart was not marked
    * rather than leaving a reader to wonder where the arrows are.
    */
-  onMarkChart?(markers: readonly unknown[]): boolean
+  onMarkChart?(
+    markers: readonly unknown[],
+    owner?: { file: string; onCleared: () => void }
+  ): boolean
   /**
    * A strategy another panel wants run, or null.
    *
@@ -210,6 +213,11 @@ export function BacktestPanel({
   onRan,
 }: Props) {
   const [marked, setMarked] = useState<number | null>(null)
+  // Closing the panel takes its marks off the chart: they are this panel's
+  // report, and with the panel gone nothing on screen would explain them.
+  const markChart = useRef(onMarkChart)
+  markChart.current = onMarkChart
+  useEffect(() => () => void markChart.current?.([]), [])
   /** What the trader typed into an input box, by key. Only what they changed. */
   const [edited, setEdited] = useState<Record<string, string>>({})
   /**
@@ -462,7 +470,10 @@ export function BacktestPanel({
       // them, so what is on the chart is always this run and only this run.
       if (onMarkChart) {
         const marks = result.ok ? chartMarkersFrom(result.markers ?? []) : []
-        setMarked(onMarkChart(marks) ? marks.length : null)
+        // Tied to the strategy, so removing it from the chart takes these
+        // marks down with it, and the note below stops counting them.
+        const owner = { file: which, onCleared: () => setMarked(0) }
+        setMarked(onMarkChart(marks, owner) ? marks.length : null)
       }
     } catch {
       if (!controller.signal.aborted) {
@@ -799,9 +810,22 @@ export function BacktestPanel({
             <BacktestChart points={outcome?.equity ?? []} />
 
             <p className="text-[10px] text-muted-foreground">
-              {marked !== null && marked > 0
-                ? `${marked} fills marked on the chart. `
-                : marked === null && onMarkChart
+              {marked !== null && marked > 0 ? (
+                <>
+                  {`${marked} fills marked on the chart. `}
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:text-foreground"
+                    onClick={() => {
+                      onMarkChart?.([])
+                      setMarked(0)
+                    }}
+                  >
+                    Clear from chart
+                  </button>
+                  {'. '}
+                </>
+              ) : marked === null && onMarkChart
                   ? 'The chart has no price series to mark yet. '
                   : ''}
               {outcome?.barCount?.toLocaleString()} bars, {Math.round(outcome?.ranMs ?? 0)}ms

@@ -408,6 +408,12 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **A strategy's Long, Short and Exit marks stayed on the chart after the
+  strategy was removed.** Backtest from the Scripts panel adds the strategy to
+  the chart and marks the run's fills on it; removing the strategy took its
+  lines away but left the marks. Now removing it takes its marks down too, and
+  so does closing the Backtest panel. "Clear from chart" beside the fill count
+  removes them at any time.
 - **The assistant could fail part way through an answer when a reasoning level
   was set on GPT-5.4 or newer models** (#2081), with "Cannot run the event loop
   while another loop is running", and only sometimes. It happened on the

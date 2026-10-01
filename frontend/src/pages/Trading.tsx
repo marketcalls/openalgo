@@ -288,6 +288,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
    * the switch between them.
    */
   const [backtestFile, setBacktestFile] = useState<string | null>(null)
+  /** The chart the Backtest panel's marks are on, so clearing reaches it. */
+  const backtestMarked = useRef<TradingTerminal | null>(null)
   const showScriptSource = useCallback((file: string) => {
     setScriptSource(file)
     setPanel('scripts')
@@ -1705,9 +1707,24 @@ function TradingWorkspace({ account }: { account: string | null }) {
               chartRevision={chartRevision}
               // The same pane helper every panel uses: the focused one, else any
               // that is up. A run marks the chart it was a run of.
-              onMarkChart={(markers) =>
-                panelTarget()?.setBacktestMarkers(markers as never) ?? false
-              }
+              onMarkChart={(markers, owner) => {
+                // The marks live on one chart. Clearing (an empty list) goes to
+                // that chart, wherever focus has moved since; a new run on
+                // another chart takes the old marks down first, so none are
+                // left behind with nothing pointing at them.
+                const marked = backtestMarked.current
+                const target = markers.length > 0 ? panelTarget() : (marked ?? panelTarget())
+                if (marked && marked !== target) marked.setBacktestMarkers([])
+                const ok =
+                  target?.setBacktestMarkers(
+                    markers as never,
+                    owner
+                      ? { indicatorId: idForScript(owner.file), onCleared: owner.onCleared }
+                      : null
+                  ) ?? false
+                backtestMarked.current = ok && markers.length > 0 ? target : null
+                return ok
+              }}
               runFile={backtestFile}
               onRan={() => setBacktestFile(null)}
             />

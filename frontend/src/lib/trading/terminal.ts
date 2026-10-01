@@ -1060,6 +1060,16 @@ export class TradingTerminal {
   private price: SeriesApi | null = null
   /** The backtest's marker layer, made once and refilled per run. */
   private btMarkers: SeriesMarkers | null = null
+  /**
+   * The study the backtest marks belong to (a strategy's OpenScript id), whether
+   * it has been seen on this chart yet, and who to tell when the marks go. The
+   * Backtest action adds the study and starts the run together, and the study
+   * registers a moment later, so the marks are only taken down once the study
+   * has been on the chart and is then removed.
+   */
+  private btMarkersFor: string | null = null
+  private btMarkersSeen = false
+  private btMarkersCleared: (() => void) | null = null
   private volume: SeriesApi | null = null
   private volumeMA: SeriesApi | null = null
   private displayedVolume: Bar[] = []
@@ -2543,6 +2553,8 @@ export class TradingTerminal {
     // vanish and nothing can take them down or put them back. Dropped here so
     // the next run makes a fresh one against the series that now exists.
     this.btMarkers = null
+    this.btMarkersFor = null
+    this.btMarkersSeen = false
     // A movement-driven type has the chart apply its transform to the raw bars
     // this series is fed, forming the elements again on every tick. The box is
     // sized once per build from the instrument's price, so bricks keep their
@@ -3731,8 +3743,16 @@ export class TradingTerminal {
    * button did nothing rather than appearing to work. A pane that is still
    * loading its history is the ordinary way to reach that.
    */
-  setBacktestMarkers(markers: readonly SeriesMarker[]): boolean {
+  setBacktestMarkers(
+    markers: readonly SeriesMarker[],
+    owner: { indicatorId: string; onCleared?: () => void } | null = null
+  ): boolean {
     if (!this.price) return false
+    this.btMarkersFor = markers.length > 0 && owner ? owner.indicatorId : null
+    this.btMarkersCleared = this.btMarkersFor ? (owner?.onCleared ?? null) : null
+    this.btMarkersSeen =
+      this.btMarkersFor !== null &&
+      !!this.chart?.indicators().some((i) => i.indicatorId === this.btMarkersFor)
     // One layer, kept and reused. `createMarkers` builds a primitive and
     // attaches it, so calling it per run would stack a new layer over the old
     // one every time and the previous run's marks would stay on the chart with
@@ -4967,6 +4987,29 @@ export class TradingTerminal {
       this.announcedIndicators = announced
       this.cb.onIndicatorsChange?.(announced)
     }
+    this.dropBacktestMarksWithoutTheirStudy(next)
+  }
+
+  /**
+   * Take a backtest's marks down once the strategy they came from is removed
+   * from the chart, however it was removed (the legend, the menu, the
+   * dialog, undo). Marks with no study behind them read as the strategy still
+   * being applied.
+   */
+  private dropBacktestMarksWithoutTheirStudy(studies: readonly { indicatorId: string }[]): void {
+    const owner = this.btMarkersFor
+    if (!owner) return
+    if (studies.some((s) => s.indicatorId === owner)) {
+      this.btMarkersSeen = true
+      return
+    }
+    if (!this.btMarkersSeen) return
+    this.btMarkers?.setMarkers([])
+    const cleared = this.btMarkersCleared
+    this.btMarkersFor = null
+    this.btMarkersSeen = false
+    this.btMarkersCleared = null
+    cleared?.()
   }
 
   captureWorkspacePane(id: string): WorkspacePane {
