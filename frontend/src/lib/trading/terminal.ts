@@ -692,6 +692,11 @@ function withoutTransformSettings<T>(values: Readonly<Record<string, T>>): Recor
   return Object.fromEntries(Object.entries(values).filter(([key]) => !transformSetting(key)))
 }
 
+/** The engine's own name for a drawing tool it has no display name for: the id, spaced. */
+function drawingIdName(tool: string): string {
+  return tool.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase())
+}
+
 /** The selected drawing's editable style. */
 export interface DrawSelection {
   id: string
@@ -2248,6 +2253,10 @@ export class TradingTerminal {
     const objects = new ChartObjects(chart, {
       drawings: this.objectDrawings,
       onSettings: (object) => this.openObjectSettings(object),
+      // A drawing's row reads as the drawing rail names its tool ("Anchored
+      // VWAP"), rather than as the engine spells an id it cannot look up
+      // ("Anchored vwap"). A tool the rail does not list keeps that spelling.
+      drawingName: (tool) => DRAW_TOOL_METADATA[tool]?.name ?? drawingIdName(tool),
     })
     this.objects = objects
     this.cb.onObjectsChange?.(objects)

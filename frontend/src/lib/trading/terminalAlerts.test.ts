@@ -502,3 +502,36 @@ describe('terminal alert integration', () => {
     expect(state.alerts.list()[0].state).toBe('triggered')
   })
 })
+
+describe('the Objects panel rows', () => {
+  it('names a drawing as the drawing rail names its tool', async () => {
+    // Without the rail's names the engine spells the id: "Anchored vwap".
+    const { terminal, state } = await mount()
+    await terminal.setDrawTool(null)
+    state.draw.add({
+      id: 'avwap',
+      tool: 'anchored-vwap',
+      paneIndex: 0,
+      points: [{ time: 120, price: 100 }],
+      style: {},
+    })
+    state.draw.add({
+      id: 'line',
+      tool: 'trend-line',
+      paneIndex: 0,
+      points: [
+        { time: 60, price: 100 },
+        { time: 180, price: 100 },
+      ],
+      style: {},
+    })
+    const objects = (
+      terminal as unknown as { objects: { list(): { kind: string; name: string }[] } }
+    ).objects
+    const rows = objects
+      .list()
+      .filter((row) => row.kind === 'drawing')
+      .map((row) => row.name)
+    expect(rows.sort()).toEqual(['Anchored VWAP', 'Trend Line'])
+  })
+})
