@@ -808,6 +808,68 @@ class BrokerData:
         }
         return minute_windows.get(interval, 30 * 24 * 3600)
 
+    @staticmethod
+    def _repair_candles(
+        df: pd.DataFrame, exchange: str, symbol: str, interval: str
+    ) -> pd.DataFrame:
+        """Make every candle satisfy low <= open, close <= high with volume >= 0.
+
+        Chart clients validate that invariant and reject the whole series over
+        one bad bar ("History contains an invalid candle"), issue #2154.
+
+        TPSeries reports a bar's volume (`intv`) as the change in the running
+        day volume (`v`), and on NSE that running total drops back at 15:20
+        and recovers a few minutes later. Observed on NSE TCS 18-09-2026 at
+        1m: v=5,382,803 at 15:19, 1,474,589 at 15:20 (intv=-3,908,214), then
+        6,872,536 at 15:28 (intv=+5,383,867). The bar holding 15:20 comes back
+        negative on every interval (the 15:20 bar at 5m, 15:15 at 1h, 13:15 at
+        4h) while BSE and daily bars are clean, which is why NSE intraday
+        charts failed and the rest loaded.
+
+        Same repair as broker/kotak/api/data.py::_repair_candles: the open and
+        the close are prices that actually traded, so the wick is widened to
+        cover them, and a volume that cannot be true is zeroed rather than
+        costing the bar its prices. Rows still missing an OHLC value are
+        dropped: a NaN reaches the client as an invalid candle too, and there
+        is no honest repair.
+        """
+        if df.empty:
+            return df
+
+        ohlc = ["open", "high", "low", "close"]
+
+        usable = df[ohlc].notna().all(axis=1)
+        if not usable.all():
+            logger.warning(
+                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing "
+                f"OHLC for {exchange}:{symbol} {interval}"
+            )
+            df = df[usable].reset_index(drop=True)
+            if df.empty:
+                return df
+
+        high = df[ohlc].max(axis=1)
+        low = df[ohlc].min(axis=1)
+        broken = (high != df["high"]) | (low != df["low"])
+        if broken.any():
+            logger.info(
+                f"HISTORY API - Widened {int(broken.sum())} candle(s) whose high/low "
+                f"excluded their own open/close for {exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df["high"] = high
+            df["low"] = low
+
+        negative = df["volume"] < 0
+        if negative.any():
+            logger.warning(
+                f"HISTORY API - Zeroing {int(negative.sum())} negative volume(s) for "
+                f"{exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df.loc[negative, "volume"] = 0
+        return df
+
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -1120,6 +1182,7 @@ class BrokerData:
             # Sort by timestamp. Adjacent chunks are half-open, but a candle
             # landing exactly on a boundary would otherwise appear twice.
             df = df.sort_values("timestamp").drop_duplicates(subset="timestamp", keep="last")
+            df = self._repair_candles(df.reset_index(drop=True), oa_exchange, symbol, interval)
             return df.reset_index(drop=True)
 
         except Exception as e:
