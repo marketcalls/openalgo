@@ -226,6 +226,12 @@ format gains the other two in its next patch.
   equity is green above the capital the run started with and red below it,
   and drawdown fills downward from zero in red, so the deepest point of a run
   is the lowest point of its chart. The tab you last chose is remembered.
+- **The whole run, on one screen.** Equity and drawdown show the full period
+  however long the run, compressed to the chart's width with every peak and
+  trough kept. Equity uses the chart's whole height on its own range, with a
+  dashed "Start" line at the starting capital, and a drawdown strip under it on
+  the same dates. Before, a long run on one-minute bars showed only its last
+  few hours, squashed against the starting capital.
 - **A reversal is one mark.** When a strategy closes one side and opens the
   other on the same bar, the chart shows "Short -2" (or "Long +2") instead of
   "Exit long -1" and "Short -1" stacked on one candle: the position the bar

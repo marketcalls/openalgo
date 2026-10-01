@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { seriesFrom } from './BacktestChart'
+import { compress, seriesFrom } from './BacktestChart'
 
 /** One point of the report's curve: milliseconds, as the record carries it. */
 function point(msAt: number, equity: number, drawdown: number) {
@@ -71,5 +71,36 @@ describe('drawdown as a share of its peak', () => {
     // Equity 90,000 after falling 10,000 from a 1,00,000 high is -10%.
     const { drawdownPercent } = seriesFrom([point(0, 100000, 0), point(1000, 90000, -10000)])
     expect(drawdownPercent.map((p) => p.value)).toEqual([0, -10])
+  })
+})
+
+describe('compress, the whole run in the width of the chart', () => {
+  // A two-month run on one-minute bars, with one deep trough and one high.
+  const long = Array.from({ length: 30_000 }, (_, i) => ({
+    time: 1_700_000_000 + i * 60,
+    value: i === 12_345 ? -500 : i === 23_456 ? 900 : Math.sin(i / 500) * 100,
+  }))
+
+  it('keeps about two points a slice, from the first bar to the last', () => {
+    const out = compress(long, 160)
+    expect(out.length).toBeLessThanOrEqual(2 * 160 + 2)
+    expect(out[0]).toEqual(long[0])
+    expect(out[out.length - 1]).toEqual(long[long.length - 1])
+  })
+
+  it('never smooths away the deepest trough or the highest peak', () => {
+    const values = compress(long, 160).map((p) => p.value)
+    expect(Math.min(...values)).toBe(-500)
+    expect(Math.max(...values)).toBe(900)
+  })
+
+  it('hands the time axis each time once, in order', () => {
+    const times = compress(long, 160).map((p) => p.time)
+    expect(times.every((time, i) => i === 0 || time > times[i - 1])).toBe(true)
+  })
+
+  it('leaves a short run as it is', () => {
+    const short = long.slice(0, 100)
+    expect(compress(short, 160)).toEqual(short)
   })
 })

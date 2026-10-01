@@ -107,6 +107,39 @@ export function seriesFrom(points: readonly CurvePoint[]): {
   return { equity, drawdown, drawdownPercent }
 }
 
+/**
+ * A long curve kept to about `slices` slices: each slice's lowest and highest
+ * point, in time order, plus the first and last point.
+ *
+ * Every peak and every trough survives, so the deepest drawdown and the best
+ * equity are on the chart however long the run, which an average or every
+ * n-th point would smooth away.
+ */
+export function compress(series: readonly Plottable[], slices: number): Plottable[] {
+  if (series.length <= slices * 2) return [...series]
+  const picked: Plottable[] = [series[0]]
+  const size = series.length / slices
+  for (let slice = 0; slice < slices; slice++) {
+    const from = Math.floor(slice * size)
+    const to = Math.min(series.length, Math.floor((slice + 1) * size))
+    if (from >= to) continue
+    let low = from
+    let high = from
+    for (let i = from + 1; i < to; i++) {
+      if (series[i].value < series[low].value) low = i
+      if (series[i].value > series[high].value) high = i
+    }
+    for (const i of low <= high ? [low, high] : [high, low]) picked.push(series[i])
+  }
+  picked.push(series[series.length - 1])
+  // The time axis takes each time once, in order.
+  const out: Plottable[] = []
+  for (const point of picked) {
+    if (out.length === 0 || point.time > out[out.length - 1].time) out.push(point)
+  }
+  return out
+}
+
 /** The series a tab draws: equity in money, drawdown in percent of the peak. */
 function plotted(points: readonly CurvePoint[], show: CurveKind): Plottable[] {
   const series = seriesFrom(points)
@@ -154,7 +187,13 @@ export function BacktestChart({
         // theme's last-price colours, so this chart's theme carries it.
         const standing = last >= base ? colours.upColor : colours.downColor
         const created = core.createChart(container, {
-          theme: { ...colours, lastPriceUp: standing, lastPriceDown: standing },
+          theme: {
+            ...colours,
+            lastPriceUp: standing,
+            lastPriceDown: standing,
+            // A quiet rule between equity and its drawdown strip.
+            paneSeparator: colours.axisLine,
+          },
           priceAxisWidth: 56,
           ariaLabel: show === 'equity' ? 'Equity curve' : 'Drawdown',
           ...(core.isValidTimezone(timeZone) ? { timezone: timeZone } : {}),
@@ -165,6 +204,9 @@ export function BacktestChart({
           timeNavigator: false,
           // The corner mark sits on the curve in a chart this small.
           branding: false,
+          // The run is compressed to the plot's width, about one point per
+          // pixel, so the spacing may fall below a candle chart's minimum.
+          timeScale: { minBarSpacing: 0.25 },
         })
         instance = created
 
@@ -177,30 +219,67 @@ export function BacktestChart({
         }
 
         const fill = (colour: string) => core.withAlpha(colour, 0.22)
-        created
-          .addSeries('baseline', {
-            style: {
-              // Equity from the capital it started with; drawdown from zero.
-              baseValue: base,
-              // Drawdown is never above zero; a touch of zero is not a gain, so
-              // its line stays red rather than flecking green at each new high.
-              topColor: show === 'equity' ? colours.upColor : colours.downColor,
-              bottomColor: colours.downColor,
-              areaTopColor: fill(show === 'equity' ? colours.upColor : colours.downColor),
-              areaBottomColor: fill(colours.downColor),
-              lineWidth: 1.5,
-            },
-            // Read as money and as a percentage on the axis and the crosshair,
-            // not as bare numbers with two decimals.
-            priceFormat: {
-              type: 'custom',
-              formatter:
-                show === 'equity'
-                  ? (value: number) => compactMoney(value, currency)
-                  : (value: number) => `${value.toFixed(2)}%`,
-            },
+        const money = (value: number) => compactMoney(value, currency)
+        const pct = (value: number) => `${value.toFixed(2)}%`
+        // The whole run, squeezed to about one point per pixel of the plot. A
+        // two-month run on one-minute bars is tens of thousands of points, and
+        // the chart will not draw bars thinner than its minimum spacing, so
+        // fitting them all showed only the last few hours.
+        const slices = Math.max(60, Math.floor((container.clientWidth - 60) / 2))
+        const series = seriesFrom(points)
+        const drawdown = compress(series.drawdownPercent, slices)
+        const drawdownSeries = (paneIndex: number) => {
+          created
+            .addSeries('baseline', {
+              paneIndex,
+              style: {
+                // Drawdown is never above zero, so its line stays red rather
+                // than flecking green at each new high.
+                baseValue: 0,
+                topColor: colours.downColor,
+                bottomColor: colours.downColor,
+                areaTopColor: fill(colours.downColor),
+                areaBottomColor: fill(colours.downColor),
+                lineWidth: 1.2,
+                ...(paneIndex > 0 ? { lastValueVisible: false, priceLineVisible: false } : {}),
+              },
+              priceFormat: { type: 'custom', formatter: pct },
+            })
+            .setData(drawdown)
+        }
+
+        if (show === 'equity') {
+          // Equity on its own range, so the line uses the whole height instead
+          // of hugging one edge beside the starting capital.
+          created
+            .addSeries('area', {
+              style: {
+                color: standing,
+                areaTopColor: fill(standing),
+                areaBottomColor: core.withAlpha(standing, 0),
+                lineWidth: 1.5,
+              },
+              priceFormat: { type: 'custom', formatter: money },
+            })
+            .setData(compress(series.equity, slices))
+          created.addPriceLine({
+            id: 'backtest-start',
+            price: base,
+            color: colours.axisText,
+            lineStyle: 'dashed',
+            lineWidth: 1,
+            label: `Start ${money(base)}`,
           })
-          .setData(data)
+          // The drawdown under it on the same time axis: the first question
+          // about a peak is how far it fell afterwards.
+          if (drawdown.length >= 2) {
+            drawdownSeries(1)
+            const strip = created.panes()[1]
+            if (strip) strip.weight = 0.35
+          }
+        } else {
+          drawdownSeries(0)
+        }
         created.fitContent()
       } catch {
         // An exception thrown from an effect unmounts the tree above it, which
