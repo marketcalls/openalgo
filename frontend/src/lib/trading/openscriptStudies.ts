@@ -633,6 +633,11 @@ export async function loadOpenScriptStudies(): Promise<OpenScriptLoad> {
         category: 'OpenScript',
         ...(trades ? { simulateOrders: true } : {}),
         resolveTime,
+        // Which chart this is drawn on. The adapter draws a band whose colour
+        // the script computes per bar, and every grid a study declares, only on
+        // a chart it knows has the hooks for them; told nothing, it refuses
+        // such a study before any bar runs (OS6024).
+        chartVersion: charts.VERSION,
       }
       const descriptor = hostedStudy(id, (instrument) =>
         descriptorFor(program as never, instrument ? { ...options, instrument } : options)
