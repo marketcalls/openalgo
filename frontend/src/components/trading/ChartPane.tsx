@@ -689,12 +689,21 @@ export function ChartPane({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
     }
+    // A scroll that moves the chart moves the price under the menu, so the
+    // menu goes. One that does not, such as the toolbar's own row settling
+    // after a control took focus, leaves the chart and the menu where they
+    // are: closing on it took the menu away the moment it opened.
+    const onScroll = (e: Event) => {
+      const target = e.target
+      const chart = chartRef.current
+      if (!(target instanceof Node) || !chart || target.contains(chart)) close()
+    }
     window.addEventListener('click', close)
-    window.addEventListener('scroll', close, true)
+    window.addEventListener('scroll', onScroll, true)
     window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('click', close)
-      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [ctx])

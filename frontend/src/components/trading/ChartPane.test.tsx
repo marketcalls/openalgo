@@ -324,6 +324,28 @@ describe('chart pane preparation ownership', () => {
     expect(owner.openAlerts).not.toHaveBeenCalled()
   })
 
+  it('keeps the menu open while the toolbar row scrolls, and closes it when the page does', async () => {
+    // The toolbar's row can settle a scroll just after the menu opens, when a
+    // control in it had focus. Closing on that took the menu away under the
+    // pointer; only a scroll that moves the chart moves the price it is about.
+    const view = render(<ChartPane {...props} />)
+    const owner = fake.owners[0]
+    await act(async () => owner.resolve())
+    act(() =>
+      owner.options.callbacks.onContextMenu?.({
+        x: 100,
+        y: 100,
+        items: [],
+        profile: null,
+        alert: { label: 'Create price alert', source: { kind: 'price' as const, price: 105 } },
+      })
+    )
+    fireEvent.scroll(view.getByRole('toolbar', { name: 'Chart controls' }))
+    expect(view.getByRole('button', { name: 'Create price alert', exact: true })).toBeVisible()
+    fireEvent.scroll(window)
+    expect(view.queryByRole('button', { name: 'Create price alert', exact: true })).toBeNull()
+  })
+
   it('offers no second alert entry in the menu', async () => {
     // One gesture, one meaning. A second entry a line below the first, spelled
     // almost the same and doing something else, is a choice nobody wants to
