@@ -79,10 +79,14 @@ changed, newest first:
   each bar a pass appended, each seeing the bars and values through the bar it
   judges. On a reload, a study whose first pass throws `IndicatorInputError`
   comes back in its error status, while any other throw still stops the
-  restore. The in-chart transforms, `barSource: 'underlying'` and
-  `ctx.transformed` do not reach a study on `/trading`: the terminal builds its
-  Renko, Heikin Ashi and other transformed bars itself, so `calc` receives the
-  bricks and `ctx.transformed` stays absent (pitfall 20).
+  restore. `/trading` has the chart apply Heikin Ashi, Renko, range bars, line
+  break, point and figure and Kagi itself, so on those chart types a study's
+  `calc` receives the elements drawn with `ctx.transformed` set, unless the
+  trader sets its Compute on row to Underlying bars, when it receives the time
+  bars and its values are read onto the elements; its hooks still run on the
+  elements, indexed by element (pitfall 20). `chart.on` is typed from
+  `ChartEventMap`: an event of your own is declared into it with
+  `declare module 'openalgo-charts'`, and `chart.emit` is deprecated for 3.0.0.
 
   **2.5.4 to 2.5.8.** Optional fields, all usable here unless noted: an
   `overlay: true` or `plot: key` target on a `draws()` shape or a marker, which
@@ -204,15 +208,13 @@ changed, newest first:
   bars ahead, the tail landing in the right margin, with fills and the legend
   following. A `calc` that throws once installed is reported on the study's
   data status instead of thrown into the render loop; throw
-  `IndicatorInputError` for a condition the user can fix (Pine
-  `runtime.error`). `alerts[].message` may be a function of the firing bar.
-  Marker shapes `cross` and `xcross`, positions `paneTop` and `paneBottom`
-  (Pine `location.top` / `location.bottom`). `fills[].overlay` for a band on
-  the price pane (Pine `force_overlay` on `fill`). `plot.colorParts` for a
-  wick and border coloured apart from the body (Pine `plotcandle` wick
-  colour). `tooltip` and `id` on `draws()` labels and boxes. Inputs
-  `interval` and `time` (Pine `input.timeframe` / `input.time`).
-  `table` options `fontSize: 'auto'` (Pine `size.auto`). And
+  `IndicatorInputError` for a condition the user can fix.
+  `alerts[].message` may be a function of the firing bar. Marker shapes
+  `cross` and `xcross`, positions `paneTop` and `paneBottom`, pinned to the
+  plot's edges. `fills[].overlay` for a band drawn on the price pane.
+  `plot.colorParts` for a wick and border coloured apart from the body.
+  `tooltip` and `id` on `draws()` labels and boxes. Inputs `interval` and
+  `time`. `table` options `fontSize: 'auto'`. And
   `ctx.requestBars` on the attach context for another instrument's bars,
   which `/trading` serves from the terminal's own cached feed: the same broker
   session and the same bar cache the chart uses, so a benchmark costs no

@@ -150,6 +150,11 @@ still come out clean. It also checks that the page and the script name the same
 set of codes, so neither can drift alone. Two claims on the first draft of that
 page were wrong, and this is what found them.
 
+This skill describes `openalgo-script` 0.8.1, the compiler `/trading` pins, with
+the server engine `openscript` at the same version. OpenScript 0.9.0, with
+fixes to the backtest engine, is coming; when the pin moves to it, read its
+changelog for anything a backtest now reports differently and say so here.
+
 **Bumping `openalgo-script` means updating this skill in the same change**, the
 way a chart bump does. Run the generator, run both checks, then update the prose
 by hand: the generator owns the name table and nothing generates the teaching.

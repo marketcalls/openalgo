@@ -365,9 +365,8 @@ table:  (ctx) => ({
 })   // or null
 ```
 
-A level's `lineStyle` is `'solid' | 'dashed' | 'dotted'` (a Pine `hline` with
-`line.style_dotted` maps directly); `dashed: true` is the older two-state form
-and `lineStyle` wins when both are given.
+A level's `lineStyle` is `'solid' | 'dashed' | 'dotted'`; `dashed: true` is
+the older two-state form and `lineStyle` wins when both are given.
 
 `range` applies only when the indicator created its own pane; two indicators
 sharing a pane would otherwise fight over it. It is a fixed range, so navigation
