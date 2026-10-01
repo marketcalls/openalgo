@@ -408,6 +408,13 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **The assistant on /trading could fail while /agent worked.** The chart
+  panel had no model picker, so it always ran the default model. When that
+  model's key had stopped working it answered "OpenAI did not accept the API
+  key for this model", while /agent kept working on a model picked by hand.
+  The chart panel now has the same model and reasoning picker as /agent, and
+  the chosen model is remembered in this browser and shared by both. A
+  remembered model that is later disabled or removed falls back to the default.
 - **An update left your secrets readable by every account on the server.**
   `install/update.sh` opens the whole install with `chmod -R 755` and never
   closed `.env` again, so after each update your `.env` (app keys, broker
