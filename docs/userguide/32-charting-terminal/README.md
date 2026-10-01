@@ -3,9 +3,9 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. The terminal uses published `openalgo-charts` 2.4.5: a from-scratch canvas
-charting engine with 17 chart types, 105 built-in indicators plus any you write
-yourself, and 85 drawing tools, wired to the same broker session and market-data
+it. The terminal uses published `openalgo-charts` 2.6.0: a from-scratch canvas
+charting engine with 19 chart types, 112 built-in indicators plus any you write
+yourself, and 87 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
 Price updates arrive over the WebSocket feed. History refreshes reconcile bars
@@ -24,7 +24,7 @@ says so and links to `/apikey`.
 | Region | What it holds |
 |---|---|
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, comparisons, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera and CSV export |
-| Left rail | Drawing tools in ten groups, magnet, keep-armed lock, undo, redo, delete |
+| Left rail | Drawing tools in eleven groups, magnet, keep-tool-selected lock, undo, redo, delete |
 | Centre | Chart grid with up to eight panes in presets, or sixteen in an imported workspace |
 | Right panel | Watchlist, option chain, Objects, or the chart assistant |
 | Right rail | The four controls that open those panels |
@@ -135,6 +135,59 @@ Study templates and chart workspaces retain OI studies and appearance. Workspace
 also retain the readout preference; observations come from the restored
 instrument's history. Expressions and price-generated chart elements do not
 have a meaningful position level and omit OI.
+
+## Studies on Another Timeframe
+
+Twenty-nine built-in studies have a **Timeframe** row in their settings: the
+moving averages (SMA, EMA, WMA, VWMA, HMA, DEMA, TEMA, ALMA, SMMA, T3, LSMA,
+KAMA, McGinley Dynamic, Zero Lag EMA, VIDYA), the bands and channels
+(Bollinger, Keltner, Donchian, Envelope), Supertrend, Parabolic SAR, ATR, RSI,
+MACD, Stochastic, Stochastic RSI, Williams %R, CCI and ADX. It offers **Chart
+interval** and the intervals your broker serves. Chart interval, the default,
+draws the study exactly as before. Pick a longer interval, such as 15m on a 5m
+chart, and the study is computed on the chart's bars folded into that interval:
+each value appears once its period has closed and does not change afterwards,
+and the legend names the interval (`EMA 9 close 15m`). Sub-day periods start at
+the session open, so 15-minute periods on NSE start at 09:15. An interval no
+longer than the chart's is the chart's own.
+
+A setting the chart cannot use, such as a timeframe on a Renko or Heikin Ashi
+chart's own bars, keeps the study on the chart without drawing it, and a message
+says why. Set **Compute on** to **Underlying bars** (below) or pick Chart
+interval to draw it again.
+
+Seven studies are new in this version: **ZigZag**, **52 Week High/Low**, **Zero
+Lag EMA**, **Variable Index Dynamic Average**, **Elder-Ray Index**, **Schaff
+Trend Cycle** and **Volatility Squeeze**.
+
+## Heikin Ashi, Renko, Range Bars, Line Break, Point & Figure and Kagi
+
+These six chart types are built from the time bars by the chart itself, so a
+brick, range bar, column or Heikin Ashi candle forms as the price moves: a tick
+that completes a Renko brick adds it at once, and a tick back takes it away
+again until the bar closes. The brick, range or box size is set from the
+instrument's price when the chart opens (about 0.15 percent of the last close,
+rounded to the tick; a Kagi reversal is twice that) and stays the same as the
+chart pages in older history. Volume under each element is the sum of the time
+bars it was built from.
+
+**Chart settings > Price** shows the chart type's own options: the box or range
+size, the reversal, the lines to break, and for Point & Figure how the box is
+sized (fixed, a percent of price, or ATR) and which prices it reads. A size of
+0 is taken from the loaded history. What you set is kept for that instrument
+and chart type, not for the pane, so a box chosen on one symbol never follows
+the pane onto another; reset returns to the size set from the price.
+
+A study on one of these charts has a **Compute on** row at the top of its
+settings. **Chart bars**, the default, computes on the bricks or candles drawn,
+as before. **Underlying bars** computes on the time bars underneath and shows
+each value at the brick it was read on, which is what a study with a
+**Timeframe** needs. The choice is saved with the study and survives a chart
+type change.
+
+Market replay on these charts steps through the time bars, so the bricks form
+as each bar is revealed. The bar you pick is the one that completed the brick
+you clicked.
 
 ## Chart Workspaces
 
@@ -273,21 +326,21 @@ the terminal reports this so you can increase row size or reduce the period.
 
 The chart carries a SELL and BUY panel in its top-left corner, and a right-click
 menu with market, limit and stop rows. What those do depends on one switch in
-the top bar, which reads either **One-Click off** or **One-Click ARMED**.
+the top bar, which reads either **One-Click off** or **One-Click ON**.
 
 - **Off (the default).** A click runs every check first (replay lock, tradable
   segment, freeze quantity, stop side) and then opens an order ticket prefilled
   with exactly what the chart would have sent. You see the order before it goes.
-- **ARMED.** A click places the order immediately, with no confirmation. A
+- **ON.** A click places the order immediately, with no confirmation. A
   second fire within 120 milliseconds is ignored, so a stray double-click cannot
   send two orders.
 
 The switch is remembered between sessions. The badge beside it always shows the
 current state.
 
-**Arming only gates new risk.** Closing a position, cancelling an order and
-dragging an order to a new price work whether One-Click is on or off. Disarming
-must never take away your exit.
+**One-Click only gates new risk.** Closing a position, cancelling an order and
+dragging an order to a new price work whether One-Click is on or off. Turning it
+off must never take away your exit.
 
 Orders placed from the chart are tagged with the `chart-trading` strategy and
 respect Live and Analyze mode exactly like every other order path in OpenAlgo.
@@ -325,23 +378,25 @@ price.
 
 ## Drawing Tools
 
-Pick a tool from the left rail. A group button re-arms whatever you last used
-from that group; the small corner wedge opens the full list without changing the
-armed tool.
+Pick a tool from the left rail. A group button selects whatever you last used
+from that group again; the small corner wedge opens the full list without
+changing the selected tool.
 
-The terminal exposes all 85 drawing tools from openalgo-charts 2.2.0. Channels
+The terminal exposes all 87 drawing tools from openalgo-charts 2.6.0. Channels
 include regression and pitchfork variants; Fibonacci and Gann include fans,
 arcs, circles and squares. Patterns include XABCD, Elliott waves and harmonic
 patterns with measured ratios. Geometric studies include tessellation and
-wavefronts. Use the scrollable group menus to reach the complete catalogue.
+wavefronts. The **Volume studies** group holds **Anchored VWAP** and **Fixed
+Range Volume Profile**, each placed by clicking on the chart. Use the scrollable
+group menus to reach the complete catalogue.
 
 Two controls change how the tools behave:
 
 - **Magnet** snaps an anchor to the nearest open, high, low or close.
-- **Keep tool armed** (the padlock) keeps the tool after you finish a drawing.
-  Without it the tool disarms after one shape and the rail returns to the
-  cursor, so three trend lines mean three trips to the rail. Both settings are
-  remembered per pane.
+- **Keep tool selected** (the padlock) keeps the tool after you finish a
+  drawing. Without it the tool is released after one shape and the rail returns
+  to the cursor, so three trend lines mean three trips to the rail. Both
+  settings are remembered per pane.
 
 Select a drawing to get a floating bar with colour, width, dash, lock, delete
 and, on text tools, an editor. Double-click a text drawing to reopen its editor.
@@ -383,7 +438,8 @@ the panel's target. The panel lists the protected price source, indicator
 instances, drawings and an active session profile. Search filters the list by
 object name, kind or source id.
 
-Each row offers only actions that object supports. Indicators can be selected,
+Drawing rows carry the tool's name as the drawing rail shows it (Anchored VWAP,
+Trend Line). Each row offers only actions that object supports. Indicators can be selected,
 shown or hidden, configured and removed. Drawings can also be locked and focused;
 focusing moves future or off-screen anchors into view. Drawing changes use the
 same undo history and per-pane save as edits on the canvas. Profile rows open the
@@ -421,7 +477,7 @@ opens its editor instead.
 
 ### Drawing tools
 
-| Key | Arms |
+| Key | Selects |
 |---|---|
 | `Alt` + `T` | Trend line |
 | `Alt` + `H` | Horizontal line |
@@ -439,7 +495,7 @@ opens its editor instead.
 | `Ctrl` or `Cmd` + `D` | Duplicate the selection |
 | Arrow keys | Nudge the selection one pixel |
 | `Shift` + arrow keys | Nudge ten pixels |
-| `Esc` | Disarm the tool, then close the open panel |
+| `Esc` | Release the tool, then close the open panel |
 
 While you are placing a multi-point tool, `Enter` finishes the shape and
 `Backspace` drops the last anchor.
@@ -466,7 +522,7 @@ that instead, keeping the exact study instance and plot you clicked, or the
 clicked drawing even if another one is selected. A notice names the alert it
 made, and the alert is editable from the rail the moment it exists.
 
-It is armed to fire once, the moment the price is reached, expiring in two months, with a
+It is set to fire once, the moment the price is reached, expiring in two months, with a
 sound and a desktop notification. Those are the same defaults the form opens
 with, so a right-click produces exactly the alert the form would have proposed.
 
@@ -524,7 +580,7 @@ a dialog always keeps the key, so erasing a character never erases a drawing.
 it was made on.** A 5m alert can be seen from the 1h chart, with its own
 interval on the label, but it is not watching there. The rail says so under the
 row rather than leaving it reading Active on a chart where nothing will fire.
-Go back to the interval it was made on to arm it again.
+Go back to the interval it was made on for it to watch again.
 
 ### Being told when one fires
 
@@ -551,10 +607,10 @@ The browser asks permission for notifications at the moment you save an alert
 with that box ticked, which is the only point at which it can. Refusing costs
 the desktop notification and nothing else.
 
-**A chart with an armed alert keeps working when its tab is hidden.** A chart
-with nothing armed stops fetching while you are elsewhere, which is the saving a
-background tab is for; an armed alert switches that off for as long as it is
-armed. Chrome minimized or the tab behind another window makes no difference.
+**A chart with an active alert keeps working when its tab is hidden.** A chart
+with no active alert stops fetching while you are elsewhere, which is the saving
+a background tab is for; an active alert switches that off for as long as it is
+active. A minimized browser or the tab behind another window makes no difference.
 Closing the tab does: these are evaluated by the chart that is open.
 
 ### Putting values in the message
@@ -640,7 +696,7 @@ It needs a model configured first, at `/agent/config`.
 Reloading the page brings back the grid layout, the pane sync settings, the open
 right panel and its width, the dock's open tab and height, the One-Click state,
 and per pane: the symbol, interval, chart type, product, indicators, comparisons, drawings,
-magnet, keep-armed, grid, volume and watermark settings.
+magnet, keep tool selected, grid, volume and watermark settings.
 
 Watchlists are stored on the server, so they follow you between devices.
 Everything else above is stored in the browser.
