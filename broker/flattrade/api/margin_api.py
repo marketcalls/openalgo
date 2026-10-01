@@ -2,7 +2,11 @@ import json
 import os
 
 from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
-from broker.flattrade.mapping.margin_data import parse_margin_response, transform_margin_positions
+from broker.flattrade.mapping.margin_data import (
+    MarginPriceUnavailable,
+    parse_margin_response,
+    transform_margin_positions,
+)
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -36,7 +40,16 @@ def calculate_margin_api(positions, auth):
 
     userid = full_api_key.split(":::")[0]
 
-    margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
+    try:
+        margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
+    except MarginPriceUnavailable as e:
+        error_response = {"status": "error", "message": str(e)}
+
+        class MockResponse:
+            status_code = 400
+            status = 400
+
+        return MockResponse(), error_response
 
     if "tsym" not in margin_data:
         error_response = {

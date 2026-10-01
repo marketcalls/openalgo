@@ -199,6 +199,14 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **An update left your secrets readable by every account on the server.**
+  `install/update.sh` opens the whole install with `chmod -R 755` and never
+  closed `.env` again, so after each update your `.env` (app keys, broker
+  credentials) and the databases in `db/` could be read by any local account.
+  This hit every server layout, and since this release also instances made by
+  `install-multi.sh`, which the updater now recognises. The updater now sets
+  `.env` and every file in `db/` back to owner-only, as a fresh install does.
+  Running the updater once fixes an existing server.
 - **A service switched to gthread could not start after going back to an
   older release.** The switched service file started OpenAlgo only through
   `install/openalgo-gunicorn.sh`, which older releases do not have, so a
