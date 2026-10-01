@@ -1,100 +1,181 @@
-import json
-import os
+# Mapping OpenAlgo API Request https://openalgo.in/docs
+# Mapping Flattrade GetBasketMargin API
 
-from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
-from broker.flattrade.mapping.margin_data import parse_margin_response, transform_margin_positions
-from utils.httpx_client import get_httpx_client
+from broker.flattrade.mapping.transform_data import map_order_type, map_product_type
+from database.token_db import get_br_symbol
 from utils.logging import get_logger
+from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
 
 logger = get_logger(__name__)
 
 
-def calculate_margin_api(positions, auth):
+def _apply_mpp(position, auth_token):
     """
-    Calculate basket margin via Flattrade's GetBasketMargin endpoint.
+    Convert MARKET/SL-M to LMT/SL-LMT with a protected price for basket margin.
 
-    Applies MPP (Market Price Protection): MARKET/SL-M are converted to
-    LMT/SL-LMT with a protected price — Flattrade's basket margin accepts
-    only LMT/SL-LMT and requires a non-zero price. See
-    broker/flattrade/mapping/transform_data.py for the equivalent order
-    placement conversion.
+    GetBasketMargin rejects MKT/SL-MKT price types, so for MARKET/SL-M inputs we
+    always return a converted order type (LMT or SL-LMT) even when MPP can't
+    fetch an LTP. Fallback price:
+      - MARKET -> position.price (user-supplied limit, may be 0)
+      - SL-M   -> position.trigger_price (at trigger, SL-LMT becomes a LIMIT
+                  at this level)
     """
-    AUTH_TOKEN = auth
+    pricetype = position.get("pricetype", "MARKET")
+    action = position["action"].upper()
+    price = str(position.get("price", 0) or 0)
+    order_type = map_order_type(pricetype)
 
-    full_api_key = os.getenv("BROKER_API_KEY")
-    if not full_api_key or ":::" not in full_api_key:
-        error_response = {
-            "status": "error",
-            "message": "BROKER_API_KEY not configured or invalid format",
-        }
+    if pricetype not in ("MARKET", "SL-M"):
+        return order_type, price
 
-        class MockResponse:
-            status_code = 500
-            status = 500
+    original_type = pricetype
+    converted_order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+    fallback_price = (
+        str(position.get("price", 0) or 0)
+        if original_type == "MARKET"
+        else str(position.get("trigger_price", 0) or 0)
+    )
 
-        return MockResponse(), error_response
-
-    userid = full_api_key.split(":::")[0]
-
-    margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
-
-    if "tsym" not in margin_data:
-        error_response = {
-            "status": "error",
-            "message": "No valid positions to calculate margin. Check if symbols are valid.",
-        }
-
-        class MockResponse:
-            status_code = 400
-            status = 400
-
-        return MockResponse(), error_response
-
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-    jdata = json.dumps(margin_data)
-    payload = f"jData={jdata}&jKey={AUTH_TOKEN}"
-
-    safe_payload = {k: v for k, v in margin_data.items() if k not in ("uid", "actid")}
-    logger.info(f"Flattrade basket margin payload: {safe_payload}")
-
-    client = get_httpx_client()
-
-    # GetBasketMargin is a non-order endpoint but is called per basket preview,
-    # so it shares the data window with the rest of the Flattrade client.
-    DATA_LIMITER.acquire()
-
+    logger.info(
+        f"Margin MPP: {original_type} detected Symbol={position['symbol']}, "
+        f"Exchange={position['exchange']}, Action={action}"
+    )
     try:
-        response = client.post(
-            "https://piconnect.flattrade.in/PiConnectAPI/GetBasketMargin",
-            headers=headers,
-            content=payload,
+        if not auth_token:
+            logger.warning(
+                f"Margin MPP: no auth token for Symbol={position['symbol']}; "
+                f"converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
+            )
+            return converted_order_type, fallback_price
+
+        from broker.flattrade.api.data import BrokerData
+
+        broker_data = BrokerData(auth_token)
+        quote = broker_data.get_quotes(position["symbol"], position["exchange"])
+        ltp = float(quote.get("ltp", 0))
+        tick_size = quote.get("tick_size")
+        instrument_type = get_instrument_type_from_symbol(position["symbol"])
+
+        logger.info(
+            f"Margin MPP Quote: Symbol={position['symbol']}, LTP={ltp}, "
+            f"TickSize={tick_size}, InstrumentType={instrument_type}"
         )
 
-        response.status = response.status_code
+        if ltp > 0:
+            protected = calculate_protected_price(
+                price=ltp,
+                action=action,
+                symbol=position["symbol"],
+                instrument_type=instrument_type,
+                tick_size=tick_size,
+            )
+            logger.info(
+                f"Margin MPP Converted: {original_type}->{converted_order_type}, "
+                f"FinalPrice={protected}"
+            )
+            return converted_order_type, str(protected)
 
-        try:
-            response_data = response.json()
-            # Learn a lower ceiling from the rejection. Not retried: a basket
-            # margin preview is user-initiated, so a stale retry is worse than
-            # surfacing the error.
-            clamp_from_response(response_data, DATA_LIMITER)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON response: {response.text}")
-            error_response = {"status": "error", "message": "Invalid response from broker API"}
-            return response, error_response
-
-        logger.info(f"Flattrade basket margin response: {response_data}")
-
-        standardized_response = parse_margin_response(response_data)
-        return response, standardized_response
+        logger.warning(
+            f"Margin MPP: LTP<=0 for Symbol={position['symbol']}; "
+            f"converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
+        )
+        return converted_order_type, fallback_price
 
     except Exception as e:
-        logger.error(f"Error calling Flattrade GetBasketMargin API: {e}")
-        error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
+        logger.error(
+            f"Margin MPP Error: Symbol={position['symbol']}, Error={e}. "
+            f"Converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
+        )
+        return converted_order_type, fallback_price
 
-        class MockResponse:
-            status_code = 500
-            status = 500
 
-        return MockResponse(), error_response
+def _build_order(position, auth_token):
+    oa_symbol = position["symbol"]
+    exchange = position["exchange"]
+    br_symbol = get_br_symbol(oa_symbol, exchange)
+    if not br_symbol:
+        logger.warning(f"Symbol not found for: {oa_symbol} on exchange: {exchange}")
+        return None
+    if "&" in br_symbol:
+        br_symbol = br_symbol.replace("&", "%26")
+
+    prctyp, prc = _apply_mpp(position, auth_token)
+
+    return {
+        "exch": exchange,
+        "tsym": br_symbol,
+        "qty": str(int(position["quantity"])),
+        "prc": prc,
+        "trgprc": str(position.get("trigger_price", 0) or 0),
+        "prd": map_product_type(position.get("product", "NRML")),
+        "trantype": "B" if position["action"].upper() == "BUY" else "S",
+        "prctyp": prctyp,
+    }
+
+
+def transform_margin_positions(positions, userid, auth_token=None):
+    orders = []
+    for position in positions:
+        try:
+            order = _build_order(position, auth_token)
+            if order:
+                orders.append(order)
+        except Exception as e:
+            logger.error(f"Error transforming position: {position}, Error: {e}")
+            continue
+    if not orders:
+        return {"uid": userid, "actid": userid, "basketlists": []}
+
+    first = orders[0]
+    rest = orders[1:]
+    return {
+        "uid": userid,
+        "actid": userid,
+        "exch": first["exch"],
+        "tsym": first["tsym"],
+        "qty": first["qty"],
+        "prc": first["prc"],
+        "trgprc": first["trgprc"],
+        "prd": first["prd"],
+        "trantype": first["trantype"],
+        "prctyp": first["prctyp"],
+        "basketlists": rest,
+    }
+
+
+def parse_margin_response(response_data):
+    try:
+        if not response_data or not isinstance(response_data, dict):
+            return {"status": "error", "message": "Invalid response from broker"}
+        if response_data.get("stat") != "Ok":
+            error_message = (
+                response_data.get("emsg")
+                or response_data.get("remarks")
+                or "Failed to calculate margin"
+            )
+            return {"status": "error", "message": error_message}
+        # Flattrade doc semantics:
+        #   marginused      -> "Total margin"        (pre-hedge basket total,
+        #                                             "Basket Margin" in the web UI)
+        #   marginusedtrade -> "Margin after trade"  (post-hedge, spread benefit
+        #                                             applied, "Post Trade Margin")
+        # Parallels Zerodha's initial.total vs final.total. Map total to
+        # marginusedtrade (matches Zerodha impl using final.total) so hedged
+        # baskets such as calendar spreads are not reported at naked-leg
+        # margin. Fall back to marginused only when marginusedtrade is absent.
+        # span/exposure are 0 since Flattrade gives no breakdown.
+        margin_used = response_data.get("marginusedtrade")
+        if margin_used in (None, ""):
+            margin_used = response_data.get("marginused")
+        margin_used = float(margin_used or 0)
+        return {
+            "status": "success",
+            "data": {
+                "total_margin_required": margin_used,
+                "span_margin": 0,
+                "exposure_margin": 0,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Error parsing margin response: {e}")
+        return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}
