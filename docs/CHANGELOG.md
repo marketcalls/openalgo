@@ -167,6 +167,26 @@ have read nothing on every bar.
 - A chart whose saved settings had auto-fit off no longer opens on an empty
   scale.
 
+### Charting terminal: right-click actions and chart-wide undo
+
+- **Right-click a study** (its line, its legend or its pane) for its settings,
+  Remove, and on a study pane Move pane up, Move pane down and Collapse or
+  Expand. The price pane stays on top.
+- **Right-click the chart** for Alerts..., and, when the symbol has something
+  open: Cancel orders on SYMBOL (n), Close position, Close half and Reverse
+  position. Every one asks first, naming the symbol, side, quantity and
+  product, and says whether it goes to your broker or, in analyzer mode, to the
+  sandbox.
+  - Cancel and Close are the same actions as the positions and orders panel.
+  - Close half is one market order for half the position in whole lots. It is
+    sent only if the position is still what the menu showed.
+  - Reverse closes the position, then opens the order ticket filled in for the
+    other side. The new position is entered only when you place that order.
+    Delivery (CNC) positions are not reversed.
+- **Undo and redo for the whole chart** (Ctrl+Z, Ctrl+Y): drawings, studies
+  added, removed or edited, pane moves, scale, chart type and interval. Orders
+  are never undone.
+
 ### Long-running memory and resource cleanup
 
 - The Windows and macOS/Linux Docker runners allow 45 seconds for container
