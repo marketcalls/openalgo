@@ -151,7 +151,7 @@ openstatz==0.4.1
 
 # The engine that runs a compiled OpenScript strategy on the server. Without it
 # a native install shows the OpenScript editor but cannot run a strategy.
-openscript==0.5.0
+openscript==0.8.1
 
 # The /agent module and the /trading agent side tab. They are imported only when
 # someone uses the agent, so a missing package does not stop the app starting;
