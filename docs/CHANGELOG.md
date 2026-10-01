@@ -408,6 +408,14 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **The assistant could fail part way through an answer when a reasoning level
+  was set on GPT-5.4 or newer models** (#2081), with "Cannot run the event loop
+  while another loop is running", and only sometimes. It happened on the
+  default web server (eventlet): the library the assistant talks to models
+  through ran a second internal loop on the same thread at the wrong moment.
+  Those steps now run on a thread of their own, so reasoning at Low, Medium and
+  High works on these models. Installs on the optional gthread web server were
+  not affected and are unchanged.
 - **The assistant on /trading could fail while /agent worked.** The chart
   panel had no model picker, so it always ran the default model. When that
   model's key had stopped working it answered "OpenAI did not accept the API

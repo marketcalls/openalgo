@@ -517,6 +517,12 @@ def _register_chatgpt_models() -> None:
         chatgpt_models.quieten_usage_warning()
     except Exception:
         logger.exception("Could not register the supplemental ChatGPT models")
+    # Under eventlet, LiteLLM's sync-to-async hops must run on a real thread or
+    # a streamed answer can fail part way (#2081). A no-op on gthread and the
+    # development server.
+    from services.agent import litellm_eventlet
+
+    litellm_eventlet.install()
 
 
 def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None) -> LiteLLM:
