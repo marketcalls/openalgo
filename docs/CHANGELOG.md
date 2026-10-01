@@ -199,6 +199,14 @@ by open and trigger-pending orders (unchanged from before).
 
 ### Fixed
 
+- **A service switched to gthread could not start after going back to an
+  older release.** The switched service file started OpenAlgo only through
+  `install/openalgo-gunicorn.sh`, which older releases do not have, so a
+  rollback without `install/switch-worker.sh --restore` first left the service
+  restarting in a loop. A service switched from now on starts OpenAlgo on
+  eventlet exactly as before the switch when the launcher is missing, and says
+  so in the service log. A service switched earlier gets this by running
+  `--restore` and switching again.
 - **A smart order could double or reverse a position when the broker did not
   answer the position check.** A smart order reads your open position from the
   broker, compares it with the position size you asked for, and places the
