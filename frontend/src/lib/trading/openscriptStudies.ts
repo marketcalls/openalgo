@@ -205,6 +205,12 @@ export interface ScriptAlertPayload {
   index: number
 }
 
+declare module 'openalgo-charts' {
+  interface ChartEventMap {
+    'openscript:alert': ScriptAlertPayload
+  }
+}
+
 /** The store key this host keeps its per-instance state under. */
 const HOST = 'openalgo:host'
 

@@ -3384,7 +3384,7 @@ export class TradingTerminal {
       'alert:expired',
       'alerts:restored',
       'alerts:checkpoint',
-    ]) {
+    ] as const) {
       this.offAlerts.push(chart.on(event, save))
     }
     let fireSequence = 0
