@@ -1,13 +1,27 @@
 """
 Broker postback (webhook) receivers for real-time order updates.
 
-Public POST routes at /postback/<broker> — brokers cannot authenticate with
-OpenAlgo sessions, so these are CSRF-exempt (see app.py) and validated per
-broker instead:
-- the <broker> in the URL must match the instance's active broker session
+Public POST routes at /postback/<broker>/<secret> — brokers cannot authenticate
+with OpenAlgo sessions, so these are CSRF-exempt (see app.py) and validated
+instead by:
+- an installation secret carried in the URL path and compared against
+  POSTBACK_SECRET. Every supported broker lets the user register an arbitrary
+  postback URL, so this authenticates all of them without broker-side support.
+  Fails closed: with POSTBACK_SECRET unset the route accepts nothing.
+- the <broker> in the URL matching the instance's active broker session
   (single-user-per-deployment, per CLAUDE.md), and
-- Zerodha payloads carry a SHA-256 checksum (order_id + order_timestamp +
-  api_secret) that is verified against BROKER_API_SECRET.
+- for Zerodha, the SHA-256 checksum (order_id + order_timestamp + api_secret)
+  verified against BROKER_API_SECRET, as a second factor.
+
+Matching a database session is NOT proof that a request came from the broker,
+which is why the URL secret is required: only Zerodha signs its payloads, so
+without it any internet client that guesses the broker name could publish
+arbitrary order updates into the user's real-time feed.
+
+Every non-crash outcome returns the same 200 body. A caller must not be able to
+distinguish accepted from rejected, or it can probe which broker is active and
+whether it has guessed the secret; real reasons are logged server-side. It also
+keeps brokers from retrying on a 4xx.
 
 Each route parses the broker payload, normalizes it into OpenAlgo's common
 order-update format (reusing the status/pricetype/product tables from the
@@ -24,6 +38,7 @@ clients may see duplicate updates for the same transition — deduplicate on
 """
 
 import hashlib
+import hmac
 import os
 
 from flask import Blueprint, jsonify, request
@@ -301,37 +316,75 @@ def _validate_zerodha_checksum(data: dict) -> bool:
     expected = hashlib.sha256(
         f"{order_id}{order_timestamp}{api_secret}".encode()
     ).hexdigest()
-    return checksum == expected
+    return hmac.compare_digest(str(checksum), expected)
+
+
+def _validate_postback_secret(token: str) -> bool:
+    """Check the installation secret carried in the postback URL path.
+
+    Only Zerodha signs its postbacks. For every other broker, matching an
+    active database session proves nothing about the caller, so without a
+    shared secret any internet client that can guess the broker name can
+    publish arbitrary order updates into the user's real-time feed.
+
+    Every supported broker lets the user register an arbitrary postback URL,
+    so a path segment works for all of them without broker-side support.
+
+    Fails closed: with POSTBACK_SECRET unset the route accepts nothing, so an
+    installation that has not configured it is not silently left open.
+    """
+    secret = os.getenv("POSTBACK_SECRET", "").strip()
+    if not secret:
+        logger.error(
+            "Postback rejected — POSTBACK_SECRET is not set. Generate one with "
+            'python -c "import secrets; print(secrets.token_urlsafe(32))" and '
+            "register the postback URL as https://<host>/postback/<broker>/<secret>"
+        )
+        return False
+    return hmac.compare_digest(token or "", secret)
 
 
 @postback_bp.route("/<broker>", methods=["POST"])
-def broker_postback(broker: str):
+@postback_bp.route("/<broker>/<token>", methods=["POST"])
+def broker_postback(broker: str, token: str = ""):
+    # Uniform response for every non-crash outcome. A caller must not be able to
+    # tell an accepted postback from a rejected one: differing status codes let
+    # an unauthenticated client probe which broker is active and whether it has
+    # guessed the secret. Real reasons are logged server-side.
+    ack = (jsonify({"status": "success"}), 200)
+
     broker = broker.lower()
     if broker not in SUPPORTED_BROKERS:
-        return jsonify({"status": "error", "message": f"Unsupported broker: {broker}"}), 404
+        logger.warning(f"Postback rejected — unsupported broker: {broker}")
+        return ack
+
+    if not _validate_postback_secret(token):
+        logger.warning(f"Postback for '{broker}' rejected — bad or missing URL secret")
+        return ack
 
     session_obj = _get_active_session()
     if session_obj is None or (session_obj.broker or "").lower() != broker:
-        # Don't leak which broker IS active to unauthenticated callers.
         logger.warning(f"Postback for '{broker}' rejected — no matching active broker session")
-        return jsonify({"status": "error", "message": "No matching broker session"}), 403
+        return ack
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         # Some brokers POST form-encoded payloads with a JSON body field.
         data = request.form.to_dict() or None
     if not isinstance(data, dict) or not data:
-        return jsonify({"status": "error", "message": "Invalid payload"}), 400
+        logger.warning(f"Postback for '{broker}' rejected — invalid payload")
+        return ack
 
+    # Kept as a second factor on top of the URL secret, not a replacement.
     if broker == "zerodha" and not _validate_zerodha_checksum(data):
         logger.warning("Zerodha postback rejected — checksum validation failed")
-        return jsonify({"status": "error", "message": "Checksum validation failed"}), 403
+        return ack
 
     try:
         fields = _NORMALIZERS[broker](data)
     except Exception:
         logger.exception(f"Postback normalization failed for {broker}")
-        return jsonify({"status": "error", "message": "Payload normalization failed"}), 400
+        return ack
 
     if fields:
         _publish(session_obj.name, broker, fields)
@@ -340,4 +393,4 @@ def broker_postback(broker: str):
             f"status={fields.get('order_status')}"
         )
 
-    return jsonify({"status": "success"}), 200
+    return ack
