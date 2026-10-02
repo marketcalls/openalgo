@@ -18,6 +18,7 @@ import { useAuthStore } from '@/stores/authStore'
 const allBrokers = [
   { id: 'fivepaisa', name: '5 Paisa', authType: 'totp' },
   { id: 'fivepaisaxts', name: '5 Paisa (XTS)', authType: 'totp' },
+  { id: 'acagarwalxts', name: 'AC Agarwal (XTS)', authType: 'totp' },
   { id: 'aliceblue', name: 'Alice Blue', authType: 'totp' },
   { id: 'angel', name: 'Angel One', authType: 'totp' },
   { id: 'arrow', name: 'Arrow', authType: 'oauth' },
@@ -134,6 +135,7 @@ export default function BrokerSelect() {
     switch (selectedBroker) {
       case 'fivepaisa':
       case 'fivepaisaxts':
+      case 'acagarwalxts':
       case 'aliceblue':
       case 'angel':
       case 'mstock':
