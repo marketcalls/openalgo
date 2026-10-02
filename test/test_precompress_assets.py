@@ -192,3 +192,76 @@ def test_serving_negotiates_the_generated_variant(dist, monkeypatch):
     assert "Content-Encoding" not in plain.headers
     assert plain.headers["Vary"] == "Accept-Encoding"
     assert plain.get_data() == (dist / "assets" / "app-abc123.js").read_bytes()
+
+
+def test_equal_mtimes_are_resolved_by_content_not_assumed_current(dist):
+    """The ambiguous case, forced rather than raced.
+
+    Equal mtimes mean either "generated from this source moments ago" or "the
+    source was rewritten inside the same filesystem tick and this variant holds
+    the previous build's bytes". stat cannot tell those apart, so the variant is
+    read back and compared.
+
+    Several tests above reach this case by accident, because everything in them
+    happens inside one tick on a fast machine. On Windows, where file times move
+    on a ~15.6 ms clock, that was most runs, which is what made them flaky: the
+    old check read equal as current and left the superseded variant in place.
+    Here the timestamps are set by hand so the case is exercised on every run,
+    on every platform, whatever the clock does.
+    """
+    import os
+
+    source = dist / "assets" / "app-abc123.js"
+    variant = dist / "assets" / "app-abc123.js.gz"
+    ensure_precompressed_assets(dist)
+    assert variant.is_file()
+
+    superseded = variant.read_bytes()
+    source.write_bytes(b"const y = 2;\n" * 400)  # same length, different bytes
+    stamp = source.stat().st_mtime
+    os.utime(variant, (stamp, stamp))
+    assert variant.stat().st_mtime == source.stat().st_mtime, "the tie must be exact"
+
+    ensure_precompressed_assets(dist)
+
+    assert variant.read_bytes() != superseded, "the previous build's bytes were kept"
+    assert gzip.decompress(variant.read_bytes()) == source.read_bytes()
+
+
+def test_an_untouched_tree_with_equal_mtimes_is_still_skipped(dist):
+    """The other half of the tie: resolving it by content must not cause churn.
+
+    A variant that does hold its source has to stay put even when the two
+    timestamps match, or every boot on a coarse-clock filesystem would rewrite
+    the whole tree.
+    """
+    import os
+
+    source = dist / "assets" / "app-abc123.js"
+    variant = dist / "assets" / "app-abc123.js.gz"
+    ensure_precompressed_assets(dist)
+
+    stamp = source.stat().st_mtime
+    os.utime(variant, (stamp, stamp))
+    before = variant.stat().st_mtime_ns
+
+    ensure_precompressed_assets(dist)
+
+    assert variant.stat().st_mtime_ns == before, "a matching variant was rewritten"
+
+
+def test_a_corrupt_variant_is_replaced_rather_than_served(dist):
+    """A truncated variant must not survive the tie-break that reads it back."""
+    import os
+
+    source = dist / "assets" / "app-abc123.js"
+    variant = dist / "assets" / "app-abc123.js.gz"
+    ensure_precompressed_assets(dist)
+
+    variant.write_bytes(variant.read_bytes()[:20])  # not valid gzip any more
+    stamp = source.stat().st_mtime
+    os.utime(variant, (stamp, stamp))
+
+    ensure_precompressed_assets(dist)
+
+    assert gzip.decompress(variant.read_bytes()) == source.read_bytes()
