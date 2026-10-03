@@ -3,28 +3,14 @@ import json
 import os
 import re
 from collections import OrderedDict
-from functools import wraps
 
-from flask import Blueprint, current_app, jsonify, redirect, session, url_for
+from flask import Blueprint, current_app, jsonify, make_response, redirect, session, url_for
 
 from database.auth_db import get_api_key_for_tradingview
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
-
-
-def no_store_headers(f):
-    """Add no-store cache headers to credential-bearing responses."""
-
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        resp = f(*args, **kwargs)
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        return resp
-
-    return wrapper
 
 
 def parse_bru_file(filepath):
@@ -312,6 +298,19 @@ def index():
 
 @playground_bp.route("/api-key")
 @check_session_validity
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = make_response(f(*args, **kwargs))
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
+
+
 @no_store_headers
 def get_api_key():
     """Get the current user's API key"""
