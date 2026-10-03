@@ -3,9 +3,7 @@ Example blueprint showing how to use the WebSocket service layer
 for internal UI components without authentication overhead.
 """
 
-from functools import wraps
-
-from flask import Blueprint, current_app, jsonify, render_template, request, session
+from flask import Blueprint, current_app, jsonify, make_response, render_template, request, session
 from flask_socketio import emit, join_room, leave_room
 
 from extensions import socketio
@@ -28,20 +26,6 @@ from services.websocket_service import (
 )
 from utils.logging import get_logger
 from utils.session import check_session_validity
-
-
-def no_store_headers(f):
-    """Add no-store cache headers to credential-bearing responses."""
-
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        resp = f(*args, **kwargs)
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        return resp
-
-    return wrapper
-
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -179,6 +163,19 @@ def api_websocket_market_data():
 
 
 @websocket_bp.route("/api/websocket/apikey", methods=["GET"])
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = make_response(f(*args, **kwargs))
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
+
+
 @no_store_headers
 def api_get_websocket_apikey():
     """Get API key for WebSocket authentication"""
