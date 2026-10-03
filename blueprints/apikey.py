@@ -1,10 +1,9 @@
 import os
 import secrets
-from functools import wraps
 from pathlib import Path
 
 from argon2 import PasswordHasher
-from flask import (
+from flask import (, make_response
     Blueprint,
     jsonify,
     redirect,
@@ -43,16 +42,14 @@ def generate_api_key():
     return secrets.token_hex(32)
 
 
+@api_key_bp.route("/apikey", methods=["GET", "POST"])
+@check_session_validity
 def no_store_headers(f):
-    """Add no-store cache headers to credential-bearing responses.
-
-    Prevents browser history, shared proxies, and debugging caches from
-    retaining decrypted/newly generated API keys.
-    """
+    """Add no-store cache headers to credential-bearing responses."""
 
     @wraps(f)
     def wrapper(*args, **kwargs):
-        resp = f(*args, **kwargs)
+        resp = make_response(f(*args, **kwargs))
         resp.headers["Cache-Control"] = "no-store, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         return resp
@@ -60,8 +57,6 @@ def no_store_headers(f):
     return wrapper
 
 
-@api_key_bp.route("/apikey", methods=["GET", "POST"])
-@check_session_validity
 @no_store_headers
 def manage_api_key():
     if request.method == "GET":
