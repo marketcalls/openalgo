@@ -3,7 +3,7 @@ import secrets
 from pathlib import Path
 
 from argon2 import PasswordHasher
-from flask import (
+from flask import (, make_response
     Blueprint,
     jsonify,
     redirect,
@@ -44,6 +44,20 @@ def generate_api_key():
 
 @api_key_bp.route("/apikey", methods=["GET", "POST"])
 @check_session_validity
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = make_response(f(*args, **kwargs))
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
+
+
+@no_store_headers
 def manage_api_key():
     if request.method == "GET":
         login_username = session["user"]
