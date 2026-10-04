@@ -3,7 +3,7 @@ import secrets
 from pathlib import Path
 
 from argon2 import PasswordHasher
-from flask import (, make_response
+from flask import (
     Blueprint,
     jsonify,
     redirect,
@@ -12,6 +12,7 @@ from flask import (, make_response
     send_file,
     session,
     url_for,
+    make_response,
 )
 
 from database.auth_db import (
