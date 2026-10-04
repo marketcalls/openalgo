@@ -1,10 +1,11 @@
 import glob
+from functools import wraps
 import json
 import os
 import re
 from collections import OrderedDict
 
-from flask import Blueprint, current_app, jsonify, make_response, redirect, session, url_for
+from flask import Blueprint, current_app, jsonify, redirect, session, url_for, make_response
 
 from database.auth_db import get_api_key_for_tradingview
 from utils.logging import get_logger
@@ -284,6 +285,19 @@ def load_bruno_endpoints(broker_type="IN_stock"):
 playground_bp = Blueprint("playground", __name__, url_prefix="/playground")
 
 
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = make_response(f(*args, **kwargs))
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
+
+
 @playground_bp.route("/")
 def index():
     """Redirect the legacy trailing-slash URL to the React-served playground page.
@@ -298,19 +312,6 @@ def index():
 
 @playground_bp.route("/api-key")
 @check_session_validity
-def no_store_headers(f):
-    """Add no-store cache headers to credential-bearing responses."""
-
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        resp = make_response(f(*args, **kwargs))
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        return resp
-
-    return wrapper
-
-
 @no_store_headers
 def get_api_key():
     """Get the current user's API key"""
