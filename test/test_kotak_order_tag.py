@@ -35,7 +35,7 @@ def test_default_tag_is_openalgo_prefix_plus_uuid():
     tag = td.transform_data(order(), "1")["ig"]
     prefix, _, rest = tag.partition("-")
     assert prefix == "openalgo"
-    uuid.UUID(rest)                       # raises if not a uuid
+    assert uuid.UUID(rest).version == 4   # raises if not a uuid
     assert len(tag) <= 52
 
 
