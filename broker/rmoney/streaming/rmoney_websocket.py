@@ -545,6 +545,35 @@ class RMoneyWebSocketClient:
             self.logger.error(f"[SUBSCRIBE] Exception: {e}")
             raise
 
+    def subscribe_batch(
+        self,
+        batch_id: str,
+        mode: int,
+        subscriptions: List[tuple[str, List[Dict]]],
+    ) -> None:
+        """Send one HTTP request while retaining each subscription's identity."""
+        instruments = [
+            instrument
+            for _correlation_id, items in subscriptions
+            for instrument in items
+        ]
+        try:
+            self.subscribe(batch_id, mode, instruments)
+        except Exception:
+            self.subscriptions.pop(batch_id, None)
+            raise
+
+        self.subscriptions.pop(batch_id, None)
+        xts_message_code = self.MODE_TO_XTS_CODE.get(
+            mode, self.XTS_MESSAGE_CODES["TOUCHLINE"]
+        )
+        for correlation_id, items in subscriptions:
+            self.subscriptions[correlation_id] = {
+                "mode": mode,
+                "instruments": items,
+                "xts_message_code": xts_message_code,
+            }
+
     def unsubscribe(self, correlation_id: str, mode: int, instruments: List[Dict]) -> bool:
         """
         Unsubscribe from market data using XTS HTTP API.
