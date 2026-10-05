@@ -187,6 +187,9 @@ def place_order_api(data, auth):
         "X-MACAddress": "MAC_ADDRESS",
         "X-PrivateKey": newdata["apikey"],
     }
+    # Angel exposes ordertag in the order book, so it can be used to recover
+    # an order when the placement response is lost or cannot be decoded.
+    ordertag = "openalgo"
     payload = json.dumps(
         {
             "variety": newdata.get("variety", "NORMAL"),
@@ -202,6 +205,7 @@ def place_order_api(data, auth):
             "squareoff": newdata.get("squareoff", "0"),
             "stoploss": newdata.get("stoploss", "0"),
             "quantity": newdata["quantity"],
+            "ordertag": ordertag,
         }
     )
 
@@ -221,8 +225,56 @@ def place_order_api(data, auth):
     # as the rest of the codebase expects .status instead of .status_code
     response.status = response.status_code
 
-    # Parse the JSON response
-    response_data = response.json()
+    # An empty or invalid body does not mean the order was rejected. Never
+    # retry this POST; check the order book using the tag sent with the order.
+    try:
+        response_data = response.json()
+        if not isinstance(response_data, dict):
+            raise ValueError("Order response is not a JSON object")
+    except (ValueError, json.JSONDecodeError):
+        response_data = None
+
+    if response_data is None:
+        logger.warning(
+            "Ambiguous Angel order response (HTTP %s); reconciling ordertag %s",
+            response.status_code,
+            ordertag,
+        )
+        order_book = get_order_book(auth)
+        orders = order_book.get("data") if isinstance(order_book, dict) else None
+        expected = {
+            "tradingsymbol": newdata["tradingsymbol"],
+            "symboltoken": newdata["symboltoken"],
+            "exchange": newdata["exchange"],
+            "transactiontype": newdata["transactiontype"],
+            "quantity": newdata["quantity"],
+        }
+        matching_orders = [
+            order
+            for order in orders or []
+            if isinstance(order, dict)
+            and order.get("ordertag") == ordertag
+            and all(str(order.get(key, "")) == str(value) for key, value in expected.items())
+        ]
+        matched_order = matching_orders[0] if len(matching_orders) == 1 else None
+        if matched_order:
+            response_data = {
+                "status": True,
+                "message": "Order found in order book after ambiguous placement response",
+                "data": {
+                    "orderid": matched_order.get("orderid"),
+                    "uniqueorderid": matched_order.get("uniqueorderid"),
+                },
+            }
+        else:
+            response_data = {
+                "status": "unknown",
+                "message": (
+                    "AngelOne returned an empty or invalid order response and no matching "
+                    "ordertag was found in the order book. Check order status before retrying."
+                ),
+                "ordertag": ordertag,
+            }
 
     # Use .get() so a malformed / non-conforming response (gateway error
     # envelope, partial response, network blip) returns a clean
@@ -232,7 +284,8 @@ def place_order_api(data, auth):
     # existing None-orderid error path. See issue #846 for the original
     # KeyError trace this hardening eliminates.
     if response_data.get("status") is True:
-        orderid = response_data.get("data", {}).get("orderid")
+        order_data = response_data.get("data") or {}
+        orderid = order_data.get("orderid") if isinstance(order_data, dict) else None
     else:
         orderid = None
     return response, response_data, orderid
