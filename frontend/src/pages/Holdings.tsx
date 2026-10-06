@@ -10,7 +10,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { tradingApi } from '@/api/trading'
+import { type StrategyAttribution, tradingApi, UNATTRIBUTED } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -28,6 +28,7 @@ import { PlaceOrderDialog } from '@/components/trading'
 import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
+import { narrowHoldingsToStrategy } from '@/lib/trading/strategyAttribution'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -59,6 +60,13 @@ export default function Holdings() {
   const [showStaleWarning, setShowStaleWarning] = useState(false)
   const [orderIntent, setOrderIntent] = useState<HoldingOrderIntent | null>(null)
 
+  // Strategy split of the holdings (POST /pnl/attribution). `all` leaves the page
+  // exactly as the broker reports it.
+  const [strategyFilter, setStrategyFilter] = useState<string>('all')
+  const [attribution, setAttribution] = useState<StrategyAttribution | null>(null)
+  const strategyFilterRef = useRef('all')
+  strategyFilterRef.current = strategyFilter
+
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
   const lastFetchRef = useRef<number>(Date.now())
@@ -77,8 +85,21 @@ export default function Holdings() {
     pauseWhenHidden: true,
   })
 
+  // The strategy being shown. Without a split to read, everything is shown.
+  const activeStrategy = attribution ? strategyFilter : 'all'
+
+  // With a strategy selected, the table and totals work on that strategy's share
+  // of each holding instead of the broker's.
+  const scopedHoldings = useMemo(
+    () =>
+      activeStrategy === 'all'
+        ? enhancedHoldings
+        : narrowHoldingsToStrategy(enhancedHoldings, attribution, activeStrategy),
+    [enhancedHoldings, attribution, activeStrategy]
+  )
+
   // Calculate enhanced stats based on real-time data
-  const enhancedStats = useMemo(() => {
+  const liveStats = useMemo(() => {
     if (!stats) return stats
 
     // Check if any holding has live data
@@ -92,6 +113,22 @@ export default function Holdings() {
     // Recalculate stats with real-time data
     return calculateLiveStats(enhancedHoldings, stats)
   }, [stats, enhancedHoldings])
+
+  const fetchAttribution = useCallback(async () => {
+    if (!apiKey) return
+    try {
+      const response = await tradingApi.getStrategyAttribution(apiKey, 'holdings')
+      setAttribution(response.status === 'success' && response.data ? response.data : null)
+    } catch {
+      // The strategy view is optional: without it the page is unchanged.
+      setAttribution(null)
+    }
+  }, [apiKey])
+
+  // Load the split once so the strategy list is ready
+  useEffect(() => {
+    void fetchAttribution()
+  }, [fetchAttribution])
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
@@ -108,6 +145,7 @@ export default function Holdings() {
           setHoldings(response.data.holdings || [])
           setStats(response.data.statistics)
           setError(null)
+          if (strategyFilterRef.current !== 'all') void fetchAttribution()
         } else {
           setError(response.message || 'Failed to fetch holdings')
         }
@@ -118,7 +156,7 @@ export default function Holdings() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, fetchAttribution]
   )
 
   // Initial fetch and visibility-aware polling
@@ -165,8 +203,29 @@ export default function Holdings() {
     return () => unsubscribe()
   }, [fetchHoldings])
 
+  // The totals shown: the broker's own (kept live), or, with a strategy selected,
+  // those of that strategy's rows, because the broker's cover the whole portfolio.
+  const enhancedStats = useMemo(() => {
+    if (activeStrategy === 'all') return liveStats
+    const invested = scopedHoldings.reduce(
+      (sum, h) => sum + (h.quantity || 0) * (h.average_price || 0),
+      0
+    )
+    const current = scopedHoldings.reduce(
+      (sum, h) => sum + (h.quantity || 0) * (h.ltp ?? h.average_price ?? 0),
+      0
+    )
+    const pnl = current - invested
+    return {
+      totalinvvalue: invested,
+      totalholdingvalue: current,
+      totalprofitandloss: pnl,
+      totalpnlpercentage: invested > 0 ? (pnl / invested) * 100 : 0,
+    } satisfies HoldingsStats
+  }, [activeStrategy, liveStats, scopedHoldings])
+
   const exportToCSV = () => {
-    if (enhancedHoldings.length === 0) {
+    if (scopedHoldings.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -182,7 +241,7 @@ export default function Holdings() {
         'P&L',
         'P&L %',
       ]
-      const rows = enhancedHoldings.map((h) => [
+      const rows = scopedHoldings.map((h) => [
         sanitizeCSV(h.symbol),
         sanitizeCSV(h.exchange),
         sanitizeCSV(h.quantity),
@@ -265,6 +324,25 @@ export default function Holdings() {
         </div>
       </div>
 
+      {/* Strategy filter: only when the strategy book has something to filter by */}
+      {attribution && attribution.strategies.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">Strategy:</span>
+          {['all', ...attribution.strategies, UNATTRIBUTED].map((name) => (
+            <Button
+              key={name}
+              variant={activeStrategy === name ? 'default' : 'outline'}
+              size="sm"
+              className="rounded-full"
+              aria-pressed={activeStrategy === name}
+              onClick={() => setStrategyFilter(name)}
+            >
+              {name === 'all' ? 'All' : name}
+            </Button>
+          ))}
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
@@ -341,6 +419,12 @@ export default function Holdings() {
               title="No holdings found"
               description="Connect a broker to start tracking your portfolio."
             />
+          ) : scopedHoldings.length === 0 ? (
+            <EmptyState
+              icon={Wallet}
+              title="No holdings for this strategy"
+              description="None of your holdings are owned by the selected strategy."
+            />
           ) : (
             <div className="overflow-x-auto">
               <Table>
@@ -358,7 +442,7 @@ export default function Holdings() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {enhancedHoldings.map((holding, index) => (
+                  {scopedHoldings.map((holding, index) => (
                     <TableRow key={`${holding.symbol}-${holding.exchange}-${index}`}>
                       <TableCell className="font-medium">{holding.symbol}</TableCell>
                       <TableCell>
