@@ -29,6 +29,50 @@ export interface DepthLevel {
   quantity: number
 }
 
+/** One strategy's share of a broker position or holding. `strategy` is "Unattributed" for the remainder no leg explains. */
+export interface StrategySlice {
+  strategy: string
+  quantity: number
+  average_price: number
+  /** Realized today by this strategy on this contract (positions only); a flat slice carries just this. */
+  today_realized_pnl: number
+  attributed: boolean
+}
+
+/** A broker row (position or holding) split into strategy slices (services/strategy_attribution.py). */
+export interface AttributedRow {
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number
+  average_price: number
+  slices: StrategySlice[]
+  mismatch: boolean
+  mismatch_reason: string | null
+  /** For a flat row only: the one strategy the book still shows holding it, owner of any unexplained realized P&L. */
+  leftover_owner: string | null
+  /** Positions with m2m requested only: today's M2M (services/position_m2m.py). */
+  m2m_available?: boolean
+  m2m_reason?: string | null
+  /** M2M independent of the live price; m2m = m2m_fixed + quantity * LTP. */
+  m2m_fixed?: number | null
+  m2m?: number | null
+  overnight_quantity?: number
+  prev_close?: number | null
+  /** The broker's own P&L on this carried row is already the day's M2M (Kotak). */
+  pnl_equals_m2m?: boolean
+}
+
+export interface StrategyAttribution {
+  kind: 'positions' | 'holdings'
+  rows: AttributedRow[]
+  strategies: string[]
+  /** Set when M2M was requested but today's trades or previous closes could not be fetched. */
+  m2m_error?: string | null
+}
+
+export const UNATTRIBUTED = 'Unattributed'
+
 export interface DepthData {
   asks: DepthLevel[]
   bids: DepthLevel[]
@@ -176,6 +220,26 @@ export const tradingApi = {
   getTrades: async (apiKey: string): Promise<ApiResponse<Trade[]>> => {
     const response = await apiClient.post<ApiResponse<Trade[]>>('/tradebook', {
       apikey: apiKey,
+    })
+    return response.data
+  },
+
+  /**
+   * Live positions or holdings split into per-strategy slices (POST /pnl/attribution,
+   * services/strategy_attribution.py). Whatever no strategy leg explains comes
+   * back as an "Unattributed" slice. Fails (503) when the strategy book is
+   * unavailable - callers should treat that as "no strategy view", not "all
+   * unattributed".
+   */
+  getStrategyAttribution: async (
+    apiKey: string,
+    kind: 'positions' | 'holdings',
+    m2m = false
+  ): Promise<ApiResponse<StrategyAttribution>> => {
+    const response = await apiClient.post<ApiResponse<StrategyAttribution>>('/pnl/attribution', {
+      apikey: apiKey,
+      kind,
+      m2m,
     })
     return response.data
   },
