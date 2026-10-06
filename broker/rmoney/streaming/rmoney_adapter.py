@@ -592,7 +592,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _start_batch_timer_locked(self) -> None:
         if self.batch_timer is not None and self.batch_timer.is_alive():
             return
-        self.batch_timer = _real_threading.Timer(
+        self.batch_timer = threading.Timer(
             self.BATCH_DELAY, self._process_batch_subscriptions
         )
         self.batch_timer.daemon = True

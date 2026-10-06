@@ -219,11 +219,10 @@ def place_order_api(data, auth):
     place_order_url = (
         "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder"
     )
-    transport_error = None
     try:
         response = client.post(place_order_url, headers=headers, content=payload)
     except httpx.TransportError as exc:
-        transport_error = exc
+        logger.warning("Angel order placement transport error: %s", exc)
         response = httpx.Response(
             502,
             request=httpx.Request("POST", place_order_url),

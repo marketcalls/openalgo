@@ -447,12 +447,6 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             queued = self.subscription_queue
             self.subscription_queue = []
-            token_list = []
-            exchange_tokens = {}
-            for item in queued:
-                exchange_tokens.setdefault(item["brexchange"], []).append(item["token"])
-            for exchange_type, tokens in exchange_tokens.items():
-                token_list.append({"exchangeType": exchange_type, "tokens": tokens})
 
         try:
             with self._wire_operation_lock:

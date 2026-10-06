@@ -9,8 +9,13 @@ class FakeWebSocketClient:
     def __init__(self):
         self.calls = []
 
-    def subscribe_batch(self, batch_id, mode, subscriptions, **_kwargs):
-        instruments = [item for _, items in subscriptions for item in items]
+    def subscribe_batch(self, batch_id, mode, subscriptions, should_subscribe=None):
+        instruments = [
+            item
+            for correlation_id, items in subscriptions
+            if should_subscribe is None or should_subscribe(correlation_id)
+            for item in items
+        ]
         self.calls.append((batch_id, mode, subscriptions, instruments))
 
 
@@ -60,7 +65,7 @@ def test_batch_timer_keeps_a_fixed_coalescing_window(monkeypatch):
         def is_alive(self):
             return self.alive
 
-    monkeypatch.setattr(adapter_module._real_threading, "Timer", FakeTimer)
+    monkeypatch.setattr(adapter_module.threading, "Timer", FakeTimer)
     adapter = RMoneyWebSocketAdapter()
 
     with adapter.lock:
@@ -84,10 +89,10 @@ def test_failed_batch_is_requeued_for_retry(monkeypatch):
             return self.alive
 
     class FailingClient:
-        def subscribe_batch(self, *_args):
+        def subscribe_batch(self, *_args, should_subscribe=None):
             raise OSError("temporary request failure")
 
-    monkeypatch.setattr(adapter_module._real_threading, "Timer", FakeTimer)
+    monkeypatch.setattr(adapter_module.threading, "Timer", FakeTimer)
     adapter = RMoneyWebSocketAdapter()
     adapter.connected = True
     adapter.ws_client = FailingClient()
@@ -201,7 +206,7 @@ def test_websocket_client_caps_each_request_at_fifty_instruments():
     assert set(client.subscriptions) == {correlation_id for correlation_id, _ in subscriptions}
 
 
-def test_duplicate_batch_retries_individually_without_adapter_wide_lock():
+def test_duplicate_batch_retries_individually():
     class FakeResponse:
         def __init__(self, duplicate):
             self.status_code = 400 if duplicate else 200

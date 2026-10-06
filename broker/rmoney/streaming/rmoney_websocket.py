@@ -17,7 +17,8 @@ Exchange Segments (Numeric):
 
 import json
 import struct
-from typing import Dict, List
+import threading
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 import requests
@@ -27,7 +28,10 @@ from broker.rmoney.baseurl import MARKET_DATA_BASE_URL
 from utils.logging import get_logger
 from utils import runtime as _runtime
 
-_real_threading = _runtime.original("threading")
+if _runtime.is_monkey_patched("thread"):
+    from eventlet.semaphore import Semaphore as _SubscriptionLock
+else:
+    _SubscriptionLock = threading.Lock
 
 
 class RMoneyWebSocketClient:
@@ -139,7 +143,7 @@ class RMoneyWebSocketClient:
 
         # Reusable HTTP session for connection pooling (avoids FD churn)
         self._http_session = requests.Session()
-        self._subscription_http_lock = _real_threading.Lock()
+        self._subscription_http_lock = _SubscriptionLock()
 
         # Initialize Socket.IO client
         self._setup_socketio()
@@ -572,7 +576,7 @@ class RMoneyWebSocketClient:
         mode: int,
         subscriptions: List[tuple[str, List[Dict]]],
         *,
-        should_subscribe=None,
+        should_subscribe: Optional[Callable[[str], bool]] = None,
     ) -> None:
         """Send capped requests while retaining each instrument's identity."""
         xts_message_code = self.MODE_TO_XTS_CODE.get(
