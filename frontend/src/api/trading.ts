@@ -57,7 +57,7 @@ export interface AttributedRow {
   /** M2M independent of the live price; m2m = m2m_fixed + quantity * LTP. */
   m2m_fixed?: number | null
   m2m?: number | null
-  overnight_quantity?: number
+  overnight_quantity?: number | null
   prev_close?: number | null
   /** The broker's own P&L on this carried row is already the day's M2M (Kotak). */
   pnl_equals_m2m?: boolean

@@ -141,7 +141,7 @@ m2m = (sell value - buy value, today's fills)
       - overnight quantity x previous close
 ```
 
-It is computed from today's tradebook and the quote's `prev_close`, so it works for any broker that provides both. It is returned only for NSE, BSE, NFO and BFO rows. `m2m_available` is false, with a reason in `m2m_reason`, rather than the figure being guessed, when: the exchange is not one of those; a carried position has no previous close; an open position has no live price; or one of the row's fills has no usable price or quantity, or a fill names no symbol, exchange or product and so cannot be placed. When today's trades or the previous closes cannot be fetched at all, every row is unavailable, `data.m2m_error` says why, and the M2M fields are null.
+It is computed from today's tradebook and the quote's `prev_close`, so it works for any broker that provides both. It is returned only for NSE, BSE, NFO and BFO rows. `m2m_available` is false, with a reason in `m2m_reason`, rather than the figure being guessed, when: the exchange is not one of those; a carried position has no previous close; an open position has no live price; or one of the row's fills has no usable price or quantity, or a fill names no symbol, exchange or product and so cannot be placed (that last case makes M2M unavailable for every row of the request, because the fill cannot be assigned to any one position). When today's trades or the previous closes cannot be fetched at all, every row is unavailable, `data.m2m_error` says why, and the M2M fields are null.
 
 ## Errors
 
