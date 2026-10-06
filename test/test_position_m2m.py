@@ -133,3 +133,28 @@ def test_string_numbers_from_a_broker_are_accepted():
         {},
     )
     assert result["m2m"] == 393.25
+
+
+def test_a_fill_with_no_usable_price_makes_the_row_unavailable_not_wrong():
+    for bad_price in (None, "", "n/a", 0, -1):
+        result = _one(
+            [_pos("P", 0, 0.05)],
+            [_trade("P", "SELL", 65, 13.95), _trade("P", "BUY", 65, bad_price)],
+            {},
+        )
+        assert not result["available"], bad_price
+        assert "usable price" in result["reason"]
+        assert result["m2m"] is None
+
+
+def test_a_fill_with_no_usable_quantity_makes_the_row_unavailable():
+    result = _one([_pos("P", 0, 0.05)], [_trade("P", "BUY", None, 10.0)], {})
+    assert not result["available"]
+
+
+def test_an_unusable_fill_only_spoils_its_own_row():
+    positions = [_pos("P", 0, 0.05, "MIS"), _pos("P", 0, 0.05, "NRML")]
+    trades = [_trade("P", "BUY", 65, "n/a", "MIS"), _trade("P", "SELL", 195, 0.25, "NRML")]
+    results = compute_m2m(positions, trades, {("P", "NFO"): 22.7})
+    assert not results[("P", "NFO", "MIS")]["available"]
+    assert results[("P", "NFO", "NRML")]["available"]

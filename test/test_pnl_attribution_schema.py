@@ -45,3 +45,11 @@ def test_the_namespace_is_mounted_on_the_pnl_path():
     mounted = {ns.name: api.get_ns_path(ns) for ns in api.namespaces}
     assert mounted.get("pnl_attribution") == "/pnl"
     assert mounted.get("pnl") == "/pnl"  # the existing P&L namespace is untouched
+
+
+def test_a_body_that_is_not_an_object_is_a_validation_error():
+    # The endpoint parses silently and loads {} for an unreadable body, so the
+    # schema answers 400 instead of the handler failing with a 500.
+    for body in ({}, [], "m2m", None):
+        with pytest.raises(ValidationError):
+            PnlAttributionSchema().load(body or {})

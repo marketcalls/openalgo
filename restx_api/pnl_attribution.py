@@ -28,7 +28,8 @@ class PnlAttribution(Resource):
         """Live positions or holdings split by strategy, with an Unattributed
         remainder. With m2m, each position also carries today's M2M."""
         try:
-            data = pnl_attribution_schema.load(request.json)
+            # Parsed silently so a malformed body is a 400 from the schema, not a 500.
+            data = pnl_attribution_schema.load(request.get_json(silent=True) or {})
 
             success, response_data, status_code = get_pnl_attribution(
                 api_key=data["apikey"], kind=data["kind"], include_m2m=data["m2m"]

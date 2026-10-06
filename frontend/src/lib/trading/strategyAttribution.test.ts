@@ -219,7 +219,7 @@ describe('groupByStrategy in M2M mode', () => {
   it('splits an open row between its strategies by quantity and keeps the total', () => {
     const groups = groupByStrategy(
       [pos({ quantity: -150, pnl: 900 })],
-      attribution([{ slices: [slice('A', -100, 100), slice('B', -50, 100)] }]),
+      attribution([{ m2m_available: true, slices: [slice('A', -100, 100), slice('B', -50, 100)] }]),
       'm2m'
     )
     expect(groups.A[0].pnl).toBeCloseTo(600)
@@ -235,6 +235,61 @@ describe('groupByStrategy in M2M mode', () => {
     )
     expect(Object.keys(groups)).toEqual(['Unattributed'])
     expect(groups.Unattributed[0].pnl).toBe(50)
+  })
+})
+
+describe('groupByStrategy edge cases', () => {
+  it('copes with a strategy named like a built-in object property', () => {
+    const groups = groupByStrategy(
+      [pos({ quantity: -150, pnl: 1500 })],
+      attribution([{ slices: [slice('constructor', -100, 100), slice('toString', -50, 100)] }])
+    )
+    expect(Object.keys(groups).sort()).toEqual(['constructor', 'toString'])
+    expect(groups.constructor).toHaveLength(1)
+  })
+
+  it('keeps a row M2M could not be computed for whole, with the broker figure and percentage', () => {
+    const groups = groupByStrategy(
+      [pos({ quantity: -150, pnl: 900, pnlpercent: 6 })],
+      attribution([
+        { m2m_available: false, slices: [slice('A', -100, 100), slice('B', -50, 100)] },
+      ]),
+      'm2m'
+    )
+    // Not divided by quantity: it is the broker's lifetime P&L, not today's M2M.
+    expect(Object.keys(groups)).toEqual(['Unattributed'])
+    expect(groups.Unattributed[0].pnl).toBe(900)
+    expect(groups.Unattributed[0].pnlpercent).toBe(6)
+    expect(groups.Unattributed[0].quantity).toBe(-150)
+  })
+
+  it('keeps a fallback row under its one strategy when that strategy owns all of it', () => {
+    const groups = groupByStrategy(
+      [pos({ quantity: -150, pnl: 900 })],
+      attribution([{ m2m_available: false, slices: [slice('A', -150, 100)] }]),
+      'm2m'
+    )
+    expect(Object.keys(groups)).toEqual(['A'])
+  })
+
+  it('lets a whole-position row be closed and a part of one not', () => {
+    const whole = groupByStrategy(
+      [pos({ quantity: -150, pnl: 1500 })],
+      attribution([{ slices: [slice('A', -150, 100)] }])
+    )
+    expect(whole.A[0].sliced).toBe(false)
+
+    const split = groupByStrategy(
+      [pos({ quantity: -150, pnl: 1500 })],
+      attribution([{ slices: [slice('A', -100, 100), slice('B', -50, 100)] }])
+    )
+    expect(split.A[0].sliced).toBe(true)
+    expect(split.B[0].sliced).toBe(true)
+  })
+
+  it('does not mark a fully Unattributed row as a part of a position', () => {
+    const groups = groupByStrategy([pos({ quantity: -150, pnl: 100 })], null)
+    expect(groups.Unattributed[0].sliced).toBeFalsy()
   })
 })
 

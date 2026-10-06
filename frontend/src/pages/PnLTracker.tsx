@@ -1,5 +1,6 @@
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -63,6 +64,8 @@ interface PnLData {
   max_drawdown: number
   pnl_series: PnLDataPoint[]
   drawdown_series: PnLDataPoint[]
+  /** The curve the server actually built: the broker's P&L, M2M, or the built-in curve it falls back to. */
+  basis?: 'pnl' | 'm2m' | 'legacy'
 }
 
 export default function PnLTracker() {
@@ -86,7 +89,15 @@ export default function PnLTracker() {
   })
   const basisRef = useRef<'pnl' | 'm2m'>(m2mBasis ? 'm2m' : 'pnl')
   basisRef.current = m2mBasis ? 'm2m' : 'pnl'
-  const basisLabel = m2mBasis ? 'M2M' : 'P&L'
+  // What the server actually delivered. It can differ from what was asked for: when
+  // M2M cannot be worked out exactly (a commodity position, a missing price) the
+  // built-in curve comes back, and the page must not title that "M2M".
+  const [deliveredBasis, setDeliveredBasis] = useState<'pnl' | 'm2m' | 'legacy' | null>(null)
+  const basisLabel = (deliveredBasis ? deliveredBasis === 'm2m' : m2mBasis) ? 'M2M' : 'P&L'
+  const m2mNotDelivered = m2mBasis && deliveredBasis !== null && deliveredBasis !== 'm2m'
+  // Only the newest request may update the page: switching quickly can leave an
+  // older response arriving last.
+  const loadSeq = useRef(0)
   const [metrics, setMetrics] = useState({
     currentMtm: 0,
     maxMtm: 0,
@@ -301,6 +312,7 @@ export default function PnLTracker() {
 
   // Load PnL data
   const loadPnLData = useCallback(async () => {
+    const seq = ++loadSeq.current
     setIsLoading(true)
     try {
       const csrfToken = await fetchCSRFToken()
@@ -318,9 +330,11 @@ export default function PnLTracker() {
       if (!response.ok) throw new Error('Failed to fetch PnL data')
 
       const result = await response.json()
+      if (seq !== loadSeq.current) return
 
       if (result.status === 'success') {
         const data: PnLData = result.data
+        setDeliveredBasis(data.basis ?? null)
 
         // Update metrics
         setMetrics({
@@ -370,9 +384,10 @@ export default function PnLTracker() {
         showToast.error(result.message || 'Failed to load PnL data', 'positions')
       }
     } catch (_error) {
+      if (seq !== loadSeq.current) return
       showToast.error('Failed to load PnL data. Please try again.', 'positions')
     } finally {
-      setIsLoading(false)
+      if (seq === loadSeq.current) setIsLoading(false)
     }
   }, [])
 
@@ -543,6 +558,16 @@ export default function PnLTracker() {
           </Button>
         </div>
       </div>
+
+      {m2mNotDelivered && (
+        <Alert variant="default" className="mb-6 bg-amber-500/10 border-amber-500/30">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-700 dark:text-amber-400">
+            Today's M2M could not be worked out for your positions (for example a commodity
+            position, or a price that is not available), so the built-in curve is shown.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Screenshot Container */}
       <div ref={screenshotContainerRef}>

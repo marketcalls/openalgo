@@ -233,25 +233,42 @@ export default function Positions() {
     savePreferences()
   }, [savePreferences])
 
-  const fetchAttribution = useCallback(async () => {
-    if (!apiKey) return
-    try {
-      const response = await tradingApi.getStrategyAttribution(
-        apiKey,
-        'positions',
-        pnlBasisRef.current === 'm2m'
-      )
-      if (response.status === 'success' && response.data) {
-        setAttribution(response.data)
-        setAttributionError(null)
-      } else {
+  // One attribution request at a time per basis, and only the newest one may
+  // write the state: a refresh and a switch landing together share a request, and
+  // a slow answer for the basis the user just left cannot replace the one they
+  // are on.
+  const attributionSeq = useRef(0)
+  const attributionInFlight = useRef<{ m2m: boolean; done: Promise<void> } | null>(null)
+
+  const fetchAttribution = useCallback((): Promise<void> => {
+    if (!apiKey) return Promise.resolve()
+    const m2m = pnlBasisRef.current === 'm2m'
+    const running = attributionInFlight.current
+    if (running && running.m2m === m2m) return running.done
+
+    const seq = ++attributionSeq.current
+    const entry = { m2m, done: Promise.resolve() }
+    entry.done = (async () => {
+      try {
+        const response = await tradingApi.getStrategyAttribution(apiKey, 'positions', m2m)
+        if (seq !== attributionSeq.current) return
+        if (response.status === 'success' && response.data) {
+          setAttribution(response.data)
+          setAttributionError(null)
+        } else {
+          setAttribution(null)
+          setAttributionError(response.message || 'Strategy split unavailable')
+        }
+      } catch {
+        if (seq !== attributionSeq.current) return
         setAttribution(null)
-        setAttributionError(response.message || 'Strategy split unavailable')
+        setAttributionError('Strategy split unavailable')
+      } finally {
+        if (attributionInFlight.current === entry) attributionInFlight.current = null
       }
-    } catch {
-      setAttribution(null)
-      setAttributionError('Strategy split unavailable')
-    }
+    })()
+    attributionInFlight.current = entry
+    return entry.done
   }, [apiKey])
 
   const fetchPositions = useCallback(
@@ -675,12 +692,14 @@ export default function Positions() {
             {attribution?.rows.some((r) => r.pnl_equals_m2m) &&
               ' On this broker the P&L of a carried position is already its M2M, so the two views match for those rows.'}
           </p>
-          {(attribution?.m2m_error || (attribution && m2mFallbackRows > 0)) && (
+          {(attribution?.m2m_error ||
+            (attribution && m2mFallbackRows > 0) ||
+            (!attribution && attributionError)) && (
             <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
               <AlertTriangle className="h-4 w-4 text-amber-600" />
               <AlertDescription className="text-amber-700 dark:text-amber-400">
-                {attribution?.m2m_error
-                  ? `M2M is unavailable right now (${attribution.m2m_error}), so the broker's P&L is shown.`
+                {attribution?.m2m_error || (!attribution && attributionError)
+                  ? `M2M is unavailable right now (${attribution?.m2m_error ?? attributionError}), so the broker's P&L is shown.`
                   : `M2M could not be worked out for ${m2mFallbackRows} of ${basisPositions.length} positions, which show the broker's P&L instead.`}
               </AlertDescription>
             </Alert>

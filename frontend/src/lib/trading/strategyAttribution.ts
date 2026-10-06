@@ -88,6 +88,10 @@ export function applyM2m(
 const isSameContract = (a: Position, b: Position) =>
   a.symbol === b.symbol && a.exchange === b.exchange && a.product === b.product
 
+/** A slice that is the whole broker position can be closed like any position; a part of one cannot. */
+const isWhole = (sliceQuantity: number, positionQuantity: number | string | undefined) =>
+  Math.abs(sliceQuantity - (Number(positionQuantity) || 0)) < 1e-9
+
 /**
  * Split each broker position into the strategy slices the backend reported
  * (services/strategy_attribution.py). The broker row stays the truth for the
@@ -103,7 +107,8 @@ export function groupByStrategy(
   const byKey = new Map(
     (attribution?.rows ?? []).map((r) => [`${r.symbol}|${r.exchange}|${r.product}`, r])
   )
-  const groups: Record<string, SlicedPosition[]> = {}
+  // No prototype, so a strategy called "constructor" or "toString" is just a name.
+  const groups: Record<string, SlicedPosition[]> = Object.create(null)
   const add = (name: string, row: SlicedPosition) => {
     if (!groups[name]) groups[name] = []
     groups[name].push(row)
@@ -121,18 +126,26 @@ export function groupByStrategy(
       const qty = Number(pos.quantity) || 0
       const openSlices = slices.filter((s) => s.quantity !== 0)
       const weight = openSlices.reduce((sum, s) => sum + Math.abs(s.quantity), 0)
-      if (qty !== 0 && weight > 0) {
+      if (attributed?.m2m_available && qty !== 0 && weight > 0) {
         for (const slice of openSlices) {
           add(slice.strategy, {
             ...pos,
             quantity: slice.quantity,
             average_price: slice.average_price,
             pnl: (Number(pos.pnl) || 0) * (Math.abs(slice.quantity) / weight),
-            sliced: true,
+            sliced: !isWhole(slice.quantity, pos.quantity),
           })
         }
       } else {
-        add(attributed?.leftover_owner || UNATTRIBUTED, { ...pos, sliced: true })
+        // A flat row, or one M2M could not be computed for (it still carries the
+        // broker's own P&L, which is not a figure to divide up as M2M): kept whole,
+        // under the one strategy that owns all of it, otherwise Unattributed.
+        const owners = new Set(openSlices.map((s) => s.strategy))
+        const wholeOwner =
+          qty !== 0 && owners.size === 1 && openSlices.length === slices.length
+            ? [...owners][0]
+            : attributed?.leftover_owner
+        add(wholeOwner || UNATTRIBUTED, { ...pos })
       }
       continue
     }
@@ -152,9 +165,9 @@ export function groupByStrategy(
         average_price: slice.average_price,
         pnl,
         pnlpercent: 0,
-        sliced: true,
+        sliced: !isWhole(slice.quantity, pos.quantity),
       }
-      if (slice.strategy === UNATTRIBUTED) remainderRow = row
+      if (!slice.attributed) remainderRow = row
       add(slice.strategy, row)
     }
 
@@ -164,7 +177,7 @@ export function groupByStrategy(
     if (slices.length === 0) {
       // Nothing explains it, unless the book still shows exactly one strategy
       // holding a position the broker has closed: then it is that strategy's.
-      add(attributed?.leftover_owner || UNATTRIBUTED, { ...pos, sliced: true })
+      add(attributed?.leftover_owner || UNATTRIBUTED, { ...pos })
     } else if (Math.abs(leftover) >= 0.005) {
       const owner = attributed?.leftover_owner
       const ownerRow = owner ? groups[owner]?.find((r) => isSameContract(r, pos)) : undefined
@@ -190,6 +203,8 @@ export function groupByStrategy(
   // is measured from), so it is set once the P&L is final.
   for (const rows of Object.values(groups)) {
     for (const row of rows) {
+      // A row M2M was not computed for keeps the broker's own percentage.
+      if (basis === 'm2m' && row.m2mBase === undefined) continue
       const base = basis === 'm2m' ? row.m2mBase || 0 : row.average_price || 0
       const invested = Math.abs((row.quantity || 0) * base)
       row.pnlpercent = invested > 0 ? (row.pnl / invested) * 100 : 0

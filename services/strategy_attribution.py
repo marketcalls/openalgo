@@ -126,6 +126,12 @@ def attribute_row(
         owners = {leg.get("strategy") for leg in open_legs + flat_today if leg.get("strategy")}
         if len(owners) == 1:
             result["leftover_owner"] = next(iter(owners))
+        if open_legs:
+            # The book thinks something is still open that the broker has closed.
+            result["mismatch"] = True
+            result["mismatch_reason"] = (
+                "the strategy book still shows an open leg on a position the broker has closed"
+            )
         return result
 
     direction = 1.0 if broker_qty > 0 else -1.0
@@ -220,7 +226,8 @@ def attribute(rows: list[dict[str, Any]], legs: list[dict[str, Any]], kind: str)
 
     index = _index_legs(legs, kind)
     out_rows = [attribute_row(row, index.get(_row_key(row, kind), []), kind) for row in rows or []]
-    strategies = sorted(
-        {s["strategy"] for r in out_rows for s in r["slices"] if s["strategy"] != UNATTRIBUTED}
-    )
+    # By the `attributed` flag, not the label: a real strategy that happens to be
+    # named like the synthetic remainder is still a strategy.
+    strategies = sorted({s["strategy"] for r in out_rows for s in r["slices"] if s["attributed"]})
+
     return {"kind": kind, "rows": out_rows, "strategies": strategies}

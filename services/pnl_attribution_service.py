@@ -27,6 +27,11 @@ def _m2m_for_positions(api_key: str, positions: list[dict]):
     from services.quotes_service import get_multiquotes
     from services.tradebook_service import get_tradebook
 
+    # No broker call when nothing here can use the answer (no positions, or only
+    # exchanges M2M is not computed for): it would only spend rate-limited quota.
+    if not any(row.get("exchange") in SUPPORTED_EXCHANGES for row in positions):
+        return compute_m2m(positions, [], {}), None
+
     ok, tradebook, _ = get_tradebook(api_key=api_key)
     if not ok:
         return {}, "today's trades are unavailable"

@@ -239,7 +239,9 @@ export const tradingApi = {
     const response = await apiClient.post<ApiResponse<StrategyAttribution>>('/pnl/attribution', {
       apikey: apiKey,
       kind,
-      m2m,
+      // M2M exists for positions only; the server ignores it for holdings, so it is
+      // not sent there.
+      m2m: kind === 'positions' && m2m,
     })
     return response.data
   },

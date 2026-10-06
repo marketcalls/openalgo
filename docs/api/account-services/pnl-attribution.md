@@ -110,13 +110,13 @@ The example is a short of 195 carried from the previous day, still open at an LT
 | quantity | number | The broker's net quantity |
 | average_price | number | The broker's average price |
 | slices | array | Per-strategy shares of the row (see below). Their quantities never add up to more than the broker holds |
-| mismatch | boolean | The strategy book disagrees with the broker (a leg on the opposite side, or legs larger than the broker quantity) |
+| mismatch | boolean | The strategy book disagrees with the broker: a leg on the opposite side, legs larger than the broker quantity, or a row the broker shows flat while the book still shows an open leg |
 | mismatch_reason | string or null | Why `mismatch` is set |
 | leftover_owner | string or null | For a row the broker shows flat: the one strategy with activity on the contract, which owns whatever realized P&L the slices do not explain. Null when none, or when more than one strategy is involved |
 | m2m_available | boolean | With `m2m`: whether M2M could be worked out for this row |
 | m2m_reason | string or null | Why not |
-| m2m_fixed | number | M2M excluding the live price: `m2m = m2m_fixed + quantity x LTP` |
-| m2m | number | Today's M2M at the row's LTP |
+| m2m_fixed | number or null | M2M excluding the live price: `m2m = m2m_fixed + quantity x LTP`. Null when `m2m_available` is false |
+| m2m | number or null | Today's M2M at the row's LTP. Null when `m2m_available` is false |
 | overnight_quantity | number | Quantity carried in from a previous day |
 | prev_close | number or null | The previous close used |
 | pnl_equals_m2m | boolean | The broker's own P&L on this carried row is already the day's M2M (Kotak values a carried leg at the previous settlement) |
@@ -141,7 +141,7 @@ m2m = (sell value - buy value, today's fills)
       - overnight quantity x previous close
 ```
 
-It is computed from today's tradebook and the quote's `prev_close`, so it works for any broker that provides both. It is returned only for NSE, BSE, NFO and BFO rows. For other exchanges, and whenever a carried position has no previous close, `m2m_available` is false rather than the figure being guessed.
+It is computed from today's tradebook and the quote's `prev_close`, so it works for any broker that provides both. It is returned only for NSE, BSE, NFO and BFO rows. `m2m_available` is false, with a reason in `m2m_reason`, rather than the figure being guessed, when: the exchange is not one of those; a carried position has no previous close; an open position has no live price; or one of the row's fills has no usable price or quantity.
 
 ## Errors
 

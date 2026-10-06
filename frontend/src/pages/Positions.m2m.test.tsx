@@ -17,14 +17,18 @@ const mocks = vi.hoisted(() => ({
   getStrategyAttribution: vi.fn(),
 }))
 
-vi.mock('@/api/trading', () => ({
-  tradingApi: {
-    getPositions: mocks.getPositions,
-    getStrategyAttribution: mocks.getStrategyAttribution,
-    closePosition: vi.fn(),
-    closeAllPositions: vi.fn(),
-  },
-}))
+vi.mock('@/api/trading', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/trading')>()
+  return {
+    ...actual,
+    tradingApi: {
+      getPositions: mocks.getPositions,
+      getStrategyAttribution: mocks.getStrategyAttribution,
+      closePosition: vi.fn(),
+      closeAllPositions: vi.fn(),
+    },
+  }
+})
 
 vi.mock('@/stores/authStore', () => ({
   useAuthStore: () => ({ apiKey: 'test-api-key', user: { broker: 'zerodha' } }),
@@ -150,7 +154,59 @@ describe('Positions M2M switch', () => {
     expect(await screen.findByText(/already its M2M/)).toBeInTheDocument()
   })
 
-  it('remembers the choice', async () => {
+  it('remembers the choice and starts on it after a remount', async () => {
+    mocks.getStrategyAttribution.mockResolvedValue(
+      attribution({
+        m2m_available: true,
+        m2m_fixed: -4377.75,
+        overnight_quantity: 195,
+        prev_close: 22.7,
+      })
+    )
+    mocks.getPositions.mockResolvedValue({ status: 'success', data: [CARRIED] })
+    const first = render(<Positions />)
+    await screen.findByText(CARRIED.symbol)
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem('openalgo_positions_prefs') ?? '{}').pnlBasis).toBe(
+        'm2m'
+      )
+    )
+    first.unmount()
+
+    mocks.getStrategyAttribution.mockClear()
+    render(<Positions />)
+    await screen.findByText(CARRIED.symbol)
+
+    expect(screen.getByRole('switch', { name: /M2M/ })).toBeChecked()
+    expect(await screen.findByText('Total M2M')).toBeInTheDocument()
+  })
+
+  it('says so when the M2M request fails outright, for example against an older server', async () => {
+    mocks.getStrategyAttribution.mockRejectedValue(new Error('404'))
+    await renderPage()
+
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
+
+    expect(await screen.findByText(/M2M is unavailable right now/)).toBeInTheDocument()
+    expect(screen.getAllByText(/11,544/).length).toBeGreaterThan(0)
+  })
+
+  it('does not let a slow answer for the basis the user left replace the one they are on', async () => {
+    localStorage.setItem(
+      'openalgo_positions_prefs',
+      JSON.stringify({
+        grouping: 'strategy',
+        filters: { product: [], direction: [], exchange: [] },
+      })
+    )
+    let resolveSlow: (value: unknown) => void = () => {}
+    const slow = new Promise((resolve) => {
+      resolveSlow = resolve
+    })
+    // The first call (broker P&L basis, from the strategy grouping) is slow; the
+    // second (M2M, after the switch) is immediate.
+    mocks.getStrategyAttribution.mockImplementationOnce(() => slow)
     mocks.getStrategyAttribution.mockResolvedValue(
       attribution({
         m2m_available: true,
@@ -160,12 +216,129 @@ describe('Positions M2M switch', () => {
       })
     )
     await renderPage()
-    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
 
-    await waitFor(() =>
-      expect(JSON.parse(localStorage.getItem('openalgo_positions_prefs') ?? '{}').pnlBasis).toBe(
-        'm2m'
-      )
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
+    await waitFor(() => expect(screen.getAllByText(/4,377\.75/).length).toBeGreaterThan(0))
+
+    // Now the slow answer arrives, with no M2M figures in it.
+    resolveSlow(attribution({}))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(screen.getAllByText(/4,377\.75/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/could not be worked out/)).not.toBeInTheDocument()
+  })
+
+  it('asks once, not twice, when the page load and the switch both want the split', async () => {
+    localStorage.setItem(
+      'openalgo_positions_prefs',
+      JSON.stringify({
+        pnlBasis: 'm2m',
+        grouping: 'none',
+        filters: { product: [], direction: [], exchange: [] },
+      })
     )
+    mocks.getStrategyAttribution.mockResolvedValue(
+      attribution({
+        m2m_available: true,
+        m2m_fixed: -4377.75,
+        overnight_quantity: 195,
+        prev_close: 22.7,
+      })
+    )
+    await renderPage()
+    await waitFor(() => expect(mocks.getStrategyAttribution).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Positions strategy grouping keeps Close for a whole position', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    localStorage.setItem(
+      'openalgo_positions_prefs',
+      JSON.stringify({
+        grouping: 'strategy',
+        filters: { product: [], direction: [], exchange: [] },
+      })
+    )
+  })
+
+  const OPEN: Position = {
+    symbol: 'NIFTY25SEP2625000CE',
+    exchange: 'NFO',
+    product: 'NRML',
+    quantity: -150,
+    average_price: 100,
+    ltp: 90,
+    pnl: 1500,
+  } as Position
+
+  const sliceOf = (strategy: string, quantity: number) => ({
+    strategy,
+    quantity,
+    average_price: 100,
+    today_realized_pnl: 0,
+    attributed: strategy !== 'Unattributed',
+  })
+
+  const withSlices = (slices: ReturnType<typeof sliceOf>[]) => ({
+    status: 'success',
+    data: {
+      kind: 'positions',
+      strategies: [],
+      m2m_error: null,
+      rows: [
+        {
+          symbol: OPEN.symbol,
+          exchange: 'NFO',
+          product: 'NRML',
+          quantity: -150,
+          average_price: 100,
+          slices,
+          mismatch: false,
+          mismatch_reason: null,
+          leftover_owner: null,
+        },
+      ],
+    },
+  })
+
+  it('offers Close when one strategy owns the whole position', async () => {
+    mocks.getPositions.mockResolvedValue({ status: 'success', data: [OPEN] })
+    mocks.getStrategyAttribution.mockResolvedValue(withSlices([sliceOf('A', -150)]))
+    render(<Positions />)
+    await screen.findByText(OPEN.symbol)
+
+    expect(
+      await screen.findByRole('button', { name: `Close ${OPEN.symbol} position` })
+    ).toBeInTheDocument()
+  })
+
+  it('offers Close when nothing is attributed and the whole position shows as Unattributed', async () => {
+    mocks.getPositions.mockResolvedValue({ status: 'success', data: [OPEN] })
+    mocks.getStrategyAttribution.mockResolvedValue({ status: 'error', message: 'unavailable' })
+    render(<Positions />)
+    await screen.findByText(OPEN.symbol)
+
+    expect(
+      await screen.findByRole('button', { name: `Close ${OPEN.symbol} position` })
+    ).toBeInTheDocument()
+  })
+
+  it('offers no Close on a part of a position, which would close all of it', async () => {
+    mocks.getPositions.mockResolvedValue({ status: 'success', data: [OPEN] })
+    mocks.getStrategyAttribution.mockResolvedValue(
+      withSlices([sliceOf('A', -100), sliceOf('B', -50)])
+    )
+    render(<Positions />)
+    await screen.findAllByText(OPEN.symbol)
+    await waitFor(() => expect(screen.getAllByText(OPEN.symbol)).toHaveLength(2))
+
+    expect(
+      screen.queryByRole('button', { name: `Close ${OPEN.symbol} position` })
+    ).not.toBeInTheDocument()
   })
 })

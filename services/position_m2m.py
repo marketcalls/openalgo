@@ -57,10 +57,17 @@ def compute_m2m(
     sells: dict[tuple, float] = {}
     buy_qty: dict[tuple, float] = {}
     sell_qty: dict[tuple, float] = {}
+    unusable: set[tuple] = set()  # rows with a fill whose price or quantity cannot be used
     for trade in trades or []:
         key = _key(trade)
         qty = _f(trade.get("quantity"))
-        value = qty * _f(trade.get("average_price"))
+        price = _f(trade.get("average_price"), default=float("nan"))
+        if not qty > 0 or not price > 0:
+            # A missing or malformed price must not become 0: that would report an
+            # available but wrong M2M.
+            unusable.add(key)
+            continue
+        value = qty * price
         action = str(trade.get("action") or "").upper()
         if action == "BUY":
             buys[key] = buys.get(key, 0.0) + value
@@ -88,6 +95,8 @@ def compute_m2m(
         }
         if position.get("exchange") not in SUPPORTED_EXCHANGES:
             result["reason"] = "exchange not supported for M2M"
+        elif key in unusable:
+            result["reason"] = "a fill has no usable price or quantity"
         elif abs(overnight) > _EPS and not (prev_close and prev_close > 0):
             result["reason"] = "previous close unavailable for a carried position"
         elif abs(end_qty) > _EPS and ltp <= 0:

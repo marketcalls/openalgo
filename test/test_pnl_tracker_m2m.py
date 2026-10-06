@@ -304,3 +304,67 @@ def test_pnl_basis_steps_aside_when_the_brokers_pnl_is_missing():
 
 def test_an_unknown_basis_steps_aside():
     assert _run(basis="weekly") is None
+
+
+# --- review fixes: bad data, other dates, missing rows, gaps, the basis marker ----------------
+
+
+def test_a_fill_without_a_usable_price_steps_aside():
+    for bad_price in (None, "", "n/a", 0, -0.5):
+        bad = TRADES + [
+            dict(_trade("MIS", "BUY", 1, 1.0, "2026-10-06 10:00:00"), average_price=bad_price)
+        ]
+        assert _run(trades=bad) is None, bad_price
+
+
+def test_trades_from_another_day_step_aside():
+    # A broker that returns the previous session's trades overnight.
+    yesterday = [dict(t, timestamp=t["timestamp"].replace("10-06", "10-05")) for t in TRADES]
+    assert _run(trades=yesterday) is None
+
+
+def test_a_product_missing_from_the_positionbook_still_counts_on_the_m2m_basis():
+    # The NRML row is flat and the broker dropped it; its fills still carry P&L.
+    only_mis = [_position("MIS")]
+    response = _run(positions=only_mis, basis="m2m")
+    assert response["current_mtm"] == -4826.25  # MIS -448.50 plus the NRML exit -4,377.75
+
+
+def test_a_product_missing_from_the_positionbook_steps_aside_on_the_pnl_basis():
+    # The broker's own P&L for the missing row is unknown, so the basis cannot be exact.
+    only_mis = _with_pnl([_position("MIS")], [-448.5])
+    assert _run(positions=only_mis, basis="pnl") is None
+
+
+def test_a_contract_with_no_candles_steps_aside():
+    assert _run(get_history_fn=lambda **kw: (True, {"data": []}, 200)) is None
+
+
+def test_minutes_before_the_first_candle_use_the_previous_close_not_a_later_price():
+    index = _index()
+    prices = pd.Series({_at(10, 0): 30.0}).reindex(index.union([_at(10, 0)])).dropna()
+    frame = build_m2m_frame(index, [_row("NRML", 195, 22.7, [], prices)])
+    # Before the first candle nothing has moved from yesterday's close.
+    assert frame["NRML"].loc[_at(9, 15)] == 0.0
+    assert frame["NRML"].loc[_at(9, 59)] == 0.0
+    assert round(frame["NRML"].loc[_at(10, 0)], 2) == round(195 * (30.0 - 22.7), 2)
+
+
+def test_the_response_says_which_basis_it_is_on():
+    positions = _with_pnl(POSITIONS, [-448.5, -11544.0])
+    assert _run(positions=positions, basis="m2m")["basis"] == "m2m"
+    assert _run(positions=positions, basis="pnl")["basis"] == "pnl"
+    early = IST.localize(datetime(2026, 10, 6, 8, 0))
+    assert _run(now=early, basis="pnl")["basis"] == "pnl"
+
+
+def test_an_intraday_only_book_gives_the_same_curve_on_both_bases():
+    # No position is carried, so the broker's P&L and today's M2M are the same figure
+    # all day, minute by minute.
+    mis_trades = [t for t in TRADES if t["product"] == "MIS"]
+    mis_position = _with_pnl([_position("MIS")], [-448.5])
+    pnl = _run(positions=mis_position, trades=mis_trades, basis="pnl")
+    m2m = _run(positions=mis_position, trades=mis_trades, basis="m2m")
+    assert pnl["pnl_series"] == m2m["pnl_series"]
+    assert pnl["drawdown_series"] == m2m["drawdown_series"]
+    assert pnl["current_mtm"] == m2m["current_mtm"] == -448.5

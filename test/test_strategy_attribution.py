@@ -442,3 +442,40 @@ def _trade_row(symbol, action, quantity, price, product="MIS", exchange="NFO"):
         "quantity": quantity,
         "average_price": price,
     }
+
+
+def test_flat_broker_row_with_a_stale_open_leg_is_flagged():
+    result = attribute([_pos("X", 0, 0.0)], [_leg("IC", "X", -65, 17.15)], KIND_POSITIONS)
+    row = result["rows"][0]
+    assert row["mismatch"] is True
+    assert "closed" in row["mismatch_reason"]
+
+
+def test_flat_broker_row_without_a_stale_leg_is_not_flagged():
+    legs = [_leg("IC", "X", 0.0, 0.0) | {"today_realized_pnl": 100.0}]
+    result = attribute([_pos("X", 0, 0.0)], legs, KIND_POSITIONS)
+    assert result["rows"][0]["mismatch"] is False
+
+
+def test_a_real_strategy_named_like_the_remainder_is_still_listed():
+    result = attribute([_pos("X", 100, 10.0)], [_leg(UNATTRIBUTED, "X", 60, 10.0)], KIND_POSITIONS)
+    assert result["strategies"] == [UNATTRIBUTED]
+    slices = result["rows"][0]["slices"]
+    assert [s["attributed"] for s in slices] == [True, False]
+
+
+def test_service_skips_the_tradebook_when_no_position_can_use_it(monkeypatch):
+    calls = []
+    svc = _patch_service(monkeypatch, positions=[_pos("CRUDEOIL", 1, 6000.0, "NRML", "MCX")])
+    _patch_m2m_inputs(monkeypatch)
+    import services.tradebook_service as tradebook_service
+
+    monkeypatch.setattr(
+        tradebook_service,
+        "get_tradebook",
+        lambda **kw: calls.append(kw) or (True, {"data": []}, 200),
+    )
+    ok, body, _ = svc.get_pnl_attribution("key", "positions", include_m2m=True)
+    assert ok and calls == []
+    assert body["data"]["rows"][0]["m2m_available"] is False
+    assert "not supported" in body["data"]["rows"][0]["m2m_reason"]

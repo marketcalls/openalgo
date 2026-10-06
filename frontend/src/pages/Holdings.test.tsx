@@ -152,6 +152,57 @@ describe('Holdings strategy filter', () => {
 
     await waitFor(() => expect(screen.getByText('TCS')).toBeInTheDocument())
     expect(screen.getByText('60')).toBeInTheDocument()
+    // The 40 shares EquityBreakout owns are not in this view.
+    expect(screen.queryByText('40')).not.toBeInTheDocument()
+  })
+
+  it('asks for the split again when a strategy is picked, so it is not stale', async () => {
+    await renderHoldings(ATTRIBUTION)
+    await waitFor(() => expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(1))
+
+    await userEvent.click(await screen.findByRole('button', { name: 'EquityBreakout' }))
+
+    await waitFor(() => expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(2))
+  })
+
+  it('falls back to All when the refreshed split no longer has the selected strategy', async () => {
+    await renderHoldings(ATTRIBUTION)
+    // The next read of the split no longer lists EquityBreakout.
+    mocks.getStrategyAttribution.mockResolvedValue({
+      status: 'success',
+      data: { ...ATTRIBUTION.data, strategies: ['Other'] },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: 'EquityBreakout' }))
+
+    await waitFor(() => expect(screen.getByText('TCS')).toBeInTheDocument())
+    expect(screen.getByText('INFY')).toBeInTheDocument()
+    expect(screen.getAllByText(/12,000/).length).toBeGreaterThan(0)
+    expect(screen.queryByText('No holdings for this strategy')).not.toBeInTheDocument()
+  })
+
+  it('does not re-read the split on every refresh while a strategy is selected', async () => {
+    await renderHoldings(ATTRIBUTION)
+    await userEvent.click(await screen.findByRole('button', { name: 'EquityBreakout' }))
+    await waitFor(() => expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(2))
+
+    await userEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    await waitFor(() => expect(mocks.getHoldings).toHaveBeenCalledTimes(2))
+
+    // The holdings were re-read; the split, read moments ago, was not.
+    expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows dashes, not zeros, for the totals of a strategy that owns nothing now', async () => {
+    await renderHoldings({
+      status: 'success',
+      data: { ...ATTRIBUTION.data, strategies: ['EquityBreakout', 'Idle'] },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Idle' }))
+
+    expect(await screen.findByText('No holdings for this strategy')).toBeInTheDocument()
+    expect(screen.getAllByText('---').length).toBeGreaterThan(0)
   })
 
   it('has no strategy chips when the strategy book has no strategies', async () => {

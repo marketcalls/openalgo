@@ -83,9 +83,14 @@ def build_m2m_frame(index: pd.DatetimeIndex, rows: list[dict[str, Any]]) -> pd.D
         cum_qty = np.concatenate([[0.0], np.cumsum(signed_qty)])[count]
         cum_value = np.concatenate([[0.0], np.cumsum(signed_value)])[count]
 
-        prices = row["prices"].reindex(index.union(row["prices"].index)).ffill().bfill()
+        # Last known candle, carried forward. Minutes before the first candle are
+        # marked at the previous close (never at a later candle, which would invent
+        # an early move); with no candle at all, at the fallback (live) price.
+        prices = row["prices"].reindex(index.union(row["prices"].index)).ffill()
         prices = prices.reindex(index).to_numpy(dtype=float)
-        prices = np.where(np.isnan(prices), _f(row.get("fallback_price")), prices)
+        fallback = _f(row.get("fallback_price"))
+        leading = _f(row.get("prev_close")) or fallback if len(row["prices"]) else fallback
+        prices = np.where(np.isnan(prices), leading, prices)
 
         qty_now = row["overnight"] + cum_qty
         marked = np.where(np.abs(qty_now) > 1e-9, qty_now * prices, 0.0)
@@ -96,9 +101,10 @@ def build_m2m_frame(index: pd.DatetimeIndex, rows: list[dict[str, Any]]) -> pd.D
     return pd.DataFrame(frame, index=index)
 
 
-def summarize(frame: pd.DataFrame) -> dict[str, Any]:
+def summarize(frame: pd.DataFrame, basis: str = "m2m") -> dict[str, Any]:
     """The response shape blueprints/pnltracker.py returns: current, max, min,
-    max drawdown and the two series."""
+    max drawdown and the two series, plus the `basis` the curve is on, so a page
+    can label what it was actually given."""
     if frame.empty:
         return {
             "current_mtm": 0,
@@ -109,6 +115,7 @@ def summarize(frame: pd.DataFrame) -> dict[str, Any]:
             "max_drawdown": 0,
             "pnl_series": [],
             "drawdown_series": [],
+            "basis": basis,
         }
     total = frame.sum(axis=1)
     drawdown = total - total.cummax()
@@ -127,6 +134,7 @@ def summarize(frame: pd.DataFrame) -> dict[str, Any]:
         "drawdown_series": [
             {"time": _ms(ts), "value": round(float(v), 2)} for ts, v in drawdown.items()
         ],
+        "basis": basis,
     }
 
 
@@ -147,6 +155,7 @@ def build_m2m_tracker_response(
     code run (anything this cannot do exactly: an unsupported exchange, an
     unparseable fill time, a missing previous close or candle history)."""
     now = now or datetime.now(IST)
+    today = now.astimezone(IST).date()
     if basis not in ("m2m", "pnl"):
         return None
 
@@ -161,8 +170,14 @@ def build_m2m_tracker_response(
         when = parse_time(stamp) if stamp else None
         action = str(trade.get("action") or "").upper()
         qty = _f(trade.get("quantity"))
-        if when is None or action not in ("BUY", "SELL") or qty <= 0:
-            logger.info("M2M tracker: a trade cannot be placed in time, using the built-in curve")
+        price = _f(trade.get("average_price"), default=float("nan"))
+        if when is None or action not in ("BUY", "SELL") or not qty > 0 or not price > 0:
+            logger.info("M2M tracker: a trade cannot be used exactly, using the built-in curve")
+            return None
+        if pd.Timestamp(when).tz_convert(IST).date() != today:
+            # A broker that returns the previous session's trades (an overnight
+            # session): the built-in code anchors to the trade date, this does not.
+            logger.info("M2M tracker: trades are not from today, using the built-in curve")
             return None
         parsed_trades.append(
             {
@@ -171,13 +186,33 @@ def build_m2m_tracker_response(
                 "product": trade.get("product"),
                 "action": action,
                 "quantity": qty,
-                "average_price": _f(trade.get("average_price")),
+                "average_price": price,
                 "time": pd.Timestamp(when),
             }
         )
 
     if not positions and not parsed_trades:
-        return summarize(pd.DataFrame())
+        return summarize(pd.DataFrame(), basis)
+
+    # A product that traded today but is missing from the positionbook (a broker
+    # that drops a flat row) still owns its fills' P&L: add it as a flat row. The
+    # broker's own P&L for it is unknown, so the P&L basis cannot be exact.
+    listed = {(p.get("symbol"), p.get("exchange"), p.get("product")) for p in positions}
+    unlisted = {(t["symbol"], t["exchange"], t["product"]) for t in parsed_trades} - listed
+    if unlisted:
+        if basis == "pnl":
+            return None
+        positions = list(positions) + [
+            {
+                "symbol": symbol,
+                "exchange": exchange,
+                "product": product,
+                "quantity": 0,
+                "ltp": 0,
+                "average_price": 0,
+            }
+            for symbol, exchange, product in sorted(unlisted)
+        ]
 
     # Previous closes for every contract involved.
     contracts = sorted(
@@ -199,7 +234,6 @@ def build_m2m_tracker_response(
         return None
 
     # Minute candles for each contract, today only.
-    today = now.astimezone(IST).date()
     closes: dict[tuple, pd.Series] = {}
     for symbol, exchange in contracts:
         rate_limiter.wait()
@@ -215,8 +249,8 @@ def build_m2m_tracker_response(
             return None
         df = pd.DataFrame(history["data"])
         if df.empty:
-            closes[(symbol, exchange)] = pd.Series(dtype=float)
-            continue
+            # A contract with no candles cannot be drawn: do not invent a curve.
+            return None
         df = to_ist(df, symbol)
         if df is None:
             return None
@@ -228,7 +262,7 @@ def build_m2m_tracker_response(
     close_at = open_at.replace(hour=MARKET_CLOSE[0], minute=MARKET_CLOSE[1])
     end = min(pd.Timestamp(now), pd.Timestamp(close_at)).floor("min")
     if end < pd.Timestamp(open_at):
-        return summarize(pd.DataFrame())
+        return summarize(pd.DataFrame(), basis)
     index = pd.date_range(start=open_at, end=end, freq="1min", tz=IST)
 
     rows = []
@@ -277,4 +311,4 @@ def build_m2m_tracker_response(
     # two always agree.
     for key, value in last_value.items():
         frame.iloc[-1, frame.columns.get_loc("|".join(str(part) for part in key))] = value
-    return summarize(frame)
+    return summarize(frame, basis)
