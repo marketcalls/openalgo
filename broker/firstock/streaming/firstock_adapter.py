@@ -39,6 +39,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = "firstock"
         self.running = False
         self.lock = _real_threading.Lock()
+        self._wire_operation_lock = _real_threading.Lock()
         self.subscription_queue = []
         self.batch_timer = None
         self.batch_delay = 0.5
@@ -372,7 +373,8 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if unsubscribe_ws and self.ws_client and self.ws_client.is_connected():
             try:
                 token_list = [{"exchangeType": brexchange, "tokens": [token]}]
-                self.ws_client.unsubscribe(correlation_id, mode, token_list)
+                with self._wire_operation_lock:
+                    self.ws_client.unsubscribe(correlation_id, mode, token_list)
                 self.logger.info(f"WebSocket unsubscribed from {symbol}.{exchange}")
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
@@ -453,7 +455,24 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 token_list.append({"exchangeType": exchange_type, "tokens": tokens})
 
         try:
-            ws_client.subscribe(f"batch_{uuid.uuid4().hex}", 2, token_list)
+            with self._wire_operation_lock:
+                with self.lock:
+                    queued = [
+                        item
+                        for item in queued
+                        if any(
+                            self.ws_subscription_refs.get(item["subscription_token"], {}).values()
+                        )
+                    ]
+                if not queued:
+                    return
+                token_list = []
+                exchange_tokens = {}
+                for item in queued:
+                    exchange_tokens.setdefault(item["brexchange"], []).append(item["token"])
+                for exchange_type, tokens in exchange_tokens.items():
+                    token_list.append({"exchangeType": exchange_type, "tokens": tokens})
+                ws_client.subscribe(f"batch_{uuid.uuid4().hex}", 2, token_list)
             self.logger.info(
                 f"Batch subscribed {sum(len(tokens) for tokens in exchange_tokens.values())} Firstock tokens"
             )

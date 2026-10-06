@@ -19,6 +19,8 @@ class FakeClient:
 
     def post(self, _url, **kwargs):
         self.payload = json.loads(kwargs["content"])
+        if isinstance(self.response, Exception):
+            raise self.response
         return self.response
 
 
@@ -110,3 +112,81 @@ def test_explicit_rejection_does_not_run_reconciliation(monkeypatch):
 
     assert body["status"] is False
     assert order_id is None
+    assert _result.status == 500
+
+
+def test_empty_response_recovers_order_by_unique_tag(monkeypatch):
+    response = FakeResponse(502, None)
+
+    def matching_orders(client):
+        return [{
+            "ordertag": client.payload["ordertag"],
+            "tradingsymbol": "SBIN-EQ",
+            "symboltoken": "3045",
+            "exchange": "NSE",
+            "transactiontype": "BUY",
+            "quantity": "1",
+            "orderid": "recovered-order",
+        }]
+
+    _client, (result, body, order_id) = _run(monkeypatch, response, matching_orders)
+
+    assert result.status == 200
+    assert body["status"] is True
+    assert order_id == "recovered-order"
+
+
+def test_reconciliation_rejects_field_mismatch_and_duplicate_tags(monkeypatch):
+    for orders in (
+        lambda client: [{
+            "ordertag": client.payload["ordertag"],
+            "tradingsymbol": "OTHER-EQ",
+            "symboltoken": "3045",
+            "exchange": "NSE",
+            "transactiontype": "BUY",
+            "quantity": "1",
+            "orderid": "wrong-symbol",
+        }],
+        lambda client: [
+            {
+                "ordertag": client.payload["ordertag"],
+                "tradingsymbol": "SBIN-EQ",
+                "symboltoken": "3045",
+                "exchange": "NSE",
+                "transactiontype": "BUY",
+                "quantity": "1",
+                "orderid": f"duplicate-{index}",
+            }
+            for index in range(2)
+        ],
+    ):
+        _client, (result, body, order_id) = _run(
+            monkeypatch, FakeResponse(502, None), orders
+        )
+        assert result.status != 200
+        assert body["status"] == "unknown"
+        assert order_id is None
+
+
+def test_transport_error_reconciles_without_retry(monkeypatch):
+    transport_error = order_api.httpx.TimeoutException("request timed out")
+
+    def matching_orders(client):
+        return [{
+            "ordertag": client.payload["ordertag"],
+            "tradingsymbol": "SBIN-EQ",
+            "symboltoken": "3045",
+            "exchange": "NSE",
+            "transactiontype": "BUY",
+            "quantity": 1,
+            "orderid": "accepted-before-timeout",
+        }]
+
+    client, (result, body, order_id) = _run(
+        monkeypatch, transport_error, matching_orders
+    )
+
+    assert len(client.payload["ordertag"]) < 20
+    assert result.status == 200
+    assert body["status"] is True
+    assert order_id == "accepted-before-timeout"

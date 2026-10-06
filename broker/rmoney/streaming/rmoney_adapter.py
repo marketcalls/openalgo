@@ -46,7 +46,6 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._stop_event = _real_threading.Event()  # Interruptible sleep for reconnect
         self.subscription_queue = {}
         self.batch_timer = None
-        self._subscription_request_lock = _real_threading.Lock()
 
         # Log the ZMQ port being used
         self.logger.info(f"RMoney XTS adapter initialized with ZMQ port: {self.zmq_port}")
@@ -226,7 +225,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 return
 
-            self._reconnect_worker = threading.Thread(
+            self._reconnect_worker = _real_threading.Thread(
                 target=self._connect_with_retry,
                 daemon=True,
                 name=f"rmoney-reconnect-{self.user_id or 'unknown'}",
@@ -540,13 +539,12 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Unsubscribe if connected
         if needs_wire_unsubscribe and self.connected and self.ws_client:
             try:
-                with self._subscription_request_lock:
-                    self.logger.info(
-                        f"Sending unsubscribe request for {symbol}.{exchange} to XTS server"
-                    )
-                    unsubscribe_ok = self.ws_client.unsubscribe(
-                        removed[0][0], mode, instruments
-                    )
+                self.logger.info(
+                    f"Sending unsubscribe request for {symbol}.{exchange} to XTS server"
+                )
+                unsubscribe_ok = self.ws_client.unsubscribe(
+                    removed[0][0], mode, instruments
+                )
                 if unsubscribe_ok:
                     self.logger.info(
                         f"Successfully sent unsubscribe request for {symbol}.{exchange}"
@@ -616,23 +614,31 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             batch_id = f"__openalgo_batch_{mode}"
             batch = []
             try:
-                with self._subscription_request_lock:
+                with self.lock:
+                    batch = [
+                        (correlation_id, sub)
+                        for correlation_id, sub in subscriptions
+                        if self.subscriptions.get(correlation_id) is sub
+                    ]
+                if not batch:
+                    continue
+
+                def is_still_subscribed(correlation_id: str) -> bool:
                     with self.lock:
-                        batch = [
-                            (correlation_id, sub)
-                            for correlation_id, sub in subscriptions
-                            if self.subscriptions.get(correlation_id) is sub
-                        ]
-                    if not batch:
-                        continue
-                    self.ws_client.subscribe_batch(
-                        batch_id,
-                        mode,
-                        [
-                            (correlation_id, sub["instruments"])
-                            for correlation_id, sub in batch
-                        ],
-                    )
+                        return any(
+                            current_id == correlation_id and self.subscriptions.get(current_id) is sub
+                            for current_id, sub in batch
+                        )
+
+                self.ws_client.subscribe_batch(
+                    batch_id,
+                    mode,
+                    [
+                        (correlation_id, sub["instruments"])
+                        for correlation_id, sub in batch
+                    ],
+                    should_subscribe=is_still_subscribed,
+                )
                 count = sum(len(sub["instruments"]) for _, sub in batch)
                 self.logger.info(
                     f"Batch subscribed {count} RMoney instruments in mode {mode}"

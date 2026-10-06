@@ -32,6 +32,17 @@ def test_unsubscribe_retires_batched_tracking_only_after_last_token():
     assert client.get_subscriptions() == []
 
 
+def test_connection_close_clears_batch_tracking_before_reconnect():
+    client = FirstockWebSocket("user", "token")
+    client.subscriptions.add("old-batch")
+    client._subscription_tokens["old-batch"] = {"NSE:1"}
+
+    client._on_close(None)
+
+    assert client.get_subscriptions() == []
+    assert client._subscription_tokens == {}
+
+
 def test_failed_batch_is_requeued_for_retry(monkeypatch):
     class FakeTimer:
         def __init__(self, *_args):

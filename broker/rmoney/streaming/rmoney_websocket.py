@@ -25,6 +25,9 @@ import socketio
 
 from broker.rmoney.baseurl import MARKET_DATA_BASE_URL
 from utils.logging import get_logger
+from utils import runtime as _runtime
+
+_real_threading = _runtime.original("threading")
 
 
 class RMoneyWebSocketClient:
@@ -136,6 +139,7 @@ class RMoneyWebSocketClient:
 
         # Reusable HTTP session for connection pooling (avoids FD churn)
         self._http_session = requests.Session()
+        self._subscription_http_lock = _real_threading.Lock()
 
         # Initialize Socket.IO client
         self._setup_socketio()
@@ -455,12 +459,13 @@ class RMoneyWebSocketClient:
                 f"[SUBSCRIBE] Code: {xts_message_code}, Instruments: {len(instruments)}"
             )
 
-            response = self._http_session.post(
-                self.subscription_url,
-                json=subscription_request,
-                headers=headers,
-                timeout=10,
-            )
+            with self._subscription_http_lock:
+                response = self._http_session.post(
+                    self.subscription_url,
+                    json=subscription_request,
+                    headers=headers,
+                    timeout=10,
+                )
             try:
                 if response.status_code == 200:
                     result = response.json()
@@ -518,12 +523,13 @@ class RMoneyWebSocketClient:
                                 "authorization": self.market_data_token,
                                 "Content-Type": "application/json",
                             }
-                            retry_response = self._http_session.post(
-                                self.subscription_url,
-                                json=subscription_request,
-                                headers=retry_headers,
-                                timeout=10,
-                            )
+                            with self._subscription_http_lock:
+                                retry_response = self._http_session.post(
+                                    self.subscription_url,
+                                    json=subscription_request,
+                                    headers=retry_headers,
+                                    timeout=10,
+                                )
                             try:
                                 if retry_response.status_code == 200:
                                     retry_result = retry_response.json()
@@ -565,6 +571,8 @@ class RMoneyWebSocketClient:
         batch_id: str,
         mode: int,
         subscriptions: List[tuple[str, List[Dict]]],
+        *,
+        should_subscribe=None,
     ) -> None:
         """Send capped requests while retaining each instrument's identity."""
         xts_message_code = self.MODE_TO_XTS_CODE.get(
@@ -584,18 +592,26 @@ class RMoneyWebSocketClient:
                 self.subscribe(chunk_id, mode, instruments, raise_on_duplicate=True)
             except RuntimeError as exc:
                 if "already subscribed" not in str(exc).lower():
+                    self.subscriptions.pop(chunk_id, None)
                     raise
-                # XTS may reject an entire mixed batch when just one instrument
-                # is already active. Retry individually so the remaining names
-                # are still subscribed and each duplicate is safely identified.
+                # XTS may reject a mixed batch when one instrument is already
+                # active. Retry individually so non-duplicates still start;
+                # each HTTP request releases the client lock before the next.
                 self.subscriptions.pop(chunk_id, None)
                 for correlation_id, instrument in chunk:
+                    if should_subscribe and not should_subscribe(correlation_id):
+                        continue
+                    previous = self.subscriptions.get(correlation_id)
                     try:
                         self.subscribe(
                             correlation_id, mode, [instrument], raise_on_duplicate=True
                         )
                     except RuntimeError as item_exc:
                         if "already subscribed" not in str(item_exc).lower():
+                            if previous is None:
+                                self.subscriptions.pop(correlation_id, None)
+                            else:
+                                self.subscriptions[correlation_id] = previous
                             raise
                         self.subscriptions[correlation_id] = {
                             "mode": mode,
@@ -655,12 +671,13 @@ class RMoneyWebSocketClient:
                 f"[UNSUBSCRIBE] Code: {xts_message_code}, Instruments: {len(instruments)}"
             )
 
-            response = self._http_session.put(
-                self.subscription_url,
-                json=unsubscription_request,
-                headers=headers,
-                timeout=10,
-            )
+            with self._subscription_http_lock:
+                response = self._http_session.put(
+                    self.subscription_url,
+                    json=unsubscription_request,
+                    headers=headers,
+                    timeout=10,
+                )
             try:
                 if response.status_code == 200:
                     result = response.json()

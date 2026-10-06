@@ -642,6 +642,9 @@ class FirstockWebSocket:
         """
         self.connection_state = self.DISCONNECTED
         self.authenticated = False  # Reset authentication status
+        with self._subscription_lock:
+            self.subscriptions.clear()
+            self._subscription_tokens.clear()
 
         # Signal the current monitor thread to exit. It may be mid-sleep;
         # Event.wait() returns immediately when set.

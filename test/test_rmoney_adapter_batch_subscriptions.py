@@ -9,7 +9,7 @@ class FakeWebSocketClient:
     def __init__(self):
         self.calls = []
 
-    def subscribe_batch(self, batch_id, mode, subscriptions):
+    def subscribe_batch(self, batch_id, mode, subscriptions, **_kwargs):
         instruments = [item for _, items in subscriptions for item in items]
         self.calls.append((batch_id, mode, subscriptions, instruments))
 
@@ -201,7 +201,7 @@ def test_websocket_client_caps_each_request_at_fifty_instruments():
     assert set(client.subscriptions) == {correlation_id for correlation_id, _ in subscriptions}
 
 
-def test_duplicate_in_batch_retries_instruments_individually():
+def test_duplicate_batch_retries_individually_without_adapter_wide_lock():
     class FakeResponse:
         def __init__(self, duplicate):
             self.status_code = 400 if duplicate else 200

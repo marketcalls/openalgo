@@ -216,11 +216,19 @@ def place_order_api(data, auth):
     client = get_httpx_client()
 
     # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder",
-        headers=headers,
-        content=payload,
+    place_order_url = (
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder"
     )
+    transport_error = None
+    try:
+        response = client.post(place_order_url, headers=headers, content=payload)
+    except httpx.TransportError as exc:
+        transport_error = exc
+        response = httpx.Response(
+            502,
+            request=httpx.Request("POST", place_order_url),
+            json={},
+        )
 
     # Add status attribute to make response compatible with http.client response
     # as the rest of the codebase expects .status instead of .status_code
@@ -244,13 +252,19 @@ def place_order_api(data, auth):
     explicit_rejection = (
         isinstance(response_data, dict) and response_data.get("status") is False
     )
+    if explicit_rejection and response.status_code == 200:
+        response.status = 500
     if not valid_order_response and not explicit_rejection:
         logger.warning(
             "Ambiguous Angel order response (HTTP %s); reconciling ordertag %s",
             response.status_code,
             ordertag,
         )
-        order_book = get_order_book(auth)
+        try:
+            order_book = get_order_book(auth)
+        except Exception:
+            logger.exception("Could not reconcile ambiguous Angel order response")
+            order_book = None
         orders = order_book.get("data") if isinstance(order_book, dict) else None
         expected = {
             "tradingsymbol": newdata["tradingsymbol"],
