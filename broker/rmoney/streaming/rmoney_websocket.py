@@ -26,12 +26,6 @@ import socketio
 
 from broker.rmoney.baseurl import MARKET_DATA_BASE_URL
 from utils.logging import get_logger
-from utils import runtime as _runtime
-
-if _runtime.is_monkey_patched("thread"):
-    from eventlet.semaphore import Semaphore as _SubscriptionLock
-else:
-    _SubscriptionLock = threading.Lock
 
 
 class RMoneyWebSocketClient:
@@ -143,7 +137,7 @@ class RMoneyWebSocketClient:
 
         # Reusable HTTP session for connection pooling (avoids FD churn)
         self._http_session = requests.Session()
-        self._subscription_http_lock = _SubscriptionLock()
+        self._subscription_http_lock = threading.Lock()
 
         # Initialize Socket.IO client
         self._setup_socketio()
