@@ -108,6 +108,11 @@ def get_pnl_attribution(api_key: str, kind: str, include_m2m: bool = False):
                 if m2m is None:
                     out["m2m_available"] = False
                     out["m2m_reason"] = m2m_error or "not computed"
+                    out["m2m_fixed"] = None
+                    out["m2m"] = None
+                    out["overnight_quantity"] = None
+                    out["prev_close"] = None
+                    out["pnl_equals_m2m"] = False
                     continue
                 out["m2m_available"] = m2m["available"]
                 out["m2m_reason"] = m2m["reason"]

@@ -48,8 +48,8 @@ def test_the_namespace_is_mounted_on_the_pnl_path():
 
 
 def test_a_body_that_is_not_an_object_is_a_validation_error():
-    # The endpoint parses silently and loads {} for an unreadable body, so the
-    # schema answers 400 instead of the handler failing with a 500.
+    # Whatever the body parses to, the schema rejects it; the endpoint additionally
+    # loads {} for a body that does not parse, so the answer is a 400, never a 500.
     for body in ({}, [], "m2m", None):
         with pytest.raises(ValidationError):
-            PnlAttributionSchema().load(body or {})
+            PnlAttributionSchema().load(body)

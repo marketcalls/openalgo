@@ -416,7 +416,7 @@ def test_service_m2m_failure_is_reported_not_zeroed(monkeypatch):
     assert ok and code == 200
     assert body["data"]["m2m_error"] == "today's trades are unavailable"
     assert row["m2m_available"] is False
-    assert "m2m" not in row
+    assert row["m2m"] is None
 
 
 def test_service_m2m_quotes_failure_is_reported(monkeypatch):
@@ -479,3 +479,13 @@ def test_service_skips_the_tradebook_when_no_position_can_use_it(monkeypatch):
     assert ok and calls == []
     assert body["data"]["rows"][0]["m2m_available"] is False
     assert "not supported" in body["data"]["rows"][0]["m2m_reason"]
+
+
+def test_service_failed_m2m_fetch_gives_null_fields_not_missing_ones(monkeypatch):
+    svc = _patch_service(monkeypatch, positions=[_pos("X", 0, 0.05)])
+    _patch_m2m_inputs(monkeypatch, tradebook_ok=False)
+    ok, body, _ = svc.get_pnl_attribution("key", "positions", include_m2m=True)
+    row = body["data"]["rows"][0]
+    for field in ("m2m_fixed", "m2m", "overnight_quantity", "prev_close"):
+        assert field in row and row[field] is None, field
+    assert row["m2m_available"] is False and row["pnl_equals_m2m"] is False

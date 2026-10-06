@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Position } from '@/types/trading'
-import { render, screen, userEvent, waitFor } from '@/test/test-utils'
+import { act, render, screen, userEvent, waitFor } from '@/test/test-utils'
 
 const mocks = vi.hoisted(() => ({
   getPositions: vi.fn(),
@@ -201,8 +201,12 @@ describe('Positions M2M switch', () => {
       })
     )
     let resolveSlow: (value: unknown) => void = () => {}
+    let slowConsumed = false
     const slow = new Promise((resolve) => {
       resolveSlow = resolve
+    }).then((value) => {
+      slowConsumed = true
+      return value
     })
     // The first call (broker P&L basis, from the strategy grouping) is slow; the
     // second (M2M, after the switch) is immediate.
@@ -222,7 +226,8 @@ describe('Positions M2M switch', () => {
 
     // Now the slow answer arrives, with no M2M figures in it.
     resolveSlow(attribution({}))
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor(() => expect(slowConsumed).toBe(true))
+    await act(async () => {}) // let React apply (or ignore) what the page just received
 
     expect(screen.getAllByText(/4,377\.75/).length).toBeGreaterThan(0)
     expect(screen.queryByText(/could not be worked out/)).not.toBeInTheDocument()
@@ -247,7 +252,8 @@ describe('Positions M2M switch', () => {
     )
     await renderPage()
     await waitFor(() => expect(mocks.getStrategyAttribution).toHaveBeenCalled())
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The load path and the switch have both had their turn once the page has painted.
+    await act(async () => {})
 
     expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(1)
   })

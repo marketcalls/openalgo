@@ -158,3 +158,13 @@ def test_an_unusable_fill_only_spoils_its_own_row():
     results = compute_m2m(positions, trades, {("P", "NFO"): 22.7})
     assert not results[("P", "NFO", "MIS")]["available"]
     assert results[("P", "NFO", "NRML")]["available"]
+
+
+def test_a_fill_that_names_no_exchange_or_product_spoils_every_row():
+    # Its key cannot equal any position's key, so it would otherwise be missed.
+    for missing in ("exchange", "product", "symbol"):
+        positions = [_pos("P", 0, 0.05, "MIS"), _pos("Q", 0, 0.05, "NRML")]
+        bad = dict(_trade("P", "BUY", 65, 7.1), **{missing: ""})
+        results = compute_m2m(positions, [bad], {})
+        assert all(not r["available"] for r in results.values()), missing
+        assert all("cannot be matched" in r["reason"] for r in results.values())

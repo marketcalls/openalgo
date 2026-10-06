@@ -128,16 +128,27 @@ export default function Holdings() {
   // the user has just picked a strategy.
   const ATTRIBUTION_MIN_INTERVAL_MS = 30000
   const lastAttributionRef = useRef(0)
-  const fetchAttribution = useCallback(async () => {
-    if (!apiKey) return
+  // One request at a time: a chip click, a gated refresh and the page load share the
+  // one already in flight, so answers cannot arrive out of order and the broker is
+  // not read twice at once.
+  const attributionInFlight = useRef<Promise<void> | null>(null)
+  const fetchAttribution = useCallback((): Promise<void> => {
+    if (!apiKey) return Promise.resolve()
+    if (attributionInFlight.current) return attributionInFlight.current
     lastAttributionRef.current = Date.now()
-    try {
-      const response = await tradingApi.getStrategyAttribution(apiKey, 'holdings')
-      setAttribution(response.status === 'success' && response.data ? response.data : null)
-    } catch {
-      // The strategy view is optional: without it the page is unchanged.
-      setAttribution(null)
-    }
+    const running = (async () => {
+      try {
+        const response = await tradingApi.getStrategyAttribution(apiKey, 'holdings')
+        setAttribution(response.status === 'success' && response.data ? response.data : null)
+      } catch {
+        // The strategy view is optional: without it the page is unchanged.
+        setAttribution(null)
+      } finally {
+        attributionInFlight.current = null
+      }
+    })()
+    attributionInFlight.current = running
+    return running
   }, [apiKey])
 
   // Load the split once so the strategy list is ready

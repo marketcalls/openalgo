@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, userEvent, waitFor } from '@/test/test-utils'
+import { act, render, screen, userEvent, waitFor } from '@/test/test-utils'
 
 // The chart library draws on a canvas; a permissive fake is enough here.
 vi.mock('lightweight-charts', () => {
@@ -145,15 +145,25 @@ describe('PnL Tracker basis switch', () => {
       releaseSlow = resolve
     })
     let pnlCalls = 0
+    let lateAnswerGiven = false
+    // Different figures per basis, so a stale answer would show in the numbers too.
+    const figures = { pnl: 3906.5, m2m: 10887.5 } as Record<string, number>
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/auth/csrf-token') return { ok: true, json: async () => ({ csrf_token: 'tok' }) }
       const requested = JSON.parse(String(init?.body ?? '{}')).basis
       pnlCalls += 1
+      const isLate = pnlCalls === 1
       // The first request (broker P&L) is slow and answers last.
-      if (pnlCalls === 1) await slow
+      if (isLate) await slow
       return {
         ok: true,
-        json: async () => ({ status: 'success', data: { ...DATA, basis: requested } }),
+        json: async () => {
+          if (isLate) lateAnswerGiven = true
+          return {
+            status: 'success',
+            data: { ...DATA, current_mtm: figures[requested], basis: requested },
+          }
+        },
       }
     })
     render(<PnLTracker />)
@@ -162,11 +172,16 @@ describe('PnL Tracker basis switch', () => {
     await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
     expect(await screen.findByText('Current M2M')).toBeInTheDocument()
 
-    releaseSlow()
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor(() => expect(screen.getAllByText(/10,887\.50/).length).toBeGreaterThan(0))
 
-    // The late broker-P&L answer did not put the P&L titles back.
+    releaseSlow()
+    await waitFor(() => expect(lateAnswerGiven).toBe(true))
+    await act(async () => {}) // let React apply (or ignore) what the page just received
+
+    // The late broker-P&L answer changed neither the titles nor the numbers.
     expect(screen.getByText('Current M2M')).toBeInTheDocument()
     expect(screen.queryByText('Current P&L')).not.toBeInTheDocument()
+    expect(screen.getAllByText(/10,887\.50/).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText(/3,906\.50/)).toHaveLength(0)
   })
 })
