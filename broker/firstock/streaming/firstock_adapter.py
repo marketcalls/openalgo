@@ -38,7 +38,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.user_id = None
         self.broker_name = "firstock"
         self.running = False
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
         self.subscription_queue = []
         self.batch_timer = None
         self.batch_delay = 0.5
@@ -452,13 +452,19 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for exchange_type, tokens in exchange_tokens.items():
                 token_list.append({"exchangeType": exchange_type, "tokens": tokens})
 
-            try:
-                ws_client.subscribe(f"batch_{uuid.uuid4().hex}", 2, token_list)
-                self.logger.info(
-                    f"Batch subscribed {sum(len(tokens) for tokens in exchange_tokens.values())} Firstock tokens"
-                )
-            except Exception as e:
-                self.logger.error(f"Firstock batch subscription failed: {e}")
+        try:
+            ws_client.subscribe(f"batch_{uuid.uuid4().hex}", 2, token_list)
+            self.logger.info(
+                f"Batch subscribed {sum(len(tokens) for tokens in exchange_tokens.values())} Firstock tokens"
+            )
+        except Exception as e:
+            with self.lock:
+                for item in queued:
+                    if self.ws_subscription_refs.get(item["subscription_token"]):
+                        self._queue_ws_subscription_locked(
+                            item["brexchange"], item["token"]
+                        )
+            self.logger.error(f"Firstock batch subscription failed: {e}")
 
     def _resubscribe_all(self) -> None:
         """Resubscribe to all existing subscriptions after reconnection"""

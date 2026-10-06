@@ -9,6 +9,9 @@ from urllib.parse import urlencode
 import websocket
 
 from utils.logging import get_logger
+from utils import runtime as _runtime
+
+_real_threading = _runtime.original("threading")
 
 
 class FirstockWebSocket:
@@ -71,9 +74,9 @@ class FirstockWebSocket:
         # _on_message auth-fail, _monitor_connection stale-pong) and the
         # self.wsapp = None null-out so racing closers don't clobber each
         # other or double-close.
-        self._close_lock = threading.Lock()
+        self._close_lock = _real_threading.Lock()
         # Wakes the supervisor loop out of its inter-retry sleep on shutdown.
-        self._shutdown_event = threading.Event()
+        self._shutdown_event = _real_threading.Event()
         self.last_pong_time = time.time()
         self.authenticated = False  # Track authentication status
 
@@ -86,6 +89,8 @@ class FirstockWebSocket:
 
         # Subscriptions tracking
         self.subscriptions = set()
+        self._subscription_tokens = {}
+        self._subscription_lock = _real_threading.Lock()
         self.pending_subscriptions = []  # Queue subscriptions until authenticated
 
         # Logger
@@ -318,6 +323,9 @@ class FirstockWebSocket:
             ping_thread.join(timeout=2)
 
         self.connection_state = self.DISCONNECTED
+        with self._subscription_lock:
+            self.subscriptions.clear()
+            self._subscription_tokens.clear()
         self.logger.info("Firstock WebSocket connection closed")
 
     def subscribe(self, correlation_id, mode, token_list):
@@ -374,8 +382,11 @@ class FirstockWebSocket:
             # Send subscription
             wsapp.send(json.dumps(subscribe_msg))
 
-            # Track subscription
-            self.subscriptions.add(correlation_id)
+            # Keep batched correlation IDs tied to their wire instruments so
+            # token-level unsubscriptions can retire a batch when it empties.
+            with self._subscription_lock:
+                self.subscriptions.add(correlation_id)
+                self._subscription_tokens.setdefault(correlation_id, set()).update(tokens)
 
             self.logger.info(f"Subscribed to {correlation_id} with tokens: {tokens}")
 
@@ -422,8 +433,17 @@ class FirstockWebSocket:
             # Send unsubscription
             wsapp.send(json.dumps(unsubscribe_msg))
 
-            # Remove from tracking
-            self.subscriptions.discard(correlation_id)
+            # Remove these instruments from every batch that contains them.
+            # Adapter subscriptions are per symbol while wire sends are batched.
+            with self._subscription_lock:
+                removed_tokens = set(tokens)
+                for tracked_id, tracked_tokens in list(self._subscription_tokens.items()):
+                    tracked_tokens.difference_update(removed_tokens)
+                    if not tracked_tokens:
+                        self._subscription_tokens.pop(tracked_id, None)
+                        self.subscriptions.discard(tracked_id)
+                self._subscription_tokens.pop(correlation_id, None)
+                self.subscriptions.discard(correlation_id)
 
             self.logger.info(f"Unsubscribed from {correlation_id}")
 
@@ -685,7 +705,8 @@ class FirstockWebSocket:
 
     def get_subscriptions(self):
         """Get list of active subscriptions"""
-        return list(self.subscriptions)
+        with self._subscription_lock:
+            return list(self.subscriptions)
 
     def _process_pending_subscriptions(self):
         """Process any subscriptions that were queued while waiting for authentication"""

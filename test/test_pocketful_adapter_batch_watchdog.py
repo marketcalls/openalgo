@@ -86,7 +86,7 @@ def test_watchdog_closes_only_after_real_data_stalls(monkeypatch):
     adapter._last_data_message_time = 100
 
     times = iter([189, 191])
-    monkeypatch.setattr(adapter_module.time, "time", lambda: next(times))
+    monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(times))
     adapter._health_check_loop(StopAfterOneCheck(), ws)
 
     assert ws.closed
@@ -95,8 +95,51 @@ def test_watchdog_closes_only_after_real_data_stalls(monkeypatch):
 def test_data_watchdog_arms_on_spread_across_three_time_buckets(monkeypatch):
     adapter = PocketfulWebSocketAdapter()
     moments = iter([100, 101, 131, 161])
-    monkeypatch.setattr(adapter_module.time, "time", lambda: next(moments))
+    monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(moments))
     for _ in range(4):
         adapter._record_market_data()
 
     assert adapter._data_watchdog_armed
+
+
+def test_data_watchdog_stays_disarmed_until_three_recent_buckets(monkeypatch):
+    adapter = PocketfulWebSocketAdapter()
+    moments = iter([100, 101, 131, 431, 461])
+    monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(moments))
+
+    for _ in range(3):
+        adapter._record_market_data()
+    assert not adapter._data_watchdog_armed
+
+    adapter._record_market_data()
+    adapter._record_market_data()
+    assert not adapter._data_watchdog_armed
+
+
+def test_failed_batch_is_requeued_for_retry(monkeypatch):
+    class FailingSocket(FakeSocket):
+        def send(self, _payload):
+            raise OSError("temporary send failure")
+
+    adapter = PocketfulWebSocketAdapter()
+    class FakeTimer:
+        def __init__(self, *_args):
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+    monkeypatch.setattr(adapter_module._real_threading, "Timer", FakeTimer)
+    adapter.connected = True
+    adapter.ws_client = FailingSocket()
+    sub = {"pocketful_mode": 2, "exchange_code": 1, "token": "11"}
+    adapter.subscriptions["a"] = sub
+    adapter.subscription_queue["a"] = sub
+
+    adapter._process_batch_subscriptions()
+
+    assert adapter.subscription_queue == {"a": sub}
+    assert adapter.batch_timer is not None

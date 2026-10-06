@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import uuid
 
 import httpx
 
@@ -189,7 +190,7 @@ def place_order_api(data, auth):
     }
     # Angel exposes ordertag in the order book, so it can be used to recover
     # an order when the placement response is lost or cannot be decoded.
-    ordertag = "openalgo"
+    ordertag = f"oa{uuid.uuid4().hex[:16]}"
     payload = json.dumps(
         {
             "variety": newdata.get("variety", "NORMAL"),
@@ -234,7 +235,16 @@ def place_order_api(data, auth):
     except (ValueError, json.JSONDecodeError):
         response_data = None
 
-    if response_data is None:
+    valid_order_response = (
+        isinstance(response_data, dict)
+        and response_data.get("status") is True
+        and isinstance(response_data.get("data"), dict)
+        and bool(response_data["data"].get("orderid"))
+    )
+    explicit_rejection = (
+        isinstance(response_data, dict) and response_data.get("status") is False
+    )
+    if not valid_order_response and not explicit_rejection:
         logger.warning(
             "Ambiguous Angel order response (HTTP %s); reconciling ordertag %s",
             response.status_code,
@@ -258,6 +268,7 @@ def place_order_api(data, auth):
         ]
         matched_order = matching_orders[0] if len(matching_orders) == 1 else None
         if matched_order:
+            response.status = 200
             response_data = {
                 "status": True,
                 "message": "Order found in order book after ambiguous placement response",
@@ -267,6 +278,8 @@ def place_order_api(data, auth):
                 },
             }
         else:
+            if response.status_code == 200:
+                response.status = 500
             response_data = {
                 "status": "unknown",
                 "message": (

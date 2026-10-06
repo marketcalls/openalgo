@@ -40,10 +40,10 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
-        self.lock = threading.Lock()
-        self._reconnect_worker_lock = threading.Lock()
+        self.lock = _real_threading.Lock()
+        self._reconnect_worker_lock = _real_threading.Lock()
         self._reconnect_worker: threading.Thread | None = None
-        self._stop_event = threading.Event()  # Interruptible sleep for reconnect
+        self._stop_event = _real_threading.Event()  # Interruptible sleep for reconnect
         self.subscription_queue = {}
         self.batch_timer = None
         self._subscription_request_lock = _real_threading.Lock()
@@ -518,32 +518,34 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Generate correlation ID
         prefix = f"{symbol}_{exchange}_{mode}"
-        removed = None
+        removed = []
+        needs_wire_unsubscribe = False
         with self.lock:
-            correlation_id = prefix
-            for key, sub in self.subscriptions.items():
-                if (
-                    (key == prefix or key.startswith(prefix + "_"))
-                    and sub["symbol"] == symbol
-                    and sub["exchange"] == exchange
-                    and sub["mode"] == mode
-                ):
-                    correlation_id = key
-                    break
-            removed = self.subscriptions.pop(correlation_id, None)
-            queued = self.subscription_queue.pop(correlation_id, None)
-            if removed is not None:
+            matches = [
+                (key, sub)
+                for key, sub in self.subscriptions.items()
+                if (key == prefix or key.startswith(prefix + "_"))
+                and sub["symbol"] == symbol
+                and sub["exchange"] == exchange
+                and sub["mode"] == mode
+            ]
+            for key, sub in matches:
+                removed.append((key, sub))
+                self.subscriptions.pop(key, None)
+                if self.subscription_queue.pop(key, None) is None:
+                    needs_wire_unsubscribe = True
+            if removed:
                 self.logger.info(f"Removed {symbol}.{exchange} from subscription registry")
 
         # Unsubscribe if connected
-        if queued is None and removed is not None and self.connected and self.ws_client:
+        if needs_wire_unsubscribe and self.connected and self.ws_client:
             try:
                 with self._subscription_request_lock:
                     self.logger.info(
                         f"Sending unsubscribe request for {symbol}.{exchange} to XTS server"
                     )
                     unsubscribe_ok = self.ws_client.unsubscribe(
-                        correlation_id, mode, instruments
+                        removed[0][0], mode, instruments
                     )
                 if unsubscribe_ok:
                     self.logger.info(
@@ -567,7 +569,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
-        else:
+        elif not removed:
             self.logger.warning("Not connected to XTS server, skipping unsubscribe request")
 
         return self._create_success_response(
@@ -612,6 +614,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         for mode, subscriptions in mode_groups.items():
             batch_id = f"__openalgo_batch_{mode}"
+            batch = []
             try:
                 with self._subscription_request_lock:
                     with self.lock:
@@ -635,6 +638,12 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"Batch subscribed {count} RMoney instruments in mode {mode}"
                 )
             except Exception as e:
+                with self.lock:
+                    for correlation_id, sub in batch:
+                        if self.subscriptions.get(correlation_id) is sub:
+                            self.subscription_queue[correlation_id] = sub
+                    if self.subscription_queue:
+                        self._start_batch_timer_locked()
                 self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
 
     def _on_error(self, wsapp, error) -> None:

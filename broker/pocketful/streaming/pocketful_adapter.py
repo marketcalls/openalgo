@@ -65,7 +65,6 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._last_data_message_time = None
         self._data_watchdog_armed = False
         self._data_bucket_starts = deque(maxlen=self.DATA_ARM_BUCKETS)
-        self._last_message_time = None
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -396,21 +395,29 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.batch_timer = None
             if not self.connected or not self.ws_client or not self.subscription_queue:
                 return
-            queued = list(self.subscription_queue.values())
+            ws_client = self.ws_client
+            queued = list(self.subscription_queue.items())
             self.subscription_queue.clear()
             groups = {}
-            for sub in queued:
+            for correlation_id, sub in queued:
                 key = (sub["pocketful_mode"], sub["exchange_code"])
-                groups.setdefault(key, {})[str(sub["token"])] = [
-                    sub["exchange_code"], int(sub["token"])
-                ]
-            for (mode, _exchange_code), instruments in groups.items():
-                try:
-                    self._send_subscription_batch(
-                        list(instruments.values()), mode, self.ws_client
-                    )
-                except Exception as e:
-                    self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
+                groups.setdefault(key, {})[correlation_id] = sub
+
+        for (mode, _exchange_code), subscriptions in groups.items():
+            instruments = {
+                str(sub["token"]): [sub["exchange_code"], int(sub["token"])]
+                for sub in subscriptions.values()
+            }
+            try:
+                self._send_subscription_batch(list(instruments.values()), mode, ws_client)
+            except Exception as e:
+                with self.lock:
+                    for correlation_id, sub in subscriptions.items():
+                        if self.subscriptions.get(correlation_id) is sub:
+                            self.subscription_queue[correlation_id] = sub
+                    if self.connected and self.subscription_queue:
+                        self._start_batch_timer_locked()
+                self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
 
     def _send_subscription_batch(self, instruments, mode: int, ws=None) -> None:
         market_type = {1: "marketdata", 2: "compact_marketdata", 4: "full_snapquote"}[mode]
@@ -475,7 +482,6 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._last_data_message_time = None
                 self._data_watchdog_armed = False
                 self._data_bucket_starts.clear()
-                self._last_message_time = time.monotonic()
                 current_ws = self.ws_client
         if stale:
             ws.close()
@@ -524,8 +530,6 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_message(self, ws, message) -> None:
         """Callback for messages from the WebSocket"""
         try:
-            if ws is self.ws_client:
-                self._last_message_time = time.monotonic()
             # Try to parse as JSON first
             try:
                 data = json.loads(message)
@@ -753,7 +757,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 break
 
     def _record_market_data(self) -> None:
-        now = time.time()
+        now = time.monotonic()
         with self.lock:
             self._last_data_message_time = now
             if self._data_watchdog_armed:
@@ -777,7 +781,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if current_ws is not self.ws_client or not self.connected:
                     return
                 silent_for = (
-                    time.time() - self._last_data_message_time
+                    time.monotonic() - self._last_data_message_time
                     if self._last_data_message_time is not None
                     else None
                 )
