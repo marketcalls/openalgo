@@ -324,16 +324,27 @@ def test_off_gthread_the_quote_fanouts_leave_no_threads_behind(definedge, monkey
     client = httpx.Client(transport=httpx.MockTransport(recorder))
     monkeypatch.setattr(flattrade, "get_httpx_client", lambda: client)
 
-    before = threading.active_count()
+    before = set(threading.enumerate())
     results = flattrade.BrokerData("susertoken")._process_quotes_batch(_symbols(10))
     assert sorted(r["data"]["ltp"] for r in results) == [101.5] * 10
     results = definedge.BrokerData("key:::susertoken:::token")._process_quotes_batch(_symbols(10))
     assert [r["data"]["ltp"] for r in results] == [101.5] * 10
 
+    # Only a quote pool's threads are counted: the suite shares one
+    # interpreter, and a thread something else starts meanwhile is not ours.
+    prefixes = ("ThreadPoolExecutor-", "openalgo-definedge-quotes", "openalgo-flattrade-quotes")
+
+    def left_behind():
+        return [
+            t.name
+            for t in threading.enumerate()
+            if t not in before and t.is_alive() and t.name.startswith(prefixes)
+        ]
+
     deadline = time.monotonic() + 5
-    while threading.active_count() > before and time.monotonic() < deadline:
+    while left_behind() and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert threading.active_count() == before, "a quote fan-out left threads running"
+    assert left_behind() == [], "a quote fan-out left threads running"
 
 
 # --- the OI cache -----------------------------------------------------------------
