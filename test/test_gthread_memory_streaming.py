@@ -16,6 +16,7 @@ def test_pocketful_rapid_reconnects_keep_one_heartbeat_thread():
         import logging
         import threading
         import time
+        from collections import deque
 
         import dotenv
         dotenv.load_dotenv = lambda *args, **kwargs: False
@@ -41,6 +42,12 @@ def test_pocketful_rapid_reconnects_keep_one_heartbeat_thread():
         adapter.lock = threading.Lock()
         adapter.subscriptions = {}
         adapter._heartbeat_stop = None
+        adapter._health_stop = None
+        adapter._last_data_message_time = None
+        adapter._data_watchdog_armed = False
+        adapter._data_bucket_starts = deque(maxlen=adapter.DATA_ARM_BUCKETS)
+        adapter.subscription_queue = {}
+        adapter.batch_timer = None
         adapter._reconnect_stop = threading.Event()
         baseline = threading.active_count()
 
@@ -120,6 +127,9 @@ def test_pocketful_repeated_connect_during_backoff_keeps_one_retry_thread():
         adapter._reconnect_stop = threading.Event()
         adapter._connect_thread = None
         adapter._heartbeat_stop = None
+        adapter._health_stop = None
+        adapter.subscription_queue = {}
+        adapter.batch_timer = None
         baseline = threading.active_count()
 
         adapter.connect()
@@ -195,6 +205,9 @@ def test_pocketful_logout_during_token_read_cannot_open_a_socket():
         adapter._reconnect_stop = threading.Event()
         adapter._connect_thread = None
         adapter._heartbeat_stop = None
+        adapter._health_stop = None
+        adapter.subscription_queue = {}
+        adapter.batch_timer = None
 
         adapter.connect()
         assert reading.wait(2), "retry thread did not reach token read"

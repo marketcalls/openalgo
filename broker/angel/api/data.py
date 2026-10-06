@@ -42,6 +42,30 @@ QUOTE_MIN_INTERVAL = float(os.getenv("ANGEL_QUOTE_MIN_INTERVAL", "0.15"))      #
 HISTORY_MIN_INTERVAL = float(os.getenv("ANGEL_HISTORY_MIN_INTERVAL", "0.5"))   # ~2 req/s (limit 3)
 
 
+def _angel_history_window(start_date: str, end_date: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Build Angel's date-only request window using IST, independent of host TZ."""
+    from_date = pd.Timestamp(start_date).normalize()
+    requested_end = pd.Timestamp(end_date).normalize()
+    now_ist = pd.Timestamp.now(tz="Asia/Kolkata")
+
+    if requested_end.date() == now_ist.date():
+        to_date = now_ist.tz_localize(None).floor("min")
+    else:
+        to_date = requested_end + pd.Timedelta(hours=23, minutes=59)
+
+    return from_date, to_date
+
+
+def _angel_timestamps_to_epoch(timestamps: pd.Series) -> pd.Series:
+    """Convert Angel's ISO timestamps (normally carrying +05:30) to UTC epochs."""
+    parsed = pd.to_datetime(timestamps, format="ISO8601")
+    if parsed.dt.tz is None:
+        parsed = parsed.dt.tz_localize("Asia/Kolkata")
+    else:
+        parsed = parsed.dt.tz_convert("UTC")
+    return parsed.astype("int64") // 10**9
+
+
 def _apply_rate_limit(category: str) -> None:
     """Block just long enough to keep ``category`` under Angel's per-second cap.
 
@@ -476,22 +500,8 @@ class BrokerData:
                     f"Timeframe '{interval}' is not supported by Angel. Supported timeframes are: {', '.join(supported)}"
                 )
 
-            # Convert dates to datetime objects
-            from_date = pd.to_datetime(start_date)
-            to_date = pd.to_datetime(end_date)
-
-            # Set start time to 00:00 for the start date
-            from_date = from_date.replace(hour=0, minute=0)
-
-            # If end_date is today, set the end time to current time
-            current_time = pd.Timestamp.now()
-            if to_date.date() == current_time.date():
-                to_date = current_time.replace(
-                    second=0, microsecond=0
-                )  # Remove seconds and microseconds
-            else:
-                # For past dates, set end time to 23:59
-                to_date = to_date.replace(hour=23, minute=59)
+            # Angel expects IST wall-clock values in fromdate/todate.
+            from_date, to_date = _angel_history_window(start_date, end_date)
 
             # Initialize empty list to store DataFrames
             dfs = []
@@ -620,15 +630,8 @@ class BrokerData:
             # Combine all chunks
             df = pd.concat(dfs, ignore_index=True)
 
-            # Convert timestamp to datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
-            if interval == "D":
-                df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
-
-            # Convert timestamp to Unix epoch
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9  # Convert to Unix epoch
+            # Angel timestamps carry their IST offset; normalize without host-TZ math.
+            df["timestamp"] = _angel_timestamps_to_epoch(df["timestamp"])
 
             # Ensure numeric columns and proper order
             numeric_columns = ["open", "high", "low", "close", "volume"]
@@ -692,20 +695,8 @@ class BrokerData:
             # Get token for the symbol
             token = get_token(symbol, exchange)
 
-            # Convert dates to datetime objects
-            from_date = pd.to_datetime(start_date)
-            to_date = pd.to_datetime(end_date)
-
-            # Set start time to 00:00 for the start date
-            from_date = from_date.replace(hour=0, minute=0)
-
-            # If end_date is today, set the end time to current time
-            current_time = pd.Timestamp.now()
-            if to_date.date() == current_time.date():
-                to_date = current_time.replace(second=0, microsecond=0)
-            else:
-                # For past dates, set end time to 23:59
-                to_date = to_date.replace(hour=23, minute=59)
+            # Keep OI requests on the same explicit IST window as candle requests.
+            from_date, to_date = _angel_history_window(start_date, end_date)
 
             # Initialize empty list to store DataFrames
             dfs = []
@@ -782,15 +773,7 @@ class BrokerData:
             # Combine all chunks
             df = pd.concat(dfs, ignore_index=True)
 
-            # Convert timestamp to datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
-            if interval == "D":
-                df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
-
-            # Convert timestamp to Unix epoch
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9
+            df["timestamp"] = _angel_timestamps_to_epoch(df["timestamp"])
 
             # Ensure oi column is numeric
             df["oi"] = pd.to_numeric(df["oi"])
