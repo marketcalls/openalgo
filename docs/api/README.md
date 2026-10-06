@@ -58,6 +58,7 @@ The current v1 surface contains **66 method/path pairs**. A resource with both G
 | POST | `/tradebook` | [Trade book](./account-services/tradebook.md) |
 | POST | `/positionbook` | [Position book](./account-services/positionbook.md) |
 | POST | `/holdings` | [Holdings](./account-services/holdings.md) |
+| POST | `/pnl/attribution` | [P&L attribution](./account-services/pnl-attribution.md) |
 
 ### Market Data And Symbols
 

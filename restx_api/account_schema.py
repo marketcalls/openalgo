@@ -58,3 +58,11 @@ class ChartSchema(Schema):
 
 class PnlSymbolsSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+
+
+class PnlAttributionSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    kind = fields.Str(required=True, validate=validate.OneOf(["positions", "holdings"]))
+    # Positions only: also return today's M2M per row (needs today's trades and
+    # previous closes, so it is opt-in).
+    m2m = fields.Bool(required=False, load_default=False)
