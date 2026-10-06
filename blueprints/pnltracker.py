@@ -312,14 +312,20 @@ def get_pnl_data():
             ), 200
 
         # Build the curve per symbol AND product from today's fills, the carried
-        # quantity and the previous close (the same M2M the Positions page shows).
-        # It returns None whenever it cannot be exact, and the code below runs
+        # quantity and the previous close, on the chosen basis: the broker's own
+        # P&L (the default, what the Positions page shows) or today's M2M. It
+        # returns None whenever it cannot be exact, and the code below runs
         # instead.
         try:
             from services.pnl_tracker_m2m import build_m2m_tracker_response
             from services.quotes_service import get_multiquotes
 
+            requested_basis = (request.get_json(silent=True) or {}).get(
+                "basis"
+            ) or request.args.get("basis")
+
             m2m_response = build_m2m_tracker_response(
+                basis="m2m" if requested_basis == "m2m" else "pnl",
                 api_key=api_key,
                 positions=tracker_positions,
                 trades=trades,

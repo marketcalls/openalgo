@@ -4,10 +4,20 @@
 blueprints/pnltracker.py calls `build_m2m_tracker_response` first and falls back
 to its own code when this returns None.
 
+Two bases, as on the Positions page (the switch there and on the tracker page):
+
+* "m2m": today's move only, carried positions measured from the previous close.
+* "pnl": the broker's own P&L. A carried position's cost is taken from the
+  broker's figure (its carried cost, which on Zerodha can differ from the real
+  fill), so the curve ends on the Positions page's P&L. Still per symbol and
+  product, so the grouping bug is gone in this view too.
+
 Why it exists: the tracker keys positions and trades by symbol only, so one
 contract traded in two products on the same day (an MIS round trip and an NRML
 position carried from the previous day) is mixed together, and the exit of a
-carried position is valued as a brand-new short. See the issue this fixes.
+carried position is valued as a brand-new short. For a carried position closed
+today it also took the broker's own P&L, and a broker can carry a different cost
+for such a position than the real fill.
 
 This module builds the curve per (symbol, exchange, product) from the formula in
 services/position_m2m.py:
@@ -16,8 +26,8 @@ services/position_m2m.py:
              + (overnight qty + net fills up to t) x price(t)
              - overnight qty x previous close
 
-summed over rows. The last point is replaced by the Positions page's own M2M
-(LTP-based), so the tracker's "Current MTM" and the page's total agree.
+summed over rows. The last point is replaced by the figure the Positions page
+shows for the same basis, so the tracker and the page agree.
 
 `build_m2m_frame` and `summarize` are pure; `build_m2m_tracker_response` does the
 I/O (quotes for previous closes, one 1-minute history call per symbol).
@@ -53,6 +63,8 @@ def build_m2m_frame(index: pd.DatetimeIndex, rows: list[dict[str, Any]]) -> pd.D
     Each row: `key` (column name), `overnight` (quantity carried in),
     `prev_close`, `prices` (a Series of minute closes, any index), `fallback_price`
     (used where no candle exists), and `trades` as (time, action, qty, price).
+    `overnight_cost`, when present, is the carried quantity's value to subtract
+    (default: overnight x previous close, i.e. the M2M basis).
     """
     frame: dict[str, np.ndarray] = {}
     index_ns = index.asi8
@@ -77,7 +89,9 @@ def build_m2m_frame(index: pd.DatetimeIndex, rows: list[dict[str, Any]]) -> pd.D
 
         qty_now = row["overnight"] + cum_qty
         marked = np.where(np.abs(qty_now) > 1e-9, qty_now * prices, 0.0)
-        overnight_cost = row["overnight"] * _f(row.get("prev_close"))
+        overnight_cost = row.get("overnight_cost")
+        if overnight_cost is None:
+            overnight_cost = row["overnight"] * _f(row.get("prev_close"))
         frame[row["key"]] = cum_value + marked - overnight_cost
     return pd.DataFrame(frame, index=index)
 
@@ -126,12 +140,15 @@ def build_m2m_tracker_response(
     rate_limiter,
     get_history_fn,
     get_multiquotes_fn,
+    basis: str = "m2m",
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """The tracker's response on the M2M basis, or None to let the tracker's own
+    """The tracker's response on the chosen basis, or None to let the tracker's own
     code run (anything this cannot do exactly: an unsupported exchange, an
     unparseable fill time, a missing previous close or candle history)."""
     now = now or datetime.now(IST)
+    if basis not in ("m2m", "pnl"):
+        return None
 
     if any(p.get("exchange") not in SUPPORTED_EXCHANGES for p in positions):
         return None
@@ -215,14 +232,35 @@ def build_m2m_tracker_response(
     index = pd.date_range(start=open_at, end=end, freq="1min", tz=IST)
 
     rows = []
+    last_value: dict[tuple, float] = {}
     for position in positions:
         key = (position.get("symbol"), position.get("exchange"), position.get("product"))
         result = final[key]
         ltp = _f(position.get("ltp"))
+        overnight_cost = None
+        if basis == "pnl":
+            try:
+                broker_pnl = float(position.get("pnl"))
+            except (TypeError, ValueError):
+                return None
+            last_value[key] = broker_pnl
+            if abs(result["overnight_quantity"]) > 1e-9:
+                # Pick the carried cost that makes this row end on the broker's own
+                # P&L: today's fills and the live mark are known, the rest is the
+                # broker's carried cost.
+                fills_value = result["m2m_fixed"] + result["overnight_quantity"] * _f(
+                    result["prev_close"]
+                )
+                overnight_cost = fills_value + _f(position.get("quantity")) * ltp - broker_pnl
+            else:
+                overnight_cost = 0.0
+        else:
+            last_value[key] = result["m2m"]
         rows.append(
             {
                 "key": "|".join(str(part) for part in key),
                 "overnight": result["overnight_quantity"],
+                "overnight_cost": overnight_cost,
                 "prev_close": result["prev_close"],
                 "prices": closes[(key[0], key[1])],
                 "fallback_price": ltp or _f(result["prev_close"]),
@@ -235,9 +273,8 @@ def build_m2m_tracker_response(
         )
     frame = build_m2m_frame(index, rows)
 
-    # The last point is the Positions page's own M2M, so the two always agree.
-    for position in positions:
-        key = (position.get("symbol"), position.get("exchange"), position.get("product"))
-        column = "|".join(str(part) for part in key)
-        frame.iloc[-1, frame.columns.get_loc(column)] = final[key]["m2m"]
+    # The last point is the Positions page's own figure for the same basis, so the
+    # two always agree.
+    for key, value in last_value.items():
+        frame.iloc[-1, frame.columns.get_loc("|".join(str(part) for part in key))] = value
     return summarize(frame)

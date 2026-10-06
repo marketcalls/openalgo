@@ -4,7 +4,7 @@ Unit tests for the P&L Tracker's M2M curve.
 The scenario is a NIFTY weekly put: a position carried overnight in NRML and sold
 at 15:15, while the same contract was also traded intraday in MIS. The tracker used
 to mix the two products, and valued the carried exit as a new short. This curve
-keeps them apart and ends on the same M2M the Positions page shows.
+keeps them apart and ends on the same figure the Positions page shows.
 
 Run with: uv run pytest test/test_pnl_tracker_m2m.py -v
 """
@@ -263,3 +263,44 @@ def test_wrapper_before_the_open_returns_the_empty_response():
 def test_wrapper_with_nothing_traded_returns_the_empty_response():
     response = _run(positions=[], trades=[])
     assert response["pnl_series"] == []
+
+
+# --- the P&L basis (the broker's own figure, per symbol and product) --------------------------
+
+
+def _with_pnl(positions, pnls):
+    return [dict(p, pnl=pnl) for p, pnl in zip(positions, pnls, strict=True)]
+
+
+def test_frame_uses_a_given_carried_cost_instead_of_the_previous_close():
+    index = _index()
+    prices = pd.Series(22.7, index=index)
+    row = _row("NRML", 195, 22.7, [(_at(15, 15), "SELL", 195, 0.25)], prices)
+    row["overnight_cost"] = 11592.75  # Kite's carried cost: 195 x 59.45
+    frame = build_m2m_frame(index, [row])
+    assert frame["NRML"].loc[_at(15, 14)] == 195 * 22.7 - 11592.75
+    assert round(frame["NRML"].iloc[-1], 2) == -11544.0
+
+
+def test_pnl_basis_ends_on_the_brokers_pnl_total_with_products_kept_apart():
+    positions = _with_pnl(POSITIONS, [-448.5, -11544.0])
+    response = _run(positions=positions, basis="pnl")
+    assert response["current_mtm"] == -11992.5
+    assert response["pnl_series"][-1]["value"] == -11992.5
+
+
+def test_the_two_bases_differ_for_a_carried_position_and_agree_for_an_intraday_one():
+    positions = _with_pnl(POSITIONS, [-448.5, -11544.0])
+    pnl = _run(positions=positions, basis="pnl")
+    m2m = _run(positions=positions, basis="m2m")
+    assert pnl["current_mtm"] == -11992.5
+    assert m2m["current_mtm"] == -4826.25
+    assert pnl["pnl_series"][0]["value"] != m2m["pnl_series"][0]["value"]
+
+
+def test_pnl_basis_steps_aside_when_the_brokers_pnl_is_missing():
+    assert _run(positions=POSITIONS, basis="pnl") is None  # fixtures carry no pnl
+
+
+def test_an_unknown_basis_steps_aside():
+    assert _run(basis="weekly") is None
