@@ -69,96 +69,78 @@ GROWW_CANCEL_ORDER_URL = f"{GROWW_BASE_URL}/v1/order/cancel"
 GROWW_ORDER_TRADES_URL = f"{GROWW_BASE_URL}/v1/order/trades"
 
 
-def direct_get_order_book(auth):
-    """
-    Get list of orders for the user using direct API calls instead of SDK
+# Groww's documented page size limits (04-orders)
+_ORDER_LIST_PAGE_SIZE = 100
+_TRADES_PAGE_SIZE = 50
 
-    Args:
-        auth (str): Authentication token
+
+def _groww_headers(auth):
+    """Headers Groww requires on every request (01-introduction)."""
+    return {
+        "Authorization": f"Bearer {auth}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-API-VERSION": "1.0",
+    }
+
+
+def _get_paged(client, url, headers, params, list_key, page_size):
+    """Read every page of a Groww list endpoint.
 
     Returns:
-        dict: Order book data with combined orders from all segments
+        tuple: (items, None) on success, or (items read so far, reason) when a
+        page failed. A short page ends the list.
+    """
+    items, page = [], 0
+    while True:
+        resp = client.get(url, headers=headers, params={**params, "page": page, "page_size": page_size})
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        if resp.status_code != 200 or not isinstance(body, dict) or body.get("status") != "SUCCESS":
+            return items, _groww_error_message(body, f"HTTP {resp.status_code}")
+        batch = (body.get("payload") or {}).get(list_key) or []
+        items.extend(batch)
+        if len(batch) < page_size:
+            return items, None
+        page += 1
+
+
+def direct_get_order_book(auth):
+    """
+    Read the day's orders from both segments (GET /v1/order/list).
+
+    Each order keeps Groww's documented fields and gains OpenAlgo's exchange
+    (NSE/BSE/NFO/BFO) and symbol.
+
+    Returns:
+        dict: {"data": orders, ...}, or {"status": "error", "message": ...}
+        when the CASH book cannot be read. An FNO read that fails is logged
+        and skipped, as for positions: it fails on accounts without F&O.
     """
     try:
-        # Prepare the API client and headers
         client = get_httpx_client()
-        headers = {
-            "Authorization": f"Bearer {auth}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        logger.debug("Using direct API to fetch Groww order book")
-
-        # Get orders from all segments (CASH + FNO)
+        headers = _groww_headers(auth)
         all_orders = []
-        segments = [SEGMENT_CASH, SEGMENT_FNO]  # Fetch from both segments
-
-        for segment in segments:
-            page = 0
-            page_size = 25  # Maximum allowed by Groww API
-
-            logger.debug(
-                f"Fetching order book for segment {segment} with pagination (page_size={page_size})"
+        for segment in (SEGMENT_CASH, SEGMENT_FNO):
+            orders, failure = _get_paged(
+                client,
+                GROWW_ORDER_LIST_URL,
+                headers,
+                {"segment": segment},
+                "order_list",
+                _ORDER_LIST_PAGE_SIZE,
             )
-
-            # Keep fetching until we get all orders for this segment
-            while True:
-                try:
-                    # Build request URL with query parameters
-                    params = {"segment": segment, "page": page, "page_size": page_size}
-
-                    logger.debug(
-                        f"Making API request to {GROWW_ORDER_LIST_URL} with params: {params}"
-                    )
-
-                    # Make the API request
-                    response = client.get(GROWW_ORDER_LIST_URL, headers=headers, params=params)
-
-                    # Check for HTTP errors
-                    response.raise_for_status()
-
-                    # Parse the response
-                    orders_data = response.json()
-                    logger.debug(f"API Response status: {orders_data.get('status')}")
-
-                    if orders_data.get("status") != "SUCCESS" or not orders_data.get(
-                        "payload", {}
-                    ).get("order_list"):
-                        logger.debug(
-                            f"No orders found or empty response for segment {segment} on page {page}"
-                        )
-                        break
-
-                    current_orders = orders_data["payload"]["order_list"]
-                    logger.debug(
-                        f"Retrieved {len(current_orders)} orders for segment {segment} from page {page}"
-                    )
-
-                    # Log details about first order for debugging
-                    if current_orders and page == 0:
-                        sample_order = current_orders[0]
-                        logger.debug(f"Sample order fields: {list(sample_order.keys())}")
-                        logger.debug(f"Sample order values: {sample_order}")
-
-                    all_orders.extend(current_orders)
-
-                    # If we got less than page_size orders, we've reached the end for this segment
-                    if len(current_orders) < page_size:
-                        logger.debug(
-                            f"Reached last page of orders for segment {segment} at page {page}"
-                        )
-                        break
-
-                    page += 1
-
-                except Exception as e:
-                    logger.error(
-                        f"Error in pagination loop for segment {segment} at page {page}: {str(e)}"
-                    )
-                    break
-
-        logger.debug(f"Successfully fetched total of {len(all_orders)} orders using direct API")
+            if failure and not says_no_positions({"message": failure}):
+                if segment == SEGMENT_CASH:
+                    logger.error(f"Groww order list (CASH) could not be read: {failure}")
+                    return {
+                        "status": "error",
+                        "message": f"Could not read the Groww order book: {failure}",
+                    }
+                logger.warning(f"Groww order list (FNO) could not be read, skipped: {failure}")
+            all_orders.extend(orders)
 
         # Map each order to OpenAlgo's exchange and symbol. Groww reports exchange
         # NSE/BSE plus segment CASH/FNO (04-orders "List orders"); OpenAlgo puts
@@ -174,33 +156,14 @@ def direct_get_order_book(auth):
             order["exchange"] = exchange
             order["symbol"] = get_oa_symbol(groww_symbol, exchange) or groww_symbol
 
-        # Return orders in the format expected by map_order_data
-        # Keep original response format for backward compatibility
-        response = {
-            "data": all_orders,
-            "order_list": all_orders,  # Include this for backward compatibility
-            "raw_response": {"status": "SUCCESS", "payload": {"order_list": all_orders}},
-        }
+        logger.debug(f"Groww order book: {len(all_orders)} orders")
+        return {"data": all_orders, "order_list": all_orders}
 
-        # Print detailed response for debugging
-        logger.debug("\n===== GROWW ORDER BOOK RESPONSE (DIRECT API) =====")
-        logger.debug(f"Total orders: {len(all_orders)}")
-        if all_orders:
-            logger.debug(f"First order sample: {json.dumps(all_orders[0], indent=2)[:500]}...")
-        logger.debug(f"Response keys: {list(response.keys())}")
-        logger.debug("============================================\n")
-
-        logger.debug(f"Final response structure: {list(response.keys())}")
-        return response
-
-    except Exception as e:
-        logger.error(f"Error fetching order book via direct API: {e}")
-        logger.exception("Full stack trace:")
-        # Return the same structure but with empty data
+    except Exception:
+        logger.exception("Error fetching the Groww order book")
         return {
-            "data": [],
-            "order_list": [],
-            "raw_response": {"status": "FAILURE", "payload": {"order_list": []}},
+            "status": "error",
+            "message": "Could not reach Groww to read the order book. Try again shortly.",
         }
 
 
@@ -309,401 +272,45 @@ def transform_groww_trade(trade):
 
 def get_trade_book(auth):
     """
-    Get list of all trades for the user using direct API calls
+    Every fill of the day, read from Groww's trades endpoint per filled order.
 
-    Args:
-        auth (str): Authentication token
+    Groww has no account-wide trade list, so the order book names the orders
+    that filled (filled_quantity > 0, 04-orders "List orders") and
+    get_order_trades reads each one's fills. Nothing is synthesised: if Groww
+    cannot return an order's trades, the tradebook reports an error rather
+    than inventing a fill.
 
     Returns:
-        tuple: (trade book data, status code)
+        dict: {"status": "success", "data": trades} with each trade already
+        transformed by transform_groww_trade, or {"status": "error", "message"}.
     """
-    try:
-        logger.debug("Using direct API implementation for get_trade_book")
+    book = get_order_book(auth)
+    if book.get("status") == "error":
+        return book
 
-        # Get order book first to find executed/completed orders
-        order_book_result = get_order_book(auth)
-        logger.debug(f"Order book result type: {type(order_book_result).__name__}")
+    trades, failed = [], []
+    for order in book.get("data", []):
+        try:
+            filled = float(order.get("filled_quantity") or 0)
+        except (TypeError, ValueError):
+            filled = 0
+        orderid = order.get("groww_order_id")
+        if filled <= 0 or not orderid:
+            continue
+        result, status_code = get_order_trades(orderid, auth, order.get("segment"))
+        if status_code != 200:
+            failed.append(orderid)
+            logger.error(f"Groww trades for order {orderid} could not be read: {result.get('message')}")
+            continue
+        trades.extend(result["trades"])
 
-        # Process the result appropriately based on its structure
-        orders = []
-
-        # Handle tuple response from direct API implementation
-        if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
-            # Extract the order data from the result
-            order_book_data = order_book_result[0]
-            logger.debug(f"Order book data type: {type(order_book_data).__name__}")
-
-            # Extract orders from the order book response based on its structure
-            if isinstance(order_book_data, dict):
-                # Log available keys for debugging
-                logger.debug(f"Order book data keys: {list(order_book_data.keys())}")
-
-                if "data" in order_book_data and order_book_data["data"]:
-                    orders = order_book_data["data"]
-                    logger.debug(f"Found {len(orders)} orders in 'data' field")
-                elif "order_list" in order_book_data and order_book_data["order_list"]:
-                    orders = order_book_data["order_list"]
-                    logger.debug(f"Found {len(orders)} orders in 'order_list' field")
-            # Handle direct list of orders
-            elif isinstance(order_book_data, list):
-                orders = order_book_data
-                logger.debug(f"Found {len(orders)} orders in list response")
-        # Legacy handling for direct dictionary response
-        elif isinstance(order_book_result, dict):
-            logger.debug("Processing legacy dictionary order book result")
-            if "data" in order_book_result and order_book_result["data"]:
-                orders = order_book_result["data"]
-            elif "order_list" in order_book_result and order_book_result["order_list"]:
-                orders = order_book_result["order_list"]
-            logger.debug(f"Found {len(orders)} orders in legacy dictionary response")
-        # Handle direct list response
-        elif isinstance(order_book_result, list):
-            orders = order_book_result
-            logger.debug(f"Found {len(orders)} orders in direct list response")
-
-        # Check if we have any orders to work with
-        if not orders:
-            logger.warning("No orders found in order book, cannot fetch trades")
-            return {"status": "success", "message": "No orders found", "data": []}, 200
-
-        # Log the first order for debugging
-        if orders:
-            logger.debug(
-                f"First order sample for debugging: {json.dumps(orders[0], indent=2, default=str)}"
-            )
-            if "order_status" in orders[0]:
-                logger.debug(f"First order status: {orders[0]['order_status']}")
-            elif "status" in orders[0]:
-                logger.debug(f"First order status: {orders[0]['status']}")
-            else:
-                logger.debug("First order has no status field")
-
-        logger.debug(f"Found {len(orders)} orders to check for trades")
-
-        # Filter orders that might have trades
-        executed_statuses = ["EXECUTED", "COMPLETED", "FILLED", "PARTIAL", "COMPLETE"]
-        potential_trade_orders = []
-
-        # Log all orders status for debugging
-        for i, order in enumerate(orders):
-            order_status = order.get("order_status", order.get("status", ""))
-            if order_status:
-                order_status = order_status.upper()
-            else:
-                order_status = "NO_STATUS"
-
-            filled_qty = order.get("filled_quantity", 0)
-            order_id = None
-
-            # Extract order ID
-            for key in ["groww_order_id", "orderid", "order_id", "id"]:
-                if key in order:
-                    order_id = order[key]
-                    break
-
-            logger.debug(
-                f"Order {i + 1}: ID={order_id}, Status={order_status}, Filled Qty={filled_qty}"
-            )
-
-            # Use more flexible criteria for executed orders
-            is_executed = (
-                order_status in executed_statuses
-                or "EXECUT" in order_status
-                or "FILL" in order_status
-                or "COMPLET" in order_status
-                or filled_qty > 0
-            )
-
-            if order_id and is_executed:
-                logger.debug(
-                    f"*** Found potential trade order: ID={order_id}, Status={order_status}"
-                )
-                # Extract transaction type (BUY/SELL) with multiple possible field names
-                transaction_type = None
-
-                # Log all fields in the order for debugging
-                logger.debug(f"Order fields available: {list(order.keys())}")
-
-                # Check all possible field names for transaction type
-                for field in [
-                    "transaction_type",
-                    "order_type",
-                    "trade_type",
-                    "side",
-                    "action",
-                    "transaction_type",
-                    "buy_sell",
-                    "transactionType",
-                ]:
-                    if field in order and order[field]:
-                        transaction_type = str(order[field]).upper()
-                        logger.debug(
-                            f"Found transaction type '{transaction_type}' in field '{field}'"
-                        )
-                        break
-
-                # Additional check for Groww-specific fields
-                if not transaction_type and "order" in order and isinstance(order["order"], dict):
-                    nested_order = order["order"]
-                    for field in [
-                        "transaction_type",
-                        "order_type",
-                        "trade_type",
-                        "side",
-                        "action",
-                        "buy_sell",
-                        "transactionType",
-                    ]:
-                        if field in nested_order and nested_order[field]:
-                            transaction_type = str(nested_order[field]).upper()
-                            logger.debug(
-                                f"Found transaction type '{transaction_type}' in nested order field '{field}'"
-                            )
-                            break
-
-                # Extract product type with multiple possible field names
-                product_type = None
-                for field in ["product", "product_type", "order_variety"]:
-                    if field in order and order[field]:
-                        product_type = order[field].upper()
-                        logger.debug(f"Found product type '{product_type}' in field '{field}'")
-                        break
-
-                # Create potential trade order with all available information
-                potential_trade_orders.append(
-                    {
-                        "order_id": order_id,
-                        "segment": order.get("segment", "CASH"),
-                        "symbol": order.get("trading_symbol", order.get("symbol", "")),
-                        "status": order_status,
-                        "filled_quantity": filled_qty,
-                        "transaction_type": transaction_type,  # Add transaction type
-                        "product": product_type,  # Add product type
-                        "exchange": order.get("exchange", ""),  # Add exchange
-                        "price": order.get("price", 0),  # Add price if available
-                    }
-                )
-
-        logger.debug(f"Found {len(potential_trade_orders)} potential orders with trades")
-
-        # Now fetch trades for each executed order
-        all_trades = []
-        segment_map = {
-            "CASH": SEGMENT_CASH,
-            "FNO": SEGMENT_FNO,
-            "F&O": SEGMENT_FNO,
-            "OPTIONS": SEGMENT_FNO,
-            "FUTURES": SEGMENT_FNO,
-        }
-
-        # Attempt to fetch trades for each potential order
-        for index, potential_order in enumerate(potential_trade_orders):
-            order_id = potential_order["order_id"]
-            raw_segment = potential_order["segment"]
-
-            # Determine the correct segment based on order ID and segment info
-            if order_id.startswith("GLTFO"):
-                segment = SEGMENT_FNO
-                logger.debug(f"Using FNO segment for order {order_id} based on order ID prefix")
-            else:
-                segment = segment_map.get(raw_segment, SEGMENT_CASH)
-                logger.debug(f"Using segment {segment} for order {order_id} (from {raw_segment})")
-
-            logger.debug(
-                f"Fetching trades for order {index + 1}/{len(potential_trade_orders)}: {order_id} (segment: {segment})"
-            )
-
-            try:
-                # Use our new direct API function to get trades for this order
-                trades_result = get_order_trades(order_id, auth, segment)
-
-                if isinstance(trades_result, tuple) and len(trades_result) >= 1:
-                    trades_data = trades_result[0]
-                    logger.debug(
-                        f"Trade result status for order {order_id}: {trades_data.get('status')}"
-                    )
-
-                    # Check if trades were found
-                    if trades_data.get("status") == "success" and "trades" in trades_data:
-                        if trades_data["trades"]:
-                            all_trades.extend(trades_data["trades"])
-                            logger.debug(
-                                f"SUCCESS: Added {len(trades_data['trades'])} trades from order {order_id}"
-                            )
-                        else:
-                            logger.debug(f"Order {order_id} has no trades despite being executed")
-
-                            # For executed orders with filled quantity but no trades, create a synthetic trade entry
-                            if potential_order.get("filled_quantity", 0) > 0:
-                                logger.debug(
-                                    f"Creating synthetic trade for executed order {order_id} with filled quantity"
-                                )
-
-                                # Create a synthetic trade based on order details
-                                synthetic_trade = {
-                                    "trade_id": f"synthetic_{order_id}",
-                                    "order_id": order_id,
-                                    "exchange_trade_id": "",
-                                    "exchange_order_id": "",
-                                    "symbol": potential_order.get("symbol", ""),
-                                    "quantity": potential_order.get("filled_quantity", 0),
-                                    "price": 0,  # We don't have this information
-                                    "trade_status": "EXECUTED",
-                                    "exchange": "",
-                                    "segment": raw_segment,
-                                    "product": potential_order.get(
-                                        "product", "MIS"
-                                    ),  # Default to MIS if not available
-                                    "transaction_type": potential_order.get(
-                                        "transaction_type", "BUY"
-                                    ),  # Use original transaction type when available
-                                    "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                    "trade_date_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                    "settlement_number": "",
-                                    "remarks": "Synthetic trade created from executed order",
-                                }
-                                all_trades.append(synthetic_trade)
-                                logger.debug(f"Added synthetic trade for order {order_id}")
-                    # Check for special cases: 404 errors for FNO orders
-                    elif (
-                        trades_data.get("status") == "error"
-                        and segment == SEGMENT_FNO
-                        and trades_result[1] == 404
-                    ):
-                        # For FNO orders that return 404, create a synthetic trade
-                        if potential_order.get("filled_quantity", 0) > 0:
-                            # Log the detailed information from potential_order for debugging
-                            logger.debug(
-                                f"Creating synthetic trade for FNO order {order_id} due to 404 error"
-                            )
-                            logger.debug(
-                                f"Order details for synthetic trade: {json.dumps(potential_order, indent=2, default=str)}"
-                            )
-                            logger.debug(
-                                f"Transaction type found: {potential_order.get('transaction_type')}"
-                            )
-
-                            # Create a synthetic trade
-                            synthetic_trade = {
-                                "trade_id": f"synthetic_fno_{order_id}",
-                                "order_id": order_id,
-                                "exchange_trade_id": "",
-                                "exchange_order_id": "",
-                                "symbol": potential_order.get("symbol", ""),
-                                "quantity": potential_order.get("filled_quantity", 0),
-                                "price": potential_order.get("price", 0),
-                                "trade_status": "EXECUTED",
-                                "exchange": potential_order.get("exchange", ""),
-                                "segment": raw_segment,
-                                "product": potential_order.get(
-                                    "product", "MIS"
-                                ),  # Default to MIS if not available
-                                "transaction_type": potential_order.get(
-                                    "transaction_type", "BUY"
-                                ),  # Default to BUY if not available
-                                "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "trade_date_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "settlement_number": "",
-                                "remarks": "Synthetic FNO trade created due to API limitation (404)",
-                            }
-                            all_trades.append(synthetic_trade)
-                            logger.debug(f"Added synthetic FNO trade for order {order_id}")
-                    else:
-                        logger.warning(
-                            f"No trades found for order {order_id}: {trades_data.get('message', 'Unknown reason')}"
-                        )
-
-                        # Check for orders where we should create synthetic trades anyway
-                        if potential_order.get("filled_quantity", 0) > 0 and potential_order.get(
-                            "status", ""
-                        ).upper() in ["EXECUTED", "COMPLETE", "FILLED"]:
-                            logger.debug(
-                                f"Creating synthetic trade for executed order {order_id} despite API error"
-                            )
-
-                            # Create a synthetic trade based on order details
-                            synthetic_trade = {
-                                "trade_id": f"synthetic_fallback_{order_id}",
-                                "order_id": order_id,
-                                "exchange_trade_id": "",
-                                "exchange_order_id": "",
-                                "symbol": potential_order.get("symbol", ""),
-                                "quantity": potential_order.get("filled_quantity", 0),
-                                "price": potential_order.get("price", 0),
-                                "trade_status": "EXECUTED",
-                                "exchange": potential_order.get("exchange", ""),
-                                "segment": raw_segment,
-                                "product": potential_order.get(
-                                    "product", "MIS"
-                                ),  # Default to MIS if not available
-                                "transaction_type": potential_order.get(
-                                    "transaction_type", "BUY"
-                                ),  # Default to BUY if not available
-                                "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "trade_date_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "settlement_number": "",
-                                "remarks": "Synthetic trade created for executed order (API error fallback)",
-                            }
-                            all_trades.append(synthetic_trade)
-                            logger.debug(f"Added synthetic fallback trade for order {order_id}")
-                else:
-                    logger.warning(f"Unexpected format for trades result for order {order_id}")
-            except Exception as e:
-                logger.exception(f"Error fetching trades for order {order_id}: {e}")
-
-        # Log summary of trade fetching
-        if all_trades:
-            logger.debug(
-                f"Successfully fetched a total of {len(all_trades)} trades across all orders"
-            )
-        else:
-            logger.warning("No trades found for any orders")
-
-        # Print first trade for debugging if available
-        if all_trades:
-            logger.debug(f"Sample trade data: {json.dumps(all_trades[0], indent=2, default=str)}")
-
-        # Format trades to match OpenAlgo's expected format (as used in the REST API)
-        # This matches the format expected by the order_data.py mapping functions
-        openalgo_trades = [transform_groww_trade(trade) for trade in all_trades]
-
-        # Log the first transformed trade for debugging
-        if openalgo_trades:
-            logger.debug(
-                f"Sample OpenAlgo trade format: {json.dumps(openalgo_trades[0], indent=2, default=str)}"
-            )
-
-        # Create the response with the structure expected by map_trade_data
-        # Note: In the REST API, the map_trade_data function will extract data from this structure
-        response = {
-            "status": "success",
-            "message": f"Retrieved {len(all_trades)} trades",
-            "data": openalgo_trades,  # This is what map_trade_data will look for first
-            "tradebook": openalgo_trades,  # For compatibility with different naming conventions
-            "raw_data": all_trades,  # Keep the original data for reference
-        }
-
-        logger.debug(
-            f"Successfully fetched and transformed {len(all_trades)} trades using direct API"
-        )
-        logger.debug(f"Response structure: {list(response.keys())}")
-
-        # Return just the data for direct usage - this is important for the REST API
-        # The REST API in tradebook.py expects a specific structure
-        return response, 200
-
-    except Exception as e:
-        logger.error(f"Error fetching trade book: {e}")
-        logger.exception("Full stack trace:")
-        # Even in error case, maintain consistent structure with empty data
-        # This ensures map_trade_data can still process it
+    if failed:
         return {
             "status": "error",
-            "message": f"Error fetching trades: {str(e)}",
-            "data": [],  # Empty list but with the expected structure
-            "tradebook": [],
-            "raw_data": [],
-        }, 500
+            "message": f"Groww did not return the trades for {len(failed)} filled order(s). "
+            "Try again shortly; the order book shows their fills.",
+        }
+    return {"status": "success", "data": [transform_groww_trade(t) for t in trades]}
 
 
 def _fno_read_failure(response):
@@ -2602,9 +2209,9 @@ def cancel_all_orders_api(data, auth):
         list of order IDs, and a list of {"orderid", "reason"}.
     """
     book = get_order_book(auth)
-    if (book.get("raw_response") or {}).get("status") == "FAILURE":
+    if book.get("status") == "error":
         # An unreadable order book is not "nothing to cancel"
-        raise RuntimeError("Could not read the Groww order book")
+        raise RuntimeError(book.get("message", "Could not read the Groww order book"))
 
     canceled_orders, failed_cancellations = [], []
     for order in book.get("data", []):
@@ -2633,269 +2240,69 @@ def cancel_all_orders_api(data, auth):
 
 def get_order_trades(orderid, auth, segment=None):
     """
-    Get list of trades for a specific order from Groww using direct API calls
+    All fills of one order (GET /v1/order/trades/{groww_order_id}).
+
+    Groww requires the order's segment and caps page_size at 50, and an order
+    can have more fills than that, so every page is read.
 
     Args:
-        orderid (str): Groww order ID to fetch trades for
+        orderid (str): Groww order ID
         auth (str): Authentication token
-        segment (str, optional): Order segment (CASH, FNO, etc.) - required by Groww API
+        segment (str, optional): CASH or FNO. Looked up from the order book when omitted.
 
     Returns:
-        tuple: (response data, status code)
+        tuple: ({"status": "success", "trades": [...]}, 200), or
+        ({"status": "error", "message": ...}, status code)
     """
     try:
-        # Store original order information to use in case we need to create a synthetic trade
-        original_order_info = {
-            "order_id": orderid,
-            "segment": segment or "UNKNOWN",
-            "filled_quantity": 0,  # Will be populated if we find this in the order book
-            "symbol": "",
-            "exchange": "",
-            "product": "",
-            "transaction_type": "",
-            "price": 0,
-            "status": "",
-        }
-
-        # If segment is not provided, try to determine it
-        if segment is None:
-            logger.debug(
-                f"No segment provided for getting trades for order {orderid}, attempting to determine from order book"
-            )
-            try:
-                # Get order book to find the order and determine its segment
-                order_book_result = get_order_book(auth)
-
-                if isinstance(order_book_result, dict) and "data" in order_book_result:
-                    order_data = order_book_result["data"]
-                elif isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
-                    order_book_data = order_book_result[0]
-                    if isinstance(order_book_data, dict) and "data" in order_book_data:
-                        order_data = order_book_data["data"]
-                    else:
-                        order_data = []
-                else:
-                    order_data = []
-
-                # Determine segment based on order ID pattern
-                if orderid.startswith("GMKFO") or orderid.startswith("GLTFO"):
-                    logger.debug(f"Order ID {orderid} appears to be an FNO order based on prefix")
-                    segment = SEGMENT_FNO
-                    original_order_info["segment"] = "FNO"
-                else:
-                    # Search for the order in the order book
-                    found_segment = False
-                    for order in order_data:
-                        # Check if this is our order
-                        if order.get("groww_order_id", order.get("orderid", "")) == orderid:
-                            # Determine segment based on order properties
-                            if order.get("segment") == "CASH":
-                                segment = SEGMENT_CASH
-                            elif order.get("segment") in ["FNO", "F&O", "OPTIONS", "FUTURES"]:
-                                segment = SEGMENT_FNO
-                            elif order.get("segment") == "CURRENCY":
-                                segment = SEGMENT_CURRENCY
-                            elif order.get("segment") == "COMMODITY":
-                                segment = SEGMENT_COMMODITY
-
-                            # Store order info for synthetic trade creation if needed
-                            original_order_info["segment"] = order.get("segment", "UNKNOWN")
-                            original_order_info["filled_quantity"] = order.get("filled_quantity", 0)
-                            original_order_info["symbol"] = order.get(
-                                "trading_symbol", order.get("tradingsymbol", "")
-                            )
-                            original_order_info["exchange"] = order.get("exchange", "")
-                            original_order_info["product"] = order.get("product", "")
-                            original_order_info["transaction_type"] = order.get(
-                                "transaction_type", order.get("action", "")
-                            )
-                            original_order_info["price"] = order.get("price", 0)
-                            original_order_info["status"] = order.get(
-                                "status", order.get("order_status", "")
-                            )
-
-                            found_segment = True
-                            logger.debug(
-                                f"Found order {orderid} in order book with segment {segment}"
-                            )
-                            break
-
-                    if not found_segment:
-                        logger.warning(f"Could not find order {orderid} in order book")
-                        # If this is an executed order but we couldn't determine segment, default based on order ID
-                        if orderid.startswith("GMK"):
-                            segment = SEGMENT_CASH
-                            original_order_info["segment"] = "CASH"
-                        else:
-                            segment = SEGMENT_CASH  # Default fallback
-            except Exception as e:
-                logger.error(f"Error determining segment for order {orderid}: {e}")
-                segment = SEGMENT_CASH  # Default to CASH segment
-
-        # Fallback to CASH segment if still not determined
-        if segment is None:
-            logger.warning(f"Could not determine segment for order {orderid}, defaulting to CASH")
-            segment = SEGMENT_CASH
-
-        logger.debug(f"Fetching trades for order {orderid} in segment {segment}")
-
-        # Prepare API client and headers
+        segments = [segment] if segment in (SEGMENT_CASH, SEGMENT_FNO) else _cancel_segments(orderid, auth)
         client = get_httpx_client()
-        headers = {
-            "Authorization": f"Bearer {auth}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        headers = _groww_headers(auth)
+        message = f"Groww returned no trades for order {orderid}"
+        for seg in segments:
+            trade_list, failure = _get_paged(
+                client,
+                f"{GROWW_ORDER_TRADES_URL}/{orderid}",
+                headers,
+                {"segment": seg},
+                "trade_list",
+                _TRADES_PAGE_SIZE,
+            )
+            if failure:
+                message = failure
+                continue
 
-        # Set API parameters
-        page = 0
-        page_size = 50
-
-        # API endpoint for getting trades for an order
-        url = f"{GROWW_ORDER_TRADES_URL}/{orderid}?segment={segment}&page={page}&page_size={page_size}"
-
-        # Log request details
-        logger.debug("-------- GET ORDER TRADES REQUEST --------")
-        logger.debug(f"Order ID: {orderid}")
-        logger.debug(f"Segment: {segment}")
-        logger.debug(f"API URL: {url}")
-        logger.debug(
-            'Request headers: {\n  "Authorization": "Bearer ***REDACTED***",\n  "Accept": "application/json",\n  "Content-Type": "application/json"\n}'
-        )
-
-        # Make the API call
-        response_obj = client.get(url, headers=headers, timeout=30)
-
-        # Log the response details
-        logger.debug("-------- GET ORDER TRADES RESPONSE --------")
-        logger.debug(f"Response status code: {response_obj.status_code}")
-
-        try:
-            # Parse JSON response
-            response_data = response_obj.json()
-            logger.debug(f"Raw response: {json.dumps(response_data, indent=2)}")
-
-            if response_obj.status_code == 200 and response_data.get("status") == "SUCCESS":
-                # Extract trades from the response
-                trades = []
-
-                if "payload" in response_data and "trade_list" in response_data["payload"]:
-                    trade_list = response_data["payload"]["trade_list"]
-                    logger.debug(f"Found {len(trade_list)} trades for order {orderid}")
-
-                    # Transform trades to standardized format
-                    for trade in trade_list:
-                        # Create a standardized trade object
-                        standardized_trade = {
-                            "trade_id": trade.get("groww_trade_id", ""),
-                            "order_id": trade.get("groww_order_id", orderid),
-                            "exchange_trade_id": trade.get("exchange_trade_id", ""),
-                            "exchange_order_id": trade.get("exchange_order_id", ""),
-                            "symbol": trade.get("trading_symbol", ""),
-                            "quantity": trade.get("quantity", 0),
-                            "price": trade.get("price", 0),
-                            "trade_status": trade.get("trade_status", "EXECUTED"),
-                            "exchange": trade.get("exchange", ""),
-                            "segment": trade.get("segment", segment),
-                            "product": trade.get("product", ""),
-                            "transaction_type": trade.get("transaction_type", ""),
-                            "created_at": trade.get("created_at", ""),
-                            "trade_date_time": trade.get("trade_date_time", ""),
-                            "settlement_number": trade.get("settlement_number", ""),
-                            "remarks": trade.get("remark", None),
-                        }
-                        trades.append(standardized_trade)
-
-                response = {
-                    "status": "success",
-                    "message": f"Retrieved {len(trades)} trades for order {orderid}",
-                    "trades": trades,
-                    "raw_response": response_data,
-                }
-                return response, 200
-            else:
-                # If we get a 404 error for an FNO order, it's likely the API doesn't support FNO trades
-                # Create a synthetic trade if we have order information
-                if (
-                    response_obj.status_code == 404
-                    and segment == SEGMENT_FNO
-                    and original_order_info["filled_quantity"] > 0
-                ):
-                    logger.debug(
-                        f"Creating synthetic trade for FNO order {orderid} as API returned 404"
-                    )
-
-                    # If this is an executed order with filled quantity, create a synthetic trade
-                    synthetic_trade = {
-                        "trade_id": f"synthetic_{orderid}",
-                        "order_id": orderid,
-                        "exchange_trade_id": "",
-                        "exchange_order_id": "",
-                        "symbol": original_order_info["symbol"],
-                        "quantity": original_order_info["filled_quantity"],
-                        "price": original_order_info["price"],
-                        "trade_status": "EXECUTED",
-                        "exchange": original_order_info["exchange"],
-                        "segment": original_order_info["segment"],
-                        "product": original_order_info["product"],
-                        "transaction_type": original_order_info["transaction_type"],
-                        "created_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                        "trade_date_time": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                        "settlement_number": "",
-                        "remarks": "Synthetic trade created from executed FNO order due to API limitation",
+            trades = []
+            for trade in trade_list:
+                exchange = openalgo_exchange(trade.get("exchange", ""), trade.get("segment", seg))
+                groww_symbol = trade.get("trading_symbol", "")
+                trades.append(
+                    {
+                        "trade_id": trade.get("groww_trade_id", ""),
+                        "order_id": trade.get("groww_order_id", orderid),
+                        "exchange_trade_id": trade.get("exchange_trade_id", ""),
+                        "exchange_order_id": trade.get("exchange_order_id", ""),
+                        "symbol": get_oa_symbol(groww_symbol, exchange) or groww_symbol,
+                        "quantity": trade.get("quantity", 0),
+                        "price": trade.get("price", 0),
+                        "trade_status": trade.get("trade_status", ""),
+                        "exchange": exchange,
+                        "segment": trade.get("segment", seg),
+                        "product": trade.get("product", ""),
+                        "transaction_type": trade.get("transaction_type", ""),
+                        "created_at": trade.get("created_at", ""),
+                        "trade_date_time": trade.get("trade_date_time", ""),
+                        "settlement_number": trade.get("settlement_number", ""),
+                        "remarks": trade.get("remark"),
                     }
+                )
+            return {"status": "success", "trades": trades}, 200
 
-                    response = {
-                        "status": "success",
-                        "message": f"Created synthetic trade for FNO order {orderid}",
-                        "trades": [synthetic_trade],
-                        "raw_response": response_data,
-                        "synthetic": True,
-                    }
-                    logger.debug(f"Returning synthetic trade for order {orderid}")
-                    return response, 200
-                else:
-                    # Regular error handling
-                    error_message = response_data.get("error", {}).get(
-                        "message", "Error retrieving trades"
-                    )
-                    error_details = response_data.get("error", {})
-
-                    logger.warning(f"Error getting trades for order {orderid}: {error_message}")
-                    if error_details:
-                        logger.warning(f"Error details: {json.dumps(error_details, indent=2)}")
-
-                    return {
-                        "status": "error",
-                        "message": f"Failed to retrieve trades: {error_message}",
-                        "trades": [],
-                        "raw_response": response_data,
-                    }, response_obj.status_code
-
-        except json.JSONDecodeError as e:
-            # Handle invalid JSON response
-            logger.error(f"Error parsing JSON response for trades for order {orderid}: {e}")
-        except Exception as e:
-            logger.error(f"Error parsing trades response: {e}")
-            logger.error(f"Raw response content: {response_obj.content}")
-
-            return {
-                "status": "error",
-                "message": f"Error parsing trades response: {str(e)}",
-                "order_id": orderid,
-                "segment": segment,
-                "trades": [],
-                "raw_content": response_obj.content.decode("utf-8", errors="replace"),
-            }, response_obj.status_code
-
-    except Exception as e:
-        logger.exception(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
-
+        return {"status": "error", "message": message, "trades": []}, 400
+    except Exception:
+        logger.exception(f"Error reading Groww trades for order {orderid}")
         return {
             "status": "error",
-            "message": f"Failed to retrieve trades due to exception: {str(e)}",
-            "order_id": orderid,
-            "segment": segment,
+            "message": "Could not reach Groww to read the order's trades.",
             "trades": [],
-            "exception_details": str(e),
         }, 500

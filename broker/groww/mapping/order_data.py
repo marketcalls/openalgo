@@ -137,187 +137,43 @@ def transform_order_data(orders):
 
 
 def map_trade_data(trade_data):
-    logger.info(f"Map trade data received type: {type(trade_data)}")
-
-    # If it's a tuple with status code (from direct API), extract the data
-    if isinstance(trade_data, tuple) and len(trade_data) == 2:
+    """The trade list from get_trade_book's response, or a list passed through."""
+    if isinstance(trade_data, tuple) and trade_data:
         trade_data = trade_data[0]
-        logger.info("Extracted trade data from tuple")
-
-    # Handle direct list of trades (which our get_trade_book now returns)
     if isinstance(trade_data, list):
-        logger.info(f"Received direct list of {len(trade_data)} trades")
         return trade_data
-
-    # Handle dictionary formats
     if isinstance(trade_data, dict):
-        # Log keys for debugging
-        logger.info(f"Trade data dict keys: {list(trade_data.keys())}")
-
-        # Check for data field
-        if "data" in trade_data and isinstance(trade_data["data"], list):
-            logger.info(f"Using 'data' field with {len(trade_data['data'])} trades")
-            return trade_data["data"]
-
-        # Check for tradebook field
-        if "tradebook" in trade_data and isinstance(trade_data["tradebook"], list):
-            logger.info(f"Using 'tradebook' field with {len(trade_data['tradebook'])} trades")
-            return trade_data["tradebook"]
-
-    # If all else fails, try the regular order mapping (fallback)
-    logger.info("Falling back to regular order mapping")
-    return map_order_data(trade_data)
+        return trade_data.get("data") or trade_data.get("tradebook") or []
+    return []
 
 
 def transform_tradebook_data(tradebook_data):
-    logger.info(f"Transform tradebook received type: {type(tradebook_data)}")
+    """
+    OpenAlgo tradebook rows (docs/api/account-services/tradebook.md).
 
-    # Handle empty input
-    if not tradebook_data:
-        logger.warning("Tradebook data is empty")
-        return []
-
-    # Log first trade for debugging
-    if isinstance(tradebook_data, list) and tradebook_data:
-        logger.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
-
+    get_order_trades has already resolved each trade's OpenAlgo exchange and
+    symbol from Groww's exchange + segment and the master contract; prices are
+    rupees as Groww documents them.
+    """
     transformed_data = []
-    for trade in tradebook_data:
-        # Get values with fallbacks for different field naming conventions
-        broker_symbol = trade.get(
-            "tradingSymbol", trade.get("tradingsymbol", trade.get("symbol", ""))
+    for trade in tradebook_data or []:
+        quantity = float(trade.get("tradedQuantity", trade.get("quantity", 0)) or 0)
+        price = float(trade.get("tradedPrice", trade.get("price", 0.0)) or 0)
+        transformed_data.append(
+            {
+                "symbol": trade.get("tradingSymbol", trade.get("symbol", "")),
+                "exchange": trade.get("exchangeSegment", trade.get("exchange", "")),
+                "product": trade.get("productType", trade.get("product", "")),
+                "action": trade.get("transactionType", trade.get("transaction_type", "")),
+                "quantity": quantity,
+                "average_price": price,
+                "trade_price": price,
+                "trade_value": quantity * price,
+                "orderid": trade.get("orderId", trade.get("order_id", "")),
+                "timestamp": trade.get("updateTime", trade.get("trade_date_time", "")),
+                "tradeid": trade.get("tradeId", trade.get("trade_id", "")),
+            }
         )
-        exchange = trade.get("exchangeSegment", trade.get("exchange", "NSE"))
-        segment = trade.get("segment", "")
-
-        # Determine proper exchange based on segment and symbol pattern
-        if segment == "FNO" or any(marker in broker_symbol for marker in ["CE", "PE", "FUT"]):
-            exchange = "NFO"
-        else:
-            exchange = "NSE"
-
-        # Try to get token from trade data if available
-        token = trade.get("token", trade.get("instrument_token", None))
-        symbol = broker_symbol
-
-        # Try to get OpenAlgo symbol from database
-        try:
-            from database.token_db import get_oa_symbol
-
-            # Try to get the OpenAlgo symbol using the token if available
-            if token:
-                openalgo_symbol = get_oa_symbol(token, exchange)
-                if openalgo_symbol:
-                    symbol = openalgo_symbol
-                    logger.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
-
-            # If token lookup failed or token wasn't available, try by broker symbol
-            elif broker_symbol:
-                # For options/futures specifically, try database lookup
-                if exchange == "NFO" and (
-                    broker_symbol.endswith("CE")
-                    or broker_symbol.endswith("PE")
-                    or "FUT" in broker_symbol
-                ):
-                    # Query the database to find the OpenAlgo symbol for this broker symbol
-                    from broker.groww.database.master_contract_db import SymToken, db_session
-
-                    with db_session() as session:
-                        record = (
-                            session.query(SymToken)
-                            .filter(
-                                SymToken.brsymbol == broker_symbol, SymToken.exchange == exchange
-                            )
-                            .first()
-                        )
-
-                        if record and record.symbol:
-                            symbol = record.symbol
-                            logger.info(
-                                f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}"
-                            )
-        except Exception as e:
-            logger.error(f"Error looking up OpenAlgo symbol from database: {e}")
-
-        # Get other trade fields
-        product = trade.get("productType", trade.get("product", ""))
-        action = trade.get("transactionType", trade.get("transaction_type", ""))
-        quantity = float(trade.get("tradedQuantity", trade.get("quantity", 0)))
-        price = float(trade.get("tradedPrice", trade.get("price", 0.0)))
-        orderid = trade.get("orderId", trade.get("order_id", ""))
-        timestamp = trade.get(
-            "updateTime", trade.get("timestamp", trade.get("trade_date_time", ""))
-        )
-        tradeid = trade.get("tradeId", trade.get("trade_id", ""))
-
-        # Calculate trade value
-        trade_value = quantity * price
-
-        # Create the transformed trade object
-        transformed_trade = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "product": product,
-            "action": action,
-            "quantity": quantity,
-            "average_price": price,
-            "trade_price": price,
-            "trade_value": trade_value,
-            "orderid": orderid,
-            "timestamp": timestamp,
-            "tradeid": tradeid,
-        }
-        transformed_data.append(transformed_trade)
-
-    logger.info(f"Transformed {len(transformed_data)} trades successfully")
-    return transformed_data
-    # def transform_tradebook_data(tradebook_data):
-    logger.info(f"Transform tradebook received type: {type(tradebook_data)}")
-
-    # Handle empty input
-    if not tradebook_data:
-        logger.warning("Tradebook data is empty")
-        return []
-
-    # Log first trade for debugging
-    if isinstance(tradebook_data, list) and tradebook_data:
-        logger.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
-
-    transformed_data = []
-    for trade in tradebook_data:
-        # Get values with fallbacks for different field naming conventions
-        symbol = trade.get("tradingSymbol", trade.get("symbol", ""))
-        exchange = trade.get("exchangeSegment", trade.get("exchange", ""))
-        product = trade.get("productType", trade.get("product", ""))
-        action = trade.get("transactionType", trade.get("transaction_type", ""))
-        quantity = trade.get("tradedQuantity", trade.get("quantity", 0))
-        price = trade.get("tradedPrice", trade.get("price", 0.0))
-        orderid = trade.get("orderId", trade.get("order_id", ""))
-        timestamp = trade.get(
-            "updateTime", trade.get("timestamp", trade.get("trade_date_time", ""))
-        )
-        tradeid = trade.get("tradeId", trade.get("trade_id", ""))
-
-        # Calculate trade value
-        trade_value = quantity * price
-
-        # Create the transformed trade object
-        transformed_trade = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "product": product,
-            "action": action,
-            "quantity": quantity,
-            "average_price": price,
-            "trade_price": price,  # Added for consistency
-            "trade_value": trade_value,
-            "orderid": orderid,
-            "timestamp": timestamp,
-            "tradeid": tradeid,  # Added for reference
-        }
-        transformed_data.append(transformed_trade)
-
-    logger.info(f"Transformed {len(transformed_data)} trades successfully")
     return transformed_data
 
 
