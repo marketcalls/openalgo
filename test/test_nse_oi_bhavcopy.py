@@ -197,6 +197,8 @@ def test_an_older_file_is_not_taken_for_the_expected_session(monkeypatch):
     bhav._failed_at.clear()
 
     assert bhav.previous_session_oi("NFO") is None
+    # The walk did reach the older file, so the None is the refusal, not a miss.
+    assert date(2026, 9, 14) in calls
     assert bhav.cached_previous_session_oi("NFO") is None
 
 
@@ -210,3 +212,4 @@ def test_the_expected_file_is_cached(monkeypatch):
 
     book = bhav.previous_session_oi("NFO")
     assert book is not None and book.trade_date == date(2026, 9, 15)
+    assert bhav.cached_previous_session_oi("NFO") is book
