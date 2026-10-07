@@ -576,6 +576,20 @@ update; no behaviour change is expected.
 - `axios` 1.18 to 1.20.0 in the frontend.
 - `litellm` 1.99.0 to 1.104.0, for the Agent. See *Agent: newer models and
   four new providers* above.
+- `Werkzeug` 3.1.8 to 3.1.9. On a Windows install, a request for a static file
+  named after a Windows device with a trailing colon (`nul:`) got past the path
+  check every file route relies on; 3.1.9 refuses it. Linux and Docker installs
+  were not affected.
+- `multidict` 6.7.1 to 6.9.1 (a memory reference leak in set operations on
+  header views). It is now pinned in the requirements files, so an existing
+  install upgrades it on the next update rather than keeping the old one.
+- Frontend: `probe-image-size` 7.4.0 and `source-map-js` 1.2.2 (CPU
+  exhaustion from crafted input), `postcss-selector-parser` 7.1.6, and `katex`
+  0.18. KaTeX is a dependency of the chat UI library that OpenAlgo never loads,
+  so no page changes.
+- **Not fixed:** `braces`, used only by the frontend test tools, has an open
+  advisory (GHSA-vfj7-8cjw-p6xm) with no patched release yet. It never reaches
+  a browser or the server.
 
 ## [2.0.2.6] - 2026-09-23
 
