@@ -28,6 +28,7 @@ from broker.groww.mapping.transform_data import (
     PRODUCT_NRML,
     SEGMENT_CASH,
     SEGMENT_FNO,
+    openalgo_exchange,
     TRANSACTION_TYPE_BUY,
     TRANSACTION_TYPE_SELL,
     # Constants
@@ -159,195 +160,19 @@ def direct_get_order_book(auth):
 
         logger.debug(f"Successfully fetched total of {len(all_orders)} orders using direct API")
 
-        # Convert all symbols from Groww format to OpenAlgo format
+        # Map each order to OpenAlgo's exchange and symbol. Groww reports exchange
+        # NSE/BSE plus segment CASH/FNO (04-orders "List orders"); OpenAlgo puts
+        # F&O on NFO/BFO. The OpenAlgo symbol comes from the master contract.
         for order in all_orders:
-            if "trading_symbol" in order:
-                groww_symbol = order["trading_symbol"]
-                groww_exchange = order.get("exchange", "")
-                segment = order.get("segment", "")
-
-                # Store original Groww format
-                order["brsymbol"] = groww_symbol
-                order["brexchange"] = groww_exchange
-
-                # First, determine the correct OpenAlgo exchange
-                # For options and futures (F&O), the exchange should be NFO even if Groww returns NSE
-                is_derivative = False
-                is_future = False
-
-                # Check if it's an option by looking for option identifiers
-                if any(suffix in groww_symbol for suffix in ["CE", "PE", "C", "P"]):
-                    exchange = "NFO"
-                    is_derivative = True
-                    order["exchange"] = "NFO"  # Set OpenAlgo exchange format
-                    logger.debug(
-                        f"Remapped exchange from {groww_exchange} to NFO for option symbol: {groww_symbol}"
-                    )
-                # Check if it's a futures contract
-                elif "FUT" in groww_symbol or segment == SEGMENT_FNO:
-                    exchange = "NFO"
-                    is_derivative = True
-                    is_future = True
-                    order["exchange"] = "NFO"  # Set OpenAlgo exchange format
-                    logger.debug(
-                        f"Remapped exchange from {groww_exchange} to NFO for futures symbol: {groww_symbol}"
-                    )
-                else:
-                    exchange = groww_exchange
-                    order["exchange"] = exchange
-
-                # Now handle the symbol conversion based on the correct exchange
-                # For NFO derivatives (options or futures), convert from Groww format to OpenAlgo format
-                if is_derivative:
-                    # Try multiple approaches to convert the symbol
-
-                    # Approach 1: Look up by token (most accurate)
-                    token = order.get("token")
-                    logger.debug(f"Token: {token}")
-                    symbol_converted = False
-
-                    try:
-                        from database.token_db import get_oa_symbol
-
-                        if token:
-                            openalgo_symbol = get_oa_symbol(token, "NFO")
-                            logger.debug(f"OpenAlgo Symbol: {openalgo_symbol}")
-                            if openalgo_symbol:
-                                order["symbol"] = openalgo_symbol
-                                logger.debug(
-                                    f"Converted NFO symbol by token: {groww_symbol} -> {openalgo_symbol}"
-                                )
-                                symbol_converted = True
-                    except Exception as e:
-                        logger.error(f"Error converting symbol by token: {e}")
-
-                    # Approach 2: Database lookup by broker symbol
-                    if not symbol_converted:
-                        try:
-                            from broker.groww.database.master_contract_db import (
-                                SymToken,
-                                db_session,
-                            )
-
-                            with db_session() as session:
-                                record = (
-                                    session.query(SymToken)
-                                    .filter(
-                                        SymToken.brsymbol == groww_symbol,
-                                        SymToken.exchange == "NFO",
-                                    )
-                                    .first()
-                                )
-
-                                if record and record.symbol:
-                                    order["symbol"] = record.symbol
-                                    logger.debug(
-                                        f"Converted NFO symbol by lookup: {groww_symbol} -> {record.symbol}"
-                                    )
-                                    symbol_converted = True
-                        except Exception as e:
-                            logger.error(f"Error converting symbol by database: {e}")
-
-                    # Approach 3: Pattern matching for Groww NFO symbols
-                    if not symbol_converted:
-                        try:
-                            import re
-
-                            # For Options: Convert from "NIFTY25515266550CE" to "NIFTY15MAY2526650CE"
-                            if not is_future:
-                                # Match Groww's option format which typically has year+month+day+strike+option_type
-                                groww_pattern = re.compile(
-                                    r"([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)(CE|PE)"
-                                )
-                                match = groww_pattern.match(groww_symbol)
-
-                                if match:
-                                    # Extract components
-                                    symbol_name, year, month_num, day, strike, option_type = (
-                                        match.groups()
-                                    )
-
-                                    # Convert numeric month to alphabetic (1=JAN, 2=FEB, etc.)
-                                    months = [
-                                        "JAN",
-                                        "FEB",
-                                        "MAR",
-                                        "APR",
-                                        "MAY",
-                                        "JUN",
-                                        "JUL",
-                                        "AUG",
-                                        "SEP",
-                                        "OCT",
-                                        "NOV",
-                                        "DEC",
-                                    ]
-                                    month_name = (
-                                        months[int(month_num) - 1]
-                                        if 1 <= int(month_num) <= 12
-                                        else f"M{month_num}"
-                                    )
-
-                                    # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                    openalgo_symbol = (
-                                        f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                    )
-                                    order["symbol"] = openalgo_symbol
-                                    logger.debug(
-                                        f"Converted Groww option symbol by pattern: {groww_symbol} -> {openalgo_symbol}"
-                                    )
-                                    symbol_converted = True
-
-                            # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
-                            else:
-                                # Match Groww's futures format
-                                future_pattern = re.compile(
-                                    r"([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?"
-                                )
-                                match = future_pattern.match(groww_symbol)
-
-                                if match:
-                                    # Extract components
-                                    symbol_name, year, month_num, day = match.groups()
-
-                                    # Convert numeric month to alphabetic (1=JAN, 2=FEB, etc.)
-                                    months = [
-                                        "JAN",
-                                        "FEB",
-                                        "MAR",
-                                        "APR",
-                                        "MAY",
-                                        "JUN",
-                                        "JUL",
-                                        "AUG",
-                                        "SEP",
-                                        "OCT",
-                                        "NOV",
-                                        "DEC",
-                                    ]
-                                    month_name = (
-                                        months[int(month_num) - 1]
-                                        if 1 <= int(month_num) <= 12
-                                        else f"M{month_num}"
-                                    )
-
-                                    # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                    openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
-                                    order["symbol"] = openalgo_symbol
-                                    logger.debug(
-                                        f"Converted Groww futures symbol by pattern: {groww_symbol} -> {openalgo_symbol}"
-                                    )
-                                    symbol_converted = True
-                        except Exception as e:
-                            logger.error(f"Error converting symbol by pattern: {e}")
-
-                    # Fallback: Use the original symbol if all conversion attempts failed
-                    if not symbol_converted:
-                        order["symbol"] = groww_symbol
-                        logger.warning(f"Could not convert NFO symbol: {groww_symbol}")
-                else:
-                    # For non-NFO symbols, use the trading symbol directly
-                    order["symbol"] = groww_symbol
+            if "trading_symbol" not in order:
+                continue
+            groww_symbol = order["trading_symbol"]
+            groww_exchange = order.get("exchange", "")
+            order["brsymbol"] = groww_symbol
+            order["brexchange"] = groww_exchange
+            exchange = openalgo_exchange(groww_exchange, order.get("segment", ""))
+            order["exchange"] = exchange
+            order["symbol"] = get_oa_symbol(groww_symbol, exchange) or groww_symbol
 
         # Return orders in the format expected by map_order_data
         # Keep original response format for backward compatibility

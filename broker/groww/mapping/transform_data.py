@@ -165,6 +165,18 @@ def map_exchange_type(exchange):
     return exchange_mapping.get(exchange.upper(), EXCHANGE_NSE)  # Default to NSE if not found
 
 
+def openalgo_exchange(groww_exchange, segment):
+    """
+    OpenAlgo exchange for a Groww exchange (NSE/BSE) and segment (CASH/FNO).
+
+    Groww reports F&O as exchange NSE/BSE with segment FNO; OpenAlgo puts it on
+    NFO/BFO. Anything else is returned as Groww sent it.
+    """
+    if segment == SEGMENT_FNO:
+        return {EXCHANGE_NSE: "NFO", EXCHANGE_BSE: "BFO"}.get(groww_exchange, groww_exchange)
+    return groww_exchange
+
+
 def map_exchange(brexchange):
     """
     Maps the Groww Exchange to OpenAlgo Exchange format.
