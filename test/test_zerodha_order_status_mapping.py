@@ -41,6 +41,12 @@ def test_first_order_in_flight_has_a_status():
     assert transformed["order_status"] == "open"
 
 
+def test_rest_order_book_exposes_trigger_pending_as_actionable_open():
+    [transformed] = transform_order_data([_order("TRIGGER PENDING")])
+
+    assert transformed["order_status"] == "open"
+
+
 def test_statistics_count_trigger_pending_and_in_flight_as_open():
     stats = calculate_order_statistics(
         [

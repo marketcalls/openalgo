@@ -187,6 +187,12 @@ def transform_order_data(orders):
             continue
 
         order_status = map_order_status(order.get("status"))
+        # The shared Order Book treats `open` as its actionable working state.
+        # Kite's trigger-pending stop orders are also live and can be modified
+        # or cancelled, so expose them as open in the REST order book while
+        # keeping the detailed status mapping for streaming/postbacks.
+        if order_status == "trigger pending":
+            order_status = "open"
 
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
