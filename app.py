@@ -1084,8 +1084,9 @@ def _restore_caches_background():
             #
             # Here rather than at first use because this thread already waits
             # for the database and holds an app context, which the market
-            # calendar needs to work out which session to anchor on.
-            previous_session_oi("NFO")
+            # calendar needs to work out which session to anchor on. A failure
+            # here is not recorded, so it cannot hold off the first real request.
+            previous_session_oi("NFO", record_failure=False)
         except Exception as e:
             logger.debug(f"NSE open interest warm-up skipped: {e}")
 

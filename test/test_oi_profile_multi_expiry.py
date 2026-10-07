@@ -19,6 +19,11 @@ def _clear_profile_cache(monkeypatch):
     monkeypatch.setattr(svc, "_nse_cached_book", lambda exchange: None)
     svc._profile_cache.clear()
     yield
+    # Drain the anchor worker while the mocks are still in place. A request
+    # queues it and returns; left running, it would resume after monkeypatch
+    # restores the real NSE and history functions and race later tests. The
+    # executor has one worker, so a no-op behind it is a barrier.
+    svc._anchor_executor.submit(lambda: None).result(timeout=30)
     svc._profile_cache.clear()
 
 

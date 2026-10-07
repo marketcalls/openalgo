@@ -54,6 +54,28 @@ def test_default_call_uses_daily_path():
     windowed_mock.assert_not_called()
 
 
+def test_one_sided_window_uses_daily_path():
+    # Only both ends make a window. An `or` in the branch would send a
+    # one-sided call down the windowed path and into fromtimestamp(None).
+    for start, end in ((1_700_000_100, None), (None, 1_700_003_700)):
+        daily_mock, windowed_mock = _run(window_start=start, window_end=end)
+        daily_mock.assert_called_once()
+        windowed_mock.assert_not_called()
+
+
+def test_windowed_leg_without_history_is_unknown_not_zero():
+    # A zero here would be painted as "no change"; absent leaves the leg out.
+    legs = [{"symbol": "NIFTY24000CE", "oi": 100}]
+    with (
+        patch.object(svc, "_history_rows", return_value=None),
+        patch.object(svc.time, "sleep"),
+    ):
+        changes = svc._fetch_windowed_oi_changes(
+            legs, "NFO", "5m", 1_700_000_000, 1_700_003_600, "test-key"
+        )
+    assert changes == {}
+
+
 def test_windowed_call_uses_windowed_path():
     daily_mock, windowed_mock = _run(window_start=1_700_000_000, window_end=1_700_003_600)
     windowed_mock.assert_called_once()

@@ -703,11 +703,19 @@ export function ChartPane({
   /** The live OI Profile instance, if the overlay is currently on. */
   const oiProfile = indicators.find((i) => i.indicatorId === OI_PROFILE_ID)
 
+  // `oiProfile` only updates once the add has landed, so a second click before
+  // then would see no instance and add another. One toggle at a time.
+  const oiProfileToggling = useRef(false)
   const toggleOiProfile = async () => {
     const t = terminalRef.current
-    if (!t) return
-    if (oiProfile) t.removeIndicatorById(oiProfile.id)
-    else await t.addIndicatorById(OI_PROFILE_ID)
+    if (!t || oiProfileToggling.current) return
+    oiProfileToggling.current = true
+    try {
+      if (oiProfile) t.removeIndicatorById(oiProfile.id)
+      else await t.addIndicatorById(OI_PROFILE_ID)
+    } finally {
+      oiProfileToggling.current = false
+    }
   }
 
   /* ── drawing / indicator / view actions (additive) ────────────────────── */
@@ -977,52 +985,49 @@ export function ChartPane({
             Alerts
           </Button>
 
-        {/* OI Profile. One click on and off, with its settings a click away,
+          {/* OI Profile. One click on and off, with its settings a click away,
             because it is a view of the whole option chain rather than one more
             line on the price - the same place Sensibull puts it. Hidden unless
             the indicator is actually installed. */}
-        {oiProfileInstalled && (
-          <div className="flex shrink-0 items-center">
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                'h-8 shrink-0 gap-1',
-                oiProfile && 'border-primary text-primary',
-                oiProfile && 'rounded-r-none border-r-0'
-              )}
-              title={oiProfile ? 'Hide the OI Profile' : 'Show open interest per strike'}
-              onClick={() => void toggleOiProfile()}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  'flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border text-[9px] leading-none',
-                  oiProfile ? 'border-primary bg-primary text-primary-foreground' : 'border-current'
-                )}
-              >
-                {oiProfile ? '✓' : ''}
-              </span>
-              <span className="hidden sm:inline">OI Profile</span>
-            </Button>
-            {oiProfile && (
+          {oiProfileInstalled && (
+            <div className="flex shrink-0 items-center">
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 w-8 shrink-0 rounded-l-none border-primary p-0 text-primary"
-                title="OI Profile settings"
-                onClick={() => terminalRef.current?.openIndicatorSettings(oiProfile.id)}
+                className={cn(
+                  'h-8 shrink-0 gap-1',
+                  oiProfile && 'border-primary text-primary',
+                  oiProfile && 'rounded-r-none border-r-0'
+                )}
+                title={oiProfile ? 'Hide the OI Profile' : 'Show open interest per strike'}
+                onClick={() => void toggleOiProfile()}
               >
-                <Settings className="h-3.5 w-3.5" />
+                <span
+                  aria-hidden
+                  className={cn(
+                    'flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border text-[9px] leading-none',
+                    oiProfile
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-current'
+                  )}
+                >
+                  {oiProfile ? '✓' : ''}
+                </span>
+                <span className="hidden sm:inline">OI Profile</span>
               </Button>
-            )}
-          </div>
-        )}
-
-        {/* The layout picker sits here, immediately after Indicators, because
-            that is where a chart terminal puts it. It is page-level, so only
-            the first pane is given one. */}
-        {layoutPicker}
+              {oiProfile && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 shrink-0 rounded-l-none border-primary p-0 text-primary"
+                  title="OI Profile settings"
+                  onClick={() => terminalRef.current?.openIndicatorSettings(oiProfile.id)}
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          )}
 
           <ComparisonMenu
             state={comparisons}

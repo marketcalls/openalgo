@@ -101,9 +101,10 @@ rest to a single module-level worker:
 - **Newest selection wins.** A later request supersedes the running job by
   generation check rather than queueing behind it; anchors it had already cached
   are kept, so nothing is refetched.
-- **The worker is the only place that may download the bhavcopy.** A request
-  reads it only if it is already in hand (`cached_previous_session_oi`), which is
-  why every symbol switch after the first is instant *and* complete.
+- **A request never downloads the bhavcopy.** It reads the file only if it is
+  already in hand (`cached_previous_session_oi`), which is why every symbol
+  switch after the first is instant *and* complete. Two background paths may
+  download it on a cache miss: this worker, and the startup warm-up below.
 - A pending payload is **not** written to the shared profile cache, or the
   client polling for the rest would be handed the same gaps for the whole TTL.
 
@@ -117,7 +118,8 @@ overlay — instead of waiting out the normal three minutes.
 database and holds an app context, which the market calendar needs to resolve
 which session to anchor on. Cost is one sub-second download during boot, off
 the critical path, and it means `oi_change_pending` is never seen in normal
-operation.
+operation. It passes `record_failure=False`: a warm-up that fails leaves no
+retry cooldown behind, so the first chart after NSE recovers still tries the file.
 
 ### Which session the file is for
 
@@ -128,9 +130,12 @@ The anchor belongs to the session *before* the one on screen:
 | Trading day, any time including after close | today | previous trading day |
 | Weekend or holiday | last session that traded | the session before that |
 
-`_displayed_session()` reads `is_market_holiday()` for the first column and
-`_newest_before()` walks back day by day for the second — an unpublished date
-404s, so weekends and holidays are skipped without a calendar lookup. Verified
+`_displayed_session()` uses `is_market_holiday()` to tell the two rows apart and
+returns the **On screen** session; `_newest_before()` then walks back day by day
+from it to find the **Anchor file** — an unpublished date 404s, so weekends and
+holidays are skipped without a calendar lookup. If NSE cannot be reached or
+refuses the request, the walk stops at the first failure rather than reading an
+outage as a run of missing dates. Verified
 to agree with the per-leg path on a trading day; the holiday branch follows the
 same shape.
 
@@ -144,6 +149,10 @@ write. Rules:
   as unknown. It draws no change. It is cached rather than retried so a chain of
   unreadable legs cannot re-storm the broker on every beat — the trade-off is
   that a transient failure keeps that leg blank for the session.
+- On the **broker path** the worker also caches `_NO_ANCHOR` for any value
+  `<= 0`, including a daily series whose previous-session close genuinely is
+  zero (a contract that opened today). Such a leg draws no change; its open
+  interest still draws. Only the NSE file can tell a real zero from a missing one.
 - An **explicit zero from NSE**, or absence from a file that covers the
   underlying, is a real anchor of 0. The whole of today's open interest is a
   genuine build. This is a behaviour change from the per-leg-only era, where

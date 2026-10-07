@@ -62,8 +62,20 @@ def test_a_row_maps_onto_the_symbol_the_platform_uses():
     assert oi["NIFTY22SEP2623200PE"] == 7_467_135
     assert oi["VEDL29SEP26292.5CE"] == 50_000
     assert underlyings == frozenset({"NIFTY", "VEDL", "TVSMOTOR"})
-    # The futures row has no option type and belongs to no option symbol.
-    assert not [s for s in oi if s.endswith("0.0CE") or s.endswith("0.0PE")]
+    # The futures row (NIFTY, 29-Sep, strike 0.00) has no option type and
+    # belongs to no option symbol. No NIFTY option in the fixture expires on
+    # 29-Sep, so any NIFTY29SEP26 key could only have come from that row.
+    assert not [s for s in oi if s.startswith("NIFTY29SEP26")]
+
+
+def test_a_ticker_with_an_unreadable_row_is_not_spoken_for():
+    # One malformed OI cell must not turn that contract into a zero anchor:
+    # the whole ticker goes back to the broker instead.
+    rows = [*ROWS, ("VEDL", "2026-09-29", "300.00", "CE", "n/a")]
+    oi, underlyings = bhav._parse(_zipped_csv(rows))
+    assert "VEDL" not in underlyings
+    assert "NIFTY" in underlyings
+    assert "VEDL29SEP26300CE" not in oi
 
 
 def test_the_anchor_matches_what_the_per_leg_path_reports():
@@ -140,3 +152,31 @@ def test_a_failure_is_not_retried_on_every_miss(monkeypatch):
     assert first > 0, "it should have looked for a file"
     assert bhav.previous_session_oi("NFO") is None
     assert len(attempts) == first, "the second miss must not download again"
+
+
+def test_an_nse_outage_stops_the_search(monkeypatch):
+    # An outage is not ten missing dates: one failed request ends the walk, so
+    # the per-leg broker fallback starts instead of waiting out ten timeouts.
+    attempts = []
+
+    def down(day):
+        attempts.append(day)
+        raise bhav._NseUnavailable
+
+    monkeypatch.setattr(bhav, "_download", down)
+    assert bhav._newest_before(date(2026, 9, 16)) is None
+    assert len(attempts) == 1
+
+
+def test_a_failed_warm_up_leaves_no_cooldown(monkeypatch):
+    # The boot warm-up is speculative. If it fails, the first real request must
+    # still try NSE rather than sit out the retry window.
+    attempts = []
+    monkeypatch.setattr(bhav, "_download", lambda day: attempts.append(day) or None)
+    monkeypatch.setattr(bhav, "_displayed_session", lambda today: today)
+    bhav._failed_at.clear()
+
+    assert bhav.previous_session_oi("NFO", record_failure=False) is None
+    first = len(attempts)
+    assert bhav.previous_session_oi("NFO") is None
+    assert len(attempts) == 2 * first, "the request after a failed warm-up must try again"

@@ -241,6 +241,9 @@ function groupsOf(fields: IndicatorField[]): [string, IndicatorField[]][] {
  * a choice of their own.
  */
 const EXPIRY_CHOICES = 8
+// The profile endpoint sums at most this many expiries (MAX_EXPIRIES in
+// blueprints/oiprofile.py) and drops the rest, so the picker stops there too.
+const MAX_PICKED_EXPIRIES = 6
 
 /** Same derivation the OI Profile indicator uses: typed name, else the chart's. */
 function underlyingOf(typed: unknown, symbol: string | undefined): string {
@@ -289,6 +292,10 @@ function ExpiryPicker({
   const [available, setAvailable] = useState<string[]>([])
 
   useEffect(() => {
+    // A new underlying's list is not the old one's: clear it at once, so an
+    // old expiry can never be ticked and saved while the new list loads, or
+    // after it fails to load.
+    setAvailable([])
     if (!underlying) return
     let alive = true
     const url =
@@ -349,7 +356,12 @@ function ExpiryPicker({
       <fieldset className="flex min-w-0 flex-col gap-1.5 border-0 p-0" aria-labelledby={id}>
         {available.map((e) => (
           <label key={e} className="flex cursor-pointer items-center gap-2 text-[13px]">
-            <TickBox id={`${id}-${e}`} checked={shown.includes(e)} onChange={() => toggle(e)} />
+            <TickBox
+              id={`${id}-${e}`}
+              checked={shown.includes(e)}
+              disabled={!shown.includes(e) && shown.length >= MAX_PICKED_EXPIRIES}
+              onChange={() => toggle(e)}
+            />
             {expiryLabel(e)}
           </label>
         ))}

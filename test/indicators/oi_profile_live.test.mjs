@@ -50,6 +50,23 @@ const canvas = () => {
     { get: (t, k) => (k in t ? t[k] : noop), set: () => true })
 }
 
+// The settings watcher polls once a second, so a change lands "about a second
+// later". Wait for the effect itself, bounded, rather than a fixed sleep a slow
+// scheduler can outrun.
+const waitFor = async (check, what, ms = 5000) => {
+  const until = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > until) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+const tooltipAt = (y, id) => {
+  primitive.hitTest(760, y, rc())
+  const c = canvas()
+  primitive.draw(c, rc(id))
+  return c.texts
+}
+
 // 23300 sits at y = 400 - 100 = 300. Bars hug the right edge (800).
 const hit = primitive.hitTest(760, 300, rc())
 assert.ok(hit, 'cursor over a strike bar must register a hit')
@@ -73,7 +90,7 @@ assert.equal(c.texts.length, 0, 'no hoverId must paint no tooltip')
 // The settings dialog fires no change event, so the indicator polls it once a
 // second and refetches. The tooltip follows the bars, so it changes with them.
 settings.mode = 'oi'
-await new Promise((r) => setTimeout(r, 1400))
+await waitFor(() => tooltipAt(300, 'oi-profile-strike:23300').includes('Call OI: 87.21L'), 'OI mode')
 primitive.hitTest(760, 300, rc())
 c = canvas()
 primitive.draw(c, rc('oi-profile-strike:23300'))
@@ -82,7 +99,7 @@ assert.ok(c.texts.includes('Put OI: 68.93L'), c.texts.join(' | '))
 
 // A negative change keeps its sign.
 settings.mode = 'change'
-await new Promise((r) => setTimeout(r, 1400))
+await waitFor(() => tooltipAt(250, 'oi-profile-strike:23400').includes('Call OI Chg: -4.00L'), 'change mode')
 primitive.hitTest(760, 250, rc())      // 23400 -> y = 250
 c = canvas()
 primitive.draw(c, rc('oi-profile-strike:23400'))
@@ -91,23 +108,23 @@ assert.ok(c.texts.includes('Call OI Chg: -4.00L'), c.texts.join(' | '))
 // Ticked expiries are a comma list, and every one of them is asked for; a
 // single value is the old single-expiry override and still works.
 settings.expiryDate = '22SEP26, 29SEP26'
-await new Promise((r) => setTimeout(r, 1400))
+await waitFor(() => lastBody?.expiry_dates?.length === 2, 'two expiries requested')
 assert.deepEqual(lastBody.expiry_dates, ['22SEP26', '29SEP26'], JSON.stringify(lastBody))
 
 settings.expiryDate = '06OCT26'
-await new Promise((r) => setTimeout(r, 1400))
+await waitFor(() => lastBody?.expiry_dates?.[0] === '06OCT26', 'the single expiry requested')
 assert.deepEqual(lastBody.expiry_dates, ['06OCT26'], JSON.stringify(lastBody))
 
 // Exchange left on Auto: the chart's own symbol picks the underlying, and the
 // BSE indices go to BFO without anyone setting anything.
 settings.exchange = 'auto'
 settings.expiryDate = ''
-await new Promise((r) => setTimeout(r, 1400))
+await waitFor(() => lastBody?.expiry_dates?.[0] === '22SEP26', 'the nearest expiry requested')
 assert.equal(lastBody.underlying, 'NIFTY', JSON.stringify(lastBody))
 assert.equal(lastBody.exchange, 'NFO', JSON.stringify(lastBody))
 
 settings.underlying = 'SENSEX'
-await new Promise((r) => setTimeout(r, 1400))
+await waitFor(() => lastBody?.underlying === 'SENSEX', 'the SENSEX request')
 assert.equal(lastBody.exchange, 'BFO', JSON.stringify(lastBody))
 
 teardown()

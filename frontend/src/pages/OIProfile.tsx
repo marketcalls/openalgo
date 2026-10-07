@@ -153,6 +153,13 @@ export default function OIProfile() {
     fetchIntervals()
   }, [])
 
+  // Which selection the plot on screen belongs to. The two-pass load below
+  // needs to know whether there is anything painted yet for what is being
+  // asked for - a repaint of the same selection must not blank its change
+  // columns on the way through. It is the key of a FULL answer only, and is
+  // cleared whenever the screen stops holding one.
+  const paintedKeyRef = useRef<string | null>(null)
+
   // Fetch underlyings when exchange changes
   useEffect(() => {
     const defaults = defaultUnderlyings[selectedExchange] || []
@@ -161,6 +168,7 @@ export default function OIProfile() {
     setExpiries([])
     setSelectedExpiries([])
     setProfileData(null)
+    paintedKeyRef.current = null
     setWindowRange(null)
 
     let cancelled = false
@@ -190,6 +198,7 @@ export default function OIProfile() {
     setExpiries([])
     setSelectedExpiries([])
     setProfileData(null)
+    paintedKeyRef.current = null
     setWindowRange(null)
 
     let cancelled = false
@@ -215,12 +224,6 @@ export default function OIProfile() {
       cancelled = true
     }
   }, [selectedUnderlying, selectedExchange])
-
-  // Which selection the plot on screen belongs to. The two-pass load below
-  // needs to know whether there is anything painted yet for what is being
-  // asked for - a repaint of the same selection must not blank its change
-  // columns on the way through.
-  const paintedKeyRef = useRef<string | null>(null)
 
   // Fetch profile data
   const fetchProfileData = useCallback(async () => {
@@ -251,7 +254,14 @@ export default function OIProfile() {
       if (paintedKeyRef.current !== selectionKey && !windowRange) {
         const fast = await oiProfileApi.getProfileData({ ...params, include_change: false })
         if (requestIdRef.current !== requestId) return
-        if (fast.status === 'success') setProfileData(fast)
+        if (fast.status === 'success') {
+          setProfileData(fast)
+          // The screen now holds a fast answer, which is no selection's full
+          // one. Without this, switching away and straight back would find the
+          // old key still here and skip the fast pass, leaving the other
+          // selection's chain on screen under this one's title.
+          paintedKeyRef.current = null
+        }
       }
 
       const response = await oiProfileApi.getProfileData(params)

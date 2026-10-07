@@ -225,22 +225,6 @@ def _candle_time(candle: dict) -> int | None:
     return int(t // 1000) if t > 1e12 else int(t)
 
 
-def _latest_session_rows(candles: list[dict]) -> list[dict]:
-    """Rows belonging to the most recent IST calendar date in the series."""
-    ist = pytz.timezone("Asia/Kolkata")
-    dated = []
-    for c in candles:
-        t = _candle_time(c)
-        if t is None:
-            continue
-        dated.append((datetime.fromtimestamp(t, ist).date(), t, c))
-    if not dated:
-        return []
-    last_date = max(d for d, _, _ in dated)
-    rows = sorted((t, c) for d, t, c in dated if d == last_date)
-    return [c for _, c in rows]
-
-
 # Broker rate-limit shape for the per-leg history calls below: small batches
 # with a pause between them, and exponential backoff on a 429.
 BATCH_SIZE = 5
@@ -551,12 +535,14 @@ def _fetch_windowed_oi_changes(
     if not symbols_to_fetch:
         return {}
 
-    def fetch_one(symbol: str) -> float:
+    def fetch_one(symbol: str) -> float | None:
         for bar in _anchor_intervals(interval):
             rows = _history_rows(symbol, options_exchange, bar, start, end, api_key)
             if rows:
                 return _oi_at_or_before(rows, window_end) - _oi_entering(rows, window_start)
-        return 0.0
+        # No history at any bar size: unknown, not a zero change. _in_batches
+        # leaves the leg out, so its change stays unpainted rather than flat.
+        return None
 
     return _in_batches(symbols_to_fetch, fetch_one)
 

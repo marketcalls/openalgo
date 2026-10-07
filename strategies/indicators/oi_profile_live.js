@@ -71,8 +71,12 @@ const COLOR_SCHEMES = {
  * would rather see expiry settle. Payoff to holders at each candidate
  * settlement, summed over every strike; the cheapest one wins.
  *
- * Computed over the WHOLE chain, never the strikes that happen to be on
- * screen: max pain is a property of the open interest, and one that moved
+ * Computed over every strike the profile fetched (Strikes Around ATM either
+ * side), never just the ones that happen to be on screen. It is not the whole
+ * option chain: open interest beyond that window is left out, so the marker
+ * is labelled as window-limited. A wider window moves it closer to the
+ * full-chain figure. Never the on-screen strikes: max pain is a property of
+ * the open interest, and one that moved
  * every time the user zoomed would be worse than none at all.
  *
  * ponytail: O(strikes^2) over the ~41 rows the chain carries, which is under
@@ -204,7 +208,7 @@ export default function ({ registerIndicator, nulls }) {
         ],
       },
       { key: 'outline', type: 'boolean', label: 'Previous Session Outline', default: true, group: 'Display' },
-      { key: 'maxPain', type: 'boolean', label: 'Max Pain Marker', default: true, group: 'Display' },
+      { key: 'maxPain', type: 'boolean', label: 'Max Pain Marker (strikes fetched)', default: true, group: 'Display' },
       { key: 'barWidth', type: 'number', label: 'Max Bar Width (px)', default: 140, min: 20, max: 400, step: 10, group: 'Display' },
       { key: 'opacity', type: 'number', label: 'Bar Opacity (%)', default: 55, min: 10, max: 100, step: 5, group: 'Display' },
       { key: 'refreshSeconds', type: 'number', label: 'Refresh (seconds)', default: 180, min: 60, max: 900, step: 30, group: 'Display' },
@@ -571,9 +575,16 @@ export default function ({ registerIndicator, nulls }) {
         const key = `${exchange}|${underlying}|${count}`
         const fresh = Date.now() - expiryCachedAt < EXPIRY_CACHE_MS
         if (key !== expiryCacheKey || expiryCache.length === 0 || !fresh) {
-          expiryCache = await fetchNearestExpiries(exchange, underlying, count)
-          expiryCacheKey = key
-          expiryCachedAt = Date.now()
+          const answer = await fetchNearestExpiries(exchange, underlying, count)
+          // An empty answer for the instrument already on screen is far more
+          // likely a lookup hiccup than expiries vanishing: keep the last good
+          // list (and its age, so the next beat asks again) rather than blank
+          // a chart that was right a moment ago.
+          if (answer.length > 0 || key !== expiryCacheKey) {
+            expiryCache = answer
+            expiryCacheKey = key
+            expiryCachedAt = Date.now()
+          }
         }
         return expiryCache
       }
@@ -628,10 +639,10 @@ export default function ({ registerIndicator, nulls }) {
         try {
           const expiries = await resolveExpiries(settings, exchange, underlying)
           if (stale()) return
-          if (expiries.length === 0) {
-            state.chain = null
-            return
-          }
+          // Nothing to ask for. Leave the screen as it is: a changed
+          // instrument was already cleared by the settings watcher, and an
+          // unchanged one keeps its last good chain through a failed lookup.
+          if (expiries.length === 0) return
 
           const request = async (includeChange) => {
             const res = await postProfileData({

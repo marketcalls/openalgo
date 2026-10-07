@@ -29,6 +29,8 @@ MAX_EXPIRIES = 6
 # what keeps a careless request from asking the broker for the whole chain.
 DEFAULT_STRIKE_COUNT = 20
 MAX_STRIKE_COUNT = 50
+# 2100-01-01 UTC: far past any chart, well inside what a datetime can hold.
+MAX_WINDOW_TS = 4102444800
 
 # Only allow these intraday intervals for the candlestick panel
 ALLOWED_INTERVALS = {"1m", "5m", "15m"}
@@ -91,6 +93,15 @@ def profile_data():
         if (window_start is None) != (window_end is None):
             return jsonify(
                 {"status": "error", "message": "window_start and window_end must be given together"}
+            ), 400
+
+        # A window outside the range a datetime can hold would pass this far and
+        # then fail inside the service, after the option chain had been fetched.
+        if window_start is not None and not (
+            0 < window_start <= MAX_WINDOW_TS and 0 < window_end <= MAX_WINDOW_TS
+        ):
+            return jsonify(
+                {"status": "error", "message": "The selected time window is out of range"}
             ), 400
 
         if window_start is not None and window_start >= window_end:
