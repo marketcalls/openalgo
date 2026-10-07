@@ -434,6 +434,30 @@ checked again on the first start.
 **Still not modelled.** The sandbox margin reconcile does not count margin held
 by open and trigger-pending orders (unchanged from before).
 
+### Agent: newer models and four new providers
+
+The Agent's provider and model lists at `/agent/config` come from LiteLLM, which
+moves from 1.99.0 to 1.104.0. Nothing to configure: models you have already
+added keep working as they are.
+
+- **Four new providers** in the provider grid: Eden AI, Nadir, Qwen Cloud and
+  Qwen AI Platform. Each needs an API key from that provider. Eden AI and Nadir
+  route to other vendors' models, so they list no models of their own: type the
+  model name when you add one.
+- **Newer models across the existing providers**, among them Claude Opus 5.5,
+  Claude Fable 5.1, GPT-6 Sol, Luna and Astra, Gemini 3.8 Flash, the Grok 4.20
+  family and the Qwen 3.8 models. The model picker shows their context window
+  and price as before.
+- **ChatGPT Plus or Pro**: `gpt-5.5` and the three `gpt-5.6` variants now come
+  from LiteLLM itself, with its context windows. `gpt-6-astra` is still added by
+  OpenAlgo so the picker shows it even when the server cannot reach GitHub.
+- **The model list depends on the server reaching GitHub.** LiteLLM downloads
+  its current model list when the app starts and falls back to the list shipped
+  with the package if that fails, so a server without internet access shows a
+  shorter list. This was already true before this release; it is written down
+  now because it explains why two installs on the same version can show
+  different models.
+
 ### Fixed
 
 - **A strategy's Long, Short and Exit marks stayed on the chart after the
@@ -550,6 +574,22 @@ update; no behaviour change is expected.
 - `tornado` 6.5.8 to 6.5.10.
 - `urllib3` 2.7.0 to 2.8.0.
 - `axios` 1.18 to 1.20.0 in the frontend.
+- `litellm` 1.99.0 to 1.104.0, for the Agent. See *Agent: newer models and
+  four new providers* above.
+- `Werkzeug` 3.1.8 to 3.1.9. On a Windows install, a request for a static file
+  named after a Windows device with a trailing colon (`nul:`) got past the path
+  check every file route relies on; 3.1.9 refuses it. Linux and Docker installs
+  were not affected.
+- `multidict` 6.7.1 to 6.9.1 (a memory reference leak in set operations on
+  header views). It is now pinned in the requirements files, so an existing
+  install upgrades it on the next update rather than keeping the old one.
+- Frontend: `probe-image-size` 7.4.0 and `source-map-js` 1.2.2 (CPU
+  exhaustion from crafted input), `postcss-selector-parser` 7.1.6, and `katex`
+  0.18. KaTeX is a dependency of the chat UI library that OpenAlgo never loads,
+  so no page changes.
+- **Not fixed:** `braces`, used only by the frontend test tools, has an open
+  advisory (GHSA-vfj7-8cjw-p6xm) with no patched release yet. It never reaches
+  a browser or the server.
 
 ## [2.0.2.6] - 2026-09-23
 
