@@ -11,12 +11,23 @@ export interface CandleData {
   oi?: number
 }
 
+/** One option contract inside a strike. A strike has several when expiries are summed. */
+export interface OIProfileLeg {
+  symbol: string
+  /** Open interest when the profile was fetched. */
+  oi: number
+  /** OI the change is measured against; null when that change is not known. */
+  base: number | null
+}
+
 export interface OIProfileChainItem {
   strike: number
   ce_oi: number
   pe_oi: number
   ce_oi_change: number
   pe_oi_change: number
+  ce_legs?: OIProfileLeg[]
+  pe_legs?: OIProfileLeg[]
 }
 
 export interface OIProfileDataResponse {
@@ -32,6 +43,8 @@ export interface OIProfileDataResponse {
   interval?: string
   candles?: CandleData[]
   oi_chain?: OIProfileChainItem[]
+  /** Exchange the option legs trade on, for subscribing to their live feed. */
+  options_exchange?: string
   window_start?: number | null
   window_end?: number | null
   strike_count?: number

@@ -831,19 +831,28 @@ def get_oi_profile_data(
                     option_symbols_for_history, options_exchange, api_key, interval
                 )
 
-        # Step 4: Compute OI changes, summed over every selected expiry
+        # Step 4: Compute OI changes, summed over every selected expiry.
+        # Each leg also goes out with the OI it is measured against ("base"), so
+        # a client holding a live tick for that leg can recompute the change
+        # itself (live - base) without another broker call. base is None when
+        # the change for that leg is not known (not asked for, or still being
+        # fetched), and the client then leaves the polled change alone.
         for item in oi_chain:
             for side in ("ce", "pe"):
                 change = 0.0
+                legs_out = []
                 for symbol, current_oi in item[f"{side}_legs"]:
+                    base = None
                     if windowed:
+                        if symbol in oi_change_map:
+                            base = current_oi - oi_change_map[symbol]
                         change += oi_change_map.get(symbol, 0.0)
                     elif symbol in prev_oi_map:
-                        change += current_oi - prev_oi_map[symbol]
+                        base = prev_oi_map[symbol]
+                        change += current_oi - base
+                    legs_out.append({"symbol": symbol, "oi": current_oi, "base": base})
                 item[f"{side}_oi_change"] = change
-            # Internal bookkeeping, not part of the response
-            item.pop("ce_legs", None)
-            item.pop("pe_legs", None)
+                item[f"{side}_legs"] = legs_out
 
         payload = {
             "status": "success",
@@ -858,6 +867,7 @@ def get_oi_profile_data(
             "interval": interval,
             "candles": candles,
             "oi_chain": oi_chain,
+            "options_exchange": options_exchange,
             "window_start": window_start,
             "window_end": window_end,
             # Lets a live overlay stop asking once the exchange has closed,

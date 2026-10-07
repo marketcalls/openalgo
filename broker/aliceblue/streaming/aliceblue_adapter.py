@@ -1296,6 +1296,8 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "timestamp": parsed_data.get("timestamp", ""),
                             "depth": depth_data,
                         }
+                        if "oi" in parsed_data:
+                            publish_data["oi"] = parsed_data["oi"]
                     else:
                         # Fallback for other data types
                         publish_data = {

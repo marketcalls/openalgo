@@ -47,6 +47,7 @@ need → drill into the specific file. Don't load everything at once.
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
 | OI Profile: where Change in OI is anchored | [oi-profile-anchors.md](oi-profile-anchors.md) |
+| OI Profile: live open interest from the broker feed, per-broker capability | [oi-profile-live-oi.md](oi-profile-live-oi.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |
 | Health monitoring | [HEALTH_MONITORING_IMPLEMENTATION.md](HEALTH_MONITORING_IMPLEMENTATION.md) · [HEALTH_MONITOR_REACT_FRONTEND.md](HEALTH_MONITOR_REACT_FRONTEND.md) |

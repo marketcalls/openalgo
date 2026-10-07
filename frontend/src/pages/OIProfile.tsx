@@ -21,7 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useMarketData } from '@/hooks/useMarketData'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { applyLiveOi } from '@/lib/oiProfileLive'
 import Plot from '@/lib/Plot2D'
 import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
@@ -42,6 +44,8 @@ const INTERVAL_DAYS: Record<string, number> = {
 // market cannot move, but the beat still has to come back slowly rather than
 // stop: a page left open overnight has to notice the next session opening.
 const LIVE_REFRESH_MS = 3 * 60 * 1000
+// How often the OI columns redraw from live ticks.
+const LIVE_REDRAW_MS = 2000
 const CLOSED_REFRESH_MS = 15 * 60 * 1000
 
 // An underlying nobody has looked at today has no previous-session OI cached
@@ -409,6 +413,45 @@ export default function OIProfile() {
     []
   )
 
+  // Live open interest. Where the broker's feed carries `oi`, the ticks that
+  // are already flowing to this browser keep the columns current between polls,
+  // at no cost to the broker API. A broker whose feed omits it simply never
+  // fills the cache, and the polled numbers stand.
+  const liveLegs = useMemo(() => {
+    const exchange = profileData?.options_exchange
+    if (!exchange || !profileData?.oi_chain) return []
+    const symbols = new Set<string>()
+    for (const row of profileData.oi_chain) {
+      for (const leg of row.ce_legs ?? []) symbols.add(leg.symbol)
+      for (const leg of row.pe_legs ?? []) symbols.add(leg.symbol)
+    }
+    return [...symbols].map((symbol) => ({ symbol, exchange }))
+  }, [profileData?.options_exchange, profileData?.oi_chain])
+
+  const { data: liveTicks } = useMarketData({
+    symbols: liveLegs,
+    mode: 'Quote',
+    enabled: liveLegs.length > 0 && profileData?.market_open !== false,
+  })
+
+  // Ticks arrive far faster than a bar chart can usefully redraw, so the plot
+  // reads a snapshot taken on a slow beat rather than every tick.
+  const liveTicksRef = useRef(liveTicks)
+  liveTicksRef.current = liveTicks
+  const [liveSnapshot, setLiveSnapshot] = useState(liveTicks)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLiveSnapshot((prev) => (prev === liveTicksRef.current ? prev : liveTicksRef.current))
+    }, LIVE_REDRAW_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  const live = useMemo(
+    () =>
+      applyLiveOi(profileData?.oi_chain ?? [], liveSnapshot, profileData?.options_exchange ?? ''),
+    [profileData?.oi_chain, profileData?.options_exchange, liveSnapshot]
+  )
+
   // Build the 3-column plot
   const profilePlot = useMemo(() => {
     // The OI columns are the point of the page; the futures candles are
@@ -417,7 +460,7 @@ export default function OIProfile() {
     if (!profileData?.oi_chain?.length) return { data: [], layout: {} }
 
     const candles = profileData.candles ?? []
-    const oiChain = profileData.oi_chain
+    const oiChain = live.chain
     const atmStrike = profileData.atm_strike
 
     // Futures candle time labels (category x-axis)
@@ -649,7 +692,7 @@ export default function OIProfile() {
     }
 
     return { data, layout }
-  }, [profileData, themeColors, selectedExpiries, selectedUnderlying, windowRange])
+  }, [profileData, live, themeColors, selectedExpiries, selectedUnderlying, windowRange])
 
   return (
     <div className="py-6 space-y-4">
@@ -801,6 +844,11 @@ export default function OIProfile() {
               ? `Expiries: ${selectedExpiries.join(' + ')}`
               : `Expiry: ${selectedExpiries[0] || '-'}`}
           </Badge>{' '}
+          {live.liveLegs > 0 && (
+            <Badge variant="secondary" className="text-sm px-3 py-1">
+              Live OI: {live.liveLegs} contracts
+            </Badge>
+          )}
           <Badge variant="secondary" className="text-sm px-3 py-1">
             Interval: {profileData.interval}
           </Badge>

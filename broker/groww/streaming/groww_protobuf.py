@@ -33,6 +33,8 @@ FIELD_CLOSE = 5
 FIELD_VOLUME = 6
 FIELD_VALUE = 7
 FIELD_LTP = 13
+# openInterest (double), per growwapi's StocksSocketResponse.proto
+FIELD_OPEN_INTEREST = 14
 
 
 class MiniProtobufParser:
@@ -196,6 +198,8 @@ class MiniProtobufParser:
                 result["value"] = self._read_fixed64()
             elif field_num == FIELD_LTP:
                 result["ltp"] = self._read_fixed64()  # Price is already in correct format
+            elif field_num == FIELD_OPEN_INTEREST:
+                result["open_interest"] = self._read_fixed64()
             else:
                 self._skip_field(wire_type)
 

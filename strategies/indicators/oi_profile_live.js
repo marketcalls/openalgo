@@ -165,7 +165,44 @@ async function fetchNearestExpiries(exchange, underlying, count) {
   return list.slice(0, count).map((e) => String(e).replace(/-/g, '').toUpperCase())
 }
 
-export default function ({ registerIndicator, nulls }) {
+/**
+ * Lay live OI over a polled chain. Mirrors frontend/src/lib/oiProfileLive.ts:
+ * a contract with a live tick takes the tick's OI, everything else keeps the
+ * polled number, and the change is re-based on the same anchor the server used
+ * (`base`) only when every contract in that strike has one. A 0 tick means the
+ * feed does not know, never that the contract emptied.
+ */
+export function overlayLiveOi(chain, liveOi) {
+  let live = 0
+  const next = chain.map((row) => {
+    const out = { ...row }
+    for (const side of ['ce', 'pe']) {
+      const legs = row[`${side}_legs`]
+      if (!Array.isArray(legs) || legs.length === 0) continue
+      let total = 0
+      let change = 0
+      let sawLive = false
+      for (const leg of legs) {
+        const tick = liveOi.get(leg.symbol)
+        const isLive = typeof tick === 'number' && tick > 0
+        const oi = isLive ? tick : Number(leg.oi) || 0
+        total += oi
+        if (isLive) {
+          sawLive = true
+          live += 1
+        }
+        if (leg.base != null) change += oi - leg.base
+      }
+      if (!sawLive) continue
+      out[`${side}_oi`] = total
+      if (legs.every((leg) => leg.base != null)) out[`${side}_oi_change`] = change
+    }
+    return out
+  })
+  return { chain: next, live }
+}
+
+export default function ({ registerIndicator, nulls, subscribeQuotes }) {
   registerIndicator({
     id: 'oi-profile-live',
     name: 'OI Profile',
@@ -601,12 +638,72 @@ export default function ({ registerIndicator, nulls }) {
       // every animation frame.
       const applyChain = (body, valueMode, hasChange) => {
         const chain = Array.isArray(body.oi_chain) ? body.oi_chain : null
-        state.chain = chain
+        polledChain = chain
         state.valueMode = valueMode
         state.hasChange = hasChange
-        state.maxPain = chain ? maxPainStrike(chain) : null
+        state.marketOpen = body.market_open !== false
+        watchLegs(chain, body.options_exchange)
+        redraw()
+      }
+
+      // Live open interest. Where the broker's feed carries `oi`, the ticks
+      // keep the bars current between polls at no cost to the broker API, over
+      // the page's one shared socket. A host without `subscribeQuotes`, or a
+      // feed that never sends `oi`, leaves the polled numbers exactly as they were.
+      let polledChain = null
+      const liveOi = new Map()
+      let liveDirty = false
+      let unsubscribeLive = null
+      let watchedLegs = ''
+
+      const redraw = () => {
+        const chain = polledChain
+        state.chain = chain && liveOi.size ? overlayLiveOi(chain, liveOi).chain : chain
+        state.maxPain = state.chain ? maxPainStrike(state.chain) : null
         ctx.requestRecompute()
       }
+
+      const stopLive = () => {
+        if (unsubscribeLive) unsubscribeLive()
+        unsubscribeLive = null
+        watchedLegs = ''
+        liveOi.clear()
+      }
+
+      const watchLegs = (chain, exchange) => {
+        if (typeof subscribeQuotes !== 'function' || !exchange || !state.marketOpen) {
+          stopLive()
+          return
+        }
+        const symbols = new Set()
+        for (const row of chain ?? []) {
+          for (const leg of row.ce_legs ?? []) symbols.add(leg.symbol)
+          for (const leg of row.pe_legs ?? []) symbols.add(leg.symbol)
+        }
+        const key = `${exchange}|${[...symbols].sort().join(',')}`
+        if (key === watchedLegs) return
+        stopLive()
+        if (symbols.size === 0) return
+        watchedLegs = key
+        unsubscribeLive = subscribeQuotes(
+          [...symbols].map((symbol) => ({ symbol, exchange })),
+          (tick) => {
+            const oi = Number(tick?.data?.oi)
+            if (!(oi > 0) || liveOi.get(tick.symbol) === oi) return
+            liveOi.set(tick.symbol, oi)
+            liveDirty = true
+          }
+        )
+      }
+
+      // Ticks arrive far faster than bars need repainting; fold them in on a
+      // slow beat instead of recomputing on every one.
+      const LIVE_REDRAW_MS = 2000
+      const liveTimer = setInterval(() => {
+        if (!liveDirty || cancelled) return
+        liveDirty = false
+        redraw()
+      }, LIVE_REDRAW_MS)
 
       // `force` is for a settings change: the run already in flight is for
       // settings nobody is looking at any more, so it is abandoned rather than
@@ -632,6 +729,8 @@ export default function ({ registerIndicator, nulls }) {
         state.mode = settings.mode === 'oi' ? 'oi' : 'change'
         watchedKey = dataKey(settings, ctx.symbol?.())
         if (!underlying) {
+          polledChain = null
+          stopLive()
           state.chain = null
           return
         }
@@ -672,7 +771,6 @@ export default function ({ registerIndicator, nulls }) {
           const oiBody = await request(false)
           if (!oiBody) return
           applyChain(oiBody, 'oi', false)
-          state.marketOpen = oiBody.market_open !== false
 
           // The change columns carry yesterday's open interest too, so the
           // outline needs them even when the bars themselves show OI.
@@ -735,6 +833,8 @@ export default function ({ registerIndicator, nulls }) {
         watchedKey = next
         // A changed instrument invalidates what is on screen; clear it rather
         // than leave the previous underlying's bars up while the new one loads.
+        polledChain = null
+        stopLive()
         state.chain = null
         state.maxPain = null
         state.changePending = false
@@ -759,6 +859,8 @@ export default function ({ registerIndicator, nulls }) {
         cancelled = true
         if (timer) clearTimeout(timer)
         clearInterval(watcher)
+        clearInterval(liveTimer)
+        stopLive()
         document.removeEventListener('visibilitychange', onVisible)
         ctx.removePrimitive(primitive)
       }

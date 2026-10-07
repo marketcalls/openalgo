@@ -256,6 +256,15 @@ class AliceBlueMessageMapper:
                 "timestamp": message.get("ft", ""),
                 "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,
             }
+            # The contract's own open interest is on depth frames only (`oi`;
+            # `toi` on tick frames is the underlying's total). A df frame
+            # carries only what changed, so absent stays absent.
+            try:
+                oi = int(float(message.get("oi") or 0))
+            except (TypeError, ValueError):
+                oi = 0
+            if oi > 0:
+                parsed["oi"] = oi
             return parsed
         except (ValueError, KeyError) as e:
             return {"type": "error", "message": f"Failed to parse depth data: {e}"}

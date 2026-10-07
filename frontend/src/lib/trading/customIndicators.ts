@@ -26,6 +26,39 @@
  * checks live here, where the real library already is, and report as toasts.
  */
 
+import { type MarketData, MarketDataManager } from '@/lib/MarketDataManager'
+
+/** One live tick handed to a module through `subscribeQuotes`. */
+export interface HostQuoteTick {
+  symbol: string
+  exchange: string
+  data: MarketData
+}
+
+/**
+ * Host API for runtime modules: Quote-mode ticks over the app's one shared
+ * WebSocket. The chart context has no tick feed of its own, and a module that
+ * opened its own socket would cost a second connection to the proxy and a
+ * second broker subscription for symbols the page may already be streaming.
+ * Returns the unsubscribe; call it from the indicator's teardown.
+ */
+export function subscribeQuotes(
+  symbols: Array<{ symbol: string; exchange: string }>,
+  onTick: (tick: HostQuoteTick) => void
+): () => void {
+  const manager = MarketDataManager.getInstance()
+  const state = manager.getState()
+  if (!state.isConnected && !state.isPaused) void manager.connect()
+  const unsubscribes = symbols.map(({ symbol, exchange }) =>
+    manager.subscribe(symbol, exchange, 'Quote', (d) =>
+      onTick({ symbol: d.symbol, exchange: d.exchange, data: d.data })
+    )
+  )
+  return () => {
+    for (const unsubscribe of unsubscribes) unsubscribe()
+  }
+}
+
 /** One module the server is offering. `mtime` busts the browser module cache. */
 interface CustomModule {
   file: string
@@ -404,6 +437,7 @@ function registerOnce(mod: CustomModule, onProblem: ProblemReporter): Promise<Ou
       const ids: string[] = []
       await register({
         ...api,
+        subscribeQuotes,
         registerIndicator: (descriptor: Record<string, unknown>) => {
           if (typeof descriptor !== 'object' || descriptor === null) {
             throw new Error('registerIndicator needs a descriptor object')

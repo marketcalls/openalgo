@@ -27,6 +27,8 @@ export interface MarketData {
   low?: number
   close?: number
   volume?: number
+  /** Open interest; only derivatives carry it, and only some broker feeds send it. */
+  oi?: number
   change?: number
   change_percent?: number
   timestamp?: string
@@ -587,6 +589,7 @@ export class MarketDataManager {
             low: marketDataPayload.low ?? newData.low,
             close: marketDataPayload.close ?? newData.close,
             volume: marketDataPayload.volume ?? newData.volume,
+            oi: marketDataPayload.oi ?? newData.oi,
             change: marketDataPayload.change ?? newData.change,
             change_percent: marketDataPayload.change_percent ?? newData.change_percent,
             timestamp: marketDataPayload.timestamp ?? newData.timestamp,
@@ -828,6 +831,7 @@ export class MarketDataManager {
             low: result.data.low ?? newData.low,
             close: result.data.prev_close ?? newData.close,
             volume: result.data.volume ?? newData.volume,
+            oi: result.data.oi ?? newData.oi,
             bid_price: result.data.bid ?? newData.bid_price,
             ask_price: result.data.ask ?? newData.ask_price,
           })

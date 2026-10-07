@@ -1101,6 +1101,10 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     quote_data["volume"] = ltp_data.get("volume")
                 if ltp_data.get("value") and ltp_data.get("value") != 0:
                     quote_data["value"] = ltp_data.get("value")
+                # Open interest rides on the same LTP proto for F&O contracts.
+                # proto3 omits a zero, so absent stays absent.
+                if ltp_data.get("open_interest"):
+                    quote_data["oi"] = int(ltp_data["open_interest"])
 
                 return quote_data
             else:

@@ -595,6 +595,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "best_bid_quantity": message.get("best_bid_quantity", 0),
                 "best_ask_price": message.get("best_ask_price", 0),
                 "best_ask_quantity": message.get("best_ask_quantity", 0),
+                **self._oi_field(message),
             }
         elif mode == 3:  # Snap Quote mode (includes depth data)
             result = {
@@ -610,6 +611,8 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "change_percentage": message.get("change_percentage", 0),
             }
 
+            result.update(self._oi_field(message))
+
             # Pass through depth data from samcoWebSocket normalization
             if "depth" in message:
                 result["depth"] = message["depth"]
@@ -617,6 +620,17 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return result
         else:
             return {}
+
+    @staticmethod
+    def _oi_field(message) -> dict[str, Any]:
+        """`{"oi": n}` from the quote stream's `oI`, or `{}`.
+
+        Only the `quote` stream carries `oI`; `quote2` frames for the same token
+        normalise it to 0. Leaving the key out keeps the client's last value
+        instead of flashing a false 0 on every depth frame.
+        """
+        oi = message.get("open_interest") or 0
+        return {"oi": int(oi)} if oi > 0 else {}
 
     def _extract_depth_data(self, message, is_buy: bool) -> list[dict[str, Any]]:
         """

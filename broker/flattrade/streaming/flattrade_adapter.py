@@ -199,6 +199,7 @@ class QuoteNormalizer:
             "last_quantity": safe_int(data.get("ltq")),
             "last_trade_time": data.get("ltt"),
             "flattrade_timestamp": safe_int(data.get("ft")),
+            **_oi_field(data),
         }
 
 
@@ -222,6 +223,7 @@ class DepthNormalizer:
             "total_buy_quantity": safe_int(data.get("tbq")),
             "total_sell_quantity": safe_int(data.get("tsq")),
             "flattrade_timestamp": safe_int(data.get("ft")),
+            **_oi_field(data),
         }
 
         # Add depth data
@@ -1373,3 +1375,17 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (ValueError, TypeError):
         return default
+
+
+def _oi_field(data: dict[str, Any]) -> dict[str, Any]:
+    """`{"oi": n}` when the (cache-merged) Noren packet carries open interest, else `{}`.
+
+    Noren's `oi` is the contract's own open interest. `toi` is the total for the
+    whole underlying and `poi` the previous close, so neither is used here. The
+    key is left out rather than sent as 0 so a client keeps its last value.
+    """
+    value = data.get("oi")
+    if value in (None, "", "-"):
+        return {}
+    oi = safe_int(value)
+    return {"oi": oi} if oi > 0 else {}
