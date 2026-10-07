@@ -393,6 +393,44 @@ def get_order_book(auth):
     return direct_get_order_book(auth)
 
 
+def groww_position_prices(position):
+    """
+    The three prices OpenAlgo reports for a Groww position, in rupees.
+
+    Groww documents every price on a position in rupees: `net_price` as "Net
+    average price in rupees of instruments", `credit_price` and `debit_price`
+    as the average price in rupees of credited and debited instruments. They
+    are carried through unchanged.
+
+    Two conversions used to stand here. `credit_price` and `debit_price` were
+    divided by 100 unconditionally, so a Rs 433.00 entry was reported as
+    Rs 4.33 on every position. `net_price` was divided only above 1000, which
+    left the scale discontinuous: Rs 1,000 came back as Rs 1,000 and Rs 1,001
+    as Rs 10.01. The same value-based conversion was removed from the
+    tradebook in #1995; holdings in this file never had one.
+
+    Args:
+        position (dict): One entry from Groww's positions payload.
+
+    Returns:
+        dict: average_price, buy_price and sell_price in rupees.
+    """
+
+    def rupees(key):
+        try:
+            return float(position.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    sell_price = rupees("debit_price")
+    return {
+        "average_price": rupees("net_price"),
+        "buy_price": rupees("credit_price"),
+        # A position with nothing sold reports 0 rather than a price.
+        "sell_price": sell_price if sell_price > 0 else 0,
+    }
+
+
 def transform_groww_trade(trade):
     """
     Transform one normalised Groww trade into the shape map_trade_data and
@@ -942,10 +980,8 @@ def get_positions(auth, strict=False):
                         )
                         net_qty = position.get("quantity", buy_qty - sell_qty)
 
-                        # Get average price - convert from paise to rupees if needed
-                        avg_price = position.get("net_price", 0)
-                        if avg_price > 1000:  # Likely in paise
-                            avg_price = avg_price / 100
+                        prices = groww_position_prices(position)
+                        avg_price = prices["average_price"]
 
                         # Get the trading symbol
                         groww_symbol = position.get("trading_symbol", "")
@@ -1090,11 +1126,8 @@ def get_positions(auth, strict=False):
                             "sell_quantity": sell_qty,
                             "segment": "EQ",  # OpenAlgo format for CASH segment
                             # Specific Groww fields (renamed to match OpenAlgo expectations)
-                            "buy_price": position.get("credit_price", 0)
-                            / 100,  # Convert paise to rupees
-                            "sell_price": position.get("debit_price", 0) / 100
-                            if position.get("debit_price", 0) > 0
-                            else 0,
+                            "buy_price": prices["buy_price"],
+                            "sell_price": prices["sell_price"],
                             "symbol_isin": position.get("symbol_isin", ""),
                             # Fields expected by OpenAlgo's UI
                             "pnl": 0,  # Not provided in response, calculate if needed
@@ -1144,10 +1177,8 @@ def get_positions(auth, strict=False):
                             )
                             net_qty = position.get("quantity", buy_qty - sell_qty)
 
-                            # Get average price - convert from paise to rupees if needed
-                            avg_price = position.get("net_price", 0)
-                            if avg_price > 1000:  # Likely in paise
-                                avg_price = avg_price / 100
+                            prices = groww_position_prices(position)
+                            avg_price = prices["average_price"]
 
                             # Get the trading symbol
                             groww_symbol = position.get("trading_symbol", "")
@@ -1285,10 +1316,8 @@ def get_positions(auth, strict=False):
                                 "buy_quantity": buy_qty,
                                 "sell_quantity": sell_qty,
                                 "segment": "FO",  # OpenAlgo format for FNO segment
-                                "buy_price": position.get("credit_price", 0) / 100,
-                                "sell_price": position.get("debit_price", 0) / 100
-                                if position.get("debit_price", 0) > 0
-                                else 0,
+                                "buy_price": prices["buy_price"],
+                                "sell_price": prices["sell_price"],
                                 "symbol_isin": position.get("symbol_isin", ""),
                                 "pnl": 0,
                                 "last_price": 0,
