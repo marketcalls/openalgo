@@ -42,9 +42,13 @@ def test_first_order_in_flight_has_a_status():
 
 
 def test_rest_order_book_exposes_trigger_pending_as_actionable_open():
-    [transformed] = transform_order_data([_order("TRIGGER PENDING")])
+    orders = [_order("TRIGGER PENDING")]
+    [transformed] = transform_order_data(orders)
 
     assert transformed["order_status"] == "open"
+    assert calculate_order_statistics(orders)["total_open_orders"] == sum(
+        order["order_status"] == "open" for order in transform_order_data(orders)
+    )
 
 
 def test_statistics_count_trigger_pending_and_in_flight_as_open():
