@@ -335,475 +335,194 @@ def _fno_read_failure(response):
 _SEGMENT_BY_EXCHANGE = {"NSE": "CASH", "BSE": "CASH", "NFO": "FNO", "BFO": "FNO"}
 
 
-def get_positions(auth, strict=False):
+def _num(value):
+    """A finite float from a Groww numeric field, or 0."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _position_row(position, segment):
+    """One Groww position (06-portfolio "Get User Positions") in OpenAlgo terms.
+
+    Prices are rupees as documented. P&L starts as the documented realised_pnl;
+    _attach_ltp adds the open quantity's move when a live price is available.
     """
-    Get current positions for the user using direct API calls to Groww API
-    Uses the /v1/positions/user endpoint as documented
+    groww_symbol = position.get("trading_symbol", "")
+    groww_exchange = position.get("exchange", "")
+    groww_segment = position.get("segment") or segment
+    exchange = openalgo_exchange(groww_exchange, groww_segment)
+    buy_qty = _num(position.get("credit_quantity")) + _num(
+        position.get("carry_forward_credit_quantity")
+    )
+    sell_qty = _num(position.get("debit_quantity")) + _num(
+        position.get("carry_forward_debit_quantity")
+    )
+    net_qty = position.get("quantity", buy_qty - sell_qty)
+    prices = groww_position_prices(position)
+    realised = _num(position.get("realised_pnl"))
+    symbol = get_oa_symbol(groww_symbol, exchange) or groww_symbol
+    return {
+        "symbol": symbol,
+        "tradingsymbol": symbol,
+        "trading_symbol": groww_symbol,
+        "exchange": exchange,
+        "brexchange": groww_exchange,
+        "segment": groww_segment,
+        "product": position.get("product", ""),
+        "quantity": net_qty,
+        "net_quantity": net_qty,
+        "average_price": prices["average_price"],
+        "buy_quantity": buy_qty,
+        "sell_quantity": sell_qty,
+        "buy_price": prices["buy_price"],
+        "sell_price": prices["sell_price"],
+        "symbol_isin": position.get("symbol_isin", ""),
+        "ltp": 0,
+        "realised": realised,
+        "unrealised": 0,
+        "pnl": realised,
+    }
+
+
+_LTP_BATCH_SIZE = 50  # 08-live-data "Get LTP": up to 50 instruments
+
+
+def _attach_ltp(rows, auth):
+    """Add a live price and the open quantity's P&L to each open position.
+
+    Groww's positions carry no last price, so one /v1/live-data/ltp call per
+    segment (50 symbols each) supplies it; the payload maps each
+    EXCHANGE_SYMBOL to its LTP. A failed price read leaves the row with LTP 0
+    and P&L as the realised amount - the position itself is still shown.
+    """
+    wanted = {}
+    for row in rows:
+        if _num(row["quantity"]) == 0 or not row["trading_symbol"]:
+            continue
+        key = f"{row['brexchange']}_{row['trading_symbol']}"
+        wanted.setdefault(row["segment"], {}).setdefault(key, []).append(row)
+    if not wanted:
+        return
+
+    client = get_httpx_client()
+    headers = _groww_headers(auth)
+    for segment, rows_by_key in wanted.items():
+        keys = list(rows_by_key)
+        for start in range(0, len(keys), _LTP_BATCH_SIZE):
+            batch = keys[start : start + _LTP_BATCH_SIZE]
+            try:
+                resp = client.get(
+                    f"{GROWW_BASE_URL}/v1/live-data/ltp",
+                    params={"segment": segment, "exchange_symbols": ",".join(batch)},
+                    headers=headers,
+                    timeout=10,
+                )
+                body = resp.json()
+            except Exception:
+                logger.warning(f"Groww LTP for {segment} positions could not be read", exc_info=True)
+                continue
+            payload = body.get("payload") if isinstance(body, dict) else None
+            if resp.status_code != 200 or body.get("status") != "SUCCESS" or not isinstance(payload, dict):
+                reason = _groww_error_message(body, f"HTTP {resp.status_code}")
+                logger.warning(f"Groww LTP for {segment} positions refused: {reason}")
+                continue
+            for key in batch:
+                ltp = _num(payload.get(key))
+                if ltp <= 0:
+                    continue
+                for row in rows_by_key[key]:
+                    row["ltp"] = ltp
+                    if row["average_price"] > 0:
+                        row["unrealised"] = (ltp - row["average_price"]) * _num(row["quantity"])
+                        row["pnl"] = row["realised"] + row["unrealised"]
+
+
+def get_positions(auth, strict=False, include_ltp=None):
+    """
+    Read the day's positions from both segments (GET /v1/positions/user).
 
     Args:
         auth (str): Authentication token
         strict (bool): Report a CASH segment that could not be read as an
             error instead of an empty book, which is what the smart order needs.
-            An FNO read that fails does not fail the whole read: this code has
-            always expected it to fail on some accounts, and refusing every
-            smart order on an account without F&O would be the wrong trade.
-            The CASH rows come back with "failed_segments": ["FNO"], so a smart
-            order in NFO or BFO is refused while one in NSE or BSE goes ahead.
+            An FNO read that fails does not fail the whole read: it fails on
+            accounts without F&O, and refusing every smart order there would be
+            the wrong trade. The CASH rows come back with
+            "failed_segments": ["FNO"], so a smart order in NFO or BFO is
+            refused while one in NSE or BSE goes ahead.
+        include_ltp (bool, optional): Attach live prices and P&L. Defaults to
+            on for the position book and off for the strict smart-order read,
+            which only needs quantities.
 
     Returns:
         tuple: (positions data, status code)
     """
+    if include_ltp is None:
+        include_ltp = not strict
     try:
-        logger.debug("Using direct API implementation for get_positions")
-
-        # Prepare the API client and headers
         client = get_httpx_client()
-        headers = {
-            "Authorization": f"Bearer {auth}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        # Groww API endpoint for positions - using documented endpoint
+        headers = _groww_headers(auth)
         positions_url = f"{GROWW_BASE_URL}/v1/positions/user"
 
-        # Get both CASH and FNO segments
-        params = {
-            "segment": "CASH"  # Default to CASH segment
-        }
-
-        # Log the request details (with redacted auth token)
-        logger.debug("-------- GET POSITIONS REQUEST --------")
-        logger.debug(f"API URL: {positions_url}")
-        logger.debug(f"Request parameters: {params}")
-        logger.debug(
-            'Request headers: {\n  "Authorization": "Bearer ***REDACTED***",\n  "Accept": "application/json",\n  "Content-Type": "application/json"\n}'
+        rows = []
+        cash = client.get(
+            positions_url, params={"segment": SEGMENT_CASH}, headers=headers, timeout=30
         )
-
-        # Make the API call for CASH segment
-        response_obj = client.get(positions_url, params=params, headers=headers, timeout=30)
-
-        # Log the response status
-        logger.debug("-------- GET POSITIONS RESPONSE --------")
-        logger.debug(f"Response status code: {response_obj.status_code}")
-
-        # Parse the response
-        all_positions = []
-        failures = []
-
         try:
-            # Parse CASH segment response
-            response_data = response_obj.json()
-            logger.debug(
-                f"Raw CASH positions response: {json.dumps(response_data, indent=2)[:1000]}..."
+            cash_body = cash.json()
+        except ValueError:
+            cash_body = None
+        if (
+            cash.status_code == 200
+            and isinstance(cash_body, dict)
+            and cash_body.get("status") == "SUCCESS"
+        ):
+            for position in (cash_body.get("payload") or {}).get("positions") or []:
+                rows.append(_position_row(position, SEGMENT_CASH))
+        elif not says_no_positions(cash_body):
+            reason = _groww_error_message(cash_body, f"HTTP {cash.status_code}")
+            if strict:
+                logger.error(f"Groww position book incomplete: CASH segment: {reason}")
+                return {"status": "error", "message": f"CASH segment: {reason}", "data": []}, 502
+            logger.warning(f"Groww CASH positions could not be read: {reason}")
+
+        fno_failure = None
+        try:
+            fno = client.get(
+                positions_url, params={"segment": SEGMENT_FNO}, headers=headers, timeout=30
             )
+            fno_failure = _fno_read_failure(fno)
+            if fno_failure is None and fno.status_code == 200:
+                fno_body = fno.json()
+                if fno_body.get("status") == "SUCCESS":
+                    for position in (fno_body.get("payload") or {}).get("positions") or []:
+                        rows.append(_position_row(position, SEGMENT_FNO))
+        except Exception as fno_error:
+            logger.warning(f"Error fetching FNO positions: {fno_error}")
+            fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
 
-            # Process the response to extract position information
-            if response_obj.status_code == 200 and response_data.get("status") == "SUCCESS":
-                # Extract positions from the payload based on the documented format
-                if "payload" in response_data and "positions" in response_data["payload"]:
-                    raw_positions = response_data["payload"]["positions"]
-                    logger.debug(f"Found {len(raw_positions)} positions in CASH segment")
+        if include_ltp:
+            _attach_ltp(rows, auth)
 
-                    # Transform positions to match OpenAlgo's expected format
-                    for position in raw_positions:
-                        # Calculate net quantities
-                        buy_qty = position.get("credit_quantity", 0) + position.get(
-                            "carry_forward_credit_quantity", 0
-                        )
-                        sell_qty = position.get("debit_quantity", 0) + position.get(
-                            "carry_forward_debit_quantity", 0
-                        )
-                        net_qty = position.get("quantity", buy_qty - sell_qty)
-
-                        prices = groww_position_prices(position)
-                        avg_price = prices["average_price"]
-
-                        # Get the trading symbol
-                        groww_symbol = position.get("trading_symbol", "")
-                        openalgo_symbol = groww_symbol
-                        symbol_converted = False
-
-                        # Handle symbol conversion for consistency with orderbook
-                        # This is primarily for FNO instruments, but we'll check all symbols
-                        try:
-                            # Import get_oa_symbol from token_db with fallback paths
-                            try:
-                                from database.token_db import get_oa_symbol
-                            except ImportError:
-                                from openalgo.database.token_db import get_oa_symbol
-
-                            # First try database lookup for any symbol
-                            db_symbol = get_oa_symbol(groww_symbol, "NFO")
-                            if db_symbol:
-                                openalgo_symbol = db_symbol
-                                logger.debug(
-                                    f"Database: Converted Groww symbol: {groww_symbol} -> {openalgo_symbol}"
-                                )
-                                symbol_converted = True
-                            else:
-                                # Pattern matching fallbacks if database lookup fails
-                                # 1. Try option pattern
-                                option_pattern = re.compile(
-                                    r"([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)"
-                                )
-                                option_match = option_pattern.match(groww_symbol)
-
-                                if option_match:
-                                    # Extract components
-                                    symbol_name, year, month_num, day, strike, option_type = (
-                                        option_match.groups()
-                                    )
-
-                                    # Convert numeric month to alphabetic
-                                    months = [
-                                        "JAN",
-                                        "FEB",
-                                        "MAR",
-                                        "APR",
-                                        "MAY",
-                                        "JUN",
-                                        "JUL",
-                                        "AUG",
-                                        "SEP",
-                                        "OCT",
-                                        "NOV",
-                                        "DEC",
-                                    ]
-                                    month_name = (
-                                        months[int(month_num) - 1]
-                                        if 1 <= int(month_num) <= 12
-                                        else f"M{month_num}"
-                                    )
-
-                                    # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                    openalgo_symbol = (
-                                        f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                    )
-                                    logger.debug(
-                                        f"Pattern: Converted Groww option symbol: {groww_symbol} -> {openalgo_symbol}"
-                                    )
-                                    symbol_converted = True
-                                else:
-                                    # 2. Try futures pattern
-                                    future_pattern = re.compile(
-                                        r"([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?"
-                                    )
-                                    future_match = future_pattern.match(groww_symbol)
-
-                                    if future_match:
-                                        # Extract components
-                                        symbol_name, year, month_num, day = future_match.groups()
-
-                                        # Convert numeric month to alphabetic
-                                        months = [
-                                            "JAN",
-                                            "FEB",
-                                            "MAR",
-                                            "APR",
-                                            "MAY",
-                                            "JUN",
-                                            "JUL",
-                                            "AUG",
-                                            "SEP",
-                                            "OCT",
-                                            "NOV",
-                                            "DEC",
-                                        ]
-                                        month_name = (
-                                            months[int(month_num) - 1]
-                                            if 1 <= int(month_num) <= 12
-                                            else f"M{month_num}"
-                                        )
-
-                                        # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                        openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
-                                        logger.debug(
-                                            f"Pattern: Converted Groww futures symbol: {groww_symbol} -> {openalgo_symbol}"
-                                        )
-                                        symbol_converted = True
-
-                        except Exception as e:
-                            logger.error(f"Error converting position symbol: {e}")
-                            # Fall back to original symbol if conversion fails
-
-                        # Map exchange to OpenAlgo format
-                        exchange = position.get("exchange", "")
-                        if exchange == "NSE":
-                            openalgo_exchange = "NSE_EQ"
-                        elif exchange == "BSE":
-                            openalgo_exchange = "BSE_EQ"
-                        elif exchange == "NFO":
-                            openalgo_exchange = "NSE_FO"
-                        else:
-                            openalgo_exchange = exchange
-
-                        # Create position object in OpenAlgo format
-                        # For CASH segment, use the original trading_symbol as the symbol
-                        if position.get("segment") == "CASH":
-                            position_symbol = position.get(
-                                "trading_symbol", groww_symbol
-                            )  # Use trading_symbol for cash segment
-                        else:
-                            position_symbol = (
-                                openalgo_symbol  # Use converted symbol for other segments
-                            )
-
-                        transformed_position = {
-                            # Standard OpenAlgo fields
-                            "symbol": position_symbol,
-                            "tradingsymbol": position_symbol,
-                            "exchange": openalgo_exchange,
-                            "product": position.get("product", ""),
-                            "quantity": net_qty,
-                            "net_quantity": net_qty,
-                            "average_price": avg_price,
-                            "buy_quantity": buy_qty,
-                            "sell_quantity": sell_qty,
-                            "segment": "EQ",  # OpenAlgo format for CASH segment
-                            # Specific Groww fields (renamed to match OpenAlgo expectations)
-                            "buy_price": prices["buy_price"],
-                            "sell_price": prices["sell_price"],
-                            "symbol_isin": position.get("symbol_isin", ""),
-                            # Fields expected by OpenAlgo's UI
-                            "pnl": 0,  # Not provided in response, calculate if needed
-                            "last_price": 0,  # Not provided in response
-                            "close_price": 0,  # Not provided in response
-                            "instrument_token": position.get(
-                                "symbol_isin", ""
-                            ),  # Use ISIN as token
-                            "unrealised": 0,  # Not provided in response
-                            "realised": 0,  # Not provided in response
-                        }
-                        all_positions.append(transformed_position)
-            elif not says_no_positions(response_data):
-                failures.append(
-                    f"CASH segment: HTTP {response_obj.status_code}, {str(response_data)[:200]}"
-                )
-
-            # Now try to get FNO segment positions
-            fno_failure = None
-            try:
-                params["segment"] = "FNO"
-                logger.debug(f"Fetching FNO positions with params: {params}")
-
-                fno_response = client.get(positions_url, params=params, headers=headers, timeout=30)
-                fno_failure = _fno_read_failure(fno_response)
-
-                if fno_response.status_code == 200:
-                    fno_data = fno_response.json()
-                    logger.debug(f"FNO response status: {fno_data.get('status')}")
-
-                    if (
-                        fno_data.get("status") == "SUCCESS"
-                        and "payload" in fno_data
-                        and "positions" in fno_data["payload"]
-                    ):
-                        fno_positions = fno_data["payload"]["positions"]
-                        logger.debug(f"Found {len(fno_positions)} positions in FNO segment")
-
-                        # Process FNO positions the same way
-                        for position in fno_positions:
-                            # Calculate net quantities
-                            buy_qty = position.get("credit_quantity", 0) + position.get(
-                                "carry_forward_credit_quantity", 0
-                            )
-                            sell_qty = position.get("debit_quantity", 0) + position.get(
-                                "carry_forward_debit_quantity", 0
-                            )
-                            net_qty = position.get("quantity", buy_qty - sell_qty)
-
-                            prices = groww_position_prices(position)
-                            avg_price = prices["average_price"]
-
-                            # Get the trading symbol
-                            groww_symbol = position.get("trading_symbol", "")
-                            openalgo_symbol = groww_symbol
-                            symbol_converted = False
-
-                            # Handle FNO symbol conversion
-                            if (
-                                position.get("segment") == "FNO"
-                                or position.get("exchange") == "NFO"
-                            ):
-                                try:
-                                    # Import get_oa_symbol with fallback paths
-                                    try:
-                                        from database.token_db import get_oa_symbol
-                                    except ImportError:
-                                        from openalgo.database.token_db import get_oa_symbol
-
-                                    # First try database lookup for this FNO symbol
-                                    db_symbol = get_oa_symbol(groww_symbol, "NFO")
-                                    if db_symbol:
-                                        openalgo_symbol = db_symbol
-                                        logger.debug(
-                                            f"Database: Converted Groww FNO symbol: {groww_symbol} -> {openalgo_symbol}"
-                                        )
-                                        symbol_converted = True
-                                    else:
-                                        # Fallback to pattern matching if database lookup fails
-                                        # For Options: Convert from Groww format to OpenAlgo format
-                                        # Groww format: "NIFTY25051334000CE" or "BANKNIFTY25051332500PE"
-                                        # OpenAlgo format: "NIFTY13MAY2534000CE" or "BANKNIFTY13MAY2532500PE"
-                                        groww_pattern = re.compile(
-                                            r"([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)"
-                                        )
-                                        match = groww_pattern.match(groww_symbol)
-
-                                    if match:
-                                        # Extract components
-                                        symbol_name, year, month_num, day, strike, option_type = (
-                                            match.groups()
-                                        )
-
-                                        # Convert numeric month to alphabetic
-                                        months = [
-                                            "JAN",
-                                            "FEB",
-                                            "MAR",
-                                            "APR",
-                                            "MAY",
-                                            "JUN",
-                                            "JUL",
-                                            "AUG",
-                                            "SEP",
-                                            "OCT",
-                                            "NOV",
-                                            "DEC",
-                                        ]
-                                        month_name = (
-                                            months[int(month_num) - 1]
-                                            if 1 <= int(month_num) <= 12
-                                            else f"M{month_num}"
-                                        )
-
-                                        # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                        openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                        logger.debug(
-                                            f"Pattern: Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}"
-                                        )
-                                        symbol_converted = True
-
-                                    # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
-                                    else:
-                                        future_pattern = re.compile(
-                                            r"([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?"
-                                        )
-                                        match = future_pattern.match(groww_symbol)
-
-                                        if match:
-                                            # Extract components
-                                            symbol_name, year, month_num, day = match.groups()
-
-                                            # Convert numeric month to alphabetic
-                                            months = [
-                                                "JAN",
-                                                "FEB",
-                                                "MAR",
-                                                "APR",
-                                                "MAY",
-                                                "JUN",
-                                                "JUL",
-                                                "AUG",
-                                                "SEP",
-                                                "OCT",
-                                                "NOV",
-                                                "DEC",
-                                            ]
-                                            month_name = (
-                                                months[int(month_num) - 1]
-                                                if 1 <= int(month_num) <= 12
-                                                else f"M{month_num}"
-                                            )
-
-                                            # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                            openalgo_symbol = (
-                                                f"{symbol_name}{day}{month_name}{year}FUT"
-                                            )
-                                            logger.debug(
-                                                f"Pattern: Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}"
-                                            )
-                                            symbol_converted = True
-                                except Exception as e:
-                                    logger.error(f"Error converting position symbol: {e}")
-                                    # Fall back to original symbol if conversion fails
-
-                            # Map exchange to OpenAlgo format
-                            exchange = position.get("exchange", "")
-                            if exchange == "NSE":
-                                openalgo_exchange = "NSE"
-                            elif exchange == "BSE":
-                                openalgo_exchange = "BSE"
-                            elif exchange == "NFO":
-                                openalgo_exchange = "NSE_FO"
-                            else:
-                                openalgo_exchange = exchange
-
-                            # Create position object with segment set to FNO
-                            transformed_position = {
-                                "symbol": openalgo_symbol,
-                                "tradingsymbol": openalgo_symbol,
-                                "exchange": openalgo_exchange,
-                                "product": position.get("product", ""),
-                                "quantity": net_qty,
-                                "net_quantity": net_qty,
-                                "average_price": avg_price,
-                                "buy_quantity": buy_qty,
-                                "sell_quantity": sell_qty,
-                                "segment": "FO",  # OpenAlgo format for FNO segment
-                                "buy_price": prices["buy_price"],
-                                "sell_price": prices["sell_price"],
-                                "symbol_isin": position.get("symbol_isin", ""),
-                                "pnl": 0,
-                                "last_price": 0,
-                                "close_price": 0,
-                                "instrument_token": position.get("symbol_isin", ""),
-                                "unrealised": 0,
-                                "realised": 0,
-                            }
-                            all_positions.append(transformed_position)
-            except Exception as fno_error:
-                # Don't fail if FNO segment request fails
-                logger.warning(f"Error fetching FNO positions: {fno_error}")
-                fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
-
-            if strict and failures:
-                logger.error(f"Groww position book incomplete: {'; '.join(failures)}")
-                return {"status": "error", "message": "; ".join(failures), "data": []}, 502
-
-            # Create formatted response
-            formatted_response = {
-                "status": "success",
-                "message": f"Retrieved {len(all_positions)} positions",
-                "data": all_positions,
-                "raw_response": response_data,  # Include the CASH segment response
-            }
-            if strict and fno_failure:
-                logger.warning(f"Groww FNO positions not read: {fno_failure}")
-                formatted_response["failed_segments"] = ["FNO"]
-
-            logger.debug(f"Successfully processed {len(all_positions)} total positions")
-            return formatted_response, 200
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing positions response: {e}")
-            logger.error(f"Response content: {response_obj.content[:1000]}")
-            return {
-                "status": "error",
-                "message": f"Error parsing positions response: {str(e)}",
-                "data": [],
-                "raw_content": response_obj.content.decode("utf-8", errors="replace")[:1000],
-            }, response_obj.status_code
+        response = {
+            "status": "success",
+            "message": f"Retrieved {len(rows)} positions",
+            "data": rows,
+        }
+        if strict and fno_failure:
+            logger.warning(f"Groww FNO positions not read: {fno_failure}")
+            response["failed_segments"] = ["FNO"]
+        return response, 200
 
     except Exception as e:
-        logger.error(f"Error fetching positions: {e}")
-        logger.exception("Full stack trace:")
+        logger.exception("Error fetching Groww positions")
         return {
             "status": "error",
-            "message": f"Error fetching positions: {str(e)}",
+            "message": f"Could not reach Groww to read positions: {type(e).__name__}",
             "data": [],
-            "raw_response": {},
         }, 500
 
 
@@ -1014,50 +733,17 @@ def get_open_position(tradingsymbol, exchange, product, auth):
         if segment is None or segment in failed_segments:
             raise PositionReadError("groww", f"the {failed_segments} position read failed")
 
-    # Check if we received positions data in expected format
-    # Handle both direct list format and dictionary with data field
-    if positions_data:
-        # If it's a dictionary with status and data fields (like Angel's format)
+    # get_positions returns (payload, status); its rows carry Groww's own
+    # trading_symbol and the OpenAlgo exchange (NSE/BSE/NFO/BFO).
+    positions_list = (payload.get("data") or []) if isinstance(payload, dict) else []
+    for position in positions_list:
         if (
-            isinstance(positions_data, dict)
-            and positions_data.get("status") == "success"
-            and positions_data.get("data")
+            position.get("trading_symbol") == tradingsymbol
+            and position.get("exchange") == exchange
+            and position.get("product") == product
         ):
-            positions_list = positions_data.get("data", [])
-        # If it's already a list
-        elif isinstance(positions_data, list):
-            positions_list = positions_data
-        else:
-            positions_list = []
-
-        # Accept both OpenAlgo-standard exchange codes and the segment-suffixed
-        # variants stored by get_positions() (NSE_EQ/BSE_EQ for CASH, NSE_FO/BSE_FO for FNO).
-        exchange_variants = {
-            "NSE": {"NSE", "NSE_EQ"},
-            "BSE": {"BSE", "BSE_EQ"},
-            "NFO": {"NFO", "NSE_FO", "NSE"},
-            "BFO": {"BFO", "BSE_FO", "BSE"},
-        }
-        expected_exchanges = exchange_variants.get(exchange, {map_exchange_type(exchange), exchange})
-
-        for position in positions_list:
-            # Check for matching position - compare with both tradingsymbol and symbol fields
-            symbol_match = (
-                position.get("tradingsymbol") == tradingsymbol
-                or position.get("symbol") == tradingsymbol
-                or position.get("trading_symbol") == tradingsymbol
-            )
-            exchange_match = position.get("exchange") in expected_exchanges
-            product_match = position.get("product") == product
-
-            if symbol_match and exchange_match and product_match:
-                # Try different field names for net quantity
-                net_qty = str(
-                    position.get(
-                        "net_quantity", position.get("netqty", position.get("quantity", "0"))
-                    )
-                )
-                break  # Found the position
+            net_qty = str(position.get("net_quantity", position.get("quantity", "0")))
+            break
 
     return net_qty
 
@@ -1749,74 +1435,33 @@ def close_all_positions(token=None, auth=None):
     """
     try:
         logger.debug("Starting close_all_positions function")
-        positions_data, status_code = get_positions(auth)
+        positions_data, status_code = get_positions(auth, include_ltp=False)
 
         if status_code != 200:
             logger.error(f"Failed to fetch positions: {positions_data}")
             return {"status": "error", "message": "Failed to fetch positions"}, 500
 
-        if not positions_data or "data" not in positions_data:
-            logger.debug("No positions to close")
+        positions = positions_data.get("data") or []
+        if not positions:
             return {"status": "success", "message": "No positions to close"}, 200
-
-        # Ensure we're using the data from the positions_data
-        positions = positions_data.get("data", [])
 
         success_count = 0
         failure_count = 0
         detailed_results = []
 
-        logger.debug(f"Total positions to process: {len(positions)}")
-
         for position in positions:
             try:
-                # Extensive logging of position details
-                logger.debug(f"Processing position: {json.dumps(position, indent=2)}")
-
-                # Get quantity and validate
-                net_qty = position.get("net_quantity", position.get("quantity", 0))
-                logger.debug(f"Net Quantity: {net_qty}")
-
-                if int(net_qty) == 0:
-                    logger.debug("Skipping position with zero net quantity")
+                net_qty = int(_num(position.get("net_quantity", position.get("quantity", 0))))
+                if net_qty == 0:
                     continue
 
-                # Get trading details
-                trading_symbol = position.get(
-                    "tradingsymbol", position.get("trading_symbol", position.get("symbol"))
-                )
-                exchange = position.get("exchange", "NSE").replace("_EQ", "").replace("_FO", "")
-                product = position.get("product", "MIS")
-                segment = position.get("segment", "")
-
-                # Retrieve broker symbol from database
-                br_symbol = get_br_symbol(trading_symbol, exchange)
-                if br_symbol:
-                    trading_symbol = br_symbol
-                    logger.debug(f"Retrieved broker symbol: {br_symbol}")
-                else:
-                    logger.warning(f"No broker symbol found for {trading_symbol} in {exchange}")
-
-                # Extensive logging of trading details
-                logger.debug(f"Trading Symbol: {trading_symbol}")
-                logger.debug(f"Exchange: {exchange}")
-                logger.debug(f"Product: {product}")
-                logger.debug(f"Segment: {segment}")
-
-                # Determine order action
-                action = "SELL" if int(net_qty) > 0 else "BUY"
-                quantity = abs(int(net_qty))
-
-                # Special handling for FNO segment with more logging
-                if (
-                    segment.upper() == "FO"
-                    or "FNO" in exchange.upper()
-                    or "NFO" in exchange.upper()
-                ):
-                    logger.debug(f"Detected FNO/Derivative segment for {trading_symbol}")
-                    exchange = "NFO"
-                    product = "MIS"  # Ensure MIS for derivatives
-                    logger.debug(f"Updated Exchange to {exchange}, Product to {product}")
+                # get_positions rows carry the OpenAlgo symbol, exchange and
+                # product, which is what place_order_api takes
+                trading_symbol = position.get("symbol")
+                exchange = position.get("exchange")
+                product = position.get("product")
+                action = "SELL" if net_qty > 0 else "BUY"
+                quantity = abs(net_qty)
 
                 # Prepare order payload
                 place_order_payload = {
@@ -1841,7 +1486,7 @@ def close_all_positions(token=None, auth=None):
                 # Enhanced logging for detailed tracking
                 result_entry = {
                     "symbol": trading_symbol,
-                    "segment": segment,
+                    "segment": position.get("segment", ""),
                     "quantity": quantity,
                     "action": action,
                     "order_id": order_id,
@@ -1855,7 +1500,7 @@ def close_all_positions(token=None, auth=None):
                     success_count += 1
                     result_entry["status"] = "success"
                     logger.debug(
-                        f"Successfully closed position {trading_symbol} in {segment} segment"
+                        f"Successfully closed position {trading_symbol} on {exchange}"
                     )
                 elif api_response and api_response.get("message", "").startswith("API error: 400"):
                     # Specific handling for 400 Bad Request
@@ -1869,7 +1514,7 @@ def close_all_positions(token=None, auth=None):
                     failure_count += 1
                     result_entry["status"] = "failed"
                     logger.error(
-                        f"Failed to close position {trading_symbol} in {segment} segment: {api_response}"
+                        f"Failed to close position {trading_symbol} on {exchange}: {api_response}"
                     )
 
                 detailed_results.append(result_entry)
