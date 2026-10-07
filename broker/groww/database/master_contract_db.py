@@ -561,7 +561,7 @@ def process_groww_data(path):
             "exchange_token": "token",  # Token ID
             "trading_symbol": "brsymbol",  # Broker-specific symbol
             "groww_symbol": "groww_symbol",  # Groww-specific symbol (keep for reference)
-            "name": "groww_symbol",  # Instrument name
+            "name": "name",  # Instrument name (company / index name for CASH rows)
             "instrument_type": "instrument_type",  # Instrument type from Groww
             "segment": "segment",  # Segment (CASH, FNO)
             "series": "series",  # Series (EQ, etc.)
@@ -638,7 +638,7 @@ def process_groww_data(path):
         # We want CE, PE, FUT values to be preserved as is
         instrument_type_map = {
             "EQ": "EQ",  # Equity
-            "IDX": "INDEX",  # Index
+            "IDX": "EQ",  # Index (identified by the *_INDEX exchange, not the type)
             "FUT": "FUT",  # Futures
             "CE": "CE",  # Call Options (keep original value)
             "PE": "PE",  # Put Options (keep original value)
@@ -699,15 +699,24 @@ def process_groww_data(path):
         df_mapped.loc[idx_bse_mask, "exchange"] = "BSE_INDEX"
 
         # Special handling for indices
-        # Make sure indices have instrumenttype=INDEX
+        # OpenAlgo has no INDEX instrumenttype: an index is an EQ row on
+        # NSE_INDEX/BSE_INDEX (same as Zerodha). The streaming code already
+        # detects indices from the exchange.
         index_mask = (df["instrument_type"] == "IDX") | (df["segment"] == "IDX")
-        df_mapped.loc[index_mask, "instrumenttype"] = "INDEX"
+        df_mapped.loc[index_mask, "instrumenttype"] = "EQ"
 
         # Format F&O symbols using vectorized operations (much faster than apply)
         # Identify FNO rows with valid expiry
+        # Groww's trading_symbol is not OpenAlgo format on BSE F&O
+        # (SENSEX26O2274900CE, SENSEX26OCTFUT) or NSE commodities (GOLD26NOVFUT),
+        # so those are rebuilt here too. MCX trading symbols already carry the
+        # full DDMMMYY expiry and are left as shipped.
         fno_data_mask = (
-            (df_mapped["brexchange"] == "NSE")
-            & (df["segment"] == "FNO")
+            (
+                ((df_mapped["brexchange"] == "NSE") & (df["segment"] == "FNO"))
+                | ((df_mapped["brexchange"] == "BSE") & (df["segment"] == "FNO"))
+                | ((df_mapped["brexchange"] == "NSE") & (df["segment"] == "COMMODITY"))
+            )
             & df_mapped["expiry"].notna()
             & (df_mapped["expiry"] != "")
         )
@@ -752,6 +761,38 @@ def process_groww_data(path):
                 df_mapped.loc[pe_mask, "symbol"] = (
                     base_symbol[pe_mask] + expiry_str[pe_mask] + strike_str[pe_mask] + "PE"
                 )
+
+        # Derivatives carry their underlying in `name`. The shared post-download
+        # pass derives it from the symbol, but only on F&O exchanges, so the NSE
+        # commodity rows (which stay on NSE) would otherwise be left blank.
+        deriv_mask = (
+            df_mapped["instrumenttype"].isin(["FUT", "CE", "PE"])
+            & df_mapped["underlying"].notna()
+            & (df_mapped["underlying"] != "")
+        )
+        df_mapped.loc[deriv_mask, "name"] = df_mapped.loc[deriv_mask, "underlying"]
+
+        # Disambiguate CASH rows that share a trading_symbol on the same exchange.
+        # Groww drops the series from trading_symbol, so NSE bonds listed under one
+        # symbol with several series (e.g. IMC1 N1/N2/N3) collapse into duplicate
+        # (symbol, exchange) pairs and lookups pick one arbitrarily. Give only those
+        # rows the SYMBOL-SERIES form (Groww's internal_trading_symbol, e.g. IMC1-N2).
+        cash_rows = df["segment"] == "CASH"
+        dup_mask = cash_rows & df_mapped[cash_rows].duplicated(
+            subset=["symbol", "exchange"], keep=False
+        ).reindex(df_mapped.index, fill_value=False)
+        if dup_mask.any():
+            series_symbol = df_mapped["symbol"] + "-" + df["series"].fillna("")
+            if "internal_trading_symbol" in df.columns:
+                series_symbol = df["internal_trading_symbol"].where(
+                    df["internal_trading_symbol"].notna() & (df["internal_trading_symbol"] != ""),
+                    series_symbol,
+                )
+            df_mapped.loc[dup_mask, "symbol"] = series_symbol[dup_mask]
+            logger.info(
+                f"Disambiguated {int(dup_mask.sum())} CASH rows sharing a trading_symbol: "
+                f"{sorted(df_mapped.loc[dup_mask, 'symbol'].tolist())}"
+            )
 
         logger.info(f"Processed {len(df_mapped)} instruments")
         return df_mapped

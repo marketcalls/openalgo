@@ -407,9 +407,10 @@ def transform_order_data(orders):
 
         # Map order type to OpenAlgo format
         mapped_order_type = order_type
-        if order_type == "STOP_LOSS":
+        # Groww returns SL / SL_M (annexure "Order Type"); OpenAlgo uses SL / SL-M
+        if order_type in ("SL", "STOP_LOSS", "STOP_LOSS_LIMIT"):
             mapped_order_type = "SL"
-        elif order_type == "STOP_LOSS_MARKET":
+        elif order_type in ("SL_M", "STOP_LOSS_MARKET"):
             mapped_order_type = "SL-M"
 
         # Map product type

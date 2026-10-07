@@ -1143,10 +1143,12 @@ class BrokerData:
                 token = get_token(symbol, exchange)
 
                 # Map OpenAlgo exchange to Groww exchange format
-                if exchange == "NSE":
+                # Indexes live in the CASH segment on Groww; without the *_INDEX
+                # branches BSE_INDEX fell through to NSE and SENSEX quoted 0.
+                if exchange in ("NSE", "NSE_INDEX"):
                     groww_exchange = EXCHANGE_NSE
                     segment = SEGMENT_CASH
-                elif exchange == "BSE":
+                elif exchange in ("BSE", "BSE_INDEX"):
                     groww_exchange = EXCHANGE_BSE
                     segment = SEGMENT_CASH
                 elif exchange == "NFO":
@@ -1681,10 +1683,10 @@ class BrokerData:
         token = get_token(symbol, exchange)
 
         # Map OpenAlgo exchange to Groww exchange format
-        if exchange == "NSE":
+        if exchange in ("NSE", "NSE_INDEX"):
             groww_exchange = EXCHANGE_NSE
             segment = SEGMENT_CASH
-        elif exchange == "BSE":
+        elif exchange in ("BSE", "BSE_INDEX"):
             groww_exchange = EXCHANGE_BSE
             segment = SEGMENT_CASH
         elif exchange == "NFO":

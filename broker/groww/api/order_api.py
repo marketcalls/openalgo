@@ -1684,8 +1684,11 @@ def direct_place_order_api(data, auth):
         validity = map_validity(data.get("validity", "DAY"))
 
         # Optional parameters
+        # SL is a stop-limit order: Groww needs both price and trigger_price
         price = (
-            float(data.get("price", 0)) if data.get("pricetype", "").upper() == "LIMIT" else None
+            float(data.get("price", 0))
+            if data.get("pricetype", "").upper() in ["LIMIT", "SL"]
+            else None
         )
         trigger_price = (
             float(data.get("trigger_price", 0))
@@ -1734,8 +1737,8 @@ def direct_place_order_api(data, auth):
             "order_reference_id": order_reference_id,
         }
 
-        # Add price for LIMIT orders with detailed logging
-        if price is not None and order_type == ORDER_TYPE_LIMIT:
+        # Add price for LIMIT and SL (stop-limit) orders with detailed logging
+        if price is not None and order_type in [ORDER_TYPE_LIMIT, ORDER_TYPE_SL]:
             # Ensure price is a proper numeric value
             try:
                 price_value = float(price)
@@ -2466,280 +2469,103 @@ def close_all_positions(token=None, auth=None):
         }, 500
 
 
-def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
+def _groww_error_message(body, fallback):
+    """The reason Groww gave for a failed request.
+
+    Groww documents failures as ``{"status": "FAILURE", "error": {"code", "message"}}``
+    (01-introduction, "Response structure").
     """
-    Cancel an order by its ID using direct API call
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+        if body.get("message"):
+            return str(body["message"])
+    return fallback
 
-    Args:
-        orderid (str): Order ID to cancel
-        auth (str): Authentication token
-        segment (str, optional): Order segment (e.g., SEGMENT_CASH). If None, will be detected from order book.
-        symbol (str, optional): Trading symbol in OpenAlgo format
-        exchange (str, optional): Exchange code
 
-    Returns:
-        tuple: (response data, status code)
+def _cancel_segments(orderid, auth):
+    """Segments to try when cancelling ``orderid``.
+
+    Groww's cancel needs the order's own segment. Read it from the order book;
+    if the order is not there, try CASH then FNO - a cancel sent to the wrong
+    segment is refused by Groww, so the second attempt is harmless.
     """
     try:
-        # If symbol is provided, convert it from OpenAlgo to Groww format
-        if symbol and exchange:
-            groww_symbol = format_openalgo_to_groww_symbol(symbol, exchange)
-            logger.debug(f"Symbol conversion for cancel order: {symbol} -> {groww_symbol}")
+        for order in get_order_book(auth).get("data", []):
+            if order.get("groww_order_id") == orderid:
+                seg = order.get("segment")
+                if seg in (SEGMENT_CASH, SEGMENT_FNO):
+                    return [seg]
+                break
+    except Exception:
+        logger.exception(f"Could not read the order book to find the segment of {orderid}")
+    return [SEGMENT_CASH, SEGMENT_FNO]
 
-        # If segment is not provided, try to determine it from order book
-        if segment is None:
-            logger.debug(
-                f"No segment provided for cancelling order {orderid}, attempting to determine from order book"
-            )
-            try:
-                # Get order book to find the order and determine its segment
-                order_book_response = get_order_book(auth)
 
-                # Check if we have orders in the response
-                if (
-                    order_book_response
-                    and isinstance(order_book_response, tuple)
-                    and len(order_book_response) > 0
-                ):
-                    order_book_data = order_book_response[0]
+def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
+    """
+    Cancel an order (POST /v1/order/cancel).
 
-                    # Special handling for FNO orders - check if the order ID starts with "GLTFO"
-                    if orderid.startswith("GLTFO"):
-                        logger.debug(
-                            f"Order ID {orderid} appears to be an FNO order based on prefix"
-                        )
-                        segment = SEGMENT_FNO
-                    else:
-                        # Regular search through all orders in the order book
-                        orders_found = False
-                        # Iterate through orders to find the matching order ID
-                        for order in order_book_data.get("data", []):
-                            if order.get("groww_order_id") == orderid:
-                                orders_found = True
-                                # Determine segment based on exchange or other properties
-                                if order.get("segment") == "CASH":
-                                    segment = SEGMENT_CASH
-                                elif order.get("segment") in ["FNO", "F&O", "OPTIONS", "FUTURES"]:
-                                    segment = SEGMENT_FNO
-                                elif order.get("segment") == "CURRENCY":
-                                    segment = SEGMENT_CURRENCY
-                                elif order.get("segment") == "COMMODITY":
-                                    segment = SEGMENT_COMMODITY
-                                logger.debug(
-                                    f"Found order {orderid} in order book with segment {segment}"
-                                )
-                                break
+    Args:
+        orderid (str): Groww order ID to cancel
+        auth (str): Authentication token
+        segment (str, optional): CASH or FNO. Looked up from the order book when omitted.
+        symbol (str, optional): OpenAlgo symbol, echoed back in the response
+        exchange (str, optional): Unused, kept for call compatibility
 
-                        # If we didn't find the order, check if it's an FNO order based on ID pattern
-                        if (
-                            not orders_found
-                            and "CE" in orderid
-                            or "PE" in orderid
-                            or "FUT" in orderid
-                        ):
-                            logger.debug(
-                                f"Order ID {orderid} appears to be an FNO order based on option/future identifiers"
-                            )
-                            segment = SEGMENT_FNO
-            except Exception as e:
-                logger.error(f"Error determining segment for order {orderid}: {e}")
-
-        # Default to CASH segment if still not determined
-        if segment is None:
-            logger.warning(
-                f"Could not determine segment for order {orderid}, defaulting to CASH segment"
-            )
-            segment = SEGMENT_CASH
-
-        logger.debug(f"Cancelling order {orderid} in segment {segment}")
-
-        # Prepare API client and headers
+    Returns:
+        tuple: (response data, status code). 200 only when Groww reports SUCCESS.
+    """
+    try:
         client = get_httpx_client()
         headers = {
             "Authorization": f"Bearer {auth}",
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "X-API-VERSION": "1.0",
         }
+        segments = [segment] if segment else _cancel_segments(orderid, auth)
 
-        # Determine if this is an FNO order by the order ID format
-        is_fno_order = False
-        if orderid.startswith("GLTFO") or any(x in orderid for x in ["CE", "PE", "FUT"]):
-            is_fno_order = True
-            segment = SEGMENT_FNO
-            logger.debug(f"Detected FNO order based on order ID pattern: {orderid}")
+        message, status_code = f"Groww could not cancel order {orderid}", 400
+        for seg in segments:
+            payload = {"segment": seg, "groww_order_id": orderid}
+            logger.debug(f"Cancelling order {orderid} in segment {seg}")
+            resp = client.post(GROWW_CANCEL_ORDER_URL, headers=headers, json=payload, timeout=30)
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
 
-        # If we're still using CASH segment for what appears to be an FNO order ID, warn about it
-        if is_fno_order and segment == SEGMENT_CASH:
+            if resp.status_code == 200 and body.get("status") == "SUCCESS":
+                order_status = (body.get("payload") or {}).get("order_status", "")
+                response = {
+                    "status": "success",
+                    "orderid": orderid,
+                    "order_status": order_status,
+                    "message": "Order cancellation requested"
+                    if order_status == "CANCELLATION_REQUESTED"
+                    else "Order cancelled",
+                }
+                if symbol:
+                    response["symbol"] = symbol
+                return response, 200
+
+            message = _groww_error_message(body, message)
+            status_code = resp.status_code if resp.status_code >= 400 else 400
             logger.warning(
-                f"Warning: Using CASH segment for what appears to be an FNO order: {orderid}"
-            )
-            logger.warning("Switching to FNO segment for this order")
-            segment = SEGMENT_FNO
-
-        # Double check and log the segment we're using
-        logger.debug(f"Using segment {segment} for order {orderid}")
-
-        # Prepare request payload
-        payload = {"segment": segment, "groww_order_id": orderid}
-
-        # Send cancel request to Groww API
-        logger.debug("-------- CANCEL ORDER REQUEST --------")
-        logger.debug(f"Order ID: {orderid}")
-        logger.debug(f"Segment: {segment}")
-        logger.debug(f"API URL: {GROWW_CANCEL_ORDER_URL}")
-        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
-
-        # Log request headers (excluding Authorization for security)
-        safe_headers = headers.copy()
-        if "Authorization" in safe_headers:
-            safe_headers["Authorization"] = "Bearer ***REDACTED***"
-        logger.debug(f"Request headers: {json.dumps(safe_headers, indent=2)}")
-
-        # Make the API call
-        response_obj = client.post(
-            GROWW_CANCEL_ORDER_URL, headers=headers, json=payload, timeout=30
-        )
-
-        logger.debug("-------- CANCEL ORDER RESPONSE --------")
-        logger.debug(f"Response status code: {response_obj.status_code}")
-
-        # Parse response
-        try:
-            response_data = response_obj.json()
-            # Log full response for debugging
-            logger.debug(f"Raw response data: {json.dumps(response_data, indent=2)}")
-
-            # Log structured response details
-            if isinstance(response_data, dict):
-                status = response_data.get("status")
-                logger.debug(f"Response status: {status}")
-
-                if "payload" in response_data:
-                    payload = response_data["payload"]
-                    logger.debug(f"Response payload: {json.dumps(payload, indent=2)}")
-
-                    # Log specific order details if available
-                    if isinstance(payload, dict):
-                        groww_order_id = payload.get("groww_order_id")
-                        order_status = payload.get("order_status")
-                        logger.debug(f"Groww order ID: {groww_order_id}")
-                        logger.debug(f"Order status: {order_status}")
-
-                if "message" in response_data:
-                    logger.debug(f"Response message: {response_data['message']}")
-
-                if "error" in response_data:
-                    logger.error(f"Error in response: {response_data['error']}")
-        except Exception as e:
-            logger.error(f"Error parsing cancel order response: {e}")
-            logger.error(f"Raw response content: {response_obj.content}")
-            response_data = {}
-
-        # Check if the response indicates success
-        if response_obj.status_code == 200:
-            logger.debug("-------- SUCCESSFUL ORDER CANCELLATION --------")
-            # Check API response status field
-            api_status = response_data.get("status", "")
-
-            # Successful cancellation if we got 200 status code
-            response = {
-                "status": "success",
-                "orderid": orderid,
-                "api_status": api_status,
-                "message": "Order cancelled successfully",
-            }
-
-            # Add raw response for debugging
-            response["raw_response"] = response_data
-
-            # Extract order status if available
-            if isinstance(response_data, dict) and "payload" in response_data:
-                payload = response_data["payload"]
-                if isinstance(payload, dict):
-                    order_status = payload.get("order_status", "")
-                    response["order_status"] = order_status
-
-                    # Store Groww order ID in response
-                    groww_order_id = payload.get("groww_order_id")
-                    if groww_order_id:
-                        response["groww_order_id"] = groww_order_id
-
-                    # If order status indicates cancellation requested, ensure we report success
-                    if order_status == "CANCELLATION_REQUESTED":
-                        response["message"] = "Order cancellation requested successfully"
-                        logger.debug(
-                            f"Order {orderid} cancellation has been requested (status: {order_status})"
-                        )
-                    elif order_status == "CANCELLED":
-                        response["message"] = "Order cancelled successfully"
-                        logger.debug(f"Order {orderid} has been cancelled (status: {order_status})")
-                    else:
-                        logger.debug(
-                            f"Order {orderid} status after cancellation attempt: {order_status}"
-                        )
-                else:
-                    logger.warning(f"Unexpected payload format: {payload}")
-
-            # If symbol is provided, include it in OpenAlgo format in the response
-            if symbol:
-                # Add the original OpenAlgo format symbol to the response
-                response["symbol"] = symbol
-                logger.debug(f"Including OpenAlgo symbol in cancel response: {symbol}")
-
-            # Log the success
-            logger.debug(f"Successfully processed cancel request for order {orderid}")
-        else:
-            logger.warning("-------- FAILED ORDER CANCELLATION --------")
-            # API returned an error status code
-            error_message = response_data.get("message", "Error cancelling order")
-            error_details = response_data.get("error", {})
-
-            logger.warning(f"Order cancellation failed with status {response_obj.status_code}")
-            logger.warning(f"Error message: {error_message}")
-            if error_details:
-                logger.warning(f"Error details: {json.dumps(error_details, indent=2)}")
-
-            # For consistency with the rest of the API, still return success
-            response = {
-                "status": "success",  # Keep consistent with other endpoints
-                "orderid": orderid,
-                "message": "Order cancellation request submitted",
-                "api_message": error_message,
-                "api_status_code": response_obj.status_code,
-                "raw_response": response_data,
-            }
-
-        # Return the response with 200 status code as expected by the endpoint
-        return response, 200
-    except Exception as e:
-        logger.exception(f"-------- ERROR CANCELLING ORDER {orderid} --------")
-
-        # Even if we got an exception, return success format for consistency
-        # The order cancellation might actually be processing despite the error
-        if "CANCELLATION_REQUESTED" in str(e):
-            logger.debug("Order seems to be in CANCELLATION_REQUESTED state despite exception")
-            response = {
-                "status": "success",
-                "orderid": orderid,
-                "message": "Order cancellation request processed successfully",
-                "exception": str(e),
-            }
-        else:
-            response = {
-                "status": "success",  # Keep consistent with other endpoints
-                "orderid": orderid,
-                "message": "Order cancellation request submitted with errors",
-                "details": str(e),
-                "exception_type": type(e).__name__,
-            }
-
-            # Log the response we're returning for debugging
-            logger.debug(
-                f"Returning error response: {json.dumps(response, indent=2)}"
+                f"Groww refused cancel of {orderid} in segment {seg}: "
+                f"HTTP {resp.status_code}, {message}"
             )
 
-        # Return the error response with 200 status code for consistency
-        return response, 200
+        return {"status": "error", "orderid": orderid, "message": message}, status_code
+    except Exception:
+        logger.exception(f"Error cancelling order {orderid}")
+        return {
+            "status": "error",
+            "orderid": orderid,
+            "message": "Could not reach Groww to cancel the order. Check the order book before retrying.",
+        }, 500
 
 
 def direct_modify_order(data, auth):
@@ -2751,7 +2577,7 @@ def direct_modify_order(data, auth):
         auth (str): Authentication token
 
     Returns:
-        tuple: (response object, response data)
+        tuple: (response data dict, status code). 200 only when Groww reports SUCCESS.
     """
     try:
         # Import the shared httpx client
@@ -2827,7 +2653,7 @@ def direct_modify_order(data, auth):
                 )
 
         # Process price with detailed logging
-        if "price" in data and data["price"] and order_type == ORDER_TYPE_LIMIT:
+        if "price" in data and data["price"] and order_type in [ORDER_TYPE_LIMIT, ORDER_TYPE_SL]:
             try:
                 price_value = float(data["price"])
                 if price_value <= 0:
@@ -2871,414 +2697,113 @@ def direct_modify_order(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {auth}",
+            "X-API-VERSION": "1.0",
         }
 
-        # Make the API request using httpx client with connection pooling
         client = get_httpx_client()
-        logger.debug(
-            f"Sending modify order API request to {api_url} with payload: {json.dumps(payload)}"
-        )
-        logger.debug(f"Request headers: {headers}")
-
+        resp = client.post(api_url, json=payload, headers=headers)
+        logger.debug(f"Modify order {groww_order_id}: HTTP {resp.status_code}, {resp.text}")
         try:
-            resp = client.post(api_url, json=payload, headers=headers)
-            logger.debug(f"API response status code: {resp.status_code}")
+            body = resp.json()
+        except ValueError:
+            body = {}
 
-            # Log raw response for debugging
-            raw_response = resp.text
-            logger.debug(f"Raw API response: {raw_response}")
-        except Exception as e:
-            logger.error(f"Exception during modify order API request: {str(e)}")
-            raise
-
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        # Handle the response
-        if resp.status_code == 200:
-            # Parse the JSON response if successful
-            try:
-                response_data = resp.json()
-                logger.debug(f"Groww modify order response: {json.dumps(response_data)}")
-
-                # Check if the response is successful and contains the required fields
-                if response_data.get("status") == "SUCCESS":
-                    # Extract order details from payload
-                    payload = response_data.get("payload", {})
-                    order_status = payload.get("order_status", "MODIFICATION_REQUESTED")
-
-                    # Always return success status when Groww API returns SUCCESS
-                    # This fixes the issue where successful API calls are reported as errors in UI
-                    response = {
-                        "status": "success",
-                        "orderid": groww_order_id,
-                        "order_status": order_status,
-                        "message": "Order modification request processed successfully",
-                    }
-                else:
-                    # Even if Groww status is not SUCCESS, we return success if we got a 200 response
-                    # This matches the behavior in the cancel_order function
-                    response = {
-                        "status": "success",
-                        "orderid": groww_order_id,
-                        "message": "Order modification request processed",
-                        "details": response_data,
-                    }
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing modify order response JSON: {e}")
-                error_message = f"Invalid JSON response: {raw_response}"
-                logger.error(error_message)
-
-                # Create error response
-                response = {"status": "error", "orderid": groww_order_id, "message": error_message}
-                return ResponseObject(400), response
-
-            # If symbol was provided in the original request, include it in OpenAlgo format
-            if "symbol" in data and data["symbol"]:
-                response["symbol"] = data["symbol"]
-                logger.debug(f"Including OpenAlgo symbol in modify response: {data['symbol']}")
-
-            # Log the success
-            logger.debug(f"Successfully submitted modification for order {groww_order_id}")
-            return ResponseObject(200), response
-        else:
-            # API call failed
-            try:
-                error_data = resp.json()
-                error_message = error_data.get("message", f"API error: {resp.status_code}")
-                error_mode = error_data.get("mode", "")
-                error_details = error_data.get("details", {})
-
-                logger.error(
-                    f"Order modification failed: Status: {resp.status_code}, Message: {error_message}, Mode: {error_mode}"
-                )
-                logger.error(
-                    f"Error details: {json.dumps(error_details) if error_details else 'None provided'}"
-                )
-
-                # Special handling for numeric validation errors
-                if "Invalid numeric value" in error_message:
-                    logger.error("NUMERIC VALUE ERROR DETECTED - Debugging payload values:")
-                    for field in ["price", "trigger_price", "quantity", "disclosed_quantity"]:
-                        if field in payload:
-                            logger.error(
-                                f"Field: {field}, Value: {payload[field]}, Type: {type(payload[field])}"
-                            )
-
-                    # Additional debugging info about the request
-                    logger.error(f"Original modification data received: {json.dumps(data)}")
-            except Exception as parse_error:
-                error_message = f"API error: {resp.status_code}. Raw response: {raw_response}"
-                logger.error(f"Failed to parse error response: {parse_error}")
-
-            logger.error(f"Error modifying order: {error_message}")
-
-            # For consistency with the current implementation, we still return success
-            # This is done because the UI expects a success response for proper handling
+        # Success only when Groww says so (01-introduction, "Response structure")
+        if resp.status_code == 200 and body.get("status") == "SUCCESS":
             response = {
                 "status": "success",
                 "orderid": groww_order_id,
-                "message": "Order modification request submitted",
-                "details": error_message,
+                "order_status": (body.get("payload") or {}).get("order_status", ""),
+                "message": "Order modification requested",
             }
-            return ResponseObject(200), response
+            if data.get("symbol"):
+                response["symbol"] = data["symbol"]
+            return response, 200
 
-    except Exception as e:
-        logger.exception(f"Error in direct_modify_order: {e}")
+        message = _groww_error_message(body, f"Groww could not modify order {groww_order_id}")
+        logger.warning(f"Groww refused modify of {groww_order_id}: HTTP {resp.status_code}, {message}")
+        status_code = resp.status_code if resp.status_code >= 400 else 400
+        return {"status": "error", "orderid": groww_order_id, "message": message}, status_code
 
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        # For consistency with the current implementation, we still return success
-        # as that's what the UI expects for proper handling
-        response = {
-            "status": "success",
+    except ValueError as e:
+        # Raised above for missing order ID or invalid quantity/price values
+        logger.warning(f"Modify order rejected before sending: {e}")
+        return {"status": "error", "orderid": data.get("orderid", ""), "message": str(e)}, 400
+    except Exception:
+        logger.exception("Error in direct_modify_order")
+        return {
+            "status": "error",
             "orderid": data.get("orderid", ""),
-            "message": "Order modification request submitted",
-            "details": str(e),
-        }
-        return ResponseObject(200), response
+            "message": "Could not reach Groww to modify the order. Check the order book before retrying.",
+        }, 500
 
 
 def modify_order(data, auth):
     """
-    Modify an existing order using direct API only (no SDK fallback)
+    Modify an existing order (POST /v1/order/modify).
 
     Args:
         data (dict): Order data with modification parameters
         auth (str): Authentication token
 
     Returns:
-        tuple: (response data dict, status code)
+        tuple: (response data dict, status code). 200 only when Groww reports SUCCESS.
     """
-    logger.debug("Using direct API approach for Groww order modification")
-    response_obj, response_data = direct_modify_order(data, auth)
+    return direct_modify_order(data, auth)
 
-    # Ensure we always return success status if Groww reports MODIFICATION_REQUESTED
-    # This fixes the issue with Bruno showing error even when modification is successful
-    if response_obj.status == 200:
-        # Extract order status from Groww response if available
-        groww_response = response_data.get("raw_response", {})
-        payload = groww_response.get("payload", {}) if isinstance(groww_response, dict) else {}
-        order_status = payload.get("order_status", "")
 
-        # Log the actual Groww response for debugging
-        logger.debug(f"Groww modify order response: {json.dumps(groww_response)}")
-
-        # Always return success status for HTTP 200 responses
-        return {
-            "status": "success",
-            "orderid": data.get("orderid", ""),
-            "order_status": order_status,
-            "message": "Order modification request processed successfully",
-        }, 200
-    else:
-        # Something went wrong with the API call
-        return response_data, response_obj.status
+# Groww order statuses that can still be cancelled (annexure "Order Status";
+# OPEN is what /v1/order/create returns for a resting order)
+_CANCELLABLE_STATUSES = {
+    "NEW",
+    "ACKED",
+    "TRIGGER_PENDING",
+    "APPROVED",
+    "OPEN",
+    "MODIFICATION_REQUESTED",
+}
 
 
 def cancel_all_orders_api(data, auth):
     """
-    Cancel all open orders
+    Cancel every open Groww order.
 
     Args:
         data (dict): Request data
         auth (str): Authentication token
 
     Returns:
-        dict: Results of cancellation attempts
+        tuple: (canceled_orders, failed_cancellations) in OpenAlgo format - a
+        list of order IDs, and a list of {"orderid", "reason"}.
     """
-    try:
-        # Get all orders - note that get_order_book returns a tuple of (response, status_code)
-        order_book_result = get_order_book(auth)
-        cancelled_orders = []
-        failed_to_cancel = []
+    book = get_order_book(auth)
+    if (book.get("raw_response") or {}).get("status") == "FAILURE":
+        # An unreadable order book is not "nothing to cancel"
+        raise RuntimeError("Could not read the Groww order book")
 
-        # Parse the order book to get the actual orders list
-        orders = []
+    canceled_orders, failed_cancellations = [], []
+    for order in book.get("data", []):
+        if str(order.get("order_status", "")).upper() not in _CANCELLABLE_STATUSES:
+            continue
+        orderid = order.get("groww_order_id")
+        if not orderid:
+            continue
+        segment = order.get("segment")
+        if segment not in (SEGMENT_CASH, SEGMENT_FNO):
+            segment = None  # cancel_order looks the order up itself
 
-        # Handle the response based on the direct API implementation which returns a tuple
-        if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
-            # Get the first element which is the response data
-            order_response = order_book_result[0]
+        response, status_code = cancel_order(orderid, auth, segment)
+        if status_code == 200:
+            canceled_orders.append(orderid)
+        else:
+            failed_cancellations.append(
+                {"orderid": orderid, "reason": response.get("message", "Failed to cancel")}
+            )
 
-            logger.debug(f"Order book response type: {type(order_response).__name__}")
-
-            # Check for 'data' field in the response dictionary
-            if isinstance(order_response, dict):
-                if "data" in order_response and order_response["data"]:
-                    orders = order_response["data"]
-                    logger.debug(f"Found {len(orders)} orders in the 'data' field")
-                elif "order_list" in order_response and order_response["order_list"]:
-                    orders = order_response["order_list"]
-                    logger.debug(f"Found {len(orders)} orders in the 'order_list' field")
-
-            # If orders is still empty, check if order_response itself is a list
-            if not orders and isinstance(order_response, list):
-                orders = order_response
-                logger.debug(f"Using order_response list directly, found {len(orders)} orders")
-        # Legacy handling for older SDK implementation
-        elif isinstance(order_book_result, dict):
-            if "data" in order_book_result and order_book_result["data"]:
-                orders = order_book_result["data"]
-                logger.debug(f"Found {len(orders)} orders in the order book (legacy format)")
-        # Direct handling if get_order_book returned a list
-        elif isinstance(order_book_result, list):
-            orders = order_book_result
-            logger.debug(f"Using order_book_result list directly, found {len(orders)} orders")
-
-        if not orders:
-            logger.warning("No orders found in order book response")
-            return {
-                "status": "success",
-                "message": "No open orders to cancel",
-                "cancelled_orders": [],
-                "failed_to_cancel": [],
-            }
-
-        # Filter cancellable orders
-        cancellable_statuses = [
-            "OPEN",
-            "PENDING",
-            "TRIGGER_PENDING",
-            "PLACED",
-            "PENDING_ORDER",
-            "NEW",
-            "ACKED",
-            "APPROVED",
-            "MODIFICATION_REQUESTED",
-            "OPEN",
-            "open",
-        ]
-
-        logger.debug(f"Checking {len(orders)} orders for cancellable status")
-        cancellable_count = 0
-
-        # Log order status for debugging
-        for i, order in enumerate(orders):
-            # Extract order ID for logging
-            order_id = None
-            for key in ["groww_order_id", "orderid", "order_id", "id"]:
-                if key in order:
-                    order_id = order[key]
-                    break
-
-            # Extract status for logging
-            order_status = order.get("order_status", order.get("status", ""))
-            logger.debug(f"Order {i + 1}/{len(orders)} ID: {order_id}, Status: {order_status}")
-
-            # Check if order is cancellable
-            if order_status.upper() in [s.upper() for s in cancellable_statuses]:
-                cancellable_count += 1
-
-        logger.debug(
-            f"Found {cancellable_count} cancellable orders out of {len(orders)} total orders"
-        )
-
-        # Process each order for cancellation
-        for order in orders:
-            order_status = order.get("order_status", order.get("status", ""))
-
-            if order_status.upper() in [s.upper() for s in cancellable_statuses]:
-                try:
-                    # Get order ID
-                    orderid = None
-                    for key in ["groww_order_id", "orderid", "order_id", "id"]:
-                        if key in order:
-                            orderid = order[key]
-                            break
-
-                    if not orderid:
-                        logger.warning(f"Could not find order ID in order: {order}")
-                        continue
-
-                    # Determine segment for the order
-                    segment = None
-                    if "segment" in order:
-                        segment_value = order["segment"]
-                        if segment_value == "CASH":
-                            segment = SEGMENT_CASH
-                        elif segment_value in ["FNO", "F&O", "OPTIONS", "FUTURES"]:
-                            segment = SEGMENT_FNO
-                        elif segment_value == "CURRENCY":
-                            segment = SEGMENT_CURRENCY
-                        elif segment_value == "COMMODITY":
-                            segment = SEGMENT_COMMODITY
-
-                    # Use our enhanced cancel_order function which returns (response_data, status_code)
-                    cancel_result = cancel_order(orderid, auth, segment)
-
-                    # Make sure the result is properly unpacked
-                    if isinstance(cancel_result, tuple) and len(cancel_result) >= 1:
-                        cancel_response = cancel_result[0]  # Get just the response data
-                    else:
-                        cancel_response = cancel_result  # Direct assignment if not a tuple
-
-                    logger.debug(
-                        f"Cancel response type for order {orderid}: {type(cancel_response).__name__}"
-                    )
-
-                    # Check if response is a dictionary and has status field
-                    if (
-                        isinstance(cancel_response, dict)
-                        and cancel_response.get("status") == "success"
-                    ):
-                        # Create the result object with order details
-                        cancelled_item = {
-                            "order_id": orderid,
-                            "status": cancel_response.get("order_status", "CANCELLED"),
-                            "message": cancel_response.get("message", "Successfully cancelled"),
-                        }
-
-                        # Get and include symbol in the OpenAlgo format
-                        if "symbol" in order:
-                            broker_symbol = order.get("symbol", "")
-
-                            # For NFO symbols that have spaces, convert to OpenAlgo format
-                            exchange = order.get("exchange", "NSE")
-                            if exchange == "NFO" and " " in broker_symbol:
-                                try:
-                                    from broker.groww.database.master_contract_db import (
-                                        format_groww_to_openalgo_symbol,
-                                    )
-
-                                    openalgo_symbol = format_groww_to_openalgo_symbol(
-                                        broker_symbol, exchange
-                                    )
-                                    if openalgo_symbol:
-                                        cancelled_item["symbol"] = openalgo_symbol
-                                        cancelled_item["brsymbol"] = (
-                                            broker_symbol  # Keep original broker symbol for reference
-                                        )
-                                        logger.debug(
-                                            f"Transformed cancelled order symbol for UI: {broker_symbol} -> {openalgo_symbol}"
-                                        )
-                                except Exception as e:
-                                    logger.error(
-                                        f"Error converting symbol for cancelled order: {e}"
-                                    )
-                                    cancelled_item["symbol"] = broker_symbol
-                            else:
-                                cancelled_item["symbol"] = broker_symbol
-
-                        # Get symbol from cancel_response if available
-                        elif "symbol" in cancel_response:
-                            cancelled_item["symbol"] = cancel_response["symbol"]
-                            if "brsymbol" in cancel_response:
-                                cancelled_item["brsymbol"] = cancel_response["brsymbol"]
-
-                        cancelled_orders.append(cancelled_item)
-                        logger.debug(f"Successfully cancelled order {orderid}")
-                    else:
-                        failed_to_cancel.append(
-                            {
-                                "order_id": orderid,
-                                "message": cancel_response.get("message", "Failed to cancel"),
-                                "details": str(cancel_response),
-                            }
-                        )
-                        logger.warning(f"Failed to cancel order {orderid}")
-
-                except Exception as e:
-                    logger.error(f"Error cancelling order {orderid if orderid else 'Unknown'}: {e}")
-                    failed_to_cancel.append(
-                        {
-                            "order_id": orderid if orderid else "Unknown",
-                            "message": "Failed to cancel due to exception",
-                            "details": str(e),
-                        }
-                    )
-
-        # Prepare success response even if some orders failed
-        response = {
-            "status": "success",
-            "message": f"Successfully cancelled {len(cancelled_orders)} orders. {len(failed_to_cancel)} orders failed.",
-            "cancelled_orders": cancelled_orders,
-            "failed_to_cancel": failed_to_cancel,
-        }
-
-        logger.debug(
-            f"Cancel all orders complete: {len(cancelled_orders)} succeeded, {len(failed_to_cancel)} failed"
-        )
-
-        # The API layer expects this function to return two values: canceled_orders and failed_cancellations
-        # Instead of returning just the response dictionary
-        return cancelled_orders, failed_to_cancel
-
-    except Exception as e:
-        logger.error(f"Error in cancel_all_orders_api: {e}")
-        # Create an error entry for the failed_to_cancel list
-        error_entry = [
-            {"order_id": "all", "message": "Failed to cancel all orders", "details": str(e)}
-        ]
-
-        # The REST API expects two return values: canceled_orders and failed_cancellations
-        # Return empty list for cancelled orders and the error entry for failed cancellations
-        return [], error_entry
+    logger.info(
+        f"Groww cancel all: {len(canceled_orders)} cancelled, {len(failed_cancellations)} failed"
+    )
+    return canceled_orders, failed_cancellations
 
 
 def get_order_trades(orderid, auth, segment=None):
