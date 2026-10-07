@@ -86,6 +86,22 @@ def test_a_price_sent_as_text_is_still_rupees():
     assert groww_position_prices(position(net_price="433.0"))["average_price"] == 433.0
 
 
+@pytest.mark.parametrize(
+    ("field", "output_key"),
+    [
+        ("net_price", "average_price"),
+        ("credit_price", "buy_price"),
+        ("debit_price", "sell_price"),
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), float("-inf"), "NaN", "infinity"],
+)
+def test_non_finite_prices_are_reported_as_zero(field, output_key, value):
+    assert groww_position_prices(position(**{field: value}))[output_key] == 0
+
+
 def test_the_value_based_conversions_do_not_come_back():
     """Guards the source itself: both heuristics lived in get_positions."""
     from pathlib import Path

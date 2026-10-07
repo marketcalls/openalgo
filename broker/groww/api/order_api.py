@@ -1,5 +1,6 @@
 import datetime
 import json
+import math
 import os
 import re
 import uuid
@@ -418,9 +419,12 @@ def groww_position_prices(position):
 
     def rupees(key):
         try:
-            return float(position.get(key) or 0)
+            value = float(position.get(key) or 0)
         except (TypeError, ValueError):
             return 0
+        # float() accepts NaN and infinities, but these are not valid prices
+        # and can produce invalid JSON in the positions response.
+        return value if math.isfinite(value) else 0
 
     sell_price = rupees("debit_price")
     return {
