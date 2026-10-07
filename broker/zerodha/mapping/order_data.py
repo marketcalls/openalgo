@@ -29,6 +29,30 @@ _POSITION_QTY_FIELDS = (
     "day_sell_quantity",
 )
 
+# Kite's working OMS states can still fill and must never inherit another
+# order's terminal status. Keep this mapping shared by REST and postbacks.
+ZERODHA_ORDER_STATUS_MAP = {
+    "COMPLETE": "complete",
+    "REJECTED": "rejected",
+    "CANCELLED": "cancelled",
+    "OPEN": "open",
+    "UPDATE": "open",
+    "TRIGGER PENDING": "trigger pending",
+    "VALIDATION PENDING": "open",
+    "PUT ORDER REQ RECEIVED": "open",
+    "OPEN PENDING": "open",
+    "MODIFY VALIDATION PENDING": "open",
+    "MODIFY PENDING": "open",
+    "CANCEL PENDING": "open",
+    "AMO REQ RECEIVED": "open",
+}
+
+
+def map_order_status(status):
+    """Map one Kite order status without carrying state between orders."""
+    raw_status = str(status or "").strip().upper()
+    return ZERODHA_ORDER_STATUS_MAP.get(raw_status, raw_status.lower() or "open")
+
 
 def _to_openalgo_quantities(row, fields):
     """Rewrite a Kite row's quantity fields from contracts into OpenAlgo units.
@@ -127,12 +151,13 @@ def calculate_order_statistics(order_data):
             elif order["transaction_type"] == "SELL":
                 total_sell_orders += 1
 
-            # Count orders based on their status
-            if order["status"] == "COMPLETE":
+            # Count the same working statuses the order book presents as live.
+            status = map_order_status(order.get("status"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif order["status"] == "OPEN":
+            elif status in ("open", "trigger pending"):
                 total_open_orders += 1
-            elif order["status"] == "REJECTED":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -161,16 +186,7 @@ def transform_order_data(orders):
             )
             continue
 
-        if order.get("status", "") == "COMPLETE":
-            order_status = "complete"
-        if order.get("status", "") == "REJECTED":
-            order_status = "rejected"
-        if order.get("status", "") == "TRIGGER PENDING":
-            order_status = "trigger pending"
-        if order.get("status", "") == "OPEN":
-            order_status = "open"
-        if order.get("status", "") == "CANCELLED":
-            order_status = "cancelled"
+        order_status = map_order_status(order.get("status"))
 
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
