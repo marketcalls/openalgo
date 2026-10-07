@@ -623,14 +623,14 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     @staticmethod
     def _oi_field(message) -> dict[str, Any]:
-        """`{"oi": n}` from the quote stream's `oI`, or `{}`.
+        """`{"oi": n}` once the quote stream has carried `oI`, or `{}` before then.
 
-        Only the `quote` stream carries `oI`; `quote2` frames for the same token
-        normalise it to 0. Leaving the key out keeps the client's last value
-        instead of flashing a false 0 on every depth frame.
+        samcoWebSocket merges the `quote` and `quote2` streams per symbol, so a
+        `quote2` frame carries the last `oI` the quote stream sent. A present
+        zero is forwarded as a real value; only "never sent" is left out.
         """
-        oi = message.get("open_interest") or 0
-        return {"oi": int(oi)} if oi > 0 else {}
+        oi = message.get("open_interest")
+        return {} if oi is None else {"oi": int(oi)}
 
     def _extract_depth_data(self, message, is_buy: bool) -> list[dict[str, Any]]:
         """

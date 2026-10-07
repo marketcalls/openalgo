@@ -21,9 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useMarketData } from '@/hooks/useMarketData'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { applyLiveOi } from '@/lib/oiProfileLive'
+import { subscribeQuotes } from '@/lib/MarketDataManager'
+import { applyLiveOi, type LiveOi, liveOiKey } from '@/lib/oiProfileLive'
 import Plot from '@/lib/Plot2D'
 import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
@@ -416,39 +416,64 @@ export default function OIProfile() {
   // Live open interest. Where the broker's feed carries `oi`, the ticks that
   // are already flowing to this browser keep the columns current between polls,
   // at no cost to the broker API. A broker whose feed omits it simply never
-  // fills the cache, and the polled numbers stand.
-  const liveLegs = useMemo(() => {
+  // fills the map, and the polled numbers stand.
+  //
+  // The set of contracts is keyed as a string so a re-poll returning the same
+  // contracts does not tear down and rebuild every subscription.
+  const liveLegsKey = useMemo(() => {
     const exchange = profileData?.options_exchange
-    if (!exchange || !profileData?.oi_chain) return []
+    if (!exchange || !profileData?.oi_chain) return ''
     const symbols = new Set<string>()
     for (const row of profileData.oi_chain) {
       for (const leg of row.ce_legs ?? []) symbols.add(leg.symbol)
       for (const leg of row.pe_legs ?? []) symbols.add(leg.symbol)
     }
-    return [...symbols].map((symbol) => ({ symbol, exchange }))
+    return [exchange, ...[...symbols].sort()].join('|')
   }, [profileData?.options_exchange, profileData?.oi_chain])
+  const liveEnabled = liveLegsKey !== '' && profileData?.market_open !== false
 
-  const { data: liveTicks } = useMarketData({
-    symbols: liveLegs,
-    mode: 'Quote',
-    enabled: liveLegs.length > 0 && profileData?.market_open !== false,
-  })
+  // Ticks land in a ref, not in state: they arrive far faster than a bar chart
+  // can usefully redraw, and putting each one in state would re-render the
+  // whole page per tick. The plot reads a snapshot taken on a slow beat.
+  const liveOiRef = useRef(new Map<string, LiveOi>())
+  const liveDirtyRef = useRef(false)
+  const [liveSnapshot, setLiveSnapshot] = useState<Map<string, LiveOi>>(() => new Map())
 
-  // Ticks arrive far faster than a bar chart can usefully redraw, so the plot
-  // reads a snapshot taken on a slow beat rather than every tick.
-  const liveTicksRef = useRef(liveTicks)
-  liveTicksRef.current = liveTicks
-  const [liveSnapshot, setLiveSnapshot] = useState(liveTicks)
+  useEffect(() => {
+    liveOiRef.current = new Map()
+    setLiveSnapshot(new Map())
+    if (!liveEnabled) return
+    const [exchange, ...symbols] = liveLegsKey.split('|')
+    return subscribeQuotes(
+      symbols.map((symbol) => ({ symbol, exchange })),
+      ({ symbol, exchange: ex, data }) => {
+        if (typeof data.oi !== 'number') return
+        liveOiRef.current.set(liveOiKey(ex, symbol), { oi: data.oi, at: Date.now() })
+        liveDirtyRef.current = true
+      }
+    )
+  }, [liveLegsKey, liveEnabled])
+
   useEffect(() => {
     const timer = setInterval(() => {
-      setLiveSnapshot((prev) => (prev === liveTicksRef.current ? prev : liveTicksRef.current))
+      if (!liveDirtyRef.current) return
+      liveDirtyRef.current = false
+      setLiveSnapshot(new Map(liveOiRef.current))
     }, LIVE_REDRAW_MS)
     return () => clearInterval(timer)
   }, [])
 
+  // A tick older than one refresh beat is no longer treated as live, so a feed
+  // that goes quiet falls back to the polled number when the next poll lands.
   const live = useMemo(
     () =>
-      applyLiveOi(profileData?.oi_chain ?? [], liveSnapshot, profileData?.options_exchange ?? ''),
+      applyLiveOi(
+        profileData?.oi_chain ?? [],
+        liveSnapshot,
+        profileData?.options_exchange ?? '',
+        Date.now(),
+        LIVE_REFRESH_MS
+      ),
     [profileData?.oi_chain, profileData?.options_exchange, liveSnapshot]
   )
 

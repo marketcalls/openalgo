@@ -40,7 +40,9 @@ class _GrowwMarketCache:
     Keyed by (groww_exchange, segment, token).
     """
 
-    _LTP_FIELDS = ("ltp", "open", "high", "low", "close", "volume", "ltt")
+    # `oi` rides the LTP proto for F&O contracts; kept here so Depth-mode
+    # publishes, which send this merged entry, carry it too.
+    _LTP_FIELDS = ("ltp", "open", "high", "low", "close", "volume", "ltt", "oi")
 
     def __init__(self):
         self._cache: dict[tuple[str, str, str], dict] = {}

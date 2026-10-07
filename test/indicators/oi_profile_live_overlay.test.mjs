@@ -20,8 +20,12 @@ const row = () => ({
   pe_legs: [{ symbol: 'P1', oi: 500, base: 450 }],
 })
 
+const NOW = 1_000_000
+const ticks = (entries, at = NOW) =>
+  new Map(Object.entries(entries).map(([sym, oi]) => [sym.toUpperCase(), { oi, at }]))
+
 test('a live leg replaces OI and re-bases the change', () => {
-  const { chain, live } = overlayLiveOi([row()], new Map([['C1', 1300]]))
+  const { chain, live } = overlayLiveOi([row()], ticks({ C1: 1300 }), NOW)
   assert.equal(chain[0].ce_oi, 1300)
   assert.equal(chain[0].ce_oi_change, 500)
   assert.equal(chain[0].pe_oi, 500)
@@ -29,21 +33,24 @@ test('a live leg replaces OI and re-bases the change', () => {
 })
 
 test('no live OI leaves the polled numbers alone', () => {
-  const { chain, live } = overlayLiveOi([row()], new Map())
+  const { chain, live } = overlayLiveOi([row()], ticks({}), NOW)
   assert.deepEqual(chain[0], row())
   assert.equal(live, 0)
 })
 
 test('a zero tick is unknown, not an emptied contract', () => {
-  assert.equal(overlayLiveOi([row()], new Map([['C1', 0]])).chain[0].ce_oi, 1000)
+  assert.equal(overlayLiveOi([row()], ticks({ C1: 0 }), NOW).chain[0].ce_oi, 1000)
 })
 
-test('an unknown base keeps the polled change', () => {
+test('an unanchored leg adds nothing to the change and freezes nothing', () => {
   const r = row()
-  r.ce_legs = [{ symbol: 'C1', oi: 1000, base: null }]
-  const { chain } = overlayLiveOi([r], new Map([['C1', 1300]]))
-  assert.equal(chain[0].ce_oi, 1300)
-  assert.equal(chain[0].ce_oi_change, 200)
+  r.ce_legs = [
+    { symbol: 'C1', oi: 1000, base: 800 },
+    { symbol: 'C2', oi: 400, base: null },
+  ]
+  const { chain } = overlayLiveOi([r], ticks({ C1: 1100, C2: 900 }), NOW)
+  assert.equal(chain[0].ce_oi, 2000)
+  assert.equal(chain[0].ce_oi_change, 300)
 })
 
 test('legs from several expiries mix live and polled', () => {
@@ -52,9 +59,15 @@ test('legs from several expiries mix live and polled', () => {
     { symbol: 'C1', oi: 1000, base: 800 },
     { symbol: 'C2', oi: 400, base: 300 },
   ]
-  const { chain } = overlayLiveOi([r], new Map([['C1', 1100]]))
+  const { chain } = overlayLiveOi([r], ticks({ C1: 1100 }), NOW)
   assert.equal(chain[0].ce_oi, 1500)
   assert.equal(chain[0].ce_oi_change, 400)
+})
+
+test('a tick older than the max age falls back to the polled number', () => {
+  const stale = ticks({ C1: 1300 }, NOW - 10_000)
+  assert.equal(overlayLiveOi([row()], stale, NOW, 5_000).chain[0].ce_oi, 1000)
+  assert.equal(overlayLiveOi([row()], stale, NOW, 60_000).chain[0].ce_oi, 1300)
 })
 
 test('attach() subscribes to the legs, repaints from a tick, unsubscribes on teardown', async () => {
@@ -134,6 +147,7 @@ test('attach() subscribes to the legs, repaints from a tick, unsubscribes on tea
 })
 
 test('a host without subscribeQuotes still loads and polls', async () => {
+  globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} }
   const mod = (await import(new URL('../../strategies/indicators/oi_profile_live.js', import.meta.url))).default
   let descriptor
   mod({ registerIndicator: (d) => { descriptor = d }, nulls: (a) => a })

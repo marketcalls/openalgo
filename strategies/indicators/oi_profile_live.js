@@ -166,14 +166,26 @@ async function fetchNearestExpiries(exchange, underlying, count) {
 }
 
 /**
- * Lay live OI over a polled chain. Mirrors frontend/src/lib/oiProfileLive.ts:
- * a contract with a live tick takes the tick's OI, everything else keeps the
- * polled number, and the change is re-based on the same anchor the server used
- * (`base`) only when every contract in that strike has one. A 0 tick means the
- * feed does not know, never that the contract emptied.
+ * Lay live OI over a polled chain. Mirrors frontend/src/lib/oiProfileLive.ts,
+ * so the chart and the /oiprofile page never disagree about a strike:
+ * - a contract with a usable tick takes the tick's OI, everything else keeps
+ *   the polled number;
+ * - a 0 tick is unknown (some adapters send 0 for "not in this packet"), never
+ *   an emptied contract;
+ * - a tick older than `maxAgeMs` is no longer live, so a feed that goes quiet
+ *   falls back to the polled number instead of freezing on its last value;
+ * - the change is the sum over contracts with a known anchor (`base`) of
+ *   `oi - base`, exactly as the server builds it.
+ *
+ * `liveOi` maps an uppercased symbol to `{ oi, at }` (epoch ms).
  */
-export function overlayLiveOi(chain, liveOi) {
+export function overlayLiveOi(chain, liveOi, now = Date.now(), maxAgeMs = Number.POSITIVE_INFINITY) {
   let live = 0
+  const tickFor = (symbol) => {
+    const t = liveOi.get(String(symbol).toUpperCase())
+    if (!t || !(t.oi > 0) || now - t.at > maxAgeMs) return null
+    return t.oi
+  }
   const next = chain.map((row) => {
     const out = { ...row }
     for (const side of ['ce', 'pe']) {
@@ -183,11 +195,10 @@ export function overlayLiveOi(chain, liveOi) {
       let change = 0
       let sawLive = false
       for (const leg of legs) {
-        const tick = liveOi.get(leg.symbol)
-        const isLive = typeof tick === 'number' && tick > 0
-        const oi = isLive ? tick : Number(leg.oi) || 0
+        const tick = tickFor(leg.symbol)
+        const oi = tick ?? (Number(leg.oi) || 0)
         total += oi
-        if (isLive) {
+        if (tick !== null) {
           sawLive = true
           live += 1
         }
@@ -195,7 +206,7 @@ export function overlayLiveOi(chain, liveOi) {
       }
       if (!sawLive) continue
       out[`${side}_oi`] = total
-      if (legs.every((leg) => leg.base != null)) out[`${side}_oi_change`] = change
+      out[`${side}_oi_change`] = change
     }
     return out
   })
@@ -658,7 +669,12 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
 
       const redraw = () => {
         const chain = polledChain
-        state.chain = chain && liveOi.size ? overlayLiveOi(chain, liveOi).chain : chain
+        // A tick older than one refresh beat no longer counts as live: when the
+        // next poll lands, a contract whose feed went quiet shows the poll.
+        state.chain =
+          chain && liveOi.size
+            ? overlayLiveOi(chain, liveOi, Date.now(), beatSeconds() * 1000).chain
+            : chain
         state.maxPain = state.chain ? maxPainStrike(state.chain) : null
         ctx.requestRecompute()
       }
@@ -689,9 +705,13 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           [...symbols].map((symbol) => ({ symbol, exchange })),
           (tick) => {
             const oi = Number(tick?.data?.oi)
-            if (!(oi > 0) || liveOi.get(tick.symbol) === oi) return
-            liveOi.set(tick.symbol, oi)
-            liveDirty = true
+            if (!Number.isFinite(oi)) return
+            const key = String(tick.symbol).toUpperCase()
+            const prev = liveOi.get(key)
+            // Every tick refreshes `at`, so a quiet-but-alive contract stays live;
+            // only a changed number needs a repaint.
+            liveOi.set(key, { oi, at: Date.now() })
+            if (prev?.oi !== oi) liveDirty = true
           }
         )
       }

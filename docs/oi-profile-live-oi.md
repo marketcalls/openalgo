@@ -18,8 +18,11 @@ which reaches the feed through the loader's `subscribeQuotes`).
    bars redraw every 2 seconds. This adds no broker API calls: the ticks are already
    flowing to the browser.
 
-A leg whose feed sends no `oi`, or sends 0, keeps its polled number. A zero tick
-is treated as "unknown", never as an emptied contract.
+A leg whose feed sends no `oi`, or sends 0, keeps its polled number. The client
+treats a 0 tick as "unknown", never as an emptied contract, because some existing
+adapters (Angel among them) send 0 when the packet simply did not carry OI. A
+tick older than one refresh beat (3 minutes) also stops counting as live, so a
+feed that goes quiet falls back to the polled number when the next poll lands.
 
 ## Change in OI stays anchored
 
@@ -27,24 +30,28 @@ The server sends each leg with the OI its change is measured against
 (`ce_legs` / `pe_legs`, `{symbol, oi, base}`). A live leg moves the change by
 exactly what it moves the OI (`live - base`), so the anchor rules in
 [oi-profile-anchors.md](oi-profile-anchors.md) are unchanged. A leg with no known
-base (change not asked for, or still being fetched) leaves its polled change alone.
+base (change not asked for, or still being fetched) adds nothing to the change,
+which is exactly how the server builds it, so it never holds back the legs
+beside it.
 
 ## Tick contract
 
-A broker adapter publishes `oi` (an integer) in its Quote and Depth ticks when
-the feed carries it, and omits the key when it does not. Omit rather than send 0:
-the client keeps its last known value across a packet that lacks the field.
+The adapters this change touched (upstox, flattrade, zebu, shoonya, samco,
+groww, aliceblue) publish `oi` as an integer when the packet carries it, a
+present 0 included, and omit the key when it does not, so a client keeps its
+last value across a partial packet. Older adapters do not all follow this: some
+send 0 for "not carried", which is why clients treat 0 as unknown.
 
 ## Broker capability
 
-"Publishes `oi`" means the adapter in `broker/<name>/streaming/` puts the
-contract's OI on its Quote and Depth ticks. The OI Profile subscribes in Quote
-mode, so a broker that sends OI only on depth frames still uses the polled numbers.
+The OI Profile subscribes in **Quote** mode, so only OI on Quote ticks moves it
+live. A broker that sends OI only on Depth ticks still uses the polled numbers.
 
 | Status | Brokers |
 |---|---|
-| Publishes `oi` on Quote ticks | angel, arrow, compositedge, definedge, deltaexchange, dhan, dhan_sandbox, firstock, fivepaisaxts, flattrade, fyers, groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal, mstock, paytm, pocketful, rmoney, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha |
-| Publishes `oi` on Depth ticks only | aliceblue |
+| `oi` on Quote ticks, checked in this change | upstox (tested live), flattrade, groww, samco, shoonya, zebu |
+| `oi` on Depth ticks only | aliceblue (depth frames are the only ones carrying it), dhan (its Quote packet has no OI; only the `full` packet does, and its standalone OI packets are not published) |
+| `oi` on ticks per the adapter code, mode not audited here | angel, arrow, compositedge, definedge, deltaexchange, dhan_sandbox, firstock, fivepaisaxts, fyers, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal, mstock, paytm, pocketful, rmoney, tradejini, tradesmart, wisdom, zerodha |
 | Polled only | fivepaisa, nubra |
 
 What this change added, and where each field is documented:
@@ -53,9 +60,9 @@ What this change added, and where each field is documented:
 |---|---|---|
 | upstox | `MarketFullFeed.oi` (`MarketDataFeedV3.proto`) | In the `full` feed that Quote and Depth already use. |
 | flattrade, zebu, shoonya | Noren touchline `oi` | Noren defines `oi` as the contract's OI, `poi` as the previous close and `toi` as the total for the underlying. Shoonya used to publish `toi` as `open_interest`; that was the underlying's total, so it now publishes `oi`. The adapters merge partial `tf` frames before normalising, so the last value is kept across frames that omit it. |
-| samco | `oI` on the `quote` stream | `quote2` frames do not carry it and normalise to 0; those are left out. |
-| groww | `StocksLivePriceProto.openInterest`, field 14 (double) | From the official `growwapi` SDK's `StocksSocketResponse.proto`. The hand-written parser used to skip the field. |
-| aliceblue | `oi` on depth frames (`dk`/`df`) | Aliceblue's websocket docs list `oi` under depth only; `toi` on tick frames is not the contract's OI. |
+| samco | `oI` on the `quote` stream | The client merges the `quote` and `quote2` streams per symbol, so a `quote2` frame carries the last `oI` a quote frame sent. Before any quote frame has carried it, the key is left out. |
+| groww | `StocksLivePriceProto.openInterest`, field 14 (double) | From the official `growwapi` SDK's `StocksSocketResponse.proto`. The hand-written parser used to skip the field. It is kept in the merge cache that Depth publishes send, so Depth subscribers get it too. |
+| aliceblue | `oi` on depth frames (`dk`/`df`) | Aliceblue's websocket docs list `oi` under depth only; `toi` on tick frames is not the contract's OI. The adapter publishes its merged snapshot, which now keeps `oi`. |
 
 Why two brokers stay polled:
 

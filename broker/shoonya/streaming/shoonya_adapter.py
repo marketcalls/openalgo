@@ -1688,11 +1688,11 @@ def _oi_field(data: dict[str, Any]) -> dict[str, Any]:
     """`{"oi": n}` when the (cache-merged) Noren packet carries open interest, else `{}`.
 
     Noren's `oi` is the contract's own open interest. `toi` is the total for the
-    whole underlying and `poi` the previous close, so neither is used here. The
-    key is left out rather than sent as 0 so a client keeps its last value.
+    whole underlying and `poi` the previous close, so neither is used here. An
+    absent key stays absent so a client keeps its last value; a present 0 is a
+    real value and is forwarded.
     """
     value = data.get("oi")
     if value in (None, "", "-"):
         return {}
-    oi = safe_int(value)
-    return {"oi": oi} if oi > 0 else {}
+    return {"oi": safe_int(value)}

@@ -258,13 +258,14 @@ class AliceBlueMessageMapper:
             }
             # The contract's own open interest is on depth frames only (`oi`;
             # `toi` on tick frames is the underlying's total). A df frame
-            # carries only what changed, so absent stays absent.
-            try:
-                oi = int(float(message.get("oi") or 0))
-            except (TypeError, ValueError):
-                oi = 0
-            if oi > 0:
-                parsed["oi"] = oi
+            # carries only what changed, so absent stays absent, while a
+            # present 0 is forwarded: it is a real value, and it is what lets
+            # a cached nonzero OI clear.
+            if message.get("oi") not in (None, ""):
+                try:
+                    parsed["oi"] = int(float(message["oi"]))
+                except (TypeError, ValueError):
+                    pass
             return parsed
         except (ValueError, KeyError) as e:
             return {"type": "error", "message": f"Failed to parse depth data: {e}"}

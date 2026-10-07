@@ -872,3 +872,35 @@ export class MarketDataManager {
 }
 
 export default MarketDataManager
+
+/** One live tick handed out by `subscribeQuotes`. */
+export interface HostQuoteTick {
+  symbol: string
+  exchange: string
+  data: MarketData
+}
+
+/**
+ * Quote-mode ticks over the app's one shared WebSocket, delivered to a plain
+ * callback rather than into React state. For consumers that sample ticks on
+ * their own beat (the OI Profile page) or live outside React entirely (the
+ * custom-indicator loader hands this to runtime modules as `subscribeQuotes`):
+ * neither needs a re-render per tick, and neither should open a second socket.
+ * Returns the unsubscribe; call it on teardown.
+ */
+export function subscribeQuotes(
+  symbols: Array<{ symbol: string; exchange: string }>,
+  onTick: (tick: HostQuoteTick) => void
+): () => void {
+  const manager = MarketDataManager.getInstance()
+  const state = manager.getState()
+  if (!state.isConnected && !state.isPaused) void manager.connect()
+  const unsubscribes = symbols.map(({ symbol, exchange }) =>
+    manager.subscribe(symbol, exchange, 'Quote', (d) =>
+      onTick({ symbol: d.symbol, exchange: d.exchange, data: d.data })
+    )
+  )
+  return () => {
+    for (const unsubscribe of unsubscribes) unsubscribe()
+  }
+}

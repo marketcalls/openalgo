@@ -655,7 +655,9 @@ class SamcoWebSocket:
             # quote2/marketDepth report totals as tbq/taq, the quote stream as tBQ/tSQ
             "total_bid_quantity": self._safe_int(data.get("tbq") or data.get("tBQ", 0)),
             "total_ask_quantity": self._safe_int(data.get("taq") or data.get("tSQ", 0)),
-            "open_interest": self._safe_int(data.get("oI", 0)),
+            # None when no frame for this symbol has carried oI yet, so the
+            # adapter can tell "not sent" from a real zero.
+            "open_interest": self._safe_int(data["oI"]) if "oI" in data else None,
             "last_traded_time": data.get("lTrdT", "") or data.get("ltt", ""),
             "exchange_timestamp": int(time.time() * 1000),
         }

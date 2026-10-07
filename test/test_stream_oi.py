@@ -7,9 +7,11 @@ case below is built from the field names in that broker's own documentation.
 """
 
 import atexit
+import logging
 import os
 import struct
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -24,10 +26,13 @@ atexit.register(lambda: TEST_DB.unlink(missing_ok=True))
 
 # websocket_proxy must load before broker.*.streaming (the packages import each other).
 import websocket_proxy  # noqa: E402, F401
+from broker.aliceblue.streaming.aliceblue_adapter import AliceblueWebSocketAdapter  # noqa: E402
 from broker.aliceblue.streaming.aliceblue_mapping import AliceBlueMessageMapper  # noqa: E402
 from broker.flattrade.streaming import flattrade_adapter  # noqa: E402
+from broker.groww.streaming.groww_adapter import _GrowwMarketCache  # noqa: E402
 from broker.groww.streaming.groww_protobuf import MiniProtobufParser  # noqa: E402
 from broker.samco.streaming.samco_adapter import SamcoWebSocketAdapter  # noqa: E402
+from broker.samco.streaming.samcoWebSocket import SamcoWebSocket  # noqa: E402
 from broker.shoonya.streaming import shoonya_adapter  # noqa: E402
 from broker.upstox.streaming.upstox_adapter import UpstoxWebSocketAdapter as Adapter  # noqa: E402
 from broker.zebu.streaming import zebu_adapter  # noqa: E402
@@ -87,9 +92,30 @@ def test_samco_forwards_open_interest():
     assert adapter._normalize_market_data(msg, 3)["oi"] == 750
 
 
-def test_samco_quote2_frame_without_oi_is_omitted():
+def test_samco_never_sent_is_omitted_and_a_real_zero_is_forwarded():
     adapter = SamcoWebSocketAdapter.__new__(SamcoWebSocketAdapter)
-    assert "oi" not in adapter._normalize_market_data({"open_interest": 0}, 2)
+    # quote2 frames arrive as mode 3. Before any quote frame has carried oI,
+    # the client reports None and the key stays absent.
+    assert "oi" not in adapter._normalize_market_data({"open_interest": None}, 3)
+    # A quote frame that carried oI = 0 is a real zero, not "not sent".
+    assert adapter._normalize_market_data({"open_interest": 0}, 2)["oi"] == 0
+
+
+def _samco_client():
+    client = SamcoWebSocket.__new__(SamcoWebSocket)
+    client._tick_state = {}
+    client._tick_state_lock = threading.Lock()
+    return client
+
+
+def test_samco_quote2_frame_carries_the_last_quote_oi():
+    client = _samco_client()
+    before = client._normalize_market_data({"symbol": "X", "bidValues": []}, "quote2")
+    assert before["open_interest"] is None, "no quote frame has carried oI yet"
+    client._normalize_market_data({"symbol": "X", "ltp": "10", "oI": "750"}, "quote")
+    after = client._normalize_market_data({"symbol": "X", "bidValues": []}, "quote2")
+    assert after["subscription_mode"] == 3
+    assert after["open_interest"] == 750
 
 
 # --- Groww: StocksLivePriceProto.openInterest is field 14 (double) ----------
@@ -119,3 +145,35 @@ def test_aliceblue_depth_frame_carries_oi():
 
 def test_aliceblue_depth_frame_without_oi():
     assert "oi" not in AliceBlueMessageMapper.parse_depth_data({"t": "df", "e": "NFO", "tk": "1"})
+
+
+def test_aliceblue_depth_frame_forwards_a_real_zero():
+    out = AliceBlueMessageMapper.parse_depth_data({"t": "df", "e": "NFO", "tk": "1", "oi": "0"})
+    assert out["oi"] == 0
+
+
+def test_aliceblue_snapshot_keeps_oi_for_publishing():
+    # The adapter publishes the merged snapshot, not the parsed frame, so the
+    # snapshot has to carry oi through, and keep it across a frame without it.
+    adapter = AliceblueWebSocketAdapter.__new__(AliceblueWebSocketAdapter)
+    adapter.market_snapshots = {}
+    adapter.logger = logging.getLogger("test_aliceblue")
+    first = adapter._update_market_snapshot("NFO:1", {"ltp": 10.0, "oi": 1500, "bids": []})
+    assert first["oi"] == 1500
+    second = adapter._update_market_snapshot("NFO:1", {"ltp": 10.5, "bids": []})
+    assert second["oi"] == 1500
+
+
+# --- Groww: Depth publishes send the merged cache entry ----------------------
+
+
+def test_groww_depth_cache_keeps_oi():
+    cache = _GrowwMarketCache()
+    cache.update_from_ltp("NSE", "FNO", "1", {"ltp": 101.5, "oi": 61875})
+    merged = cache.update_from_depth("NSE", "FNO", "1", {"depth": {"buy": [], "sell": []}})
+    assert merged["oi"] == 61875
+
+
+@pytest.mark.parametrize("mod", [flattrade_adapter, zebu_adapter, shoonya_adapter])
+def test_noren_forwards_a_real_zero(mod):
+    assert mod.QuoteNormalizer.normalize({"lp": "1", "oi": "0"}, "tf")["oi"] == 0
