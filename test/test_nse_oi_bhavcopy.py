@@ -180,3 +180,33 @@ def test_a_failed_warm_up_leaves_no_cooldown(monkeypatch):
     first = len(attempts)
     assert bhav.previous_session_oi("NFO") is None
     assert len(attempts) == 2 * first, "the request after a failed warm-up must try again"
+
+
+def test_an_older_file_is_not_taken_for_the_expected_session(monkeypatch):
+    # The expected anchor file (15-Sep) is not up yet, so the walk finds 14-Sep.
+    # Caching that would anchor two days of build as one; it must be refused.
+    calls = []
+
+    def download(day):
+        calls.append(day)
+        return _zipped_csv() if day == date(2026, 9, 14) else None
+
+    monkeypatch.setattr(bhav, "_download", download)
+    monkeypatch.setattr(bhav, "_displayed_session", lambda today: date(2026, 9, 16))
+    monkeypatch.setattr(bhav, "is_market_holiday", lambda day, exchange=None: day.weekday() >= 5)
+    bhav._failed_at.clear()
+
+    assert bhav.previous_session_oi("NFO") is None
+    assert bhav.cached_previous_session_oi("NFO") is None
+
+
+def test_the_expected_file_is_cached(monkeypatch):
+    monkeypatch.setattr(
+        bhav, "_download", lambda day: _zipped_csv() if day == date(2026, 9, 15) else None
+    )
+    monkeypatch.setattr(bhav, "_displayed_session", lambda today: date(2026, 9, 16))
+    monkeypatch.setattr(bhav, "is_market_holiday", lambda day, exchange=None: day.weekday() >= 5)
+    bhav._failed_at.clear()
+
+    book = bhav.previous_session_oi("NFO")
+    assert book is not None and book.trade_date == date(2026, 9, 15)

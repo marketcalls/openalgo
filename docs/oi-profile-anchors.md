@@ -135,7 +135,10 @@ returns the **On screen** session; `_newest_before()` then walks back day by day
 from it to find the **Anchor file** — an unpublished date 404s, so weekends and
 holidays are skipped without a calendar lookup. If NSE cannot be reached or
 refuses the request, the walk stops at the first failure rather than reading an
-outage as a run of missing dates. Verified
+outage as a run of missing dates. The file found must also be the one expected: if it is older than the
+session before the one on screen (NSE has not published that one yet), it is
+refused rather than cached, and anchors fall back to per-leg history until the
+right file appears. Verified
 to agree with the per-leg path on a trading day; the holiday branch follows the
 same shape.
 

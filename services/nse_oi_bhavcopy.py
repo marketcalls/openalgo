@@ -204,6 +204,20 @@ def _displayed_session(today: date) -> date:
     return today
 
 
+def _session_before(day: date) -> date | None:
+    """The last trading session strictly before `day`, or None if the calendar
+    will not say. Used to check that the file found is the one expected."""
+    for back in range(1, _MAX_LOOKBACK_DAYS + 1):
+        candidate = day - timedelta(days=back)
+        try:
+            if not is_market_holiday(candidate, "NFO"):
+                return candidate
+        except Exception:
+            logger.warning("Could not read the market calendar", exc_info=True)
+            return None
+    return None
+
+
 def previous_session_oi(exchange: str, record_failure: bool = True) -> Bhavcopy | None:
     """
     Closing open interest for every NSE option, as of the session before the
@@ -232,7 +246,20 @@ def previous_session_oi(exchange: str, record_failure: bool = True) -> Bhavcopy 
     if failed is not None and (datetime.now(_IST).timestamp() - failed) < _RETRY_AFTER_SECONDS:
         return None
 
-    book = _newest_before(_displayed_session(today))
+    displayed = _displayed_session(today)
+    book = _newest_before(displayed)
+
+    # The walk back takes the newest file it finds. If NSE has not published the
+    # session before the one on screen yet, that is an older session's file,
+    # and anchoring on it would report two days of build as one, cached for
+    # half a day. Refuse it: the per-leg broker fallback has the right anchor.
+    expected = _session_before(displayed)
+    if book is not None and expected is not None and book.trade_date < expected:
+        logger.warning(
+            f"NSE has not published the {expected} bhavcopy yet (newest is "
+            f"{book.trade_date}); anchors fall back to per-leg history"
+        )
+        book = None
 
     with _lock:
         if book is None:
