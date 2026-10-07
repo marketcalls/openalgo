@@ -1388,4 +1388,9 @@ def _oi_field(data: dict[str, Any]) -> dict[str, Any]:
     value = data.get("oi")
     if value in (None, "", "-"):
         return {}
-    return {"oi": safe_int(value)}
+    # Not safe_int: it defaults a parse failure to 0, and a present 0 is a real
+    # value that would overwrite the last good OI. Unparseable is "not sent".
+    try:
+        return {"oi": int(float(value))}
+    except (TypeError, ValueError):
+        return {}

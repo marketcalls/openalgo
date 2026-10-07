@@ -705,12 +705,16 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           [...symbols].map((symbol) => ({ symbol, exchange })),
           (tick) => {
             const oi = Number(tick?.data?.oi)
-            if (!Number.isFinite(oi)) return
+            // A 0 is "not carried" on some brokers, so it must not replace the
+            // last good value; that one ages out on its own if the feed stops.
+            if (!(oi > 0)) return
+            // When OI last arrived, not when this tick did: the host merges
+            // ticks, so a price-only tick re-sends the old OI and must not keep
+            // it fresh. An older host without the stamp falls back to now.
+            const at = Number(tick.data.oi_updated_at) || Date.now()
             const key = String(tick.symbol).toUpperCase()
             const prev = liveOi.get(key)
-            // Every tick refreshes `at`, so a quiet-but-alive contract stays live;
-            // only a changed number needs a repaint.
-            liveOi.set(key, { oi, at: Date.now() })
+            liveOi.set(key, { oi, at })
             if (prev?.oi !== oi) liveDirty = true
           }
         )

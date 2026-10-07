@@ -428,6 +428,9 @@ export default function OIProfile() {
       for (const leg of row.ce_legs ?? []) symbols.add(leg.symbol)
       for (const leg of row.pe_legs ?? []) symbols.add(leg.symbol)
     }
+    // No contracts means nothing to stream: no key, so no subscription and no
+    // reason to open the shared socket.
+    if (symbols.size === 0) return ''
     return [exchange, ...[...symbols].sort()].join('|')
   }, [profileData?.options_exchange, profileData?.oi_chain])
   const liveEnabled = liveLegsKey !== '' && profileData?.market_open !== false
@@ -447,8 +450,15 @@ export default function OIProfile() {
     return subscribeQuotes(
       symbols.map((symbol) => ({ symbol, exchange })),
       ({ symbol, exchange: ex, data }) => {
-        if (typeof data.oi !== 'number') return
-        liveOiRef.current.set(liveOiKey(ex, symbol), { oi: data.oi, at: Date.now() })
+        // Only a positive OI is usable (0 means "not carried" on some brokers),
+        // and its age is when OI last arrived, not when this tick did: a
+        // price-only tick re-sends the cached OI and must not keep it fresh.
+        const { oi, oi_updated_at: at } = data
+        if (typeof oi !== 'number' || !(oi > 0) || typeof at !== 'number') return
+        const key = liveOiKey(ex, symbol)
+        const prev = liveOiRef.current.get(key)
+        if (prev?.oi === oi && prev.at === at) return
+        liveOiRef.current.set(key, { oi, at })
         liveDirtyRef.current = true
       }
     )

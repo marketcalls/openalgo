@@ -18,11 +18,19 @@ which reaches the feed through the loader's `subscribeQuotes`).
    bars redraw every 2 seconds. This adds no broker API calls: the ticks are already
    flowing to the browser.
 
-A leg whose feed sends no `oi`, or sends 0, keeps its polled number. The client
-treats a 0 tick as "unknown", never as an emptied contract, because some existing
-adapters (Angel among them) send 0 when the packet simply did not carry OI. A
-tick older than one refresh beat (3 minutes) also stops counting as live, so a
-feed that goes quiet falls back to the polled number when the next poll lands.
+A contract shows its polled number until a usable tick arrives, and again once
+that tick has aged out. A packet without `oi`, or with 0, does not by itself
+bring the polled number back: the last usable tick stays on screen until it ages
+out. The client treats a 0 tick as "unknown", never as an emptied contract,
+because some existing adapters (Angel among them) send 0 when the packet simply
+did not carry OI.
+
+A tick ages out once the open interest in it is older than one refresh beat:
+3 minutes on `/oiprofile`, and the indicator's **Refresh (seconds)** setting on
+the chart (180 by default). Its age is when OI last arrived, not when the last
+tick did, so a price-only tick re-sending the cached OI does not keep it fresh.
+A feed that goes quiet therefore falls back to the polled number when the next
+poll lands.
 
 ## Change in OI stays anchored
 
@@ -37,9 +45,13 @@ beside it.
 ## Tick contract
 
 The adapters this change touched (upstox, flattrade, zebu, shoonya, samco,
-groww, aliceblue) publish `oi` as an integer when the packet carries it, a
-present 0 included, and omit the key when it does not, so a client keeps its
-last value across a partial packet. Older adapters do not all follow this: some
+groww, aliceblue) publish `oi` as an integer when the packet carries it and
+omit the key when it does not, so a client keeps its last value across a
+partial packet. A present 0 is forwarded only where the source can tell zero
+from absent (flattrade, zebu, shoonya, samco, aliceblue). Upstox and Groww use
+proto3, which drops a zero field on the wire, so for them 0 and "not sent" look
+the same and neither is published. A value that will not parse is treated as
+not sent, never as 0. Older adapters do not all follow this: some
 send 0 for "not carried", which is why clients treat 0 as unknown.
 
 ## Broker capability

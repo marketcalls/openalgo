@@ -140,6 +140,22 @@ test('attach() subscribes to the legs, repaints from a tick, unsubscribes on tea
   await new Promise((r) => setTimeout(r, 2200)) // one redraw beat
   assert.ok(tooltip().includes('Call OI: 90.00L'), tooltip().join(' | '))
   assert.ok(tooltip().includes('Put OI: 68.93L'), 'a leg with no tick keeps its polled OI')
+
+  // A 0 tick is "not carried" on some brokers: it must not displace the last
+  // good value.
+  onTick({ symbol: 'NIFTY22SEP2623300CE', exchange: 'NFO', data: { oi: 0 } })
+  await new Promise((r) => setTimeout(r, 2200))
+  assert.ok(tooltip().includes('Call OI: 90.00L'), tooltip().join(' | '))
+
+  // OI whose last arrival is older than a refresh beat is no longer live,
+  // however recently a price-only tick re-sent it.
+  onTick({
+    symbol: 'NIFTY22SEP2623300CE',
+    exchange: 'NFO',
+    data: { oi: 9_500_000, oi_updated_at: Date.now() - 10 * 60 * 1000 },
+  })
+  await new Promise((r) => setTimeout(r, 2200))
+  assert.ok(tooltip().includes('Call OI: 87.21L'), tooltip().join(' | '))
   } finally {
     teardown()
   }

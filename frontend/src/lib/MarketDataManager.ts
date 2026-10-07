@@ -29,6 +29,12 @@ export interface MarketData {
   volume?: number
   /** Open interest; only derivatives carry it, and only some broker feeds send it. */
   oi?: number
+  /**
+   * Epoch ms of the last update that actually carried `oi`. The cache merges
+   * every tick, so `oi` itself is re-sent with price-only ticks; this is what
+   * tells a consumer how old the open interest really is.
+   */
+  oi_updated_at?: number
   change?: number
   change_percent?: number
   timestamp?: string
@@ -590,6 +596,8 @@ export class MarketDataManager {
             close: marketDataPayload.close ?? newData.close,
             volume: marketDataPayload.volume ?? newData.volume,
             oi: marketDataPayload.oi ?? newData.oi,
+            oi_updated_at:
+              typeof marketDataPayload.oi === 'number' ? Date.now() : newData.oi_updated_at,
             change: marketDataPayload.change ?? newData.change,
             change_percent: marketDataPayload.change_percent ?? newData.change_percent,
             timestamp: marketDataPayload.timestamp ?? newData.timestamp,
@@ -832,6 +840,7 @@ export class MarketDataManager {
             close: result.data.prev_close ?? newData.close,
             volume: result.data.volume ?? newData.volume,
             oi: result.data.oi ?? newData.oi,
+            oi_updated_at: typeof result.data.oi === 'number' ? Date.now() : newData.oi_updated_at,
             bid_price: result.data.bid ?? newData.bid_price,
             ask_price: result.data.ask ?? newData.ask_price,
           })

@@ -101,3 +101,43 @@ describe('MarketDataManager fallback sequencing', () => {
     })
   })
 })
+
+describe('MarketDataManager open interest age', () => {
+  afterEach(() => {
+    MarketDataManager.resetInstance()
+    vi.useRealTimers()
+  })
+
+  it('stamps oi only when a tick carries it, not when a price-only tick re-sends the cache', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    const manager = MarketDataManager.getInstance()
+    const harness = manager as unknown as ManagerHarness
+    const tick = (data: Record<string, number>) =>
+      harness.handleMessage(
+        new MessageEvent('message', {
+          data: JSON.stringify({ type: 'market_data', symbol: 'C1', exchange: 'NFO', data }),
+        })
+      )
+
+    tick({ ltp: 10, oi: 500 })
+    expect(manager.getCachedData('C1', 'NFO')?.data).toMatchObject({
+      oi: 500,
+      oi_updated_at: 1_000,
+    })
+
+    vi.setSystemTime(9_000)
+    tick({ ltp: 11 })
+    // The merged cache still holds the OI, but its age is unchanged.
+    expect(manager.getCachedData('C1', 'NFO')?.data).toMatchObject({
+      oi: 500,
+      oi_updated_at: 1_000,
+    })
+
+    tick({ ltp: 12, oi: 600 })
+    expect(manager.getCachedData('C1', 'NFO')?.data).toMatchObject({
+      oi: 600,
+      oi_updated_at: 9_000,
+    })
+  })
+})

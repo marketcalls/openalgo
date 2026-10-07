@@ -177,3 +177,9 @@ def test_groww_depth_cache_keeps_oi():
 @pytest.mark.parametrize("mod", [flattrade_adapter, zebu_adapter, shoonya_adapter])
 def test_noren_forwards_a_real_zero(mod):
     assert mod.QuoteNormalizer.normalize({"lp": "1", "oi": "0"}, "tf")["oi"] == 0
+
+
+@pytest.mark.parametrize("mod", [flattrade_adapter, zebu_adapter, shoonya_adapter])
+@pytest.mark.parametrize("junk", ["  ", "abc", "N/A"])
+def test_noren_malformed_oi_is_not_sent_as_zero(mod, junk):
+    assert "oi" not in mod.QuoteNormalizer.normalize({"lp": "1", "oi": junk}, "tf")
