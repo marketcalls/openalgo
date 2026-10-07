@@ -574,8 +574,10 @@ app. Everything about the agent's provider catalogue is read live from LiteLLM
 precisely so a package bump brings new models with it. This provider is the one
 exception, and it needs a person.
 
-**The symptom, if you do not know this.** LiteLLM's registry carries ten
-`chatgpt/*` entries, newest `gpt-5.4`, while the backend serves more. A model
+**The symptom, if you do not know this.** LiteLLM's registry lags the backend:
+at 1.104.0 its bundled map carries fourteen `chatgpt/*` entries, newest the
+`gpt-5.6` variants, while the backend serves more. The map LiteLLM fetches from
+GitHub at import is usually ahead of the bundled one, so check both. A model
 absent from that registry has no `mode`, so LiteLLM routes it through the
 chat-completions bridge instead of `/v1/responses`. The request never reaches
 the API: it lands on a Cloudflare interstitial and returns

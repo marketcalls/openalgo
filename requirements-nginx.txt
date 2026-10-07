@@ -156,7 +156,7 @@ openscript==0.8.1
 # The /agent module and the /trading agent side tab. They are imported only when
 # someone uses the agent, so a missing package does not stop the app starting;
 # it fails the first chat instead.
-litellm==1.99.0
+litellm==1.104.0
 agno==3.0.5
 ddgs>=9.16.0
 
