@@ -7,6 +7,7 @@ import json
 import ssl
 import threading
 import time
+from collections import deque
 
 import websocket
 
@@ -85,6 +86,19 @@ class DefinedGeWebSocket:
         self.heartbeat_running = False
         self._last_message_time = None
         self._last_message_lock = threading.Lock()
+
+        # Market-data silence watchdog (issue #2075). _last_message_time above
+        # is stamped by every inbound frame, heartbeat acks included, so a
+        # session that keeps acking while sending no ticks passes the stall
+        # check forever. Tick flow gets its own clock, armed only once data
+        # has been arriving over time - see _update_last_data_time.
+        self.data_silence_timeout = 180
+        self.data_arm_bucket = 30
+        self.data_arm_buckets = 3
+        self.data_arm_window = 300
+        self._last_data_message_time = None
+        self._data_watchdog_armed = False
+        self._data_bucket_starts = deque(maxlen=self.data_arm_buckets)
 
         # WS-level ping keeps NAT/proxy paths alive between app heartbeats
         self.ping_interval = 30
@@ -199,6 +213,7 @@ class DefinedGeWebSocket:
         logger.info("DefinedGe WebSocket connection opened")
         self.connected = True
         self._update_last_message_time()
+        self._reset_data_liveness()
 
         # Authenticate after connection
         self._authenticate()
@@ -243,6 +258,57 @@ class DefinedGeWebSocket:
         with self._last_message_lock:
             self._last_message_time = time.time()
 
+    def _update_last_data_time(self):
+        """Record a market-data frame and arm the data-silence watchdog.
+
+        Called only from the tick and depth branches of _on_message, never for
+        a connect ack, a subscription ack or the heartbeat reply, so the clock
+        it keeps is the feed's rather than the socket's.
+
+        Arming asks that data arrived *spread over time*, not that a lot of it
+        arrived. Definedge answers every subscribe with a "tk"/"dk" snapshot,
+        so a session opened overnight receives one frame per subscribed scrip
+        within a second of connecting - fifty symbols is fifty frames. Any
+        rule counting frames would arm on that burst and then recycle the
+        socket every data_silence_timeout until the market opened.
+
+        Bucketing separates the two: a burst lands in one bucket (two if it
+        straddles a boundary), while a live feed keeps producing frames bucket
+        after bucket. data_arm_window stops stray after-hours ticks hours
+        apart from accumulating into a false arm.
+
+        Arming lasts only for this connection, so a market that closes while
+        the watchdog is armed costs one recycle and the replacement then sits
+        quiet.
+        """
+        now = time.time()
+        newly_armed = False
+
+        with self._last_message_lock:
+            self._last_data_message_time = now
+
+            if not self._data_watchdog_armed:
+                bucket_start = now - (now % self.data_arm_bucket)
+                if not self._data_bucket_starts or self._data_bucket_starts[-1] != bucket_start:
+                    self._data_bucket_starts.append(bucket_start)
+
+                if (
+                    len(self._data_bucket_starts) == self._data_bucket_starts.maxlen
+                    and now - self._data_bucket_starts[0] <= self.data_arm_window
+                ):
+                    self._data_watchdog_armed = True
+                    newly_armed = True
+
+        if newly_armed:
+            logger.info("Market data is flowing; watching for tick silence from here on")
+
+    def _reset_data_liveness(self):
+        """Clear the per-connection market-data liveness state."""
+        with self._last_message_lock:
+            self._last_data_message_time = None
+            self._data_watchdog_armed = False
+            self._data_bucket_starts.clear()
+
     def _on_message(self, ws, message):
         """Process incoming WebSocket message"""
         self._update_last_message_time()
@@ -257,14 +323,18 @@ class DefinedGeWebSocket:
                 self._handle_subscription_ack(data)
                 # IMPORTANT: Also process as tick data to capture initial OHLC
                 self._handle_tick_data(data)
+                self._update_last_data_time()
             elif message_type == "tf":  # Touchline feed
                 self._handle_tick_data(data)
+                self._update_last_data_time()
             elif message_type == "dk":  # Depth acknowledgement
                 self._handle_depth_ack(data)
                 # IMPORTANT: Also process as depth data to capture initial OHLC
                 self._handle_depth_data(data)
+                self._update_last_data_time()
             elif message_type == "df":  # Depth feed
                 self._handle_depth_data(data)
+                self._update_last_data_time()
             elif message_type == "uk":  # Unsubscribe touchline acknowledgement
                 self._handle_unsubscribe_ack(data)
             elif message_type == "udk":  # Unsubscribe depth acknowledgement
@@ -423,15 +493,33 @@ class DefinedGeWebSocket:
                 self.ws.send(json.dumps(heartbeat_msg))
                 logger.debug("Heartbeat sent")
 
-                # Stall detection: if nothing has arrived for heartbeat_timeout,
-                # the connection is silently dead - close it so the adapter's
+                # Stall detection, on two clocks. heartbeat_timeout catches a
+                # socket that has gone quiet altogether; data_silence_timeout
+                # catches one that still answers heartbeats while delivering no
+                # market data. The second case used to be invisible, because the
+                # ack itself refreshed _last_message_time - the feed could stay
+                # dead for the rest of the session with the connection still
+                # reported healthy, and nothing that runs on ticks (stop losses,
+                # sandbox order triggers, Flow conditions) would fire. Issue
+                # #2075. Either way the socket is closed so the adapter's
                 # on_disconnect handler reconnects.
+                now = time.time()
                 with self._last_message_lock:
                     last = self._last_message_time
-                if last and (time.time() - last) > self.heartbeat_timeout:
-                    logger.error(
-                        f"No messages received for {self.heartbeat_timeout}s - closing stalled connection"
+                    last_data = self._last_data_message_time
+                    armed = self._data_watchdog_armed
+
+                stall_reason = None
+                if last and (now - last) > self.heartbeat_timeout:
+                    stall_reason = f"no messages received for {self.heartbeat_timeout}s"
+                elif armed and last_data and (now - last_data) > self.data_silence_timeout:
+                    stall_reason = (
+                        f"no market data for {now - last_data:.0f}s while the session "
+                        "kept answering heartbeats"
                     )
+
+                if stall_reason:
+                    logger.error(f"Closing stalled connection - {stall_reason}")
                     if self.ws:
                         self.ws.close()
                     break

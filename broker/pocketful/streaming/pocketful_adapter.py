@@ -1,3 +1,4 @@
+from collections import deque
 import json
 import os
 import struct
@@ -11,6 +12,7 @@ import websocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from utils.logging import get_logger
+from utils import runtime as _runtime
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -25,11 +27,19 @@ from websocket_proxy.mapping import SymbolMapper
 
 from .pocketful_mapping import PocketfulCapabilityRegistry, PocketfulExchangeMapper
 
+_real_threading = _runtime.original("threading")
+
 
 class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Pocketful-specific implementation of the WebSocket adapter"""
 
     BASE_URL = "wss://trade.pocketful.in"
+    BATCH_DELAY = 0.5
+    HEALTH_CHECK_INTERVAL = 30
+    DATA_SILENCE_TIMEOUT = 90
+    DATA_ARM_BUCKET = 30
+    DATA_ARM_BUCKETS = 3
+    DATA_ARM_WINDOW = 300
 
     def __init__(self):
         super().__init__()
@@ -43,8 +53,18 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
         self.heartbeat_thread = None
+        self._heartbeat_stop = None
+        self._connect_thread = None
+        self._reconnect_stop = threading.Event()
+        self.subscription_queue = {}
+        self.batch_timer = None
+        self.health_thread = None
+        self._health_stop = None
+        self._last_data_message_time = None
+        self._data_watchdog_armed = False
+        self._data_bucket_starts = deque(maxlen=self.DATA_ARM_BUCKETS)
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -90,11 +110,31 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        with self.lock:
+            if (
+                self._connect_thread is not None
+                and self._connect_thread.is_alive()
+                and not self._reconnect_stop.is_set()
+            ):
+                return
+            # A prior disconnect can still be finishing its old loop. Give
+            # this connection its own stop signal so a new login cannot revive
+            # the old loop by clearing a shared Event.
+            stop_event = threading.Event()
+            self._reconnect_stop = stop_event
+            self._connect_thread = threading.Thread(
+                target=self._connect_with_retry,
+                args=(stop_event,),
+                daemon=True,
+                name="pocketful-market-reconnect",
+            )
+            self._connect_thread.start()
 
-    def _connect_with_retry(self) -> None:
+    def _connect_with_retry(self, stop_event: threading.Event | None = None) -> None:
         """Connect to Pocketful WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+        if stop_event is None:
+            stop_event = self._reconnect_stop
+        while self.running and not stop_event.is_set() and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
                 self.logger.info(
                     f"Connecting to Pocketful WebSocket (attempt {self.reconnect_attempts + 1})"
@@ -115,20 +155,29 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Build WebSocket URL
                 ws_url = f"{self.BASE_URL}/ws/v1/feeds?login_id={self.user_id}&access_token={self.access_token}"
 
-                # Create WebSocket connection
-                self.ws_client = websocket.WebSocketApp(
-                    ws_url,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open,
-                )
+                # A logout may have landed during the token DB read. Publish
+                # the socket under the same short lock disconnect() uses, so
+                # it cannot appear after disconnect already looked for one.
+                with self.lock:
+                    if not self.running or stop_event.is_set():
+                        break
+                    ws_client = websocket.WebSocketApp(
+                        ws_url,
+                        on_message=self._on_message,
+                        on_error=self._on_error,
+                        on_close=self._on_close,
+                        on_open=self._on_open,
+                    )
+                    self.ws_client = ws_client
 
                 # Run WebSocket connection
-                self.ws_client.run_forever()
+                if not self.running or stop_event.is_set():
+                    ws_client.close()
+                    break
+                ws_client.run_forever()
 
                 # If we get here, the connection was closed
-                if not self.running:
+                if not self.running or stop_event.is_set():
                     break
 
                 self.reconnect_attempts += 1
@@ -136,7 +185,8 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.warning(f"Connection lost. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                if stop_event.wait(delay):
+                    break
 
             except Exception as e:
                 self.reconnect_attempts += 1
@@ -144,16 +194,29 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                if stop_event.wait(delay):
+                    break
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
 
     def disconnect(self) -> None:
         """Disconnect from Pocketful WebSocket"""
-        self.running = False
-        if hasattr(self, "ws_client") and self.ws_client:
-            self.ws_client.close()
+        with self.lock:
+            self.running = False
+            self.connected = False
+            self._reconnect_stop.set()
+            if self._heartbeat_stop is not None:
+                self._heartbeat_stop.set()
+            if self._health_stop is not None:
+                self._health_stop.set()
+            if self.batch_timer is not None:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+            ws_client = self.ws_client
+        if ws_client is not None:
+            ws_client.close()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
@@ -241,14 +304,9 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "actual_depth": actual_depth,
                 "is_fallback": is_fallback,
             }
-
-        # Subscribe if connected
-        if self.connected and self.ws_client:
-            try:
-                self._send_subscription(exchange_code, token, pocketful_mode)
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            if self.connected and self.ws_client:
+                self.subscription_queue[correlation_id] = self.subscriptions[correlation_id]
+                self._start_batch_timer_locked()
 
         # Return success with capability info
         return self._create_success_response(
@@ -291,23 +349,82 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         pocketful_mode = pocketful_mode_map.get(mode, 2)
 
         # Generate correlation ID
-        correlation_id = f"{symbol}_{exchange}_{mode}"
-
-        # Remove from subscriptions
+        prefix = f"{symbol}_{exchange}_{mode}"
+        removed = None
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
+            correlation_id = prefix
+            for key, sub in self.subscriptions.items():
+                if (
+                    (key == prefix or key.startswith(prefix + "_"))
+                    and sub["symbol"] == symbol
+                    and sub["exchange"] == exchange
+                    and sub["mode"] == mode
+                ):
+                    correlation_id = key
+                    break
+            removed = self.subscriptions.pop(correlation_id, None)
+            queued = self.subscription_queue.pop(correlation_id, None)
+            if self.subscription_queue:
+                self._start_batch_timer_locked()
 
         # Unsubscribe if connected
-        if self.connected and self.ws_client:
+        if queued is None and removed is not None and self.connected and self.ws_client:
             try:
-                self._send_unsubscription(exchange_code, token, pocketful_mode)
+                self._send_unsubscription(
+                    removed["exchange_code"], removed["token"], removed["pocketful_mode"]
+                )
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
+        )
+
+    def _start_batch_timer_locked(self) -> None:
+        if self.batch_timer is not None and self.batch_timer.is_alive():
+            return
+        self.batch_timer = _real_threading.Timer(
+            self.BATCH_DELAY, self._process_batch_subscriptions
+        )
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        with self.lock:
+            self.batch_timer = None
+            if not self.connected or not self.ws_client or not self.subscription_queue:
+                return
+            ws_client = self.ws_client
+            queued = list(self.subscription_queue.items())
+            self.subscription_queue.clear()
+            groups = {}
+            for correlation_id, sub in queued:
+                key = (sub["pocketful_mode"], sub["exchange_code"])
+                groups.setdefault(key, {})[correlation_id] = sub
+
+        for (mode, _exchange_code), subscriptions in groups.items():
+            instruments = {
+                str(sub["token"]): [sub["exchange_code"], int(sub["token"])]
+                for sub in subscriptions.values()
+            }
+            try:
+                self._send_subscription_batch(list(instruments.values()), mode, ws_client)
+            except Exception as e:
+                with self.lock:
+                    for correlation_id, sub in subscriptions.items():
+                        if self.subscriptions.get(correlation_id) is sub:
+                            self.subscription_queue[correlation_id] = sub
+                    if self.connected and self.subscription_queue:
+                        self._start_batch_timer_locked()
+                self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
+
+    def _send_subscription_batch(self, instruments, mode: int, ws=None) -> None:
+        market_type = {1: "marketdata", 2: "compact_marketdata", 4: "full_snapquote"}[mode]
+        packet = {"a": "subscribe", "v": instruments, "m": market_type}
+        (ws or self.ws_client).send(json.dumps(packet))
+        self.logger.info(
+            f"Sent batch subscription for {len(instruments)} instruments in {market_type} mode"
         )
 
     def _send_subscription(self, exchange_code: int, token: str, mode: int) -> None:
@@ -344,26 +461,54 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_open(self, ws) -> None:
         """Callback when connection is established"""
-        self.logger.info("Connected to Pocketful WebSocket")
-        self.connected = True
-        self.reconnect_attempts = 0
+        with self.lock:
+            # websocket-client may invoke on_open even when disconnect closed
+            # this socket just before run_forever began. Never authenticate or
+            # start a heartbeat for a revoked/obsolete connection.
+            if not self.running or self._reconnect_stop.is_set() or ws is not self.ws_client:
+                stale = True
+            else:
+                stale = False
+                self.connected = True
+                self.reconnect_attempts = 0
+                if self._heartbeat_stop is not None:
+                    self._heartbeat_stop.set()
+                stop_event = threading.Event()
+                self._heartbeat_stop = stop_event
+                if self._health_stop is not None:
+                    self._health_stop.set()
+                health_stop = _real_threading.Event()
+                self._health_stop = health_stop
+                self._last_data_message_time = None
+                self._data_watchdog_armed = False
+                self._data_bucket_starts.clear()
+                current_ws = self.ws_client
+        if stale:
+            ws.close()
+            return
 
-        # Start heartbeat thread
-        self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self.logger.info("Connected to Pocketful WebSocket")
+        self.heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(stop_event, current_ws),
+            daemon=True,
+            name="pocketful-market-heartbeat",
+        )
         self.heartbeat_thread.start()
+
+        self.health_thread = _real_threading.Thread(
+            target=self._health_check_loop,
+            args=(health_stop, current_ws),
+            daemon=True,
+            name="pocketful-market-health",
+        )
+        self.health_thread.start()
 
         # Resubscribe to existing subscriptions if reconnecting
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    self._send_subscription(
-                        sub["exchange_code"], sub["token"], sub["pocketful_mode"]
-                    )
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            self.subscription_queue.update(self.subscriptions)
+            if self.subscription_queue:
+                self._start_batch_timer_locked()
 
     def _on_error(self, ws, error) -> None:
         """Callback for WebSocket errors"""
@@ -374,7 +519,13 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(
             f"Pocketful WebSocket connection closed: code={close_status_code}, message={close_msg}"
         )
-        self.connected = False
+        with self.lock:
+            if ws is self.ws_client:
+                self.connected = False
+                if self._heartbeat_stop is not None:
+                    self._heartbeat_stop.set()
+                if self._health_stop is not None:
+                    self._health_stop.set()
 
     def _on_message(self, ws, message) -> None:
         """Callback for messages from the WebSocket"""
@@ -408,6 +559,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
             res = decodeDetailedMarketData(message)
             if not res:
                 return
+            self._record_market_data()
 
             token = str(res.get("instrument_token"))
             exchange_code = res.get("exchange_code")
@@ -457,6 +609,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
             res = decodeCompactMarketData(message)
             if not res:
                 return
+            self._record_market_data()
 
             token = str(res.get("instrument_token"))
             exchange_code = res.get("exchange_code")
@@ -500,6 +653,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
             res = decodeSnapquoteData(message)
             if not res:
                 return
+            self._record_market_data()
 
             token = str(res.get("instrument_token"))
             exchange_code = res.get("exchange_code")
@@ -590,13 +744,59 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     return sub
         return None
 
-    def _heartbeat_loop(self) -> None:
+    def _heartbeat_loop(self, stop_event: threading.Event, current_ws) -> None:
         """Send periodic heartbeats to keep connection alive"""
-        while self.running and self.connected:
+        while self.running and self.connected and not stop_event.is_set():
             try:
-                if self.ws_client and self.connected:
-                    self.ws_client.send(json.dumps({"a": "h"}))
+                if self.ws_client is current_ws:
+                    current_ws.send(json.dumps({"a": "h"}))
                     self.logger.debug("Heartbeat sent")
             except Exception as e:
                 self.logger.error(f"Error sending heartbeat: {e}")
-            time.sleep(15)  # Send heartbeat every 15 seconds
+            if stop_event.wait(15):
+                break
+
+    def _record_market_data(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            self._last_data_message_time = now
+            if self._data_watchdog_armed:
+                return
+            bucket = now - (now % self.DATA_ARM_BUCKET)
+            if not self._data_bucket_starts or self._data_bucket_starts[-1] != bucket:
+                self._data_bucket_starts.append(bucket)
+            recent = [
+                start
+                for start in self._data_bucket_starts
+                if now - start <= self.DATA_ARM_WINDOW
+            ]
+            self._data_bucket_starts = deque(recent, maxlen=self.DATA_ARM_BUCKETS)
+            if len(self._data_bucket_starts) >= self.DATA_ARM_BUCKETS:
+                self._data_watchdog_armed = True
+                self.logger.info("Pocketful market-data silence watchdog armed")
+
+    def _health_check_loop(self, stop_event, current_ws) -> None:
+        while self.running and not stop_event.wait(self.HEALTH_CHECK_INTERVAL):
+            with self.lock:
+                if current_ws is not self.ws_client or not self.connected:
+                    return
+                silent_for = (
+                    time.monotonic() - self._last_data_message_time
+                    if self._last_data_message_time is not None
+                    else None
+                )
+                should_close = (
+                    self._data_watchdog_armed
+                    and silent_for is not None
+                    and silent_for >= self.DATA_SILENCE_TIMEOUT
+                )
+            if should_close:
+                self.logger.warning(
+                    "Pocketful market data stalled for %.0f seconds; closing socket to reconnect",
+                    silent_for,
+                )
+                try:
+                    current_ws.close()
+                except Exception as e:
+                    self.logger.error(f"Error closing stalled Pocketful socket: {e}")
+                return

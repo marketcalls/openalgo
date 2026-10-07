@@ -35,6 +35,7 @@ from services.strategy_chart_service import (
     _cap_last_n_trading_dates,
     _resolve_trading_window,
 )
+from utils import runtime
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
@@ -93,6 +94,32 @@ _anchor_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oi-anch
 _anchor_lock = threading.Lock()
 _anchor_generation = 0
 _anchor_running: set[str] = set()  # symbols the current job still intends to fetch
+
+#: Longest one OI Profile request spends fetching previous-day OI under the
+#: gthread worker, in seconds. A 20-strike chain is up to 82 contracts, and
+#: broker history requests are paced at about three a second, so a complete
+#: fetch normally takes 30 to 40 seconds and fits. What the budget cuts short
+#: is the case that ran for minutes: repeated broker refusals, each followed by
+#: a backoff, while the request holds one of the gthread worker's fixed pool of
+#: threads. Under eventlet and the development server there is no budget.
+GTHREAD_OI_CHANGE_BUDGET_SECONDS = 60.0
+
+
+def _oi_change_deadline() -> float | None:
+    """Return the time.monotonic() deadline for the daily OI fetch, or None."""
+    if not runtime.gthread_active():
+        return None
+    return time.monotonic() + GTHREAD_OI_CHANGE_BUDGET_SECONDS
+
+
+def _oi_change_note(loaded: int, requested: int) -> str:
+    """The sentence shown when the daily OI change covers only some contracts."""
+    return (
+        f"Loading the previous day's OI took too long, so the daily OI change is "
+        f"shown for {loaded} of {requested} option contracts. Refresh in a minute "
+        f"to load the rest."
+    )
+
 
 # Index symbols that need special exchange for quotes
 NSE_INDEX_SYMBOLS = {
@@ -234,9 +261,19 @@ RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
 
 
 def _history_rows(
-    symbol: str, exchange: str, interval: str, start: str, end: str, api_key: str
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start: str,
+    end: str,
+    api_key: str,
+    deadline: float | None = None,
 ) -> list[dict] | None:
-    """One history call with 429 backoff. Returns the rows, or None."""
+    """One history call with 429 backoff. Returns the rows, or None.
+
+    With a `deadline` (time.monotonic()), a backoff that would end past it is
+    not waited for: the symbol is given up as unknown instead.
+    """
     for attempt in range(MAX_RETRIES + 1):
         try:
             success, resp, status_code = get_history(
@@ -256,12 +293,20 @@ def _history_rows(
                 logger.warning(f"Could not read history for {symbol}: {e}")
                 return None
         delay = RETRY_BASE_DELAY * (2**attempt)
+        if deadline is not None and time.monotonic() + delay >= deadline:
+            return None
         logger.warning(f"Rate limited fetching {symbol}, retry {attempt + 1} after {delay}s")
         time.sleep(delay)
     return None
 
 
-def _in_batches(symbols: list[str], fetch_one) -> dict[str, float]:
+class _BatchResult(dict):
+    """A symbol -> value map that also says whether a deadline stopped it short."""
+
+    cut = False
+
+
+def _in_batches(symbols: list[str], fetch_one, deadline: float | None = None) -> dict[str, float]:
     """
     Run fetch_one over symbols in rate-limit-friendly batches.
 
@@ -271,14 +316,27 @@ def _in_batches(symbols: list[str], fetch_one) -> dict[str, float]:
     every contract of it had been written today, so one broker hiccup paints a
     strike as a huge fresh build. Absent means unknown, and unknown draws
     nothing.
+
+    With a `deadline` (time.monotonic()), no symbol is started and no pause is
+    waited for past it; the symbols not reached are simply absent.
     """
-    results = {}
+
+    def out_of_time(wait: float = 0.0) -> bool:
+        return deadline is not None and time.monotonic() + wait >= deadline
+
+    results = _BatchResult()
     for i in range(0, len(symbols), BATCH_SIZE):
         for symbol in symbols[i : i + BATCH_SIZE]:
+            if out_of_time():
+                results.cut = True
+                return results
             value = fetch_one(symbol)
             if value is not None:
                 results[symbol] = value
         if i + BATCH_SIZE < len(symbols):
+            if out_of_time(BATCH_DELAY):
+                results.cut = True
+                return results
             time.sleep(BATCH_DELAY)
     return results
 
@@ -515,10 +573,16 @@ def _fetch_windowed_oi_changes(
     window_start: int,
     window_end: int,
     api_key: str,
+    deadline: float | None = None,
 ) -> dict[str, float]:
     """
     Fetch intraday history for options and return OI change over an
     arbitrary [window_start, window_end] range (unix seconds).
+
+    This is the one OI-change path that still reads broker history inside the
+    request, one call per leg, so under gthread it takes the same time budget
+    the previous-day fetch had (`deadline`, see :func:`_oi_change_deadline`):
+    a leg not reached in time is left out rather than given a change of zero.
 
     Read at the tightest bar size the broker serves rather than the chart's,
     because the anchor's granularity is the measurement's error - see
@@ -537,14 +601,14 @@ def _fetch_windowed_oi_changes(
 
     def fetch_one(symbol: str) -> float | None:
         for bar in _anchor_intervals(interval):
-            rows = _history_rows(symbol, options_exchange, bar, start, end, api_key)
+            rows = _history_rows(symbol, options_exchange, bar, start, end, api_key, deadline)
             if rows:
                 return _oi_at_or_before(rows, window_end) - _oi_entering(rows, window_start)
         # No history at any bar size: unknown, not a zero change. _in_batches
         # leaves the leg out, so its change stays unpainted rather than flat.
         return None
 
-    return _in_batches(symbols_to_fetch, fetch_one)
+    return _in_batches(symbols_to_fetch, fetch_one, deadline)
 
 
 def _market_open(exchange: str) -> bool:
@@ -747,6 +811,7 @@ def get_oi_profile_data(
         oi_change_map = {}
         prev_oi_map = {}
         change_pending = False
+        windowed_requested = 0
         if include_change:
             if windowed:
                 oi_change_map = _fetch_windowed_oi_changes(
@@ -756,6 +821,10 @@ def get_oi_profile_data(
                     window_start,
                     window_end,
                     api_key,
+                    deadline=_oi_change_deadline(),
+                )
+                windowed_requested = len(
+                    {s["symbol"] for s in option_symbols_for_history if s.get("oi", 0) > 0}
                 )
             else:
                 prev_oi_map, change_pending = _fetch_prev_session_oi(
@@ -800,6 +869,13 @@ def get_oi_profile_data(
             # rather than wait out its usual beat.
             "oi_change_pending": change_pending,
         }
+        if getattr(oi_change_map, "cut", False):
+            # The gthread budget stopped the window short (there is no
+            # deadline otherwise): say how much it covers rather than show a
+            # partial change as whole. A leg with no history is not a cut.
+            payload["message"] = _oi_change_note(len(oi_change_map), windowed_requested)
+            payload["oi_change_loaded"] = len(oi_change_map)
+            payload["oi_change_requested"] = windowed_requested
 
         # A half-filled answer must not be pinned for the whole TTL, or the
         # client polling for the rest keeps being handed the same gaps.

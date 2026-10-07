@@ -19,9 +19,27 @@ from database.apscheduler_jobstore_db import (
     get_database_url,
 )
 from database.engine_factory import create_db_engine
+from utils import real_threading
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_active_schedule_runs: set[str] = set()
+_active_schedule_runs_lock = real_threading.Lock()
+
+
+def claim_schedule_run(schedule_id: str) -> bool:
+    """Claim a schedule until its submitted download job reaches a terminal state."""
+    with _active_schedule_runs_lock:
+        if schedule_id in _active_schedule_runs:
+            return False
+        _active_schedule_runs.add(schedule_id)
+        return True
+
+
+def release_schedule_run(schedule_id: str) -> None:
+    with _active_schedule_runs_lock:
+        _active_schedule_runs.discard(schedule_id)
 
 
 class HistorifyScheduler:
@@ -524,9 +542,14 @@ def execute_schedule(schedule_id: str, api_key: str = None):
     )
     from services.historify_service import create_and_start_job
 
+    if not claim_schedule_run(schedule_id):
+        logger.info(f"Scheduled download {schedule_id} is already running; skipping overlap")
+        return
+
     logger.info(f"Executing scheduled download: {schedule_id}")
 
     execution_id = None
+    job_started = False
 
     try:
         # Get schedule configuration
@@ -584,18 +607,17 @@ def execute_schedule(schedule_id: str, api_key: str = None):
             start_date=start_date,
             end_date=end_date,
             api_key=effective_api_key,
-            config={"schedule_id": schedule_id},
+            config={"schedule_id": schedule_id, "schedule_execution_id": execution_id},
             incremental=True,
         )
 
         if success:
             job_id = response.get("job_id")
+            job_started = True
             if execution_id:
                 update_schedule_execution(
                     execution_id, download_job_id=job_id, symbols_processed=len(symbols)
                 )
-            update_schedule(schedule_id, status="idle", last_run_status="success")
-            increment_schedule_run_counts(schedule_id, is_success=True)
             logger.info(f"Scheduled download started: {job_id} ({len(symbols)} symbols)")
 
             # Emit Socket.IO event
@@ -628,6 +650,10 @@ def execute_schedule(schedule_id: str, api_key: str = None):
         update_schedule(schedule_id, status="idle", last_run_status="error")
         increment_schedule_run_counts(schedule_id, is_success=False)
     finally:
+        # A successfully-created download owns this claim until its processor
+        # calls release_schedule_run. Every early/error path ends here.
+        if not job_started:
+            release_schedule_run(schedule_id)
         # APScheduler runs this on its own worker thread with no Flask app
         # context, so teardown_appcontext never fires and every scoped session
         # this run touched - auth_db for the API key lookup, plus whatever

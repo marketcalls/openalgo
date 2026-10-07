@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -59,6 +60,18 @@ class FivepaisaXTSWebSocketClient:
     BSE_FO = 4
     MCX_FO = 5
 
+    # Data-stall watchdog. XTS has no heartbeat on the data channel and the feed
+    # is legitimately silent outside trading hours, so silence only counts while
+    # a subscribed exchange's session is open (see _stall_reference).
+    HEALTH_CHECK_INTERVAL = 30
+    DATA_TIMEOUT = 90
+    # IST session windows in minutes after midnight. MCX segment ids are 5 in
+    # the class constants above and 51 in XTS proper; accept both.
+    _EQUITY_SESSION = (9 * 60 + 15, 15 * 60 + 30)
+    _MCX_SESSION = (9 * 60, 23 * 60 + 30)
+    _MCX_SEGMENTS = {"5", "51"}
+    _IST = timezone(timedelta(hours=5, minutes=30))
+
     def __init__(self, api_key: str, api_secret: str, user_id: str, base_url: str = None):
         """
         Initialize the Fivepaisa XTS Socket.IO client
@@ -97,6 +110,11 @@ class FivepaisaXTSWebSocketClient:
         # Subscriptions tracking
         self.subscriptions = {}
 
+        # Data-stall watchdog state
+        self.last_message_time: float | None = None
+        self._health_thread: threading.Thread | None = None
+        self._health_stop = threading.Event()
+
         # Create Socket.IO client
         self._setup_socketio()
 
@@ -109,21 +127,25 @@ class FivepaisaXTSWebSocketClient:
         self.sio.on("disconnect", self._on_disconnect)
         self.sio.on("message", self._on_message_handler)
 
-        # Register XTS specific message handlers
-        self.sio.on("1501-json-full", self._on_message_1501_json_full)
-        self.sio.on("1501-json-partial", self._on_message_1501_json_partial)
-        self.sio.on("1502-json-full", self._on_message_1502_json_full)
-        self.sio.on("1502-json-partial", self._on_message_1502_json_partial)
-        self.sio.on("1505-json-full", self._on_message_1505_json_full)
-        self.sio.on("1505-json-partial", self._on_message_1505_json_partial)
-        self.sio.on("1510-json-full", self._on_message_1510_json_full)
-        self.sio.on("1510-json-partial", self._on_message_1510_json_partial)
-        self.sio.on("1512-json-full", self._on_message_1512_json_full)
-        self.sio.on("1512-json-partial", self._on_message_1512_json_partial)
-
-        # Register handler for 1105 events (binary market data)
-        self.sio.on("1105-json-partial", self._on_message_1105_json_partial)
-        self.sio.on("1105-json-full", self._on_message_1105_json_full)
+        # Register XTS specific message handlers. Each goes through
+        # _stamped so the stall watchdog sees every market-data event,
+        # including ones the handler later filters out.
+        for event, handler in (
+            ("1501-json-full", self._on_message_1501_json_full),
+            ("1501-json-partial", self._on_message_1501_json_partial),
+            ("1502-json-full", self._on_message_1502_json_full),
+            ("1502-json-partial", self._on_message_1502_json_partial),
+            ("1505-json-full", self._on_message_1505_json_full),
+            ("1505-json-partial", self._on_message_1505_json_partial),
+            ("1510-json-full", self._on_message_1510_json_full),
+            ("1510-json-partial", self._on_message_1510_json_partial),
+            ("1512-json-full", self._on_message_1512_json_full),
+            ("1512-json-partial", self._on_message_1512_json_partial),
+            # 1105 events (binary market data)
+            ("1105-json-partial", self._on_message_1105_json_partial),
+            ("1105-json-full", self._on_message_1105_json_full),
+        ):
+            self.sio.on(event, self._stamped(handler))
 
         # Add catch-all handler for any unhandled events
         self.sio.on("*", self._on_catch_all)
@@ -221,6 +243,7 @@ class FivepaisaXTSWebSocketClient:
         """Disconnect from Socket.IO and release transport resources"""
         self.running = False
         self.connected = False
+        self._stop_health_check()
 
         try:
             if self.sio and self.sio.connected:
@@ -381,10 +404,95 @@ class FivepaisaXTSWebSocketClient:
 
         self.logger.info(f"Unsubscribed from {len(instruments)} instruments")
 
+    def _stamped(self, handler):
+        """Wrap a market-data handler so it records when data last arrived."""
+
+        def wrapper(*args, **kwargs):
+            self.last_message_time = time.time()
+            return handler(*args, **kwargs)
+
+        return wrapper
+
+    def _stall_reference(self, now: float) -> float | None:
+        """Instant silence should be measured from, or None if no session is open.
+
+        The later of the last message and the open of the earliest live session:
+        a socket connected at 08:00 has a stale last_message_time by 09:15, and
+        measuring from it would reconnect the moment the market opens.
+        """
+        ist_now = datetime.fromtimestamp(now, self._IST)
+        if ist_now.weekday() >= 5:
+            return None
+
+        with_segments = {
+            str(instrument.get("exchangeSegment"))
+            for sub in list(self.subscriptions.values())
+            for instrument in sub.get("instruments", [])
+        }
+        if not with_segments:
+            return None
+
+        minute = ist_now.hour * 60 + ist_now.minute
+        midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        opens = []
+        for segment in with_segments:
+            start, end = self._MCX_SESSION if segment in self._MCX_SEGMENTS else self._EQUITY_SESSION
+            if start <= minute < end:
+                opens.append(midnight + start * 60)
+        if not opens:
+            return None
+        return max(self.last_message_time or 0.0, min(opens))
+
+    def _start_health_check(self):
+        if (
+            self._health_thread
+            and self._health_thread.is_alive()
+            and not self._health_stop.is_set()
+        ):
+            return
+        # A fresh stop event per worker: clearing a shared one would resurrect a
+        # stopping predecessor instead of replacing it.
+        self._health_stop = threading.Event()
+        self._health_thread = threading.Thread(
+            target=self._health_check_loop,
+            args=(self._health_stop,),
+            daemon=True,
+            name="fivepaisaxts-health-check",
+        )
+        self._health_thread.start()
+
+    def _stop_health_check(self):
+        self._health_stop.set()
+
+    def _health_check_loop(self, stop_event: threading.Event):
+        while not stop_event.wait(self.HEALTH_CHECK_INTERVAL):
+            if not self.connected:
+                return
+            reference = self._stall_reference(time.time())
+            if reference is None:
+                continue
+            silent_for = time.time() - reference
+            if silent_for > self.DATA_TIMEOUT:
+                self.logger.error(
+                    f"Data stall detected - no market data for {silent_for:.0f}s "
+                    "during an open session. Forcing reconnect..."
+                )
+                # Drop only the transport. The adapter's close callback reconnects
+                # and replays its own subscription book; disconnect() would also
+                # clear this client's subscriptions and stop the reconnect.
+                try:
+                    if self.sio:
+                        self.sio.disconnect()
+                except Exception as e:
+                    self.logger.warning(f"Error closing stalled Socket.IO connection: {e}")
+                return
+
     def _on_connect(self):
         """Socket.IO connect event handler"""
         self.connected = True
+        self.last_message_time = time.time()
         self.logger.info("Connected to Fivepaisa XTS Socket.IO")
+        self._start_health_check()
 
         # Call external callback
         if self.on_open:
@@ -393,6 +501,7 @@ class FivepaisaXTSWebSocketClient:
     def _on_disconnect(self):
         """Socket.IO disconnect event handler"""
         self.connected = False
+        self._stop_health_check()
         self.logger.info("Disconnected from Fivepaisa XTS Socket.IO")
 
         # Call external callback

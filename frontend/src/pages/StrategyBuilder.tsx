@@ -56,6 +56,7 @@ import {
   useOptionChainLive,
 } from '@/hooks/useOptionChainLive'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { serverSentence } from '@/lib/serverSentence'
 import {
   type ChainIdentity,
   chainIdentity,
@@ -725,9 +726,9 @@ export default function StrategyBuilder() {
         } else {
           setFutureExpiries([])
         }
-      } catch (_err) {
+      } catch (error) {
         if (!cancelled) {
-          showToast.error('Failed to fetch expiries')
+          showToast.error(serverSentence(error, 'Failed to fetch expiries'))
         }
       }
     })()
@@ -1423,8 +1424,8 @@ export default function StrategyBuilder() {
           })
           chainsByExpiry.set(legExpiry, listedFarChain)
         }
-      } catch {
-        showToast.error('Unable to validate every template contract')
+      } catch (error) {
+        showToast.error(serverSentence(error, 'Unable to validate every template contract'))
         return
       }
 

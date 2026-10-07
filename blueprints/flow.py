@@ -198,9 +198,38 @@ def _execution_status_code(result: dict) -> int:
         return 200
     if result.get("already_running"):
         return 409
+    # Only a workflow started in the background (gthread only) carries these.
+    if result.get("accepted"):
+        return 202
+    if result.get("busy"):
+        return 429
     if result.get("status") == "error":
         return 502 if result.get("errors") else 500
     return 200
+
+
+def _run_or_start(workflow, **kwargs):
+    """Execute a triggered workflow, on this request or, if it waits, on the pool.
+
+    A Delay or Wait Until node can sleep for minutes inside the run. Under the
+    gthread worker that would hold one of a fixed number of request threads
+    for the whole wait, so there (and only there) a workflow whose waits add up
+    to more than FLOW_INLINE_WAIT_SECONDS is started on a Flow pool and the
+    trigger is answered at once with 202. Under eventlet and the development
+    server a sleeping request costs nothing, and every workflow runs on its
+    request exactly as before, so TradingView still gets the broker's answer.
+    A workflow with no wait, or a short one, always runs on its request.
+    """
+    from services.flow_executor_service import (
+        execute_workflow,
+        start_workflow_in_background,
+        workflow_runs_in_background,
+    )
+    from utils.runtime import gthread_active
+
+    if gthread_active() and workflow_runs_in_background(workflow.nodes):
+        return start_workflow_in_background(workflow.id, nodes=workflow.nodes, **kwargs)
+    return execute_workflow(workflow.id, **kwargs)
 
 
 def _existing_for_trigger_check(workflow_id):
@@ -335,8 +364,24 @@ def update_workflow(workflow_id):
 @check_session_validity
 def delete_workflow(workflow_id):
     """Delete a workflow"""
+    from services.flow_executor_service import get_workflow_lock
+
+    lock = get_workflow_lock(workflow_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "This workflow is still running. Try again when it finishes."}), 409
+    try:
+        return _delete_workflow_locked(workflow_id)
+    finally:
+        lock.release()
+
+
+def _delete_workflow_locked(workflow_id):
+    """Release resources and delete while no run can add another subscription."""
     from database.flow_db import delete_workflow, get_workflow
-    from services.flow_executor_service import release_workflow_subscriptions
+    from services.flow_executor_service import (
+        has_workflow_subscriptions,
+        release_workflow_subscriptions,
+    )
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -344,6 +389,13 @@ def delete_workflow(workflow_id):
     workflow = get_workflow(workflow_id)
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
+
+    # A failed proxy unsubscribe retains ownership so the same delete request
+    # can retry later. Deleting the row now would lose its API key and leave
+    # the feed subscribed for the life of the shared websocket client.
+    release_workflow_subscriptions(workflow_id)
+    if has_workflow_subscriptions(workflow_id):
+        return jsonify({"error": "The workflow feed is still connected. Try again shortly."}), 503
 
     # Deactivate if active. Every in-memory registration must be torn down
     # here too - deleting the row alone would strand the watch/alert, which
@@ -354,11 +406,6 @@ def delete_workflow(workflow_id):
         scheduler.remove_workflow_job(workflow_id)
         get_flow_price_monitor().remove_alert(workflow_id)
         get_flow_order_update_monitor().remove_watch(workflow_id)
-
-    # Unconditionally, not only when active: a workflow deactivated and then
-    # deleted has already been released, and this is a no-op, but one that
-    # subscribed while active and was never deactivated still holds them.
-    release_workflow_subscriptions(workflow_id)
 
     if delete_workflow(workflow_id):
         return jsonify({"status": "success", "message": "Workflow deleted"})
@@ -585,9 +632,25 @@ def activate_workflow(workflow_id):
 @check_session_validity
 def deactivate_workflow(workflow_id):
     """Deactivate a workflow"""
+    from services.flow_executor_service import get_workflow_lock
+
+    lock = get_workflow_lock(workflow_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "This workflow is still running. Try again when it finishes."}), 409
+    try:
+        return _deactivate_workflow_locked(workflow_id)
+    finally:
+        lock.release()
+
+
+def _deactivate_workflow_locked(workflow_id):
+    """Deactivate while no run can add another subscription."""
     from database.flow_db import deactivate_workflow as db_deactivate
     from database.flow_db import get_workflow, set_schedule_job_id
-    from services.flow_executor_service import release_workflow_subscriptions
+    from services.flow_executor_service import (
+        has_workflow_subscriptions,
+        release_workflow_subscriptions,
+    )
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -597,9 +660,19 @@ def deactivate_workflow(workflow_id):
         return jsonify({"error": "Workflow not found"}), 404
 
     if not workflow.is_active:
+        release_workflow_subscriptions(workflow_id)
+        if has_workflow_subscriptions(workflow_id):
+            return jsonify({"error": "The workflow feed is still connected. Try again shortly."}), 503
         return jsonify({"status": "already_inactive", "message": "Workflow is already inactive"})
 
     try:
+        # Keep active triggers running when the shared websocket has not
+        # confirmed release. The workflow can then be retried without losing
+        # its schedule or price/order monitors.
+        release_workflow_subscriptions(workflow_id)
+        if has_workflow_subscriptions(workflow_id):
+            return jsonify({"error": "The workflow feed is still connected. Try again shortly."}), 503
+
         # Removed by workflow id, not by the stored schedule_job_id. The id is
         # derived deterministically, so this still finds the job when the stored
         # pointer was never written or was cleared -- the case that used to skip
@@ -619,12 +692,6 @@ def deactivate_workflow(workflow_id):
         # Remove order-update watch if any
         order_monitor = get_flow_order_update_monitor()
         order_monitor.remove_watch(workflow_id)
-
-        # Give back any market-data subscription the workflow opened. The
-        # websocket client is a process-wide singleton, so a subscription left
-        # behind is held for the life of the worker and counts against the
-        # per-broker symbol ceiling that /trading and the sandbox engine share.
-        release_workflow_subscriptions(workflow_id)
 
         # Update workflow as inactive
         if not db_deactivate(workflow_id):
@@ -675,7 +742,6 @@ def _execution_blocked(workflow):
 def execute_workflow_now(workflow_id):
     """Execute a workflow immediately"""
     from database.flow_db import get_workflow
-    from services.flow_executor_service import execute_workflow
 
     workflow = get_workflow(workflow_id)
     if not workflow:
@@ -690,7 +756,7 @@ def execute_workflow_now(workflow_id):
         return jsonify(blocked), 400
 
     try:
-        result = execute_workflow(workflow_id, api_key=api_key)
+        result = _run_or_start(workflow, api_key=api_key)
         return jsonify(result), _execution_status_code(result)
     except Exception as e:
         logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
@@ -1007,7 +1073,6 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
     import hmac
 
     from database.flow_db import get_workflow_by_webhook_token
-    from services.flow_executor_service import execute_workflow
 
     workflow = get_workflow_by_webhook_token(token)
     if not workflow:
@@ -1080,7 +1145,7 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
 
     try:
         logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")
-        result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
+        result = _run_or_start(workflow, webhook_data=data, api_key=api_key)
         status = result.get("status", "success")
         # On failure, report the run's own message. Overwriting it left a caller
         # such as TradingView with HTTP 200 and the text "Workflow 'X' triggered"

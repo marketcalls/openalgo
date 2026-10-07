@@ -101,13 +101,14 @@ def to_rest_exchange(oa_exchange):
 def to_ltp_exchange(oa_exchange):
     """OpenAlgo exchange -> the exchange code /fetch-ltp expects.
 
-    The feed and the LTP snapshot address indices by their own codes; the
-    ordinary parent-exchange code would simply omit the instrument from the
-    response, which would surface as an LTP of zero.
+    Unlike the order endpoints, /fetch-ltp addresses every instrument by its
+    SEGMENT code -- NFO, BFO, CDS, NSE_INDEX, BSE_INDEX -- which is exactly the
+    OpenAlgo exchange. The parent code (NSE for an NFO token) is not an error:
+    the gateway just omits the instrument from the response, which surfaced as
+    "No quote data available" for every derivative leg. Verified live: an NFO
+    token returns under "NFO" and is dropped under "NSE"; BFO and CDS likewise.
     """
-    if is_index_exchange(oa_exchange):
-        return oa_exchange
-    return to_rest_exchange(oa_exchange)
+    return oa_exchange
 
 
 def to_oa_exchange(ir_exchange, instrument_segment=None):

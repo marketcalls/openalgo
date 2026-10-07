@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import threading
@@ -6,6 +7,8 @@ import time
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError, max_queue_wait
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -13,6 +16,80 @@ from .baseurl import get_base_url, get_common_headers, get_url
 from .baseurl import get_client_code as baseurl_client_code
 
 logger = get_logger(__name__)
+
+# --- How many requests may wait on the Motilal feed at once, under gthread ---
+# A quote or depth request here subscribes on a WebSocket and then waits
+# seconds for the data, holding its thread the whole time. Under the gthread
+# worker those are request threads from a fixed pool, so at most
+# _FEED_WAITERS_MAX requests wait at once. The next waits at most the data
+# ceiling of utils.broker_backpressure for a place, and is refused with a
+# sentence the trader can act on.
+# Under eventlet and the development server nothing is capped, as before.
+_FEED_WAITERS_MAX = 8
+_feed_waiters = threading.BoundedSemaphore(_FEED_WAITERS_MAX)
+_feed_gate_held = threading.local()
+_FEED_BUSY_MESSAGE = (
+    "Too many live quote and depth requests are already waiting on the Motilal "
+    "feed. Try again in a few seconds."
+)
+
+
+def _feed_gated(on_busy=None):
+    """Decorate a method that waits on the feed; a no-op outside gthread.
+
+    Args:
+        on_busy: Called with the method's arguments instead of raising when no
+            place frees up in time, for a method that has another way to answer.
+    """
+
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapper(*args, **kwargs):
+            # Nested gated calls on one thread already hold a place.
+            if not runtime.gthread_active() or getattr(_feed_gate_held, "held", False):
+                return method(*args, **kwargs)
+            if not _feed_waiters.acquire(timeout=max_queue_wait("data")):
+                logger.warning(f"Motilal feed: {method.__name__} refused, all places taken")
+                if on_busy is not None:
+                    return on_busy(*args, **kwargs)
+                raise BrokerBusyError(_FEED_BUSY_MESSAGE)
+            _feed_gate_held.held = True
+            try:
+                return method(*args, **kwargs)
+            finally:
+                _feed_gate_held.held = False
+                _feed_waiters.release()
+
+        return wrapper
+
+    return decorate
+
+
+# --- Waiting on the feed ---------------------------------------------------
+# A quote or depth request registers its scrips and then waits for their data.
+# It used to wait a fixed time whatever happened; it now looks every
+# _FEED_POLL_SECONDS and stops as soon as everything it will read has arrived
+# (see MotilalWebSocket.has_snapshot). What it reads, and how, is unchanged, so
+# the answer is the same one, only sooner. When the data is not all there the
+# wait lasts exactly as long as before.
+_FEED_POLL_SECONDS = 0.05
+_DEPTH_WAIT_SECONDS = 3.0
+
+
+def _wait_for_feed(ready, seconds: float) -> bool:
+    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
+
+    True as soon as it is, False once the time is up. time.sleep yields to the
+    other requests under eventlet and holds only this request's thread elsewhere.
+    """
+    deadline = time.monotonic() + seconds
+    while not ready():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_FEED_POLL_SECONDS, remaining))
+    return True
+
 
 # Live market-data WebSocket per broker session, shared across BrokerData
 # instances. It has to live at module scope because quotes_service/depth_service
@@ -673,10 +750,16 @@ class BrokerData:
             else:
                 return self._process_multiquotes_batch(symbols)
 
+        except BrokerBusyError:
+            # Refused by the feed gate before anything was sent (gthread only).
+            # Passed through so the service answers 429 with its sentence; a
+            # 500 here would let an option chain show zero prices as success.
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
 
+    @_feed_gated()
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
         Process a batch of symbols using WebSocket subscription
@@ -834,11 +917,29 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Step 2: Wait for data to arrive
+        # Step 2: Wait for data to arrive, up to the same 2-5 seconds as before,
+        # ending as soon as every scrip's quote is complete. A batch with an
+        # index waits the whole time, as it always did: index data is kept after
+        # an index is unregistered, so what is already here may be from an
+        # earlier request rather than this one.
         pending = len(registered_scrips) + len(index_map)
         wait_time = min(max(pending * 0.1, 2), 5)  # Between 2-5 seconds
-        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
-        time.sleep(wait_time)
+        logger.debug(f"Waiting up to {wait_time:.1f}s for quote data...")
+
+        def batch_arrived():
+            if index_map:
+                return False
+            return all(
+                websocket.has_snapshot(
+                    scrip["motilal_exchange"],
+                    scrip["token"],
+                    need_oi=scrip["exchange_type"] == "DERIVATIVES",
+                    whole_book=False,
+                )
+                for scrip in registered_scrips
+            )
+
+        _wait_for_feed(batch_arrived, wait_time)
 
         # Step 3: Collect results from WebSocket
         for key, info in symbol_map.items():
@@ -942,6 +1043,7 @@ class BrokerData:
         )
         return skipped_symbols + results
 
+    @_feed_gated()
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
         Get market depth for given symbol from Motilal Oswal using WebSocket.
@@ -1044,8 +1146,20 @@ class BrokerData:
             logger.debug(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
             logger.warning("Motilal may only provide depth level 1 (best bid/ask) via WebSocket")
 
-            # Wait for depth data to arrive (increased time for potential multiple levels)
-            time.sleep(3.0)
+            # Wait for depth data to arrive, for up to the same three seconds,
+            # ending as soon as the book, the LTP and day OHLC packets and (for
+            # a derivative) the open interest packet are all here. When any of
+            # them does not come, the read below happens at three seconds as
+            # before.
+            _wait_for_feed(
+                lambda: websocket.has_snapshot(
+                    motilal_exchange,
+                    token,
+                    need_oi=exchange_type == "DERIVATIVES",
+                    whole_book=True,
+                ),
+                _DEPTH_WAIT_SECONDS,
+            )
 
             # Retrieve depth (may contain 1-5 levels depending on broker feed)
             depth = websocket.get_market_depth(motilal_exchange, token)

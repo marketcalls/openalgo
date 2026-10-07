@@ -25,7 +25,6 @@
 #                        explicit message rather than fabricating candles from
 #                        live ticks.
 
-import sys
 import threading
 import time
 
@@ -46,12 +45,13 @@ logger = get_logger(__name__)
 # uses eventlet-original threads), so the dict it writes must be guarded with a
 # REAL lock -- a green (monkey-patched) lock shared across the real/green
 # boundary can deadlock under eventlet. Mirror the streaming client.
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
 
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+_real_threading = _runtime.original("threading")
 
 
 class HDFCSecuritiesAPIError(Exception):
@@ -140,9 +140,22 @@ class BrokerData:
             )
             return {}
 
+        # BFO and CDS rows come back with "exchange": "" -- recover the code
+        # from the request when the token was asked for under exactly one.
+        requested = {}
+        for inst in instruments:
+            requested.setdefault(str(inst["token"]), set()).add(str(inst["exchange"]).upper())
+
         result = {}
         for row in payload.get("data") or []:
-            key = (str(row.get("exchange", "")).upper(), str(row.get("token", "")))
+            token = str(row.get("token", ""))
+            exchange = str(row.get("exchange") or "").upper()
+            if not exchange:
+                codes = requested.get(token, set())
+                if len(codes) != 1:
+                    continue
+                exchange = next(iter(codes))
+            key = (exchange, token)
             result[key] = {
                 "ltp": float(row.get("ltp") or 0.0),
                 "prev_close": float(row.get("prev_close") or 0.0),
@@ -150,8 +163,8 @@ class BrokerData:
         return result
 
     def _ltp_for_row(self, row):
-        # fetch-ltp addresses indices by NSE_INDEX / BSE_INDEX, not by their
-        # parent cash exchange - see to_ltp_exchange.
+        # fetch-ltp addresses instruments by segment code (NFO, NSE_INDEX, ...),
+        # not by their parent exchange - see to_ltp_exchange.
         exchange_code = to_ltp_exchange(row.exchange)
         quotes = self._fetch_ltp([{"exchange": exchange_code, "token": str(row.token)}])
         return quotes.get((exchange_code, str(row.token)), {"ltp": 0.0, "prev_close": 0.0})

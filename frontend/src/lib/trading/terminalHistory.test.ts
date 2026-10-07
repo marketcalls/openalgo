@@ -7,8 +7,14 @@ import {
   ReplayGroup,
   type SeriesApi,
 } from 'openalgo-charts'
-import { parseExpression, type SymbolExpression } from 'openalgo-charts/transform'
+import {
+  parseExpression,
+  RenkoTransform,
+  runTransform,
+  type SymbolExpression,
+} from 'openalgo-charts/transform'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CHART_TYPES } from './chartTypes'
 import { type SymbolView, TradingTerminal } from './terminal'
 import { WorkspaceReplayCoordinator } from './workspaceReplay'
 
@@ -21,7 +27,6 @@ type TerminalState = {
   volumeMA: SeriesApi | null
   ctype: string
   rawBars: Bar[]
-  shownBars: Bar[]
   builder: CandleBuilder
   liveBucket: number
   sym: SymbolView
@@ -530,7 +535,7 @@ describe('terminal comparison workspace integration', () => {
     await terminal.addComparison('THIRD', 'NSE')
     terminal.setComparisonMode('percentage')
     expect(terminal.comparisonState()).toMatchObject({
-      mode: 'percentage',
+      mode: 'percent',
       items: [
         { symbol: 'OTHER', exchange: 'NSE', status: 'ready' },
         { symbol: 'THIRD', exchange: 'NSE', status: 'ready' },
@@ -545,6 +550,14 @@ describe('terminal comparison workspace integration', () => {
     expect(after.comparisons.map((item) => item.symbol)).toEqual(['THIRD'])
     expect(before.comparisons).toHaveLength(2)
     expect(terminal.exportDataCsv().split('\r\n')[0]).toContain('comparison:1:THIRD:close')
+    // The download dialog's choices narrow the same file.
+    expect(terminal.dataExportChoices()).toEqual({ studies: [], comparisons: 1 })
+    expect(terminal.exportDataCsv({ comparisons: false }).split('\r\n')[0]).not.toContain(
+      'comparison:'
+    )
+    expect(terminal.exportDataCsv({ range: 'all', studies: [], comparisons: true })).toBe(
+      terminal.exportDataCsv()
+    )
     expect(state.price.getData().map((row) => row.close)).toEqual([100, 101, 102, 103])
   })
 })
@@ -588,7 +601,10 @@ describe('selected candle readout', () => {
     host.warnIfStarved(state.chart.addIndicator('open-interest', {}))
     expect(toast).not.toHaveBeenCalled()
     host.warnIfStarved(state.chart.addIndicator('sma', { length: 100 }))
-    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/needs more history/), '')
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/has nothing to plot on the 4 bars loaded/),
+      ''
+    )
   })
 
   it('repaints the saved OI readout after asynchronous settings restoration', async () => {
@@ -792,9 +808,14 @@ describe('built-in volume and average', () => {
     const { terminal, state } = mount()
     state.ctype = ctype
     state.rawBars = state.rawBars.map((b, i) => ({ ...b, volume: [10, 20, 30, 60][i] }))
-    state.setPriceData()
+    state.buildChart()
+    // The chart applies the transform; the series is still fed the raw bars.
+    expect(state.chart.seriesTransform(state.price)?.type).toBe(
+      CHART_TYPES[ctype].transform?.(1).type
+    )
+    expect(state.price.getData().map((b) => b.time)).toEqual(state.rawBars.map((b) => b.time))
     await terminal.applyChartSettings({ 'volume.showMA': true, 'volume.maPeriod': 1 })
-    const prices = state.price.getData()
+    const prices = state.chart.primaryBars()
     const volumes = state.volume.getData()
     expect(volumes.length).toBeGreaterThan(1)
     expect(volumes.reduce((total, b) => total + b.close, 0)).toBe(120)
@@ -807,8 +828,186 @@ describe('built-in volume and average', () => {
       )
     )
     await state.beginReplayAt(1)
-    expect(state.volumeMA!.getData().map((b) => b.close)).toEqual(
-      volumes.slice(0, 2).map((b) => b.close)
+    // Replay walks the raw bars, so the elements and their volume are formed
+    // from the revealed prefix alone: no volume from a bar not yet replayed.
+    const revealed = state.price.getData()
+    expect(revealed.length).toBeLessThan(state.rawBars.length)
+    const replayed = state.volume.getData()
+    expect(replayed.map((b) => b.time)).toEqual(state.chart.primaryBars().map((b) => b.time))
+    expect(replayed.reduce((total, b) => total + b.close, 0)).toBe(
+      revealed.reduce((total, b) => total + (b.volume ?? 0), 0)
+    )
+    expect(state.volumeMA!.getData().map((b) => b.close)).toEqual(replayed.map((b) => b.close))
+  })
+
+  it('forms Renko bricks from each tick in the chart, without reloading the series', () => {
+    const { state } = mount()
+    state.ctype = 'renko'
+    state.buildChart()
+    const box = state.chart.seriesTransform(state.price)?.options?.boxSize
+    expect(box).toBe(0.15)
+    const reload = vi.spyOn(state.price, 'setData')
+    const before = state.chart.primaryBars().length
+    state.onTick({ ltp: 104.5, timeSec: 245 })
+    expect(reload).not.toHaveBeenCalled()
+    expect(state.price.getData().at(-1)?.close).toBe(104.5)
+    const batch = runTransform(new RenkoTransform({ boxSize: Number(box) }), state.rawBars)
+    expect(state.chart.primaryBars().map((b) => [b.time, b.open, b.close])).toEqual(
+      batch.map((b) => [b.time, b.open, b.close])
+    )
+    expect(state.chart.primaryBars().length).toBeGreaterThan(before)
+    // Every raw bar's volume lands on exactly one brick.
+    expect(state.volume.getData().reduce((total, b) => total + b.close, 0)).toBe(
+      state.rawBars.reduce((total, b) => total + (b.volume ?? 0), 0)
+    )
+    // A tick that takes the price back takes the bricks back with it.
+    state.onTick({ ltp: 103, timeSec: 250 })
+    const back = runTransform(new RenkoTransform({ boxSize: Number(box) }), state.rawBars)
+    expect(state.chart.primaryBars()).toHaveLength(back.length)
+  })
+
+  it('reads the volume under a Kagi element, not the thickness the element carries', () => {
+    const { state, legendEl } = mount()
+    state.ctype = 'kagi'
+    state.rawBars = state.rawBars.map((b, i) => ({ ...b, volume: [10, 20, 30, 60][i] }))
+    state.buildChart()
+    const last = state.chart.primaryBars().at(-1)
+    expect(last?.volume === 0 || last?.volume === 1).toBe(true)
+    const under = state.volume.getData().at(-1)?.close
+    expect(under).toBeGreaterThan(1)
+    expect(legendEl.textContent).toContain(`V ${under}`)
+  })
+
+  it('replays a transformed chart from the raw bar that completed the picked element', async () => {
+    const { terminal, state } = mount()
+    state.ctype = 'renko'
+    state.buildChart()
+    const shown = state.chart.primaryBars()
+    // An element formed by the third raw bar (time 180).
+    const pick = shown.findIndex((b) => b.time >= 180 && b.time < 240)
+    expect(pick).toBeGreaterThan(0)
+    terminal.startReplay()
+    terminal.moveReplayPick(pick)
+    terminal.commitReplayPick()
+    await vi.waitFor(() => expect(terminal.replayActive()).toBe(true))
+    expect(state.price.getData().map((b) => b.time)).toEqual([60, 120, 180])
+    expect(terminal.replayState()?.index).toBe(2)
+    const box = Number(state.chart.seriesTransform(state.price)?.options?.boxSize)
+    expect(state.chart.primaryBars()).toHaveLength(
+      runTransform(new RenkoTransform({ boxSize: box }), state.rawBars.slice(0, 3)).length
+    )
+    terminal.stopReplay()
+    expect(state.price.getData()).toHaveLength(state.rawBars.length)
+  })
+
+  it('says why a study with a timeframe draws nothing on Renko, and computes it on the underlying bars', async () => {
+    await import('openalgo-charts/indicators')
+    const { terminal, state } = mount()
+    state.ctype = 'renko'
+    state.buildChart()
+    const ema = state.chart.addIndicator('ema', { length: 2 })
+    const toast = vi.spyOn(terminal as unknown as { toast(m: string, k: string): void }, 'toast')
+    terminal.updateIndicatorSettings(ema.id, { timeframe: '5m' })
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/underlying bars/), 'err')
+    expect(ema.dataStatus()?.state).toBe('error')
+    toast.mockClear()
+    terminal.updateIndicatorSettings(ema.id, { timeframe: '5m' }, 'underlying')
+    expect(toast).not.toHaveBeenCalled()
+    expect(ema.barSource()).toBe('underlying')
+    expect(ema.dataStatus()?.state).not.toBe('error')
+    // Kept with the study, so the rebuild a chart type switch makes brings it back.
+    const saved = (state as unknown as { activeIndicators: { barSource?: string }[] })
+      .activeIndicators
+    expect(saved.map((record) => record.barSource)).toEqual(['underlying'])
+    state.buildChart()
+    await vi.waitFor(() => expect(state.chart.indicators()).toHaveLength(1))
+    expect(state.chart.indicators()[0].barSource()).toBe('underlying')
+    expect(state.chart.indicators()[0].settings().timeframe).toBe('5m')
+  })
+
+  it('offers a built-in study the intervals the chart folds to, and Compute on only on a transformed chart', async () => {
+    await import('openalgo-charts/indicators')
+    const { terminal, state } = mount()
+    const settings = vi.fn()
+    const host = terminal as unknown as {
+      cb: Record<string, unknown>
+      availableIntervals: string[]
+    }
+    host.cb.onIndicatorSettings = settings
+    host.availableIntervals = ['1m', '5m', '1h', 'D', 'W', 'M']
+    const request = async () => {
+      settings.mockClear()
+      const ema = state.chart.indicators().find((one) => one.indicatorId === 'ema')
+      terminal.openIndicatorSettings(ema?.id ?? '')
+      await vi.waitFor(() => expect(settings).toHaveBeenCalled())
+      return settings.mock.calls[0][0] as {
+        barSource?: string
+        inputs: { key: string; options?: { value: unknown }[] }[]
+      }
+    }
+    state.chart.addIndicator('ema', { length: 2 })
+    const plain = await request()
+    // The broker's monthly code is not one the chart can fold to.
+    expect(plain.inputs.find((f) => f.key === 'timeframe')?.options?.map((o) => o.value)).toEqual([
+      '',
+      '1m',
+      '5m',
+      '1h',
+      'D',
+      'W',
+    ])
+    expect(plain.barSource).toBeUndefined()
+    state.ctype = 'renko'
+    state.buildChart()
+    state.chart.addIndicator('ema', { length: 2 })
+    expect((await request()).barSource).toBe('chart')
+  })
+
+  it('offers the transform options in chart settings and keeps a choice per instrument', async () => {
+    const { terminal, state } = mount()
+    const choices = () => (state as unknown as { transformChoices: unknown }).transformChoices
+    const box = () => state.chart.seriesTransform(state.price)?.options?.boxSize
+    state.ctype = 'renko'
+    state.buildChart()
+    const request = await terminal.chartSettings()
+    const keys = request?.tabs.flatMap((tab) => tab.inputs.map((input) => input.key)) ?? []
+    expect(keys).toContain('transform.boxSize')
+    // Reset returns to the box this terminal sized from the price.
+    expect(request?.defaults['transform.boxSize']).toBe(0.15)
+    await terminal.applyChartSettings({ 'transform.boxSize': 0.5 })
+    expect(box()).toBe(0.5)
+    expect(state.volume.getData()).toHaveLength(state.chart.primaryBars().length)
+    // Kept for the instrument, never with the pane's settings, which follow
+    // the pane from symbol to symbol.
+    expect(Object.keys(state.chartSettingsSaved).some((key) => key.startsWith('transform.'))).toBe(
+      false
+    )
+    expect(choices()).toEqual({ 'NFO:NIFTY29SEP26FUT': { renko: { boxSize: 0.5 } } })
+    state.buildChart()
+    expect(box()).toBe(0.5)
+    const nifty = state.sym
+    state.sym = { ...nifty, symbol: 'OTHER' }
+    state.buildChart()
+    expect(box()).toBe(0.15)
+    state.sym = nifty
+    state.buildChart()
+    await terminal.applyChartSettings({ 'transform.boxSize': 0.15 })
+    expect(choices()).toEqual({})
+  })
+
+  it.each([
+    ['point-figure', 'point-figure', { boxSize: 0.15 }],
+    ['kagi', 'kagi', { reversal: 0.3 }],
+  ])('draws %s with its own renderer from the raw bars', (ctype, renderer, options) => {
+    const { state } = mount()
+    state.ctype = ctype
+    state.buildChart()
+    expect(state.chart.seriesType(state.price)).toBe(renderer)
+    expect(state.chart.seriesTransform(state.price)).toEqual({ type: ctype, options })
+    expect(state.price.getData().map((b) => b.time)).toEqual(state.rawBars.map((b) => b.time))
+    expect(state.chart.primaryBars().length).toBeGreaterThan(0)
+    expect(state.volume.getData().map((b) => b.time)).toEqual(
+      state.chart.primaryBars().map((b) => b.time)
     )
   })
 

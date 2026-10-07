@@ -10,6 +10,12 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 from ..mapping.order_data import (
     map_trade_data,
@@ -364,12 +370,15 @@ def get_trade_book(auth):
         return []
 
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Get list of positions using Tradejini API.
 
     Args:
         auth (str): Authentication token
+        strict (bool): Fail the whole read when a row cannot be transformed,
+            instead of leaving that row out. The smart order passes True,
+            because a row left out reads as a flat position.
 
     Returns:
         dict: Positions data in OpenAlgo format
@@ -488,6 +497,11 @@ def get_positions(auth):
 
                 except Exception as e:
                     logger.error(f"Error transforming position: {str(e)}", exc_info=True)
+                    if strict:
+                        return {
+                            "status": "error",
+                            "message": f"A position row could not be read: {e}",
+                        }
                     continue
 
             # Return in OpenAlgo format - same pattern as orderbook and tradebook
@@ -660,46 +674,51 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}  # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}  # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0  # seconds
+# A fetch still in flight when an order invalidates the cache is returned to its
+# own caller but never cached, so the next order cannot read the book from
+# before the previous fill (utils/smart_order_guard.py).
+_POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """get_positions answers {"status": "success", "data": [...]} for a book it
+    read, "no-data" included, and {"status": "error"} for every failure."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book(
+            "tradejini", lambda: get_positions(auth, strict=True), _position_book_ok
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
-    """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data.
+
+    Also stops a fetch that started before this order from caching the book
+    it read.
+    """
+    _POSITION_BOOK.invalidate(auth)
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
@@ -746,7 +765,21 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
                 pos_symbol = str(position.get("symbol", "")).upper().strip()
                 pos_exch = str(position.get("exchange", "")).upper().strip()
-                pos_qty = int(float(position.get("quantity", 0)))
+                try:
+                    pos_qty = int(float(position.get("quantity", 0)))
+                except (TypeError, ValueError) as exc:
+                    if pos_exch == exchange and pos_symbol == tradingsymbol:
+                        # The row for this very symbol cannot be read, so its
+                        # position is unknown, not flat.
+                        raise PositionReadError(
+                            "tradejini",
+                            f"quantity {position.get('quantity')!r} of {pos_symbol}: {exc}",
+                        ) from exc
+                    logger.warning(
+                        f"get_open_position - Skipping {pos_symbol} on {pos_exch}: "
+                        f"quantity {position.get('quantity')!r} is not a number"
+                    )
+                    continue
 
                 logger.debug(
                     f"get_open_position - Checking OpenAlgo position: {pos_symbol} on {pos_exch}, qty: {pos_qty}"
@@ -857,9 +890,14 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         )
         return "0"
 
+    except PositionReadError:
+        raise
     except Exception as e:
+        # The book was read, but something in it could not be: the position
+        # is unknown, and reading it as flat would size the order against
+        # nothing.
         logger.exception(f"get_open_position - Exception: {str(e)}")
-        return "0"
+        raise PositionReadError("tradejini", f"{type(e).__name__}: {e}") from e
 
 
 def place_order_api(data, auth):
@@ -1005,6 +1043,7 @@ def place_order_api(data, auth):
         return None, {"status": "error", "message": error_msg}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Place a smart order using Tradejini API.
@@ -1035,9 +1074,9 @@ def place_smartorder_api(data, auth):
         product = data.get("product", "MIS")
 
         # Per-symbol lock: serialize smart orders per symbol
-        symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-        with symbol_lock:
+        with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+            if not symbol_lock:
+                return SymbolLocks.busy(symbol)
             # Target position size - this is the key parameter for SmartOrder
             try:
                 position_size = int(float(data.get("position_size", "0")))
@@ -1059,6 +1098,8 @@ def place_smartorder_api(data, auth):
                     f"(from get_open_position)"
                 )
 
+            except PositionReadError:
+                raise
             except Exception as e:
                 logger.exception(f"place_smartorder_api - Error getting position: {str(e)}")
                 return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
@@ -1205,6 +1246,8 @@ def place_smartorder_api(data, auth):
                 logger.exception(error_msg)
                 return None, {"status": "error", "message": error_msg}, None
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Smart order placement failed: {str(e)}"
         logger.exception(f"place_smartorder_api - Exception occurred: {error_msg}")

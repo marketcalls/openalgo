@@ -1,6 +1,7 @@
 import importlib
 import os
-from datetime import UTC, datetime, timedelta, timezone, date
+from datetime import UTC, date, datetime, timedelta, timezone
+from types import ModuleType
 
 import pandas as pd
 import pytz
@@ -10,13 +11,10 @@ from marshmallow import ValidationError
 
 from database.auth_db import get_auth_token_broker
 from limiter import limiter
+from services.broker_busy import BROKER_BUSY_STATUS, BrokerBusyError
 from utils.logging import get_logger
 
 from .data_schemas import TickerSchema
-
-from types import ModuleType
-
-
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("ticker", description="Stock Ticker Data API")
@@ -257,6 +255,18 @@ class Ticker(Resource):
                         jsonify({"status": "success", "data": df.to_dict(orient="records")}), 200
                     )
 
+            except BrokerBusyError as e:
+                # Only the gthread worker refuses a history request for waiting
+                # too long on the broker's rate limit; the text says what to do.
+                logger.warning(f"Ticker history request refused as busy: {e}")
+                if response_format == "txt":
+                    response = TextResponse(f"{e}\n")
+                    response.content_type = "text/plain"
+                    response.json = {"request_id": f"ticker_{symbol}_{history_data['interval']}"}
+                    return response, BROKER_BUSY_STATUS
+                return make_response(
+                    jsonify({"status": "error", "message": str(e)}), BROKER_BUSY_STATUS
+                )
             except Exception as e:
                 logger.exception(f"Error in broker_module.get_history: {e}")
                 if response_format == "txt":

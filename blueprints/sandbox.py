@@ -3,7 +3,17 @@ import io
 import os
 from datetime import datetime
 
-from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import (
+    Blueprint,
+    Response,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
 from database.sandbox_db import (
     SandboxFunds,
@@ -18,6 +28,7 @@ from database.sandbox_db import (
 )
 from limiter import limiter
 from utils.logging import get_logger
+from utils.runtime import gthread_active
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
@@ -237,22 +248,18 @@ def update_config():
                 try:
                     from decimal import Decimal
 
-                    from database.sandbox_db import SandboxFunds, db_session
+                    from sandbox.fund_manager import rebase_starting_capital
 
                     new_capital = Decimal(str(config_value))
 
-                    # Update all user funds with new starting capital
-                    # This resets their balance to the new capital value
-                    funds = SandboxFunds.query.all()
-                    for fund in funds:
-                        # Calculate what the new available balance should be
-                        # New available = new_capital - used_margin + total_pnl
-                        fund.total_capital = new_capital
-                        fund.available_balance = new_capital - fund.used_margin + fund.total_pnl
-
-                    db_session.commit()
+                    # Update all user funds with new starting capital: each
+                    # balance becomes new_capital - used_margin + total_pnl.
+                    # Written as a compare-and-set per account, so a margin
+                    # block committed while this runs is kept, not overwritten
+                    # by a balance computed from before it.
+                    updated = rebase_starting_capital(new_capital)
                     logger.info(
-                        f"Updated {len(funds)} user funds with new starting capital: ₹{new_capital}"
+                        f"Updated {updated} user funds with new starting capital: ₹{new_capital}"
                     )
                 except Exception as e:
                     logger.exception(f"Error updating user funds with new capital: {e}")
@@ -310,6 +317,21 @@ def update_config():
 @limiter.limit(API_RATE_LIMIT)
 def reset_config():
     """Reset sandbox configuration to defaults and clear all sandbox data"""
+    from services.analyzer_service import MODE_BUSY_MESSAGE, mode_transition
+    from utils.keyed_locks import LockBusy
+
+    try:
+        # Held for the whole reset, so a mode change cannot land between the
+        # engines being paused and started again and leave them disagreeing
+        # with the mode. The wait is unbounded except under gthread.
+        with mode_transition():
+            return _reset_config_locked()
+    except LockBusy:
+        return jsonify({"status": "error", "message": MODE_BUSY_MESSAGE}), 409
+
+
+def _reset_config_locked():
+    """The body of :func:`reset_config`, run under the analyzer mode lock."""
     try:
         user_id = session.get("user")
 
@@ -335,75 +357,18 @@ def reset_config():
         for key, value in default_configs.items():
             set_config(key, value)
 
-        # Clear all sandbox data for the current user
+        # Under the gthread worker the engine threads fill orders truly in
+        # parallel with this request, so one fill already under way could land
+        # its trade, position and margin after the wipe below, against an
+        # account the reset reports as cleared. The engines are paused for the
+        # wipe there. Under eventlet and on the development server they are
+        # left running, exactly as before.
+        paused = _pause_sandbox_engines() if gthread_active() else None
         try:
-            # Delete all orders
-            deleted_orders = SandboxOrders.query.filter_by(user_id=user_id).delete()
-            logger.info(f"Deleted {deleted_orders} sandbox orders for user {user_id}")
-
-            # Delete all trades
-            deleted_trades = SandboxTrades.query.filter_by(user_id=user_id).delete()
-            logger.info(f"Deleted {deleted_trades} sandbox trades for user {user_id}")
-
-            # Delete all positions
-            deleted_positions = SandboxPositions.query.filter_by(user_id=user_id).delete()
-            logger.info(f"Deleted {deleted_positions} sandbox positions for user {user_id}")
-
-            # Delete all holdings
-            deleted_holdings = SandboxHoldings.query.filter_by(user_id=user_id).delete()
-            logger.info(f"Deleted {deleted_holdings} sandbox holdings for user {user_id}")
-
-            # Delete all daily P&L history
-            from database.sandbox_db import SandboxDailyPnL
-
-            deleted_daily_pnl = SandboxDailyPnL.query.filter_by(user_id=user_id).delete()
-            logger.info(f"Deleted {deleted_daily_pnl} daily P&L records for user {user_id}")
-
-            # Reset funds to starting capital
-            from datetime import datetime
-            from decimal import Decimal
-
-            import pytz
-
-            fund = SandboxFunds.query.filter_by(user_id=user_id).first()
-            starting_capital = Decimal(default_configs["starting_capital"])
-
-            if fund:
-                # Reset existing fund
-                fund.total_capital = starting_capital
-                fund.available_balance = starting_capital
-                fund.used_margin = Decimal("0.00")
-                fund.unrealized_pnl = Decimal("0.00")
-                fund.realized_pnl = Decimal("0.00")
-                fund.today_realized_pnl = Decimal("0.00")
-                fund.total_pnl = Decimal("0.00")
-                fund.last_reset_date = datetime.now(pytz.timezone("Asia/Kolkata"))
-                fund.reset_count = (fund.reset_count or 0) + 1
-                logger.info(f"Reset sandbox funds for user {user_id}")
-            else:
-                # Create new fund record
-                fund = SandboxFunds(
-                    user_id=user_id,
-                    total_capital=starting_capital,
-                    available_balance=starting_capital,
-                    used_margin=Decimal("0.00"),
-                    unrealized_pnl=Decimal("0.00"),
-                    realized_pnl=Decimal("0.00"),
-                    today_realized_pnl=Decimal("0.00"),
-                    total_pnl=Decimal("0.00"),
-                    last_reset_date=datetime.now(pytz.timezone("Asia/Kolkata")),
-                    reset_count=1,
-                )
-                db_session.add(fund)
-                logger.info(f"Created new sandbox funds for user {user_id}")
-
-            db_session.commit()
-            logger.info(f"Successfully reset all sandbox data for user {user_id}")
-
-        except Exception as e:
-            db_session.rollback()
-            logger.exception(f"Error clearing sandbox data: {str(e)}")
-            raise
+            _wipe_sandbox_account(user_id, default_configs["starting_capital"])
+        finally:
+            if paused:
+                _resume_sandbox_engines(paused)
 
         logger.info("Sandbox configuration and data reset to defaults")
         return jsonify(
@@ -418,6 +383,124 @@ def reset_config():
         return jsonify(
             {"status": "error", "message": f"Error resetting configuration: {str(e)}"}
         ), 500
+
+
+def _pause_sandbox_engines():
+    """Stop the sandbox execution engine and square-off scheduler if they run.
+
+    Returns:
+        Which of the two were running, for :func:`_resume_sandbox_engines`.
+    """
+    from sandbox.execution_thread import is_execution_engine_running, stop_execution_engine
+    from sandbox.squareoff_thread import is_squareoff_scheduler_running, stop_squareoff_scheduler
+
+    paused = {
+        "engine": is_execution_engine_running(),
+        "scheduler": is_squareoff_scheduler_running(),
+    }
+    if paused["engine"]:
+        stop_execution_engine()
+    if paused["scheduler"]:
+        stop_squareoff_scheduler()
+    return paused
+
+
+def _resume_sandbox_engines(paused):
+    """Start again what :func:`_pause_sandbox_engines` stopped, if analyze mode is still on."""
+    try:
+        from database.settings_db import get_analyze_mode
+
+        if not get_analyze_mode():
+            logger.info("Analyze mode was switched off during the reset; engines stay stopped")
+            return
+        if paused.get("engine"):
+            from sandbox.execution_thread import start_execution_engine
+
+            start_execution_engine()
+        if paused.get("scheduler"):
+            from sandbox.squareoff_thread import start_squareoff_scheduler
+
+            start_squareoff_scheduler()
+    except Exception:
+        logger.exception("Could not restart the sandbox engines after the reset")
+
+
+def _wipe_sandbox_account(user_id, starting_capital_value):
+    """Delete a user's sandbox orders, trades, positions, holdings and P&L; reset funds.
+
+    One transaction: either all of it is cleared or none of it is. The first
+    DELETE takes the database's write lock and it is held to the commit, so no
+    other writer can land between the funds read below and the reset of it.
+    """
+    # Clear all sandbox data for the current user
+    try:
+        # Delete all orders
+        deleted_orders = SandboxOrders.query.filter_by(user_id=user_id).delete()
+        logger.info(f"Deleted {deleted_orders} sandbox orders for user {user_id}")
+
+        # Delete all trades
+        deleted_trades = SandboxTrades.query.filter_by(user_id=user_id).delete()
+        logger.info(f"Deleted {deleted_trades} sandbox trades for user {user_id}")
+
+        # Delete all positions
+        deleted_positions = SandboxPositions.query.filter_by(user_id=user_id).delete()
+        logger.info(f"Deleted {deleted_positions} sandbox positions for user {user_id}")
+
+        # Delete all holdings
+        deleted_holdings = SandboxHoldings.query.filter_by(user_id=user_id).delete()
+        logger.info(f"Deleted {deleted_holdings} sandbox holdings for user {user_id}")
+
+        # Delete all daily P&L history
+        from database.sandbox_db import SandboxDailyPnL
+
+        deleted_daily_pnl = SandboxDailyPnL.query.filter_by(user_id=user_id).delete()
+        logger.info(f"Deleted {deleted_daily_pnl} daily P&L records for user {user_id}")
+
+        # Reset funds to starting capital
+        from datetime import datetime
+        from decimal import Decimal
+
+        import pytz
+
+        fund = SandboxFunds.query.filter_by(user_id=user_id).first()
+        starting_capital = Decimal(starting_capital_value)
+
+        if fund:
+            # Reset existing fund
+            fund.total_capital = starting_capital
+            fund.available_balance = starting_capital
+            fund.used_margin = Decimal("0.00")
+            fund.unrealized_pnl = Decimal("0.00")
+            fund.realized_pnl = Decimal("0.00")
+            fund.today_realized_pnl = Decimal("0.00")
+            fund.total_pnl = Decimal("0.00")
+            fund.last_reset_date = datetime.now(pytz.timezone("Asia/Kolkata"))
+            fund.reset_count = (fund.reset_count or 0) + 1
+            logger.info(f"Reset sandbox funds for user {user_id}")
+        else:
+            # Create new fund record
+            fund = SandboxFunds(
+                user_id=user_id,
+                total_capital=starting_capital,
+                available_balance=starting_capital,
+                used_margin=Decimal("0.00"),
+                unrealized_pnl=Decimal("0.00"),
+                realized_pnl=Decimal("0.00"),
+                today_realized_pnl=Decimal("0.00"),
+                total_pnl=Decimal("0.00"),
+                last_reset_date=datetime.now(pytz.timezone("Asia/Kolkata")),
+                reset_count=1,
+            )
+            db_session.add(fund)
+            logger.info(f"Created new sandbox funds for user {user_id}")
+
+        db_session.commit()
+        logger.info(f"Successfully reset all sandbox data for user {user_id}")
+
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error clearing sandbox data: {str(e)}")
+        raise
 
 
 @sandbox_bp.route("/reload-squareoff", methods=["POST"])
@@ -643,10 +726,7 @@ def my_pnl():
         from datetime import date, datetime
         from decimal import Decimal
 
-        import pytz
-
         user_id = session.get("user")
-        ist = pytz.timezone("Asia/Kolkata")
 
         # Get all positions (both open and closed) for P&L history
         positions = (
@@ -910,7 +990,7 @@ def sanitize_csv_value(value):
 
     # Check if the value starts with potentially dangerous characters
     # Note: '-' is excluded because negative numbers are common in financial data
-    if str_value and str_value[0] in ('=', '+', '@', '\t', '\r'):
+    if str_value and str_value[0] in ("=", "+", "@", "\t", "\r"):
         return "'" + str_value
 
     return str_value
@@ -1091,7 +1171,9 @@ def export_daily_pnl():
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         response = Response(csv_data, mimetype="text/csv")
-        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_daily_pnl_{timestamp}.csv'
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=sandbox_daily_pnl_{timestamp}.csv"
+        )
         return response
 
     except Exception as e:
@@ -1121,7 +1203,9 @@ def export_positions():
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         response = Response(csv_data, mimetype="text/csv")
-        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_positions_{timestamp}.csv'
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=sandbox_positions_{timestamp}.csv"
+        )
         return response
 
     except Exception as e:
@@ -1151,7 +1235,9 @@ def export_holdings():
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         response = Response(csv_data, mimetype="text/csv")
-        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_holdings_{timestamp}.csv'
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=sandbox_holdings_{timestamp}.csv"
+        )
         return response
 
     except Exception as e:
@@ -1181,7 +1267,9 @@ def export_trades():
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         response = Response(csv_data, mimetype="text/csv")
-        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_trades_{timestamp}.csv'
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=sandbox_trades_{timestamp}.csv"
+        )
         return response
 
     except Exception as e:

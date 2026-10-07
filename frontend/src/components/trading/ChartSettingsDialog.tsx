@@ -13,12 +13,13 @@
  * it as two stacked colour rows costs three times the height for the property a
  * trader changes most.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type {
   ChartSettingsField,
   ChartSettingsPairField,
   ChartSettingsRequest,
 } from '@/lib/trading/terminal'
+import { conditionHolds } from '@/lib/trading/inputConditions'
 import { cn } from '@/lib/utils'
 import { SettingsField } from './IndicatorSettingsDialog'
 import { TickBox } from './TickBox'
@@ -39,10 +40,13 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
 
   useEffect(() => {
     setValues(req ? { ...req.values } : {})
-    setTabId(req?.tabs[0]?.id ?? '')
+    setTabId(req?.initialTab ?? req?.tabs[0]?.id ?? '')
   }, [req])
 
-  useEffect(() => {
+  // Attached before the form is painted. The form mounts on its first opening,
+  // and a passive effect can run after the first paint, so an Escape pressed
+  // the moment the form appeared went unheard.
+  useLayoutEffect(() => {
     if (!req) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -86,6 +90,13 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
   if (!req || !tab) return null
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v as Value }))
+
+  // A control that means something only beside another one (a point and
+  // figure box size in fixed mode) shows only then. The empty state reads this
+  // list too, so a tab whose every control is hidden says so.
+  const shownInputs = tab.inputs.filter(
+    (f) => isPair(f) || !f.visibleWhen || conditionHolds(f.visibleWhen, values)
+  )
 
   /**
    * Send only what changed. The engine writes exactly the keys it is handed, so
@@ -176,7 +187,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
             <p className="mb-4 text-xs leading-relaxed text-muted-foreground">{tab.description}</p>
           )}
           <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
-            {groupsOf(tab.inputs).map(([heading, group]) => (
+            {groupsOf(shownInputs).map(([heading, group]) => (
               <FieldGroup
                 key={`${tab.id}-${heading}`}
                 heading={heading}
@@ -187,7 +198,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
               />
             ))}
           </div>
-          {tab.inputs.length === 0 && (
+          {shownInputs.length === 0 && (
             <p className="py-3 text-[13px] text-muted-foreground">Nothing to configure here.</p>
           )}
         </div>

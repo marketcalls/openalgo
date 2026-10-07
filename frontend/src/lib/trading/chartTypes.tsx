@@ -1,17 +1,14 @@
 /**
  * Chart-type catalogue for the trading terminal: the dropdown
  * groups, each type's icon, its underlying openalgo-charts series, and (for
- * movement-driven types) a transform factory. Kagi and Point & Figure are
- * intentionally omitted for now.
+ * movement-driven types) the transform the chart applies to the raw bars.
  */
 
-import {
-  HeikinAshiTransform,
-  type ISeriesTransform,
-  LineBreakTransform,
-  RangeBarsTransform,
-  RenkoTransform,
-} from 'openalgo-charts/transform'
+import type { Bar, SeriesTransformSpec } from 'openalgo-charts'
+// Registers the in-chart transforms the specs below name, and the point and
+// figure and Kagi renderers. Imported here, beside the catalogue that names
+// them, so every chart reading this catalogue can apply them.
+import 'openalgo-charts/transform'
 import type { ReactNode } from 'react'
 
 export interface ChartTypeDef {
@@ -19,8 +16,14 @@ export interface ChartTypeDef {
   label: string
   iconKey: string
   series: string
-  /** Movement-driven types run this transform over the raw bars first. */
-  transform?: (boxSize: number) => ISeriesTransform
+  /**
+   * Movement-driven types: the transform the chart applies to the raw bars,
+   * for a box (or range, or reversal) sized from the instrument's price. The
+   * chart forms the elements again on every tick, so a brick appears as the
+   * bar that completes it arrives. `value` stays the saved name, which is why
+   * it is not always the transform's own id (`range` is `range-bars`).
+   */
+  transform?: (boxSize: number) => SeriesTransformSpec
   /** Baseline needs a baseValue in its series style. */
   baseline?: boolean
 }
@@ -54,28 +57,46 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
       label: 'Heikin Ashi',
       iconKey: 'candle',
       series: 'candlestick',
-      transform: () => new HeikinAshiTransform(),
+      transform: () => ({ type: 'heikin-ashi' }),
     },
     {
       value: 'renko',
       label: 'Renko',
       iconKey: 'bricks',
       series: 'candlestick',
-      transform: (b) => new RenkoTransform({ boxSize: b }),
+      transform: (b) => ({ type: 'renko', options: { boxSize: b } }),
     },
     {
       value: 'range',
       label: 'Range Bars',
       iconKey: 'bricks',
       series: 'candlestick',
-      transform: (b) => new RangeBarsTransform({ range: b }),
+      transform: (b) => ({ type: 'range-bars', options: { range: b } }),
     },
     {
       value: 'line-break',
       label: 'Line Break',
       iconKey: 'bricks',
       series: 'candlestick',
-      transform: () => new LineBreakTransform({ lines: 3 }),
+      transform: () => ({ type: 'line-break', options: { lines: 3 } }),
+    },
+    {
+      value: 'point-figure',
+      label: 'Point & Figure',
+      iconKey: 'pointFigure',
+      series: 'point-figure',
+      // Three boxes to reverse, from each bar's high and low: the standard
+      // construction, and the transform's own defaults.
+      transform: (b) => ({ type: 'point-figure', options: { boxSize: b } }),
+    },
+    {
+      value: 'kagi',
+      label: 'Kagi',
+      iconKey: 'kagi',
+      series: 'kagi',
+      // A reversal of two boxes, the proportion the transform itself takes
+      // between its box and a Kagi reversal when it sizes both from history.
+      transform: (b) => ({ type: 'kagi', options: { reversal: Number((b * 2).toPrecision(12)) } }),
     },
   ],
   [
@@ -92,6 +113,46 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
 export const CHART_TYPES: Record<string, ChartTypeDef> = Object.fromEntries(
   CHART_TYPE_GROUPS.flat().map((d) => [d.value, d])
 )
+
+/**
+ * The chart type id the packaged widget knows a value by. The widget applies
+ * a transform itself under the transform's own id, so `range` is `range-bars`
+ * there; every other value is the same word.
+ */
+export function widgetChartType(value: string): string {
+  return CHART_TYPES[value]?.transform?.(0).type ?? value
+}
+
+/**
+ * Volume under each element of a transformed chart: the raw bars' volume summed
+ * onto the element they formed, keyed by the element's time. An element's own
+ * `volume` is not traded volume (a Kagi line keeps its thickness there and a
+ * brick carries none), so this is what a volume histogram under one draws.
+ * Raw bars after the last element (a brick still forming) count toward it.
+ */
+export function volumeUnderElements(elements: readonly Bar[], raw: readonly Bar[]): Bar[] {
+  const out: Bar[] = []
+  let ri = 0
+  for (const element of elements) {
+    let v = 0
+    while (ri < raw.length && raw[ri].time <= element.time) {
+      v += raw[ri].volume || 0
+      ri++
+    }
+    out.push({ time: element.time, open: 0, high: v, low: 0, close: v })
+  }
+  let rest = 0
+  while (ri < raw.length) {
+    rest += raw[ri].volume || 0
+    ri++
+  }
+  if (out.length && rest) {
+    const last = out[out.length - 1]
+    last.high += rest
+    last.close += rest
+  }
+  return out
+}
 
 const s = {
   fill: 'none',
@@ -196,6 +257,20 @@ export function chartTypeIcon(iconKey: string): ReactNode {
             opacity=".6"
           />
           <path d="M3 13l4-5 4 2 4-5 6 4" {...s} strokeWidth={1.6} />
+        </svg>
+      )
+    case 'pointFigure':
+      return (
+        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.6}>
+          <path d="M4 5l4 4M8 5l-4 4M4 11l4 4M8 11l-4 4M16 9l4 4M20 9l-4 4M16 15l4 4M20 15l-4 4" />
+          <circle cx="12" cy="7" r="2" />
+          <circle cx="12" cy="13" r="2" />
+        </svg>
+      )
+    case 'kagi':
+      return (
+        <svg viewBox="0 0 24 24" {...s}>
+          <path d="M3 18h4V8h5v7h4V5h5" />
         </svg>
       )
     case 'bricks':

@@ -10,7 +10,6 @@ All existing code will continue to work without any changes.
 # This makes the enhanced cache transparent to existing code
 # For complete backward compatibility, also expose the old cache variable
 # (though it's not used anymore, some code might reference it)
-from cachetools import TTLCache
 
 from database.token_db_enhanced import (
     # Data types
@@ -38,8 +37,9 @@ from database.token_db_enhanced import (
     load_cache_for_broker,
     search_symbols,
 )
+from utils.thread_safe_cache import LockedTTLCache
 
-token_cache = TTLCache(maxsize=1024, ttl=3600)  # Dummy cache for compatibility
+token_cache = LockedTTLCache(maxsize=1024, ttl=3600)  # Dummy cache for compatibility
 
 # Re-export everything so imports work identically
 __all__ = [

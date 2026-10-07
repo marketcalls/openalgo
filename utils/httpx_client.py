@@ -7,13 +7,34 @@ from typing import Optional
 
 import httpx
 
+from utils.lazy import LazyInit
 from utils.logging import get_logger
 
 # Set up logging
 logger = get_logger(__name__)
 
-# Global httpx client for connection pooling
-_httpx_client = None
+#: Seconds a request may wait for a free connection when all 100 are in use,
+#: under the gthread worker only. Waiting happens before a byte is sent, so
+#: giving up cannot duplicate an order; it turns pool saturation into a prompt
+#: error instead of a two-minute hang on one of a fixed number of threads.
+#: Under eventlet and the dev server the pool wait keeps the overall timeout.
+GTHREAD_POOL_TIMEOUT_SECONDS = 10.0
+
+REQUEST_TIMEOUT_SECONDS = 120.0
+
+
+def _build_client() -> httpx.Client:
+    client = _create_http_client()
+    logger.debug(
+        "Created HTTP client with automatic protocol negotiation (HTTP/2 preferred, HTTP/1.1 fallback)"
+    )
+    return client
+
+
+# Global httpx client for connection pooling, built once by exactly one caller.
+# Two cold threads used to be able to build one each, and the loser's pool was
+# discarded without being closed.
+_client = LazyInit(_build_client, name="httpx-client")
 
 
 def get_httpx_client() -> httpx.Client:
@@ -25,14 +46,31 @@ def get_httpx_client() -> httpx.Client:
     Returns:
         httpx.Client: A configured HTTP client with protocol auto-negotiation
     """
-    global _httpx_client
+    return _client.get()
 
-    if _httpx_client is None:
-        _httpx_client = _create_http_client()
-        logger.debug(
-            "Created HTTP client with automatic protocol negotiation (HTTP/2 preferred, HTTP/1.1 fallback)"
-        )
-    return _httpx_client
+
+def get_pool_stats() -> dict | None:
+    """Best-effort view of the shared connection pool, for diagnostics.
+
+    Reads httpx's private transport attributes, each guarded, so a release
+    that renames one costs that figure and nothing else.
+
+    Returns:
+        ``{"connections", "idle", "max_connections"}``, or None before the
+        client exists.
+    """
+    client = _client.peek()
+    if client is None:
+        return None
+    stats: dict = {"connections": None, "idle": None, "max_connections": 100}
+    try:
+        pool = client._transport._pool
+        connections = list(pool.connections)
+        stats["connections"] = len(connections)
+        stats["idle"] = sum(1 for c in connections if c.is_idle())
+    except Exception:
+        pass
+    return stats
 
 
 def request(method: str, url: str, **kwargs) -> httpx.Response:
@@ -183,10 +221,19 @@ def _create_http_client() -> httpx.Client:
         # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues
         http2_enabled = not is_standalone
 
+        from utils.runtime import gthread_active
+
+        # Increased timeout for large historical data requests. The pool wait
+        # is bounded separately under gthread; see GTHREAD_POOL_TIMEOUT_SECONDS.
+        if gthread_active():
+            timeout = httpx.Timeout(REQUEST_TIMEOUT_SECONDS, pool=GTHREAD_POOL_TIMEOUT_SECONDS)
+        else:
+            timeout = REQUEST_TIMEOUT_SECONDS
+
         client = httpx.Client(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
-            timeout=120.0,  # Increased timeout for large historical data requests
+            timeout=timeout,
             limits=httpx.Limits(
                 max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
                 max_connections=100,  # Increased from 50 for 10+ concurrent strategies
@@ -220,9 +267,14 @@ def cleanup_httpx_client() -> None:
     Returns:
         None
     """
-    global _httpx_client
+    closed = []
 
-    if _httpx_client is not None:
-        _httpx_client.close()
-        _httpx_client = None
+    def _close(client: httpx.Client) -> None:
+        client.close()
+        closed.append(True)
+
+    # Under the same lock as creation, so no caller is handed the client while
+    # it is being closed.
+    _client.reset(close=_close)
+    if closed:
         logger.info("Closed HTTP client")

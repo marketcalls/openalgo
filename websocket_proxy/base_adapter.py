@@ -477,21 +477,12 @@ class BaseBrokerWebSocketAdapter(ABC):
             user_id: The user's ID
         """
         try:
-            from database.auth_db import (
-                auth_cache,
-                feed_token_cache,
-            )
+            from database.auth_db import invalidate_user_auth_cache
 
-            cache_key_auth = f"auth-{user_id}"
-            cache_key_feed = f"feed-{user_id}"
-
-            caches_cleared = []
-            if cache_key_auth in auth_cache:
-                del auth_cache[cache_key_auth]
-                caches_cleared.append("auth_cache")
-            if cache_key_feed in feed_token_cache:
-                del feed_token_cache[cache_key_feed]
-                caches_cleared.append("feed_token_cache")
+            # One call per cache, never a membership test then a delete, and
+            # an invalidation, so a read already in flight cannot store the
+            # stale token again.
+            caches_cleared = invalidate_user_auth_cache(user_id)
             # Note: broker_cache is keyed by API key, not user_id, so we skip it here
             # It only caches broker names which don't affect auth token validation
 

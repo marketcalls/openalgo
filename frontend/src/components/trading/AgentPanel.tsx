@@ -35,15 +35,18 @@
  */
 
 import { AlertCircle, Bot, SquarePen } from 'lucide-react'
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
+import type { ReasoningEffort } from '@/api/agent'
 import { AgentSetupGate, useAgentConfigured } from '@/components/agent/AgentSetupGate'
 import { Composer, type ComposerTurn } from '@/components/agent/Composer'
 import { Message } from '@/components/agent/Message'
+import { ModelPicker } from '@/components/agent/ModelPicker'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { prefillComposer } from '@/lib/agent/composer'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { useAgentStream } from '@/lib/agent/useAgentStream'
+import { useModelChoice } from '@/lib/agent/useModelChoice'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
 import type { ChartContext } from '@/lib/trading/chartContract'
 import { cn } from '@/lib/utils'
@@ -105,8 +108,15 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
   const { configured, loading } = useAgentConfigured()
   const threadRef = useRef<HTMLDivElement>(null)
 
+  // The same model as /agent, remembered in this browser. Effort belongs to
+  // the question, so it is per turn and not remembered.
+  const [modelId, setModelId] = useModelChoice()
+  const [effort, setEffort] = useState<ReasoningEffort>('off')
+
   const { messages, running, error, send, stop, reset } = useAgentStream({
     surface: 'chart',
+    modelId,
+    reasoningEffort: effort === 'off' ? null : effort,
     // Never `tradingEnabled`. The chart surface is offered no order tools, and
     // asking for them here would be asking for a capability this panel has no
     // approval flow for. An order request belongs on the chat page.
@@ -217,9 +227,18 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
               onStop={handleStop}
               running={running}
               placeholder="Ask about this chart"
-              // No picker on this surface, so the turn runs on the configured
-              // default and the composer asks about that row.
-              modelId={null}
+              // The row the picker shows, so the attach control and the turn
+              // agree about which model has to read a file or a screenshot.
+              modelId={modelId}
+              controls={
+                <ModelPicker
+                  value={modelId}
+                  onChange={setModelId}
+                  effort={effort}
+                  onEffortChange={setEffort}
+                  disabled={running}
+                />
+              }
               onCaptureChart={onCaptureChart}
               // The surface asks for no order tools, so an answer's Buy and
               // Sell controls are withheld here. They write an order request

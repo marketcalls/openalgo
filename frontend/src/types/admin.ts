@@ -136,12 +136,90 @@ export interface SystemHost {
   is_android?: boolean
 }
 
+/** What `install/openalgo-gunicorn.sh` exported about this start (utils/runtime.launcher_info). */
+export interface RuntimeLauncher {
+  version: string
+  requested: string | null
+  effective: string | null
+  threads: number | null
+}
+
+/** The gthread worker's request pool, best effort (utils/runtime.gthread_pool_stats). */
+export interface RuntimeThreadPool {
+  spawned: number | null
+  busy: number | null
+  waiting: number | null
+  open_connections: number | null
+}
+
+/**
+ * How much of the request thread pool long-lived work holds
+ * (utils/stream_registry.thread_budget). `threads` and `headroom` are null
+ * under eventlet and the development server, which have no pool.
+ */
+export interface RuntimeThreadBudget {
+  threads: number | null
+  streams: number | null
+  socketio: number | null
+  headroom: number | null
+}
+
+/** Open and peak long-lived streams by kind (utils/stream_registry.snapshot). */
+export type RuntimeStreams = Record<string, { open: number; peak: number }>
+
+/** The shared outbound HTTP client's pool (utils/httpx_client.get_pool_stats). */
+export interface RuntimeHttpPool {
+  connections: number | null
+  idle: number | null
+  max_connections: number | null
+}
+
+/** The market data proxy's state (websocket_proxy/app_integration.proxy_status). */
+export interface RuntimeProxyStatus {
+  mode: string | null
+  pid: number | null
+  alive: boolean | null
+  restarts: number | null
+  last_exit_code: number | null
+  last_restart_at: number | null
+}
+
+/**
+ * The runtime block of the system report, built by blueprints/admin.py
+ * `_runtime_info`. Everything past the first five fields is optional so an
+ * older server, or a figure the server could not read, leaves it out.
+ */
 export interface SystemRuntime {
   python_version?: string
   python_implementation?: string
   eventlet_active?: boolean
   wsgi_hint?: string
   process_uptime_seconds?: number | null
+  /** `eventlet`, `gthread`, `dev`, or another gunicorn worker's name. */
+  worker_class?: string | null
+  /** What `OPENALGO_WORKER_CLASS` in .env asks for right now. */
+  requested_worker_class?: 'eventlet' | 'gthread' | null
+  gunicorn_version?: string | null
+  configured_workers?: number | null
+  /** The gthread request thread count; null under eventlet and the dev server. */
+  configured_threads?: number | null
+  /** Seconds a stop gives open requests to finish. */
+  graceful_timeout?: number | null
+  launcher?: RuntimeLauncher | null
+  /** Null when not running under gunicorn. */
+  started_by_launcher?: boolean | null
+  thread_pool?: RuntimeThreadPool | null
+  thread_budget?: RuntimeThreadBudget | null
+  streams?: RuntimeStreams | null
+  /** Where the market data proxy runs: `subprocess`, `thread`, `external`, or null. */
+  websocket_proxy_mode?: string | null
+  /** The proxy's own state, shown when the server reports it. */
+  websocket_proxy?: RuntimeProxyStatus | null
+  /** Null until the first outbound request builds the shared client. */
+  http_pool?: RuntimeHttpPool | null
+  active_threads?: number | null
+  /** Plain sentences for the operator, already written for a trader. */
+  notes?: string[]
 }
 
 export interface SystemHardware {

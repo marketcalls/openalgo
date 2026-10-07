@@ -116,6 +116,18 @@ class UpstoxWebSocketClient:
         # reconnect attempt as STALL-TRIGGERED instead of looking identical
         # to a network-induced reconnect (issue #1357).
         self._stall_triggered_reconnect = False
+
+        # Consecutive 401 refusals of the authorize call. The stored login
+        # expires every night, and every reconnect until the next login is
+        # refused the same way; the first refusal of a streak is logged and the
+        # rest are not, which kept one expired login from filling the error log
+        # with four ERROR lines every thirty seconds.
+        self._authorize_refusals = 0
+
+        # Whether self.ws holds a socket worth dialling. A refused authorize
+        # leaves it holding the previous, already-refused URL, and dialling that
+        # again only repeats a handshake Upstox has already turned down.
+        self._dial_current_socket = True
         self.callbacks: dict[str, Callable | None] = {
             "on_connect": None,
             "on_message": None,
@@ -204,17 +216,18 @@ class UpstoxWebSocketClient:
         """Run the WebSocket connection with reconnection logic"""
         self._reconnect_attempts = 0
         while self.running:
-            try:
-                # Enable keepalive pings (same as Dhan/Flattrade which work reliably).
-                # websocket-client needs explicit pings to keep the connection alive,
-                # unlike the async websockets library which has internal keepalive.
-                self.ws.run_forever(
-                    sslopt={"cert_reqs": ssl.CERT_NONE},
-                    ping_interval=30,
-                    ping_timeout=10,
-                )
-            except Exception as e:
-                self.logger.error(f"WebSocket run_forever error: {e}")
+            if self._dial_current_socket:
+                try:
+                    # Enable keepalive pings (same as Dhan/Flattrade which work reliably).
+                    # websocket-client needs explicit pings to keep the connection alive,
+                    # unlike the async websockets library which has internal keepalive.
+                    self.ws.run_forever(
+                        sslopt={"cert_reqs": ssl.CERT_NONE},
+                        ping_interval=30,
+                        ping_timeout=10,
+                    )
+                except Exception as e:
+                    self.logger.error(f"WebSocket run_forever error: {e}")
 
             self._connected = False
 
@@ -223,8 +236,14 @@ class UpstoxWebSocketClient:
 
             self._reconnect_attempts += 1
             if self._reconnect_attempts >= self._reconnect_config["max_attempts"]:
-                self.logger.error("Max reconnect attempts reached")
-                self._trigger_error("Max reconnect attempts reached")
+                if self._authorize_refusals:
+                    self._trigger_error(
+                        "Stopped retrying Upstox market data: Upstox still refuses the stored "
+                        "login. Log in to Upstox again and market data restarts."
+                    )
+                else:
+                    self.logger.error("Max reconnect attempts reached")
+                    self._trigger_error("Max reconnect attempts reached")
                 break
 
             # A socket that has NEVER completed a handshake is not a reconnect, it
@@ -236,8 +255,12 @@ class UpstoxWebSocketClient:
             # timer defers against a dead socket, and no tick ever arrives while
             # the loop retries for ~25 minutes. Raise it through the error callback
             # once, with the cause named.
+            # Not when the authorize itself is being refused with a 401: the
+            # cause is then known (the stored login), and blaming the connection
+            # limit would send the operator to the wrong setting.
             if (
                 not self._ever_connected
+                and self._authorize_refusals == 0
                 and self._reconnect_attempts == self.NEVER_CONNECTED_ALERT_AFTER
             ):
                 self._trigger_error(
@@ -289,8 +312,10 @@ class UpstoxWebSocketClient:
             # process restart.
             self._refresh_auth_token()
 
-            # Re-fetch WebSocket URL for reconnection
+            # Re-fetch WebSocket URL for reconnection. Without one, skip the dial
+            # and go round the backoff again: the old URL was refused already.
             ws_url = self._get_websocket_url()
+            self._dial_current_socket = bool(ws_url)
             if ws_url:
                 self.ws = websocket.WebSocketApp(
                     ws_url,
@@ -655,6 +680,12 @@ class UpstoxWebSocketClient:
             response.raise_for_status()
             auth_data = response.json()
             ws_url = auth_data.get("data", {}).get("authorized_redirect_uri")
+            if ws_url and self._authorize_refusals:
+                self.logger.info(
+                    f"Upstox accepted the login again after {self._authorize_refusals} "
+                    "refusals; reconnecting market data"
+                )
+                self._authorize_refusals = 0
             if ws_url:
                 self.logger.debug(
                     f"Received WebSocket URL: {urlsplit(ws_url)._replace(query='').geturl()}"
@@ -674,6 +705,22 @@ class UpstoxWebSocketClient:
             # Standard account reads as a generic network failure.
             status = e.response.status_code if e.response is not None else "?"
             body = (e.response.text or "")[:500] if e.response is not None else ""
+            if status == 401:
+                # The stored login was refused: it expires every night, and
+                # every retry until the next login is refused the same way.
+                # Say so once per streak, plainly, and retry quietly after.
+                self._authorize_refusals += 1
+                if self._authorize_refusals == 1:
+                    self.logger.warning(
+                        "Upstox did not accept the stored login for market data "
+                        f"(HTTP 401 {body[:200]}). The login expires every day; market data "
+                        "resumes after you log in to Upstox again. Retrying quietly until then."
+                    )
+                else:
+                    self.logger.debug(
+                        f"Upstox still refuses the stored login (refusal {self._authorize_refusals})"
+                    )
+                return None
             self.logger.error(f"WebSocket authorize rejected: HTTP {status} {body}")
             if status == 429 or "limit" in body.lower():
                 self.logger.error(

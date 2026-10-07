@@ -1,5 +1,4 @@
 import json
-from turtle import position
 
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger

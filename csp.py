@@ -69,6 +69,28 @@ def get_csp_config():
     if child_src:
         csp_config["child-src"] = child_src
 
+    # Worker source directive.
+    #
+    # Stated rather than left to the fallback chain, which is worker-src, then
+    # child-src, then script-src. Without this a worker is governed by
+    # script-src, which carries a CDN it has no use for; naming it keeps a
+    # worker to this origin alone, which is tighter than what it inherited.
+    #
+    # 'self' and nothing else. The worker this application loads is a file the
+    # build emits and the server serves, so a blob or data URL would be a
+    # loosening with nothing asking for it: neither was reachable before this
+    # directive existed either, since the chain landed on script-src, which
+    # carries no blob.
+    #
+    # The charting terminal loads one: a backtest over a hundred thousand bars
+    # takes most of a second to fold, and doing that on the page freezes the
+    # live chart and the live price along with it. A deployment that sets this
+    # to 'none' does not break the backtest, which falls back to running on the
+    # page, but every long run stalls the terminal while it does.
+    worker_src = os.getenv("CSP_WORKER_SRC", "'self'")
+    if worker_src:
+        csp_config["worker-src"] = worker_src
+
     # Form action directive
     form_action = os.getenv("CSP_FORM_ACTION", "'self'")
     if form_action:

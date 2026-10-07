@@ -10,7 +10,7 @@ author-facing export is named in the docs but never appears inside real code.
 
 ## Reuse a built-in instead of porting its formula
 
-**The single highest-leverage technique in this skill.** The 102 built-ins are
+**The single highest-leverage technique in this skill.** The 112 built-ins are
 descriptors, and a descriptor is data plus a `calc`, so any of them doubles as a
 calculation. There is no reason to reimplement MACD.
 
@@ -43,7 +43,9 @@ only the periods keeps working if the built-in gains a setting later.
 
 | built-in | columns |
 | --- | --- |
-| `sma`, `ema`, `wma`, `hma`, and the other averages | `ma` |
+| `sma`, `ema`, `wma` | `ma` |
+| `hma`, `dema`, `tema`, `alma`, `smma`, `t3`, `kama`, `lsma`, `vwma`, `zlema`, `vidya` | the id itself (`hma`, ...) |
+| `mcginley-dynamic` | `mg` |
 | `macd` | `macd`, `signal`, `histogram` |
 | `bollinger` | `upper`, `basis`, `lower` |
 | `rsi` | `rsi` |

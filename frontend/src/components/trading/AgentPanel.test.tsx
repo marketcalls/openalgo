@@ -42,10 +42,36 @@ vi.mock('@/api/agent', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/agent')>()),
   getStatus: async () => ({ configured, default_model_id: 1, model_count: 1 }),
   // The composer asks which model the turn will run on so it knows whether a
-  // file may be attached. Nothing here configures one, and no model means the
-  // question cannot be answered, which is not a reason to refuse a file.
-  listModels: async () => [],
+  // file may be attached, and the picker lists them. Most tests configure
+  // none, and no model means the question cannot be answered, which is not a
+  // reason to refuse a file.
+  listModels: async () => models,
 }))
+
+/** The registered models the picker offers; empty unless a test sets them. */
+let models: Array<Record<string, unknown>> = []
+
+function model(id: number, name: string, extra: Record<string, unknown> = {}) {
+  return {
+    id,
+    provider_kind: 'openai',
+    model_name: name,
+    display_name: name,
+    base_url: null,
+    enabled: true,
+    is_default: false,
+    supports_reasoning: false,
+    default_reasoning_effort: 'off',
+    supports_vision: false,
+    tools_unreliable: false,
+    last_tested_at: null,
+    last_test_ok: true,
+    last_test_error: null,
+    has_api_key: true,
+    api_key_fingerprint: null,
+    ...extra,
+  }
+}
 
 function context(overrides: Partial<ChartContext> = {}): ChartContext {
   return {
@@ -78,6 +104,7 @@ beforeEach(() => {
   streams.length = 0
   replies = []
   configured = true
+  models = []
   localStorage.clear()
 })
 
@@ -266,5 +293,44 @@ describe('AgentPanel setup gate', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Message the agent')).toBeInTheDocument())
     expect(screen.queryByText('Set up your agent')).not.toBeInTheDocument()
+  })
+})
+
+describe('AgentPanel model choice', () => {
+  const both = () => [
+    model(1, 'gpt-4.1', { is_default: true }),
+    model(2, 'claude-sonnet-5-5', { provider_kind: 'anthropic' }),
+  ]
+
+  it('runs on the model chosen on /agent, remembered in this browser', async () => {
+    models = both()
+    localStorage.setItem('oa-agent-model', '2')
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: /claude-sonnet-5-5/ })).toBeInTheDocument()
+    await userEvent.type(box(), 'read this chart{Enter}')
+    await waitFor(() => expect(streams).toHaveLength(1))
+    expect(streams[0].body.model_id).toBe(2)
+  })
+
+  it('sends no model when none was chosen, so the configured default runs', async () => {
+    models = both()
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: /gpt-4\.1/ })).toBeInTheDocument()
+    await userEvent.type(box(), 'read this chart{Enter}')
+    await waitFor(() => expect(streams).toHaveLength(1))
+    expect(streams[0].body).not.toHaveProperty('model_id')
+  })
+
+  it('forgets a remembered model that is no longer enabled and runs the default', async () => {
+    models = [model(1, 'gpt-4.1', { is_default: true }), model(2, 'old-model', { enabled: false })]
+    localStorage.setItem('oa-agent-model', '2')
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    await waitFor(() => expect(localStorage.getItem('oa-agent-model')).toBeNull())
+    await userEvent.type(box(), 'read this chart{Enter}')
+    await waitFor(() => expect(streams).toHaveLength(1))
+    expect(streams[0].body).not.toHaveProperty('model_id')
   })
 })

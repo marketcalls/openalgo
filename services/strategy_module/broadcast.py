@@ -53,18 +53,23 @@ drift apart.
 Threading
 ---------
 
-Every caller of this module is a greenlet: the tick consumer, the engine, the
-scheduler jobs and the request handlers. The one real OS thread in the
-strategy package is ``tick_feed.on_tick``, and it never reaches here - it puts
-the tick on a real queue and returns.
+The callers are the tick consumer, the engine, the scheduler jobs and the
+request handlers. Under the gthread worker (and the development server) those
+are real OS threads running truly in parallel; under the eventlet worker they
+are greenlets on the one hub. The one thread in the strategy package that is
+real under eventlet as well is the websocket client's loop, and it never
+reaches here: ``tick_feed.on_tick`` puts the tick on a real queue and returns.
 
-Emits are still marshalled through ``socketio.start_background_task`` rather
-than called inline. Two reasons, both of which matter here more than they do
-at the module's other call sites: it keeps the serialisation off the tick
-path, and ``start_background_task`` is the async-mode-aware spawn, so if a
-caller is ever moved onto a real thread the emit is at least handed to the
-Socket.IO server's own machinery rather than run from underneath it. It is not
-a substitute for the rule: do not call these functions from a real thread.
+Emits are made on the caller's thread. The Socket.IO server in
+``extensions.py`` serialises them under gthread and the development server
+(python-socketio's ``emit`` is not thread safe), and under eventlet no emit
+yields, so green emits cannot interleave either. They used to be handed to
+``socketio.start_background_task``, which in the threading async mode starts a
+new OS thread per emit: ten deltas a second per watched strategy became ten
+threads a second, and two of them could reach the browser out of order, an
+older P&L frame overwriting a newer one. Should a real OS thread ever call in
+under eventlet, the emit is queued for the hub
+(``utils.real_threading.submit_to_hub``) rather than made from underneath it.
 """
 
 from __future__ import annotations
@@ -81,7 +86,9 @@ import pytz
 from extensions import socketio
 from services.strategy_module import state
 from services.strategy_module.risk_adapter import run_pnl
+from utils import real_threading
 from utils.logging import get_logger
+from utils.runtime import is_monkey_patched
 
 logger = get_logger(__name__)
 
@@ -140,7 +147,7 @@ def _delta_interval_seconds() -> float:
 
 #: A liquid option ticks many times a second and a browser cannot paint more
 #: than about ten frames of it. Ten per second per strategy is also what bounds
-#: the number of background emit tasks this module creates.
+#: the number of emits this module makes.
 DELTA_MIN_INTERVAL_SEC = _delta_interval_seconds()
 
 #: strategy_id -> monotonic time of the last delta admitted for it. Bounded
@@ -149,9 +156,11 @@ DELTA_MIN_INTERVAL_SEC = _delta_interval_seconds()
 #: both. See the resource note at the bottom of this module.
 _last_delta_at: dict[int, float] = {}
 
-#: Guards the map above, held for the dict operations only. Green under
-#: eventlet, which is correct: every caller is a greenlet, and the critical
-#: section is arithmetic on a dict with no I/O in it.
+#: Guards the map above, held for the dict operations only. Real under the
+#: gthread worker, where callers run in parallel, and green under eventlet,
+#: where they are greenlets; correct in both because the critical section is
+#: arithmetic on a dict with no I/O in it. No real OS thread takes it under
+#: eventlet (see the Threading note above).
 _throttle_lock = threading.Lock()
 
 #: How many strategies the throttle map may track before it is swept. A
@@ -478,25 +487,38 @@ def forget_strategy(strategy_id: int) -> None:
 
 
 def _emit_now(event: str, payload: dict[str, Any], room: str) -> None:
-    """The emit itself, on whatever background task the server gave us."""
+    """The emit itself. Never raises."""
     try:
         socketio.emit(event, payload, to=room, namespace=NAMESPACE)
     except Exception:
-        # Two layers of this, because the two live in different places. Under
-        # eventlet this body runs in a greenlet of its own, so a raise here
-        # would never reach the try in _emit; it would surface as an unhandled
-        # greenlet exception with no request context attached to it.
+        # Two layers of this, because the two can run in different places.
+        # When a real thread under eventlet hands the emit to the hub, this
+        # body runs on a green thread of its own, so a raise here would never
+        # reach the try in _emit.
         logger.exception("Strategy broadcast %s to %s failed", event, room)
+
+
+def _hand_to_server(event: str, payload: dict[str, Any], room: str) -> None:
+    """Emit on this thread, or queue the emit for the hub from a real thread.
+
+    Only a real OS thread under eventlet queues: it must not touch the Socket.IO
+    server's green queues itself. Everywhere else the emit is made here, in
+    order, with no thread of its own.
+    """
+    if is_monkey_patched("thread") and not real_threading.on_hub_thread():
+        real_threading.submit_to_hub(_emit_now, event, payload, room)
+        return
+    _emit_now(event, payload, room)
 
 
 def _emit(event: str, payload: dict[str, Any], strategy_id: int) -> bool:
     """Hand one message to the Socket.IO server. Never raises."""
     room = room_for(strategy_id)
     try:
-        socketio.start_background_task(_emit_now, event, payload, room)
+        _hand_to_server(event, payload, room)
         return True
     except Exception:
-        logger.exception("Could not schedule the %s broadcast to %s", event, room)
+        logger.exception("Could not hand the %s broadcast to %s to the server", event, room)
         return False
 
 
@@ -660,12 +682,11 @@ def push_terminal(
 # streamed a delta. Removed by push_terminal and by forget_strategy when a run
 # ends, and swept by _prune_locked if it ever passes MAX_TRACKED_STRATEGIES.
 #
-# One green lock, ``_throttle_lock``, module level, never per call.
+# One lock, ``_throttle_lock``, module level, never per call: a stdlib lock,
+# real under gthread and the development server, green under eventlet.
 #
 # No database session, no file, no socket, no subprocess and no thread or
-# executor of its own. Emits are handed to socketio.start_background_task,
-# which under eventlet spawns a greenlet and on the development server a
-# short-lived thread; the delta throttle is what bounds how many of those a
-# running strategy can create, to one per DELTA_MIN_INTERVAL_SEC plus its
-# one-offs.
+# executor of its own. Emits are made on the caller's thread, so a running
+# strategy starts no thread per frame; the delta throttle bounds how many
+# frames it sends, to one per DELTA_MIN_INTERVAL_SEC plus its one-offs.
 # ---------------------------------------------------------------------------

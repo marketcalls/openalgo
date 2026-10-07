@@ -1,9 +1,10 @@
 import copy
 import importlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
+from services.broker_busy import BrokerBusyError, broker_busy_result
 from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
 from utils.logging import get_logger
 
@@ -196,6 +197,10 @@ def calculate_margin_with_auth(
         error_response = {"status": "error", "message": str(e)}
         executor.submit(async_log_order, "margin", original_data, error_response)
         return False, error_response, 501
+    except BrokerBusyError as e:
+        busy = broker_busy_result(e, "Margin calculation")
+        executor.submit(async_log_order, "margin", original_data, busy[1])
+        return busy
     except Exception as e:
         logger.exception(f"Error in broker_module.calculate_margin_api: {e}")
         error_response = {

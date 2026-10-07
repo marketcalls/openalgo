@@ -29,13 +29,36 @@ and returns 0, so throttled legs silently show as zero OI instead of erroring
 out. Keeping pacing state at module level here means every caller across all
 three files shares the same clock regardless of how many instances or threads
 are in flight at once.
+
+Bounded waits under the gthread worker. Under eventlet and the dev server a
+caller waits for its slot however far back in the queue it is, exactly as
+before. Under gthread each waiting caller holds one of a fixed number of request
+threads, so two changes apply there and only there:
+
+* a caller whose slot is further away than
+  ``utils.broker_backpressure.max_queue_wait(kind)`` is refused with
+  BrokerBusyError, and books nothing, so it delays nobody after it; and
+* order placement, modification and cancellation (``kind="order"``) are paced
+  on a clock of their own, as IIFL documents a separate 10 req/sec cap for
+  them, so an order never waits behind an option chain's open interest fan-out
+  and is never refused because of one.
 """
 
+import math
 import threading
 import time
 
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError, max_queue_wait
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 _lock = threading.Lock()
 _last_call_time = 0.0
+# Order writes' own clock. Used only under the gthread worker; everywhere else
+# every call shares _last_call_time, as it always has.
+_last_order_call_time = 0.0
 
 # Tightest documented cap across categories is 10 req/sec; pace at ~8 req/sec
 # (0.125s) to leave headroom for clock jitter and for data/order/funds calls
@@ -46,23 +69,59 @@ MAX_RETRIES = 3
 BASE_BACKOFF = 1.0  # seconds; exponential fallback when no Retry-After header: 1, 2, 4
 
 
-def apply_rate_limit():
+def apply_rate_limit(kind: str = "data"):
     """Block the calling thread until it is safe to make another IIFL Capital API call.
 
     Shared process-wide (module-level lock + timestamp) so every caller
     across broker.iiflcapital.api paces against the same clock, regardless
     of how many separate BrokerData/order_api/funds calls -- or threads
     inside a single ThreadPoolExecutor fanout -- are in flight at once.
+
+    Args:
+        kind: ``"order"`` for order placement, modification and cancellation,
+            ``"data"`` for everything else. It only matters under the gthread
+            worker (see the module docstring).
+
+    Raises:
+        BrokerBusyError: Only under the gthread worker, when the caller's slot
+            is further away than the ceiling for ``kind``. Nothing is booked.
     """
-    global _last_call_time
+    global _last_call_time, _last_order_call_time
+    ceiling = max_queue_wait(kind)
+    own_clock = kind == "order" and runtime.gthread_active()
     with _lock:
         now = time.time()
-        elapsed = now - _last_call_time
+        last = _last_order_call_time if own_clock else _last_call_time
+        elapsed = now - last
         sleep_time = MIN_INTERVAL - elapsed if elapsed < MIN_INTERVAL else 0
-        _last_call_time = now + sleep_time
+        refused = ceiling is not None and sleep_time > ceiling
+        if not refused:
+            if own_clock:
+                _last_order_call_time = now + sleep_time
+            else:
+                _last_call_time = now + sleep_time
+
+    if refused:
+        logger.warning(
+            f"IIFL Capital pacing ({kind}) refused a request whose turn was "
+            f"{sleep_time:.1f}s away (limit {ceiling:.0f}s under gthread)"
+        )
+        raise busy_error(sleep_time, kind)
 
     if sleep_time > 0:
         time.sleep(sleep_time)
+
+
+def busy_error(wait: float, kind: str) -> BrokerBusyError:
+    """The refusal for a request whose turn would come ``wait`` seconds from now."""
+    what = "This order was not sent" if kind == "order" else "This request was not sent"
+    seconds = max(1, math.ceil(wait))
+    return BrokerBusyError(
+        "IIFL Capital allows only a few requests each second, and OpenAlgo already "
+        f"has more waiting than it can send in time. {what}. Try again in about "
+        f"{seconds} seconds.",
+        retry_after=wait,
+    )
 
 
 def retry_delay_from_headers(headers, attempt):
@@ -92,6 +151,10 @@ def is_rate_limited(status_code: int, message: str = "") -> bool:
     containing a rate-limit or retry hint as retryable -- this substring
     match covers IIFL's generic EC003 "Something went wrong, please try
     after some time" error, the closest documented analogue.
+
+    Retryable means a read may be retried. An order write that gets this
+    answer is never resent (see order_api._request): EC003 can arrive after
+    IIFL accepted the order.
     """
     if status_code == 429:
         return True

@@ -17,15 +17,20 @@ function context(onProblem = vi.fn()) {
   return { apiKey: 'k', username: 'trader', onProblem }
 }
 
-/** A fetch that answers each path with an ok flag and a body status. */
-function fetchWith(answers: Record<string, { ok: boolean; status?: string }>) {
+/** A fetch that answers each path with an ok flag, a body status and a reason. */
+function fetchWith(
+  answers: Record<string, { ok: boolean; status?: string; message?: string }>
+) {
   const calls: { url: string; body: Record<string, unknown> }[] = []
   const impl = vi.fn(async (url: string, init?: RequestInit) => {
     const answer = answers[url] ?? { ok: true }
     calls.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
     return {
       ok: answer.ok,
-      json: async () => (answer.status ? { status: answer.status } : {}),
+      json: async () => ({
+        ...(answer.status ? { status: answer.status } : {}),
+        ...(answer.message ? { message: answer.message } : {}),
+      }),
     } as Response
   })
   vi.stubGlobal('fetch', impl)
@@ -184,5 +189,101 @@ describe('what it reports back for the log', () => {
   it('names nothing when nothing was asked for', async () => {
     fetchWith({})
     expect(await deliverAlert(OFF, NOTICE, context())).toEqual([])
+  })
+})
+
+describe('why a send failed', () => {
+  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+  const NOTICE = { title: 'BHEL crossed 250', body: '', tag: 'a1' }
+  const context = (onProblem: (m: string) => void) => ({
+    apiKey: 'k',
+    username: 'rajandran',
+    onProblem,
+  })
+
+  /**
+   * THE ONE THAT MATTERS, and it is the bug that was reported.
+   *
+   * Both of the server's refusals used to arrive as the same sentence, "check
+   * that a device is paired under WhatsApp", because `post` returned a boolean
+   * and the reason was dropped on the floor. A trader whose device IS paired
+   * but whose account is not linked read that, went and looked at the device,
+   * found it paired, and had nowhere left to go.
+   */
+  it('tells the trader what the server actually said', async () => {
+    const onProblem = vi.fn()
+    fetchWith({
+      '/api/v1/whatsapp/notify': {
+        ok: false,
+        status: 'error',
+        message: 'Username not found or not linked to WhatsApp',
+      },
+    })
+
+    await deliverAlert({ ...OFF, whatsapp: true }, NOTICE, context(onProblem))
+
+    const said = String(onProblem.mock.calls[0]?.[0])
+    expect(said).toContain('Username not found or not linked to WhatsApp')
+    expect(said).toContain('WhatsApp')
+    // Still no status codes in front of a trader.
+    expect(said).not.toMatch(/\b[45]\d\d\b/)
+  })
+
+  it('says something useful when the server gives no reason at all', async () => {
+    const onProblem = vi.fn()
+    fetchWith({ '/api/v1/telegram/notify': { ok: false } })
+
+    await deliverAlert({ ...OFF, telegram: true }, NOTICE, context(onProblem))
+
+    const said = String(onProblem.mock.calls[0]?.[0])
+    expect(said).toContain('Telegram')
+    expect(said.length).toBeGreaterThan(20)
+  })
+})
+
+describe('how the outward channels are attempted', () => {
+  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+  const NOTICE = { title: 'BHEL crossed 250', body: '', tag: 'a1' }
+
+  /**
+   * THE SECOND ONE THAT MATTERS. These ran in turn, and WhatsApp's endpoint
+   * defaults `wait_for_delivery` to true, so an alert asking for both waited
+   * out the whole Telegram round trip before WhatsApp was even started.
+   *
+   * The assertion is that BOTH requests are in flight while neither has
+   * answered. A sequential implementation cannot satisfy it: its second fetch
+   * does not exist until the first resolves.
+   */
+  it('starts both channels before either has answered', async () => {
+    const started: string[] = []
+    let releaseTelegram: () => void = () => {}
+    const telegramAnswered = new Promise<void>((resolve) => {
+      releaseTelegram = resolve
+    })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        started.push(String(url))
+        if (String(url).includes('telegram')) await telegramAnswered
+        return { ok: true, json: async () => ({ status: 'success' }) } as Response
+      })
+    )
+
+    const sending = deliverAlert(
+      { ...OFF, telegram: true, whatsapp: true },
+      NOTICE,
+      { apiKey: 'k', username: 'rajandran', onProblem: vi.fn() }
+    )
+
+    // Let the microtask queue drain without letting Telegram answer.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(started).toHaveLength(2)
+    expect(started.some((one) => one.includes('whatsapp'))).toBe(true)
+
+    releaseTelegram()
+    await expect(sending).resolves.toEqual(expect.arrayContaining(['telegram', 'whatsapp']))
   })
 })

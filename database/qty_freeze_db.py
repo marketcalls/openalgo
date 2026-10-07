@@ -9,11 +9,12 @@ Orders exceeding this limit need to be split.
 Freeze quantities are admin-managed per exchange + underlying (NFO seeded from
 NSE's qtyfreeze.csv; BFO/CDS/MCX and others added via the Freeze Quantities page
 or a CSV upload). Any F&O exchange with a configured entry is honored; symbols
-without an entry default to 1 (no splitting cap applied).
+without an entry return 0, meaning no limit is known and none is enforced.
 """
 
 import csv
 import os
+import threading
 
 from sqlalchemy import Column, Index, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -39,8 +40,19 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # In-memory cache for freeze quantities - always warm
+#
+# Published whole: a load builds a new dict and rebinds this name in one
+# assignment, and readers bind it once per call. The dict used to be cleared
+# and refilled in place, so under the gthread worker a reader could land in
+# the gap and get 0 ("no limit known") for an underlying that has one, and
+# the order then went out unsplit above the exchange's freeze quantity.
 _freeze_qty_cache: dict[str, int] = {}
 _cache_loaded: bool = False
+
+# Serialises loads, including the lazy first one, which several threads can
+# reach at once at boot. A plain stdlib lock (green under eventlet), because
+# the load does database I/O. Readers never take it.
+_load_lock = threading.Lock()
 
 
 class QtyFreeze(Base):
@@ -132,26 +144,43 @@ def load_freeze_qty_cache() -> bool:
     Returns:
         True if successful, False otherwise
     """
+    with _load_lock:
+        return _load_freeze_qty_cache_locked()
+
+
+def _load_freeze_qty_cache_locked() -> bool:
+    """The load behind load_freeze_qty_cache. Call with ``_load_lock`` held."""
     global _freeze_qty_cache, _cache_loaded
 
     try:
-        _freeze_qty_cache.clear()
-
         # Load all entries from database
         entries = QtyFreeze.query.all()
 
+        fresh: dict[str, int] = {}
         for entry in entries:
             # Cache key: "EXCHANGE:SYMBOL" (e.g., "NFO:NIFTY")
             cache_key = f"{entry.exchange}:{entry.symbol}"
-            _freeze_qty_cache[cache_key] = entry.freeze_qty
+            fresh[cache_key] = entry.freeze_qty
 
+        _freeze_qty_cache = fresh
         _cache_loaded = True
-        logger.debug(f"Loaded {len(_freeze_qty_cache)} freeze quantities into cache")
+        logger.debug(f"Loaded {len(fresh)} freeze quantities into cache")
         return True
 
     except Exception as e:
+        # As before, a failed load leaves the cache empty rather than stale.
+        _freeze_qty_cache = {}
         logger.exception(f"Error loading freeze qty cache: {e}")
         return False
+
+
+def _ensure_loaded() -> None:
+    """Load the cache once, however many threads arrive cold at the same time."""
+    if _cache_loaded:
+        return
+    with _load_lock:
+        if not _cache_loaded:
+            _load_freeze_qty_cache_locked()
 
 
 def get_freeze_qty(symbol: str, exchange: str) -> int:
@@ -160,28 +189,29 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     Uses in-memory cache for fast lookups.
 
     Returns the configured freeze quantity for any F&O exchange (NFO, BFO, CDS,
-    MCX, ...) that has an entry, and 1 as the default when none is configured.
+    MCX, ...) that has an entry, and 0 when none is configured.
+
+    0 means "no freeze limit known", which is what every caller already tests
+    for. It must not be 1: the table is seeded with NFO rows only, so BFO, CDS,
+    MCX and any NFO underlying without a row resolved to a freeze limit of one
+    unit, and callers that reject `quantity > freeze` then refused every order
+    on those exchanges -- one lot of SENSEX (20) or CRUDEOIL (100) is above 1.
+    The only reason this went unnoticed is that NFO index options, which do
+    have rows, are the common case.
 
     Args:
         symbol: The underlying symbol (e.g., "NIFTY", "RELIANCE", "SENSEX", "CRUDEOIL")
         exchange: Exchange code (NFO, BFO, CDS, MCX, ...)
 
     Returns:
-        Freeze quantity (integer)
+        Freeze quantity, or 0 when none is configured.
     """
-    global _cache_loaded
-
     # Ensure cache is loaded
-    if not _cache_loaded:
-        load_freeze_qty_cache()
+    _ensure_loaded()
 
-    # Look up the configured entry for this exchange+symbol; default to 1 if none.
-    cache_key = f"{exchange}:{symbol}"
-    if cache_key in _freeze_qty_cache:
-        return _freeze_qty_cache[cache_key]
-
-    # If not found, return 1 as default
-    return 1
+    # Look up the configured entry for this exchange+symbol, in one bound dict.
+    # Not configured: 0, never 1 -- see the note above.
+    return _freeze_qty_cache.get(f"{exchange}:{symbol}", 0)
 
 
 def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
@@ -200,7 +230,7 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
         exchange: Exchange code
 
     Returns:
-        Freeze quantity (integer)
+        Freeze quantity, or 0 when the underlying has no configured limit.
     """
     import re
 
@@ -225,7 +255,9 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
         # Handle special cases like M&M, BAJAJ-AUTO
         return get_freeze_qty(underlying, exchange)
 
-    return 1
+    # The symbol did not parse (e.g. it starts with a digit, like 360ONE).
+    # Unknown, not "one unit".
+    return 0
 
 
 def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:
@@ -238,20 +270,18 @@ def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:
     Returns:
         Dictionary of symbol -> freeze_qty
     """
-    global _cache_loaded
-
-    if not _cache_loaded:
-        load_freeze_qty_cache()
+    _ensure_loaded()
+    cache = _freeze_qty_cache
 
     if exchange:
         prefix = f"{exchange}:"
         return {
             key.replace(prefix, ""): value
-            for key, value in _freeze_qty_cache.items()
+            for key, value in cache.items()
             if key.startswith(prefix)
         }
 
-    return dict(_freeze_qty_cache)
+    return dict(cache)
 
 
 def ensure_qty_freeze_tables_exists():

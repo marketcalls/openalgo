@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import type { SearchRow } from '@/lib/trading/terminal'
+import { SEARCH_INPUT_ATTR } from '@/lib/trading/quickEntry'
 import { cn } from '@/lib/utils'
 
 /**
@@ -222,6 +223,13 @@ interface Props {
   onPick: (row: SearchRow) => void
   /** Seeds the input (usually the pane's current symbol) and is text-selected on open. */
   initialQuery?: string
+  /**
+   * False when the seed is the start of what the trader is typing (quick entry
+   * from the chart): the caret goes after it instead of selecting it, so the
+   * next key adds to it rather than replacing it, and the box takes focus at
+   * once rather than a moment later.
+   */
+  selectInitial?: boolean
   mode?: 'symbol' | 'comparison'
   title?: string
   container?: HTMLElement | null
@@ -233,6 +241,7 @@ export function SymbolSearchDialog({
   search,
   onPick,
   initialQuery,
+  selectInitial = true,
   mode = 'symbol',
   title = 'Symbol Search',
   container,
@@ -322,11 +331,14 @@ export function SymbolSearchDialog({
     setSel(0)
     setQuery(initialQuery ?? '')
     const t = setTimeout(() => {
-      inputRef.current?.focus()
-      inputRef.current?.select()
+      const node = inputRef.current
+      if (!node) return
+      node.focus()
+      if (selectInitial) node.select()
+      else node.setSelectionRange(node.value.length, node.value.length)
     }, 30)
     return () => clearTimeout(t)
-  }, [open, initialQuery])
+  }, [open, initialQuery, selectInitial])
 
   // Debounced search; a request id guards against out-of-order responses.
   useEffect(() => {
@@ -455,7 +467,10 @@ export function SymbolSearchDialog({
       <DialogContent
         container={container}
         className="flex max-h-[80vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
-        onOpenAutoFocus={(e) => e.preventDefault()}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          if (!selectInitial) inputRef.current?.focus()
+        }}
       >
         <DialogTitle className="px-5 pt-5 pb-3 text-xl">{title}</DialogTitle>
 
@@ -464,6 +479,7 @@ export function SymbolSearchDialog({
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
           <input
             ref={inputRef}
+            {...{ [SEARCH_INPUT_ATTR]: '' }}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}

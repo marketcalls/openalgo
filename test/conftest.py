@@ -53,3 +53,38 @@ collect_ignore = [
     "test_websocket.py",
     "test_websocket_service.py",
 ]
+
+
+# The OpenScript state files, kept out of the operator's own.
+#
+# Three files under strategies/ say what each deployment runs on, which
+# deployments a trader means to have running, and what has been asked of a run
+# that is still going. They are the same class of thing as the databases and the
+# log above: a test that writes one is writing a trader's own state.
+#
+# This is not hypothetical. The runner blueprint restores schedules and runs at
+# import, which reads the running file, and a run recorded there whose process
+# has gone is started again or dropped. A suite run on a machine with live
+# strategies cleared the record of every one of them, so the next restart of the
+# real application brought none of them back.
+#
+# Reassigned rather than configured, because these are not settings: nothing an
+# operator installs should have a knob for where a trader's strategies live.
+def _isolate_openscript_state() -> None:
+    from pathlib import Path
+
+    here = Path("strategies") / "test"
+    here.mkdir(parents=True, exist_ok=True)
+
+    from services import openscript_commands, openscript_run_config, openscript_running
+
+    openscript_run_config.CONFIG_FILE = here / "openscript_run_configs.json"
+    openscript_running.STATE_FILE = here / "openscript_running.json"
+    openscript_commands.COMMAND_FILE = here / "openscript_commands.json"
+
+    import blueprints.openscript_runner as runner_blueprint
+
+    runner_blueprint.SCHEDULES_FILE = here / "openscript_runner_schedules.json"
+
+
+_isolate_openscript_state()

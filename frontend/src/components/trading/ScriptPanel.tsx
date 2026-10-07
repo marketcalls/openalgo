@@ -27,7 +27,13 @@
  * plug into a real code editor component. Installing one now would mean wiring
  * it twice and carrying a large dependency in between. The affordances that
  * matter today are here: a monospace face, no spell check, a gutter, save on
- * Ctrl+S, and the compiler's own words underneath.
+ * Ctrl+S, Tab that indents rather than leaving the editor, and the compiler's
+ * own words underneath.
+ *
+ * **An edit is never lost to a switch or a closed panel.** Unsaved text is kept
+ * per script (`openscriptDrafts.ts`) and comes back when that script is opened
+ * again, so moving between scripts or glancing at another panel costs nothing.
+ * Throwing an edit away is its own action, and it asks first.
  *
  * **Compiling is the whole feedback loop.** There is no build step between
  * saving a script and the chart running it, so a mistake either appears in this
@@ -47,8 +53,9 @@ import {
   Plus,
   TerminalSquare,
   Trash2,
+  Undo2,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +64,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  dropDraft,
+  fingerprintOf,
+  flushDrafts,
+  hasDraft,
+  keepDraft,
+  readDraft,
+} from '@/lib/trading/openscriptDrafts'
 import {
   type CompileResult,
   compileSource,
@@ -73,6 +88,7 @@ import {
   starterFor,
 } from '@/lib/trading/openscriptFiles'
 import { type HighlightedSpan, highlight, SPAN_CLASS } from '@/lib/trading/openscriptHighlight'
+import { type IndentEdit, indentEdit, outdentEdit } from '@/lib/trading/openscriptIndent'
 import {
   forgetScript,
   noteOpened,
@@ -138,6 +154,21 @@ function stemOf(file: string): string {
   return file.replace(/\.oscript$/, '')
 }
 
+/**
+ * What each kind is, in the words of the form that creates one.
+ *
+ * Said before the script is written because the two are different things to
+ * write and to run. The strategy sentence names where each half happens, since
+ * a trader who has just made one will look for the next step: the play button
+ * backtests it over the chart's history, and running it is the Strategies
+ * panel's, which trades in sandbox or live as the platform is set.
+ */
+export const KIND_HINT: Readonly<Record<ScriptKind, string>> = {
+  study: 'Computes and draws on the chart. It places no orders.',
+  strategy:
+    'Draws like a study and also places orders. Backtest it on the chart, then run it from the Strategies panel.',
+}
+
 /** Where the caret is, counted the way the diagnostics count: from one. */
 function caretAt(area: HTMLTextAreaElement): { line: number; column: number } {
   const upto = area.value.slice(0, area.selectionStart)
@@ -157,6 +188,14 @@ interface Props {
    */
   onAddToChart: (indicatorId: string) => boolean
   /**
+   * Test this strategy over the chart's history and mark what it did.
+   *
+   * Answers a boolean for the same reason `onAddToChart` does: a button that
+   * does nothing and says nothing is the failure this panel keeps being caught
+   * by. False means there was no chart to test against.
+   */
+  onBacktest?: (file: string) => boolean
+  /**
    * A script to open as soon as the panel is up, from the braces button on a
    * study's legend row.
    *
@@ -170,7 +209,7 @@ interface Props {
   onOpened?: () => void
 }
 
-export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) {
+export function ScriptPanel({ onAddToChart, onBacktest, openFile = null, onOpened }: Props) {
   const [scripts, setScripts] = useState<StoredScript[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
@@ -189,6 +228,28 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
    */
   const [nameTouched, setNameTouched] = useState(false)
   const [newKind, setNewKind] = useState<ScriptKind>('study')
+  /**
+   * Whether the discard question is on screen.
+   *
+   * An inline row under the header, the same shape as the naming row, rather
+   * than a browser dialog: it names the script it is about, it sits where the
+   * trader is already looking, and it does not stop the rest of the page.
+   */
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false)
+  /**
+   * Whether the draft on screen was typed over an older copy of the file.
+   *
+   * Set when a kept draft is restored and the saved text has changed since it
+   * was made, so another tab or a restore wrote the file in between. Saving
+   * would replace that newer copy, and a trader should know that before they
+   * do it rather than after.
+   */
+  const [movedUnder, setMovedUnder] = useState(false)
+  /**
+   * What the next Tab in the editor will do, for the status bar to say. Null
+   * while the editor does not have focus, when there is nothing to say.
+   */
+  const [tabHint, setTabHint] = useState<'indent' | 'leave' | null>(null)
   /**
    * What each listed script declares itself to be, keyed by name and time.
    *
@@ -225,6 +286,24 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
    * record it would be a render for a fact nothing draws.
    */
   const wantsNameFocus = useRef(false)
+  /** The same, for the discard row's safe answer. */
+  const wantsDiscardFocus = useRef(false)
+  const keepEditingRef = useRef<HTMLButtonElement>(null)
+  const areaRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * Whether the next Tab leaves the editor instead of indenting.
+   *
+   * Escape sets it and any other key clears it, which is how code editors let
+   * a keyboard out of a box where Tab has been given to the text: Escape, then
+   * Tab. A ref because the key handler reads it on the way past; `tabHint`
+   * carries the same fact to the screen.
+   */
+  const tabLeaves = useRef(false)
+  /**
+   * Where the selection goes once an indent that could not use the browser's
+   * own insertion has rendered. See `applyIndent`.
+   */
+  const pendingSelection = useRef<{ start: number; end: number } | null>(null)
 
   const dirty = open !== null && source !== saved
   const nameFault = naming ? nameProblem(newName) : null
@@ -289,6 +368,43 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
     }
   }, [source])
 
+  /**
+   * Keep what has been typed and not saved, per script.
+   *
+   * Runs on every edit and on every save, and `keepDraft` forgets the draft
+   * itself the moment the text matches the saved copy again, so a save needs
+   * no separate step. The page's copy is updated at once and storage a moment
+   * after typing stops.
+   */
+  useEffect(() => {
+    if (open !== null) keepDraft(open, source, saved)
+  }, [open, source, saved])
+
+  // Whatever is still waiting to be written goes now: when the panel closes,
+  // and when the page is being left, which a timer would not outlive.
+  useEffect(() => {
+    window.addEventListener('pagehide', flushDrafts)
+    return () => {
+      window.removeEventListener('pagehide', flushDrafts)
+      flushDrafts()
+    }
+  }, [])
+
+  /**
+   * Puts the selection back where an indent left it, once its text is on
+   * screen. Keyed on the text because that is what has to render first: set
+   * before it, the selection would be reset by the new value going in.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the text it positions the selection in has rendered
+  useLayoutEffect(() => {
+    const want = pendingSelection.current
+    const area = areaRef.current
+    if (want === null || area === null) return
+    pendingSelection.current = null
+    area.setSelectionRange(want.start, want.end)
+    setCaret(caretAt(area))
+  }, [source])
+
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
       const found = await listScripts(signal)
@@ -341,13 +457,23 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
     setResult(null)
     try {
       const text = await readScript(file)
+      // An edit kept from before comes back in place of the saved text, which
+      // is what makes switching away and closing the panel lossless. A draft
+      // that matches the file is not a draft any more, and is let go.
+      const draft = readDraft(file)
+      const restored = draft !== null && draft.text !== text ? draft.text : text
+      if (draft !== null && draft.text === text) dropDraft(file)
       setOpen(file)
-      setSource(text)
+      setSource(restored)
       setSaved(text)
+      setMovedUnder(draft !== null && restored !== text && draft.base !== fingerprintOf(text))
+      setConfirmingDiscard(false)
       // Remembered only once the read succeeded. A name that could not be
       // opened must not become the one the panel returns to next time.
       setRecents(noteOpened(file))
-      setResult(await compileSource(file, text))
+      // The text on screen is the one compiled, so the console and the gutter
+      // speak about what the trader is looking at.
+      setResult(await compileSource(file, restored))
     } catch (error) {
       setResult({
         ok: false,
@@ -415,6 +541,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       setResult(compiled)
       await saveScript(open, source)
       setSaved(source)
+      setMovedUnder(false)
       await refresh()
     } catch (error) {
       setResult({
@@ -432,7 +559,10 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
     setBusy(true)
     try {
       await deleteScript(open)
+      dropDraft(open)
       setRecents(forgetScript(open))
+      setMovedUnder(false)
+      setConfirmingDiscard(false)
       setOpen(null)
       setSource('')
       setSaved('')
@@ -458,6 +588,11 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
     try {
       const starter = starterFor(newName, newKind)
       await saveScript(file, starter)
+      // A draft left under this name by a script deleted from another tab is
+      // not about this one, and must not be restored over its starter later.
+      dropDraft(file)
+      setMovedUnder(false)
+      setConfirmingDiscard(false)
       setOpen(file)
       setSource(starter)
       setSaved(starter)
@@ -474,6 +609,28 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       setBusy(false)
     }
   }, [newName, newKind, refresh])
+
+  /**
+   * Throws the unsaved edit away and puts the saved text back.
+   *
+   * Only ever reached through the discard row, never from a key or a switch:
+   * with drafts kept, this is the one way an edit is lost, and it should take a
+   * decision rather than a slip.
+   */
+  const discard = useCallback(async () => {
+    if (open === null) return
+    dropDraft(open)
+    setSource(saved)
+    setMovedUnder(false)
+    setConfirmingDiscard(false)
+    setResult(await compileSource(open, saved))
+  }, [open, saved])
+
+  /** Asks the discard question, from a menu, which has to hand the row its focus. */
+  const askDiscardFromMenu = useCallback(() => {
+    wantsDiscardFocus.current = true
+    setConfirmingDiscard(true)
+  }, [])
 
   const startNaming = useCallback(() => {
     setNewName('')
@@ -494,6 +651,12 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
    * closes the menu, and on the tick this runs the field may not exist yet.
    */
   const keepNameFocus = useCallback((event: Event) => {
+    if (wantsDiscardFocus.current) {
+      wantsDiscardFocus.current = false
+      event.preventDefault()
+      requestAnimationFrame(() => keepEditingRef.current?.focus())
+      return
+    }
     if (!wantsNameFocus.current) return
     wantsNameFocus.current = false
     event.preventDefault()
@@ -511,6 +674,23 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
    */
   const applyToChart = useCallback(() => {
     if (open === null) return
+
+    // Applying a strategy means testing it over the chart's history and marking
+    // what it did, which is the only thing "apply" can honestly mean for a
+    // script that trades: the chart tier draws and does not trade, so a
+    // strategy is not in the indicator list and adding it there was refused by
+    // the engine with OS6006. Handed to the backtest instead of refused.
+    if (kind === 'strategy') {
+      if (onBacktest?.(open)) return
+      setResult((previous) => ({
+        ok: previous?.ok ?? false,
+        diagnostics: previous?.diagnostics ?? [],
+        problem: 'There is no chart open to test this strategy against.',
+      }))
+      setConsoleOpen(true)
+      return
+    }
+
     if (onAddToChart(idForScript(open))) return
     setResult((previous) => ({
       ok: previous?.ok ?? false,
@@ -518,18 +698,78 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       problem: 'There is no chart open to add this study to.',
     }))
     setConsoleOpen(true)
-  }, [open, onAddToChart])
+  }, [kind, onBacktest, open, onAddToChart])
+
+  /**
+   * Makes an indent in the editor, as one step the trader can undo.
+   *
+   * The browser's own insertion is used where it exists, because it is what
+   * puts an edit on the text area's undo stack: Ctrl+Z after a Tab then takes
+   * back the indent, as it would in any editor. It raises the same input event
+   * typing does, so the source, the colours behind the text and the gutter all
+   * follow it through the ordinary change handler. Where that insertion is not
+   * available the new text goes through state instead, and the selection is
+   * restored once it has rendered, since writing a new value into a text area
+   * puts the caret at the end.
+   */
+  const applyIndent = useCallback((area: HTMLTextAreaElement, edit: IndentEdit) => {
+    const before = area.value
+    const after = before.slice(0, edit.from) + edit.text + before.slice(edit.to)
+    area.setSelectionRange(edit.from, edit.to)
+    let inserted = false
+    try {
+      inserted =
+        edit.text === ''
+          ? document.execCommand('delete')
+          : document.execCommand('insertText', false, edit.text)
+    } catch {
+      inserted = false
+    }
+    if (inserted && area.value === after) {
+      area.setSelectionRange(edit.selectionStart, edit.selectionEnd)
+      setCaret(caretAt(area))
+      return
+    }
+    pendingSelection.current = { start: edit.selectionStart, end: edit.selectionEnd }
+    setSource(after)
+  }, [])
 
   // Ctrl+S is what anyone editing text reaches for, and without it the browser
   // opens its own save dialog over the panel.
+  //
+  // Tab indents and Shift+Tab takes an indent back out, because a text area
+  // would otherwise hand the key to the browser and move focus out of the
+  // editor mid-block. Escape and then Tab is the way out for a keyboard, and
+  // the status bar says so while the editor has focus. Tab with Ctrl, Alt or
+  // Meta is left alone: those belong to the browser and the operating system.
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
         void store()
+        return
+      }
+      if (event.key === 'Escape') {
+        tabLeaves.current = true
+        setTabHint('leave')
+        return
+      }
+      if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        if (tabLeaves.current || event.nativeEvent.isComposing) return
+        event.preventDefault()
+        const area = event.currentTarget
+        const edit = event.shiftKey
+          ? outdentEdit(area.value, area.selectionStart, area.selectionEnd)
+          : indentEdit(area.value, area.selectionStart, area.selectionEnd)
+        if (edit !== null) applyIndent(area, edit)
+        return
+      }
+      if (event.key !== 'Shift' && tabLeaves.current) {
+        tabLeaves.current = false
+        setTabHint('indent')
       }
     },
-    [store]
+    [store, applyIndent]
   )
 
   return (
@@ -598,6 +838,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                     className={cn('text-xs', file === open && 'text-primary')}
                   >
                     <span className="truncate">{stemOf(file)}</span>
+                    {hasDraft(file) && <UnsavedMark />}
                   </DropdownMenuItem>
                 ))}
                 {others.length > 0 && <DropdownMenuSeparator />}
@@ -610,6 +851,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                 className="text-xs"
               >
                 <span className="truncate">{stemOf(script.file)}</span>
+                {hasDraft(script.file) && <UnsavedMark />}
               </DropdownMenuItem>
             ))}
             {scripts !== null && scripts.length === 0 && (
@@ -673,6 +915,14 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
               <DropdownMenuItem className="text-xs" onSelect={startNamingFromMenu}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
                 New script
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-xs"
+                disabled={busy || !dirty}
+                onSelect={askDiscardFromMenu}
+              >
+                <Undo2 className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+                Discard unsaved changes
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -741,11 +991,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                 </button>
               ))}
             </div>
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              {newKind === 'study'
-                ? 'Computes and draws on the chart.'
-                : 'Draws, and places orders. Backtesting is not built yet.'}
-            </p>
+            <p className="text-[10px] leading-snug text-muted-foreground">{KIND_HINT[newKind]}</p>
           </fieldset>
 
           <div className="flex gap-1.5">
@@ -767,6 +1013,59 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
               Cancel
             </button>
           </div>
+        </div>
+      )}
+
+      {/* The discard question, in the panel's own shape rather than a browser
+          dialog. The safe answer takes focus, so a stray Enter keeps the work. */}
+      {confirmingDiscard && open !== null && dirty && (
+        <div
+          role="alertdialog"
+          aria-label={`Discard unsaved changes to ${stemOf(open)}`}
+          className="shrink-0 space-y-1.5 border-b px-2 py-2"
+        >
+          <p className="text-[11px] leading-snug">
+            Discard your unsaved changes to {stemOf(open)}? The saved copy stays as it is.
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              className={cn(CHIP, 'text-destructive hover:text-destructive')}
+              onClick={() => void discard()}
+            >
+              Discard changes
+            </button>
+            <button
+              ref={keepEditingRef}
+              type="button"
+              className={CHIP}
+              onClick={() => setConfirmingDiscard(false)}
+            >
+              Keep editing
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Said only when it matters: a kept draft is normal and the status bar
+          already calls it unsaved, but one typed over an older copy of the file
+          would replace the newer copy on save. */}
+      {movedUnder && open !== null && dirty && !confirmingDiscard && (
+        <div className="shrink-0 border-b bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+          These are unsaved changes from earlier, and the saved copy of {stemOf(open)} has changed
+          since. Saving replaces that copy with this one.{' '}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={() => {
+              // This note gives way to the question, so the question's safe
+              // answer takes the focus the button it came from is taking away.
+              setConfirmingDiscard(true)
+              requestAnimationFrame(() => keepEditingRef.current?.focus())
+            }}
+          >
+            Discard changes
+          </button>
         </div>
       )}
 
@@ -860,6 +1159,7 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                 ))}
               </pre>
               <textarea
+                ref={areaRef}
                 value={source}
                 // A paste can bring carriage returns in, and the editor works
                 // in the language's own normal form so the text, the compiler's
@@ -868,6 +1168,14 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                 // only rewrites when there was something to rewrite.
                 onChange={(event) => setSource(withoutCarriageReturns(event.target.value))}
                 onKeyDown={onKeyDown}
+                onFocus={() => {
+                  tabLeaves.current = false
+                  setTabHint('indent')
+                }}
+                onBlur={() => {
+                  tabLeaves.current = false
+                  setTabHint(null)
+                }}
                 onSelect={(event) => setCaret(caretAt(event.currentTarget))}
                 onScroll={(event) =>
                   setScrolled({
@@ -884,12 +1192,17 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                 // source on one row. See EDITOR_TEXT for why that matters.
                 wrap="off"
                 aria-label={`Source of ${open}`}
+                aria-describedby="script-editor-keys"
                 className={cn(
                   EDITOR_TEXT,
                   'absolute inset-0 h-full w-full resize-none bg-transparent text-transparent caret-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring'
                 )}
                 style={{ lineHeight: `${LINE_HEIGHT}px` }}
               />
+              <p id="script-editor-keys" className="sr-only">
+                Tab indents with spaces and Shift+Tab takes an indent back out. To leave the editor
+                with the keyboard, press Escape, then Tab.
+              </p>
             </div>
           </div>
 
@@ -1016,6 +1329,18 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
                 'Ready'
               )}
             </span>
+            {/* How to get out of the editor, said while it has focus and Tab has
+                been given to the text. The live region repeats the change for a
+                screen reader, which would not otherwise hear that Escape did
+                anything. */}
+            {tabHint !== null && (
+              <span aria-hidden className="shrink-0 text-[10px] text-muted-foreground">
+                {tabHint === 'leave' ? 'Tab now leaves the editor' : 'Esc then Tab to leave'}
+              </span>
+            )}
+            <span aria-live="polite" className="sr-only">
+              {tabHint === 'leave' ? 'Tab now leaves the editor.' : ''}
+            </span>
             <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
               Ln {caret.line}, Col {caret.column}
             </span>
@@ -1024,4 +1349,9 @@ export function ScriptPanel({ onAddToChart, openFile = null, onOpened }: Props) 
       )}
     </PanelShell>
   )
+}
+
+/** The mark beside a script in the menu that has an edit waiting to be saved. */
+function UnsavedMark() {
+  return <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">unsaved</span>
 }

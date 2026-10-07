@@ -17,6 +17,15 @@ export interface StoredScript {
   file: string
   mtime: number
   bytes: number
+  /**
+   * Whether a compiled program is stored beside this source.
+   *
+   * The same question as whether anything server side could run this script.
+   * The compiler is in the browser and nowhere else, so a script the browser
+   * has never compiled cleanly has no program stored for it, and a runner has
+   * nothing to walk.
+   */
+  program: boolean
 }
 
 /**
@@ -70,6 +79,21 @@ export interface CompileResult {
    * carries every diagnostic in full.
    */
   line?: number
+  /**
+   * The compiled program, in the canonical encoding, when the script compiles.
+   *
+   * Text rather than an object, and that is the point. The canonical encoding
+   * is what a program's hash is taken over and what an engine loading a program
+   * from text insists on, so those are the bytes that have to travel and be
+   * stored. Handing the object to JSON.stringify on the way out would produce
+   * different bytes, and the stored program would be refused when an engine
+   * came to load it.
+   *
+   * Present only when `ok`. The emitter recovers, so a script with an error in
+   * it still produces a program, and storing that one would leave a program
+   * that cannot compute where a runner will find it.
+   */
+  program?: string
 }
 
 const BASE = '/openscript'
@@ -114,7 +138,17 @@ export async function listScripts(signal?: AbortSignal): Promise<StoredScript[]>
   })
   if (!response.ok) throw new Error('Your scripts could not be listed. Try again in a moment.')
   const body = await response.json()
-  return Array.isArray(body) ? (body as StoredScript[]) : []
+  if (!Array.isArray(body)) return []
+  // Read field by field rather than cast, for the sake of `program`: an
+  // installation whose backend predates compiled programs answers without it,
+  // and a panel asking whether a script is runnable has to read false there
+  // rather than undefined.
+  return body.map((entry) => ({
+    file: String(entry?.file ?? ''),
+    mtime: Number(entry?.mtime) || 0,
+    bytes: Number(entry?.bytes) || 0,
+    program: entry?.program === true,
+  }))
 }
 
 /**
@@ -155,19 +189,49 @@ async function writeHeaders(): Promise<HeadersInit> {
   }
 }
 
-/** Creates or replaces one script, and answers with what the server stored. */
-export async function saveScript(file: string, source: string): Promise<StoredScript> {
+/**
+ * Creates or replaces one script, with the compiled program beside it.
+ *
+ * **The program travels with the save, and this is the only place it can come
+ * from.** The compiler is TypeScript, the engine that will run a strategy on
+ * the server is Python with no compiler in it, and the server has no JavaScript
+ * runtime to fall back on. The browser is therefore the one place in the whole
+ * deployment where a program can be produced, and a save carrying only the
+ * source would leave nothing server side able to run the script, ever.
+ *
+ * `compiled` is the result a caller already has. The panel compiles before it
+ * writes so it can say what is wrong, and handing that result over saves
+ * compiling the same text twice; a caller with nothing gets a compile of its
+ * own, so this is correct either way and no caller has to remember. A stale
+ * result is not a silent failure either: a program records the hash of the
+ * source it was built from, and the server refuses a pair that disagrees.
+ *
+ * A script that does not compile is still saved. Being half way through a
+ * thought is not a reason to lose it, and the server reads a source with no
+ * program as exactly that: kept, editable, and not runnable.
+ */
+export async function saveScript(
+  file: string,
+  source: string,
+  compiled?: CompileResult,
+): Promise<StoredScript> {
+  const result = compiled ?? (await compileSource(file, source))
   const response = await fetch(`${BASE}/${encodeURIComponent(file)}`, {
     method: 'POST',
     credentials: 'include',
     headers: await writeHeaders(),
-    body: JSON.stringify({ source }),
+    body: JSON.stringify({ source, program: result.program ?? null }),
   })
   if (!response.ok) {
     throw new Error(await readMessage(response, `${file} could not be saved.`))
   }
   const body = await response.json()
-  return { file, mtime: Number(body.mtime) || 0, bytes: Number(body.bytes) || 0 }
+  return {
+    file,
+    mtime: Number(body.mtime) || 0,
+    bytes: Number(body.bytes) || 0,
+    program: body.program === true,
+  }
 }
 
 /** Removes one script and the backup taken of it. */
@@ -194,7 +258,7 @@ export async function deleteScript(file: string): Promise<void> {
  * read-through into four saves.
  */
 export async function compileSource(file: string, source: string): Promise<CompileResult> {
-  const { sourceFile, lex, parseTokens, check, emit, DiagnosticBag } = await import(
+  const { sourceFile, lex, parseTokens, check, emit, canonicalise, DiagnosticBag } = await import(
     'openalgo-script'
   )
 
@@ -224,6 +288,12 @@ export async function compileSource(file: string, source: string): Promise<Compi
   return {
     ok,
     diagnostics,
+    // The canonical encoding, taken from the language rather than from
+    // JSON.stringify, and only for a script that would actually run. The
+    // encoder is the one a program's hash is defined over; a host that wrote
+    // its own would agree with it until the first number that reads back two
+    // ways.
+    program: ok ? canonicalText(canonicalise, emitted.program) : undefined,
     // Taken from the compiled program, which is the language's own answer,
     // falling back to the declaration the lexer found when nothing compiled.
     kind:
@@ -238,6 +308,24 @@ export async function compileSource(file: string, source: string): Promise<Compi
       emitted.program === undefined && diagnostics.length === 0
         ? 'This script did not compile, and the compiler gave no reason. Please report it.'
         : undefined,
+  }
+}
+
+/**
+ * The canonical encoding of a program, or nothing when it cannot be written.
+ *
+ * The encoder refuses a value the format cannot hold, a number that is not
+ * finite being the one that exists, and it refuses by throwing. None of that is
+ * the author's doing and none of it is a diagnostic, so it must not take the
+ * save down with it: the script is written, no program is stored, and the
+ * script reads as not runnable, which is the truth.
+ */
+function canonicalText(encode: (value: unknown) => string, program: unknown): string | undefined {
+  if (program === undefined) return undefined
+  try {
+    return encode(program)
+  } catch {
+    return undefined
   }
 }
 
@@ -274,6 +362,20 @@ export function fileForScriptId(indicatorId: string): string | null {
   const stem = indicatorId.slice(ID_PREFIX.length)
   if (!NAME_PATTERN.test(stem)) return null
   return `${stem}.oscript`
+}
+
+/**
+ * Whether a study on the chart is an instance of one of the trader's scripts.
+ *
+ * A settings request names the instance, not the study it was made from, and
+ * the chart names an instance after its study: `<indicator id>-<n>`, the same
+ * name carried through a saved layout. So an instance of a script carries the
+ * prefix its study id does. The settings dialog asks this because a script and
+ * a JavaScript indicator read some settings differently, an interval above all.
+ * `openscriptIntervals.test.ts` holds the naming to the installed chart.
+ */
+export function isScriptInstance(instanceId: string): boolean {
+  return instanceId.startsWith(ID_PREFIX)
 }
 
 /**

@@ -464,32 +464,42 @@ class FyersTbtWebSocket:
 
         state = self.depth_data[ticker]
 
-        # Process bids - update state at specific indices
-        # Only update if the value is non-zero (0 means "no change" or "empty")
-        if depth.bids:
-            for i, bid in enumerate(depth.bids):
-                if i >= 50:
-                    break
-                # Update price only if present and non-zero
-                if bid.HasField("price") and bid.price.value > 0:
-                    state["buy"][i]["price"] = bid.price.value / 100
-                if bid.HasField("qty") and bid.qty.value > 0:
-                    state["buy"][i]["quantity"] = bid.qty.value
-                if bid.HasField("nord") and bid.nord.value > 0:
-                    state["buy"][i]["orders"] = bid.nord.value
+        # Snapshot replaces the book; diffs accumulate on top of it.
+        if is_snapshot:
+            state["buy"] = [{"price": 0, "quantity": 0, "orders": 0} for _ in range(50)]
+            state["sell"] = [{"price": 0, "quantity": 0, "orders": 0} for _ in range(50)]
 
-        # Process asks - update state at specific indices
+        # Process bids - index by protobuf MarketLevel.num (true position 0-49).
+        # Diffs carry only changed levels, so the loop counter is not the position.
+        if depth.bids:
+            for bid in depth.bids:
+                if not bid.HasField("num"):
+                    continue
+                idx = bid.num.value
+                if not 0 <= idx < 50:
+                    continue
+                # Update on HasField even when value is 0 so cleared levels go stale-free.
+                if bid.HasField("price"):
+                    state["buy"][idx]["price"] = bid.price.value / 100
+                if bid.HasField("qty"):
+                    state["buy"][idx]["quantity"] = bid.qty.value
+                if bid.HasField("nord"):
+                    state["buy"][idx]["orders"] = bid.nord.value
+
+        # Process asks - same num-based indexing as bids.
         if depth.asks:
-            for i, ask in enumerate(depth.asks):
-                if i >= 50:
-                    break
-                # Update price only if present and non-zero
-                if ask.HasField("price") and ask.price.value > 0:
-                    state["sell"][i]["price"] = ask.price.value / 100
-                if ask.HasField("qty") and ask.qty.value > 0:
-                    state["sell"][i]["quantity"] = ask.qty.value
-                if ask.HasField("nord") and ask.nord.value > 0:
-                    state["sell"][i]["orders"] = ask.nord.value
+            for ask in depth.asks:
+                if not ask.HasField("num"):
+                    continue
+                idx = ask.num.value
+                if not 0 <= idx < 50:
+                    continue
+                if ask.HasField("price"):
+                    state["sell"][idx]["price"] = ask.price.value / 100
+                if ask.HasField("qty"):
+                    state["sell"][idx]["quantity"] = ask.qty.value
+                if ask.HasField("nord"):
+                    state["sell"][idx]["orders"] = ask.nord.value
 
         # Update total quantities if present
         if depth.HasField("tbq"):

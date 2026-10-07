@@ -12,6 +12,7 @@ import {
 import { Input } from '@/components/ui/input'
 import type { ChartWorkspaceCatalogState } from '@/hooks/useChartWorkspaceCatalog'
 import type { TradingTerminal } from '@/lib/trading/terminal'
+import { Tip } from './Tip'
 
 export type IndicatorTemplateTarget = Pick<
   TradingTerminal,
@@ -44,6 +45,8 @@ export function IndicatorTemplates({
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [message, setMessage] = useState('')
+  /** Deleting waits for a second, explicit press: a template is not in any undo history. */
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const alive = useRef(true)
   const inFlight = useRef(false)
   const selected = catalog?.templates.find((item) => item.id === selectedId)
@@ -58,6 +61,10 @@ export function IndicatorTemplates({
   useEffect(() => {
     setSavedName(selected?.name ?? '')
   }, [selected?.name])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the question belongs to the template it was asked about
+  useEffect(() => {
+    setConfirmDelete(false)
+  }, [selected?.id])
 
   async function perform(action: () => Promise<ActionResult>) {
     if (inFlight.current || disabled) return
@@ -94,17 +101,23 @@ export function IndicatorTemplates({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          data-workspace-control
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0 px-2.5 text-xs"
-          title="Templates for the selected chart"
-        >
-          Templates
-        </Button>
-      </DialogTrigger>
+      <Tip
+        tip={{
+          title: 'Indicator templates',
+          sub: 'Save the studies on the selected chart, or apply a saved set',
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button
+            data-workspace-control
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 px-2.5 text-xs"
+          >
+            Templates
+          </Button>
+        </DialogTrigger>
+      </Tip>
       <DialogContent
         data-workspace-control
         className="max-h-[90dvh] overflow-y-auto sm:max-w-xl"
@@ -199,6 +212,23 @@ export function IndicatorTemplates({
                     {mode === 'replace' ? 'Replace studies' : 'Add studies'}
                   </Button>
                 ))}
+                <Button
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() =>
+                    void perform(async () => {
+                      const indicators = chart().captureIndicatorTemplate()
+                      await run((repository) => repository.saveTemplate(selected.id, indicators))
+                      return {
+                        message: `${selected.name} now holds the ${indicators.length} ${
+                          indicators.length === 1 ? 'study' : 'studies'
+                        } on the selected chart`,
+                      }
+                    })
+                  }
+                >
+                  Update with current chart
+                </Button>
               </div>
               <label htmlFor={`${id}-rename`} className="mt-2 text-sm font-medium">
                 Saved template name
@@ -244,15 +274,8 @@ export function IndicatorTemplates({
                 </Button>
                 <Button
                   variant="outline"
-                  disabled={disabled}
-                  onClick={() =>
-                    void perform(async () => {
-                      await run((repository) =>
-                        repository.remove('indicator-template', selected.id)
-                      )
-                      return { message: 'Template deleted', select: '' }
-                    })
-                  }
+                  disabled={disabled || confirmDelete}
+                  onClick={() => setConfirmDelete(true)}
                 >
                   Delete
                 </Button>
@@ -283,6 +306,38 @@ export function IndicatorTemplates({
                   Export JSON
                 </Button>
               </div>
+              {confirmDelete && (
+                <div
+                  role="alertdialog"
+                  aria-label="Delete template"
+                  className="grid gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+                >
+                  <p className="text-sm">
+                    Delete the template {selected.name}? Charts that already use its studies keep
+                    them. This cannot be undone.
+                  </p>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+                      Keep template
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      disabled={disabled}
+                      onClick={() =>
+                        void perform(async () => {
+                          await run((repository) =>
+                            repository.remove('indicator-template', selected.id)
+                          )
+                          setConfirmDelete(false)
+                          return { message: 'Template deleted', select: '' }
+                        })
+                      }
+                    >
+                      Delete template
+                    </Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

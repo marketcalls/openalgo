@@ -128,7 +128,7 @@ const err = once(errors)
 const warn = once(warnings)
 const note = once(notes)
 
-// The library's IndicatorInput union, which has exactly EIGHT members.
+// The input types /trading renders: eight of the library's IndicatorInput union.
 //
 // This set once also listed 'session', 'timeframe', 'symbol' and 'price',
 // described as added in 1.8.1. They were never added, and whitelisting them
@@ -142,11 +142,13 @@ const note = once(notes)
 // remains a `text` input the indicator parses itself; a fixed set of choices
 // remains a `select`.
 //
-// The runtime list in `frontend/src/lib/trading/customIndicators.ts` is the
-// authority on what registers, and this has to agree with it, or a file the
-// app runs happily is refused by the gate. 'expiries' is ours rather than the
-// library's - the dialog renders it as a tick list of the underlying's
-// nearest option expiries and hands back a comma-separated string.
+// 2.5.4 then added `symbol`, `session`, `multiline`, `price` and `timestamp`
+// to the library. They stay out of this set because OpenAlgo's loader
+// (frontend/src/lib/trading/customIndicators.ts) is the authority on what
+// registers, and this has to agree with it, or a file the app runs happily is
+// refused by the gate (and the reverse). 'expiries' is ours rather than the
+// library's - the dialog renders it as a tick list of the underlying's nearest
+// option expiries and hands back a comma-separated string.
 const INPUT_TYPES = new Set([
   'number', 'boolean', 'color', 'text', 'select', 'source', 'interval', 'time',
   'expiries',

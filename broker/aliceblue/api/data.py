@@ -12,6 +12,7 @@ import pandas as pd
 from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from database.auth_db import Auth
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -31,6 +32,22 @@ HISTORICAL_API_URL = BASE_URL + "open-api/od/ChartAPIService/api/chart/history"
 # dead token; bounded by the one broker session this instance can hold.
 _WS_REGISTRY: dict = {}
 _WS_REGISTRY_LOCK = threading.Lock()
+
+# Held for the whole build of a socket: look up, connect, register. The first
+# burst after an idle minute (an option chain firing multiquotes, depth and an
+# index quote together) used to send every request down the build path at
+# once, and each loser's socket was overwritten in the registry and never
+# disconnected; its connect had invalidated the winner's server session, and
+# its reconnect loop, which has no attempt cap, ran for the life of the worker.
+# Callers queue here instead and take the socket the first one built. A plain
+# stdlib lock: only request threads take it, and it is green under eventlet.
+_WS_CREATE_LOCK = threading.Lock()
+
+# Bumped, under _WS_REGISTRY_LOCK, every time a socket is registered. A caller
+# reads it before queueing on _WS_CREATE_LOCK, so once through it can tell a
+# socket built while it waited (take it) from the one it found wanting
+# (replace it).
+_ws_generation = 0
 
 
 def close_all_websockets():
@@ -116,6 +133,32 @@ class BrokerData:
             if cached is not None and cached.is_websocket_connected():
                 return cached
 
+        # One build at a time. Read the generation before queueing, so a socket
+        # another request registers while this one waits counts as newer than
+        # the one this request found missing, idle or broken, even under
+        # force_new: two requests asking for a fresh socket at once must not
+        # tear down each other's.
+        with _WS_REGISTRY_LOCK:
+            seen_generation = _ws_generation
+        with _WS_CREATE_LOCK:
+            with _WS_REGISTRY_LOCK:
+                current = _WS_REGISTRY.get(self.session_id)
+                built_meanwhile = _ws_generation != seen_generation
+            if built_meanwhile and current is not None and current.is_websocket_connected():
+                return current
+            return self._build_websocket()
+
+    def _build_websocket(self):
+        """Replace this session's socket with a freshly connected one.
+
+        Called only while holding _WS_CREATE_LOCK.
+
+        Returns:
+            AliceBlueWebSocket: The connected socket, or None if it could not
+            be built.
+        """
+        global _ws_generation
+
         try:
             # Drop whatever was registered for this session before replacing it,
             # so a stale socket and its threads are not left behind.
@@ -173,13 +216,14 @@ class BrokerData:
             # socket is authenticated with a dead one. Leaving it registered
             # would strand a socket plus its reader and heartbeat threads every
             # single day in a worker that never restarts.
+            # Anything else still registered under this session is superseded
+            # too and is closed rather than overwritten and orphaned.
             with _WS_REGISTRY_LOCK:
-                superseded = [
-                    (sid, sock) for sid, sock in _WS_REGISTRY.items() if sid != self.session_id
-                ]
+                superseded = [(sid, sock) for sid, sock in _WS_REGISTRY.items() if sock is not ws]
                 for sid, _ in superseded:
                     del _WS_REGISTRY[sid]
                 _WS_REGISTRY[self.session_id] = ws
+                _ws_generation += 1
 
             for _, sock in superseded:
                 logger.info("Closing AliceBlue WebSocket for a superseded session")
@@ -574,14 +618,17 @@ class BrokerData:
             if not success:
                 raise Exception(f"Failed to subscribe to depth for {symbol} on {exchange}")
 
-            # Wait for depth data to arrive
-            time.sleep(2.0)
+            try:
+                # Wait for depth data to arrive
+                time.sleep(2.0)
 
-            # Retrieve depth from WebSocket
-            depth = websocket.get_market_depth(api_exchange, token)
-
-            # Unsubscribe after getting the data
-            websocket.unsubscribe([instrument], is_depth=True)
+                # Retrieve depth from WebSocket
+                depth = websocket.get_market_depth(api_exchange, token)
+            finally:
+                # Unsubscribe after getting the data, on every path: the socket
+                # counts subscribers, and a claim never given back would keep
+                # this instrument subscribed for the life of the socket.
+                websocket.unsubscribe([instrument], is_depth=True)
 
             if not depth:
                 raise Exception(f"No market depth received for {symbol} on {exchange}")
@@ -905,6 +952,10 @@ class BrokerData:
                 response = client.post(HISTORICAL_API_URL, headers=headers, json=payload, timeout=15)
                 response.raise_for_status()
                 data = response.json()
+            except BrokerBusyError:
+                # Refused by the rate limiter (gthread only) and never sent: say
+                # so, rather than return an empty frame that reads as "no data".
+                raise
             except httpx.HTTPStatusError as http_err:
                 logger.error(f"HTTP Error: {http_err}")
                 logger.error(f"Response body: {http_err.response.text[:500]}")
@@ -1049,6 +1100,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")
             return pd.DataFrame()
