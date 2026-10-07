@@ -1,6 +1,6 @@
 ---
 name: openscript
-description: Write an OpenScript study or strategy for OpenAlgo, and install it into strategies/openscript/ only after it compiles. Use when asked to create, port or debug an OpenScript indicator, study, strategy, backtest script or .oscript file, including porting a study or strategy written for another charting platform. This is the OpenScript path, not the JavaScript chart-indicator path and not the Python openalgo.ta path.
+description: Write an OpenScript study or strategy for OpenAlgo, and install it into strategies/openscript/ only after it compiles. Use when asked to create, port or debug an OpenScript indicator, study, strategy, backtest script or .oscript file, including porting a study or strategy written for another charting platform, or a JavaScript chart indicator (an openalgo-charts descriptor) into a study that computes the same values. This is the OpenScript path, not the JavaScript chart-indicator path and not the Python openalgo.ta path.
 argument-hint: "[what the study or strategy should do]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
@@ -83,6 +83,7 @@ and they are not optional.
 | `reference/library.md` | every one of the 350 names, with what it answers and its warmup. Generated from the installed compiler. |
 | `reference/pitfalls.md` | what goes wrong, with the diagnostic code you will actually see. Every code on it is proved against the compiler. |
 | `reference/strategies.md` | the shapes a strategy takes, and which example answers which ask. |
+| `reference/porting-from-javascript.md` | porting a JavaScript chart indicator into a study that computes the same values: the chart helpers whose OpenScript twin differs, absent values, `fn` scope, markers, tables, inputs, and how to check parity. |
 | `examples/*.oscript` | six worked files, all of which compile. The reasoning is in the comments. |
 
 **Look a name up rather than recalling it.** 350 names is more than anyone holds,
@@ -107,6 +108,12 @@ The output is a draft, not a port. Read every finding: a warning marks a place
 where the numbers can differ from the original, and a line kept as a comment is
 behaviour that did not come across. Then take it through `validate.mjs` like
 any other draft.
+
+To port a JavaScript chart indicator (an `openalgo-charts` descriptor handed to
+`registerIndicator`, with `calc(bars, settings)`) into a study, read
+`reference/porting-from-javascript.md` first: there is no importer for that
+direction, and several chart helpers share a name with a built-in that computes
+something else.
 
 ## Three things that cost the most time
 
