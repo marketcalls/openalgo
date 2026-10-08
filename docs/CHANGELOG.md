@@ -587,6 +587,11 @@ update; no behaviour change is expected.
   exhaustion from crafted input), `postcss-selector-parser` 7.1.6, and `katex`
   0.18. KaTeX is a dependency of the chat UI library that OpenAlgo never loads,
   so no page changes.
+- Frontend code editor: `@uiw/react-codemirror` and `@uiw/codemirror-themes`
+  4.25.4 to 4.25.12, with the CodeMirror 6 core they sit on (`view` 6.43,
+  `state` 6.7, `language` 6.13). These draw the strategy editor and log viewer
+  at `/python`, and the JSON views in Playground, Analyzer, Logs, TradingView
+  and GoCharting. Nothing changes on screen.
 - **Not fixed:** `braces`, used only by the frontend test tools, has an open
   advisory (GHSA-vfj7-8cjw-p6xm) with no patched release yet. It never reaches
   a browser or the server.
