@@ -955,6 +955,25 @@ def direct_place_order_api(data, auth):
         if resp.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
             payload_data = body.get("payload") or {}
             orderid = payload_data.get("groww_order_id")
+            order_status = str(payload_data.get("order_status") or "").upper()
+            if order_status in ("FAILED", "REJECTED"):
+                # Accepted by the API but failed straight away (e.g. a stop-loss
+                # trigger outside the allowed range); Groww's remark says why
+                remark = payload_data.get("remark") or "Groww rejected the order"
+                logger.warning(f"Groww order for {original_symbol} {order_status}: {body}")
+                return _Status(400), {"status": "error", "message": remark}, None
+            if not orderid:
+                # Never report success without an order ID to track or cancel
+                logger.error(f"Groww order reply without groww_order_id for {original_symbol}: {body}")
+                return (
+                    _Status(502),
+                    {
+                        "status": "error",
+                        "message": "Groww did not return an order ID. Check the order book "
+                        "before placing the order again.",
+                    },
+                    None,
+                )
             formatted_response = {
                 "groww_order_id": orderid,
                 "order_status": payload_data.get("order_status"),

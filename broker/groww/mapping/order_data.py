@@ -133,7 +133,17 @@ def transform_order_data(orders):
         "order_status",
         "timestamp",
     )
-    return [{f: order.get(f, "") for f in fields} for order in _orders_from(orders)]
+    rows = []
+    for order in _orders_from(orders):
+        row = {f: order.get(f, "") for f in fields}
+        # The shared Order Book treats `open` as its actionable working state
+        # (Cancel/Modify). A TRIGGER_PENDING stop-loss is live and can be
+        # modified or cancelled, so show it as open here, as Zerodha does;
+        # statistics still count it from map_order_data's detailed status.
+        if row["order_status"] == "trigger pending":
+            row["order_status"] = "open"
+        rows.append(row)
+    return rows
 
 
 def map_trade_data(trade_data):
