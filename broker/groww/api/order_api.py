@@ -33,7 +33,6 @@ from broker.groww.mapping.transform_data import (
     TRANSACTION_TYPE_SELL,
     # Constants
     VALIDITY_DAY,
-    VALIDITY_IOC,
     map_exchange,
     map_exchange_type,
     map_order_type,
@@ -748,6 +747,13 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     return net_qty
 
 
+class _Status:
+    """The HTTP status the order services read from a broker response (res.status)."""
+
+    def __init__(self, status):
+        self.status = status
+
+
 def direct_place_order_api(data, auth):
     """
     Place an order with Groww using direct API (no SDK)
@@ -771,6 +777,10 @@ def direct_place_order_api(data, auth):
         original_exchange = data.get("exchange", "NSE")
         quantity = int(data.get("quantity"))
 
+        # An exchange Groww cannot trade is the reason to give, before any
+        # symbol lookup (MCX contracts are in the master contract)
+        map_exchange_type(original_exchange)
+
         # First, try to look up the broker symbol (brsymbol) directly from the database
         from broker.groww.database.master_contract_db import SymToken, db_session
 
@@ -782,16 +792,14 @@ def direct_place_order_api(data, auth):
                 .first()
             )
 
-        if db_record and db_record.brsymbol:
-            # Use the broker symbol from the database if found
-            trading_symbol = db_record.brsymbol
-            logger.debug(f"Using brsymbol from database: {original_symbol} -> {trading_symbol}")
-        else:
-            # If not found in database, try format conversion as fallback
-            trading_symbol = format_openalgo_to_groww_symbol(original_symbol, original_exchange)
-            logger.debug(
-                f"Symbol not found in database, using conversion: {original_symbol} -> {trading_symbol}"
+        if not (db_record and db_record.brsymbol):
+            # Groww's trading_symbol comes from its instrument file; a guessed
+            # symbol could name a different contract
+            raise ValueError(
+                f"{original_symbol} is not in the {original_exchange} master contract. "
+                "Check the symbol, or download the master contract again."
             )
+        trading_symbol = db_record.brsymbol
 
         # Map the rest of the parameters to Groww API format
         product = map_product_type(data.get("product", "CNC"))
@@ -903,137 +911,51 @@ def direct_place_order_api(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {auth}",
+            "X-API-VERSION": "1.0",
         }
 
-        # Make the API request using httpx client with connection pooling
         client = get_httpx_client()
-        logger.debug(f"Sending API request to {api_url} with payload: {json.dumps(payload)}")
-        logger.debug(f"Request headers: {headers}")
-
+        resp = client.post(api_url, json=payload, headers=headers)
+        logger.debug(f"Place order: HTTP {resp.status_code}, {resp.text}")
         try:
-            resp = client.post(api_url, json=payload, headers=headers)
-            logger.debug(f"API response status code: {resp.status_code}")
+            body = resp.json()
+        except ValueError:
+            body = None
 
-            # Log raw response for debugging
-            raw_response = resp.text
-            logger.debug(f"Raw API response: {raw_response}")
-        except Exception as e:
-            logger.error(f"Exception during API request: {str(e)}")
-            raise
+        # Success only when Groww says so (01-introduction, "Response structure")
+        if resp.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
+            payload_data = body.get("payload") or {}
+            orderid = payload_data.get("groww_order_id")
+            formatted_response = {
+                "groww_order_id": orderid,
+                "order_status": payload_data.get("order_status"),
+                "order_reference_id": payload_data.get("order_reference_id", order_reference_id),
+                "remark": payload_data.get("remark", "Order placed successfully"),
+                "trading_symbol": trading_symbol,
+                "symbol": original_symbol,
+            }
+            return _Status(200), formatted_response, orderid
 
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
+        message = _groww_error_message(body, f"Groww did not accept the order (HTTP {resp.status_code})")
+        logger.error(f"Groww refused order for {original_symbol}: HTTP {resp.status_code}, {message}")
+        status = resp.status_code if resp.status_code >= 400 else 400
+        return _Status(status), {"status": "error", "message": message}, None
 
-        # Handle the response
-        if resp.status_code == 200:
-            # Try to parse the response JSON
-            try:
-                response_data = resp.json()
-                logger.debug(f"Groww order response: {json.dumps(response_data)}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing response JSON: {e}")
-                response_data = {
-                    "status": "error",
-                    "message": f"Invalid JSON response: {raw_response}",
-                }
-                res = ResponseObject(400)
-                return res, response_data, None
-
-            if response_data.get("status") == "SUCCESS":
-                # Extract values from the response payload
-                payload_data = response_data.get("payload", {})
-                orderid = payload_data.get("groww_order_id")
-                order_status = payload_data.get("order_status")
-
-                logger.debug(f"Order ID: {orderid}, Status: {order_status}")
-
-                # Format response to match the expected structure
-                formatted_response = {
-                    "groww_order_id": orderid,
-                    "order_status": order_status,
-                    "order_reference_id": payload_data.get(
-                        "order_reference_id", order_reference_id
-                    ),
-                    "remark": payload_data.get("remark", "Order placed successfully"),
-                    "trading_symbol": trading_symbol,
-                    "symbol": original_symbol,  # Add original OpenAlgo symbol to response
-                }
-
-                res = ResponseObject(200)
-                return res, formatted_response, orderid
-            else:
-                # API call succeeded but order placement failed
-                error_message = response_data.get("message", "Unknown error")
-                error_mode = response_data.get("mode", "")
-                error_details = response_data.get("details", {})
-
-                logger.error(f"Order placement failed: {error_message}, Mode: {error_mode}")
-                logger.error(
-                    f"Error details: {json.dumps(error_details) if error_details else 'None provided'}"
-                )
-
-                # Special handling for numeric validation errors
-                if "Invalid numeric value" in error_message:
-                    logger.error("NUMERIC VALUE ERROR DETECTED - Debugging payload values:")
-                    for field in ["price", "trigger_price", "quantity", "disclosed_quantity"]:
-                        if field in payload:
-                            logger.error(
-                                f"Field: {field}, Value: {payload[field]}, Type: {type(payload[field])}"
-                            )
-
-                    # Additional debugging info about the request
-                    logger.error(f"Original data received: {json.dumps(data)}")
-
-                res = ResponseObject(400)
-                response_data = {"status": "error", "message": error_message, "mode": error_mode}
-                return res, response_data, None
-        else:
-            # API call failed
-            try:
-                error_data = resp.json()
-                error_message = error_data.get("message", f"API error: {resp.status_code}")
-                error_mode = error_data.get("mode", "")
-                error_details = error_data.get("details", {})
-
-                logger.error(
-                    f"API error response: Status: {resp.status_code}, Message: {error_message}, Mode: {error_mode}"
-                )
-                logger.error(
-                    f"Error details: {json.dumps(error_details) if error_details else 'None provided'}"
-                )
-
-                # Special handling for numeric validation errors
-                if "Invalid numeric value" in error_message:
-                    logger.error("NUMERIC VALUE ERROR DETECTED - Debugging payload values:")
-                    for field in ["price", "trigger_price", "quantity", "disclosed_quantity"]:
-                        if field in payload:
-                            logger.error(
-                                f"Field: {field}, Value: {payload[field]}, Type: {type(payload[field])}"
-                            )
-
-                    # Additional debugging info about the request
-                    logger.error(f"Original data received: {json.dumps(data)}")
-            except Exception as parse_error:
-                error_message = f"API error: {resp.status_code}. Raw response: {raw_response}"
-                logger.error(f"Failed to parse error response: {parse_error}")
-
-            logger.error(f"Error placing order: {error_message}")
-            res = ResponseObject(resp.status_code)
-            response_data = {"status": "error", "message": error_message}
-            return res, response_data, None
-
-    except Exception as e:
-        logger.exception(f"Error placing order: {e}")
-
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        res = ResponseObject(500)
-        response_data = {"status": "error", "message": str(e)}
-        return res, response_data, None
+    except ValueError as e:
+        # Refused before sending: unsupported exchange, product, price type,
+        # validity or action, an unknown symbol, or an invalid number
+        logger.warning(f"Order not sent to Groww: {e}")
+        return _Status(400), {"status": "error", "message": str(e)}, None
+    except Exception:
+        logger.exception("Error placing Groww order")
+        return (
+            _Status(500),
+            {
+                "status": "error",
+                "message": "Could not reach Groww to place the order. Check the order book before retrying.",
+            },
+            None,
+        )
 
 
 def place_order_api(data, auth):

@@ -3,9 +3,8 @@
 
 # Groww API constants based on the SDK documentation
 
-# Validity types
+# Validity types (annexure "Validity": DAY only)
 VALIDITY_DAY = "DAY"
-VALIDITY_IOC = "IOC"
 
 # Exchange types
 EXCHANGE_NSE = "NSE"
@@ -147,9 +146,12 @@ def map_order_type(pricetype):
         "SL": ORDER_TYPE_SL,
         "SL-M": ORDER_TYPE_SLM,
     }
-    return order_type_mapping.get(
-        pricetype.upper(), ORDER_TYPE_MARKET
-    )  # Default to MARKET if not found
+    order_type = order_type_mapping.get(str(pricetype).upper())
+    if order_type is None:
+        raise ValueError(
+            f"Groww does not support the {pricetype} price type. Use MARKET, LIMIT, SL or SL-M."
+        )
+    return order_type
 
 
 def map_exchange_type(exchange):
@@ -162,7 +164,18 @@ def map_exchange_type(exchange):
         "NFO": EXCHANGE_NSE,  # NFO is part of NSE for Groww
         "BFO": EXCHANGE_BSE,  # BSE futures & options
     }
-    return exchange_mapping.get(exchange.upper(), EXCHANGE_NSE)  # Default to NSE if not found
+    groww_exchange = exchange_mapping.get(str(exchange).upper())
+    if groww_exchange is None:
+        raise ValueError(_unsupported_exchange(exchange))
+    return groww_exchange
+
+
+def _unsupported_exchange(exchange):
+    """Why an order on this exchange cannot go to Groww."""
+    return (
+        f"Groww's trading API does not support the {exchange} exchange. "
+        "Orders can be placed on NSE, BSE, NFO and BFO only."
+    )
 
 
 def openalgo_exchange(groww_exchange, segment):
@@ -199,7 +212,10 @@ def map_product_type(product):
         "NRML": PRODUCT_NRML,  # Normal delivery
         "MIS": PRODUCT_MIS,  # Intraday
     }
-    return product_type_mapping.get(product.upper(), PRODUCT_CNC)  # Default to CNC if not found
+    groww_product = product_type_mapping.get(str(product).upper())
+    if groww_product is None:
+        raise ValueError(f"Groww does not support the {product} product. Use CNC, MIS or NRML.")
+    return groww_product
 
 
 def reverse_map_product_type(product):
@@ -220,7 +236,10 @@ def get_segment(exchange):
         "NFO": SEGMENT_FNO,
         "BFO": SEGMENT_FNO,
     }
-    return segment_mapping.get(exchange.upper(), SEGMENT_CASH)  # Default to CASH if not found
+    segment = segment_mapping.get(str(exchange).upper())
+    if segment is None:
+        raise ValueError(_unsupported_exchange(exchange))
+    return segment
 
 
 def map_segment_type(exchange):
@@ -233,19 +252,21 @@ def map_segment_type(exchange):
         "NFO": SEGMENT_FNO,
         "BFO": SEGMENT_FNO,
     }
-    return segment_mapping.get(exchange.upper(), SEGMENT_CASH)  # Default to CASH if not found
+    segment = segment_mapping.get(str(exchange).upper())
+    if segment is None:
+        raise ValueError(_unsupported_exchange(exchange))
+    return segment
 
 
 def map_validity(validity):
     """
     Maps OpenAlgo validity to Groww validity type.
     """
-    validity_mapping = {
-        "DAY": VALIDITY_DAY,
-        "IOC": VALIDITY_IOC,
-        "GTC": VALIDITY_DAY,  # Groww doesn't support GTC, defaulting to DAY
-    }
-    return validity_mapping.get(validity.upper(), VALIDITY_DAY)  # Default to DAY if not found
+    # Groww's annexure lists DAY as the only validity; anything else is
+    # refused rather than quietly changed to DAY
+    if str(validity).upper() != VALIDITY_DAY:
+        raise ValueError(f"Groww accepts DAY validity only; {validity} is not supported.")
+    return VALIDITY_DAY
 
 
 def map_transaction_type(action):
@@ -253,6 +274,7 @@ def map_transaction_type(action):
     Maps OpenAlgo action to Groww transaction_type.
     """
     transaction_type_mapping = {"BUY": TRANSACTION_TYPE_BUY, "SELL": TRANSACTION_TYPE_SELL}
-    return transaction_type_mapping.get(
-        action.upper(), TRANSACTION_TYPE_BUY
-    )  # Default to BUY if not found
+    transaction_type = transaction_type_mapping.get(str(action).upper())
+    if transaction_type is None:
+        raise ValueError(f"Unknown action {action}. Use BUY or SELL.")
+    return transaction_type
