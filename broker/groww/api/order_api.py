@@ -3,11 +3,12 @@ import json
 import math
 import os
 import re
-import uuid
-from datetime import datetime
 import threading
 import time
+import uuid
+from datetime import datetime
 
+from broker.groww.api.rate_limiter import groww_request
 from broker.groww.database.master_contract_db import (
     format_groww_to_openalgo_symbol,
     format_openalgo_to_groww_symbol,
@@ -28,7 +29,6 @@ from broker.groww.mapping.transform_data import (
     PRODUCT_NRML,
     SEGMENT_CASH,
     SEGMENT_FNO,
-    openalgo_exchange,
     TRANSACTION_TYPE_BUY,
     TRANSACTION_TYPE_SELL,
     # Constants
@@ -40,6 +40,7 @@ from broker.groww.mapping.transform_data import (
     map_segment_type,
     map_transaction_type,
     map_validity,
+    openalgo_exchange,
     reverse_map_product_type,
     # Functions
     transform_data,
@@ -47,6 +48,7 @@ from broker.groww.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.position_read import (
@@ -92,7 +94,10 @@ def _get_paged(client, url, headers, params, list_key, page_size):
     """
     items, page = [], 0
     while True:
-        resp = client.get(url, headers=headers, params={**params, "page": page, "page_size": page_size})
+        resp = groww_request(
+            client, "GET", url, "non_trading", headers=headers,
+            params={**params, "page": page, "page_size": page_size}, timeout=30,
+        )
         try:
             body = resp.json()
         except ValueError:
@@ -389,54 +394,76 @@ def _position_row(position, segment):
 _LTP_BATCH_SIZE = 50  # 08-live-data "Get LTP": up to 50 instruments
 
 
-def _attach_ltp(rows, auth):
-    """Add a live price and the open quantity's P&L to each open position.
+def _live_prices(keys_by_segment, auth):
+    """Last traded prices from /v1/live-data/ltp (08-live-data "Get LTP").
 
-    Groww's positions carry no last price, so one /v1/live-data/ltp call per
-    segment (50 symbols each) supplies it; the payload maps each
-    EXCHANGE_SYMBOL to its LTP. A failed price read leaves the row with LTP 0
-    and P&L as the realised amount - the position itself is still shown.
+    Args:
+        keys_by_segment: {"CASH" | "FNO": iterable of "EXCHANGE_TRADINGSYMBOL"}
+        auth: Authentication token
+
+    Returns:
+        dict: {"EXCHANGE_TRADINGSYMBOL": ltp} for every symbol Groww priced.
+        A batch Groww refuses is logged and left out; callers show no price
+        rather than a wrong one.
     """
-    wanted = {}
-    for row in rows:
-        if _num(row["quantity"]) == 0 or not row["trading_symbol"]:
-            continue
-        key = f"{row['brexchange']}_{row['trading_symbol']}"
-        wanted.setdefault(row["segment"], {}).setdefault(key, []).append(row)
-    if not wanted:
-        return
-
+    prices = {}
     client = get_httpx_client()
     headers = _groww_headers(auth)
-    for segment, rows_by_key in wanted.items():
-        keys = list(rows_by_key)
+    for segment, keys in keys_by_segment.items():
+        keys = list(dict.fromkeys(keys))
         for start in range(0, len(keys), _LTP_BATCH_SIZE):
             batch = keys[start : start + _LTP_BATCH_SIZE]
             try:
-                resp = client.get(
+                resp = groww_request(
+                    client,
+                    "GET",
                     f"{GROWW_BASE_URL}/v1/live-data/ltp",
+                    "live",
                     params={"segment": segment, "exchange_symbols": ",".join(batch)},
                     headers=headers,
                     timeout=10,
                 )
                 body = resp.json()
+            except BrokerBusyError:
+                raise
             except Exception:
-                logger.warning(f"Groww LTP for {segment} positions could not be read", exc_info=True)
+                logger.warning(f"Groww LTP for {segment} could not be read", exc_info=True)
                 continue
             payload = body.get("payload") if isinstance(body, dict) else None
             if resp.status_code != 200 or body.get("status") != "SUCCESS" or not isinstance(payload, dict):
                 reason = _groww_error_message(body, f"HTTP {resp.status_code}")
-                logger.warning(f"Groww LTP for {segment} positions refused: {reason}")
+                logger.warning(f"Groww LTP for {segment} refused: {reason}")
                 continue
             for key in batch:
                 ltp = _num(payload.get(key))
-                if ltp <= 0:
-                    continue
-                for row in rows_by_key[key]:
-                    row["ltp"] = ltp
-                    if row["average_price"] > 0:
-                        row["unrealised"] = (ltp - row["average_price"]) * _num(row["quantity"])
-                        row["pnl"] = row["realised"] + row["unrealised"]
+                if ltp > 0:
+                    prices[key] = ltp
+    return prices
+
+
+def _attach_ltp(rows, auth):
+    """Add a live price and the open quantity's P&L to each open position.
+
+    Groww's positions carry no last price, so _live_prices supplies it. A
+    failed price read leaves the row with LTP 0 and P&L as the realised
+    amount - the position itself is still shown.
+    """
+    wanted = {}
+    for row in rows:
+        if _num(row["quantity"]) == 0 or not row["trading_symbol"]:
+            continue
+        wanted.setdefault(row["segment"], []).append(f"{row['brexchange']}_{row['trading_symbol']}")
+    if not wanted:
+        return
+    prices = _live_prices(wanted, auth)
+    for row in rows:
+        ltp = prices.get(f"{row['brexchange']}_{row['trading_symbol']}")
+        if not ltp or _num(row["quantity"]) == 0:
+            continue
+        row["ltp"] = ltp
+        if row["average_price"] > 0:
+            row["unrealised"] = (ltp - row["average_price"]) * _num(row["quantity"])
+            row["pnl"] = row["realised"] + row["unrealised"]
 
 
 def get_positions(auth, strict=False, include_ltp=None):
@@ -467,8 +494,9 @@ def get_positions(auth, strict=False, include_ltp=None):
         positions_url = f"{GROWW_BASE_URL}/v1/positions/user"
 
         rows = []
-        cash = client.get(
-            positions_url, params={"segment": SEGMENT_CASH}, headers=headers, timeout=30
+        cash = groww_request(
+            client, "GET", positions_url, "non_trading",
+            params={"segment": SEGMENT_CASH}, headers=headers, timeout=30,
         )
         try:
             cash_body = cash.json()
@@ -490,8 +518,9 @@ def get_positions(auth, strict=False, include_ltp=None):
 
         fno_failure = None
         try:
-            fno = client.get(
-                positions_url, params={"segment": SEGMENT_FNO}, headers=headers, timeout=30
+            fno = groww_request(
+                client, "GET", positions_url, "non_trading",
+                params={"segment": SEGMENT_FNO}, headers=headers, timeout=30,
             )
             fno_failure = _fno_read_failure(fno)
             if fno_failure is None and fno.status_code == 200:
@@ -554,7 +583,7 @@ def get_holdings(auth):
         logger.debug(f"API URL: {holdings_url}")
 
         # Make the API call
-        response_obj = client.get(holdings_url, headers=headers, timeout=30)
+        response_obj = groww_request(client, "GET", holdings_url, "non_trading", headers=headers, timeout=30)
 
         # Log the response status
         logger.debug("-------- GET HOLDINGS RESPONSE --------")
@@ -915,7 +944,7 @@ def direct_place_order_api(data, auth):
         }
 
         client = get_httpx_client()
-        resp = client.post(api_url, json=payload, headers=headers)
+        resp = groww_request(client, "POST", api_url, "order", json=payload, headers=headers, timeout=30)
         logger.debug(f"Place order: HTTP {resp.status_code}, {resp.text}")
         try:
             body = resp.json()
@@ -1280,15 +1309,15 @@ def get_holdings(auth):
             "X-API-VERSION": "1.0",
         }
 
-        # Make the API request
-        import httpx
-
-        with httpx.Client() as client:
-            response = client.get(
-                "https://api.groww.in/v1/holdings/user",
-                headers=headers,
-                timeout=10.0,  # 10-second timeout
-            )
+        # Shared client (never a per-call httpx.Client), paced as Non Trading
+        response = groww_request(
+            get_httpx_client(),
+            "GET",
+            "https://api.groww.in/v1/holdings/user",
+            "non_trading",
+            headers=headers,
+            timeout=10.0,
+        )
 
         # Log the raw response
         logger.debug(f"Holdings API Response Status: {response.status_code}")
@@ -1309,27 +1338,46 @@ def get_holdings(auth):
             logger.error(error_msg)
             return None, {"status": "error", "message": error_msg}
 
-        # Transform holdings to OpenAlgo format
+        # Transform holdings to OpenAlgo format. Groww's holdings carry no
+        # exchange and no price (06-portfolio "Get Holdings"): the exchange is
+        # where the master contract lists the symbol (NSE first, else BSE) and
+        # the price comes from the LTP endpoint.
         holdings = response_data.get("payload", {}).get("holdings", [])
         formatted_holdings = []
-
         for holding in holdings:
-            formatted_holding = {
-                "symbol": holding.get("trading_symbol"),
-                "isin": holding.get("isin"),
-                "quantity": holding.get("quantity", 0),
-                "average_price": holding.get("average_price", 0),
-                "free_quantity": holding.get("demat_free_quantity", 0),
-                "locked_quantity": (
-                    holding.get("demat_locked_quantity", 0)
-                    + holding.get("groww_locked_quantity", 0)
-                ),
-                "pledged_quantity": holding.get("pledge_quantity", 0),
-                "t1_quantity": holding.get("t1_quantity", 0),
-            }
-            formatted_holdings.append(formatted_holding)
+            trading_symbol = holding.get("trading_symbol") or ""
+            exchange = next(
+                (ex for ex in ("NSE", "BSE") if get_oa_symbol(trading_symbol, ex)), None
+            )
+            formatted_holdings.append(
+                {
+                    "symbol": get_oa_symbol(trading_symbol, exchange) if exchange else trading_symbol,
+                    "trading_symbol": trading_symbol,
+                    "exchange": exchange or "",
+                    "isin": holding.get("isin"),
+                    "quantity": _num(holding.get("quantity")),
+                    "average_price": _num(holding.get("average_price")),
+                    "free_quantity": holding.get("demat_free_quantity", 0),
+                    "locked_quantity": _num(holding.get("demat_locked_quantity"))
+                    + _num(holding.get("groww_locked_quantity")),
+                    "pledged_quantity": holding.get("pledge_quantity", 0),
+                    "t1_quantity": holding.get("t1_quantity", 0),
+                }
+            )
 
-        logger.debug(f"Processed {len(formatted_holdings)} holdings")
+        prices = _live_prices(
+            {SEGMENT_CASH: [f"{h['exchange']}_{h['trading_symbol']}" for h in formatted_holdings if h["exchange"]]},
+            auth,
+        )
+        for h in formatted_holdings:
+            ltp = prices.get(f"{h['exchange']}_{h['trading_symbol']}")
+            if not ltp:
+                continue  # no price: no P&L rather than a made-up one
+            h["ltp"] = ltp
+            h["pnl"] = (ltp - h["average_price"]) * h["quantity"]
+            h["pnlpercent"] = (
+                (ltp - h["average_price"]) / h["average_price"] * 100 if h["average_price"] else 0.0
+            )
 
         return formatted_holdings, {"status": "success"}
 
@@ -1530,7 +1578,10 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
         for seg in segments:
             payload = {"segment": seg, "groww_order_id": orderid}
             logger.debug(f"Cancelling order {orderid} in segment {seg}")
-            resp = client.post(GROWW_CANCEL_ORDER_URL, headers=headers, json=payload, timeout=30)
+            resp = groww_request(
+                client, "POST", GROWW_CANCEL_ORDER_URL, "order",
+                headers=headers, json=payload, timeout=30,
+            )
             try:
                 body = resp.json()
             except ValueError:
@@ -1700,7 +1751,7 @@ def direct_modify_order(data, auth):
         }
 
         client = get_httpx_client()
-        resp = client.post(api_url, json=payload, headers=headers)
+        resp = groww_request(client, "POST", api_url, "order", json=payload, headers=headers, timeout=30)
         logger.debug(f"Modify order {groww_order_id}: HTTP {resp.status_code}, {resp.text}")
         try:
             body = resp.json()

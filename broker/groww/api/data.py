@@ -10,6 +10,7 @@ import pandas as pd
 import pytz
 
 from broker.groww.api.order_api import _groww_error_message
+from broker.groww.api.rate_limiter import groww_request
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from database.token_db_enhanced import get_symbol_info
 from utils.httpx_client import get_httpx_client
@@ -27,7 +28,9 @@ SEGMENT_CASH = "CASH"  # Segment code for Cash market
 SEGMENT_FNO = "FNO"  # Segment code for F&O market
 
 
-def get_api_response(endpoint, auth_token, method="GET", params=None, data=None, debug=False):
+def get_api_response(
+    endpoint, auth_token, method="GET", params=None, data=None, debug=False, category="live"
+):
     """Make direct API requests to Groww endpoints
 
     This function directly calls Groww API endpoints using the shared httpx client
@@ -67,14 +70,10 @@ def get_api_response(endpoint, auth_token, method="GET", params=None, data=None,
 
     try:
         # Make the request based on the HTTP method
-        if method.upper() == "GET":
-            response = client.get(url, headers=headers, params=params)
-        elif method.upper() == "POST":
-            response = client.post(url, headers=headers, json=data)
-        elif method.upper() == "PUT":
-            response = client.put(url, headers=headers, json=data)
-        elif method.upper() == "DELETE":
-            response = client.delete(url, headers=headers, params=params)
+        if method.upper() in ("GET", "DELETE"):
+            response = groww_request(client, method.upper(), url, category, headers=headers, params=params)
+        elif method.upper() in ("POST", "PUT"):
+            response = groww_request(client, method.upper(), url, category, headers=headers, json=data)
         else:
             logger.error(f"Unsupported HTTP method: {method}")
             return {"error": f"Unsupported HTTP method: {method}"}
@@ -196,9 +195,6 @@ class BrokerData:
     # (checked on RELIANCE, 1 Sep - 7 Oct 2026: 22 of 23 days had no open).
     # candle/range is marked deprecated, so these move once Groww fixes that.
     _EOD_MINUTES = {"D": "1440", "W": "10080"}
-    # Seconds between chunk requests. Groww does not name the rate-limit bucket
-    # for historical data; bursts of ~10 requests were refused with HTTP 429.
-    _CHUNK_PAUSE = 1.0
 
     def _groww_symbol(self, symbol, exchange):
         """
@@ -268,14 +264,13 @@ class BrokerData:
         }
         candles = []
         chunk_start = start
-        first = True
         while chunk_start.date() <= end.date():
             chunk_end = min(chunk_start + timedelta(days=max_days - 1), end)
-            if not first:
-                time.sleep(self._CHUNK_PAUSE)
-            first = False
-            resp = client.get(
+            resp = groww_request(
+                client,
+                "GET",
                 f"https://api.groww.in{path}",
+                "history",
                 headers=headers,
                 params={
                     **params,
@@ -1271,7 +1266,6 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = 50  # Groww API limit: up to 50 instruments per request
-            RATE_LIMIT_DELAY = 0.2  # Delay in seconds between batch API calls
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -1289,9 +1283,6 @@ class BrokerData:
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
 
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -1610,6 +1601,8 @@ class BrokerData:
                     "data": {
                         "bid": 0,  # OHLC endpoint doesn't provide bid/ask
                         "ask": 0,
+                        "bid_qty": 0,
+                        "ask_qty": 0,
                         "open": open_price,
                         "high": high_price,
                         "low": low_price,
@@ -1648,13 +1641,12 @@ class BrokerData:
         already carry LTP/OHLC from the batch endpoint. Mutates
         ``existing_results`` in place.
 
-        Per-symbol /v1/live-data/quote calls are issued sequentially with a
-        wide gap to avoid Groww's 429 lockout, and the loop aborts after a
-        run of consecutive failures so we never spin in a banned state.
-        Symbols whose overlay fails simply keep their LTP/OHLC baseline.
+        Per-symbol /v1/live-data/quote calls are issued sequentially and paced
+        by broker.groww.api.rate_limiter (Live Data, 300/min), and the loop
+        aborts after a run of consecutive failures so we never spin in a
+        banned state. Symbols whose overlay fails simply keep their LTP/OHLC
+        baseline.
         """
-        # 250ms gap = ~4 RPS — observed sustained safe rate on Groww Live Data.
-        REQUEST_INTERVAL = 0.25
         # Stop overlaying after this many back-to-back 429s — Groww has put
         # us in cooldown and continuing only delays the user.
         MAX_CONSECUTIVE_429 = 4
@@ -1817,9 +1809,6 @@ class BrokerData:
         overlaid = 0
 
         for idx, exchange_symbol in enumerate(exchange_symbols):
-            if idx > 0:
-                time.sleep(REQUEST_INTERVAL)
-
             quote_result = _fetch_one(exchange_symbol)
             err_str = str(quote_result.get("error", ""))
 
@@ -1846,7 +1835,9 @@ class BrokerData:
             quote_data = quote_result["data"]
             # Merge enriched fields onto the OHLC baseline. Keep OHLC values
             # from the batch (they're the authoritative LTP/open/high/low) and
-            # overlay everything else from the quote endpoint.
+            # overlay the rest of OpenAlgo's multiquote fields: the documented
+            # bid/ask/volume/oi plus bid_qty/ask_qty, as the reference broker
+            # returns them for the option chain. Depth stays in the depth API.
             for key in (
                 "bid",
                 "ask",
@@ -1854,9 +1845,6 @@ class BrokerData:
                 "ask_qty",
                 "volume",
                 "oi",
-                "total_buy_qty",
-                "total_sell_qty",
-                "depth",
             ):
                 if key in quote_data:
                     target["data"][key] = quote_data[key]

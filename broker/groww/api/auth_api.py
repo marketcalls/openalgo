@@ -1,7 +1,9 @@
 import hashlib
 import os
 import time
+from datetime import datetime
 
+from broker.groww.api.rate_limiter import groww_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -26,6 +28,52 @@ def generate_checksum(api_secret, timestamp):
     return sha256.hexdigest()
 
 
+def _login_error(body):
+    """A login failure in words a trader can act on, with Groww's own reason."""
+    reason = None
+    if isinstance(body, dict):
+        error = body.get("error")
+        reason = (error.get("message") if isinstance(error, dict) else None) or body.get("message")
+    message = "Groww did not issue an access token"
+    if reason:
+        message += f": {reason}"
+    return (
+        f"{message}. Check the API key and secret, and that the key is approved for today "
+        "on Groww's API Keys page."
+    )
+
+
+def _token_from_response(body):
+    """The access token from a token response (02-authentication "Token response").
+
+    Groww returns token, tokenRefId, sessionName, expiry and isActive. A token
+    Groww marks inactive, or one already past its expiry, is refused here
+    rather than failing on the first order.
+    """
+    token = body.get("token") if isinstance(body, dict) else None
+    if not token:
+        return None, _login_error(body)
+    if body.get("isActive") is False:
+        return None, (
+            "Groww issued an access token that is not active. Approve the API key for today "
+            "on Groww's API Keys page, then log in again."
+        )
+    expiry = body.get("expiry")
+    if expiry:
+        try:
+            expires_at = datetime.fromisoformat(str(expiry))
+        except ValueError:
+            logger.warning(f"Groww token expiry not understood: {expiry!r}")
+        else:
+            if expires_at <= datetime.now(expires_at.tzinfo):
+                return None, (
+                    f"Groww issued an access token that expired at {expiry}. "
+                    "Log in again to get a new one."
+                )
+            logger.info(f"Groww access token valid until {expiry}")
+    return token, None
+
+
 def get_access_token_via_checksum(api_key, api_secret):
     """
     Get access token using API key and secret with checksum-based flow.
@@ -48,8 +96,13 @@ def get_access_token_via_checksum(api_key, api_secret):
         # Get the shared httpx client
         client = get_httpx_client()
 
-        # Headers per Groww API documentation
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        # Headers per Groww API documentation (01-introduction: all are mandatory)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-API-VERSION": "1.0",
+        }
 
         # Payload per Groww API documentation
         payload = {"key_type": "approval", "checksum": checksum, "timestamp": timestamp}
@@ -58,28 +111,20 @@ def get_access_token_via_checksum(api_key, api_secret):
         endpoint = "https://api.groww.in/v1/token/api/access"
 
         try:
-            response = client.post(endpoint, headers=headers, json=payload, timeout=30)
+            response = groww_request(client, "POST", endpoint, "auth", headers=headers, json=payload, timeout=30)
 
-            if response.status_code == 200:
+            try:
                 response_data = response.json()
+            except ValueError:
+                response_data = {}
+            if response.status_code != 200:
+                logger.error(f"Groww login refused: HTTP {response.status_code}, {response.text}")
+                return None, _login_error(response_data)
+            return _token_from_response(response_data)
 
-                # Expect 'token' field in response
-                if "token" in response_data:
-                    return response_data["token"], None
-                else:
-                    return (
-                        None,
-                        f"Authentication succeeded but no token found in response: {response_data}",
-                    )
-            else:
-                try:
-                    error_data = response.json()
-                    return None, f"HTTP error {response.status_code}: {error_data}"
-                except Exception:
-                    return None, f"HTTP error {response.status_code}: {response.text}"
-
-        except Exception as e:
-            return None, f"Request failed: {str(e)}"
+        except Exception:
+            logger.exception("Groww login request failed")
+            return None, "Could not reach Groww to log in. Check your connection and try again."
 
     except Exception as e:
         return None, f"Authentication error: {str(e)}"

@@ -242,15 +242,21 @@ def transform_holdings_data(holdings_data):
             # Try to extract symbol from trading symbol
             symbol = holdings["trading_symbol"].replace("NSE:", "").replace("BSE:", "")
 
+        # get_holdings resolves the exchange from the master contract and the
+        # P&L from the live LTP; a holding Groww could not price carries 0 P&L
         transformed_position = {
             "symbol": symbol,
-            "exchange": holdings.get("exchange", "NSE"),  # Default to NSE
+            "exchange": holdings.get("exchange", ""),
             "quantity": float(holdings.get("quantity", holdings.get("totalQty", 0))),
             "average_price": float(holdings.get("average_price", holdings.get("avgPrice", 0))),
-            "product": holdings.get("product", "CNC"),
-            "pnl": float(holdings.get("pnl", 0)),
-            "pnlpercent": float(holdings.get("pnlpercent", 0)),
+            "product": holdings.get("product", "CNC"),  # demat holdings are delivery
+            "pnl": round(float(holdings.get("pnl", 0)), 2),
+            "pnlpercent": round(float(holdings.get("pnlpercent", 0)), 2),
         }
+        # Same extra fields as the reference broker (Zerodha), which the
+        # Holdings page shows; no ltp when Groww could not price the holding
+        if holdings.get("ltp"):
+            transformed_position["ltp"] = round(float(holdings["ltp"]), 2)
         transformed_data.append(transformed_position)
 
     return transformed_data
@@ -352,10 +358,12 @@ def calculate_portfolio_statistics(holdings_data):
         quantity = float(holding.get("quantity", holding.get("qty", 0)))
         avg_price = float(holding.get("average_price", holding.get("avgPrice", 0)))
 
-        # Calculate holding value
-        holding_value = quantity * avg_price
-        totalholdingvalue += holding_value
-        totalinvvalue += holding_value
+        # Invested at the average price; held at the live price when Groww
+        # priced the holding (get_holdings sets ltp), else at the average
+        invested = quantity * avg_price
+        ltp = float(holding.get("ltp") or 0)
+        totalinvvalue += invested
+        totalholdingvalue += quantity * ltp if ltp else invested
 
         # Use provided PnL if available
         pnl = float(holding.get("pnl", 0))

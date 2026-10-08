@@ -5,10 +5,33 @@ import os
 
 import httpx
 
+from broker.groww.api.rate_limiter import groww_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _day_m2m(auth_token):
+    """Realised and unrealised P&L of the day's positions, in rupees.
+
+    Returns (0.0, 0.0) when positions cannot be read, which is logged: the
+    funds figures are still worth showing without the P&L.
+    """
+    from broker.groww.api.order_api import get_positions
+
+    try:
+        payload, status = get_positions(auth_token)
+    except Exception:
+        logger.exception("Groww positions could not be read for funds P&L")
+        return 0.0, 0.0
+    if status != 200 or payload.get("status") != "success":
+        logger.warning(f"Groww positions not read for funds P&L: {payload.get('message')}")
+        return 0.0, 0.0
+    rows = payload.get("data") or []
+    realised = sum(float(row.get("realised") or 0) for row in rows)
+    unrealised = sum(float(row.get("unrealised") or 0) for row in rows)
+    return realised, unrealised
 
 
 def get_margin_data(auth_token):
@@ -20,13 +43,17 @@ def get_margin_data(auth_token):
         url = "https://api.groww.in/v1/margins/detail/user"
 
         # Set up headers with authentication token
-        headers = {"Accept": "application/json", "Authorization": f"Bearer {auth_token}"}
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {auth_token}",
+            "X-API-VERSION": "1.0",
+        }
 
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
 
         # Make the API request using the shared client
-        response = client.get(url, headers=headers)
+        response = groww_request(client, "GET", url, "non_trading", headers=headers, timeout=30)
 
         # Check if the request was successful
         if response.status_code != 200:
@@ -49,58 +76,19 @@ def get_margin_data(auth_token):
             logger.error("Error fetching margin data: Empty payload")
             return {}
 
-        # Create position data structure to calculate P&L
-        # For Groww, we need to get positions separately if needed for P&L
-        # This is a placeholder for when position API integration is added
-        total_unrealised = 0
-        total_realised = 0
+        # The margins endpoint carries no P&L. Groww documents realised_pnl on
+        # positions (06-portfolio), and get_positions adds each open
+        # position's move from its average using the live LTP.
+        total_realised, total_unrealised = _day_m2m(auth_token)
 
-        try:
-            # Get positions or P&L data if available
-            # This would be implemented when adding position support
-            pass
-        except Exception as e:
-            logger.error(f"Error fetching position data: {e}")
-            # Default to zeros if unable to fetch
-            total_unrealised = 0
-            total_realised = 0
-
-        # Extract equity and F&O margin details
-        equity_margin_details = margin_data.get("equity_margin_details", {})
-        fno_margin_details = margin_data.get("fno_margin_details", {})
-
-        # Construct and return the processed margin data in the standard format
-        # Map Groww API response fields to the expected structure
+        # OpenAlgo's funds format (docs/api/account-services/funds.md) has
+        # exactly these five fields, from Groww's margins/detail/user payload
         processed_margin_data = {
-            # Use clear_cash as available cash
             "availablecash": "{:.2f}".format(margin_data.get("clear_cash", 0)),
-            # Use collateral_available for collateral
             "collateral": "{:.2f}".format(margin_data.get("collateral_available", 0)),
-            # Use calculated or fetched unrealized P&L
-            "m2munrealized": f"{total_unrealised:.2f}",
-            # Use calculated or fetched realized P&L
             "m2mrealized": f"{total_realised:.2f}",
-            # Use net_margin_used for utilized debits
+            "m2munrealized": f"{total_unrealised:.2f}",
             "utiliseddebits": "{:.2f}".format(margin_data.get("net_margin_used", 0)),
-            # Additional Groww-specific fields that might be useful
-            "brokerage_and_charges": "{:.2f}".format(margin_data.get("brokerage_and_charges", 0)),
-            "adhoc_margin": "{:.2f}".format(margin_data.get("adhoc_margin", 0)),
-            # Add equity and F&O specific balances for additional details
-            "equity_cnc_balance": "{:.2f}".format(
-                equity_margin_details.get("cnc_balance_available", 0)
-            ),
-            "equity_mis_balance": "{:.2f}".format(
-                equity_margin_details.get("mis_balance_available", 0)
-            ),
-            "fno_futures_balance": "{:.2f}".format(
-                fno_margin_details.get("future_balance_available", 0)
-            ),
-            "fno_option_buy_balance": "{:.2f}".format(
-                fno_margin_details.get("option_buy_balance_available", 0)
-            ),
-            "fno_option_sell_balance": "{:.2f}".format(
-                fno_margin_details.get("option_sell_balance_available", 0)
-            ),
         }
         return processed_margin_data
 
