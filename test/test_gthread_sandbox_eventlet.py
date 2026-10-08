@@ -269,3 +269,49 @@ def test_the_index_rebuild_never_holds_its_real_lock_across_a_yield(tmp_path):
     assert out["notify_took"] < 0.3
     assert out["kept"] is True
     assert out["ticks"] >= 10
+
+
+def test_placing_an_order_does_not_wait_for_the_feed_to_acknowledge(tmp_path):
+    """Issue #2104: the feed subscribe runs off the order path, and the hub stays live.
+
+    The acknowledgement wait yields under eventlet, so inline it never froze
+    the hub, but it was still added to the order's own response.
+    """
+    out = run(
+        tmp_path,
+        """
+        from types import SimpleNamespace
+        import database.auth_db as auth_db
+        from sandbox import websocket_execution_engine as wse
+
+        calls = []
+
+        def slow_subscribe(username, broker, symbols, mode):
+            time.sleep(1.0)  # the proxy taking its time to acknowledge
+            calls.append([s["symbol"] for s in symbols])
+            return True, {}, 200
+
+        wse.subscribe_to_symbols = slow_subscribe
+        auth_db.get_api_key_for_tradingview = lambda user_id: "test-key"
+        auth_db.get_broker_name = lambda api_key: "zerodha"
+
+        engine = wse.WebSocketExecutionEngine()
+        engine._running = True
+        ticker = Ticker()
+        start = time.monotonic()
+        engine.notify_order_placed(
+            SimpleNamespace(exchange="NSE", symbol="RELIANCE", orderid="EV-W1", user_id=USER)
+        )
+        notify_took = time.monotonic() - start
+        wse._feed_subscription_executor.submit(lambda: None).result(timeout=10)
+        ticker.alive = False
+        print("RESULT " + json.dumps({
+            "notify_took": notify_took,
+            "calls": calls,
+            "ticks": ticker.ticks,
+        }))
+        """,
+    )
+    assert out["notify_took"] < 0.3
+    assert out["calls"] == [["RELIANCE"]]
+    assert out["ticks"] >= 10

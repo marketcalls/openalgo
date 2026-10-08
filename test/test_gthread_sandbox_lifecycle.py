@@ -228,3 +228,118 @@ def test_stopping_the_engine_does_not_wait_out_the_upgrade_watcher(monkeypatch):
     assert elapsed < 2.0, f"stopping the engine waited {elapsed:.2f}s on its own watcher"
     assert not watcher.is_alive()
     assert et._auto_upgrade_thread is None
+
+
+# Issue #2104. Placing, cancelling or filling a sandbox order used to call the
+# proxy's subscribe or unsubscribe inline, and that waits up to 12 seconds for
+# an acknowledgement. The order needs none of it, so the calls now run on one
+# worker, in the order they were made.
+
+
+def _slow_feed(monkeypatch, subscribe_delay=0.0, unsubscribe_delay=0.0):
+    """Replace the proxy calls with recorders that take their time to acknowledge."""
+    import database.auth_db as auth_db
+    from sandbox import websocket_execution_engine as wse
+
+    calls = []
+
+    def recorder(kind, delay):
+        def call(username, broker, symbols, mode):
+            time.sleep(delay)  # the proxy taking its time to acknowledge
+            calls.append((kind, [s["symbol"] for s in symbols]))
+            return True, {}, 200
+
+        return call
+
+    monkeypatch.setattr(wse, "subscribe_to_symbols", recorder("subscribe", subscribe_delay))
+    monkeypatch.setattr(wse, "unsubscribe_from_symbols", recorder("unsubscribe", unsubscribe_delay))
+    monkeypatch.setattr(auth_db, "get_api_key_for_tradingview", lambda user_id: "test-key")
+    monkeypatch.setattr(auth_db, "get_broker_name", lambda api_key: "zerodha")
+    return calls
+
+
+def _wait_for_feed_worker():
+    """Return once every subscribe and unsubscribe queued so far has run."""
+    from sandbox import websocket_execution_engine as wse
+
+    wse._feed_subscription_executor.submit(lambda: None).result(timeout=10)
+
+
+def _order(orderid, symbol="RELIANCE"):
+    return SimpleNamespace(exchange="NSE", symbol=symbol, orderid=orderid, user_id=USER)
+
+
+def test_placing_an_order_does_not_wait_for_the_feed_to_acknowledge(monkeypatch):
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch, subscribe_delay=2.0)
+
+    started = time.monotonic()
+    run_in_thread(lambda: engine.notify_order_placed(_order("LIFE-W1")))
+    elapsed = time.monotonic() - started
+    _wait_for_feed_worker()
+
+    assert elapsed < 0.5, f"placing the order waited {elapsed:.2f}s for the feed"
+    assert calls == [("subscribe", ["RELIANCE"])]
+
+
+@pytest.mark.parametrize("hook", ["order_completed", "position_opened", "gtt_placed"])
+def test_no_order_path_hook_waits_for_the_feed(monkeypatch, hook):
+    engine = _running_engine(monkeypatch)
+    _slow_feed(monkeypatch, subscribe_delay=2.0, unsubscribe_delay=2.0)
+    engine.notify_order_placed(_order("LIFE-W2"))
+    _wait_for_feed_worker()
+    gtt = SimpleNamespace(
+        gtt_id="LIFE-G1",
+        exchange="NSE",
+        symbol="ZEEL",
+        user_id=USER,
+        legs=[SimpleNamespace(id=901, leg_status="pending")],
+    )
+    calls = {
+        "order_completed": lambda: engine.notify_order_completed("LIFE-W2", "NSE:RELIANCE", USER),
+        "position_opened": lambda: engine.notify_position_opened(USER, "ZEEL", "NSE"),
+        "gtt_placed": lambda: engine.notify_gtt_placed(gtt),
+    }
+
+    started = time.monotonic()
+    run_in_thread(calls[hook])
+    elapsed = time.monotonic() - started
+    _wait_for_feed_worker()
+
+    assert elapsed < 0.5, f"notify_{hook} waited {elapsed:.2f}s for the feed"
+
+
+def test_a_quick_place_then_cancel_unsubscribes_after_it_subscribes(monkeypatch):
+    """The cancel's unsubscribe must not overtake the place's slower subscribe."""
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch, subscribe_delay=0.5)
+
+    def place_then_cancel():
+        engine.notify_order_placed(_order("LIFE-W3"))
+        engine.notify_order_completed("LIFE-W3", "NSE:RELIANCE", USER)
+
+    run_in_thread(place_then_cancel)
+    _wait_for_feed_worker()
+
+    assert calls == [("subscribe", ["RELIANCE"]), ("unsubscribe", ["RELIANCE"])]
+
+
+def test_a_failed_subscribe_does_not_stop_the_next_one(monkeypatch):
+    from sandbox import websocket_execution_engine as wse
+
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch)
+    recorded = wse.subscribe_to_symbols
+
+    def fails_first(username, broker, symbols, mode):
+        if not calls:
+            calls.append(("failed", [s["symbol"] for s in symbols]))
+            raise ConnectionError("the proxy is not reachable")
+        return recorded(username, broker, symbols, mode)
+
+    monkeypatch.setattr(wse, "subscribe_to_symbols", fails_first)
+    engine.notify_order_placed(_order("LIFE-W4", "RELIANCE"))
+    engine.notify_order_placed(_order("LIFE-W5", "ZEEL"))
+    _wait_for_feed_worker()
+
+    assert calls == [("failed", ["RELIANCE"]), ("subscribe", ["ZEEL"])]

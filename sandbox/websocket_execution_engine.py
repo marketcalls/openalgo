@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 # Add parent directory to path
@@ -23,9 +24,24 @@ from database.sandbox_db import SandboxOrders, db_session
 from services.market_data_service import get_market_data_service
 from services.websocket_service import subscribe_to_symbols, unsubscribe_from_symbols
 from utils import real_threading as _real_threading
+from utils.db_sessions import session_cleanup
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Feed subscribe/unsubscribe calls run here, never on the caller. They are
+# called from the order path (placing, cancelling and filling an order, opening
+# and closing a position, placing a GTT), and each one reads the database and
+# then waits up to 12 seconds for the websocket proxy to acknowledge. Inline,
+# that wait was added to the order response although the order needs none of
+# it. One worker, not one per call: calls run in the order they were made, so
+# a quick place-then-cancel can never run its unsubscribe before its
+# subscribe and leave a subscription behind. It is shared by every engine
+# instance for the same reason across a stop and a start, and it is a plain
+# executor thread, so green under eventlet like the callers that feed it.
+_feed_subscription_executor = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="sandbox-feed-subscribe"
+)
 
 
 class WebSocketExecutionEngine:
@@ -676,6 +692,29 @@ class WebSocketExecutionEngine:
             self._monitored_symbols.discard(symbol_key)
 
     def _subscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
+        """Queue an LTP subscription for the given user and symbols; never waits."""
+        if symbols:
+            _feed_subscription_executor.submit(self._send_subscribe, user_id, list(symbols))
+
+    def _unsubscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
+        """Queue an LTP unsubscription for the given user and symbols; never waits."""
+        if symbols:
+            _feed_subscription_executor.submit(self._send_unsubscribe, user_id, list(symbols))
+
+    @staticmethod
+    def _send_subscribe(user_id: str, symbols: list[tuple[str, str]]):
+        """Subscribe to LTP via WebSocket. Runs on the feed subscription worker."""
+        with session_cleanup():
+            WebSocketExecutionEngine._subscribe_now(user_id, symbols)
+
+    @staticmethod
+    def _send_unsubscribe(user_id: str, symbols: list[tuple[str, str]]):
+        """Unsubscribe from LTP via WebSocket. Runs on the feed subscription worker."""
+        with session_cleanup():
+            WebSocketExecutionEngine._unsubscribe_now(user_id, symbols)
+
+    @staticmethod
+    def _subscribe_now(user_id: str, symbols: list[tuple[str, str]]):
         """Subscribe to LTP via WebSocket for the given user and symbols."""
         if not symbols:
             return
@@ -703,7 +742,8 @@ class WebSocketExecutionEngine:
         except Exception as e:
             logger.exception(f"Error subscribing WebSocket symbols for user {user_id}: {e}")
 
-    def _unsubscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
+    @staticmethod
+    def _unsubscribe_now(user_id: str, symbols: list[tuple[str, str]]):
         """Unsubscribe from LTP via WebSocket for the given user and symbols."""
         if not symbols:
             return
