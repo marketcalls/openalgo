@@ -330,7 +330,6 @@ SPECS = {
         path="/v1/positions/user",
         book=_groww_book,
         error={"status": "FAILURE", "error": {"code": "GA005", "message": "Invalid token"}},
-        reads_flat=True,
     ),
     "hdfcsecurities": Spec(
         path="cumulative-positions",
@@ -804,7 +803,7 @@ def test_held_position_gives_the_same_order_as_before(harness, broker):
     reason=(
         "Pre-existing, not changed by this fix: the plugin reads every position as "
         "flat even when the read works (XTS brokers match on keys the XTS book does "
-        "not carry; Groww's get_open_position never unwraps get_positions' tuple)."
+        "not carry)."
     ),
 )
 def test_held_position_is_read(harness, broker):

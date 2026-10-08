@@ -3,11 +3,12 @@ import json
 import math
 import os
 import re
-import uuid
-from datetime import datetime
 import threading
 import time
+import uuid
+from datetime import datetime
 
+from broker.groww.api.rate_limiter import groww_request
 from broker.groww.database.master_contract_db import (
     format_groww_to_openalgo_symbol,
     format_openalgo_to_groww_symbol,
@@ -32,7 +33,6 @@ from broker.groww.mapping.transform_data import (
     TRANSACTION_TYPE_SELL,
     # Constants
     VALIDITY_DAY,
-    VALIDITY_IOC,
     map_exchange,
     map_exchange_type,
     map_order_type,
@@ -40,6 +40,7 @@ from broker.groww.mapping.transform_data import (
     map_segment_type,
     map_transaction_type,
     map_validity,
+    openalgo_exchange,
     reverse_map_product_type,
     # Functions
     transform_data,
@@ -47,6 +48,7 @@ from broker.groww.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.position_read import (
@@ -68,314 +70,106 @@ GROWW_CANCEL_ORDER_URL = f"{GROWW_BASE_URL}/v1/order/cancel"
 GROWW_ORDER_TRADES_URL = f"{GROWW_BASE_URL}/v1/order/trades"
 
 
-def direct_get_order_book(auth):
-    """
-    Get list of orders for the user using direct API calls instead of SDK
+# Groww's documented page size limits (04-orders)
+_ORDER_LIST_PAGE_SIZE = 100
+_TRADES_PAGE_SIZE = 50
 
-    Args:
-        auth (str): Authentication token
+
+def _groww_headers(auth):
+    """Headers Groww requires on every request (01-introduction)."""
+    return {
+        "Authorization": f"Bearer {auth}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-API-VERSION": "1.0",
+    }
+
+
+def _get_paged(client, url, headers, params, list_key, page_size):
+    """Read every page of a Groww list endpoint.
 
     Returns:
-        dict: Order book data with combined orders from all segments
+        tuple: (items, None) on success, or (items read so far, reason) when a
+        page failed. A short page ends the list.
+    """
+    items, page = [], 0
+    while True:
+        resp = groww_request(
+            client, "GET", url, "non_trading", headers=headers,
+            params={**params, "page": page, "page_size": page_size}, timeout=30,
+        )
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        if resp.status_code != 200 or not isinstance(body, dict) or body.get("status") != "SUCCESS":
+            return items, _groww_error_message(body, f"HTTP {resp.status_code}")
+        batch = (body.get("payload") or {}).get(list_key) or []
+        items.extend(batch)
+        if len(batch) < page_size:
+            return items, None
+        page += 1
+
+
+def direct_get_order_book(auth):
+    """
+    Read the day's orders from both segments (GET /v1/order/list).
+
+    Each order keeps Groww's documented fields and gains OpenAlgo's exchange
+    (NSE/BSE/NFO/BFO) and symbol.
+
+    Returns:
+        dict: {"data": orders, ...}, or {"status": "error", "message": ...}
+        when the CASH book cannot be read. An FNO read that fails is logged
+        and skipped, as for positions: it fails on accounts without F&O.
     """
     try:
-        # Prepare the API client and headers
         client = get_httpx_client()
-        headers = {
-            "Authorization": f"Bearer {auth}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        logger.debug("Using direct API to fetch Groww order book")
-
-        # Get orders from all segments (CASH + FNO)
+        headers = _groww_headers(auth)
         all_orders = []
-        segments = [SEGMENT_CASH, SEGMENT_FNO]  # Fetch from both segments
-
-        for segment in segments:
-            page = 0
-            page_size = 25  # Maximum allowed by Groww API
-
-            logger.debug(
-                f"Fetching order book for segment {segment} with pagination (page_size={page_size})"
+        for segment in (SEGMENT_CASH, SEGMENT_FNO):
+            orders, failure = _get_paged(
+                client,
+                GROWW_ORDER_LIST_URL,
+                headers,
+                {"segment": segment},
+                "order_list",
+                _ORDER_LIST_PAGE_SIZE,
             )
+            if failure and not says_no_positions({"message": failure}):
+                if segment == SEGMENT_CASH:
+                    logger.error(f"Groww order list (CASH) could not be read: {failure}")
+                    return {
+                        "status": "error",
+                        "message": f"Could not read the Groww order book: {failure}",
+                    }
+                logger.warning(f"Groww order list (FNO) could not be read, skipped: {failure}")
+            all_orders.extend(orders)
 
-            # Keep fetching until we get all orders for this segment
-            while True:
-                try:
-                    # Build request URL with query parameters
-                    params = {"segment": segment, "page": page, "page_size": page_size}
-
-                    logger.debug(
-                        f"Making API request to {GROWW_ORDER_LIST_URL} with params: {params}"
-                    )
-
-                    # Make the API request
-                    response = client.get(GROWW_ORDER_LIST_URL, headers=headers, params=params)
-
-                    # Check for HTTP errors
-                    response.raise_for_status()
-
-                    # Parse the response
-                    orders_data = response.json()
-                    logger.debug(f"API Response status: {orders_data.get('status')}")
-
-                    if orders_data.get("status") != "SUCCESS" or not orders_data.get(
-                        "payload", {}
-                    ).get("order_list"):
-                        logger.debug(
-                            f"No orders found or empty response for segment {segment} on page {page}"
-                        )
-                        break
-
-                    current_orders = orders_data["payload"]["order_list"]
-                    logger.debug(
-                        f"Retrieved {len(current_orders)} orders for segment {segment} from page {page}"
-                    )
-
-                    # Log details about first order for debugging
-                    if current_orders and page == 0:
-                        sample_order = current_orders[0]
-                        logger.debug(f"Sample order fields: {list(sample_order.keys())}")
-                        logger.debug(f"Sample order values: {sample_order}")
-
-                    all_orders.extend(current_orders)
-
-                    # If we got less than page_size orders, we've reached the end for this segment
-                    if len(current_orders) < page_size:
-                        logger.debug(
-                            f"Reached last page of orders for segment {segment} at page {page}"
-                        )
-                        break
-
-                    page += 1
-
-                except Exception as e:
-                    logger.error(
-                        f"Error in pagination loop for segment {segment} at page {page}: {str(e)}"
-                    )
-                    break
-
-        logger.debug(f"Successfully fetched total of {len(all_orders)} orders using direct API")
-
-        # Convert all symbols from Groww format to OpenAlgo format
+        # Map each order to OpenAlgo's exchange and symbol. Groww reports exchange
+        # NSE/BSE plus segment CASH/FNO (04-orders "List orders"); OpenAlgo puts
+        # F&O on NFO/BFO. The OpenAlgo symbol comes from the master contract.
         for order in all_orders:
-            if "trading_symbol" in order:
-                groww_symbol = order["trading_symbol"]
-                groww_exchange = order.get("exchange", "")
-                segment = order.get("segment", "")
+            if "trading_symbol" not in order:
+                continue
+            groww_symbol = order["trading_symbol"]
+            groww_exchange = order.get("exchange", "")
+            order["brsymbol"] = groww_symbol
+            order["brexchange"] = groww_exchange
+            exchange = openalgo_exchange(groww_exchange, order.get("segment", ""))
+            order["exchange"] = exchange
+            order["symbol"] = get_oa_symbol(groww_symbol, exchange) or groww_symbol
 
-                # Store original Groww format
-                order["brsymbol"] = groww_symbol
-                order["brexchange"] = groww_exchange
+        logger.debug(f"Groww order book: {len(all_orders)} orders")
+        return {"data": all_orders, "order_list": all_orders}
 
-                # First, determine the correct OpenAlgo exchange
-                # For options and futures (F&O), the exchange should be NFO even if Groww returns NSE
-                is_derivative = False
-                is_future = False
-
-                # Check if it's an option by looking for option identifiers
-                if any(suffix in groww_symbol for suffix in ["CE", "PE", "C", "P"]):
-                    exchange = "NFO"
-                    is_derivative = True
-                    order["exchange"] = "NFO"  # Set OpenAlgo exchange format
-                    logger.debug(
-                        f"Remapped exchange from {groww_exchange} to NFO for option symbol: {groww_symbol}"
-                    )
-                # Check if it's a futures contract
-                elif "FUT" in groww_symbol or segment == SEGMENT_FNO:
-                    exchange = "NFO"
-                    is_derivative = True
-                    is_future = True
-                    order["exchange"] = "NFO"  # Set OpenAlgo exchange format
-                    logger.debug(
-                        f"Remapped exchange from {groww_exchange} to NFO for futures symbol: {groww_symbol}"
-                    )
-                else:
-                    exchange = groww_exchange
-                    order["exchange"] = exchange
-
-                # Now handle the symbol conversion based on the correct exchange
-                # For NFO derivatives (options or futures), convert from Groww format to OpenAlgo format
-                if is_derivative:
-                    # Try multiple approaches to convert the symbol
-
-                    # Approach 1: Look up by token (most accurate)
-                    token = order.get("token")
-                    logger.debug(f"Token: {token}")
-                    symbol_converted = False
-
-                    try:
-                        from database.token_db import get_oa_symbol
-
-                        if token:
-                            openalgo_symbol = get_oa_symbol(token, "NFO")
-                            logger.debug(f"OpenAlgo Symbol: {openalgo_symbol}")
-                            if openalgo_symbol:
-                                order["symbol"] = openalgo_symbol
-                                logger.debug(
-                                    f"Converted NFO symbol by token: {groww_symbol} -> {openalgo_symbol}"
-                                )
-                                symbol_converted = True
-                    except Exception as e:
-                        logger.error(f"Error converting symbol by token: {e}")
-
-                    # Approach 2: Database lookup by broker symbol
-                    if not symbol_converted:
-                        try:
-                            from broker.groww.database.master_contract_db import (
-                                SymToken,
-                                db_session,
-                            )
-
-                            with db_session() as session:
-                                record = (
-                                    session.query(SymToken)
-                                    .filter(
-                                        SymToken.brsymbol == groww_symbol,
-                                        SymToken.exchange == "NFO",
-                                    )
-                                    .first()
-                                )
-
-                                if record and record.symbol:
-                                    order["symbol"] = record.symbol
-                                    logger.debug(
-                                        f"Converted NFO symbol by lookup: {groww_symbol} -> {record.symbol}"
-                                    )
-                                    symbol_converted = True
-                        except Exception as e:
-                            logger.error(f"Error converting symbol by database: {e}")
-
-                    # Approach 3: Pattern matching for Groww NFO symbols
-                    if not symbol_converted:
-                        try:
-                            import re
-
-                            # For Options: Convert from "NIFTY25515266550CE" to "NIFTY15MAY2526650CE"
-                            if not is_future:
-                                # Match Groww's option format which typically has year+month+day+strike+option_type
-                                groww_pattern = re.compile(
-                                    r"([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)(CE|PE)"
-                                )
-                                match = groww_pattern.match(groww_symbol)
-
-                                if match:
-                                    # Extract components
-                                    symbol_name, year, month_num, day, strike, option_type = (
-                                        match.groups()
-                                    )
-
-                                    # Convert numeric month to alphabetic (1=JAN, 2=FEB, etc.)
-                                    months = [
-                                        "JAN",
-                                        "FEB",
-                                        "MAR",
-                                        "APR",
-                                        "MAY",
-                                        "JUN",
-                                        "JUL",
-                                        "AUG",
-                                        "SEP",
-                                        "OCT",
-                                        "NOV",
-                                        "DEC",
-                                    ]
-                                    month_name = (
-                                        months[int(month_num) - 1]
-                                        if 1 <= int(month_num) <= 12
-                                        else f"M{month_num}"
-                                    )
-
-                                    # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                    openalgo_symbol = (
-                                        f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                    )
-                                    order["symbol"] = openalgo_symbol
-                                    logger.debug(
-                                        f"Converted Groww option symbol by pattern: {groww_symbol} -> {openalgo_symbol}"
-                                    )
-                                    symbol_converted = True
-
-                            # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
-                            else:
-                                # Match Groww's futures format
-                                future_pattern = re.compile(
-                                    r"([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?"
-                                )
-                                match = future_pattern.match(groww_symbol)
-
-                                if match:
-                                    # Extract components
-                                    symbol_name, year, month_num, day = match.groups()
-
-                                    # Convert numeric month to alphabetic (1=JAN, 2=FEB, etc.)
-                                    months = [
-                                        "JAN",
-                                        "FEB",
-                                        "MAR",
-                                        "APR",
-                                        "MAY",
-                                        "JUN",
-                                        "JUL",
-                                        "AUG",
-                                        "SEP",
-                                        "OCT",
-                                        "NOV",
-                                        "DEC",
-                                    ]
-                                    month_name = (
-                                        months[int(month_num) - 1]
-                                        if 1 <= int(month_num) <= 12
-                                        else f"M{month_num}"
-                                    )
-
-                                    # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                    openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
-                                    order["symbol"] = openalgo_symbol
-                                    logger.debug(
-                                        f"Converted Groww futures symbol by pattern: {groww_symbol} -> {openalgo_symbol}"
-                                    )
-                                    symbol_converted = True
-                        except Exception as e:
-                            logger.error(f"Error converting symbol by pattern: {e}")
-
-                    # Fallback: Use the original symbol if all conversion attempts failed
-                    if not symbol_converted:
-                        order["symbol"] = groww_symbol
-                        logger.warning(f"Could not convert NFO symbol: {groww_symbol}")
-                else:
-                    # For non-NFO symbols, use the trading symbol directly
-                    order["symbol"] = groww_symbol
-
-        # Return orders in the format expected by map_order_data
-        # Keep original response format for backward compatibility
-        response = {
-            "data": all_orders,
-            "order_list": all_orders,  # Include this for backward compatibility
-            "raw_response": {"status": "SUCCESS", "payload": {"order_list": all_orders}},
-        }
-
-        # Print detailed response for debugging
-        logger.debug("\n===== GROWW ORDER BOOK RESPONSE (DIRECT API) =====")
-        logger.debug(f"Total orders: {len(all_orders)}")
-        if all_orders:
-            logger.debug(f"First order sample: {json.dumps(all_orders[0], indent=2)[:500]}...")
-        logger.debug(f"Response keys: {list(response.keys())}")
-        logger.debug("============================================\n")
-
-        logger.debug(f"Final response structure: {list(response.keys())}")
-        return response
-
-    except Exception as e:
-        logger.error(f"Error fetching order book via direct API: {e}")
-        logger.exception("Full stack trace:")
-        # Return the same structure but with empty data
+    except BrokerBusyError:
+        raise
+    except Exception:
+        logger.exception("Error fetching the Groww order book")
         return {
-            "data": [],
-            "order_list": [],
-            "raw_response": {"status": "FAILURE", "payload": {"order_list": []}},
+            "status": "error",
+            "message": "Could not reach Groww to read the order book. Try again shortly.",
         }
 
 
@@ -484,401 +278,45 @@ def transform_groww_trade(trade):
 
 def get_trade_book(auth):
     """
-    Get list of all trades for the user using direct API calls
+    Every fill of the day, read from Groww's trades endpoint per filled order.
 
-    Args:
-        auth (str): Authentication token
+    Groww has no account-wide trade list, so the order book names the orders
+    that filled (filled_quantity > 0, 04-orders "List orders") and
+    get_order_trades reads each one's fills. Nothing is synthesised: if Groww
+    cannot return an order's trades, the tradebook reports an error rather
+    than inventing a fill.
 
     Returns:
-        tuple: (trade book data, status code)
+        dict: {"status": "success", "data": trades} with each trade already
+        transformed by transform_groww_trade, or {"status": "error", "message"}.
     """
-    try:
-        logger.debug("Using direct API implementation for get_trade_book")
+    book = get_order_book(auth)
+    if book.get("status") == "error":
+        return book
 
-        # Get order book first to find executed/completed orders
-        order_book_result = get_order_book(auth)
-        logger.debug(f"Order book result type: {type(order_book_result).__name__}")
+    trades, failed = [], []
+    for order in book.get("data", []):
+        try:
+            filled = float(order.get("filled_quantity") or 0)
+        except (TypeError, ValueError):
+            filled = 0
+        orderid = order.get("groww_order_id")
+        if filled <= 0 or not orderid:
+            continue
+        result, status_code = get_order_trades(orderid, auth, order.get("segment"))
+        if status_code != 200:
+            failed.append(orderid)
+            logger.error(f"Groww trades for order {orderid} could not be read: {result.get('message')}")
+            continue
+        trades.extend(result["trades"])
 
-        # Process the result appropriately based on its structure
-        orders = []
-
-        # Handle tuple response from direct API implementation
-        if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
-            # Extract the order data from the result
-            order_book_data = order_book_result[0]
-            logger.debug(f"Order book data type: {type(order_book_data).__name__}")
-
-            # Extract orders from the order book response based on its structure
-            if isinstance(order_book_data, dict):
-                # Log available keys for debugging
-                logger.debug(f"Order book data keys: {list(order_book_data.keys())}")
-
-                if "data" in order_book_data and order_book_data["data"]:
-                    orders = order_book_data["data"]
-                    logger.debug(f"Found {len(orders)} orders in 'data' field")
-                elif "order_list" in order_book_data and order_book_data["order_list"]:
-                    orders = order_book_data["order_list"]
-                    logger.debug(f"Found {len(orders)} orders in 'order_list' field")
-            # Handle direct list of orders
-            elif isinstance(order_book_data, list):
-                orders = order_book_data
-                logger.debug(f"Found {len(orders)} orders in list response")
-        # Legacy handling for direct dictionary response
-        elif isinstance(order_book_result, dict):
-            logger.debug("Processing legacy dictionary order book result")
-            if "data" in order_book_result and order_book_result["data"]:
-                orders = order_book_result["data"]
-            elif "order_list" in order_book_result and order_book_result["order_list"]:
-                orders = order_book_result["order_list"]
-            logger.debug(f"Found {len(orders)} orders in legacy dictionary response")
-        # Handle direct list response
-        elif isinstance(order_book_result, list):
-            orders = order_book_result
-            logger.debug(f"Found {len(orders)} orders in direct list response")
-
-        # Check if we have any orders to work with
-        if not orders:
-            logger.warning("No orders found in order book, cannot fetch trades")
-            return {"status": "success", "message": "No orders found", "data": []}, 200
-
-        # Log the first order for debugging
-        if orders:
-            logger.debug(
-                f"First order sample for debugging: {json.dumps(orders[0], indent=2, default=str)}"
-            )
-            if "order_status" in orders[0]:
-                logger.debug(f"First order status: {orders[0]['order_status']}")
-            elif "status" in orders[0]:
-                logger.debug(f"First order status: {orders[0]['status']}")
-            else:
-                logger.debug("First order has no status field")
-
-        logger.debug(f"Found {len(orders)} orders to check for trades")
-
-        # Filter orders that might have trades
-        executed_statuses = ["EXECUTED", "COMPLETED", "FILLED", "PARTIAL", "COMPLETE"]
-        potential_trade_orders = []
-
-        # Log all orders status for debugging
-        for i, order in enumerate(orders):
-            order_status = order.get("order_status", order.get("status", ""))
-            if order_status:
-                order_status = order_status.upper()
-            else:
-                order_status = "NO_STATUS"
-
-            filled_qty = order.get("filled_quantity", 0)
-            order_id = None
-
-            # Extract order ID
-            for key in ["groww_order_id", "orderid", "order_id", "id"]:
-                if key in order:
-                    order_id = order[key]
-                    break
-
-            logger.debug(
-                f"Order {i + 1}: ID={order_id}, Status={order_status}, Filled Qty={filled_qty}"
-            )
-
-            # Use more flexible criteria for executed orders
-            is_executed = (
-                order_status in executed_statuses
-                or "EXECUT" in order_status
-                or "FILL" in order_status
-                or "COMPLET" in order_status
-                or filled_qty > 0
-            )
-
-            if order_id and is_executed:
-                logger.debug(
-                    f"*** Found potential trade order: ID={order_id}, Status={order_status}"
-                )
-                # Extract transaction type (BUY/SELL) with multiple possible field names
-                transaction_type = None
-
-                # Log all fields in the order for debugging
-                logger.debug(f"Order fields available: {list(order.keys())}")
-
-                # Check all possible field names for transaction type
-                for field in [
-                    "transaction_type",
-                    "order_type",
-                    "trade_type",
-                    "side",
-                    "action",
-                    "transaction_type",
-                    "buy_sell",
-                    "transactionType",
-                ]:
-                    if field in order and order[field]:
-                        transaction_type = str(order[field]).upper()
-                        logger.debug(
-                            f"Found transaction type '{transaction_type}' in field '{field}'"
-                        )
-                        break
-
-                # Additional check for Groww-specific fields
-                if not transaction_type and "order" in order and isinstance(order["order"], dict):
-                    nested_order = order["order"]
-                    for field in [
-                        "transaction_type",
-                        "order_type",
-                        "trade_type",
-                        "side",
-                        "action",
-                        "buy_sell",
-                        "transactionType",
-                    ]:
-                        if field in nested_order and nested_order[field]:
-                            transaction_type = str(nested_order[field]).upper()
-                            logger.debug(
-                                f"Found transaction type '{transaction_type}' in nested order field '{field}'"
-                            )
-                            break
-
-                # Extract product type with multiple possible field names
-                product_type = None
-                for field in ["product", "product_type", "order_variety"]:
-                    if field in order and order[field]:
-                        product_type = order[field].upper()
-                        logger.debug(f"Found product type '{product_type}' in field '{field}'")
-                        break
-
-                # Create potential trade order with all available information
-                potential_trade_orders.append(
-                    {
-                        "order_id": order_id,
-                        "segment": order.get("segment", "CASH"),
-                        "symbol": order.get("trading_symbol", order.get("symbol", "")),
-                        "status": order_status,
-                        "filled_quantity": filled_qty,
-                        "transaction_type": transaction_type,  # Add transaction type
-                        "product": product_type,  # Add product type
-                        "exchange": order.get("exchange", ""),  # Add exchange
-                        "price": order.get("price", 0),  # Add price if available
-                    }
-                )
-
-        logger.debug(f"Found {len(potential_trade_orders)} potential orders with trades")
-
-        # Now fetch trades for each executed order
-        all_trades = []
-        segment_map = {
-            "CASH": SEGMENT_CASH,
-            "FNO": SEGMENT_FNO,
-            "F&O": SEGMENT_FNO,
-            "OPTIONS": SEGMENT_FNO,
-            "FUTURES": SEGMENT_FNO,
-        }
-
-        # Attempt to fetch trades for each potential order
-        for index, potential_order in enumerate(potential_trade_orders):
-            order_id = potential_order["order_id"]
-            raw_segment = potential_order["segment"]
-
-            # Determine the correct segment based on order ID and segment info
-            if order_id.startswith("GLTFO"):
-                segment = SEGMENT_FNO
-                logger.debug(f"Using FNO segment for order {order_id} based on order ID prefix")
-            else:
-                segment = segment_map.get(raw_segment, SEGMENT_CASH)
-                logger.debug(f"Using segment {segment} for order {order_id} (from {raw_segment})")
-
-            logger.debug(
-                f"Fetching trades for order {index + 1}/{len(potential_trade_orders)}: {order_id} (segment: {segment})"
-            )
-
-            try:
-                # Use our new direct API function to get trades for this order
-                trades_result = get_order_trades(order_id, auth, segment)
-
-                if isinstance(trades_result, tuple) and len(trades_result) >= 1:
-                    trades_data = trades_result[0]
-                    logger.debug(
-                        f"Trade result status for order {order_id}: {trades_data.get('status')}"
-                    )
-
-                    # Check if trades were found
-                    if trades_data.get("status") == "success" and "trades" in trades_data:
-                        if trades_data["trades"]:
-                            all_trades.extend(trades_data["trades"])
-                            logger.debug(
-                                f"SUCCESS: Added {len(trades_data['trades'])} trades from order {order_id}"
-                            )
-                        else:
-                            logger.debug(f"Order {order_id} has no trades despite being executed")
-
-                            # For executed orders with filled quantity but no trades, create a synthetic trade entry
-                            if potential_order.get("filled_quantity", 0) > 0:
-                                logger.debug(
-                                    f"Creating synthetic trade for executed order {order_id} with filled quantity"
-                                )
-
-                                # Create a synthetic trade based on order details
-                                synthetic_trade = {
-                                    "trade_id": f"synthetic_{order_id}",
-                                    "order_id": order_id,
-                                    "exchange_trade_id": "",
-                                    "exchange_order_id": "",
-                                    "symbol": potential_order.get("symbol", ""),
-                                    "quantity": potential_order.get("filled_quantity", 0),
-                                    "price": 0,  # We don't have this information
-                                    "trade_status": "EXECUTED",
-                                    "exchange": "",
-                                    "segment": raw_segment,
-                                    "product": potential_order.get(
-                                        "product", "MIS"
-                                    ),  # Default to MIS if not available
-                                    "transaction_type": potential_order.get(
-                                        "transaction_type", "BUY"
-                                    ),  # Use original transaction type when available
-                                    "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                    "trade_date_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                    "settlement_number": "",
-                                    "remarks": "Synthetic trade created from executed order",
-                                }
-                                all_trades.append(synthetic_trade)
-                                logger.debug(f"Added synthetic trade for order {order_id}")
-                    # Check for special cases: 404 errors for FNO orders
-                    elif (
-                        trades_data.get("status") == "error"
-                        and segment == SEGMENT_FNO
-                        and trades_result[1] == 404
-                    ):
-                        # For FNO orders that return 404, create a synthetic trade
-                        if potential_order.get("filled_quantity", 0) > 0:
-                            # Log the detailed information from potential_order for debugging
-                            logger.debug(
-                                f"Creating synthetic trade for FNO order {order_id} due to 404 error"
-                            )
-                            logger.debug(
-                                f"Order details for synthetic trade: {json.dumps(potential_order, indent=2, default=str)}"
-                            )
-                            logger.debug(
-                                f"Transaction type found: {potential_order.get('transaction_type')}"
-                            )
-
-                            # Create a synthetic trade
-                            synthetic_trade = {
-                                "trade_id": f"synthetic_fno_{order_id}",
-                                "order_id": order_id,
-                                "exchange_trade_id": "",
-                                "exchange_order_id": "",
-                                "symbol": potential_order.get("symbol", ""),
-                                "quantity": potential_order.get("filled_quantity", 0),
-                                "price": potential_order.get("price", 0),
-                                "trade_status": "EXECUTED",
-                                "exchange": potential_order.get("exchange", ""),
-                                "segment": raw_segment,
-                                "product": potential_order.get(
-                                    "product", "MIS"
-                                ),  # Default to MIS if not available
-                                "transaction_type": potential_order.get(
-                                    "transaction_type", "BUY"
-                                ),  # Default to BUY if not available
-                                "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "trade_date_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "settlement_number": "",
-                                "remarks": "Synthetic FNO trade created due to API limitation (404)",
-                            }
-                            all_trades.append(synthetic_trade)
-                            logger.debug(f"Added synthetic FNO trade for order {order_id}")
-                    else:
-                        logger.warning(
-                            f"No trades found for order {order_id}: {trades_data.get('message', 'Unknown reason')}"
-                        )
-
-                        # Check for orders where we should create synthetic trades anyway
-                        if potential_order.get("filled_quantity", 0) > 0 and potential_order.get(
-                            "status", ""
-                        ).upper() in ["EXECUTED", "COMPLETE", "FILLED"]:
-                            logger.debug(
-                                f"Creating synthetic trade for executed order {order_id} despite API error"
-                            )
-
-                            # Create a synthetic trade based on order details
-                            synthetic_trade = {
-                                "trade_id": f"synthetic_fallback_{order_id}",
-                                "order_id": order_id,
-                                "exchange_trade_id": "",
-                                "exchange_order_id": "",
-                                "symbol": potential_order.get("symbol", ""),
-                                "quantity": potential_order.get("filled_quantity", 0),
-                                "price": potential_order.get("price", 0),
-                                "trade_status": "EXECUTED",
-                                "exchange": potential_order.get("exchange", ""),
-                                "segment": raw_segment,
-                                "product": potential_order.get(
-                                    "product", "MIS"
-                                ),  # Default to MIS if not available
-                                "transaction_type": potential_order.get(
-                                    "transaction_type", "BUY"
-                                ),  # Default to BUY if not available
-                                "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "trade_date_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                                "settlement_number": "",
-                                "remarks": "Synthetic trade created for executed order (API error fallback)",
-                            }
-                            all_trades.append(synthetic_trade)
-                            logger.debug(f"Added synthetic fallback trade for order {order_id}")
-                else:
-                    logger.warning(f"Unexpected format for trades result for order {order_id}")
-            except Exception as e:
-                logger.exception(f"Error fetching trades for order {order_id}: {e}")
-
-        # Log summary of trade fetching
-        if all_trades:
-            logger.debug(
-                f"Successfully fetched a total of {len(all_trades)} trades across all orders"
-            )
-        else:
-            logger.warning("No trades found for any orders")
-
-        # Print first trade for debugging if available
-        if all_trades:
-            logger.debug(f"Sample trade data: {json.dumps(all_trades[0], indent=2, default=str)}")
-
-        # Format trades to match OpenAlgo's expected format (as used in the REST API)
-        # This matches the format expected by the order_data.py mapping functions
-        openalgo_trades = [transform_groww_trade(trade) for trade in all_trades]
-
-        # Log the first transformed trade for debugging
-        if openalgo_trades:
-            logger.debug(
-                f"Sample OpenAlgo trade format: {json.dumps(openalgo_trades[0], indent=2, default=str)}"
-            )
-
-        # Create the response with the structure expected by map_trade_data
-        # Note: In the REST API, the map_trade_data function will extract data from this structure
-        response = {
-            "status": "success",
-            "message": f"Retrieved {len(all_trades)} trades",
-            "data": openalgo_trades,  # This is what map_trade_data will look for first
-            "tradebook": openalgo_trades,  # For compatibility with different naming conventions
-            "raw_data": all_trades,  # Keep the original data for reference
-        }
-
-        logger.debug(
-            f"Successfully fetched and transformed {len(all_trades)} trades using direct API"
-        )
-        logger.debug(f"Response structure: {list(response.keys())}")
-
-        # Return just the data for direct usage - this is important for the REST API
-        # The REST API in tradebook.py expects a specific structure
-        return response, 200
-
-    except Exception as e:
-        logger.error(f"Error fetching trade book: {e}")
-        logger.exception("Full stack trace:")
-        # Even in error case, maintain consistent structure with empty data
-        # This ensures map_trade_data can still process it
+    if failed:
         return {
             "status": "error",
-            "message": f"Error fetching trades: {str(e)}",
-            "data": [],  # Empty list but with the expected structure
-            "tradebook": [],
-            "raw_data": [],
-        }, 500
+            "message": f"Groww did not return the trades for {len(failed)} filled order(s). "
+            "Try again shortly; the order book shows their fills.",
+        }
+    return {"status": "success", "data": [transform_groww_trade(t) for t in trades]}
 
 
 def _fno_read_failure(response):
@@ -889,6 +327,8 @@ def _fno_read_failure(response):
     """
     try:
         body = response.json()
+    except BrokerBusyError:
+        raise
     except Exception:
         body = None
     if response.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
@@ -903,475 +343,222 @@ def _fno_read_failure(response):
 _SEGMENT_BY_EXCHANGE = {"NSE": "CASH", "BSE": "CASH", "NFO": "FNO", "BFO": "FNO"}
 
 
-def get_positions(auth, strict=False):
+def _num(value):
+    """A finite float from a Groww numeric field, or 0."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _position_row(position, segment):
+    """One Groww position (06-portfolio "Get User Positions") in OpenAlgo terms.
+
+    Prices are rupees as documented. P&L starts as the documented realised_pnl;
+    _attach_ltp adds the open quantity's move when a live price is available.
     """
-    Get current positions for the user using direct API calls to Groww API
-    Uses the /v1/positions/user endpoint as documented
+    groww_symbol = position.get("trading_symbol", "")
+    groww_exchange = position.get("exchange", "")
+    groww_segment = position.get("segment") or segment
+    exchange = openalgo_exchange(groww_exchange, groww_segment)
+    buy_qty = _num(position.get("credit_quantity")) + _num(
+        position.get("carry_forward_credit_quantity")
+    )
+    sell_qty = _num(position.get("debit_quantity")) + _num(
+        position.get("carry_forward_debit_quantity")
+    )
+    net_qty = position.get("quantity", buy_qty - sell_qty)
+    prices = groww_position_prices(position)
+    realised = _num(position.get("realised_pnl"))
+    symbol = get_oa_symbol(groww_symbol, exchange) or groww_symbol
+    return {
+        "symbol": symbol,
+        "tradingsymbol": symbol,
+        "trading_symbol": groww_symbol,
+        "exchange": exchange,
+        "brexchange": groww_exchange,
+        "segment": groww_segment,
+        "product": position.get("product", ""),
+        "quantity": net_qty,
+        "net_quantity": net_qty,
+        "average_price": prices["average_price"],
+        "buy_quantity": buy_qty,
+        "sell_quantity": sell_qty,
+        "buy_price": prices["buy_price"],
+        "sell_price": prices["sell_price"],
+        "symbol_isin": position.get("symbol_isin", ""),
+        "ltp": 0,
+        "realised": realised,
+        "unrealised": 0,
+        "pnl": realised,
+    }
+
+
+_LTP_BATCH_SIZE = 50  # 08-live-data "Get LTP": up to 50 instruments
+
+
+def _live_prices(keys_by_segment, auth):
+    """Last traded prices from /v1/live-data/ltp (08-live-data "Get LTP").
+
+    Args:
+        keys_by_segment: {"CASH" | "FNO": iterable of "EXCHANGE_TRADINGSYMBOL"}
+        auth: Authentication token
+
+    Returns:
+        dict: {"EXCHANGE_TRADINGSYMBOL": ltp} for every symbol Groww priced.
+        A batch Groww refuses is logged and left out; callers show no price
+        rather than a wrong one.
+    """
+    prices = {}
+    client = get_httpx_client()
+    headers = _groww_headers(auth)
+    for segment, keys in keys_by_segment.items():
+        keys = list(dict.fromkeys(keys))
+        for start in range(0, len(keys), _LTP_BATCH_SIZE):
+            batch = keys[start : start + _LTP_BATCH_SIZE]
+            try:
+                resp = groww_request(
+                    client,
+                    "GET",
+                    f"{GROWW_BASE_URL}/v1/live-data/ltp",
+                    "live",
+                    params={"segment": segment, "exchange_symbols": ",".join(batch)},
+                    headers=headers,
+                    timeout=10,
+                )
+                body = resp.json()
+            except BrokerBusyError:
+                raise
+            except Exception:
+                logger.warning(f"Groww LTP for {segment} could not be read", exc_info=True)
+                continue
+            payload = body.get("payload") if isinstance(body, dict) else None
+            if resp.status_code != 200 or body.get("status") != "SUCCESS" or not isinstance(payload, dict):
+                reason = _groww_error_message(body, f"HTTP {resp.status_code}")
+                logger.warning(f"Groww LTP for {segment} refused: {reason}")
+                continue
+            for key in batch:
+                ltp = _num(payload.get(key))
+                if ltp > 0:
+                    prices[key] = ltp
+    return prices
+
+
+def _attach_ltp(rows, auth):
+    """Add a live price and the open quantity's P&L to each open position.
+
+    Groww's positions carry no last price, so _live_prices supplies it. A
+    failed price read leaves the row with LTP 0 and P&L as the realised
+    amount - the position itself is still shown.
+    """
+    wanted = {}
+    for row in rows:
+        if _num(row["quantity"]) == 0 or not row["trading_symbol"]:
+            continue
+        wanted.setdefault(row["segment"], []).append(f"{row['brexchange']}_{row['trading_symbol']}")
+    if not wanted:
+        return
+    prices = _live_prices(wanted, auth)
+    for row in rows:
+        ltp = prices.get(f"{row['brexchange']}_{row['trading_symbol']}")
+        if not ltp or _num(row["quantity"]) == 0:
+            continue
+        row["ltp"] = ltp
+        if row["average_price"] > 0:
+            row["unrealised"] = (ltp - row["average_price"]) * _num(row["quantity"])
+            row["pnl"] = row["realised"] + row["unrealised"]
+
+
+def get_positions(auth, strict=False, include_ltp=None):
+    """
+    Read the day's positions from both segments (GET /v1/positions/user).
 
     Args:
         auth (str): Authentication token
         strict (bool): Report a CASH segment that could not be read as an
             error instead of an empty book, which is what the smart order needs.
-            An FNO read that fails does not fail the whole read: this code has
-            always expected it to fail on some accounts, and refusing every
-            smart order on an account without F&O would be the wrong trade.
-            The CASH rows come back with "failed_segments": ["FNO"], so a smart
-            order in NFO or BFO is refused while one in NSE or BSE goes ahead.
+            An FNO read that fails does not fail the whole read: it fails on
+            accounts without F&O, and refusing every smart order there would be
+            the wrong trade. The CASH rows come back with
+            "failed_segments": ["FNO"], so a smart order in NFO or BFO is
+            refused while one in NSE or BSE goes ahead.
+        include_ltp (bool, optional): Attach live prices and P&L. Defaults to
+            on for the position book and off for the strict smart-order read,
+            which only needs quantities.
 
     Returns:
         tuple: (positions data, status code)
     """
+    if include_ltp is None:
+        include_ltp = not strict
     try:
-        logger.debug("Using direct API implementation for get_positions")
-
-        # Prepare the API client and headers
         client = get_httpx_client()
-        headers = {
-            "Authorization": f"Bearer {auth}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        # Groww API endpoint for positions - using documented endpoint
+        headers = _groww_headers(auth)
         positions_url = f"{GROWW_BASE_URL}/v1/positions/user"
 
-        # Get both CASH and FNO segments
-        params = {
-            "segment": "CASH"  # Default to CASH segment
-        }
-
-        # Log the request details (with redacted auth token)
-        logger.debug("-------- GET POSITIONS REQUEST --------")
-        logger.debug(f"API URL: {positions_url}")
-        logger.debug(f"Request parameters: {params}")
-        logger.debug(
-            'Request headers: {\n  "Authorization": "Bearer ***REDACTED***",\n  "Accept": "application/json",\n  "Content-Type": "application/json"\n}'
+        rows = []
+        cash = groww_request(
+            client, "GET", positions_url, "non_trading",
+            params={"segment": SEGMENT_CASH}, headers=headers, timeout=30,
         )
-
-        # Make the API call for CASH segment
-        response_obj = client.get(positions_url, params=params, headers=headers, timeout=30)
-
-        # Log the response status
-        logger.debug("-------- GET POSITIONS RESPONSE --------")
-        logger.debug(f"Response status code: {response_obj.status_code}")
-
-        # Parse the response
-        all_positions = []
-        failures = []
-
         try:
-            # Parse CASH segment response
-            response_data = response_obj.json()
-            logger.debug(
-                f"Raw CASH positions response: {json.dumps(response_data, indent=2)[:1000]}..."
+            cash_body = cash.json()
+        except ValueError:
+            cash_body = None
+        if (
+            cash.status_code == 200
+            and isinstance(cash_body, dict)
+            and cash_body.get("status") == "SUCCESS"
+        ):
+            for position in (cash_body.get("payload") or {}).get("positions") or []:
+                rows.append(_position_row(position, SEGMENT_CASH))
+        elif not says_no_positions(cash_body):
+            reason = _groww_error_message(cash_body, f"HTTP {cash.status_code}")
+            if strict:
+                logger.error(f"Groww position book incomplete: CASH segment: {reason}")
+                return {"status": "error", "message": f"CASH segment: {reason}", "data": []}, 502
+            logger.warning(f"Groww CASH positions could not be read: {reason}")
+
+        fno_failure = None
+        try:
+            fno = groww_request(
+                client, "GET", positions_url, "non_trading",
+                params={"segment": SEGMENT_FNO}, headers=headers, timeout=30,
             )
+            fno_failure = _fno_read_failure(fno)
+            if fno_failure is None and fno.status_code == 200:
+                fno_body = fno.json()
+                if fno_body.get("status") == "SUCCESS":
+                    for position in (fno_body.get("payload") or {}).get("positions") or []:
+                        rows.append(_position_row(position, SEGMENT_FNO))
+        except BrokerBusyError:
+            raise
+        except Exception as fno_error:
+            logger.warning(f"Error fetching FNO positions: {fno_error}")
+            fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
 
-            # Process the response to extract position information
-            if response_obj.status_code == 200 and response_data.get("status") == "SUCCESS":
-                # Extract positions from the payload based on the documented format
-                if "payload" in response_data and "positions" in response_data["payload"]:
-                    raw_positions = response_data["payload"]["positions"]
-                    logger.debug(f"Found {len(raw_positions)} positions in CASH segment")
+        if include_ltp:
+            _attach_ltp(rows, auth)
 
-                    # Transform positions to match OpenAlgo's expected format
-                    for position in raw_positions:
-                        # Calculate net quantities
-                        buy_qty = position.get("credit_quantity", 0) + position.get(
-                            "carry_forward_credit_quantity", 0
-                        )
-                        sell_qty = position.get("debit_quantity", 0) + position.get(
-                            "carry_forward_debit_quantity", 0
-                        )
-                        net_qty = position.get("quantity", buy_qty - sell_qty)
+        response = {
+            "status": "success",
+            "message": f"Retrieved {len(rows)} positions",
+            "data": rows,
+        }
+        if strict and fno_failure:
+            logger.warning(f"Groww FNO positions not read: {fno_failure}")
+            response["failed_segments"] = ["FNO"]
+        return response, 200
 
-                        prices = groww_position_prices(position)
-                        avg_price = prices["average_price"]
-
-                        # Get the trading symbol
-                        groww_symbol = position.get("trading_symbol", "")
-                        openalgo_symbol = groww_symbol
-                        symbol_converted = False
-
-                        # Handle symbol conversion for consistency with orderbook
-                        # This is primarily for FNO instruments, but we'll check all symbols
-                        try:
-                            # Import get_oa_symbol from token_db with fallback paths
-                            try:
-                                from database.token_db import get_oa_symbol
-                            except ImportError:
-                                from openalgo.database.token_db import get_oa_symbol
-
-                            # First try database lookup for any symbol
-                            db_symbol = get_oa_symbol(groww_symbol, "NFO")
-                            if db_symbol:
-                                openalgo_symbol = db_symbol
-                                logger.debug(
-                                    f"Database: Converted Groww symbol: {groww_symbol} -> {openalgo_symbol}"
-                                )
-                                symbol_converted = True
-                            else:
-                                # Pattern matching fallbacks if database lookup fails
-                                # 1. Try option pattern
-                                option_pattern = re.compile(
-                                    r"([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)"
-                                )
-                                option_match = option_pattern.match(groww_symbol)
-
-                                if option_match:
-                                    # Extract components
-                                    symbol_name, year, month_num, day, strike, option_type = (
-                                        option_match.groups()
-                                    )
-
-                                    # Convert numeric month to alphabetic
-                                    months = [
-                                        "JAN",
-                                        "FEB",
-                                        "MAR",
-                                        "APR",
-                                        "MAY",
-                                        "JUN",
-                                        "JUL",
-                                        "AUG",
-                                        "SEP",
-                                        "OCT",
-                                        "NOV",
-                                        "DEC",
-                                    ]
-                                    month_name = (
-                                        months[int(month_num) - 1]
-                                        if 1 <= int(month_num) <= 12
-                                        else f"M{month_num}"
-                                    )
-
-                                    # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                    openalgo_symbol = (
-                                        f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                    )
-                                    logger.debug(
-                                        f"Pattern: Converted Groww option symbol: {groww_symbol} -> {openalgo_symbol}"
-                                    )
-                                    symbol_converted = True
-                                else:
-                                    # 2. Try futures pattern
-                                    future_pattern = re.compile(
-                                        r"([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?"
-                                    )
-                                    future_match = future_pattern.match(groww_symbol)
-
-                                    if future_match:
-                                        # Extract components
-                                        symbol_name, year, month_num, day = future_match.groups()
-
-                                        # Convert numeric month to alphabetic
-                                        months = [
-                                            "JAN",
-                                            "FEB",
-                                            "MAR",
-                                            "APR",
-                                            "MAY",
-                                            "JUN",
-                                            "JUL",
-                                            "AUG",
-                                            "SEP",
-                                            "OCT",
-                                            "NOV",
-                                            "DEC",
-                                        ]
-                                        month_name = (
-                                            months[int(month_num) - 1]
-                                            if 1 <= int(month_num) <= 12
-                                            else f"M{month_num}"
-                                        )
-
-                                        # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                        openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
-                                        logger.debug(
-                                            f"Pattern: Converted Groww futures symbol: {groww_symbol} -> {openalgo_symbol}"
-                                        )
-                                        symbol_converted = True
-
-                        except Exception as e:
-                            logger.error(f"Error converting position symbol: {e}")
-                            # Fall back to original symbol if conversion fails
-
-                        # Map exchange to OpenAlgo format
-                        exchange = position.get("exchange", "")
-                        if exchange == "NSE":
-                            openalgo_exchange = "NSE_EQ"
-                        elif exchange == "BSE":
-                            openalgo_exchange = "BSE_EQ"
-                        elif exchange == "NFO":
-                            openalgo_exchange = "NSE_FO"
-                        else:
-                            openalgo_exchange = exchange
-
-                        # Create position object in OpenAlgo format
-                        # For CASH segment, use the original trading_symbol as the symbol
-                        if position.get("segment") == "CASH":
-                            position_symbol = position.get(
-                                "trading_symbol", groww_symbol
-                            )  # Use trading_symbol for cash segment
-                        else:
-                            position_symbol = (
-                                openalgo_symbol  # Use converted symbol for other segments
-                            )
-
-                        transformed_position = {
-                            # Standard OpenAlgo fields
-                            "symbol": position_symbol,
-                            "tradingsymbol": position_symbol,
-                            "exchange": openalgo_exchange,
-                            "product": position.get("product", ""),
-                            "quantity": net_qty,
-                            "net_quantity": net_qty,
-                            "average_price": avg_price,
-                            "buy_quantity": buy_qty,
-                            "sell_quantity": sell_qty,
-                            "segment": "EQ",  # OpenAlgo format for CASH segment
-                            # Specific Groww fields (renamed to match OpenAlgo expectations)
-                            "buy_price": prices["buy_price"],
-                            "sell_price": prices["sell_price"],
-                            "symbol_isin": position.get("symbol_isin", ""),
-                            # Fields expected by OpenAlgo's UI
-                            "pnl": 0,  # Not provided in response, calculate if needed
-                            "last_price": 0,  # Not provided in response
-                            "close_price": 0,  # Not provided in response
-                            "instrument_token": position.get(
-                                "symbol_isin", ""
-                            ),  # Use ISIN as token
-                            "unrealised": 0,  # Not provided in response
-                            "realised": 0,  # Not provided in response
-                        }
-                        all_positions.append(transformed_position)
-            elif not says_no_positions(response_data):
-                failures.append(
-                    f"CASH segment: HTTP {response_obj.status_code}, {str(response_data)[:200]}"
-                )
-
-            # Now try to get FNO segment positions
-            fno_failure = None
-            try:
-                params["segment"] = "FNO"
-                logger.debug(f"Fetching FNO positions with params: {params}")
-
-                fno_response = client.get(positions_url, params=params, headers=headers, timeout=30)
-                fno_failure = _fno_read_failure(fno_response)
-
-                if fno_response.status_code == 200:
-                    fno_data = fno_response.json()
-                    logger.debug(f"FNO response status: {fno_data.get('status')}")
-
-                    if (
-                        fno_data.get("status") == "SUCCESS"
-                        and "payload" in fno_data
-                        and "positions" in fno_data["payload"]
-                    ):
-                        fno_positions = fno_data["payload"]["positions"]
-                        logger.debug(f"Found {len(fno_positions)} positions in FNO segment")
-
-                        # Process FNO positions the same way
-                        for position in fno_positions:
-                            # Calculate net quantities
-                            buy_qty = position.get("credit_quantity", 0) + position.get(
-                                "carry_forward_credit_quantity", 0
-                            )
-                            sell_qty = position.get("debit_quantity", 0) + position.get(
-                                "carry_forward_debit_quantity", 0
-                            )
-                            net_qty = position.get("quantity", buy_qty - sell_qty)
-
-                            prices = groww_position_prices(position)
-                            avg_price = prices["average_price"]
-
-                            # Get the trading symbol
-                            groww_symbol = position.get("trading_symbol", "")
-                            openalgo_symbol = groww_symbol
-                            symbol_converted = False
-
-                            # Handle FNO symbol conversion
-                            if (
-                                position.get("segment") == "FNO"
-                                or position.get("exchange") == "NFO"
-                            ):
-                                try:
-                                    # Import get_oa_symbol with fallback paths
-                                    try:
-                                        from database.token_db import get_oa_symbol
-                                    except ImportError:
-                                        from openalgo.database.token_db import get_oa_symbol
-
-                                    # First try database lookup for this FNO symbol
-                                    db_symbol = get_oa_symbol(groww_symbol, "NFO")
-                                    if db_symbol:
-                                        openalgo_symbol = db_symbol
-                                        logger.debug(
-                                            f"Database: Converted Groww FNO symbol: {groww_symbol} -> {openalgo_symbol}"
-                                        )
-                                        symbol_converted = True
-                                    else:
-                                        # Fallback to pattern matching if database lookup fails
-                                        # For Options: Convert from Groww format to OpenAlgo format
-                                        # Groww format: "NIFTY25051334000CE" or "BANKNIFTY25051332500PE"
-                                        # OpenAlgo format: "NIFTY13MAY2534000CE" or "BANKNIFTY13MAY2532500PE"
-                                        groww_pattern = re.compile(
-                                            r"([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)"
-                                        )
-                                        match = groww_pattern.match(groww_symbol)
-
-                                    if match:
-                                        # Extract components
-                                        symbol_name, year, month_num, day, strike, option_type = (
-                                            match.groups()
-                                        )
-
-                                        # Convert numeric month to alphabetic
-                                        months = [
-                                            "JAN",
-                                            "FEB",
-                                            "MAR",
-                                            "APR",
-                                            "MAY",
-                                            "JUN",
-                                            "JUL",
-                                            "AUG",
-                                            "SEP",
-                                            "OCT",
-                                            "NOV",
-                                            "DEC",
-                                        ]
-                                        month_name = (
-                                            months[int(month_num) - 1]
-                                            if 1 <= int(month_num) <= 12
-                                            else f"M{month_num}"
-                                        )
-
-                                        # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                        openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                        logger.debug(
-                                            f"Pattern: Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}"
-                                        )
-                                        symbol_converted = True
-
-                                    # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
-                                    else:
-                                        future_pattern = re.compile(
-                                            r"([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?"
-                                        )
-                                        match = future_pattern.match(groww_symbol)
-
-                                        if match:
-                                            # Extract components
-                                            symbol_name, year, month_num, day = match.groups()
-
-                                            # Convert numeric month to alphabetic
-                                            months = [
-                                                "JAN",
-                                                "FEB",
-                                                "MAR",
-                                                "APR",
-                                                "MAY",
-                                                "JUN",
-                                                "JUL",
-                                                "AUG",
-                                                "SEP",
-                                                "OCT",
-                                                "NOV",
-                                                "DEC",
-                                            ]
-                                            month_name = (
-                                                months[int(month_num) - 1]
-                                                if 1 <= int(month_num) <= 12
-                                                else f"M{month_num}"
-                                            )
-
-                                            # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                            openalgo_symbol = (
-                                                f"{symbol_name}{day}{month_name}{year}FUT"
-                                            )
-                                            logger.debug(
-                                                f"Pattern: Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}"
-                                            )
-                                            symbol_converted = True
-                                except Exception as e:
-                                    logger.error(f"Error converting position symbol: {e}")
-                                    # Fall back to original symbol if conversion fails
-
-                            # Map exchange to OpenAlgo format
-                            exchange = position.get("exchange", "")
-                            if exchange == "NSE":
-                                openalgo_exchange = "NSE"
-                            elif exchange == "BSE":
-                                openalgo_exchange = "BSE"
-                            elif exchange == "NFO":
-                                openalgo_exchange = "NSE_FO"
-                            else:
-                                openalgo_exchange = exchange
-
-                            # Create position object with segment set to FNO
-                            transformed_position = {
-                                "symbol": openalgo_symbol,
-                                "tradingsymbol": openalgo_symbol,
-                                "exchange": openalgo_exchange,
-                                "product": position.get("product", ""),
-                                "quantity": net_qty,
-                                "net_quantity": net_qty,
-                                "average_price": avg_price,
-                                "buy_quantity": buy_qty,
-                                "sell_quantity": sell_qty,
-                                "segment": "FO",  # OpenAlgo format for FNO segment
-                                "buy_price": prices["buy_price"],
-                                "sell_price": prices["sell_price"],
-                                "symbol_isin": position.get("symbol_isin", ""),
-                                "pnl": 0,
-                                "last_price": 0,
-                                "close_price": 0,
-                                "instrument_token": position.get("symbol_isin", ""),
-                                "unrealised": 0,
-                                "realised": 0,
-                            }
-                            all_positions.append(transformed_position)
-            except Exception as fno_error:
-                # Don't fail if FNO segment request fails
-                logger.warning(f"Error fetching FNO positions: {fno_error}")
-                fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
-
-            if strict and failures:
-                logger.error(f"Groww position book incomplete: {'; '.join(failures)}")
-                return {"status": "error", "message": "; ".join(failures), "data": []}, 502
-
-            # Create formatted response
-            formatted_response = {
-                "status": "success",
-                "message": f"Retrieved {len(all_positions)} positions",
-                "data": all_positions,
-                "raw_response": response_data,  # Include the CASH segment response
-            }
-            if strict and fno_failure:
-                logger.warning(f"Groww FNO positions not read: {fno_failure}")
-                formatted_response["failed_segments"] = ["FNO"]
-
-            logger.debug(f"Successfully processed {len(all_positions)} total positions")
-            return formatted_response, 200
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing positions response: {e}")
-            logger.error(f"Response content: {response_obj.content[:1000]}")
-            return {
-                "status": "error",
-                "message": f"Error parsing positions response: {str(e)}",
-                "data": [],
-                "raw_content": response_obj.content.decode("utf-8", errors="replace")[:1000],
-            }, response_obj.status_code
-
+    except BrokerBusyError:
+        raise
     except Exception as e:
-        logger.error(f"Error fetching positions: {e}")
-        logger.exception("Full stack trace:")
+        logger.exception("Error fetching Groww positions")
         return {
             "status": "error",
-            "message": f"Error fetching positions: {str(e)}",
+            "message": f"Could not reach Groww to read positions: {type(e).__name__}",
             "data": [],
-            "raw_response": {},
         }, 500
 
 
@@ -1404,7 +591,7 @@ def get_holdings(auth):
         logger.debug(f"API URL: {holdings_url}")
 
         # Make the API call
-        response_obj = client.get(holdings_url, headers=headers, timeout=30)
+        response_obj = groww_request(client, "GET", holdings_url, "non_trading", headers=headers, timeout=30)
 
         # Log the response status
         logger.debug("-------- GET HOLDINGS RESPONSE --------")
@@ -1476,6 +663,8 @@ def get_holdings(auth):
                     "raw_response": response_data,
                 }, response_obj.status_code
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error parsing holdings response: {e}")
             return {
@@ -1486,6 +675,8 @@ def get_holdings(auth):
                 "raw_data": response_obj.content.decode("utf-8", errors="replace"),
             }, response_obj.status_code
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error while fetching trades using direct API: {e}")
         logger.exception("Full stack trace:")
@@ -1582,52 +773,26 @@ def get_open_position(tradingsymbol, exchange, product, auth):
         if segment is None or segment in failed_segments:
             raise PositionReadError("groww", f"the {failed_segments} position read failed")
 
-    # Check if we received positions data in expected format
-    # Handle both direct list format and dictionary with data field
-    if positions_data:
-        # If it's a dictionary with status and data fields (like Angel's format)
+    # get_positions returns (payload, status); its rows carry Groww's own
+    # trading_symbol and the OpenAlgo exchange (NSE/BSE/NFO/BFO).
+    positions_list = (payload.get("data") or []) if isinstance(payload, dict) else []
+    for position in positions_list:
         if (
-            isinstance(positions_data, dict)
-            and positions_data.get("status") == "success"
-            and positions_data.get("data")
+            position.get("trading_symbol") == tradingsymbol
+            and position.get("exchange") == exchange
+            and position.get("product") == product
         ):
-            positions_list = positions_data.get("data", [])
-        # If it's already a list
-        elif isinstance(positions_data, list):
-            positions_list = positions_data
-        else:
-            positions_list = []
-
-        # Accept both OpenAlgo-standard exchange codes and the segment-suffixed
-        # variants stored by get_positions() (NSE_EQ/BSE_EQ for CASH, NSE_FO/BSE_FO for FNO).
-        exchange_variants = {
-            "NSE": {"NSE", "NSE_EQ"},
-            "BSE": {"BSE", "BSE_EQ"},
-            "NFO": {"NFO", "NSE_FO", "NSE"},
-            "BFO": {"BFO", "BSE_FO", "BSE"},
-        }
-        expected_exchanges = exchange_variants.get(exchange, {map_exchange_type(exchange), exchange})
-
-        for position in positions_list:
-            # Check for matching position - compare with both tradingsymbol and symbol fields
-            symbol_match = (
-                position.get("tradingsymbol") == tradingsymbol
-                or position.get("symbol") == tradingsymbol
-                or position.get("trading_symbol") == tradingsymbol
-            )
-            exchange_match = position.get("exchange") in expected_exchanges
-            product_match = position.get("product") == product
-
-            if symbol_match and exchange_match and product_match:
-                # Try different field names for net quantity
-                net_qty = str(
-                    position.get(
-                        "net_quantity", position.get("netqty", position.get("quantity", "0"))
-                    )
-                )
-                break  # Found the position
+            net_qty = str(position.get("net_quantity", position.get("quantity", "0")))
+            break
 
     return net_qty
+
+
+class _Status:
+    """The HTTP status the order services read from a broker response (res.status)."""
+
+    def __init__(self, status):
+        self.status = status
 
 
 def direct_place_order_api(data, auth):
@@ -1653,6 +818,10 @@ def direct_place_order_api(data, auth):
         original_exchange = data.get("exchange", "NSE")
         quantity = int(data.get("quantity"))
 
+        # An exchange Groww cannot trade is the reason to give, before any
+        # symbol lookup (MCX contracts are in the master contract)
+        map_exchange_type(original_exchange)
+
         # First, try to look up the broker symbol (brsymbol) directly from the database
         from broker.groww.database.master_contract_db import SymToken, db_session
 
@@ -1664,15 +833,30 @@ def direct_place_order_api(data, auth):
                 .first()
             )
 
-        if db_record and db_record.brsymbol:
-            # Use the broker symbol from the database if found
-            trading_symbol = db_record.brsymbol
-            logger.debug(f"Using brsymbol from database: {original_symbol} -> {trading_symbol}")
-        else:
-            # If not found in database, try format conversion as fallback
-            trading_symbol = format_openalgo_to_groww_symbol(original_symbol, original_exchange)
-            logger.debug(
-                f"Symbol not found in database, using conversion: {original_symbol} -> {trading_symbol}"
+        if not (db_record and db_record.brsymbol):
+            # Groww's trading_symbol comes from its instrument file; a guessed
+            # symbol could name a different contract
+            raise ValueError(
+                f"{original_symbol} is not in the {original_exchange} master contract. "
+                "Check the symbol, or download the master contract again."
+            )
+        trading_symbol = db_record.brsymbol
+
+        # Groww's instrument file gives some NSE bonds one trading_symbol for
+        # several series (IMC1 for N1, N2 and N3). The master contract tells
+        # them apart (IMC1-N1, ...), but an order carries only Groww's
+        # trading_symbol, so Groww could not tell which series was meant.
+        with db_session() as session:
+            sharing = (
+                session.query(SymToken)
+                .filter_by(brsymbol=trading_symbol, exchange=original_exchange)
+                .count()
+            )
+        if sharing > 1:
+            raise ValueError(
+                f"{original_symbol} cannot be ordered through Groww's API: Groww lists "
+                f"{sharing} series under the same trading symbol {trading_symbol} and an "
+                "order cannot say which one. Place it in the Groww app instead."
             )
 
         # Map the rest of the parameters to Groww API format
@@ -1684,8 +868,11 @@ def direct_place_order_api(data, auth):
         validity = map_validity(data.get("validity", "DAY"))
 
         # Optional parameters
+        # SL is a stop-limit order: Groww needs both price and trigger_price
         price = (
-            float(data.get("price", 0)) if data.get("pricetype", "").upper() == "LIMIT" else None
+            float(data.get("price", 0))
+            if data.get("pricetype", "").upper() in ["LIMIT", "SL"]
+            else None
         )
         trigger_price = (
             float(data.get("trigger_price", 0))
@@ -1734,8 +921,8 @@ def direct_place_order_api(data, auth):
             "order_reference_id": order_reference_id,
         }
 
-        # Add price for LIMIT orders with detailed logging
-        if price is not None and order_type == ORDER_TYPE_LIMIT:
+        # Add price for LIMIT and SL (stop-limit) orders with detailed logging
+        if price is not None and order_type in [ORDER_TYPE_LIMIT, ORDER_TYPE_SL]:
             # Ensure price is a proper numeric value
             try:
                 price_value = float(price)
@@ -1782,137 +969,72 @@ def direct_place_order_api(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {auth}",
+            "X-API-VERSION": "1.0",
         }
 
-        # Make the API request using httpx client with connection pooling
         client = get_httpx_client()
-        logger.debug(f"Sending API request to {api_url} with payload: {json.dumps(payload)}")
-        logger.debug(f"Request headers: {headers}")
-
+        resp = groww_request(client, "POST", api_url, "order", json=payload, headers=headers, timeout=30)
+        logger.debug(f"Place order: HTTP {resp.status_code}, {resp.text}")
         try:
-            resp = client.post(api_url, json=payload, headers=headers)
-            logger.debug(f"API response status code: {resp.status_code}")
+            body = resp.json()
+        except ValueError:
+            body = None
 
-            # Log raw response for debugging
-            raw_response = resp.text
-            logger.debug(f"Raw API response: {raw_response}")
-        except Exception as e:
-            logger.error(f"Exception during API request: {str(e)}")
-            raise
-
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        # Handle the response
-        if resp.status_code == 200:
-            # Try to parse the response JSON
-            try:
-                response_data = resp.json()
-                logger.debug(f"Groww order response: {json.dumps(response_data)}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing response JSON: {e}")
-                response_data = {
-                    "status": "error",
-                    "message": f"Invalid JSON response: {raw_response}",
-                }
-                res = ResponseObject(400)
-                return res, response_data, None
-
-            if response_data.get("status") == "SUCCESS":
-                # Extract values from the response payload
-                payload_data = response_data.get("payload", {})
-                orderid = payload_data.get("groww_order_id")
-                order_status = payload_data.get("order_status")
-
-                logger.debug(f"Order ID: {orderid}, Status: {order_status}")
-
-                # Format response to match the expected structure
-                formatted_response = {
-                    "groww_order_id": orderid,
-                    "order_status": order_status,
-                    "order_reference_id": payload_data.get(
-                        "order_reference_id", order_reference_id
-                    ),
-                    "remark": payload_data.get("remark", "Order placed successfully"),
-                    "trading_symbol": trading_symbol,
-                    "symbol": original_symbol,  # Add original OpenAlgo symbol to response
-                }
-
-                res = ResponseObject(200)
-                return res, formatted_response, orderid
-            else:
-                # API call succeeded but order placement failed
-                error_message = response_data.get("message", "Unknown error")
-                error_mode = response_data.get("mode", "")
-                error_details = response_data.get("details", {})
-
-                logger.error(f"Order placement failed: {error_message}, Mode: {error_mode}")
-                logger.error(
-                    f"Error details: {json.dumps(error_details) if error_details else 'None provided'}"
+        # Success only when Groww says so (01-introduction, "Response structure")
+        if resp.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
+            payload_data = body.get("payload") or {}
+            orderid = payload_data.get("groww_order_id")
+            order_status = str(payload_data.get("order_status") or "").upper()
+            if order_status in ("FAILED", "REJECTED"):
+                # Accepted by the API but failed straight away (e.g. a stop-loss
+                # trigger outside the allowed range); Groww's remark says why
+                remark = payload_data.get("remark") or "Groww rejected the order"
+                logger.warning(f"Groww order for {original_symbol} {order_status}: {body}")
+                return _Status(400), {"status": "error", "message": remark}, None
+            if not orderid:
+                # Never report success without an order ID to track or cancel
+                logger.error(f"Groww order reply without groww_order_id for {original_symbol}: {body}")
+                return (
+                    _Status(502),
+                    {
+                        "status": "error",
+                        "message": "Groww did not return an order ID. Check the order book "
+                        "before placing the order again.",
+                    },
+                    None,
                 )
+            formatted_response = {
+                "groww_order_id": orderid,
+                "order_status": payload_data.get("order_status"),
+                "order_reference_id": payload_data.get("order_reference_id", order_reference_id),
+                "remark": payload_data.get("remark", "Order placed successfully"),
+                "trading_symbol": trading_symbol,
+                "symbol": original_symbol,
+            }
+            return _Status(200), formatted_response, orderid
 
-                # Special handling for numeric validation errors
-                if "Invalid numeric value" in error_message:
-                    logger.error("NUMERIC VALUE ERROR DETECTED - Debugging payload values:")
-                    for field in ["price", "trigger_price", "quantity", "disclosed_quantity"]:
-                        if field in payload:
-                            logger.error(
-                                f"Field: {field}, Value: {payload[field]}, Type: {type(payload[field])}"
-                            )
+        message = _groww_error_message(body, f"Groww did not accept the order (HTTP {resp.status_code})")
+        logger.error(f"Groww refused order for {original_symbol}: HTTP {resp.status_code}, {message}")
+        status = resp.status_code if resp.status_code >= 400 else 400
+        return _Status(status), {"status": "error", "message": message}, None
 
-                    # Additional debugging info about the request
-                    logger.error(f"Original data received: {json.dumps(data)}")
-
-                res = ResponseObject(400)
-                response_data = {"status": "error", "message": error_message, "mode": error_mode}
-                return res, response_data, None
-        else:
-            # API call failed
-            try:
-                error_data = resp.json()
-                error_message = error_data.get("message", f"API error: {resp.status_code}")
-                error_mode = error_data.get("mode", "")
-                error_details = error_data.get("details", {})
-
-                logger.error(
-                    f"API error response: Status: {resp.status_code}, Message: {error_message}, Mode: {error_mode}"
-                )
-                logger.error(
-                    f"Error details: {json.dumps(error_details) if error_details else 'None provided'}"
-                )
-
-                # Special handling for numeric validation errors
-                if "Invalid numeric value" in error_message:
-                    logger.error("NUMERIC VALUE ERROR DETECTED - Debugging payload values:")
-                    for field in ["price", "trigger_price", "quantity", "disclosed_quantity"]:
-                        if field in payload:
-                            logger.error(
-                                f"Field: {field}, Value: {payload[field]}, Type: {type(payload[field])}"
-                            )
-
-                    # Additional debugging info about the request
-                    logger.error(f"Original data received: {json.dumps(data)}")
-            except Exception as parse_error:
-                error_message = f"API error: {resp.status_code}. Raw response: {raw_response}"
-                logger.error(f"Failed to parse error response: {parse_error}")
-
-            logger.error(f"Error placing order: {error_message}")
-            res = ResponseObject(resp.status_code)
-            response_data = {"status": "error", "message": error_message}
-            return res, response_data, None
-
-    except Exception as e:
-        logger.exception(f"Error placing order: {e}")
-
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        res = ResponseObject(500)
-        response_data = {"status": "error", "message": str(e)}
-        return res, response_data, None
+    except ValueError as e:
+        # Refused before sending: unsupported exchange, product, price type,
+        # validity or action, an unknown symbol, or an invalid number
+        logger.warning(f"Order not sent to Groww: {e}")
+        return _Status(400), {"status": "error", "message": str(e)}, None
+    except BrokerBusyError:
+        raise
+    except Exception:
+        logger.exception("Error placing Groww order")
+        return (
+            _Status(500),
+            {
+                "status": "error",
+                "message": "Could not reach Groww to place the order. Check the order book before retrying.",
+            },
+            None,
+        )
 
 
 def place_order_api(data, auth):
@@ -2000,6 +1122,8 @@ def direct_place_order(
         logger.debug(f"Direct order response: {response}")
         return response
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.exception(f"Direct order error: {e}")
         return {"status": "error", "message": str(e)}
@@ -2210,6 +1334,8 @@ def place_smartorder_api(data, auth):
 
     except PositionReadError:
         raise
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}
@@ -2237,15 +1363,15 @@ def get_holdings(auth):
             "X-API-VERSION": "1.0",
         }
 
-        # Make the API request
-        import httpx
-
-        with httpx.Client() as client:
-            response = client.get(
-                "https://api.groww.in/v1/holdings/user",
-                headers=headers,
-                timeout=10.0,  # 10-second timeout
-            )
+        # Shared client (never a per-call httpx.Client), paced as Non Trading
+        response = groww_request(
+            get_httpx_client(),
+            "GET",
+            "https://api.groww.in/v1/holdings/user",
+            "non_trading",
+            headers=headers,
+            timeout=10.0,
+        )
 
         # Log the raw response
         logger.debug(f"Holdings API Response Status: {response.status_code}")
@@ -2266,30 +1392,51 @@ def get_holdings(auth):
             logger.error(error_msg)
             return None, {"status": "error", "message": error_msg}
 
-        # Transform holdings to OpenAlgo format
+        # Transform holdings to OpenAlgo format. Groww's holdings carry no
+        # exchange and no price (06-portfolio "Get Holdings"): the exchange is
+        # where the master contract lists the symbol (NSE first, else BSE) and
+        # the price comes from the LTP endpoint.
         holdings = response_data.get("payload", {}).get("holdings", [])
         formatted_holdings = []
-
         for holding in holdings:
-            formatted_holding = {
-                "symbol": holding.get("trading_symbol"),
-                "isin": holding.get("isin"),
-                "quantity": holding.get("quantity", 0),
-                "average_price": holding.get("average_price", 0),
-                "free_quantity": holding.get("demat_free_quantity", 0),
-                "locked_quantity": (
-                    holding.get("demat_locked_quantity", 0)
-                    + holding.get("groww_locked_quantity", 0)
-                ),
-                "pledged_quantity": holding.get("pledge_quantity", 0),
-                "t1_quantity": holding.get("t1_quantity", 0),
-            }
-            formatted_holdings.append(formatted_holding)
+            trading_symbol = holding.get("trading_symbol") or ""
+            exchange = next(
+                (ex for ex in ("NSE", "BSE") if get_oa_symbol(trading_symbol, ex)), None
+            )
+            formatted_holdings.append(
+                {
+                    "symbol": get_oa_symbol(trading_symbol, exchange) if exchange else trading_symbol,
+                    "trading_symbol": trading_symbol,
+                    "exchange": exchange or "",
+                    "isin": holding.get("isin"),
+                    "quantity": _num(holding.get("quantity")),
+                    "average_price": _num(holding.get("average_price")),
+                    "free_quantity": holding.get("demat_free_quantity", 0),
+                    "locked_quantity": _num(holding.get("demat_locked_quantity"))
+                    + _num(holding.get("groww_locked_quantity")),
+                    "pledged_quantity": holding.get("pledge_quantity", 0),
+                    "t1_quantity": holding.get("t1_quantity", 0),
+                }
+            )
 
-        logger.debug(f"Processed {len(formatted_holdings)} holdings")
+        prices = _live_prices(
+            {SEGMENT_CASH: [f"{h['exchange']}_{h['trading_symbol']}" for h in formatted_holdings if h["exchange"]]},
+            auth,
+        )
+        for h in formatted_holdings:
+            ltp = prices.get(f"{h['exchange']}_{h['trading_symbol']}")
+            if not ltp:
+                continue  # no price: no P&L rather than a made-up one
+            h["ltp"] = ltp
+            h["pnl"] = (ltp - h["average_price"]) * h["quantity"]
+            h["pnlpercent"] = (
+                (ltp - h["average_price"]) / h["average_price"] * 100 if h["average_price"] else 0.0
+            )
 
         return formatted_holdings, {"status": "success"}
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         error_msg = f"Error fetching holdings: {str(e)}"
         logger.error(error_msg, exc_info=True)
@@ -2314,74 +1461,33 @@ def close_all_positions(token=None, auth=None):
     """
     try:
         logger.debug("Starting close_all_positions function")
-        positions_data, status_code = get_positions(auth)
+        positions_data, status_code = get_positions(auth, include_ltp=False)
 
         if status_code != 200:
             logger.error(f"Failed to fetch positions: {positions_data}")
             return {"status": "error", "message": "Failed to fetch positions"}, 500
 
-        if not positions_data or "data" not in positions_data:
-            logger.debug("No positions to close")
+        positions = positions_data.get("data") or []
+        if not positions:
             return {"status": "success", "message": "No positions to close"}, 200
-
-        # Ensure we're using the data from the positions_data
-        positions = positions_data.get("data", [])
 
         success_count = 0
         failure_count = 0
         detailed_results = []
 
-        logger.debug(f"Total positions to process: {len(positions)}")
-
         for position in positions:
             try:
-                # Extensive logging of position details
-                logger.debug(f"Processing position: {json.dumps(position, indent=2)}")
-
-                # Get quantity and validate
-                net_qty = position.get("net_quantity", position.get("quantity", 0))
-                logger.debug(f"Net Quantity: {net_qty}")
-
-                if int(net_qty) == 0:
-                    logger.debug("Skipping position with zero net quantity")
+                net_qty = int(_num(position.get("net_quantity", position.get("quantity", 0))))
+                if net_qty == 0:
                     continue
 
-                # Get trading details
-                trading_symbol = position.get(
-                    "tradingsymbol", position.get("trading_symbol", position.get("symbol"))
-                )
-                exchange = position.get("exchange", "NSE").replace("_EQ", "").replace("_FO", "")
-                product = position.get("product", "MIS")
-                segment = position.get("segment", "")
-
-                # Retrieve broker symbol from database
-                br_symbol = get_br_symbol(trading_symbol, exchange)
-                if br_symbol:
-                    trading_symbol = br_symbol
-                    logger.debug(f"Retrieved broker symbol: {br_symbol}")
-                else:
-                    logger.warning(f"No broker symbol found for {trading_symbol} in {exchange}")
-
-                # Extensive logging of trading details
-                logger.debug(f"Trading Symbol: {trading_symbol}")
-                logger.debug(f"Exchange: {exchange}")
-                logger.debug(f"Product: {product}")
-                logger.debug(f"Segment: {segment}")
-
-                # Determine order action
-                action = "SELL" if int(net_qty) > 0 else "BUY"
-                quantity = abs(int(net_qty))
-
-                # Special handling for FNO segment with more logging
-                if (
-                    segment.upper() == "FO"
-                    or "FNO" in exchange.upper()
-                    or "NFO" in exchange.upper()
-                ):
-                    logger.debug(f"Detected FNO/Derivative segment for {trading_symbol}")
-                    exchange = "NFO"
-                    product = "MIS"  # Ensure MIS for derivatives
-                    logger.debug(f"Updated Exchange to {exchange}, Product to {product}")
+                # get_positions rows carry the OpenAlgo symbol, exchange and
+                # product, which is what place_order_api takes
+                trading_symbol = position.get("symbol")
+                exchange = position.get("exchange")
+                product = position.get("product")
+                action = "SELL" if net_qty > 0 else "BUY"
+                quantity = abs(net_qty)
 
                 # Prepare order payload
                 place_order_payload = {
@@ -2406,7 +1512,7 @@ def close_all_positions(token=None, auth=None):
                 # Enhanced logging for detailed tracking
                 result_entry = {
                     "symbol": trading_symbol,
-                    "segment": segment,
+                    "segment": position.get("segment", ""),
                     "quantity": quantity,
                     "action": action,
                     "order_id": order_id,
@@ -2420,7 +1526,7 @@ def close_all_positions(token=None, auth=None):
                     success_count += 1
                     result_entry["status"] = "success"
                     logger.debug(
-                        f"Successfully closed position {trading_symbol} in {segment} segment"
+                        f"Successfully closed position {trading_symbol} on {exchange}"
                     )
                 elif api_response and api_response.get("message", "").startswith("API error: 400"):
                     # Specific handling for 400 Bad Request
@@ -2434,11 +1540,13 @@ def close_all_positions(token=None, auth=None):
                     failure_count += 1
                     result_entry["status"] = "failed"
                     logger.error(
-                        f"Failed to close position {trading_symbol} in {segment} segment: {api_response}"
+                        f"Failed to close position {trading_symbol} on {exchange}: {api_response}"
                     )
 
                 detailed_results.append(result_entry)
 
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.exception(f"Error processing position {position}: {str(e)}")
                 failure_count += 1
@@ -2450,6 +1558,8 @@ def close_all_positions(token=None, auth=None):
         logger.debug(msg)
         return {"status": "success", "message": msg, "detailed_results": detailed_results}, 200
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         error_msg = f"Error in close_all_positions: {str(e)}"
         logger.exception(error_msg)
@@ -2466,280 +1576,110 @@ def close_all_positions(token=None, auth=None):
         }, 500
 
 
-def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
+def _groww_error_message(body, fallback):
+    """The reason Groww gave for a failed request.
+
+    Groww documents failures as ``{"status": "FAILURE", "error": {"code", "message"}}``
+    (01-introduction, "Response structure").
     """
-    Cancel an order by its ID using direct API call
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+        if body.get("message"):
+            return str(body["message"])
+    return fallback
 
-    Args:
-        orderid (str): Order ID to cancel
-        auth (str): Authentication token
-        segment (str, optional): Order segment (e.g., SEGMENT_CASH). If None, will be detected from order book.
-        symbol (str, optional): Trading symbol in OpenAlgo format
-        exchange (str, optional): Exchange code
 
-    Returns:
-        tuple: (response data, status code)
+def _cancel_segments(orderid, auth):
+    """Segments to try when cancelling ``orderid``.
+
+    Groww's cancel needs the order's own segment. Read it from the order book;
+    if the order is not there, try CASH then FNO - a cancel sent to the wrong
+    segment is refused by Groww, so the second attempt is harmless.
     """
     try:
-        # If symbol is provided, convert it from OpenAlgo to Groww format
-        if symbol and exchange:
-            groww_symbol = format_openalgo_to_groww_symbol(symbol, exchange)
-            logger.debug(f"Symbol conversion for cancel order: {symbol} -> {groww_symbol}")
+        for order in get_order_book(auth).get("data", []):
+            if order.get("groww_order_id") == orderid:
+                seg = order.get("segment")
+                if seg in (SEGMENT_CASH, SEGMENT_FNO):
+                    return [seg]
+                break
+    except BrokerBusyError:
+        raise
+    except Exception:
+        logger.exception(f"Could not read the order book to find the segment of {orderid}")
+    return [SEGMENT_CASH, SEGMENT_FNO]
 
-        # If segment is not provided, try to determine it from order book
-        if segment is None:
-            logger.debug(
-                f"No segment provided for cancelling order {orderid}, attempting to determine from order book"
-            )
-            try:
-                # Get order book to find the order and determine its segment
-                order_book_response = get_order_book(auth)
 
-                # Check if we have orders in the response
-                if (
-                    order_book_response
-                    and isinstance(order_book_response, tuple)
-                    and len(order_book_response) > 0
-                ):
-                    order_book_data = order_book_response[0]
+def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
+    """
+    Cancel an order (POST /v1/order/cancel).
 
-                    # Special handling for FNO orders - check if the order ID starts with "GLTFO"
-                    if orderid.startswith("GLTFO"):
-                        logger.debug(
-                            f"Order ID {orderid} appears to be an FNO order based on prefix"
-                        )
-                        segment = SEGMENT_FNO
-                    else:
-                        # Regular search through all orders in the order book
-                        orders_found = False
-                        # Iterate through orders to find the matching order ID
-                        for order in order_book_data.get("data", []):
-                            if order.get("groww_order_id") == orderid:
-                                orders_found = True
-                                # Determine segment based on exchange or other properties
-                                if order.get("segment") == "CASH":
-                                    segment = SEGMENT_CASH
-                                elif order.get("segment") in ["FNO", "F&O", "OPTIONS", "FUTURES"]:
-                                    segment = SEGMENT_FNO
-                                elif order.get("segment") == "CURRENCY":
-                                    segment = SEGMENT_CURRENCY
-                                elif order.get("segment") == "COMMODITY":
-                                    segment = SEGMENT_COMMODITY
-                                logger.debug(
-                                    f"Found order {orderid} in order book with segment {segment}"
-                                )
-                                break
+    Args:
+        orderid (str): Groww order ID to cancel
+        auth (str): Authentication token
+        segment (str, optional): CASH or FNO. Looked up from the order book when omitted.
+        symbol (str, optional): OpenAlgo symbol, echoed back in the response
+        exchange (str, optional): Unused, kept for call compatibility
 
-                        # If we didn't find the order, check if it's an FNO order based on ID pattern
-                        if (
-                            not orders_found
-                            and "CE" in orderid
-                            or "PE" in orderid
-                            or "FUT" in orderid
-                        ):
-                            logger.debug(
-                                f"Order ID {orderid} appears to be an FNO order based on option/future identifiers"
-                            )
-                            segment = SEGMENT_FNO
-            except Exception as e:
-                logger.error(f"Error determining segment for order {orderid}: {e}")
-
-        # Default to CASH segment if still not determined
-        if segment is None:
-            logger.warning(
-                f"Could not determine segment for order {orderid}, defaulting to CASH segment"
-            )
-            segment = SEGMENT_CASH
-
-        logger.debug(f"Cancelling order {orderid} in segment {segment}")
-
-        # Prepare API client and headers
+    Returns:
+        tuple: (response data, status code). 200 only when Groww reports SUCCESS.
+    """
+    try:
         client = get_httpx_client()
         headers = {
             "Authorization": f"Bearer {auth}",
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "X-API-VERSION": "1.0",
         }
+        segments = [segment] if segment else _cancel_segments(orderid, auth)
 
-        # Determine if this is an FNO order by the order ID format
-        is_fno_order = False
-        if orderid.startswith("GLTFO") or any(x in orderid for x in ["CE", "PE", "FUT"]):
-            is_fno_order = True
-            segment = SEGMENT_FNO
-            logger.debug(f"Detected FNO order based on order ID pattern: {orderid}")
+        message, status_code = f"Groww could not cancel order {orderid}", 400
+        for seg in segments:
+            payload = {"segment": seg, "groww_order_id": orderid}
+            logger.debug(f"Cancelling order {orderid} in segment {seg}")
+            resp = groww_request(
+                client, "POST", GROWW_CANCEL_ORDER_URL, "order",
+                headers=headers, json=payload, timeout=30,
+            )
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
 
-        # If we're still using CASH segment for what appears to be an FNO order ID, warn about it
-        if is_fno_order and segment == SEGMENT_CASH:
+            if resp.status_code == 200 and body.get("status") == "SUCCESS":
+                order_status = (body.get("payload") or {}).get("order_status", "")
+                response = {
+                    "status": "success",
+                    "orderid": orderid,
+                    "order_status": order_status,
+                    "message": "Order cancellation requested"
+                    if order_status == "CANCELLATION_REQUESTED"
+                    else "Order cancelled",
+                }
+                if symbol:
+                    response["symbol"] = symbol
+                return response, 200
+
+            message = _groww_error_message(body, message)
+            status_code = resp.status_code if resp.status_code >= 400 else 400
             logger.warning(
-                f"Warning: Using CASH segment for what appears to be an FNO order: {orderid}"
-            )
-            logger.warning("Switching to FNO segment for this order")
-            segment = SEGMENT_FNO
-
-        # Double check and log the segment we're using
-        logger.debug(f"Using segment {segment} for order {orderid}")
-
-        # Prepare request payload
-        payload = {"segment": segment, "groww_order_id": orderid}
-
-        # Send cancel request to Groww API
-        logger.debug("-------- CANCEL ORDER REQUEST --------")
-        logger.debug(f"Order ID: {orderid}")
-        logger.debug(f"Segment: {segment}")
-        logger.debug(f"API URL: {GROWW_CANCEL_ORDER_URL}")
-        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
-
-        # Log request headers (excluding Authorization for security)
-        safe_headers = headers.copy()
-        if "Authorization" in safe_headers:
-            safe_headers["Authorization"] = "Bearer ***REDACTED***"
-        logger.debug(f"Request headers: {json.dumps(safe_headers, indent=2)}")
-
-        # Make the API call
-        response_obj = client.post(
-            GROWW_CANCEL_ORDER_URL, headers=headers, json=payload, timeout=30
-        )
-
-        logger.debug("-------- CANCEL ORDER RESPONSE --------")
-        logger.debug(f"Response status code: {response_obj.status_code}")
-
-        # Parse response
-        try:
-            response_data = response_obj.json()
-            # Log full response for debugging
-            logger.debug(f"Raw response data: {json.dumps(response_data, indent=2)}")
-
-            # Log structured response details
-            if isinstance(response_data, dict):
-                status = response_data.get("status")
-                logger.debug(f"Response status: {status}")
-
-                if "payload" in response_data:
-                    payload = response_data["payload"]
-                    logger.debug(f"Response payload: {json.dumps(payload, indent=2)}")
-
-                    # Log specific order details if available
-                    if isinstance(payload, dict):
-                        groww_order_id = payload.get("groww_order_id")
-                        order_status = payload.get("order_status")
-                        logger.debug(f"Groww order ID: {groww_order_id}")
-                        logger.debug(f"Order status: {order_status}")
-
-                if "message" in response_data:
-                    logger.debug(f"Response message: {response_data['message']}")
-
-                if "error" in response_data:
-                    logger.error(f"Error in response: {response_data['error']}")
-        except Exception as e:
-            logger.error(f"Error parsing cancel order response: {e}")
-            logger.error(f"Raw response content: {response_obj.content}")
-            response_data = {}
-
-        # Check if the response indicates success
-        if response_obj.status_code == 200:
-            logger.debug("-------- SUCCESSFUL ORDER CANCELLATION --------")
-            # Check API response status field
-            api_status = response_data.get("status", "")
-
-            # Successful cancellation if we got 200 status code
-            response = {
-                "status": "success",
-                "orderid": orderid,
-                "api_status": api_status,
-                "message": "Order cancelled successfully",
-            }
-
-            # Add raw response for debugging
-            response["raw_response"] = response_data
-
-            # Extract order status if available
-            if isinstance(response_data, dict) and "payload" in response_data:
-                payload = response_data["payload"]
-                if isinstance(payload, dict):
-                    order_status = payload.get("order_status", "")
-                    response["order_status"] = order_status
-
-                    # Store Groww order ID in response
-                    groww_order_id = payload.get("groww_order_id")
-                    if groww_order_id:
-                        response["groww_order_id"] = groww_order_id
-
-                    # If order status indicates cancellation requested, ensure we report success
-                    if order_status == "CANCELLATION_REQUESTED":
-                        response["message"] = "Order cancellation requested successfully"
-                        logger.debug(
-                            f"Order {orderid} cancellation has been requested (status: {order_status})"
-                        )
-                    elif order_status == "CANCELLED":
-                        response["message"] = "Order cancelled successfully"
-                        logger.debug(f"Order {orderid} has been cancelled (status: {order_status})")
-                    else:
-                        logger.debug(
-                            f"Order {orderid} status after cancellation attempt: {order_status}"
-                        )
-                else:
-                    logger.warning(f"Unexpected payload format: {payload}")
-
-            # If symbol is provided, include it in OpenAlgo format in the response
-            if symbol:
-                # Add the original OpenAlgo format symbol to the response
-                response["symbol"] = symbol
-                logger.debug(f"Including OpenAlgo symbol in cancel response: {symbol}")
-
-            # Log the success
-            logger.debug(f"Successfully processed cancel request for order {orderid}")
-        else:
-            logger.warning("-------- FAILED ORDER CANCELLATION --------")
-            # API returned an error status code
-            error_message = response_data.get("message", "Error cancelling order")
-            error_details = response_data.get("error", {})
-
-            logger.warning(f"Order cancellation failed with status {response_obj.status_code}")
-            logger.warning(f"Error message: {error_message}")
-            if error_details:
-                logger.warning(f"Error details: {json.dumps(error_details, indent=2)}")
-
-            # For consistency with the rest of the API, still return success
-            response = {
-                "status": "success",  # Keep consistent with other endpoints
-                "orderid": orderid,
-                "message": "Order cancellation request submitted",
-                "api_message": error_message,
-                "api_status_code": response_obj.status_code,
-                "raw_response": response_data,
-            }
-
-        # Return the response with 200 status code as expected by the endpoint
-        return response, 200
-    except Exception as e:
-        logger.exception(f"-------- ERROR CANCELLING ORDER {orderid} --------")
-
-        # Even if we got an exception, return success format for consistency
-        # The order cancellation might actually be processing despite the error
-        if "CANCELLATION_REQUESTED" in str(e):
-            logger.debug("Order seems to be in CANCELLATION_REQUESTED state despite exception")
-            response = {
-                "status": "success",
-                "orderid": orderid,
-                "message": "Order cancellation request processed successfully",
-                "exception": str(e),
-            }
-        else:
-            response = {
-                "status": "success",  # Keep consistent with other endpoints
-                "orderid": orderid,
-                "message": "Order cancellation request submitted with errors",
-                "details": str(e),
-                "exception_type": type(e).__name__,
-            }
-
-            # Log the response we're returning for debugging
-            logger.debug(
-                f"Returning error response: {json.dumps(response, indent=2)}"
+                f"Groww refused cancel of {orderid} in segment {seg}: "
+                f"HTTP {resp.status_code}, {message}"
             )
 
-        # Return the error response with 200 status code for consistency
-        return response, 200
+        return {"status": "error", "orderid": orderid, "message": message}, status_code
+    except BrokerBusyError:
+        raise
+    except Exception:
+        logger.exception(f"Error cancelling order {orderid}")
+        return {
+            "status": "error",
+            "orderid": orderid,
+            "message": "Could not reach Groww to cancel the order. Check the order book before retrying.",
+        }, 500
 
 
 def direct_modify_order(data, auth):
@@ -2751,7 +1691,7 @@ def direct_modify_order(data, auth):
         auth (str): Authentication token
 
     Returns:
-        tuple: (response object, response data)
+        tuple: (response data dict, status code). 200 only when Groww reports SUCCESS.
     """
     try:
         # Import the shared httpx client
@@ -2789,6 +1729,8 @@ def direct_modify_order(data, auth):
                                 order_type = order["order_type"]
                                 logger.debug(f"Retrieved order type from order book: {order_type}")
                                 break
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.error(f"Error retrieving order type from order book: {e}")
 
@@ -2827,7 +1769,7 @@ def direct_modify_order(data, auth):
                 )
 
         # Process price with detailed logging
-        if "price" in data and data["price"] and order_type == ORDER_TYPE_LIMIT:
+        if "price" in data and data["price"] and order_type in [ORDER_TYPE_LIMIT, ORDER_TYPE_SL]:
             try:
                 price_value = float(data["price"])
                 if price_value <= 0:
@@ -2871,681 +1813,184 @@ def direct_modify_order(data, auth):
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {auth}",
+            "X-API-VERSION": "1.0",
         }
 
-        # Make the API request using httpx client with connection pooling
         client = get_httpx_client()
-        logger.debug(
-            f"Sending modify order API request to {api_url} with payload: {json.dumps(payload)}"
-        )
-        logger.debug(f"Request headers: {headers}")
-
+        resp = groww_request(client, "POST", api_url, "order", json=payload, headers=headers, timeout=30)
+        logger.debug(f"Modify order {groww_order_id}: HTTP {resp.status_code}, {resp.text}")
         try:
-            resp = client.post(api_url, json=payload, headers=headers)
-            logger.debug(f"API response status code: {resp.status_code}")
+            body = resp.json()
+        except ValueError:
+            body = {}
 
-            # Log raw response for debugging
-            raw_response = resp.text
-            logger.debug(f"Raw API response: {raw_response}")
-        except Exception as e:
-            logger.error(f"Exception during modify order API request: {str(e)}")
-            raise
-
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        # Handle the response
-        if resp.status_code == 200:
-            # Parse the JSON response if successful
-            try:
-                response_data = resp.json()
-                logger.debug(f"Groww modify order response: {json.dumps(response_data)}")
-
-                # Check if the response is successful and contains the required fields
-                if response_data.get("status") == "SUCCESS":
-                    # Extract order details from payload
-                    payload = response_data.get("payload", {})
-                    order_status = payload.get("order_status", "MODIFICATION_REQUESTED")
-
-                    # Always return success status when Groww API returns SUCCESS
-                    # This fixes the issue where successful API calls are reported as errors in UI
-                    response = {
-                        "status": "success",
-                        "orderid": groww_order_id,
-                        "order_status": order_status,
-                        "message": "Order modification request processed successfully",
-                    }
-                else:
-                    # Even if Groww status is not SUCCESS, we return success if we got a 200 response
-                    # This matches the behavior in the cancel_order function
-                    response = {
-                        "status": "success",
-                        "orderid": groww_order_id,
-                        "message": "Order modification request processed",
-                        "details": response_data,
-                    }
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing modify order response JSON: {e}")
-                error_message = f"Invalid JSON response: {raw_response}"
-                logger.error(error_message)
-
-                # Create error response
-                response = {"status": "error", "orderid": groww_order_id, "message": error_message}
-                return ResponseObject(400), response
-
-            # If symbol was provided in the original request, include it in OpenAlgo format
-            if "symbol" in data and data["symbol"]:
-                response["symbol"] = data["symbol"]
-                logger.debug(f"Including OpenAlgo symbol in modify response: {data['symbol']}")
-
-            # Log the success
-            logger.debug(f"Successfully submitted modification for order {groww_order_id}")
-            return ResponseObject(200), response
-        else:
-            # API call failed
-            try:
-                error_data = resp.json()
-                error_message = error_data.get("message", f"API error: {resp.status_code}")
-                error_mode = error_data.get("mode", "")
-                error_details = error_data.get("details", {})
-
-                logger.error(
-                    f"Order modification failed: Status: {resp.status_code}, Message: {error_message}, Mode: {error_mode}"
-                )
-                logger.error(
-                    f"Error details: {json.dumps(error_details) if error_details else 'None provided'}"
-                )
-
-                # Special handling for numeric validation errors
-                if "Invalid numeric value" in error_message:
-                    logger.error("NUMERIC VALUE ERROR DETECTED - Debugging payload values:")
-                    for field in ["price", "trigger_price", "quantity", "disclosed_quantity"]:
-                        if field in payload:
-                            logger.error(
-                                f"Field: {field}, Value: {payload[field]}, Type: {type(payload[field])}"
-                            )
-
-                    # Additional debugging info about the request
-                    logger.error(f"Original modification data received: {json.dumps(data)}")
-            except Exception as parse_error:
-                error_message = f"API error: {resp.status_code}. Raw response: {raw_response}"
-                logger.error(f"Failed to parse error response: {parse_error}")
-
-            logger.error(f"Error modifying order: {error_message}")
-
-            # For consistency with the current implementation, we still return success
-            # This is done because the UI expects a success response for proper handling
+        # Success only when Groww says so (01-introduction, "Response structure")
+        if resp.status_code == 200 and body.get("status") == "SUCCESS":
             response = {
                 "status": "success",
                 "orderid": groww_order_id,
-                "message": "Order modification request submitted",
-                "details": error_message,
+                "order_status": (body.get("payload") or {}).get("order_status", ""),
+                "message": "Order modification requested",
             }
-            return ResponseObject(200), response
+            if data.get("symbol"):
+                response["symbol"] = data["symbol"]
+            return response, 200
 
-    except Exception as e:
-        logger.exception(f"Error in direct_modify_order: {e}")
+        message = _groww_error_message(body, f"Groww could not modify order {groww_order_id}")
+        logger.warning(f"Groww refused modify of {groww_order_id}: HTTP {resp.status_code}, {message}")
+        status_code = resp.status_code if resp.status_code >= 400 else 400
+        return {"status": "error", "orderid": groww_order_id, "message": message}, status_code
 
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
-
-        # For consistency with the current implementation, we still return success
-        # as that's what the UI expects for proper handling
-        response = {
-            "status": "success",
+    except ValueError as e:
+        # Raised above for missing order ID or invalid quantity/price values
+        logger.warning(f"Modify order rejected before sending: {e}")
+        return {"status": "error", "orderid": data.get("orderid", ""), "message": str(e)}, 400
+    except BrokerBusyError:
+        raise
+    except Exception:
+        logger.exception("Error in direct_modify_order")
+        return {
+            "status": "error",
             "orderid": data.get("orderid", ""),
-            "message": "Order modification request submitted",
-            "details": str(e),
-        }
-        return ResponseObject(200), response
+            "message": "Could not reach Groww to modify the order. Check the order book before retrying.",
+        }, 500
 
 
 def modify_order(data, auth):
     """
-    Modify an existing order using direct API only (no SDK fallback)
+    Modify an existing order (POST /v1/order/modify).
 
     Args:
         data (dict): Order data with modification parameters
         auth (str): Authentication token
 
     Returns:
-        tuple: (response data dict, status code)
+        tuple: (response data dict, status code). 200 only when Groww reports SUCCESS.
     """
-    logger.debug("Using direct API approach for Groww order modification")
-    response_obj, response_data = direct_modify_order(data, auth)
+    return direct_modify_order(data, auth)
 
-    # Ensure we always return success status if Groww reports MODIFICATION_REQUESTED
-    # This fixes the issue with Bruno showing error even when modification is successful
-    if response_obj.status == 200:
-        # Extract order status from Groww response if available
-        groww_response = response_data.get("raw_response", {})
-        payload = groww_response.get("payload", {}) if isinstance(groww_response, dict) else {}
-        order_status = payload.get("order_status", "")
 
-        # Log the actual Groww response for debugging
-        logger.debug(f"Groww modify order response: {json.dumps(groww_response)}")
-
-        # Always return success status for HTTP 200 responses
-        return {
-            "status": "success",
-            "orderid": data.get("orderid", ""),
-            "order_status": order_status,
-            "message": "Order modification request processed successfully",
-        }, 200
-    else:
-        # Something went wrong with the API call
-        return response_data, response_obj.status
+# Groww order statuses that can still be cancelled (annexure "Order Status";
+# OPEN is what /v1/order/create returns for a resting order)
+_CANCELLABLE_STATUSES = {
+    "NEW",
+    "ACKED",
+    "TRIGGER_PENDING",
+    "APPROVED",
+    "OPEN",
+    "MODIFICATION_REQUESTED",
+}
 
 
 def cancel_all_orders_api(data, auth):
     """
-    Cancel all open orders
+    Cancel every open Groww order.
 
     Args:
         data (dict): Request data
         auth (str): Authentication token
 
     Returns:
-        dict: Results of cancellation attempts
+        tuple: (canceled_orders, failed_cancellations) in OpenAlgo format - a
+        list of order IDs, and a list of {"orderid", "reason"}.
     """
-    try:
-        # Get all orders - note that get_order_book returns a tuple of (response, status_code)
-        order_book_result = get_order_book(auth)
-        cancelled_orders = []
-        failed_to_cancel = []
+    book = get_order_book(auth)
+    if book.get("status") == "error":
+        # An unreadable order book is not "nothing to cancel"
+        raise RuntimeError(book.get("message", "Could not read the Groww order book"))
 
-        # Parse the order book to get the actual orders list
-        orders = []
+    canceled_orders, failed_cancellations = [], []
+    for order in book.get("data", []):
+        if str(order.get("order_status", "")).upper() not in _CANCELLABLE_STATUSES:
+            continue
+        orderid = order.get("groww_order_id")
+        if not orderid:
+            continue
+        segment = order.get("segment")
+        if segment not in (SEGMENT_CASH, SEGMENT_FNO):
+            segment = None  # cancel_order looks the order up itself
 
-        # Handle the response based on the direct API implementation which returns a tuple
-        if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
-            # Get the first element which is the response data
-            order_response = order_book_result[0]
+        response, status_code = cancel_order(orderid, auth, segment)
+        if status_code == 200:
+            canceled_orders.append(orderid)
+        else:
+            failed_cancellations.append(
+                {"orderid": orderid, "reason": response.get("message", "Failed to cancel")}
+            )
 
-            logger.debug(f"Order book response type: {type(order_response).__name__}")
-
-            # Check for 'data' field in the response dictionary
-            if isinstance(order_response, dict):
-                if "data" in order_response and order_response["data"]:
-                    orders = order_response["data"]
-                    logger.debug(f"Found {len(orders)} orders in the 'data' field")
-                elif "order_list" in order_response and order_response["order_list"]:
-                    orders = order_response["order_list"]
-                    logger.debug(f"Found {len(orders)} orders in the 'order_list' field")
-
-            # If orders is still empty, check if order_response itself is a list
-            if not orders and isinstance(order_response, list):
-                orders = order_response
-                logger.debug(f"Using order_response list directly, found {len(orders)} orders")
-        # Legacy handling for older SDK implementation
-        elif isinstance(order_book_result, dict):
-            if "data" in order_book_result and order_book_result["data"]:
-                orders = order_book_result["data"]
-                logger.debug(f"Found {len(orders)} orders in the order book (legacy format)")
-        # Direct handling if get_order_book returned a list
-        elif isinstance(order_book_result, list):
-            orders = order_book_result
-            logger.debug(f"Using order_book_result list directly, found {len(orders)} orders")
-
-        if not orders:
-            logger.warning("No orders found in order book response")
-            return {
-                "status": "success",
-                "message": "No open orders to cancel",
-                "cancelled_orders": [],
-                "failed_to_cancel": [],
-            }
-
-        # Filter cancellable orders
-        cancellable_statuses = [
-            "OPEN",
-            "PENDING",
-            "TRIGGER_PENDING",
-            "PLACED",
-            "PENDING_ORDER",
-            "NEW",
-            "ACKED",
-            "APPROVED",
-            "MODIFICATION_REQUESTED",
-            "OPEN",
-            "open",
-        ]
-
-        logger.debug(f"Checking {len(orders)} orders for cancellable status")
-        cancellable_count = 0
-
-        # Log order status for debugging
-        for i, order in enumerate(orders):
-            # Extract order ID for logging
-            order_id = None
-            for key in ["groww_order_id", "orderid", "order_id", "id"]:
-                if key in order:
-                    order_id = order[key]
-                    break
-
-            # Extract status for logging
-            order_status = order.get("order_status", order.get("status", ""))
-            logger.debug(f"Order {i + 1}/{len(orders)} ID: {order_id}, Status: {order_status}")
-
-            # Check if order is cancellable
-            if order_status.upper() in [s.upper() for s in cancellable_statuses]:
-                cancellable_count += 1
-
-        logger.debug(
-            f"Found {cancellable_count} cancellable orders out of {len(orders)} total orders"
-        )
-
-        # Process each order for cancellation
-        for order in orders:
-            order_status = order.get("order_status", order.get("status", ""))
-
-            if order_status.upper() in [s.upper() for s in cancellable_statuses]:
-                try:
-                    # Get order ID
-                    orderid = None
-                    for key in ["groww_order_id", "orderid", "order_id", "id"]:
-                        if key in order:
-                            orderid = order[key]
-                            break
-
-                    if not orderid:
-                        logger.warning(f"Could not find order ID in order: {order}")
-                        continue
-
-                    # Determine segment for the order
-                    segment = None
-                    if "segment" in order:
-                        segment_value = order["segment"]
-                        if segment_value == "CASH":
-                            segment = SEGMENT_CASH
-                        elif segment_value in ["FNO", "F&O", "OPTIONS", "FUTURES"]:
-                            segment = SEGMENT_FNO
-                        elif segment_value == "CURRENCY":
-                            segment = SEGMENT_CURRENCY
-                        elif segment_value == "COMMODITY":
-                            segment = SEGMENT_COMMODITY
-
-                    # Use our enhanced cancel_order function which returns (response_data, status_code)
-                    cancel_result = cancel_order(orderid, auth, segment)
-
-                    # Make sure the result is properly unpacked
-                    if isinstance(cancel_result, tuple) and len(cancel_result) >= 1:
-                        cancel_response = cancel_result[0]  # Get just the response data
-                    else:
-                        cancel_response = cancel_result  # Direct assignment if not a tuple
-
-                    logger.debug(
-                        f"Cancel response type for order {orderid}: {type(cancel_response).__name__}"
-                    )
-
-                    # Check if response is a dictionary and has status field
-                    if (
-                        isinstance(cancel_response, dict)
-                        and cancel_response.get("status") == "success"
-                    ):
-                        # Create the result object with order details
-                        cancelled_item = {
-                            "order_id": orderid,
-                            "status": cancel_response.get("order_status", "CANCELLED"),
-                            "message": cancel_response.get("message", "Successfully cancelled"),
-                        }
-
-                        # Get and include symbol in the OpenAlgo format
-                        if "symbol" in order:
-                            broker_symbol = order.get("symbol", "")
-
-                            # For NFO symbols that have spaces, convert to OpenAlgo format
-                            exchange = order.get("exchange", "NSE")
-                            if exchange == "NFO" and " " in broker_symbol:
-                                try:
-                                    from broker.groww.database.master_contract_db import (
-                                        format_groww_to_openalgo_symbol,
-                                    )
-
-                                    openalgo_symbol = format_groww_to_openalgo_symbol(
-                                        broker_symbol, exchange
-                                    )
-                                    if openalgo_symbol:
-                                        cancelled_item["symbol"] = openalgo_symbol
-                                        cancelled_item["brsymbol"] = (
-                                            broker_symbol  # Keep original broker symbol for reference
-                                        )
-                                        logger.debug(
-                                            f"Transformed cancelled order symbol for UI: {broker_symbol} -> {openalgo_symbol}"
-                                        )
-                                except Exception as e:
-                                    logger.error(
-                                        f"Error converting symbol for cancelled order: {e}"
-                                    )
-                                    cancelled_item["symbol"] = broker_symbol
-                            else:
-                                cancelled_item["symbol"] = broker_symbol
-
-                        # Get symbol from cancel_response if available
-                        elif "symbol" in cancel_response:
-                            cancelled_item["symbol"] = cancel_response["symbol"]
-                            if "brsymbol" in cancel_response:
-                                cancelled_item["brsymbol"] = cancel_response["brsymbol"]
-
-                        cancelled_orders.append(cancelled_item)
-                        logger.debug(f"Successfully cancelled order {orderid}")
-                    else:
-                        failed_to_cancel.append(
-                            {
-                                "order_id": orderid,
-                                "message": cancel_response.get("message", "Failed to cancel"),
-                                "details": str(cancel_response),
-                            }
-                        )
-                        logger.warning(f"Failed to cancel order {orderid}")
-
-                except Exception as e:
-                    logger.error(f"Error cancelling order {orderid if orderid else 'Unknown'}: {e}")
-                    failed_to_cancel.append(
-                        {
-                            "order_id": orderid if orderid else "Unknown",
-                            "message": "Failed to cancel due to exception",
-                            "details": str(e),
-                        }
-                    )
-
-        # Prepare success response even if some orders failed
-        response = {
-            "status": "success",
-            "message": f"Successfully cancelled {len(cancelled_orders)} orders. {len(failed_to_cancel)} orders failed.",
-            "cancelled_orders": cancelled_orders,
-            "failed_to_cancel": failed_to_cancel,
-        }
-
-        logger.debug(
-            f"Cancel all orders complete: {len(cancelled_orders)} succeeded, {len(failed_to_cancel)} failed"
-        )
-
-        # The API layer expects this function to return two values: canceled_orders and failed_cancellations
-        # Instead of returning just the response dictionary
-        return cancelled_orders, failed_to_cancel
-
-    except Exception as e:
-        logger.error(f"Error in cancel_all_orders_api: {e}")
-        # Create an error entry for the failed_to_cancel list
-        error_entry = [
-            {"order_id": "all", "message": "Failed to cancel all orders", "details": str(e)}
-        ]
-
-        # The REST API expects two return values: canceled_orders and failed_cancellations
-        # Return empty list for cancelled orders and the error entry for failed cancellations
-        return [], error_entry
+    logger.info(
+        f"Groww cancel all: {len(canceled_orders)} cancelled, {len(failed_cancellations)} failed"
+    )
+    return canceled_orders, failed_cancellations
 
 
 def get_order_trades(orderid, auth, segment=None):
     """
-    Get list of trades for a specific order from Groww using direct API calls
+    All fills of one order (GET /v1/order/trades/{groww_order_id}).
+
+    Groww requires the order's segment and caps page_size at 50, and an order
+    can have more fills than that, so every page is read.
 
     Args:
-        orderid (str): Groww order ID to fetch trades for
+        orderid (str): Groww order ID
         auth (str): Authentication token
-        segment (str, optional): Order segment (CASH, FNO, etc.) - required by Groww API
+        segment (str, optional): CASH or FNO. Looked up from the order book when omitted.
 
     Returns:
-        tuple: (response data, status code)
+        tuple: ({"status": "success", "trades": [...]}, 200), or
+        ({"status": "error", "message": ...}, status code)
     """
     try:
-        # Store original order information to use in case we need to create a synthetic trade
-        original_order_info = {
-            "order_id": orderid,
-            "segment": segment or "UNKNOWN",
-            "filled_quantity": 0,  # Will be populated if we find this in the order book
-            "symbol": "",
-            "exchange": "",
-            "product": "",
-            "transaction_type": "",
-            "price": 0,
-            "status": "",
-        }
-
-        # If segment is not provided, try to determine it
-        if segment is None:
-            logger.debug(
-                f"No segment provided for getting trades for order {orderid}, attempting to determine from order book"
-            )
-            try:
-                # Get order book to find the order and determine its segment
-                order_book_result = get_order_book(auth)
-
-                if isinstance(order_book_result, dict) and "data" in order_book_result:
-                    order_data = order_book_result["data"]
-                elif isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
-                    order_book_data = order_book_result[0]
-                    if isinstance(order_book_data, dict) and "data" in order_book_data:
-                        order_data = order_book_data["data"]
-                    else:
-                        order_data = []
-                else:
-                    order_data = []
-
-                # Determine segment based on order ID pattern
-                if orderid.startswith("GMKFO") or orderid.startswith("GLTFO"):
-                    logger.debug(f"Order ID {orderid} appears to be an FNO order based on prefix")
-                    segment = SEGMENT_FNO
-                    original_order_info["segment"] = "FNO"
-                else:
-                    # Search for the order in the order book
-                    found_segment = False
-                    for order in order_data:
-                        # Check if this is our order
-                        if order.get("groww_order_id", order.get("orderid", "")) == orderid:
-                            # Determine segment based on order properties
-                            if order.get("segment") == "CASH":
-                                segment = SEGMENT_CASH
-                            elif order.get("segment") in ["FNO", "F&O", "OPTIONS", "FUTURES"]:
-                                segment = SEGMENT_FNO
-                            elif order.get("segment") == "CURRENCY":
-                                segment = SEGMENT_CURRENCY
-                            elif order.get("segment") == "COMMODITY":
-                                segment = SEGMENT_COMMODITY
-
-                            # Store order info for synthetic trade creation if needed
-                            original_order_info["segment"] = order.get("segment", "UNKNOWN")
-                            original_order_info["filled_quantity"] = order.get("filled_quantity", 0)
-                            original_order_info["symbol"] = order.get(
-                                "trading_symbol", order.get("tradingsymbol", "")
-                            )
-                            original_order_info["exchange"] = order.get("exchange", "")
-                            original_order_info["product"] = order.get("product", "")
-                            original_order_info["transaction_type"] = order.get(
-                                "transaction_type", order.get("action", "")
-                            )
-                            original_order_info["price"] = order.get("price", 0)
-                            original_order_info["status"] = order.get(
-                                "status", order.get("order_status", "")
-                            )
-
-                            found_segment = True
-                            logger.debug(
-                                f"Found order {orderid} in order book with segment {segment}"
-                            )
-                            break
-
-                    if not found_segment:
-                        logger.warning(f"Could not find order {orderid} in order book")
-                        # If this is an executed order but we couldn't determine segment, default based on order ID
-                        if orderid.startswith("GMK"):
-                            segment = SEGMENT_CASH
-                            original_order_info["segment"] = "CASH"
-                        else:
-                            segment = SEGMENT_CASH  # Default fallback
-            except Exception as e:
-                logger.error(f"Error determining segment for order {orderid}: {e}")
-                segment = SEGMENT_CASH  # Default to CASH segment
-
-        # Fallback to CASH segment if still not determined
-        if segment is None:
-            logger.warning(f"Could not determine segment for order {orderid}, defaulting to CASH")
-            segment = SEGMENT_CASH
-
-        logger.debug(f"Fetching trades for order {orderid} in segment {segment}")
-
-        # Prepare API client and headers
+        segments = [segment] if segment in (SEGMENT_CASH, SEGMENT_FNO) else _cancel_segments(orderid, auth)
         client = get_httpx_client()
-        headers = {
-            "Authorization": f"Bearer {auth}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        headers = _groww_headers(auth)
+        message = f"Groww returned no trades for order {orderid}"
+        for seg in segments:
+            trade_list, failure = _get_paged(
+                client,
+                f"{GROWW_ORDER_TRADES_URL}/{orderid}",
+                headers,
+                {"segment": seg},
+                "trade_list",
+                _TRADES_PAGE_SIZE,
+            )
+            if failure:
+                message = failure
+                continue
 
-        # Set API parameters
-        page = 0
-        page_size = 50
-
-        # API endpoint for getting trades for an order
-        url = f"{GROWW_ORDER_TRADES_URL}/{orderid}?segment={segment}&page={page}&page_size={page_size}"
-
-        # Log request details
-        logger.debug("-------- GET ORDER TRADES REQUEST --------")
-        logger.debug(f"Order ID: {orderid}")
-        logger.debug(f"Segment: {segment}")
-        logger.debug(f"API URL: {url}")
-        logger.debug(
-            'Request headers: {\n  "Authorization": "Bearer ***REDACTED***",\n  "Accept": "application/json",\n  "Content-Type": "application/json"\n}'
-        )
-
-        # Make the API call
-        response_obj = client.get(url, headers=headers, timeout=30)
-
-        # Log the response details
-        logger.debug("-------- GET ORDER TRADES RESPONSE --------")
-        logger.debug(f"Response status code: {response_obj.status_code}")
-
-        try:
-            # Parse JSON response
-            response_data = response_obj.json()
-            logger.debug(f"Raw response: {json.dumps(response_data, indent=2)}")
-
-            if response_obj.status_code == 200 and response_data.get("status") == "SUCCESS":
-                # Extract trades from the response
-                trades = []
-
-                if "payload" in response_data and "trade_list" in response_data["payload"]:
-                    trade_list = response_data["payload"]["trade_list"]
-                    logger.debug(f"Found {len(trade_list)} trades for order {orderid}")
-
-                    # Transform trades to standardized format
-                    for trade in trade_list:
-                        # Create a standardized trade object
-                        standardized_trade = {
-                            "trade_id": trade.get("groww_trade_id", ""),
-                            "order_id": trade.get("groww_order_id", orderid),
-                            "exchange_trade_id": trade.get("exchange_trade_id", ""),
-                            "exchange_order_id": trade.get("exchange_order_id", ""),
-                            "symbol": trade.get("trading_symbol", ""),
-                            "quantity": trade.get("quantity", 0),
-                            "price": trade.get("price", 0),
-                            "trade_status": trade.get("trade_status", "EXECUTED"),
-                            "exchange": trade.get("exchange", ""),
-                            "segment": trade.get("segment", segment),
-                            "product": trade.get("product", ""),
-                            "transaction_type": trade.get("transaction_type", ""),
-                            "created_at": trade.get("created_at", ""),
-                            "trade_date_time": trade.get("trade_date_time", ""),
-                            "settlement_number": trade.get("settlement_number", ""),
-                            "remarks": trade.get("remark", None),
-                        }
-                        trades.append(standardized_trade)
-
-                response = {
-                    "status": "success",
-                    "message": f"Retrieved {len(trades)} trades for order {orderid}",
-                    "trades": trades,
-                    "raw_response": response_data,
-                }
-                return response, 200
-            else:
-                # If we get a 404 error for an FNO order, it's likely the API doesn't support FNO trades
-                # Create a synthetic trade if we have order information
-                if (
-                    response_obj.status_code == 404
-                    and segment == SEGMENT_FNO
-                    and original_order_info["filled_quantity"] > 0
-                ):
-                    logger.debug(
-                        f"Creating synthetic trade for FNO order {orderid} as API returned 404"
-                    )
-
-                    # If this is an executed order with filled quantity, create a synthetic trade
-                    synthetic_trade = {
-                        "trade_id": f"synthetic_{orderid}",
-                        "order_id": orderid,
-                        "exchange_trade_id": "",
-                        "exchange_order_id": "",
-                        "symbol": original_order_info["symbol"],
-                        "quantity": original_order_info["filled_quantity"],
-                        "price": original_order_info["price"],
-                        "trade_status": "EXECUTED",
-                        "exchange": original_order_info["exchange"],
-                        "segment": original_order_info["segment"],
-                        "product": original_order_info["product"],
-                        "transaction_type": original_order_info["transaction_type"],
-                        "created_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                        "trade_date_time": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                        "settlement_number": "",
-                        "remarks": "Synthetic trade created from executed FNO order due to API limitation",
+            trades = []
+            for trade in trade_list:
+                exchange = openalgo_exchange(trade.get("exchange", ""), trade.get("segment", seg))
+                groww_symbol = trade.get("trading_symbol", "")
+                trades.append(
+                    {
+                        "trade_id": trade.get("groww_trade_id", ""),
+                        "order_id": trade.get("groww_order_id", orderid),
+                        "exchange_trade_id": trade.get("exchange_trade_id", ""),
+                        "exchange_order_id": trade.get("exchange_order_id", ""),
+                        "symbol": get_oa_symbol(groww_symbol, exchange) or groww_symbol,
+                        "quantity": trade.get("quantity", 0),
+                        "price": trade.get("price", 0),
+                        "trade_status": trade.get("trade_status", ""),
+                        "exchange": exchange,
+                        "segment": trade.get("segment", seg),
+                        "product": trade.get("product", ""),
+                        "transaction_type": trade.get("transaction_type", ""),
+                        "created_at": trade.get("created_at", ""),
+                        "trade_date_time": trade.get("trade_date_time", ""),
+                        "settlement_number": trade.get("settlement_number", ""),
+                        "remarks": trade.get("remark"),
                     }
+                )
+            return {"status": "success", "trades": trades}, 200
 
-                    response = {
-                        "status": "success",
-                        "message": f"Created synthetic trade for FNO order {orderid}",
-                        "trades": [synthetic_trade],
-                        "raw_response": response_data,
-                        "synthetic": True,
-                    }
-                    logger.debug(f"Returning synthetic trade for order {orderid}")
-                    return response, 200
-                else:
-                    # Regular error handling
-                    error_message = response_data.get("error", {}).get(
-                        "message", "Error retrieving trades"
-                    )
-                    error_details = response_data.get("error", {})
-
-                    logger.warning(f"Error getting trades for order {orderid}: {error_message}")
-                    if error_details:
-                        logger.warning(f"Error details: {json.dumps(error_details, indent=2)}")
-
-                    return {
-                        "status": "error",
-                        "message": f"Failed to retrieve trades: {error_message}",
-                        "trades": [],
-                        "raw_response": response_data,
-                    }, response_obj.status_code
-
-        except json.JSONDecodeError as e:
-            # Handle invalid JSON response
-            logger.error(f"Error parsing JSON response for trades for order {orderid}: {e}")
-        except Exception as e:
-            logger.error(f"Error parsing trades response: {e}")
-            logger.error(f"Raw response content: {response_obj.content}")
-
-            return {
-                "status": "error",
-                "message": f"Error parsing trades response: {str(e)}",
-                "order_id": orderid,
-                "segment": segment,
-                "trades": [],
-                "raw_content": response_obj.content.decode("utf-8", errors="replace"),
-            }, response_obj.status_code
-
-    except Exception as e:
-        logger.exception(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
-
+        return {"status": "error", "message": message, "trades": []}, 400
+    except BrokerBusyError:
+        raise
+    except Exception:
+        logger.exception(f"Error reading Groww trades for order {orderid}")
         return {
             "status": "error",
-            "message": f"Failed to retrieve trades due to exception: {str(e)}",
-            "order_id": orderid,
-            "segment": segment,
+            "message": "Could not reach Groww to read the order's trades.",
             "trades": [],
-            "exception_details": str(e),
         }, 500
