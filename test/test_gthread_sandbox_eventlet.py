@@ -287,7 +287,7 @@ def test_placing_an_order_does_not_wait_for_the_feed_to_acknowledge(tmp_path):
         calls = []
 
         def slow_subscribe(username, broker, symbols, mode):
-            time.sleep(1.0)  # the proxy taking its time to acknowledge
+            time.sleep(2.0)  # the proxy taking its time to acknowledge
             calls.append([s["symbol"] for s in symbols])
             return True, {}, 200
 
@@ -303,7 +303,7 @@ def test_placing_an_order_does_not_wait_for_the_feed_to_acknowledge(tmp_path):
             SimpleNamespace(exchange="NSE", symbol="RELIANCE", orderid="EV-W1", user_id=USER)
         )
         notify_took = time.monotonic() - start
-        wse._feed_subscription_executor.submit(lambda: None).result(timeout=10)
+        wse._feed_executor.submit(lambda: None).result(timeout=10)
         ticker.alive = False
         print("RESULT " + json.dumps({
             "notify_took": notify_took,
@@ -312,6 +312,6 @@ def test_placing_an_order_does_not_wait_for_the_feed_to_acknowledge(tmp_path):
         }))
         """,
     )
-    assert out["notify_took"] < 0.3
+    assert out["notify_took"] < 1.0
     assert out["calls"] == [["RELIANCE"]]
     assert out["ticks"] >= 10

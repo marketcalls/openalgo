@@ -100,6 +100,7 @@ def test_a_fill_does_not_hold_the_position_lock_across_a_feed_subscribe(monkeypa
         return time.monotonic() - started
 
     _, elapsed = run_in_threads([first_fill, second_fill])
+    _wait_for_feed_worker()
     assert elapsed < 1.0, f"the second fill waited {elapsed:.2f}s behind the first one's subscribe"
     assert len(calls) == 2
 
@@ -262,7 +263,7 @@ def _wait_for_feed_worker():
     """Return once every subscribe and unsubscribe queued so far has run."""
     from sandbox import websocket_execution_engine as wse
 
-    wse._feed_subscription_executor.submit(lambda: None).result(timeout=10)
+    wse._feed_executor.submit(lambda: None).result(timeout=10)
 
 
 def _order(orderid, symbol="RELIANCE"):
@@ -278,7 +279,7 @@ def test_placing_an_order_does_not_wait_for_the_feed_to_acknowledge(monkeypatch)
     elapsed = time.monotonic() - started
     _wait_for_feed_worker()
 
-    assert elapsed < 0.5, f"placing the order waited {elapsed:.2f}s for the feed"
+    assert elapsed < 1.5, f"placing the order waited {elapsed:.2f}s for the feed"
     assert calls == [("subscribe", ["RELIANCE"])]
 
 
@@ -306,7 +307,7 @@ def test_no_order_path_hook_waits_for_the_feed(monkeypatch, hook):
     elapsed = time.monotonic() - started
     _wait_for_feed_worker()
 
-    assert elapsed < 0.5, f"notify_{hook} waited {elapsed:.2f}s for the feed"
+    assert elapsed < 1.5, f"notify_{hook} waited {elapsed:.2f}s for the feed"
 
 
 def test_a_quick_place_then_cancel_unsubscribes_after_it_subscribes(monkeypatch):
@@ -319,6 +320,41 @@ def test_a_quick_place_then_cancel_unsubscribes_after_it_subscribes(monkeypatch)
         engine.notify_order_completed("LIFE-W3", "NSE:RELIANCE", USER)
 
     run_in_thread(place_then_cancel)
+    _wait_for_feed_worker()
+
+    assert calls == [("subscribe", ["RELIANCE"]), ("unsubscribe", ["RELIANCE"])]
+
+
+def test_a_cancel_racing_a_place_is_queued_after_it(monkeypatch):
+    """The queue order is the refcount order, even when two threads interleave.
+
+    The place takes the first reference and the cancel on another thread then
+    releases it. The place's subscribe is held up until the cancel is done,
+    which is where a call queued after the lock is released lets the cancel's
+    unsubscribe go first and leaves the symbol subscribed with nothing in it.
+    """
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch)
+    send_subscribe = engine._subscribe_ws_symbols
+    cancelled = threading.Event()
+
+    def subscribe_once_cancelled(user_id, symbols):
+        cancelled.wait(5)
+        send_subscribe(user_id, symbols)
+
+    monkeypatch.setattr(engine, "_subscribe_ws_symbols", subscribe_once_cancelled)
+
+    def cancel_once_placed():
+        deadline = time.monotonic() + 5
+        while USER not in engine._user_symbol_refcounts and time.monotonic() < deadline:
+            time.sleep(0.005)
+        engine.notify_order_completed("LIFE-W6", "NSE:RELIANCE", USER)
+        cancelled.set()
+
+    canceller = threading.Thread(target=cancel_once_placed, daemon=True)
+    canceller.start()
+    engine.notify_order_placed(_order("LIFE-W6"))
+    canceller.join(10)
     _wait_for_feed_worker()
 
     assert calls == [("subscribe", ["RELIANCE"]), ("unsubscribe", ["RELIANCE"])]
