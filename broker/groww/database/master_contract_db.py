@@ -782,7 +782,12 @@ def process_groww_data(path):
             subset=["symbol", "exchange"], keep=False
         ).reindex(df_mapped.index, fill_value=False)
         if dup_mask.any():
-            series_symbol = df_mapped["symbol"] + "-" + df["series"].fillna("")
+            # SYMBOL-SERIES only where Groww gave a series; without one the
+            # symbol stays as it is rather than becoming "SYMBOL-"
+            series = df["series"].fillna("").astype(str).str.strip()
+            series_symbol = df_mapped["symbol"].where(
+                series == "", df_mapped["symbol"] + "-" + series
+            )
             if "internal_trading_symbol" in df.columns:
                 series_symbol = df["internal_trading_symbol"].where(
                     df["internal_trading_symbol"].notna() & (df["internal_trading_symbol"] != ""),

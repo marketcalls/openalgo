@@ -48,6 +48,7 @@ class Client:
 @pytest.fixture
 def clock(monkeypatch):
     c = FakeClock()
+    monkeypatch.setattr(rl.time, "monotonic", c.time)
     monkeypatch.setattr(rl.time, "time", c.time)
     monkeypatch.setattr(rl.time, "sleep", c.sleep)
     monkeypatch.setattr(rl, "_last_call_time", dict.fromkeys(rl.MIN_INTERVAL, 0.0))
@@ -85,6 +86,16 @@ def test_retries_stop_after_max_retries_and_return_the_429(clock):
     assert len(client.calls) == rl.MAX_RETRIES + 1
     # exponential fallback when Groww sends no Retry-After: 1, 2, 4
     assert [s for s in clock.sleeps if s >= 1] == [1.0, 2.0, 4.0]
+
+
+def test_an_http_date_retry_after_is_honoured(clock):
+    from email.utils import format_datetime
+    from datetime import datetime, timezone
+
+    when = format_datetime(datetime.fromtimestamp(clock.now + 3, tz=timezone.utc), usegmt=True)
+    client = Client([429, 200], headers={"Retry-After": when})
+    rl.groww_request(client, "GET", "https://api.groww.in/x", "live")
+    assert any(2.9 <= s <= 3.1 for s in clock.sleeps)
 
 
 def test_under_gthread_a_long_server_delay_is_refused_not_slept(clock, monkeypatch):

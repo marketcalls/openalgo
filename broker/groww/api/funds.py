@@ -8,6 +8,7 @@ import httpx
 from broker.groww.api.rate_limiter import groww_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.broker_backpressure import BrokerBusyError
 
 logger = get_logger(__name__)
 
@@ -15,20 +16,39 @@ logger = get_logger(__name__)
 def _day_m2m(auth_token):
     """Realised and unrealised P&L of the day's positions, in rupees.
 
-    Returns (0.0, 0.0) when positions cannot be read, which is logged: the
-    funds figures are still worth showing without the P&L.
+    Uses the strict position read, so a CASH book that cannot be read is
+    reported rather than summed as empty. OpenAlgo's funds format has no field
+    for "incomplete", so what is missing is logged instead of hidden: an FNO
+    segment that was not read, and open positions Groww returned no live price
+    for (their unrealised P&L is unknown, not 0). Returns (0.0, 0.0) when the
+    book cannot be read at all; the cash figures are still worth showing.
     """
     from broker.groww.api.order_api import get_positions
 
     try:
-        payload, status = get_positions(auth_token)
+        payload, status = get_positions(auth_token, strict=True, include_ltp=True)
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception("Groww positions could not be read for funds P&L")
         return 0.0, 0.0
     if status != 200 or payload.get("status") != "success":
         logger.warning(f"Groww positions not read for funds P&L: {payload.get('message')}")
         return 0.0, 0.0
+    if payload.get("failed_segments"):
+        logger.warning(
+            f"Groww funds P&L excludes the {payload['failed_segments']} positions, which could not be read"
+        )
     rows = payload.get("data") or []
+    unpriced = [
+        row.get("symbol")
+        for row in rows
+        if float(row.get("quantity") or 0) != 0 and not float(row.get("ltp") or 0)
+    ]
+    if unpriced:
+        logger.warning(
+            f"Groww funds unrealised P&L excludes open positions with no live price: {unpriced}"
+        )
     realised = sum(float(row.get("realised") or 0) for row in rows)
     unrealised = sum(float(row.get("unrealised") or 0) for row in rows)
     return realised, unrealised
@@ -92,6 +112,8 @@ def get_margin_data(auth_token):
         }
         return processed_margin_data
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error in get_margin_data: {e}")
         # Return an empty dictionary in case of unexpected data structure or error

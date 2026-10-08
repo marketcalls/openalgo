@@ -163,6 +163,8 @@ def direct_get_order_book(auth):
         logger.debug(f"Groww order book: {len(all_orders)} orders")
         return {"data": all_orders, "order_list": all_orders}
 
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception("Error fetching the Groww order book")
         return {
@@ -325,6 +327,8 @@ def _fno_read_failure(response):
     """
     try:
         body = response.json()
+    except BrokerBusyError:
+        raise
     except Exception:
         body = None
     if response.status_code == 200 and isinstance(body, dict) and body.get("status") == "SUCCESS":
@@ -528,6 +532,8 @@ def get_positions(auth, strict=False, include_ltp=None):
                 if fno_body.get("status") == "SUCCESS":
                     for position in (fno_body.get("payload") or {}).get("positions") or []:
                         rows.append(_position_row(position, SEGMENT_FNO))
+        except BrokerBusyError:
+            raise
         except Exception as fno_error:
             logger.warning(f"Error fetching FNO positions: {fno_error}")
             fno_failure = f"FNO segment: {type(fno_error).__name__}: {fno_error}"
@@ -545,6 +551,8 @@ def get_positions(auth, strict=False, include_ltp=None):
             response["failed_segments"] = ["FNO"]
         return response, 200
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.exception("Error fetching Groww positions")
         return {
@@ -655,6 +663,8 @@ def get_holdings(auth):
                     "raw_response": response_data,
                 }, response_obj.status_code
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error parsing holdings response: {e}")
             return {
@@ -665,6 +675,8 @@ def get_holdings(auth):
                 "raw_data": response_obj.content.decode("utf-8", errors="replace"),
             }, response_obj.status_code
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error while fetching trades using direct API: {e}")
         logger.exception("Full stack trace:")
@@ -830,6 +842,23 @@ def direct_place_order_api(data, auth):
             )
         trading_symbol = db_record.brsymbol
 
+        # Groww's instrument file gives some NSE bonds one trading_symbol for
+        # several series (IMC1 for N1, N2 and N3). The master contract tells
+        # them apart (IMC1-N1, ...), but an order carries only Groww's
+        # trading_symbol, so Groww could not tell which series was meant.
+        with db_session() as session:
+            sharing = (
+                session.query(SymToken)
+                .filter_by(brsymbol=trading_symbol, exchange=original_exchange)
+                .count()
+            )
+        if sharing > 1:
+            raise ValueError(
+                f"{original_symbol} cannot be ordered through Groww's API: Groww lists "
+                f"{sharing} series under the same trading symbol {trading_symbol} and an "
+                "order cannot say which one. Place it in the Groww app instead."
+            )
+
         # Map the rest of the parameters to Groww API format
         product = map_product_type(data.get("product", "CNC"))
         exchange = map_exchange_type(original_exchange)
@@ -994,6 +1023,8 @@ def direct_place_order_api(data, auth):
         # validity or action, an unknown symbol, or an invalid number
         logger.warning(f"Order not sent to Groww: {e}")
         return _Status(400), {"status": "error", "message": str(e)}, None
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception("Error placing Groww order")
         return (
@@ -1091,6 +1122,8 @@ def direct_place_order(
         logger.debug(f"Direct order response: {response}")
         return response
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.exception(f"Direct order error: {e}")
         return {"status": "error", "message": str(e)}
@@ -1301,6 +1334,8 @@ def place_smartorder_api(data, auth):
 
     except PositionReadError:
         raise
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}
@@ -1400,6 +1435,8 @@ def get_holdings(auth):
 
         return formatted_holdings, {"status": "success"}
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         error_msg = f"Error fetching holdings: {str(e)}"
         logger.error(error_msg, exc_info=True)
@@ -1508,6 +1545,8 @@ def close_all_positions(token=None, auth=None):
 
                 detailed_results.append(result_entry)
 
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.exception(f"Error processing position {position}: {str(e)}")
                 failure_count += 1
@@ -1519,6 +1558,8 @@ def close_all_positions(token=None, auth=None):
         logger.debug(msg)
         return {"status": "success", "message": msg, "detailed_results": detailed_results}, 200
 
+    except BrokerBusyError:
+        raise
     except Exception as e:
         error_msg = f"Error in close_all_positions: {str(e)}"
         logger.exception(error_msg)
@@ -1564,6 +1605,8 @@ def _cancel_segments(orderid, auth):
                 if seg in (SEGMENT_CASH, SEGMENT_FNO):
                     return [seg]
                 break
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception(f"Could not read the order book to find the segment of {orderid}")
     return [SEGMENT_CASH, SEGMENT_FNO]
@@ -1628,6 +1671,8 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
             )
 
         return {"status": "error", "orderid": orderid, "message": message}, status_code
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception(f"Error cancelling order {orderid}")
         return {
@@ -1684,6 +1729,8 @@ def direct_modify_order(data, auth):
                                 order_type = order["order_type"]
                                 logger.debug(f"Retrieved order type from order book: {order_type}")
                                 break
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.error(f"Error retrieving order type from order book: {e}")
 
@@ -1798,6 +1845,8 @@ def direct_modify_order(data, auth):
         # Raised above for missing order ID or invalid quantity/price values
         logger.warning(f"Modify order rejected before sending: {e}")
         return {"status": "error", "orderid": data.get("orderid", ""), "message": str(e)}, 400
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception("Error in direct_modify_order")
         return {
@@ -1936,6 +1985,8 @@ def get_order_trades(orderid, auth, segment=None):
             return {"status": "success", "trades": trades}, 200
 
         return {"status": "error", "message": message, "trades": []}, 400
+    except BrokerBusyError:
+        raise
     except Exception:
         logger.exception(f"Error reading Groww trades for order {orderid}")
         return {

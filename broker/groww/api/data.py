@@ -15,6 +15,7 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from database.token_db_enhanced import get_symbol_info
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.broker_backpressure import BrokerBusyError
 
 logger = get_logger(__name__)
 # API endpoints are handled by the Groww SDK
@@ -99,6 +100,8 @@ def get_api_response(
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
         return {"error": f"HTTP error: {e.response.status_code}", "details": e.response.text}
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error in API request: {str(e)}")
         if debug:
@@ -520,6 +523,8 @@ class BrokerData:
                         "data": [],
                         "message": "Missing symbol or exchange in request",
                     }
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.error(f"Error processing single symbol request: {str(e)}")
                 return {
@@ -678,6 +683,8 @@ class BrokerData:
                                             key = key_val[0].strip()
                                             val = key_val[1].strip()
                                             ohlc[key] = float(val)
+                                except BrokerBusyError:
+                                    raise
                                 except Exception as e:
                                     logger.error(f"Error parsing OHLC string: {e}")
                             else:
@@ -877,6 +884,8 @@ class BrokerData:
 
                         quote_item["depth"] = depth
 
+                except BrokerBusyError:
+                    raise
                 except Exception as api_error:
                     logger.error(f"Groww API error: {str(api_error)}")
                     error_msg = str(api_error)
@@ -890,6 +899,8 @@ class BrokerData:
                             "ltp": 0,
                         }
                     )
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.error(f"Error processing Groww API data for {sym}: {str(e)}")
                 # Add empty quote data with error message
@@ -1225,6 +1236,8 @@ class BrokerData:
                             key = key_val[0].strip()
                             val = key_val[1].strip()
                             ohlc[key] = float(val)
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error parsing OHLC string: {e}")
             elif isinstance(ohlc_data, dict):
@@ -1303,6 +1316,8 @@ class BrokerData:
             )
             return depth_response
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception(f"Error getting market depth: {str(e)}")
             return {}
@@ -1353,6 +1368,8 @@ class BrokerData:
                 # Single batch processing
                 return self._process_quotes_batch(symbols)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -1432,6 +1449,8 @@ class BrokerData:
                 else:
                     cash_symbols.append(exchange_symbol)
 
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
                 skipped_symbols.append({"symbol": symbol, "exchange": exchange, "error": str(e)})
@@ -1604,14 +1623,15 @@ class BrokerData:
             for exchange_symbol in exchange_symbols:
                 original = symbol_map.get(exchange_symbol, {})
                 ohlc_data = payload.get(exchange_symbol)
+                ltp = ltp_payload.get(exchange_symbol)
 
-                if not ohlc_data:
-                    logger.warning(f"No OHLC data found for {exchange_symbol}")
+                if not ohlc_data and ltp is None:
+                    logger.warning(f"No OHLC or LTP data found for {exchange_symbol}")
                     results.append(
                         {
                             "symbol": original.get("symbol", exchange_symbol),
                             "exchange": original.get("exchange", "UNKNOWN"),
-                            "error": "No quote data available",
+                            "error": no_price,
                         }
                     )
                     continue
@@ -1634,14 +1654,15 @@ class BrokerData:
                             parsed[k.strip()] = float(v.strip())
                         if parsed:
                             ohlc_dict = parsed
+                    except BrokerBusyError:
+                        raise
                     except Exception as parse_err:
                         logger.warning(
                             f"Failed to parse OHLC string for {exchange_symbol}: "
                             f"{ohlc_data!r} ({parse_err})"
                         )
 
-                ltp = ltp_payload.get(exchange_symbol)
-                if ohlc_dict is None or ltp is None:
+                if ltp is None:
                     results.append(
                         {
                             "symbol": original.get("symbol", exchange_symbol),
@@ -1651,6 +1672,12 @@ class BrokerData:
                     )
                     continue
                 ltp = float(ltp)
+                if ohlc_dict is None:
+                    # Groww priced the symbol but its OHLC entry was missing or a
+                    # bare number: the live price still stands, the OHLC fields
+                    # read 0 like the other fields the batch does not carry
+                    logger.warning(f"No OHLC breakdown for {exchange_symbol}: {ohlc_data!r}")
+                    ohlc_dict = {}
                 open_price = float(ohlc_dict.get("open", 0) or 0)
                 high_price = float(ohlc_dict.get("high", 0) or 0)
                 low_price = float(ohlc_dict.get("low", 0) or 0)
@@ -1675,6 +1702,8 @@ class BrokerData:
                 }
                 results.append(result_item)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching OHLC batch: {str(e)}")
             # Return error entries for all symbols
@@ -1740,6 +1769,8 @@ class BrokerData:
                     },
                     debug=False,
                 )
+            except BrokerBusyError:
+                raise
             except Exception as fetch_err:
                 logger.warning(
                     f"Quote fetch failed for {exchange_symbol}: {fetch_err}"
@@ -1790,6 +1821,8 @@ class BrokerData:
                         if ":" in part:
                             k, v = part.split(":", 1)
                             ohlc[k.strip()] = float(v.strip())
+                except BrokerBusyError:
+                    raise
                 except Exception:
                     ohlc = {}
 

@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from broker.groww.api.rate_limiter import groww_request
+from utils.broker_backpressure import BROKER_BUSY_MESSAGE, BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -28,8 +29,12 @@ def generate_checksum(api_secret, timestamp):
     return sha256.hexdigest()
 
 
-def _login_error(body):
-    """A login failure in words a trader can act on, with Groww's own reason."""
+def _login_error(body, status_code=None):
+    """A login failure in words a trader can act on, with Groww's own reason.
+
+    The advice depends on why Groww refused: too many token requests and a
+    failure on Groww's side are not credential problems.
+    """
     reason = None
     if isinstance(body, dict):
         error = body.get("error")
@@ -37,6 +42,16 @@ def _login_error(body):
     message = "Groww did not issue an access token"
     if reason:
         message += f": {reason}"
+    if status_code == 429:
+        return (
+            f"{message}. Groww is limiting login requests (30 a minute, 150 a day). "
+            "Wait a minute, then log in again."
+        )
+    if status_code is not None and status_code >= 500:
+        return (
+            f"{message}. Groww's login service is not responding right now; the API key "
+            "is not the problem. Try again in a few minutes."
+        )
     return (
         f"{message}. Check the API key and secret, and that the key is approved for today "
         "on Groww's API Keys page."
@@ -119,9 +134,13 @@ def get_access_token_via_checksum(api_key, api_secret):
                 response_data = {}
             if response.status_code != 200:
                 logger.error(f"Groww login refused: HTTP {response.status_code}, {response.text}")
-                return None, _login_error(response_data)
+                return None, _login_error(response_data, response.status_code)
             return _token_from_response(response_data)
 
+        except BrokerBusyError as e:
+            # Refused by OpenAlgo's own pacing before anything was sent
+            logger.warning(f"Groww login not sent, rate limit queue full: {e}")
+            return None, str(e) or BROKER_BUSY_MESSAGE
         except Exception:
             logger.exception("Groww login request failed")
             return None, "Could not reach Groww to log in. Check your connection and try again."

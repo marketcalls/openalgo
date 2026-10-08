@@ -23,6 +23,7 @@ under the per-second one.
 
 import threading
 import time
+from email.utils import parsedate_to_datetime
 
 from utils.broker_backpressure import BrokerBusyError, cap_server_delay, check_queue_wait
 
@@ -39,6 +40,8 @@ MAX_RETRIES = 3
 BASE_BACKOFF = 1.0  # seconds; exponential fallback when Groww gives no Retry-After: 1, 2, 4
 
 _lock = threading.Lock()
+# time.monotonic() of each type's last booked slot; only deltas are used, so a
+# wall-clock (NTP) step cannot stall callers or let a burst through
 _last_call_time = dict.fromkeys(MIN_INTERVAL, 0.0)
 
 
@@ -63,7 +66,7 @@ def apply_rate_limit(category):
     """
     interval = MIN_INTERVAL[category]
     with _lock:
-        now = time.time()
+        now = time.monotonic()
         elapsed = now - _last_call_time[category]
         sleep_time = interval - elapsed if elapsed < interval else 0
         check_queue_wait(sleep_time, _queue_kind(category))
@@ -87,7 +90,11 @@ def retry_delay(headers, attempt, category):
         try:
             delay = max(float(retry_after), 0.05)
         except ValueError:
-            pass
+            # Retry-After may also be an HTTP date (RFC 9110 10.2.3)
+            try:
+                delay = max(parsedate_to_datetime(retry_after).timestamp() - time.time(), 0.05)
+            except (TypeError, ValueError, OverflowError):
+                pass
     if cap_server_delay(delay, _queue_kind(category)) is None:
         raise BrokerBusyError(
             "Groww asked OpenAlgo to slow down for longer than a request can be held. "
