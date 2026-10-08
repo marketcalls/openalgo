@@ -195,6 +195,19 @@ class BrokerData:
     # (checked on RELIANCE, 1 Sep - 7 Oct 2026: 22 of 23 days had no open).
     # candle/range is marked deprecated, so these move once Groww fixes that.
     _EOD_MINUTES = {"D": "1440", "W": "10080"}
+    # Length of each intraday candle, to tell a pre-open candle from one that
+    # reaches into the regular session
+    _INTERVAL_MINUTES = {
+        "1minute": 1,
+        "2minute": 2,
+        "3minute": 3,
+        "5minute": 5,
+        "10minute": 10,
+        "15minute": 15,
+        "30minute": 30,
+        "1hour": 60,
+        "4hour": 240,
+    }
 
     def _groww_symbol(self, symbol, exchange):
         """
@@ -240,6 +253,34 @@ class BrokerData:
             strike_str = str(int(strike)) if strike == int(strike) else str(strike)
             groww_symbol = f"{groww_exchange}-{underlying}-{expiry}-{strike_str}-{info.instrumenttype}"
         return groww_exchange, SEGMENT_FNO, groww_symbol, info.brsymbol
+
+    # Intervals built from 15-minute candles (see get_history)
+    _REBUCKETED = {"30minute", "1hour", "4hour"}
+
+    @staticmethod
+    def _rebucket(candles, minutes):
+        """Combine 15-minute session candles into ``minutes``-long candles
+        starting at 09:15 each day: first open, highest high, lowest low,
+        last close, summed volume (None when Groww gave none, as for indices).
+        """
+
+        def pick(fn, a, b):
+            return b if a is None else a if b is None else fn(a, b)
+
+        buckets = {}
+        for stamp, open_, high, low, close, volume in sorted(candles):
+            market_open = stamp.replace(hour=9, minute=15, second=0, microsecond=0)
+            offset = int((stamp - market_open).total_seconds() // 60) // minutes * minutes
+            key = market_open + timedelta(minutes=offset)
+            bucket = buckets.get(key)
+            if bucket is None:
+                buckets[key] = [key, open_, high, low, close, volume]
+                continue
+            bucket[2] = pick(max, bucket[2], high)
+            bucket[3] = pick(min, bucket[3], low)
+            bucket[4] = close
+            bucket[5] = pick(lambda x, y: x + y, bucket[5], volume)
+        return [tuple(bucket) for _, bucket in sorted(buckets.items())]
 
     @staticmethod
     def _to_date(value):
@@ -301,9 +342,9 @@ class BrokerData:
         Historical candles for an OpenAlgo symbol.
 
         Intraday intervals come from GET /v1/historical/candles (backtesting
-        docs), whose volume is per candle. Its pre-open fragments carry volume
-        but no opening price and are left out; no other value is filled in or
-        dropped. Its open-interest field is not used: on 2026-10-07 it summed
+        docs), whose volume is per candle. Candles wholly inside the 09:00-09:15
+        pre-open session are left out, so the day starts at 09:15; no other
+        value is filled in or dropped. Its open-interest field is not used: on 2026-10-07 it summed
         the per-minute values over each candle and did not match Groww's quote.
 
         Daily and weekly come from GET /v1/historical/candle/range (see
@@ -362,6 +403,12 @@ class BrokerData:
                 midnight = pytz.UTC.localize(datetime.combine(day, datetime.min.time()))
                 rows.append([int(midnight.timestamp()), *candle[1:6]])
         else:
+            # Groww starts 30m/1h/4h candles on the clock hour, so the first one
+            # of a day mixes the 09:00-09:15 pre-open session with regular
+            # trading and carries a null open. Those intervals are built from
+            # 15-minute candles instead (which split exactly at 09:15), aligned
+            # to the 09:15 market open as other brokers' are.
+            fetch_interval = interval if interval not in self._REBUCKETED else "15minute"
             candles = self._fetch_candles(
                 symbol,
                 "/v1/historical/candles",
@@ -369,27 +416,41 @@ class BrokerData:
                     "exchange": groww_exchange,
                     "segment": segment,
                     "groww_symbol": groww_symbol,
-                    "candle_interval": interval,
+                    "candle_interval": fetch_interval,
                 },
                 start,
                 end,
-                self._MAX_DAYS[interval],
+                self._MAX_DAYS[fetch_interval],
             )
             ist = pytz.timezone("Asia/Kolkata")
+            fetch_minutes = self._INTERVAL_MINUTES[fetch_interval]
+            session = []
             for candle in candles:
                 prices = candle[1:5]
+                stamp = datetime.fromisoformat(str(candle[0]).replace(" ", "T"))
+                market_open = stamp.replace(hour=9, minute=15, second=0, microsecond=0)
+                # Leave out candles wholly inside the pre-open session
+                if stamp + timedelta(minutes=fetch_minutes) <= market_open:
+                    continue
                 if prices[0] is None:
                     continue  # pre-open fragment: volume without an opening price
-                stamp = datetime.fromisoformat(str(candle[0]).replace(" ", "T"))
                 volume = candle[5] if len(candle) > 5 else None
-                rows.append([int(ist.localize(stamp).timestamp()), *prices, volume])
+                session.append((stamp, *prices, volume))
+
+            if interval in self._REBUCKETED:
+                session = self._rebucket(session, self._INTERVAL_MINUTES[interval])
+            for stamp, *ohlcv in session:
+                rows.append([int(ist.localize(stamp).timestamp()), *ohlcv])
 
         if not rows:
             return pd.DataFrame(columns=columns)
         df = pd.DataFrame(rows, columns=columns)
         df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-        # Keep Groww's nulls (e.g. index volume) as None so they serialise as
-        # JSON null, not NaN
+        # OpenAlgo's history format has a numeric volume, and the chart rejects
+        # a candle whose volume is null. Groww sends none for indices and
+        # leaves it empty on the odd stock candle, so that reads as 0, as the
+        # reference broker reports index volume. Prices are never filled in.
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
         return df.astype(object).where(df.notna(), None)
 
     def get_intervals(self) -> dict[str, dict[str, list[str]]]:
