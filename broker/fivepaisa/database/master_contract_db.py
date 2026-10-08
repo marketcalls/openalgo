@@ -381,6 +381,22 @@ def process_5paisa_csv(path):
     idx_df = new_df[idx_mask]
     non_idx_df = new_df[~idx_mask]
     idx_df = idx_df.drop_duplicates(subset=["symbol", "exchange"], keep="first")
+
+    # Step 5: Remove duplicate contracts (keep the highest ScripCode).
+    # 5Paisa's master lists some contracts under several ScripCodes whose rows
+    # are identical in every other column (seen on BFO for ITC around the
+    # ITC Hotels demerger and long-dated SENSEX strikes), so they all build
+    # the same OpenAlgo symbol and lookups by (symbol, exchange) became
+    # ambiguous. The newest listing carries the highest ScripCode.
+    before = len(non_idx_df)
+    non_idx_df = non_idx_df.sort_values("token", ascending=False).drop_duplicates(
+        subset=["symbol", "exchange"], keep="first"
+    )
+    if before != len(non_idx_df):
+        logger.info(
+            f"Dropped {before - len(non_idx_df)} duplicate (symbol, exchange) rows, "
+            "kept highest ScripCode"
+        )
     new_df = pd.concat([non_idx_df, idx_df], ignore_index=True)
 
     return new_df
