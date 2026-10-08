@@ -107,6 +107,23 @@ def get_api_response(endpoint, auth_token, method="GET", params=None, data=None,
         return {"error": str(e)}
 
 
+def _response_reason(response, fallback):
+    """Groww's own reason for a failed get_api_response call, if it gave one."""
+    if not isinstance(response, dict):
+        return fallback
+    details = response.get("details")
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except ValueError:
+            details = None
+    if isinstance(details, dict):
+        reason = _groww_error_message(details, None)
+        if reason:
+            return reason
+    return _groww_error_message(response, None) or fallback
+
+
 class BrokerData:
     def __init__(self, auth_token):
         """Initialize Groww data handler with authentication token"""
@@ -506,9 +523,10 @@ class BrokerData:
                     groww_exchange = EXCHANGE_BSE
                     segment = SEGMENT_FNO
                 else:
-                    logger.warning(f"Unsupported exchange: {exchange}, defaulting to NSE")
-                    groww_exchange = EXCHANGE_NSE
-                    segment = SEGMENT_CASH
+                    raise ValueError(
+                        f"Groww does not provide market data for the {exchange} exchange. "
+                    "Supported: NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX."
+                    )
 
                 # Get broker-specific symbol. For FNO contracts, fall back to
                 # format conversion when the master-contract lookup misses —
@@ -630,21 +648,27 @@ class BrokerData:
                             # alternate keys for some segments. Probe each
                             # known name so FNO contracts populate bid/ask/
                             # volume/OI even when the canonical key is absent.
+                            _depth = response.get("depth") or {}
+                            _top_bid = (_depth.get("buy") or [{}])[0] or {}
+                            _top_ask = (_depth.get("sell") or [{}])[0] or {}
                             _bid = (
                                 response.get("bid_price")
                                 or response.get("bid")
                                 or response.get("best_bid_price")
+                                or _top_bid.get("price")
                             )
                             _ask = (
                                 response.get("offer_price")
                                 or response.get("ask")
                                 or response.get("best_offer_price")
                                 or response.get("best_ask_price")
+                                or _top_ask.get("price")
                             )
                             _bid_qty = (
                                 response.get("bid_quantity")
                                 or response.get("bid_size")
                                 or response.get("best_bid_quantity")
+                                or _top_bid.get("quantity")
                             )
                             _ask_qty = (
                                 response.get("offer_quantity")
@@ -652,6 +676,7 @@ class BrokerData:
                                 or response.get("ask_size")
                                 or response.get("offer_size")
                                 or response.get("best_offer_quantity")
+                                or _top_ask.get("quantity")
                             )
                             _vol = (
                                 response.get("volume")
@@ -745,10 +770,23 @@ class BrokerData:
                             logger.info(f"Added quote_item: {quote_item}")
                         else:
                             logger.warning(f"Invalid response format for {symbol} on {exchange}")
-                            response = {}
+                            quote_data.append(
+                                {
+                                    "symbol": symbol,
+                                    "exchange": exchange,
+                                    "error": f"Groww returned no quote for {symbol}",
+                                }
+                            )
                     else:
-                        logger.warning(f"Empty or error response for {symbol} on {exchange}")
-                        response = {}
+                        reason = _response_reason(response, "no response")
+                        logger.warning(f"Groww refused quote for {symbol} on {exchange}: {reason}")
+                        quote_data.append(
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "error": f"Groww did not return a quote for {symbol}: {reason}",
+                            }
+                        )
 
                     # This section is now handled directly in the response processing code above to avoid duplicate processing
                     continue
@@ -813,8 +851,7 @@ class BrokerData:
 
         # No data case
         if not quote_data:
-            logger.warning("No quote data found for the requested symbols")
-            return {"status": "error", "message": "No data retrieved"}
+            raise ValueError("Groww returned no quote data for the requested symbols")
 
         # Single symbol case - return in simpler format for OpenAlgo frontend
         if isinstance(symbol_list, (str, dict)) or len(symbol_list) == 1:
@@ -841,6 +878,9 @@ class BrokerData:
             return {}
 
         quote = quote_data[0]
+        if quote.get("error"):
+            # A failed quote is an error, not a quote of zeros
+            raise ValueError(quote["error"])
 
         logger.info(f"Formatting single quote: {quote}")
 
@@ -1044,8 +1084,10 @@ class BrokerData:
             groww_exchange = EXCHANGE_BSE
             segment = SEGMENT_FNO
         else:
-            groww_exchange = EXCHANGE_NSE
-            segment = SEGMENT_CASH
+            raise ValueError(
+                f"Groww does not provide market data for the {exchange} exchange. "
+                "Supported: NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX."
+            )
 
         # Convert symbol format for derivatives
         if exchange in ["NFO", "BFO"]:
@@ -1290,6 +1332,10 @@ class BrokerData:
                 # shape happens to match the OpenAlgo pattern (e.g. JUN26
                 # contracts: "NIFTY26JUN22350PE" → "NIFTY22JUN350PE").
                 # Only convert from OpenAlgo when DB lookup misses.
+                if exchange not in ("NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"):
+                    raise ValueError(
+                        f"Groww does not provide market data for the {exchange} exchange"
+                    )
                 br_symbol = get_br_symbol(symbol, exchange)
 
                 if not br_symbol:
@@ -1314,7 +1360,9 @@ class BrokerData:
                 elif exchange in ["BSE", "BFO", "BSE_INDEX"]:
                     groww_exchange = "BSE"
                 else:
-                    groww_exchange = "NSE"  # Default
+                    raise ValueError(
+                        f"Groww does not provide market data for the {exchange} exchange"
+                    )
 
                 # Build exchange_trading_symbol format: EXCHANGE_SYMBOL
                 exchange_symbol = f"{groww_exchange}_{br_symbol}"
@@ -1476,6 +1524,30 @@ class BrokerData:
             else:
                 payload = response  # Direct response format
 
+            # The OHLC snapshot's close is the previous session's close (it
+            # equals the quote's ohlc.close, and day_change = LTP - close), so
+            # the live price comes from the LTP endpoint (08-live-data
+            # "Get LTP": 50 instruments, payload maps each symbol to its LTP).
+            ltp_response = get_api_response(
+                endpoint="/v1/live-data/ltp",
+                auth_token=self.auth_token,
+                method="GET",
+                params={"segment": segment, "exchange_symbols": symbols_param},
+            )
+            ltp_payload = (
+                ltp_response.get("payload")
+                if isinstance(ltp_response, dict) and ltp_response.get("status") == "SUCCESS"
+                else None
+            )
+            no_price = "Groww returned no live price for this symbol"
+            if not isinstance(ltp_payload, dict):
+                ltp_payload = {}
+                no_price = (
+                    "Groww did not return live prices: "
+                    f"{_response_reason(ltp_response, 'no response')}"
+                )
+                logger.warning(f"Groww LTP batch failed for {segment}: {ltp_response}")
+
             # Process each symbol's data
             for exchange_symbol in exchange_symbols:
                 original = symbol_map.get(exchange_symbol, {})
@@ -1516,20 +1588,21 @@ class BrokerData:
                             f"{ohlc_data!r} ({parse_err})"
                         )
 
-                if ohlc_dict is not None:
-                    open_price = float(ohlc_dict.get("open", 0) or 0)
-                    high_price = float(ohlc_dict.get("high", 0) or 0)
-                    low_price = float(ohlc_dict.get("low", 0) or 0)
-                    close_price = float(ohlc_dict.get("close", 0) or 0)
-                    # Use close as LTP for OHLC endpoint
-                    ltp = close_price
-                else:
-                    # Scalar fallback (just LTP)
-                    try:
-                        ltp = float(ohlc_data) if ohlc_data else 0
-                    except (TypeError, ValueError):
-                        ltp = 0
-                    open_price = high_price = low_price = close_price = ltp
+                ltp = ltp_payload.get(exchange_symbol)
+                if ohlc_dict is None or ltp is None:
+                    results.append(
+                        {
+                            "symbol": original.get("symbol", exchange_symbol),
+                            "exchange": original.get("exchange", "UNKNOWN"),
+                            "error": no_price,
+                        }
+                    )
+                    continue
+                ltp = float(ltp)
+                open_price = float(ohlc_dict.get("open", 0) or 0)
+                high_price = float(ohlc_dict.get("high", 0) or 0)
+                low_price = float(ohlc_dict.get("low", 0) or 0)
+                close_price = float(ohlc_dict.get("close", 0) or 0)
 
                 result_item = {
                     "symbol": original.get("symbol", exchange_symbol),
@@ -1541,7 +1614,7 @@ class BrokerData:
                         "high": high_price,
                         "low": low_price,
                         "ltp": ltp,
-                        "prev_close": close_price,  # Using close as prev_close
+                        "prev_close": close_price,  # ohlc.close is the previous close
                         "volume": 0,  # OHLC endpoint doesn't provide volume
                         "oi": 0,  # OHLC endpoint doesn't provide OI
                     },
