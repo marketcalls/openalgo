@@ -177,16 +177,59 @@ def oa_exchange_for(vortex_exchange):
 # ("For NSE_CUR & MCX_FO actual quantity = quantity * lot_size * multiplier").
 # Equity lot size is 1 so NSE_EQ/BSE_EQ are unaffected.
 #
-# TODO(rupeezy): BSE_FO is not named in that rule. It is treated like NSE_FO
-# (units) because the exchange itself trades BSE derivatives in units; verify
-# with one live SENSEX order before relying on it.
+# BSE_FO is not named in that rule but takes units like NSE_FO. Verified with
+# the margin calculator (/margins/basket), which takes the same quantity field:
+# SENSEX FUT (lot 20) priced quantity 20 as one lot, while MCX CRUDEOIL FUT
+# (lot 100) priced quantity 1 as one lot.
 _LOT_DENOMINATED = {"MCX_FO"}
 
 
+# MCX contracts whose price is quoted per a smaller unit than they trade in:
+# value = lots x price x multiplier. Any root not listed is quoted in the unit
+# it trades in, so its lot size is the multiplier (CRUDEOIL: 100 barrels quoted
+# per barrel). Same table as broker/zerodha/mapping/mcx_contract_size.py
+# (contract size / quotation unit); keep the two in step.
+MCX_QUOTATION_MULTIPLIERS = {
+    "GOLD": 100,  # 1 kg / 10 g
+    "GOLDM": 10,  # 100 g / 10 g
+    "GOLDGUINEA": 1,  # 8 g / 8 g
+    "GOLDTEN": 1,  # 10 g / 10 g
+    "SILVER100": 10,  # 100 g / 10 g
+    "ZINC": 5000,  # 5 MT / kg
+    "ZINCMINI": 1000,  # 1 MT / kg
+    "LEAD": 5000,  # 5 MT / kg
+    "LEADMINI": 1000,  # 1 MT / kg
+    "ALUMINIUM": 5000,  # 5 MT / kg
+    "ALUMINI": 1000,  # 1 MT / kg
+    "KAPAS": 200,  # 4,000 kg / 20 kg
+    "COTTONOIL": 500,  # 5,000 kg / 10 kg
+}
+
+
+def trade_value(units, price, oa_exchange, underlying, lotsize):
+    """Rupee value of a fill. quantity x price everywhere except MCX, where a
+    contract quoted per a smaller unit (GOLDM: 100 g quoted per 10 g) is
+    valued as lots x price x quotation multiplier."""
+    if oa_exchange != "MCX" or not lotsize:
+        return units * price
+    lots = units / lotsize
+    return lots * price * MCX_QUOTATION_MULTIPLIERS.get(underlying, lotsize)
+
+
 def to_vortex_quantity(quantity, brexchange, lotsize):
-    """OpenAlgo units -> Vortex order quantity. Raises ValueError when an MCX
-    quantity is not a whole number of lots (the same refusal other brokers give)."""
-    quantity = int(quantity)
+    """OpenAlgo units -> Vortex order quantity.
+
+    Raises ValueError (reported to the caller as a 400) when the quantity is
+    not a whole number, or an MCX quantity is not a whole number of lots (the
+    same refusal other brokers give).
+    """
+    try:
+        value = float(quantity)
+    except (TypeError, ValueError):
+        raise ValueError(f"Quantity {quantity!r} must be a whole number.") from None
+    if not value.is_integer():
+        raise ValueError(f"Quantity {quantity!r} must be a whole number.")
+    quantity = int(value)
     if brexchange in _LOT_DENOMINATED:
         lot = int(lotsize or 1)
         if lot > 1:

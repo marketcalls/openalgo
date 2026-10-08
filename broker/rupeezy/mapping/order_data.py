@@ -5,7 +5,12 @@
 # which is stored as SymToken.brsymbol. MCX quantities come back in lots and
 # are converted to units (see mapping/exchange.py).
 
-from broker.rupeezy.mapping.exchange import from_vortex_quantity, oa_exchange_for, split_ticker
+from broker.rupeezy.mapping.exchange import (
+    from_vortex_quantity,
+    oa_exchange_for,
+    split_ticker,
+    trade_value,
+)
 from broker.rupeezy.mapping.transform_data import reverse_map_product_type, reverse_map_variety
 from database.token_db import get_oa_symbol, get_symbol_info
 from utils.logging import get_logger
@@ -41,7 +46,13 @@ def _f(value):
         return 0.0
 
 
-def _lot_size(row, oa_symbol, oa_exchange):
+def _underlying(oa_symbol, oa_exchange):
+    """Master-contract `name` (the underlying for derivatives)."""
+    info = get_symbol_info(oa_symbol, oa_exchange) if oa_symbol else None
+    return info.name if info else None
+
+
+def lot_size_for(row, oa_symbol, oa_exchange):
     """Lot size for MCX quantity conversion: the row's own if present, else
     the master contract's."""
     lot = row.get("lot_size")
@@ -63,7 +74,7 @@ def _normalize_row(row):
     row["_product"] = reverse_map_product_type(oa_exchange, row.get("product")) or row.get(
         "product", ""
     )
-    row["_lot_size"] = _lot_size(row, oa_symbol, oa_exchange)
+    row["_lot_size"] = lot_size_for(row, oa_symbol, oa_exchange)
     return row
 
 
@@ -161,7 +172,16 @@ def transform_tradebook_data(tradebook_data):
                 "action": str(trade.get("transaction_type", "")).upper(),
                 "quantity": quantity,
                 "average_price": price,
-                "trade_value": round(quantity * price, 2),
+                "trade_value": round(
+                    trade_value(
+                        quantity,
+                        price,
+                        trade["_exchange"],
+                        _underlying(trade["_symbol"], trade["_exchange"]),
+                        trade["_lot_size"],
+                    ),
+                    2,
+                ),
                 "orderid": trade.get("order_id", ""),
                 "timestamp": trade.get("traded_at", ""),
             }

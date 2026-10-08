@@ -75,25 +75,26 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 
-def delete_symtoken_table():
-    logger.info("Deleting Symtoken Table")
-    SymToken.query.delete()
-    db_session.commit()
+def replace_symtoken_table(df):
+    """Swap the whole SymToken table for `df` in one transaction.
 
-
-def copy_from_dataframe(df):
-    logger.info("Performing Bulk Insert")
+    The delete and the insert commit together, so a failed insert rolls back
+    to the previous contract instead of leaving the table empty. Raises on
+    failure so the caller reports it.
+    """
     records = df.to_dict(orient="records")
+    if not records:
+        raise ValueError("The Rupeezy instrument master was empty; keeping the existing contract.")
     try:
-        if records:
-            db_session.bulk_insert_mappings(SymToken, records)
-            db_session.commit()
-            logger.info(f"Bulk insert completed with {len(records)} records.")
-        else:
-            logger.info("No records to insert.")
+        logger.info(f"Replacing Symtoken table with {len(records)} records")
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f"Bulk insert completed with {len(records)} records.")
     except Exception:
-        logger.exception("Error during bulk insert")
         db_session.rollback()
+        logger.exception("Rupeezy master contract insert failed; previous contract kept")
+        raise
 
 
 def download_master():
@@ -188,8 +189,7 @@ def master_contract_download():
     logger.info("Downloading Rupeezy Master Contract")
     try:
         token_df = process_master(download_master())
-        delete_symtoken_table()
-        copy_from_dataframe(token_df)
+        replace_symtoken_table(token_df)
         return socketio.emit(
             "master_contract_download",
             {"status": "success", "message": "Successfully Downloaded"},
@@ -203,6 +203,7 @@ def master_contract_download():
 
 
 def search_symbols(symbol, exchange):
+    term = str(symbol).replace("%", r"\%").replace("_", r"\_")
     return SymToken.query.filter(
-        SymToken.symbol.like(f"%{symbol}%"), SymToken.exchange == exchange
+        SymToken.symbol.like(f"%{term}%", escape="\\"), SymToken.exchange == exchange
     ).all()

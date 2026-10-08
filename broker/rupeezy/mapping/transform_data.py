@@ -85,7 +85,9 @@ def transform_data(data):
         # you should send the Last Trade Price as 0").
         "price": 0.0 if variety in ("RL-MKT", "SL-MKT") else _price(data.get("price")),
         "trigger_price": _price(data.get("trigger_price")) if variety in ("SL", "SL-MKT") else 0.0,
-        "disclosed_quantity": int(data.get("disclosed_quantity") or 0),
+        "disclosed_quantity": to_vortex_quantity(
+            data.get("disclosed_quantity") or 0, brexchange, lotsize
+        ),
         "validity": "DAY",
         "is_amo": False,
         # Max 50 chars; free text that comes back on the order book.
@@ -107,6 +109,8 @@ def transform_modify_order_data(data, traded_quantity, brexchange, lotsize):
         "traded_quantity": int(traded_quantity or 0),
         "price": 0.0 if variety in ("RL-MKT", "SL-MKT") else _price(data.get("price")),
         "trigger_price": _price(data.get("trigger_price")) if variety in ("SL", "SL-MKT") else 0.0,
-        "disclosed_quantity": int(data.get("disclosed_quantity") or 0),
+        "disclosed_quantity": to_vortex_quantity(
+            data.get("disclosed_quantity") or 0, brexchange, lotsize
+        ),
         "validity": "DAY",
     }

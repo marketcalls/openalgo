@@ -575,7 +575,9 @@ def test_trade_book_maps_to_openalgo(monkeypatch):
     import broker.rupeezy.mapping.order_data as od
 
     monkeypatch.setattr(od, "get_oa_symbol", lambda brsymbol, exchange: brsymbol)
-    monkeypatch.setattr(od, "get_symbol_info", lambda s, e: SimpleNamespace(lotsize=100))
+    monkeypatch.setattr(
+        od, "get_symbol_info", lambda s, e: SimpleNamespace(lotsize=100, name="CRUDEOIL")
+    )
     raw = {
         "status": "success",
         "trades": [
@@ -744,7 +746,7 @@ def test_a_read_is_retried_once_on_a_dead_connection(monkeypatch):
 
     flaky = _FlakyClient()
     monkeypatch.setattr(client, "get_httpx_client", lambda: flaky)
-    monkeypatch.setattr(client, "wait_for_slot", lambda category: None)
+    monkeypatch.setattr(client, "wait_for_slot", lambda category, kind="data": None)
     assert client.request_json("GET", "/trading/portfolio/positions", "tok") == {
         "status": "success"
     }
@@ -759,7 +761,265 @@ def test_an_order_is_never_retried(monkeypatch):
 
     flaky = _FlakyClient()
     monkeypatch.setattr(client, "get_httpx_client", lambda: flaky)
-    monkeypatch.setattr(client, "wait_for_slot", lambda category: None)
+    monkeypatch.setattr(client, "wait_for_slot", lambda category, kind="data": None)
     with pytest.raises(httpx.ReadTimeout):
         client.request("POST", "/trading/orders/regular", "tok", payload={"ticker": "NSE:SBIN"})
     assert len(flaky.calls) == 1
+
+
+# --- review fixes -----------------------------------------------------------------
+
+
+def test_mcx_disclosed_quantity_is_sent_in_lots(symbol_info):
+    payload = symbol_info.transform_data(
+        {
+            "symbol": "CRUDEOIL20MAR28FUT",
+            "exchange": "MCX",
+            "action": "BUY",
+            "pricetype": "LIMIT",
+            "product": "NRML",
+            "quantity": "500",
+            "disclosed_quantity": "200",
+            "price": "6500",
+        }
+    )
+    assert (payload["quantity"], payload["disclosed_quantity"]) == (5, 2)
+
+
+@pytest.mark.parametrize("bad", [None, "abc", "1.5", 2.5])
+def test_quantity_must_be_a_whole_number(bad):
+    with pytest.raises(ValueError, match="whole number"):
+        ex.to_vortex_quantity(bad, "NSE_EQ", 1)
+
+
+class _Sequence:
+    """A fake client that answers from a list of httpx.Response objects."""
+
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append(method)
+        return self.responses.pop(0)
+
+
+@pytest.fixture
+def client_module(monkeypatch):
+    import broker.rupeezy.api.client as client
+
+    monkeypatch.setattr(client, "wait_for_slot", lambda category, kind="data": None)
+    monkeypatch.setattr(client.time, "sleep", lambda s: None)
+    return client
+
+
+def test_a_write_is_not_resent_after_429(client_module, monkeypatch):
+    import httpx
+
+    fake = _Sequence(httpx.Response(429, json={"status": "error"}))
+    monkeypatch.setattr(client_module, "get_httpx_client", lambda: fake)
+    response = client_module.request("POST", "/trading/orders/regular", "tok", payload={"x": 1})
+    assert response.status_code == 429 and fake.calls == ["POST"]
+
+
+def test_a_read_honours_an_http_date_retry_after(client_module, monkeypatch):
+    import httpx
+
+    fake = _Sequence(
+        httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
+        httpx.Response(200, json={"status": "success"}),
+    )
+    monkeypatch.setattr(client_module, "get_httpx_client", lambda: fake)
+    assert client_module.request_json("GET", "/trading/orders", "tok") == {"status": "success"}
+    assert fake.calls == ["GET", "GET"]
+
+
+def test_an_empty_success_body_is_success(client_module, monkeypatch):
+    import httpx
+
+    fake = _Sequence(httpx.Response(204))
+    monkeypatch.setattr(client_module, "get_httpx_client", lambda: fake)
+    assert client_module.request_json("DELETE", "/trading/orders/gtt/x", "tok") == {
+        "status": "success"
+    }
+
+
+def test_the_pacer_refuses_a_long_wait_under_gthread(monkeypatch):
+    from broker.rupeezy.api import rate_limiter
+    from utils.broker_backpressure import BrokerBusyError
+
+    monkeypatch.setattr("utils.runtime.gthread_active", lambda: True)
+    monkeypatch.setitem(rate_limiter._next_slot, "history", rate_limiter.time.monotonic() + 60)
+    with pytest.raises(BrokerBusyError):
+        rate_limiter.wait_for_slot("history", "data")
+
+
+def test_close_all_uses_the_master_lot_size_when_the_row_has_none(close_all, monkeypatch):
+    position = {
+        "ticker": "MCX:CRUDEOIL26NOVFUT",
+        "exchange": "MCX_FO",
+        "product": "DELIVERY",
+        "quantity": 2,
+    }
+    sent = []
+    monkeypatch.setattr(close_all, "get_positions", lambda auth: _book(position))
+    monkeypatch.setattr(close_all, "lot_size_for", lambda row, symbol, exchange: 100)
+    monkeypatch.setattr(
+        close_all, "place_order_api", lambda order, auth: sent.append(order) or (None, {}, "OID")
+    )
+    close_all.close_all_positions("key", "tok")
+    assert sent[0]["quantity"] == "200"  # 2 lots x 100, not 2
+
+
+def test_cancel_all_raises_when_the_book_cannot_be_read(close_all, monkeypatch):
+    from broker.rupeezy.api.client import RupeezyAPIError
+
+    monkeypatch.setattr(
+        close_all, "get_order_book", lambda auth: {"status": "error", "message": "Invalid session"}
+    )
+    with pytest.raises(RupeezyAPIError, match="Invalid session"):
+        close_all.cancel_all_orders_api({}, "tok")
+
+
+def test_modify_reports_an_unreadable_order_as_an_error_not_missing(close_all, monkeypatch):
+    monkeypatch.setattr(close_all, "resolve_instrument", lambda s, e: ("NSE:SBIN", "NSE_EQ", 1))
+    monkeypatch.setattr(
+        close_all, "request_json", lambda *a, **k: {"status": "error", "message": "Invalid session"}
+    )
+    body, status = close_all.modify_order(
+        {
+            "orderid": "X",
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "pricetype": "LIMIT",
+            "quantity": 1,
+            "price": 1,
+        },
+        "tok",
+    )
+    assert status == 502 and "Invalid session" in body["message"]
+
+
+def test_smart_order_keeps_the_busy_answer(close_all, monkeypatch):
+    from utils.broker_backpressure import BrokerBusyError
+
+    def busy(*a, **k):
+        raise BrokerBusyError(retry_after=30)
+
+    monkeypatch.setattr(close_all, "get_open_position", busy)
+    response, data, orderid = close_all.place_smartorder_api(
+        {"symbol": "SBIN", "exchange": "NSE", "product": "MIS", "position_size": "1"}, "tok"
+    )
+    assert response.status == 429 and orderid is None
+
+
+def test_gtt_modify_refuses_a_change_of_type(gtt):
+    with pytest.raises(ValueError, match="SINGLE and OCO"):
+        gtt.transform_modify_gtt(
+            {
+                "symbol": "SBIN",
+                "exchange": "NSE",
+                "trigger_type": "SINGLE",
+                "quantity": 1,
+                "pricetype": "LIMIT",
+                "price": 790,
+                "trigger_price": 795,
+            },
+            VORTEX_OCO,
+        )
+
+
+def test_a_fired_oco_reports_triggered(gtt):
+    fired = {
+        **VORTEX_OCO,
+        "orders": [
+            {**VORTEX_OCO["orders"][1], "status": "cancelled"},  # lower leg
+            {**VORTEX_OCO["orders"][0], "status": "triggered"},  # higher leg fired
+        ],
+    }
+    [row] = gtt.map_gtt_book({"data": [fired]}, include_history=True)
+    assert row["status"] == "triggered"
+
+
+def test_mcx_trade_value_uses_the_quotation_multiplier():
+    # GOLDM: lot 100 g, quoted per 10 g. 1 lot at 7,000 is worth 70,000, not 700,000.
+    assert ex.trade_value(100, 7000, "MCX", "GOLDM", 100) == 70000
+    # CRUDEOIL is quoted per barrel, so units x price holds.
+    assert ex.trade_value(100, 6500, "MCX", "CRUDEOIL", 100) == 650000
+    assert ex.trade_value(5, 954, "NSE", "SBIN", 1) == 4770
+
+
+def test_funds_accept_a_combined_only_body(monkeypatch):
+    import broker.rupeezy.api.funds as funds
+
+    monkeypatch.setattr(
+        funds, "request_json", lambda *a, **k: {"exchange_combined": {"net_available": 100}}
+    )
+    assert funds.get_margin_data("tok")["availablecash"] == "100.00"
+
+
+def test_quotes_carry_top_of_book_quantities(data_module, monkeypatch):
+    monkeypatch.setattr(
+        data_module,
+        "request_json",
+        lambda *a, **k: {
+            "status": "success",
+            "data": {
+                "NSE:SBIN": {
+                    "last_trade_price": 954.0,
+                    "depth": {
+                        "buy": [{"price": 953.0, "quantity": 54}],
+                        "sell": [{"price": 954.0, "quantity": 2827}],
+                    },
+                }
+            },
+        },
+    )
+    q = data_module.BrokerData("tok").get_quotes("SBIN", "NSE")
+    assert (q["bid_qty"], q["ask_qty"]) == (54, 2827)
+
+
+def test_a_full_tick_is_published_to_every_registered_topic():
+    from broker.rupeezy.streaming.rupeezy_adapter import RupeezyWebSocketAdapter
+
+    entry = {"modes": {1, 3}}
+    assert RupeezyWebSocketAdapter._topics_for(entry, "DEPTH") == {"LTP", "DEPTH"}
+    # An ltp packet cannot serve a depth subscriber.
+    assert RupeezyWebSocketAdapter._topics_for(entry, "LTP") == {"LTP"}
+
+
+def test_a_subscribe_on_a_dying_socket_is_kept_for_replay():
+    from broker.rupeezy.streaming.rupeezy_websocket import RupeezyWebSocket
+
+    class _Dead:
+        def send(self, _):
+            raise ConnectionError("socket closed")
+
+    ws = RupeezyWebSocket("tok")
+    ws.connected, ws.ws = True, _Dead()
+    ws.subscribe("NSE:SBIN", "full")  # must not raise
+    assert ws.subscriptions == {"NSE:SBIN": "full"}
+
+
+def test_a_replay_skips_what_was_unsubscribed():
+    from broker.rupeezy.streaming.rupeezy_websocket import RupeezyWebSocket
+
+    sent = []
+
+    class _Live:
+        def send(self, frame):
+            sent.append(frame)
+
+    ws = RupeezyWebSocket("tok")
+    ws.subscriptions = {"NSE:SBIN": "full", "NSE:INFY": "ltp"}
+    ws.connected, ws.ws = True, _Live()
+    original = ws._try_send
+
+    def unsubscribe_infy_first(ticker, mode, kind):
+        if ticker == "NSE:SBIN":
+            ws.subscriptions.pop("NSE:INFY", None)  # removed after the snapshot
+        return original(ticker, mode, kind)
+
+    ws._try_send = unsubscribe_infy_first
+    ws._resubscribe_all()
+    assert all("INFY" not in frame for frame in sent)

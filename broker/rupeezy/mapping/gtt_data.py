@@ -93,13 +93,24 @@ def transform_modify_gtt(data, existing):
     Legs are matched by price order: the existing lower-trigger leg takes the
     new lower trigger (`triggerprice_sl` / `stoploss`), the higher one the new
     higher trigger. An existing trailing stop is kept (its type cannot change).
+
+    Vortex modifies the legs a GTT already has, so a modify cannot turn a
+    single GTT into an OCO or back. That is refused with ValueError (a 400)
+    rather than sending a partial or zero-filled body.
     """
     _, brexchange, lotsize = resolve_instrument(data["symbol"], data["exchange"])
     quantity = to_vortex_quantity(data["quantity"], brexchange, lotsize)
     variety = _variety(data.get("pricetype"))
     legs = sorted(existing.get("orders") or [], key=lambda o: _f(o.get("trigger_price")))
 
-    if len(legs) >= 2:
+    existing_oco = len(legs) >= 2
+    requested = str(data.get("trigger_type") or "").upper()
+    if requested and (requested == "OCO") != existing_oco:
+        raise ValueError(
+            "A GTT cannot be changed between SINGLE and OCO. Cancel it and place a new one instead."
+        )
+
+    if existing_oco:
         targets = [
             (data.get("stoploss"), data.get("triggerprice_sl")),
             (data.get("target"), data.get("triggerprice_tg")),
@@ -108,7 +119,7 @@ def transform_modify_gtt(data, existing):
         targets = [(data.get("price"), _single_trigger(data))]
 
     body = []
-    for leg, (price, trigger) in zip(legs, targets, strict=False):
+    for leg, (price, trigger) in zip(legs, targets, strict=True):
         entry = {"id": leg.get("id"), **_leg(quantity, price, trigger, variety)}
         trail = leg.get("trail")
         if trail:
@@ -122,9 +133,13 @@ def transform_modify_gtt(data, existing):
 
 
 def _gtt_status(orders):
+    """One status for a GTT from its legs. Active wins while any leg can still
+    fire; then triggered, since in an OCO the leg that fired is the one that
+    describes the outcome while its sibling only shows cancelled."""
     statuses = [str(o.get("status") or "").lower() for o in orders]
-    if "active" in statuses:
-        return "active"
+    for preferred in ("active", "triggered"):
+        if preferred in statuses:
+            return preferred
     return statuses[0] if statuses else ""
 
 

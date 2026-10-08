@@ -286,8 +286,26 @@ class RupeezyWebSocket:
         payload = {"ticker": ticker, "mode": mode, "message_type": message_type}
         self.ws.send(json.dumps(payload))
 
+    def _try_send(self, ticker, mode, message_type):
+        """Send one subscription frame. Called with self.lock held, so the
+        frame and the bookkeeping it reflects can never interleave with
+        another subscribe, unsubscribe or replay. False if the socket was not
+        writable; the subscription state still holds, so a subscribe is
+        replayed on the next connect."""
+        if not (self.connected and self.ws):
+            return False
+        try:
+            self._send(ticker, mode, message_type)
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Rupeezy {message_type} for {ticker} not sent ({e}); will retry on reconnect"
+            )
+            return False
+
     def subscribe(self, ticker, mode):
-        """Subscribe (or change mode). Queued for replay if not yet connected."""
+        """Subscribe (or change mode). Recorded first, so it is replayed on
+        (re)connect even if the socket is down or drops mid-send."""
         with self.lock:
             if (
                 ticker not in self.subscriptions
@@ -295,29 +313,26 @@ class RupeezyWebSocket:
             ):
                 raise ValueError("Rupeezy allows at most 1000 instruments per connection.")
             self.subscriptions[ticker] = mode
-        if self.connected and self.ws:
-            self._send(ticker, mode, "subscribe")
+            self._try_send(ticker, mode, "subscribe")
 
     def unsubscribe(self, ticker):
         with self.lock:
             mode = self.subscriptions.pop(ticker, None)
-        if mode and self.connected and self.ws:
-            try:
-                self._send(ticker, mode, "unsubscribe")
-            except Exception as e:
-                logger.error(f"Rupeezy unsubscribe failed for {ticker}: {e}")
+            if mode:
+                self._try_send(ticker, mode, "unsubscribe")
 
     def _resubscribe_all(self):
         with self.lock:
-            items = list(self.subscriptions.items())
-        for ticker, mode in items:
+            tickers = list(self.subscriptions)
+        for ticker in tickers:
             if self._stop_event.is_set() or not self.connected:
                 return
-            try:
-                self._send(ticker, mode, "subscribe")
-            except Exception as e:
-                logger.error(f"Rupeezy resubscribe failed for {ticker}: {e}")
-                return
+            with self.lock:
+                # Re-read under the lock: an unsubscribe since the snapshot
+                # must not be undone by a stale replay.
+                mode = self.subscriptions.get(ticker)
+                if mode and not self._try_send(ticker, mode, "subscribe"):
+                    return
 
     # --- callbacks ------------------------------------------------------
 

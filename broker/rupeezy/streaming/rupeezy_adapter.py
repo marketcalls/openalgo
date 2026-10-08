@@ -20,6 +20,10 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 # Vortex packet mode -> OpenAlgo topic suffix.
 _MODE_TO_TOPIC = {"ltp": "LTP", "ohlcv": "QUOTE", "full": "DEPTH"}
 
+# OpenAlgo numeric mode -> topic suffix, and how rich a packet each needs.
+_NUMERIC_TO_TOPIC = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
+_TOPIC_RANK = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
+
 
 class RupeezyWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def __init__(self):
@@ -167,13 +171,32 @@ class RupeezyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 entry = self.instruments.get((tick["exchange"], tick["token"]))
                 if not entry:
                     continue
-                topic_mode = _MODE_TO_TOPIC.get(tick["mode"], "QUOTE")
-                data = self._normalize(tick, entry["symbol"], entry["exchange"], topic_mode)
-                self.publish_market_data(
-                    f"{entry['exchange']}_{entry['symbol']}_{topic_mode}", data
-                )
+                packet_topic = _MODE_TO_TOPIC.get(tick["mode"], "QUOTE")
+                for topic_mode in self._topics_for(entry, packet_topic):
+                    data = self._normalize(tick, entry["symbol"], entry["exchange"], topic_mode)
+                    self.publish_market_data(
+                        f"{entry['exchange']}_{entry['symbol']}_{topic_mode}", data
+                    )
             except Exception as e:
                 self.logger.error(f"Error handling Rupeezy tick: {e}")
+
+    @staticmethod
+    def _topics_for(entry, packet_topic):
+        """Every registered topic this packet can serve.
+
+        A symbol wanted in several modes is subscribed once, at the richest,
+        so Vortex streams only that packet. A full packet carries everything
+        an LTP or QUOTE subscriber needs, so it is published to each
+        registered topic up to its own richness; otherwise the lower-mode
+        subscribers would go silent.
+        """
+        rank = _TOPIC_RANK[packet_topic]
+        topics = {
+            _NUMERIC_TO_TOPIC[m]
+            for m in entry["modes"]
+            if m in _NUMERIC_TO_TOPIC and _TOPIC_RANK[_NUMERIC_TO_TOPIC[m]] <= rank
+        }
+        return topics or {packet_topic}
 
     @staticmethod
     def _normalize(tick, symbol, exchange, topic_mode):

@@ -58,6 +58,9 @@ def _format_quote(q):
     return {
         "ask": asks[0]["price"],
         "bid": bids[0]["price"],
+        # The option chain reads these (see the Zerodha fix for issue #2045).
+        "ask_qty": asks[0]["quantity"],
+        "bid_qty": bids[0]["quantity"],
         "high": _f(q.get("high_price")),
         "low": _f(q.get("low_price")),
         "ltp": _f(q.get("last_trade_price")),

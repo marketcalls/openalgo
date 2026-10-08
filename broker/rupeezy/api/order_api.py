@@ -3,13 +3,13 @@
 # Orders and books over the Vortex trading API
 # (https://vortex.rupeezy.in/docs/latest/regular-order/).
 
-from broker.rupeezy.api.client import request, request_json
+from broker.rupeezy.api.client import RupeezyAPIError, request, request_json
 from broker.rupeezy.mapping.exchange import (
     from_vortex_quantity,
     oa_exchange_for,
     split_ticker,
 )
-from broker.rupeezy.mapping.order_data import OPEN_STATUSES, map_status
+from broker.rupeezy.mapping.order_data import OPEN_STATUSES, lot_size_for, map_status
 from broker.rupeezy.mapping.transform_data import (
     map_product_type,
     resolve_instrument,
@@ -18,6 +18,7 @@ from broker.rupeezy.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_oa_symbol
+from utils.broker_backpressure import BrokerBusyError, busy_response
 from utils.logging import get_logger
 from utils.position_read import (
     PositionReadError,
@@ -249,6 +250,10 @@ def place_smartorder_api(data, auth):
 
     except PositionReadError:
         raise
+    except BrokerBusyError as busy:
+        # Refused by the rate-limit pacer before anything was sent (gthread
+        # worker only). Keep the busy answer rather than a generic error.
+        return busy_response(str(busy))
     except Exception as e:
         logger.exception("Error in Rupeezy place_smartorder_api")
         return res, {"status": "error", "message": f"Error in place_smartorder_api: {e}"}, orderid
@@ -283,7 +288,9 @@ def close_all_positions(current_api_key, auth):
             failed.append(f"{ticker}: not in the master contract")
             continue
         quantity = from_vortex_quantity(
-            position.get("quantity"), position.get("exchange"), position.get("lot_size")
+            position.get("quantity"),
+            position.get("exchange"),
+            lot_size_for(position, symbol, oa_exchange),
         )
         order = {
             "apikey": current_api_key,
@@ -323,12 +330,17 @@ def cancel_order(orderid, auth):
 
 
 def _latest_order_state(orderid, auth):
-    """Most recent history row for an order (history is newest first)."""
+    """Most recent history row for an order (history is newest first).
+
+    Returns None when Vortex answers but has no such order. Raises
+    RupeezyAPIError when the history could not be read at all, so a session
+    or server error is not reported as a missing order.
+    """
     payload = request_json("GET", f"/trading/orders/{orderid}", auth)
+    if payload.get("status") != "success":
+        raise RupeezyAPIError(payload.get("message") or "Could not read the order from Rupeezy.")
     rows = payload.get("data") or []
-    if payload.get("status") != "success" or not rows:
-        return None
-    return rows[0]
+    return rows[0] if rows else None
 
 
 def modify_order(data, auth):
@@ -345,6 +357,11 @@ def modify_order(data, auth):
         )
     except ValueError as e:
         return {"status": "error", "message": str(e)}, 400
+    except BrokerBusyError:
+        raise  # the modify service answers it as busy
+    except RupeezyAPIError as e:
+        logger.exception(f"Could not read Rupeezy order {orderid} before modifying it")
+        return {"status": "error", "message": str(e)}, 502
     except Exception as e:
         logger.exception(f"Error preparing Rupeezy modify for {orderid}")
         return {"status": "error", "message": f"Failed to modify order: {e}"}, 500
@@ -366,7 +383,9 @@ def cancel_all_orders_api(data, auth):
     """Cancel every open / trigger-pending order."""
     book = get_order_book(auth)
     if book.get("status") != "success":
-        return [], []
+        # Not "nothing to cancel": nothing was checked. The service turns this
+        # into an error for the caller.
+        raise RupeezyAPIError(book.get("message") or "Could not read the order book from Rupeezy.")
 
     canceled, failed = [], []
     for order in book.get("orders", []):

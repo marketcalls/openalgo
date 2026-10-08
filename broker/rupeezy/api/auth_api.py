@@ -69,5 +69,5 @@ def authenticate_broker(auth_code):
                 error_message = e.response.json().get("message", error_message)
         except Exception:
             pass
-        logger.error(f"Rupeezy authentication error: {error_message}")
+        logger.exception(f"Rupeezy authentication error: {error_message}")
         return None, f"API error: {error_message}"

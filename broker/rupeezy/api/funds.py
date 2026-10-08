@@ -27,7 +27,9 @@ def get_margin_data(auth_token):
     # Documented response has the buckets at the top level; tolerate a
     # {"status", "data": {...}} envelope too.
     body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    if payload.get("status") == "error" or not any(k in body for k in ("nse", "mcx")):
+    if payload.get("status") == "error" or not any(
+        k in body for k in ("exchange_combined", "nse", "mcx")
+    ):
         logger.error(f"Error fetching Rupeezy funds: {payload.get('message')}")
         return {}
 
