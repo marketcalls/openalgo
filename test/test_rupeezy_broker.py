@@ -1023,3 +1023,33 @@ def test_a_replay_skips_what_was_unsubscribed():
     ws._try_send = unsubscribe_infy_first
     ws._resubscribe_all()
     assert all("INFY" not in frame for frame in sent)
+
+
+def test_an_unsent_unsubscribe_recycles_the_connection():
+    from broker.rupeezy.streaming.rupeezy_websocket import RupeezyWebSocket
+
+    class _Flaky:
+        closed = False
+
+        def send(self, _):
+            raise ConnectionError("send failed")
+
+        def close(self):
+            self.closed = True
+
+    ws = RupeezyWebSocket("tok")
+    sock = _Flaky()
+    ws.subscriptions = {"NSE:SBIN": "full"}
+    ws.connected, ws.ws = True, sock
+    ws.unsubscribe("NSE:SBIN")
+    assert ws.subscriptions == {} and sock.closed  # reconnect drops the server-side stream
+
+
+def test_an_unsubscribe_while_offline_does_not_recycle():
+    from broker.rupeezy.streaming.rupeezy_websocket import RupeezyWebSocket
+
+    ws = RupeezyWebSocket("tok")
+    ws.subscriptions = {"NSE:SBIN": "full"}
+    ws.connected, ws.ws = False, None
+    ws.unsubscribe("NSE:SBIN")  # nothing to send, nothing to close
+    assert ws.subscriptions == {}

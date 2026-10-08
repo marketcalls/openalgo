@@ -316,10 +316,27 @@ class RupeezyWebSocket:
             self._try_send(ticker, mode, "subscribe")
 
     def unsubscribe(self, ticker):
+        """Stop a ticker. If the frame cannot be sent on a socket that still
+        looks open, the server would keep streaming it with nothing left to
+        retry the unsubscribe, so the connection is recycled: a new one starts
+        with no server-side subscriptions and replays only what is still wanted."""
+        recycle = False
         with self.lock:
             mode = self.subscriptions.pop(ticker, None)
-            if mode:
-                self._try_send(ticker, mode, "unsubscribe")
+            if mode and self.connected and self.ws:
+                recycle = not self._try_send(ticker, mode, "unsubscribe")
+        if recycle:
+            logger.warning(f"Rupeezy unsubscribe for {ticker} not sent; reconnecting the feed")
+            self._recycle_connection()
+
+    def _recycle_connection(self):
+        """Close the current socket; the run loop reconnects and replays."""
+        ws = self.ws
+        if ws:
+            try:
+                ws.close()
+            except Exception as e:
+                logger.debug(f"Error closing Rupeezy websocket for recycle: {e}")
 
     def _resubscribe_all(self):
         with self.lock:
