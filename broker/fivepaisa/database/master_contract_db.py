@@ -256,7 +256,10 @@ def process_5paisa_csv(path):
     # asks for instrumenttype="FUT". Storing "XX" made futures expiries come
     # back empty on every exchange. The symbol itself is already built with a
     # FUT suffix above, so only the column was wrong.
-    new_df["instrumenttype"] = filtered_df["Series"].replace({"XX": "FUT"})
+    # Cash rows in the "BE" series (trade-for-trade) are still equity: OpenAlgo
+    # has only EQ/FUT/CE/PE, so storing "BE" left 600 NSE/BSE stocks outside
+    # every EQ filter.
+    new_df["instrumenttype"] = filtered_df["Series"].replace({"XX": "FUT", "BE": "EQ"})
     new_df["tick_size"] = filtered_df["TickSize"]
     # Common Index Symbol Normalization
 
