@@ -499,6 +499,28 @@ SPECS = {
         patches={"get_client_id": lambda auth: "CLIENT01"},
     ),
     "rmoney": Spec(path="/portfolio/positions", book=_xts_book, error=XTS_ERROR),
+    "rupeezy": Spec(
+        path="/trading/portfolio/positions",
+        book=lambda q: {
+            "status": "success",
+            "data": {
+                "net": []
+                if q is None
+                else [
+                    {
+                        "ticker": "NSE:SBIN",
+                        "exchange": "NSE_EQ",
+                        "product": "INTRADAY",
+                        "quantity": q,
+                        "lot_size": 1,
+                    }
+                ],
+                "day": [],
+            },
+        },
+        error={"status": "error", "code": "e-101", "message": "Invalid session"},
+        patches={"resolve_instrument": lambda symbol, exchange: ("NSE:SBIN", "NSE_EQ", 1)},
+    ),
     "samco": Spec(
         path="/position/getPositions",
         br_symbol="SBIN-EQ",
