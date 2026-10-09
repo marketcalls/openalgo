@@ -127,6 +127,10 @@ export default function EditPythonStrategy() {
 
   const handleStartStrategy = async () => {
     if (!strategyId || !strategy || actionLoading) return
+    if (hasChanges && !isRunning && !isScheduled) {
+      showToast.error('Save or discard changes before starting', 'pythonStrategy')
+      return
+    }
     try {
       setActionLoading(true)
       const response = await pythonStrategyApi.startStrategy(strategyId)
