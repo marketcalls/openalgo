@@ -32,6 +32,7 @@ from flask import Blueprint, Flask
 import blueprints.openscript as openscript
 import utils.session
 from blueprints.openscript import openscript_bp
+from services import openscript_store
 
 SOURCE = 'version 1\nstudy("Range", overlay = true)\nplot(close, "C", aqua)\n'
 
@@ -69,7 +70,7 @@ def scripts(tmp_path, monkeypatch):
     """Point the blueprint at a directory this test owns."""
     directory = tmp_path / "strategies" / "openscript"
     directory.mkdir(parents=True)
-    monkeypatch.setattr(openscript, "SCRIPTS_DIR", directory)
+    monkeypatch.setattr(openscript_store, "SCRIPTS_DIR", directory)
     return directory
 
 

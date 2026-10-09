@@ -102,6 +102,7 @@ from services.agent.tools.market import (
     BrokerIntervals,
     candle_columns,
     chart_bars,
+    daily_interval,
     normalise_interval,
     normalise_pair,
     summarise_candles,
@@ -464,7 +465,7 @@ class InstrumentToolkit(OpenAlgoToolkit):
             its numbers.
         """
         symbol, exchange, notices = normalise_pair(symbol, exchange)
-        sessions = normalise_int(days, "days", 1, MAX_SESSIONS)
+        sessions = normalise_int(days, "days", 1, MAX_SESSIONS, DEFAULT_SESSIONS)
         interval, interval_notice = normalise_interval(interval, "api", self._intervals.accepted())
         if interval_notice:
             notices.append(interval_notice)
@@ -722,7 +723,7 @@ class InstrumentToolkit(OpenAlgoToolkit):
         """
         today = datetime.now(IST).date()
         start = today - timedelta(days=WEEK_52_LOOKBACK_DAYS)
-        interval, _ = normalise_interval("D", "api", self._intervals.accepted())
+        interval = daily_interval(self._intervals.accepted())
 
         response = self.service_call(
             history_service.get_history,

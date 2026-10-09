@@ -17,7 +17,7 @@ Adding a capability is **one new file plus one registry line**:
 Nothing else changes. ``builder.py`` passes :func:`build_toolkits` to agno as a
 callable factory, so the list is re-evaluated on every run against the current
 session state: a session that has not enabled trading never sees the order
-tools in its schema at all, and the chart surface never sees them either.
+tools in its schema at all, on any surface.
 
 Import safety
 -------------
@@ -41,7 +41,7 @@ every capability it names in ``requires`` is true on the context. Selection
 never inspects anything the model can influence.
 
 A capability is a boolean on :class:`ToolContext` that the surface decides per
-run: ``trading_enabled`` and ``web_search_enabled`` today. Withholding the
+run: ``trading_enabled``, ``web_search_enabled`` and ``mcp_enabled`` today. Withholding the
 toolkit is the whole enforcement -- a tool that is not built has no schema, so
 the model cannot call it, cannot be talked into calling it, and does not pay for
 its description. There is deliberately **one** mechanism for this rather than a
@@ -93,15 +93,19 @@ CHART_ONLY: frozenset[str] = frozenset({SURFACE_CHART})
 #: :class:`ToolContext` that the surface sets per run.
 CAPABILITY_TRADING = "trading_enabled"
 CAPABILITY_WEB_SEARCH = "web_search_enabled"
+CAPABILITY_MCP = "mcp_enabled"
 
 #: Every capability a spec may name. Validated on the spec so a typo is a build
 #: error rather than a gate that is silently always open.
-CAPABILITIES: frozenset[str] = frozenset({CAPABILITY_TRADING, CAPABILITY_WEB_SEARCH})
+CAPABILITIES: frozenset[str] = frozenset(
+    {CAPABILITY_TRADING, CAPABILITY_WEB_SEARCH, CAPABILITY_MCP}
+)
 
 __all__ = [
     "ALL_SURFACES",
     "CHAT_AND_VOICE",
     "CAPABILITIES",
+    "CAPABILITY_MCP",
     "CAPABILITY_TRADING",
     "CAPABILITY_WEB_SEARCH",
     "CHART_ONLY",
@@ -166,6 +170,10 @@ class ToolContext:
             not "prefer not to search" but "the search tools are not in the
             request at all". Absent means on, so a surface that has no switch
             keeps the behaviour it had.
+        mcp_enabled: True when this run may read the external MCP data
+            servers. Toolkits requiring :data:`CAPABILITY_MCP` are withheld when
+            it is false. Absent means on; the builder ANDs it with the
+            operator's ``mcp_enabled`` setting.
         analyzer_mode: True when the platform analyzer toggle is on. Carried for
             the risk guard and for prompt wording; it never selects toolkits.
         session_state: The agno session state mapping this context was derived
@@ -182,6 +190,7 @@ class ToolContext:
     user_id: str | None = None
     trading_enabled: bool = False
     web_search_enabled: bool = True
+    mcp_enabled: bool = True
     analyzer_mode: bool = False
     session_state: dict[str, Any] = field(default_factory=dict)
     extras: dict[str, Any] = field(default_factory=dict)
@@ -193,6 +202,7 @@ class ToolContext:
         self.surface = _normalise_surface(self.surface)
         self.trading_enabled = bool(self.trading_enabled)
         self.web_search_enabled = bool(self.web_search_enabled)
+        self.mcp_enabled = bool(self.mcp_enabled)
         self.analyzer_mode = bool(self.analyzer_mode)
 
     @classmethod
@@ -500,11 +510,14 @@ TOOLKITS: list[ToolkitSpec] = [
         key="orders",
         module="services.agent.tools.orders",
         attr="OrdersToolkit",
-        # Reaches voice, but only ever through CAPABILITY_TRADING, which the
-        # route computes as the AND of the master switch and
-        # `voice_trading_enabled` for a spoken run. The spec stays declarative;
-        # the narrowing lives with the caller that knows the surface.
-        surfaces=CHAT_AND_VOICE,
+        # Every surface, but only ever through CAPABILITY_TRADING: the builder
+        # ANDs the request with the operator's master switch, and for a spoken
+        # run the route ANDs it again with `voice_trading_enabled`. The chart
+        # panel was withheld at first because it had no approval card; it
+        # renders the same one as the chat page now, so an order asked for
+        # beside the chart pauses for the same human decision instead of being
+        # refused with a pointer to another page.
+        surfaces=ALL_SURFACES,
         requires=frozenset({CAPABILITY_TRADING}),
         order=50,
         description=(
@@ -519,6 +532,31 @@ TOOLKITS: list[ToolkitSpec] = [
         surfaces=CHAT_ONLY,
         order=60,
         description="Write a generated Python strategy to strategies/scripts/. Never starts it.",
+    ),
+    ToolkitSpec(
+        key="skills",
+        module="services.agent.tools.skills",
+        attr="SkillsToolkit",
+        # The surfaces services/agent/skills/registry.py offers a skill on. A
+        # test pins the two together, so a skill offered on a new surface fails
+        # loudly instead of being listed in a prompt whose tools cannot read it.
+        # Not voice: authoring is a typing job, for the reason CHAT_ONLY gives.
+        surfaces=frozenset({SURFACE_CHAT, SURFACE_CHART}),
+        order=58,
+        description="Read a skill's authoring instructions and reference pages, live from disk.",
+    ),
+    ToolkitSpec(
+        key="openscript_gen",
+        module="services.agent.tools.openscript_gen",
+        attr="OpenScriptToolkit",
+        # The chart panel too, unlike the other writers: a study is written
+        # beside the chart it plots on, and /trading is where it compiles.
+        surfaces=frozenset({SURFACE_CHAT, SURFACE_CHART}),
+        order=65,
+        description=(
+            "Save an OpenScript source to strategies/openscript/ for the /trading editor to "
+            "compile. Never compiles or runs it."
+        ),
     ),
     ToolkitSpec(
         key="flow_gen",
@@ -536,6 +574,17 @@ TOOLKITS: list[ToolkitSpec] = [
         requires=frozenset({CAPABILITY_WEB_SEARCH}),
         order=80,
         description="Web search for links, and cited web research.",
+    ),
+    ToolkitSpec(
+        key="mcp",
+        module="services.agent.tools.mcp",
+        attr="McpToolkit",
+        # One toolkit for every server in services/agent/mcp/registry.py; a
+        # server is added there, not here. Each server narrows its own surfaces.
+        surfaces=ALL_SURFACES,
+        requires=frozenset({CAPABILITY_MCP}),
+        order=85,
+        description="Read external market data from the registered MCP servers.",
     ),
 ]
 

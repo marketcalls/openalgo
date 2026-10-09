@@ -23,10 +23,12 @@
  *   before pressing send. It reuses the same prefill channel the answer's own
  *   controls use, so there is one way text gets into that box.
  *
- * - **This surface is offered no order tools at all.** It never asks for
- *   trading, so the backend never builds an order tool into the run's schema.
- *   That is structural rather than a matter of prompt wording, and it is why
- *   there is no approval prompt on this panel and no reason for one.
+ * - **Orders pause for approval here, exactly as on `/agent`.** The panel asks
+ *   for trading only when the operator's own switch on the config page is on,
+ *   and the backend ANDs that with the same switch again, so a session with
+ *   trading off still gets no order tool in its schema. When it is on, an order
+ *   request pauses the run and the same approval card the chat page renders
+ *   appears in this thread; nothing reaches a broker until it is approved.
  *
  * A narrow column is the constraint the layout answers to. The header carries
  * no instrument, because the pane toolbar beside it already does; the chips
@@ -34,9 +36,10 @@
  * renders is already a single collapsed line before this panel touches it.
  */
 
+import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Bot, SquarePen } from 'lucide-react'
 import { useCallback, useRef, useState } from 'react'
-import type { ReasoningEffort } from '@/api/agent'
+import { agentQueryKeys, getSettings, type ReasoningEffort } from '@/api/agent'
 import { AgentSetupGate, useAgentConfigured } from '@/components/agent/AgentSetupGate'
 import { Composer, type ComposerTurn } from '@/components/agent/Composer'
 import { Message } from '@/components/agent/Message'
@@ -113,13 +116,23 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
   const [modelId, setModelId] = useModelChoice()
   const [effort, setEffort] = useState<ReasoningEffort>('off')
 
-  const { messages, running, error, send, stop, reset } = useAgentStream({
+  // The trading switch lives on the config page; the panel only reads it, and
+  // shares the cache entry the chat page reads, so both agree.
+  const settings = useQuery({
+    queryKey: agentQueryKeys.settings(),
+    queryFn: getSettings,
+    staleTime: 30_000,
+  })
+  const tradingEnabled = settings.data?.data.trading_enabled ?? false
+
+  const { messages, running, error, send, stop, confirm, reset } = useAgentStream({
     surface: 'chart',
     modelId,
     reasoningEffort: effort === 'off' ? null : effort,
-    // Never `tradingEnabled`. The chart surface is offered no order tools, and
-    // asking for them here would be asking for a capability this panel has no
-    // approval flow for. An order request belongs on the chat page.
+    // Asking is not the same as getting: the backend ANDs this with the
+    // operator's own trading setting, and every order tool pauses the run for
+    // the approval card below before anything reaches the broker.
+    tradingEnabled,
     getChartContext,
     onChartCommand,
   })
@@ -131,6 +144,10 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
     [send]
   )
   const handleStop = useCallback(() => void stop(), [stop])
+  const handleConfirm = useCallback(
+    (decisions: Record<string, boolean>) => void confirm(decisions),
+    [confirm]
+  )
 
   return (
     <PanelShell
@@ -179,13 +196,21 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
                 <p className="text-sm font-medium">Ask about this chart</p>
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   It reads the symbol, interval and bars you are looking at, and it can mark up the
-                  chart. It places no orders here.
+                  chart.{' '}
+                  {tradingEnabled
+                    ? 'Orders you ask for wait for your approval here before they are placed.'
+                    : 'Trading is off in the agent settings, so it places no orders.'}
                 </p>
               </div>
             ) : (
               <div className="space-y-5 px-3 py-3">
                 {messages.map((message) => (
-                  <Message key={message.id} message={message} busy={running} />
+                  <Message
+                    key={message.id}
+                    message={message}
+                    busy={running}
+                    onConfirm={handleConfirm}
+                  />
                 ))}
                 {/* Lets the newest question reach the top even when the answer
                     under it is a line long. */}
@@ -240,11 +265,10 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
                 />
               }
               onCaptureChart={onCaptureChart}
-              // The surface asks for no order tools, so an answer's Buy and
-              // Sell controls are withheld here. They write an order request
-              // into this box, and a request this panel can only refuse is
-              // worse than no button: it reads as a route to a trade.
-              canOrder={false}
+              // An answer's Buy and Sell controls write an order request into
+              // this box. Offered only while trading is on: a request the
+              // panel can only refuse reads as a route to a trade.
+              canOrder={tradingEnabled}
             />
           </div>
         </>
