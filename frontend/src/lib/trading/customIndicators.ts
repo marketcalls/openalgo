@@ -44,7 +44,7 @@ type ProblemReporter = (message: string) => void
 
 const INDEX_URL = '/custom-indicators/index.json'
 
-// The library's IndicatorInput union, and nothing beyond it.
+// The library's IndicatorInput union, plus one of ours.
 //
 // This set once also carried 'session', 'timeframe', 'symbol' and 'price',
 // which openalgo-charts never defined. Permitting a type nothing renders is
@@ -57,6 +57,12 @@ const INDEX_URL = '/custom-indicators/index.json'
 // 2.4.0 added two for real, and IndicatorSettingsDialog renders both:
 // 'interval' is a timeframe code the engine can bucket by, and 'time' is a
 // wall-clock string in the chart's zone.
+//
+// 'expiries' is ours, not the library's: the settings dialog renders it as a
+// tick list of the underlying's nearest option expiries and stores the picks
+// as a comma-separated string. It is here on the same terms as the rest -
+// adding a type is half the job, and a type this list accepts but the dialog
+// cannot draw registers fine and then shows the user an empty row.
 const INPUT_TYPES = new Set([
   'number',
   'boolean',
@@ -66,6 +72,7 @@ const INPUT_TYPES = new Set([
   'source',
   'interval',
   'time',
+  'expiries',
 ])
 const PLACEMENTS = new Set(['onchart', 'pane'])
 

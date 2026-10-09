@@ -144,6 +144,7 @@ const CAPABILITIES = [
   ["a drawn zone that explains itself on hover", "tooltip: `"],
   ["input 'interval'", "type: 'interval'"],
   ["input 'time'", "type: 'time'"],
+  ["input 'expiries'", "type: 'expiries'"],
   ["a table that fits its own type", "fontSize: 'auto'"],
 ]
 
