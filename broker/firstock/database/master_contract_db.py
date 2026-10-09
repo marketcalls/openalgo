@@ -103,8 +103,12 @@ def replace_symtoken_table(frames):
     records = []
     seen_tokens = set()
     for _segment, df in frames:
-        rows = [row for row in df.to_dict(orient="records") if row["token"] not in seen_tokens]
-        seen_tokens.update(row["token"] for row in rows)
+        # Compare as strings: CSV tokens can parse as numbers while the index
+        # rows carried over from the database are strings.
+        rows = [
+            row for row in df.to_dict(orient="records") if str(row["token"]) not in seen_tokens
+        ]
+        seen_tokens.update(str(row["token"]) for row in rows)
         records.extend(rows)
 
     try:
