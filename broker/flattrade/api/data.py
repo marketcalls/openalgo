@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import time
 import urllib.parse
@@ -70,15 +71,18 @@ def _candle_number(candle: dict, key: str) -> float | None:
 
     ``float(candle.get(key, 0))`` raised TypeError on a null (which the candle
     loop does not catch, so one bad row failed the whole history request) and
-    turned a missing price into a real-looking 0.
+    turned a missing price into a real-looking 0. NaN and infinity are treated
+    as missing too: float() accepts them, a NaN price would be charted, and
+    int(inf) raises OverflowError, which the candle loop does not catch.
     """
     value = candle.get(key)
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
