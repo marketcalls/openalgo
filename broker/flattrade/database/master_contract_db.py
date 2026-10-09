@@ -643,6 +643,15 @@ def process_flattrade_bse_data(output_path):
     df = pd.read_csv(file_path)
     logger.info(f"Available columns in BSE CSV: {df.columns.tolist()}")
 
+    # BSE_Equity.csv carries ~100 stale rows whose Exchange, Symbol and
+    # Instrument are all NULL. Flattrade rejects every one of their tokens as
+    # an invalid scrip, and they left symtoken rows with an empty name
+    # (QA MC-14) and duplicated live scrips under an old token (QA MC-03).
+    stale = df["Exchange"].isna()
+    if stale.any():
+        logger.info(f"Dropping {int(stale.sum())} BSE rows with no exchange")
+        df = df[~stale]
+
     # Rename columns to match your schema
     column_mapping = {
         "Token": "token",
