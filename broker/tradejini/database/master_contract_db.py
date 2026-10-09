@@ -555,9 +555,18 @@ def master_contract_download():
                 scrip_data = scrip_data.get("d", [])
 
             df = process_scrip_data(scrip_data, group)
-            if not df.empty:
-                token_frames.append(df)
-                logger.info(f"Processed {len(df)} symbols for {group_name}")
+            if df.empty:
+                # A group that sent rows but yielded none failed to parse;
+                # swapping the table now would silently drop its symbols.
+                if scrip_data:
+                    raise RuntimeError(
+                        f"Tradejini returned no usable symbols for {group_name}. Your "
+                        "existing symbols were kept; try the download again."
+                    )
+                logger.warning(f"Tradejini group {group_name} has no symbols")
+                continue
+            token_frames.append(df)
+            logger.info(f"Processed {len(df)} symbols for {group_name}")
 
         token_df = pd.concat(token_frames, ignore_index=True) if token_frames else pd.DataFrame()
         if token_df.empty or "token" not in token_df or token_df["token"].dropna().empty:
@@ -568,7 +577,9 @@ def master_contract_download():
 
         # Replace the stored contracts only after every group was fetched and
         # the combined result was validated.
-        replace_symtoken_table(token_df)
+        # Keep the first row for a token shared by several groups, as the old
+        # per-group copy_from_dataframe calls did.
+        replace_symtoken_table(token_df.drop_duplicates(subset=["token"], keep="first"))
 
         if socketio:
             socketio.emit(
