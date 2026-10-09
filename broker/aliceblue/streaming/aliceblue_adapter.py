@@ -672,7 +672,17 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Fields to check and merge
         price_fields = ["ltp", "open", "high", "low", "close", "average_price"]
         volume_fields = ["volume", "total_buy_quantity", "total_sell_quantity"]
-        other_fields = ["total_oi", "change_percent", "timestamp", "symbol", "exchange", "token"]
+        # `oi` is the contract's open interest from depth frames; copied only when
+        # the frame carries it, so a df frame without it keeps the last value.
+        other_fields = [
+            "total_oi",
+            "oi",
+            "change_percent",
+            "timestamp",
+            "symbol",
+            "exchange",
+            "token",
+        ]
 
         # Update price fields - only if non-zero
         for field in price_fields:
@@ -1296,6 +1306,8 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             "timestamp": parsed_data.get("timestamp", ""),
                             "depth": depth_data,
                         }
+                        if "oi" in parsed_data:
+                            publish_data["oi"] = parsed_data["oi"]
                     else:
                         # Fallback for other data types
                         publish_data = {

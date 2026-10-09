@@ -168,6 +168,7 @@ class QuoteNormalizer:
             "last_quantity": safe_int(data.get("ltq")),
             "last_trade_time": data.get("ltt"),
             "shoonya_timestamp": safe_int(data.get("ft")),
+            **_oi_field(data),
         }
 
 
@@ -191,6 +192,7 @@ class DepthNormalizer:
             "total_buy_quantity": safe_int(data.get("tbq")),
             "total_sell_quantity": safe_int(data.get("tsq")),
             "shoonya_timestamp": safe_int(data.get("ft")),
+            **_oi_field(data),
         }
 
         # Add depth data
@@ -260,7 +262,6 @@ class DepthNormalizer:
                     "lower_circuit": safe_float(data.get("lc")),
                     "52_week_high": safe_float(data.get("52h")),
                     "52_week_low": safe_float(data.get("52l")),
-                    "open_interest": safe_int(data.get("toi")),
                 }
             )
 
@@ -1681,3 +1682,22 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (ValueError, TypeError):
         return default
+
+
+def _oi_field(data: dict[str, Any]) -> dict[str, Any]:
+    """`{"oi": n}` when the (cache-merged) Noren packet carries open interest, else `{}`.
+
+    Noren's `oi` is the contract's own open interest. `toi` is the total for the
+    whole underlying and `poi` the previous close, so neither is used here. An
+    absent key stays absent so a client keeps its last value; a present 0 is a
+    real value and is forwarded.
+    """
+    value = data.get("oi")
+    if value in (None, "", "-"):
+        return {}
+    # Not safe_int: it defaults a parse failure to 0, and a present 0 is a real
+    # value that would overwrite the last good OI. Unparseable is "not sent".
+    try:
+        return {"oi": int(float(value))}
+    except (TypeError, ValueError):
+        return {}

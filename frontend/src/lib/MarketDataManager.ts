@@ -27,6 +27,14 @@ export interface MarketData {
   low?: number
   close?: number
   volume?: number
+  /** Open interest; only derivatives carry it, and only some broker feeds send it. */
+  oi?: number
+  /**
+   * Epoch ms of the last update that actually carried `oi`. The cache merges
+   * every tick, so `oi` itself is re-sent with price-only ticks; this is what
+   * tells a consumer how old the open interest really is.
+   */
+  oi_updated_at?: number
   change?: number
   change_percent?: number
   timestamp?: string
@@ -587,6 +595,9 @@ export class MarketDataManager {
             low: marketDataPayload.low ?? newData.low,
             close: marketDataPayload.close ?? newData.close,
             volume: marketDataPayload.volume ?? newData.volume,
+            oi: marketDataPayload.oi ?? newData.oi,
+            oi_updated_at:
+              typeof marketDataPayload.oi === 'number' ? Date.now() : newData.oi_updated_at,
             change: marketDataPayload.change ?? newData.change,
             change_percent: marketDataPayload.change_percent ?? newData.change_percent,
             timestamp: marketDataPayload.timestamp ?? newData.timestamp,
@@ -828,6 +839,8 @@ export class MarketDataManager {
             low: result.data.low ?? newData.low,
             close: result.data.prev_close ?? newData.close,
             volume: result.data.volume ?? newData.volume,
+            oi: result.data.oi ?? newData.oi,
+            oi_updated_at: typeof result.data.oi === 'number' ? Date.now() : newData.oi_updated_at,
             bid_price: result.data.bid ?? newData.bid_price,
             ask_price: result.data.ask ?? newData.ask_price,
           })
@@ -868,3 +881,35 @@ export class MarketDataManager {
 }
 
 export default MarketDataManager
+
+/** One live tick handed out by `subscribeQuotes`. */
+export interface HostQuoteTick {
+  symbol: string
+  exchange: string
+  data: MarketData
+}
+
+/**
+ * Quote-mode ticks over the app's one shared WebSocket, delivered to a plain
+ * callback rather than into React state. For consumers that sample ticks on
+ * their own beat (the OI Profile page) or live outside React entirely (the
+ * custom-indicator loader hands this to runtime modules as `subscribeQuotes`):
+ * neither needs a re-render per tick, and neither should open a second socket.
+ * Returns the unsubscribe; call it on teardown.
+ */
+export function subscribeQuotes(
+  symbols: Array<{ symbol: string; exchange: string }>,
+  onTick: (tick: HostQuoteTick) => void
+): () => void {
+  const manager = MarketDataManager.getInstance()
+  const state = manager.getState()
+  if (!state.isConnected && !state.isPaused) void manager.connect()
+  const unsubscribes = symbols.map(({ symbol, exchange }) =>
+    manager.subscribe(symbol, exchange, 'Quote', (d) =>
+      onTick({ symbol: d.symbol, exchange: d.exchange, data: d.data })
+    )
+  )
+  return () => {
+    for (const unsubscribe of unsubscribes) unsubscribe()
+  }
+}

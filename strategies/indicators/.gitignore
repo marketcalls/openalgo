@@ -5,10 +5,13 @@
 !.gitignore
 !README.md
 
-# Open Range Breakout ships with OpenAlgo as a working reference indicator, so
-# a fresh install has one real example to read and modify. It is the ONLY .js
-# tracked here; anything else you write stays on your own machine.
+# Two indicators ship with OpenAlgo as working reference material, so a fresh
+# install has real examples to read and modify. Open Range Breakout is the pure
+# case: one calc over the chart's own bars. OI Profile is the other half of the
+# surface - data the chart has never seen, fetched in `attach`, drawn by its own
+# canvas primitive. Anything else you write stays on your own machine.
 !open_range_breakout.js
+!oi_profile_live.js
 
 # Ignore backup and editor files
 *.bak
