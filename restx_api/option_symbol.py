@@ -15,7 +15,8 @@ Request Body:
     "expiry_date": "28OCT25",  // Optional if underlying includes expiry
     "strike_int": 50,  // Optional: Strike interval. If omitted, actual strikes from database are used (RECOMMENDED)
     "offset": "ITM2",  // ATM, ITM1-ITM50, OTM1-OTM50
-    "option_type": "CE"  // CE or PE
+    "option_type": "CE",  // CE or PE
+    "include_quotes": true  // Optional: include the selected option quote
 }
 
 Response:
@@ -25,7 +26,12 @@ Response:
     "exchange": "NFO",
     "lotsize": 25,
     "tick_size": 0.05,
-    "underlying_ltp": 23587.50
+    "underlying_ltp": 23587.50,
+    "quote": {
+        "ltp": 125.5,
+        "bid": 125.25,
+        "ask": 125.75
+    }
 }
 """
 
@@ -71,6 +77,7 @@ class OptionSymbol(Resource):
             )  # Optional - if not provided, actual strikes from database will be used
             offset = data["offset"]
             option_type = data["option_type"]
+            include_quotes = data.get("include_quotes", False)
 
             logger.info(
                 f"Option symbol request: underlying={underlying}, exchange={exchange}, "
@@ -86,6 +93,7 @@ class OptionSymbol(Resource):
                 offset=offset,
                 option_type=option_type,
                 api_key=api_key,
+                include_quotes=include_quotes,
             )
 
             return response, status_code
