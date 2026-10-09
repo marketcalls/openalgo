@@ -72,6 +72,55 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def get_existing_index_rows():
+    """Return the stored index rows, to carry forward when /V1/indexList fails."""
+    columns = [
+        "symbol",
+        "brsymbol",
+        "name",
+        "exchange",
+        "brexchange",
+        "token",
+        "expiry",
+        "strike",
+        "lotsize",
+        "instrumenttype",
+        "tick_size",
+    ]
+    rows = SymToken.query.filter(SymToken.instrumenttype == "INDEX").all()
+    return pd.DataFrame([{col: getattr(row, col) for col in columns} for row in rows])
+
+
+def replace_symtoken_table(frames):
+    """Swap the master contract in one transaction.
+
+    ``frames`` is a list of (segment, DataFrame). A row whose token was already
+    taken by an earlier segment is dropped, matching what the old per-segment
+    copy_from_dataframe calls produced. The delete and the insert commit
+    together, so any failure rolls back to the previous contract instead of
+    leaving the table empty or half-filled.
+    """
+    records = []
+    seen_tokens = set()
+    for _segment, df in frames:
+        # Compare as strings: CSV tokens can parse as numbers while the index
+        # rows carried over from the database are strings.
+        rows = [
+            row for row in df.to_dict(orient="records") if str(row["token"]) not in seen_tokens
+        ]
+        seen_tokens.update(str(row["token"]) for row in rows)
+        records.extend(rows)
+
+    try:
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f"Replaced symtoken table with {len(records)} records")
+    except Exception:
+        db_session.rollback()
+        raise
+
+
 # Firstock V1 URLs for downloading symbol files
 firstock_urls = {
     "NSE": "https://api.firstock.in/V1/symbols/NSE?ref=firstock.in",
@@ -89,51 +138,52 @@ def download_firstock_data(output_path):
     NSE/BSE: Exchange, Token, LotSize, TradingSymbol, CompanyName, ISIN, TickSize, FreezeQty
     NFO/BFO: Exchange, Token, LotSize, Symbol, TradingSymbol, CompanyName, Expiry,
              Instrument, OptionType, StrikePrice, TickSize, FreezeQty
+
+    Raises if any file fails, so the caller never replaces the stored contract
+    with a partial set. Files left over from an earlier failed run are removed
+    first, so a failed download cannot be masked by an old copy.
     """
     logger.info("Downloading Firstock Data")
 
     if not os.path.exists(output_path):
         os.makedirs(output_path)
+    delete_firstock_temp_data(output_path)
 
     downloaded_files = []
+    failed = []
 
-    try:
-        # Get the shared httpx client with connection pooling
-        client = get_httpx_client()
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
 
-        for exchange, url in firstock_urls.items():
-            try:
-                logger.info(f"Downloading {exchange} data from {url}")
+    for exchange, url in firstock_urls.items():
+        try:
+            logger.info(f"Downloading {exchange} data from {url}")
 
-                # Make request using shared httpx client
-                response = client.get(url, timeout=30)
+            # Make request using shared httpx client
+            response = client.get(url, timeout=30)
 
-                # Add status attribute for compatibility
-                response.status = response.status_code
+            if response.status_code == 200 and response.text.strip():
+                file_path = f"{output_path}/{exchange}_symbols.csv"
+                with open(file_path, "w") as f:
+                    f.write(response.text)
+                downloaded_files.append(f"{exchange}_symbols.csv")
+                logger.info(f"Successfully downloaded {exchange} data")
+            else:
+                logger.error(
+                    f"Failed to download {exchange} data. Status code: {response.status_code}, "
+                    f"bytes: {len(response.content)}"
+                )
+                failed.append(exchange)
 
-                if response.status_code == 200:
-                    file_path = f"{output_path}/{exchange}_symbols.csv"
-                    with open(file_path, "w") as f:
-                        f.write(response.text)
-                    downloaded_files.append(f"{exchange}_symbols.csv")
-                    logger.info(f"Successfully downloaded {exchange} data")
-                else:
-                    logger.error(
-                        f"Failed to download {exchange} data. Status code: {response.status_code}"
-                    )
+        except Exception as e:
+            logger.error(f"Error downloading {exchange} data: {str(e)}")
+            failed.append(exchange)
 
-            except Exception as e:
-                if "timeout" in str(e).lower():
-                    logger.error(f"Timeout while downloading {exchange} data - please try again")
-                elif "connection" in str(e).lower():
-                    logger.error(
-                        f"Connection error while downloading {exchange} data - please check your internet connection"
-                    )
-                else:
-                    logger.error(f"Error downloading {exchange} data: {str(e)}")
-
-    except Exception as e:
-        logger.error(f"Error initializing HTTP client: {str(e)}")
+    if failed:
+        raise RuntimeError(
+            f"Could not download the Firstock symbol files for {', '.join(failed)}. "
+            "Your existing symbols were kept; try the download again."
+        )
 
     return downloaded_files
 
@@ -782,43 +832,49 @@ def master_contract_download():
 
         # Initialize database
         init_db()
-        delete_symtoken_table()
 
-        # Download data
-        downloaded_files = download_firstock_data(output_path)
+        # Download and process every segment before touching the stored
+        # contract. A failure anywhere up to the swap leaves it unchanged.
+        download_firstock_data(output_path)
 
-        if downloaded_files:
-            # Process each exchange
-            if "NSE_symbols.csv" in downloaded_files:
-                token_df = process_firstock_nse_data(output_path)
-                copy_from_dataframe(token_df)
+        frames = []
+        for segment, process in (
+            ("NSE", process_firstock_nse_data),
+            ("BSE", process_firstock_bse_data),
+            ("NFO", process_firstock_nfo_data),
+            ("BFO", process_firstock_bfo_data),
+        ):
+            token_df = process(output_path)
+            if token_df is None or token_df.empty:
+                raise RuntimeError(
+                    f"The Firstock {segment} symbol file had no usable rows. "
+                    "Your existing symbols were kept; try the download again."
+                )
+            frames.append((segment, token_df))
 
-            if "BSE_symbols.csv" in downloaded_files:
-                token_df = process_firstock_bse_data(output_path)
-                copy_from_dataframe(token_df)
+        # V1 API: indices are no longer in CSVs — fetch via authenticated endpoint.
+        # If that call fails, keep the indices already stored rather than
+        # dropping NIFTY, BANKNIFTY and the rest from the refreshed table.
+        index_df = fetch_firstock_indices()
+        if index_df.empty:
+            index_df = get_existing_index_rows()
+            logger.warning(
+                f"Firstock index list unavailable; keeping {len(index_df)} existing index rows"
+            )
+        if not index_df.empty:
+            frames.append(("INDEX", index_df))
 
-            if "NFO_symbols.csv" in downloaded_files:
-                token_df = process_firstock_nfo_data(output_path)
-                copy_from_dataframe(token_df)
+        replace_symtoken_table(frames)
 
-            if "BFO_symbols.csv" in downloaded_files:
-                token_df = process_firstock_bfo_data(output_path)
-                copy_from_dataframe(token_df)
+        # Clean up temporary files
+        delete_firstock_temp_data(output_path)
 
-            # V1 API: indices are no longer in CSVs — fetch via authenticated endpoint
-            index_df = fetch_firstock_indices()
-            if not index_df.empty:
-                copy_from_dataframe(index_df)
-
-            # Clean up temporary files
-            delete_firstock_temp_data(output_path)
-
-            logger.info("Master contract download completed successfully")
-            socketio.emit("download_progress", "Download completed")
-        else:
-            logger.info("No files were downloaded")
-            socketio.emit("download_progress", "Download failed")
+        logger.info("Master contract download completed successfully")
+        socketio.emit("download_progress", "Download completed")
 
     except Exception as e:
-        logger.error(f"Error in master contract download: {e}")
+        logger.exception(f"Error in master contract download: {e}")
         socketio.emit("download_progress", f"Error: {str(e)}")
+        # Raise so the shared caller (utils/auth_utils) records the download as
+        # failed; it ignores the return value and reports success otherwise.
+        raise
