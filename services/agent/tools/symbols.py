@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from services import expiry_service, search_service, symbol_service
 from services.agent.prompts import wrap_tool_result
 from services.agent.tools.base import OpenAlgoToolkit
+from services.agent.tools.market import clean_exchange
 from utils.logging import get_logger
 
 try:
@@ -404,7 +405,9 @@ class SymbolsToolkit(OpenAlgoToolkit):
             exchange: The exchange the derivatives are listed on, one of NFO,
                 BFO, CDS, BCD, MCX, NCDEX, NCO, CRYPTO. NIFTY and BANKNIFTY
                 options are on NFO even though the index itself is quoted on
-                NSE_INDEX; SENSEX options are on BFO.
+                NSE_INDEX; SENSEX options are on BFO. NSE, NSE_INDEX, BSE,
+                BSE_INDEX and MCX_INDEX are read as their derivatives
+                exchange, and the result says so.
             instrument_type: ``options`` or ``futures``. Nothing else.
 
         Returns:
@@ -417,8 +420,9 @@ class SymbolsToolkit(OpenAlgoToolkit):
             symbol,
             "Pass the underlying alone, such as 'NIFTY' or 'RELIANCE', not a full contract symbol.",
         ).upper()
-        venue = self._expiry_exchange(exchange)
+        venue, notice = self._expiry_exchange(exchange)
         kind = self._instrument_type(instrument_type)
+        notices = {"notices": [notice]} if notice else {}
 
         payload = self.service_call(
             expiry_service.get_expiry_dates,
@@ -444,6 +448,7 @@ class SymbolsToolkit(OpenAlgoToolkit):
                         "underlying is listed there either. Check the underlying with the "
                         "operator rather than guessing an expiry."
                     ),
+                    **notices,
                 },
                 symbol=underlying,
                 exchange=venue,
@@ -462,6 +467,7 @@ class SymbolsToolkit(OpenAlgoToolkit):
                     "not derivable the same way, so confirm the full contract with "
                     "search_symbols before using it."
                 ),
+                **notices,
             },
             symbol=underlying,
             exchange=venue,
@@ -501,7 +507,7 @@ class SymbolsToolkit(OpenAlgoToolkit):
         Raises:
             RetryAgentRun: When the code is missing and required, or unknown.
         """
-        text = value.strip().upper() if isinstance(value, str) else ""
+        text = clean_exchange(value) if isinstance(value, str) else ""
         if not text:
             if allow_blank:
                 return ""
@@ -518,35 +524,34 @@ class SymbolsToolkit(OpenAlgoToolkit):
             )
         return text
 
-    def _expiry_exchange(self, value: Any) -> str:
+    def _expiry_exchange(self, value: Any) -> tuple[str, str | None]:
         """Normalise an exchange code for an expiry lookup.
 
         A cash or index exchange lists no derivative, so it can never answer
-        this question. Rather than reporting an empty list, name the exchange
-        the derivatives are actually on.
+        this question. Where its derivatives have one home (NSE and NSE_INDEX
+        on NFO, BSE and BSE_INDEX on BFO, MCX_INDEX on MCX) the lookup moves
+        there and says so, rather than costing the model a turn.
 
         Args:
             value: The value the model passed.
 
         Returns:
-            The upper-case derivatives exchange code.
+            The upper-case derivatives exchange code, and a notice when it
+            differs from the one passed.
 
         Raises:
             RetryAgentRun: When the code is unknown or lists no derivatives.
         """
         text = self._exchange(value, allow_blank=False)
         if text in DERIVATIVE_EXCHANGES:
-            return text
+            return text, None
 
         venue = _DERIVATIVE_VENUE.get(text)
         if venue:
-            self.invalid_argument(
-                "exchange",
+            return venue, (
                 f"{text} lists no futures or options"
                 + (" and is a quote-only index feed" if text in INDEX_EXCHANGES else "")
-                + ".",
-                f"Its derivatives are listed on {venue}; call the tool again with "
-                f"exchange='{venue}'.",
+                + f", so the expiries were read from {venue}, where its derivatives are listed."
             )
         self.invalid_argument(
             "exchange",

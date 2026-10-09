@@ -8,6 +8,67 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Agent: reliable tool calls on /agent and /trading
+
+No database migration and no `update.sh` run are needed. Restart OpenAlgo after
+pulling.
+
+**Questions about several instruments now work the first time.** Asking for
+the history of TCS and INFY, the news on BHEL and RELIANCE, or expiries for
+crude, gold and silver used to fail every tool call and only succeed after the
+model gave up and asked one instrument at a time. The ChatGPT subscription
+models (and any model that reaches LiteLLM through its Responses bridge) send
+the details of several calls at once in a form LiteLLM 1.104.0 dropped; the
+agent now recovers them.
+
+**What changed for traders**
+
+- The `/trading` chart assistant can place orders, with the same approval card
+  as `/agent`, when **Allow the agent to place, modify and cancel orders** is on in
+  `/agent/config`. With it off, nothing changes: the panel offers no order
+  tools.
+- An approval card for an order whose details did not arrive (symbol,
+  quantity and so on) can no longer be approved; reject it and ask again.
+  Cancel-all and close-all, which take no details, are unaffected.
+- The agent accepts far more ways of saying the same thing: dates such as
+  `09-10-2026` or `today`, intervals such as `1d`, `daily` or `5min`, expiries
+  such as `28-OCT-26` or `2026-10-28`, `NSE:INFY` style symbols, `call`/`put`,
+  `INTRADAY`/`DELIVERY` and `SLM`. History and charts default to daily candles
+  over a recent range when no dates are given.
+- Weekly and monthly candles work on brokers that only serve daily ones: the
+  agent builds them from daily candles and says so.
+- NIFTY or SENSEX named on NSE or BSE is moved to its index exchange for option
+  chains, option symbols and option charts, as it already was for quotes.
+- The agent can write an OpenScript study or strategy and a Flow workflow,
+  guided by the `openscript` and `flow-builder` skills in `.claude/skills/`,
+  which it reads live, so edits to those files apply on the next message. An
+  OpenScript it saves is stored as source and compiles when you open it in the
+  `/trading` editor; it will not overwrite a script you have already compiled.
+
+**Now refused or reported differently**
+
+- Closing a position the broker reports as flat now says there was nothing to
+  close and to check the position book, instead of reporting success. Several
+  brokers read every position as flat, so the old success message could be
+  wrong.
+- An order on an index exchange (NSE_INDEX, BSE_INDEX) is refused with the
+  exchange its future or option trades on.
+- A price sent with a MARKET order, or a trigger sent with a LIMIT order, is
+  still refused rather than silently dropped, because the approval card would
+  otherwise show a different order from the one sent.
+
+**Not modelled, or deliberately absent**
+
+- External data over MCP is built but no server is registered. The NSE MCP
+  servers were tried and removed because they repeatedly timed out. The
+  External data section stays hidden on `/agent/config` until a server is
+  added.
+- The order risk check still charges a buy its full value, so a margin order on
+  NFO, BFO, MCX or an intraday equity order can be refused when funds are short
+  of the full notional.
+- Web search requests now run on the web server's own event loop under the
+  default eventlet worker, which removes a way they could stall the server.
+
 ## [2.0.2.7] - 2026-10-08
 
 ### gthread Web Server Release
