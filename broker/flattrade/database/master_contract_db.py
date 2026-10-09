@@ -945,7 +945,10 @@ def master_contract_download():
     """
     logger.info("Downloading Flattrade Master Contract")
 
-    output_path = "tmp"
+    # A Flattrade-only folder: the files have generic names (NSE.csv, BSE.csv)
+    # and the cleanup removes every CSV, so sharing tmp/ with another broker's
+    # concurrent download would delete or overwrite its files.
+    output_path = os.path.join("tmp", "flattrade")
     try:
         # Download and process every segment before touching the stored
         # contract. A failure anywhere up to the swap leaves it unchanged.
@@ -974,7 +977,7 @@ def master_contract_download():
         error_msg = f"Error in master contract download: {e}"
         logger.error(f"{error_msg}")
         if socketio:
-            return socketio.emit(
-                "master_contract_download", {"status": "error", "message": error_msg}
-            )
-        raise e
+            socketio.emit("master_contract_download", {"status": "error", "message": error_msg})
+        # Raise so the shared caller (utils/auth_utils) records the download as
+        # failed; it ignores the return value and reports success otherwise.
+        raise
