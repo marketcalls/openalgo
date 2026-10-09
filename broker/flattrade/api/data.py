@@ -6,6 +6,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from datetime import datetime, timedelta
+from datetime import time as dt_time
 
 import httpx
 import pandas as pd
@@ -62,6 +63,22 @@ def _quote_pool():
 _apply_rate_limit = DATA_LIMITER.acquire
 _apply_rate_limit_async = DATA_LIMITER.acquire_async
 _is_rate_limit_error = is_rate_limit_error
+
+
+def _candle_number(candle: dict, key: str) -> float | None:
+    """A numeric candle field, or None when Flattrade sent it null, empty or not at all.
+
+    ``float(candle.get(key, 0))`` raised TypeError on a null (which the candle
+    loop does not catch, so one bad row failed the whole history request) and
+    turned a missing price into a real-looking 0.
+    """
+    value = candle.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
@@ -701,14 +718,27 @@ class BrokerData:
                     candle = json.loads(candle)
 
                 try:
+                    # Both endpoints use into/inth/intl/intc for OHLC and intv for
+                    # volume. A candle missing any price is skipped rather than
+                    # filled with 0, which would chart as a crash to zero.
+                    op = _candle_number(candle, "into")
+                    hi = _candle_number(candle, "inth")
+                    lo = _candle_number(candle, "intl")
+                    cl = _candle_number(candle, "intc")
+                    if None in (op, hi, lo, cl):
+                        logger.warning(f"Skipping Flattrade candle with missing OHLC: {candle}")
+                        continue
+                    volume = int(_candle_number(candle, "intv") or 0)
+                    oi = int(_candle_number(candle, "oi") or 0)
+
                     # Parse timestamp based on interval
                     if interval == "D":
-                        # EOD data format: "21-SEP-2022"
-                        timestamp = int(candle.get("ssboe", 0))  # Use ssboe for timestamp
-                        op = float(candle.get("into", 0))  # EOD uses 'into' for open
-                        hi = float(candle.get("inth", 0))  # EOD uses 'inth' for high
-                        lo = float(candle.get("intl", 0))  # EOD uses 'intl' for low
-                        cl = float(candle.get("intc", 0))  # EOD uses 'intc' for close
+                        # EOD data format: "21-SEP-2022"; ssboe is the epoch timestamp
+                        ssboe = _candle_number(candle, "ssboe")
+                        if ssboe is None:
+                            logger.warning(f"Skipping Flattrade EOD candle with no ssboe: {candle}")
+                            continue
+                        timestamp = int(ssboe)
                         # Flattrade's BSE index EOD rows (SENSEX) often carry a close
                         # outside the day's high/low. Widen the range to cover open
                         # and close so the candle stays valid for charting.
@@ -723,53 +753,51 @@ class BrokerData:
                                 "high": hi,
                                 "low": lo,
                                 "close": cl,
-                                "volume": int(
-                                    float(candle.get("intv", 0))
-                                ),  # EOD uses 'intv' for volume
-                                "oi": int(float(candle.get("oi", 0))),  # Open Interest
+                                "volume": volume,
+                                "oi": oi,
                             }
                         )
                     else:
                         # Intraday format: "02-06-2020 15:46:23"
                         try:
-                            timestamp = int(
-                                datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S").timestamp()
-                            )
+                            candle_dt = datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S")
+                            timestamp = int(candle_dt.timestamp())
                         except ValueError:
                             logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
-                        # Skip candles with all zero values
+                        # On NSE/BSE cash and F&O, TPSeries adds a 09:14 bar holding
+                        # the pre-open discovered price: flat OHLC, zero bar volume.
+                        # The session opens at 09:15, so drop it (QA HS-07).
                         if (
-                            float(candle.get("into", 0)) == 0
-                            and float(candle.get("inth", 0)) == 0
-                            and float(candle.get("intl", 0)) == 0
-                            and float(candle.get("intc", 0)) == 0
+                            exchange in ("NSE", "BSE", "NFO", "BFO")
+                            and candle_dt.time() < dt_time(9, 15)
                         ):
+                            continue
+
+                        # Skip candles with all zero values
+                        if op == 0 and hi == 0 and lo == 0 and cl == 0:
                             continue
 
                         data.append(
                             {
                                 "timestamp": timestamp,
-                                "open": float(
-                                    candle.get("into", 0)
-                                ),  # Intraday also uses 'into' for open
-                                "high": float(
-                                    candle.get("inth", 0)
-                                ),  # Intraday also uses 'inth' for high
-                                "low": float(
-                                    candle.get("intl", 0)
-                                ),  # Intraday also uses 'intl' for low
-                                "close": float(
-                                    candle.get("intc", 0)
-                                ),  # Intraday also uses 'intc' for close
-                                "volume": int(
-                                    float(candle.get("intv", 0))
-                                ),  # Intraday also uses 'intv' for volume
-                                "oi": int(float(candle.get("oi", 0))),  # Open Interest
+                                "open": op,
+                                "high": hi,
+                                "low": lo,
+                                "close": cl,
+                                # During the NSE closing session (15:15-15:30)
+                                # Flattrade's cumulative 'v' switches to a separate
+                                # counter and back, so 'intv' (its bar-to-bar
+                                # difference) goes negative, e.g. INFY -13,357,992
+                                # at 15:20. A bar cannot trade negative volume and
+                                # the chart rejects the whole history on one, so
+                                # floor it at 0.
+                                "volume": max(volume, 0),
+                                "oi": oi,
                             }
                         )
-                except (KeyError, ValueError) as e:
+                except (KeyError, TypeError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
             df = pd.DataFrame(data)
