@@ -220,9 +220,11 @@ def process_flattrade_nse_data(output_path):
             df.get("strike", pd.Series([-1] * len(df))), errors="coerce"
         ).fillna(-1)
 
-        # Ensure the instrument type is consistent
+        # instrumenttype is OpenAlgo's EQ/FUT/CE/PE vocabulary. Index rows are
+        # typed EQ; the NSE_INDEX exchange set above is what marks them as an
+        # index (QA MC-04).
         df["instrumenttype"] = df["instrumenttype"].apply(
-            lambda x: "EQ" if x in ["EQ", "BE"] else x
+            lambda x: "EQ" if x in ["EQ", "BE", "INDEX"] else x
         )
 
         # Handle missing or invalid numeric values in 'lotsize'
@@ -676,8 +678,9 @@ def process_flattrade_bse_data(output_path):
         df.get("strike", pd.Series([-1] * len(df))), errors="coerce"
     ).fillna(-1)  # Fill strike with -1 if missing
 
-    # Set instrument type: keep UNDIND for index instruments, set EQ for others
-    df["instrumenttype"] = df["instrumenttype"].apply(lambda x: "INDEX" if x == "UNDIND" else "EQ")
+    # Every BSE cash row is EQ, index rows included: the BSE_INDEX exchange set
+    # above is what marks an index, not the instrument type (QA MC-04).
+    df["instrumenttype"] = "EQ"
 
     # Handle missing or invalid numeric values in 'lotsize'
     df["lotsize"] = (
