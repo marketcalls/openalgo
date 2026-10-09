@@ -621,6 +621,9 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+            # Keep the OpenAlgo exchange: get_quotes below must resolve the token
+            # against it, not the broker exchange (SENSEX lives under BSE_INDEX).
+            oa_exchange = exchange
 
             if exchange == "NSE_INDEX":
                 exchange = "NSE"
@@ -702,13 +705,24 @@ class BrokerData:
                     if interval == "D":
                         # EOD data format: "21-SEP-2022"
                         timestamp = int(candle.get("ssboe", 0))  # Use ssboe for timestamp
+                        op = float(candle.get("into", 0))  # EOD uses 'into' for open
+                        hi = float(candle.get("inth", 0))  # EOD uses 'inth' for high
+                        lo = float(candle.get("intl", 0))  # EOD uses 'intl' for low
+                        cl = float(candle.get("intc", 0))  # EOD uses 'intc' for close
+                        # Flattrade's BSE index EOD rows (SENSEX) often carry a close
+                        # outside the day's high/low. Widen the range to cover open
+                        # and close so the candle stays valid for charting.
+                        if hi < max(op, cl) or lo > min(op, cl):
+                            logger.debug(f"Inconsistent EOD candle from Flattrade: {candle}")
+                            hi = max(hi, op, cl)
+                            lo = min(lo, op, cl)
                         data.append(
                             {
                                 "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),  # EOD uses 'into' for open
-                                "high": float(candle.get("inth", 0)),  # EOD uses 'inth' for high
-                                "low": float(candle.get("intl", 0)),  # EOD uses 'intl' for low
-                                "close": float(candle.get("intc", 0)),  # EOD uses 'intc' for close
+                                "open": op,
+                                "high": hi,
+                                "low": lo,
+                                "close": cl,
                                 "volume": int(
                                     float(candle.get("intv", 0))
                                 ),  # EOD uses 'intv' for volume
@@ -777,7 +791,7 @@ class BrokerData:
                     if df.empty or df["timestamp"].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            quotes = self.get_quotes(symbol, exchange)
+                            quotes = self.get_quotes(symbol, oa_exchange)
 
                             if quotes:
                                 today_data = {
