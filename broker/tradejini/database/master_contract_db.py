@@ -89,6 +89,23 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def replace_symtoken_table(df):
+    """Swap the master contract in one transaction.
+
+    The delete and the insert commit together, so a failed insert rolls back
+    to the previous contract instead of leaving the table empty.
+    """
+    records = df.to_dict(orient="records")
+    try:
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f"Replaced symtoken table with {len(records)} records")
+    except Exception:
+        db_session.rollback()
+        raise
+
+
 # Define Tradejini API endpoints
 TRADEJINI_BASE_URL = "https://api.tradejini.com/v2"
 SCRIP_GROUPS_URL = f"{TRADEJINI_BASE_URL}/api/mkt-data/scrips/symbol-store"
@@ -148,7 +165,7 @@ def get_scrip_data(scrip_group):
         return data
     except Exception as e:
         logger.error(f"Error fetching scrip data for {scrip_group}: {e}")
-        return []
+        return None
 
 
 # Each scrip group declares its own id layout via 'idFormat' in the Scrip Master
@@ -507,47 +524,51 @@ def master_contract_download():
     logger.info("Starting Tradejini Master Contract Download")
 
     try:
-        # Delete existing data
-        delete_symtoken_table()
-
         # Get scrip groups
         scrip_groups = get_scrip_groups()
         if not scrip_groups:
-            logger.info("No scrip groups found. Exiting.")
-            return False
+            raise RuntimeError(
+                "Could not fetch the Tradejini symbol list. Your existing symbols were kept; "
+                "try the download again."
+            )
 
         logger.info(f"Found {len(scrip_groups)} scrip groups")
+        token_frames = []
 
         # Process each scrip group
         for group in scrip_groups:
-            try:
-                group_name = group.get("name")
-                if not group_name:
-                    continue
-
-                logger.info(f"Processing group: {group_name} (format: {group.get('idFormat')})")
-                scrip_data = get_scrip_data(group_name)
-
-                if scrip_data:
-                    # Check if response is successful
-                    if isinstance(scrip_data, dict) and scrip_data.get("s") == "ok":
-                        scrip_data = scrip_data.get("d", [])
-
-                    # Process the data into DataFrame
-                    df = process_scrip_data(scrip_data, group)
-
-                    # Insert into database
-                    if not df.empty:
-                        copy_from_dataframe(df)
-                        logger.info(f"Processed {len(df)} symbols for {group_name}")
-                    else:
-                        logger.info(f"No valid records found for {group_name}")
-                else:
-                    logger.info(f"No data received for {group_name}")
-
-            except Exception as group_error:
-                logger.error(f"Error processing group {group_name}: {group_error}")
+            group_name = group.get("name")
+            if not group_name:
+                logger.warning(f"Skipping scrip group without a name: {group}")
                 continue
+
+            logger.info(f"Processing group: {group_name} (format: {group.get('idFormat')})")
+            scrip_data = get_scrip_data(group_name)
+            if scrip_data is None:
+                raise RuntimeError(
+                    f"Could not download the Tradejini {group_name} symbols. Your existing "
+                    "symbols were kept; try the download again."
+                )
+
+            # Check if response is successful
+            if isinstance(scrip_data, dict) and scrip_data.get("s") == "ok":
+                scrip_data = scrip_data.get("d", [])
+
+            df = process_scrip_data(scrip_data, group)
+            if not df.empty:
+                token_frames.append(df)
+                logger.info(f"Processed {len(df)} symbols for {group_name}")
+
+        token_df = pd.concat(token_frames, ignore_index=True) if token_frames else pd.DataFrame()
+        if token_df.empty or "token" not in token_df or token_df["token"].dropna().empty:
+            raise RuntimeError(
+                "Tradejini returned no usable symbols. Your existing symbols were kept; "
+                "try the download again."
+            )
+
+        # Replace the stored contracts only after every group was fetched and
+        # the combined result was validated.
+        replace_symtoken_table(token_df)
 
         if socketio:
             socketio.emit(
@@ -557,8 +578,9 @@ def master_contract_download():
         return True
 
     except Exception as e:
-        error_msg = f"Error in master contract download: {e}"
-        logger.error(f"{error_msg}")
+        logger.exception(f"Error in master contract download: {e}")
         if socketio:
-            socketio.emit("master_contract_download", {"status": "error", "message": error_msg})
-        return False
+            socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        # Raise so the shared caller (utils/auth_utils) records the download as
+        # failed; it ignores the return value and reports success otherwise.
+        raise
