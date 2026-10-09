@@ -90,6 +90,37 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def replace_symtoken_table(frames):
+    """Swap the master contract in one transaction.
+
+    ``frames`` is a list of (segment, DataFrame). A row whose token was already
+    taken by an earlier segment is dropped, matching what the old per-segment
+    copy_from_dataframe calls produced. The delete and the insert commit
+    together, so any failure rolls back to the previous contract instead of
+    leaving the table empty or half-filled.
+    """
+    records = []
+    seen_tokens = set()
+    for segment, df in frames:
+        if df is None or df.empty:
+            raise RuntimeError(
+                f"The Flattrade {segment} symbol file had no usable rows. "
+                "Your existing symbols were kept; try the download again."
+            )
+        rows = [row for row in df.to_dict(orient="records") if row["token"] not in seen_tokens]
+        seen_tokens.update(row["token"] for row in rows)
+        records.extend(rows)
+
+    try:
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f"Replaced symtoken table with {len(records)} records")
+    except Exception:
+        db_session.rollback()
+        raise
+
+
 # Define the Flattrade URLs for downloading the symbol files
 flattrade_urls = {
     "NSE": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/NSE_Equity.csv",
@@ -106,18 +137,24 @@ flattrade_urls = {
 def download_csv_data(output_path):
     """
     Downloads CSV files directly to the tmp folder.
+
+    Raises if any file fails, so the caller never replaces the stored contract
+    with a partial set. Files left over from an earlier failed run are removed
+    first, so a failed download cannot be masked by yesterday's copy.
     """
     logger.info("Downloading CSV Data")
 
     if not os.path.exists(output_path):
         os.makedirs(output_path)
+    delete_flattrade_temp_data(output_path)
 
     downloaded_files = []
+    failed = []
 
     for key, url in flattrade_urls.items():
         try:
             response = requests.get(url, timeout=10)
-            if response.status_code == 200:
+            if response.status_code == 200 and response.content.strip():
                 logger.info(f"Successfully downloaded {key} from {url}")
                 output_file = os.path.join(output_path, f"{key}.csv")
                 with open(output_file, "wb") as f:
@@ -125,10 +162,19 @@ def download_csv_data(output_path):
                 downloaded_files.append(f"{key}.csv")
             else:
                 logger.error(
-                    f"Failed to download {key} from {url}. Status code: {response.status_code}"
+                    f"Failed to download {key} from {url}. Status code: {response.status_code}, "
+                    f"bytes: {len(response.content)}"
                 )
+                failed.append(key)
         except Exception as e:
             logger.error(f"Error downloading {key} from {url}: {e}")
+            failed.append(key)
+
+    if failed:
+        raise RuntimeError(
+            f"Could not download the Flattrade symbol files for {', '.join(failed)}. "
+            "Your existing symbols were kept; try the download again."
+        )
 
     # Combine NFO and BFO files
     combine_nfo_files(output_path)
@@ -898,22 +944,19 @@ def master_contract_download():
 
     output_path = "tmp"
     try:
+        # Download and process every segment before touching the stored
+        # contract. A failure anywhere up to the swap leaves it unchanged.
         download_csv_data(output_path)
-        delete_symtoken_table()
 
-        # Placeholders for processing different exchanges
-        token_df = process_flattrade_nse_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_bse_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_nfo_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_cds_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_mcx_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_bfo_data(output_path)
-        copy_from_dataframe(token_df)
+        frames = [
+            ("NSE", process_flattrade_nse_data(output_path)),
+            ("BSE", process_flattrade_bse_data(output_path)),
+            ("NFO", process_flattrade_nfo_data(output_path)),
+            ("CDS", process_flattrade_cds_data(output_path)),
+            ("MCX", process_flattrade_mcx_data(output_path)),
+            ("BFO", process_flattrade_bfo_data(output_path)),
+        ]
+        replace_symtoken_table(frames)
 
         delete_flattrade_temp_data(output_path)
 
