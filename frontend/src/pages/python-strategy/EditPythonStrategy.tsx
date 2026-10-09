@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   Download,
   FileCode,
+  Square,
+  ScrollText,
   Maximize2,
   Minimize2,
   RotateCcw,
@@ -35,10 +37,12 @@ export default function EditPythonStrategy() {
   const [originalCode, setOriginalCode] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [actionLoading, setActionLoading] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
   const hasChanges = code !== originalCode
   const isRunning = strategy?.status === 'running'
+  const isScheduled = strategy?.status === 'scheduled'
 
   // Ref to always have access to the latest code value in event handlers
   const codeRef = useRef(code)
@@ -121,6 +125,55 @@ export default function EditPythonStrategy() {
     showToast.info('Changes discarded', 'pythonStrategy')
   }
 
+  const handleStartStrategy = async () => {
+    if (!strategyId || !strategy || actionLoading) return
+    try {
+      setActionLoading(true)
+      const response = await pythonStrategyApi.startStrategy(strategyId)
+      if (response.status === 'success') {
+        showToast.success(response.message || 'Strategy started', 'pythonStrategy')
+        void refreshStrategyStatus()
+      } else {
+        showToast.error(response.message || 'Failed to start strategy', 'pythonStrategy')
+      }
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { data?: { message?: string } }; message?: string }
+      showToast.error(
+        axiosError.response?.data?.message || axiosError.message || 'Failed to start strategy',
+        'pythonStrategy'
+      )
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleStopStrategy = async () => {
+    if (!strategyId || !strategy || actionLoading) return
+    try {
+      setActionLoading(true)
+      const response = await pythonStrategyApi.stopStrategy(strategyId)
+      if (response.status === 'success') {
+        showToast.success(response.message || 'Strategy stopped', 'pythonStrategy')
+        void refreshStrategyStatus()
+      } else {
+        showToast.error(response.message || 'Failed to stop strategy', 'pythonStrategy')
+      }
+    } catch {
+      showToast.error('Failed to stop strategy', 'pythonStrategy')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function refreshStrategyStatus() {
+    if (!strategyId) return
+    try {
+      setStrategy(await pythonStrategyApi.getStrategy(strategyId))
+    } catch {
+      // Keep the current view; the dashboard also treats refresh as best effort.
+    }
+  }
+
   const handleExport = async (version: 'saved' | 'current') => {
     if (!strategyId || !strategy) return
 
@@ -160,6 +213,35 @@ export default function EditPythonStrategy() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">{strategy.name}</h2>
           <div className="flex gap-2">
+            <Button
+              variant={isRunning ? 'destructive' : isScheduled ? 'outline' : 'default'}
+              size="sm"
+              className={
+                isScheduled
+                  ? 'border-orange-500 text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950'
+                  : !isRunning
+                    ? 'bg-green-600 hover:bg-green-700'
+                    : ''
+              }
+              onClick={isRunning || isScheduled ? handleStopStrategy : handleStartStrategy}
+              disabled={actionLoading}
+              title={
+                isRunning
+                  ? 'Stop running strategy'
+                  : isScheduled
+                    ? 'Cancel scheduled auto-start'
+                    : 'Start strategy'
+              }
+            >
+              <Square className="h-4 w-4 mr-2" />
+              {isRunning ? 'Stop' : isScheduled ? 'Cancel' : 'Start'}
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/python/${strategy.id}/logs`}>
+                <ScrollText className="h-4 w-4 mr-2" />
+                View Logs
+              </Link>
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setIsFullscreen(false)}>
               <Minimize2 className="h-4 w-4" />
             </Button>
@@ -229,6 +311,35 @@ export default function EditPythonStrategy() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant={isRunning ? 'destructive' : isScheduled ? 'outline' : 'default'}
+            size="sm"
+            className={
+              isScheduled
+                ? 'border-orange-500 text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950'
+                : !isRunning
+                  ? 'bg-green-600 hover:bg-green-700'
+                  : ''
+            }
+            onClick={isRunning || isScheduled ? handleStopStrategy : handleStartStrategy}
+            disabled={actionLoading}
+            title={
+              isRunning
+                ? 'Stop running strategy'
+                : isScheduled
+                  ? 'Cancel scheduled auto-start'
+                  : 'Start strategy'
+            }
+          >
+            <Square className="h-4 w-4 mr-2" />
+            {isRunning ? 'Stop' : isScheduled ? 'Cancel' : 'Start'}
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/python/${strategy.id}/logs`}>
+              <ScrollText className="h-4 w-4 mr-2" />
+              View Logs
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setIsFullscreen(true)}>
             <Maximize2 className="h-4 w-4" />
           </Button>
