@@ -798,7 +798,11 @@ class ZerodhaWebSocket:
 
                     if len(packet) >= 184:
                         try:
-                            tick["exchange_timestamp"] = struct.unpack(">I", packet[60:64])[0]
+                            # Kite sends the exchange time in epoch seconds; every other
+                            # time field OpenAlgo publishes is epoch milliseconds.
+                            exchange_ts = struct.unpack(">I", packet[60:64])[0]
+                            if exchange_ts:
+                                tick["exchange_timestamp"] = exchange_ts * 1000
                             oi_offset = 184 - 4
                             if oi_offset + 4 <= len(packet):
                                 tick["open_interest"] = struct.unpack(">I", packet[oi_offset:oi_offset + 4])[0]
