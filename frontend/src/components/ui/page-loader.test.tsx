@@ -30,11 +30,19 @@ describe('PageLoader', () => {
   })
 
   describe('accessibility', () => {
-    it('has accessible loading indicator', () => {
+    it('has accessible loading indicator with status role', () => {
       render(<PageLoader />)
 
-      // Check for text content that screen readers can announce
-      expect(screen.getByText('Loading...')).toBeInTheDocument()
+      // Check for text content and status role for screen readers
+      const statusElement = screen.getByRole('status')
+      expect(statusElement).toBeInTheDocument()
+      expect(statusElement).toHaveTextContent('Loading...')
+    })
+
+    it('marks spinner icon as decorative with aria-hidden', () => {
+      const { container } = render(<PageLoader />)
+      const spinner = container.querySelector('.animate-spin')
+      expect(spinner).toHaveAttribute('aria-hidden', 'true')
     })
   })
 })
