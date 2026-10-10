@@ -27,7 +27,6 @@ Protocol (docs: "Market Data - WebSocket"):
 
 import json
 import ssl
-import sys
 import threading
 import time
 from collections import deque
@@ -44,12 +43,14 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
+from utils.real_threading import wait_for as _cooperative_wait
 
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+_real_threading = _runtime.original("threading")
 
 # packetType values that carry an MBPData payload (cash, F&O, currency,
 # commodity, circuit and OI packets), resolved from the generated enum so a
@@ -370,7 +371,14 @@ class HDFCSkyWebSocket:
             return False
 
     def wait_for_connection(self, timeout=15.0):
-        return self._connection_ready.wait(timeout=timeout)
+        """Wait for the feed thread to report the socket open.
+
+        ``_connection_ready`` is a real Event set by the feed's real OS thread.
+        A greenlet blocking in its ``wait()`` would stop the eventlet hub, and
+        every other request on the worker, for the whole handshake, so this
+        polls it cooperatively there. Everywhere else it is the native wait.
+        """
+        return _cooperative_wait(self._connection_ready, timeout)
 
     def is_connected(self):
         return self.connected and self.running

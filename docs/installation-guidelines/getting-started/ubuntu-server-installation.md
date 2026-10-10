@@ -1,5 +1,9 @@
 # Ubuntu Server Installation
 
+The installer starts with **eventlet**. To use **gthread**, finish installation
+then follow the [gthread installation and switching guide](../../gthread/README.md#installing-with-gthread).
+There is currently no worker-selection prompt in this installer.
+
 ### Prerequisites
 
 #### System Requirements

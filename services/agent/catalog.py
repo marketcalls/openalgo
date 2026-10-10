@@ -3,22 +3,32 @@
 **Nothing about providers or models is stored in the database.** The registry in
 `ag_provider_model` holds operator intent only: which models are enabled, which
 one is default, and how each authenticates. What models exist, what they cost
-and what they can do is read from LiteLLM's own in-package data every time the
-process starts, which makes maintenance a single action: bump `litellm`. New
-providers and models arrive with the package. There is no catalogue table, no
-generated TypeScript constant, no regeneration script and no network call.
+and what they can do is read from LiteLLM every time the process starts, which
+makes maintenance a single action: bump `litellm`. New providers and models
+arrive with the package. There is no catalogue table, no generated TypeScript
+constant and no regeneration script.
 
-Verified against `litellm==1.99.0`:
+**Where LiteLLM's data comes from.** The provider list is code and moves only
+with the package. The model map is not: on import LiteLLM fetches the current
+`model_prices_and_context_window.json` from its GitHub repository (5 second
+timeout) and falls back to the copy bundled in the wheel when that fails or when
+`LITELLM_LOCAL_MODEL_COST_MAP=True`. So an online install sees models newer
+than its pin, an offline one sees exactly the pin, and this module reads
+whichever LiteLLM loaded. The import is not ours to make network-free.
 
-* `litellm.LITELLM_CHAT_PROVIDERS` lists 94 chat-capable providers, 93 of them
+Verified against `litellm==1.104.0` on 2026-10-07:
+
+* `litellm.LITELLM_CHAT_PROVIDERS` lists 98 chat-capable providers, 97 of them
   distinct because `baseten` appears twice. This is the list
-  :func:`list_providers` offers. `litellm.provider_list` has 152 but includes
+  :func:`list_providers` offers. `litellm.provider_list` has 160 but includes
   embedding, image, audio and rerank-only providers, and presenting a rerank
   provider as somewhere to run a chat agent is noise.
-* `litellm.models_by_provider` maps 96 providers onto 3021 model names.
-* `litellm.model_cost` carries 3517 entries of per-model metadata:
-  `max_input_tokens`, `max_output_tokens`, `input_cost_per_token`,
-  `output_cost_per_token`, `mode` and `supports_function_calling`.
+* `litellm.models_by_provider` maps 101 providers onto 3785 model names from
+  the bundled map, 3864 from the remote one.
+* `litellm.model_cost` carries 4376 entries of per-model metadata from the
+  bundled map, 4484 from the remote one: `max_input_tokens`,
+  `max_output_tokens`, `input_cost_per_token`, `output_cost_per_token`, `mode`
+  and `supports_function_calling`.
 
 `supports_function_calling` is load-bearing rather than decoration. This agent
 is entirely tool-driven, so a model that cannot call a function cannot drive it
@@ -31,7 +41,7 @@ Why not `litellm.get_model_info`
 --------------------------------
 
 It resolves a prefixed id nicely but it **invents metadata**. Measured at
-1.99.0, `get_model_info("ollama/definitely-not-a-real-model-xyz")` returns a
+1.99.0 and again at 1.104.0, `get_model_info("ollama/definitely-not-a-real-model-xyz")` returns a
 complete entry with `input_cost_per_token` and `output_cost_per_token` of `0.0`
 for a model that does not exist, which is exactly the guessed price this module
 must never produce. It also raises on an unmapped model and writes a provider
@@ -131,6 +141,7 @@ _BRANDS: Mapping[str, tuple[str, str]] = MappingProxyType(
         "deepinfra": ("DeepInfra", "deepinfra"),
         "deepseek": ("DeepSeek", "deepseek"),
         "docker_model_runner": ("Docker Model Runner", "docker"),
+        "edenai": ("Eden AI", "edenai"),
         "featherless_ai": ("Featherless AI", "featherless"),
         "fireworks_ai": ("Fireworks AI", "fireworks"),
         "friendliai": ("FriendliAI", "friendliai"),
@@ -150,6 +161,7 @@ _BRANDS: Mapping[str, tuple[str, str]] = MappingProxyType(
         "mistral": ("Mistral AI", "mistral"),
         "modelscope": ("ModelScope", "modelscope"),
         "moonshot": ("Moonshot AI", "moonshot"),
+        "nadir": ("Nadir", "nadir"),
         "nebius": ("Nebius AI Studio", "nebius"),
         "novita": ("Novita AI", "novita"),
         "nvidia_nim": ("NVIDIA NIM", "nvidia"),
@@ -162,6 +174,8 @@ _BRANDS: Mapping[str, tuple[str, str]] = MappingProxyType(
         "openrouter": ("OpenRouter", "openrouter"),
         "perplexity": ("Perplexity", "perplexity"),
         "petals": ("Petals", ""),
+        "qwen_ai_platform": ("Qwen AI Platform", "alibaba"),
+        "qwencloud": ("Qwen Cloud", "alibaba"),
         "replicate": ("Replicate", "replicate"),
         "sagemaker": ("Amazon SageMaker", "aws"),
         "sagemaker_chat": ("Amazon SageMaker (chat)", "aws"),
@@ -452,10 +466,10 @@ def list_providers() -> list[ProviderInfo]:
     """List the chat-capable providers LiteLLM knows about.
 
     Built from `litellm.LITELLM_CHAT_PROVIDERS`, not from
-    `litellm.provider_list`: the latter's 152 entries include embedding, image,
+    `litellm.provider_list`: the latter's 160 entries include embedding, image,
     audio and rerank-only providers that cannot host a chat agent. Duplicates
     are collapsed, because LITELLM_CHAT_PROVIDERS ships `baseten` twice at
-    1.99.0.
+    1.104.0.
 
     Returns:
         Every provider, sorted by display name, case-insensitively. Empty when
@@ -722,7 +736,7 @@ def _read_provider_ids(litellm: Any, entries: Mapping[str, Mapping[str, Any]]) -
 
     The union rather than any one list, because each is incomplete on its own:
     a provider can price models without listing them (`models_by_provider` has
-    96 of the 152), and a provider can be chat-capable with no priced models at
+    101 of the 160), and a provider can be chat-capable with no priced models at
     all. This set is only used to decide whether a slash in a model id is a
     provider prefix worth stripping, so being generous is the safe direction.
 

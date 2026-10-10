@@ -40,6 +40,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import time
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
@@ -62,6 +63,7 @@ from services.agent.frames import SSE_HEADERS
 from services.agent.providers import litellm_model_id, reasoning_capable
 from services.agent.safety import audit
 from services.agent.tools import ToolContext
+from utils import stream_registry
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -82,6 +84,18 @@ AGENT_RATE_LIMIT = "240 per minute"
 # should be reachable at the browsing rate of a settings page.
 AGENT_STREAM_RATE_LIMIT = "30 per minute"
 AGENT_TEST_RATE_LIMIT = "12 per minute"
+
+#: Answers streaming at once. Every chat and confirm stream is counted in
+#: ``utils.stream_registry`` under :data:`AGENT_STREAM_KIND`, and under the
+#: gthread worker, where each one holds a pool thread for the whole turn, a
+#: stream over this many is refused with :data:`STREAMS_BUSY_MESSAGE`. Under
+#: eventlet and on the development server nothing is refused. A constant, like
+#: the budgets above.
+MAX_CONCURRENT_STREAMS = 6
+AGENT_STREAM_KIND = "agent_stream"
+STREAMS_BUSY_MESSAGE = (
+    "Several answers are already being written. Wait for one to finish, then send this again."
+)
 
 _api_limit = limiter.shared_limit(AGENT_RATE_LIMIT, scope="agent_api")
 _stream_limit = limiter.shared_limit(AGENT_STREAM_RATE_LIMIT, scope="agent_stream")
@@ -1191,6 +1205,78 @@ def test_websearch_provider(provider: str):
 
 
 # ---------------------------------------------------------------------------
+# External data (MCP)
+#
+# The on/off switch is the `mcp_enabled` row and travels through
+# `/api/settings` like the trading switch. These two routes add what that
+# payload cannot: the registered servers, and a real connection test.
+# ---------------------------------------------------------------------------
+
+
+@agent_bp.route("/api/mcp", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_mcp_servers():
+    """The registered external data servers and whether the switch is on.
+
+    Reads the registry only; no server is contacted.
+    """
+    from services.agent.mcp.registry import registered_servers
+
+    try:
+        enabled = agent_settings.is_mcp_enabled(fresh=True)
+    except Exception:
+        logger.exception("Could not read the agent MCP setting")
+        return _error("Could not read the external data setting", 500)
+    return _ok(
+        {
+            "enabled": enabled,
+            "servers": [
+                {
+                    "key": spec.key,
+                    "title": spec.title,
+                    "description": spec.description,
+                    "url": spec.url,
+                }
+                for spec in registered_servers()
+            ],
+        }
+    )
+
+
+@agent_bp.route("/api/mcp/test", methods=["POST"])
+@check_session_validity
+@_test_limit
+def test_mcp_servers():
+    """Test the connection to every registered server, or to the one named.
+
+    The same rule as the model and web search tests: a server that fails is a
+    200 carrying ``ok: false`` and a sentence for the operator, not an HTTP
+    error. Each test starts a fresh session and lists the tools, ignoring the
+    circuit breaker, because the operator asked whether the server answers now.
+
+    Returns:
+        ``{results: [{key, title, ok, latency_ms, tool_count, message}]}``.
+    """
+    from services.agent.mcp.client import check_servers
+    from services.agent.mcp.registry import server_by_key
+
+    body = request.get_json(silent=True)
+    if body is not None and not isinstance(body, dict):
+        return _error("The request body must be a JSON object", 400)
+    server = (body or {}).get("server")
+    if server is not None and (not isinstance(server, str) or server_by_key(server) is None):
+        return _error("Unknown external data server", 400)
+
+    try:
+        results = check_servers([server] if server else None)
+    except Exception:
+        logger.exception("The MCP connection test could not be run")
+        return _error("Could not run the external data test", 500)
+    return _ok({"results": results})
+
+
+# ---------------------------------------------------------------------------
 # ChatGPT subscription
 # ---------------------------------------------------------------------------
 
@@ -1978,7 +2064,13 @@ class _TurnRecorder:
         return bool(self.text or self.tools or self.notices or self._viz or self._ui or self._usage)
 
 
-def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, username: str):
+def _record_stream(
+    chunks,
+    recorder: _TurnRecorder,
+    conversation_id: int,
+    username: str,
+    ticket: stream_registry.StreamTicket | None = None,
+):
     """Pass SSE text through untouched while recording what it carried.
 
     The persist happens in a ``finally``, so a client that hangs up mid-answer
@@ -1991,6 +2083,9 @@ def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, userna
         recorder: The recorder to fold each frame into.
         conversation_id: The conversation being appended to.
         username: The owner, for the owner-scoped session binding.
+        ticket: The stream's slot, released once the turn is persisted. The
+            route also releases it when the response closes, which covers a
+            client that left before this generator ever started.
 
     Yields:
         Each chunk exactly as it arrived.
@@ -2006,7 +2101,54 @@ def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, userna
                     logger.exception("Could not record an agent frame")
             yield chunk
     finally:
-        _persist_turn(recorder, conversation_id, username)
+        try:
+            _persist_turn(recorder, conversation_id, username)
+        finally:
+            if ticket is not None:
+                ticket.release()
+
+
+def _with_stream_slot(body: Callable[[stream_registry.StreamTicket], Any]):
+    """Run a streaming route's body holding one of the agent's stream slots.
+
+    The slot is taken before anything else, so a refused turn builds no agent
+    and writes no conversation. Every answer that is not the stream itself
+    (a validation error, a missing conversation, a build failure) gives the
+    slot back here; the stream gives it back when it ends, through
+    :func:`_record_stream` and the response's close.
+
+    Args:
+        body: The route's work, given the slot it holds.
+
+    Returns:
+        The route's response, or 429 with :data:`STREAMS_BUSY_MESSAGE` under
+        the gthread worker when :data:`MAX_CONCURRENT_STREAMS` are open.
+    """
+    ticket = stream_registry.admit(
+        AGENT_STREAM_KIND, stream_registry.enforced_limit(MAX_CONCURRENT_STREAMS)
+    )
+    if ticket is None:
+        return _error(STREAMS_BUSY_MESSAGE, 429, {"kind": "busy"})
+    try:
+        result = body(ticket)
+    except BaseException:
+        ticket.release()
+        raise
+    if not (isinstance(result, Response) and result.is_streamed):
+        ticket.release()
+    return result
+
+
+def _stream_response(chunks, recorder, conversation_id, username, ticket) -> Response:
+    """The SSE response for one turn, holding ``ticket`` until it closes."""
+    response = Response(
+        stream_with_context(_record_stream(chunks, recorder, conversation_id, username, ticket)),
+        mimetype="text/event-stream",
+    )
+    response.call_on_close(ticket.release)
+    for header, value in SSE_HEADERS.items():
+        response.headers[header] = value
+    return response
 
 
 def _persist_turn(recorder: _TurnRecorder, conversation_id: int, username: str) -> None:
@@ -2492,6 +2634,11 @@ def chat_stream():
     frame with **no** ``done`` after it, and the client resumes it at
     ``/chat/confirm``.
     """
+    return _with_stream_slot(_chat_stream_body)
+
+
+def _chat_stream_body(ticket: stream_registry.StreamTicket):
+    """The work of :func:`chat_stream`, holding a stream slot."""
     username, api_key, error = _chat_preconditions()
     if error:
         return error
@@ -2619,13 +2766,7 @@ def chat_stream():
         user_message_id=user_message_id,
     )
 
-    response = Response(
-        stream_with_context(_record_stream(chunks, recorder, conversation_id, username)),
-        mimetype="text/event-stream",
-    )
-    for header, value in SSE_HEADERS.items():
-        response.headers[header] = value
-    return response
+    return _stream_response(chunks, recorder, conversation_id, username, ticket)
 
 
 @agent_bp.route("/api/chat/confirm", methods=["POST"])
@@ -2642,6 +2783,11 @@ def chat_confirm():
     is left undecided and agno pauses on it again, which is the right outcome
     for a partial answer rather than a silent approval.
     """
+    return _with_stream_slot(_chat_confirm_body)
+
+
+def _chat_confirm_body(ticket: stream_registry.StreamTicket):
+    """The work of :func:`chat_confirm`, holding a stream slot."""
     username, api_key, error = _chat_preconditions()
     if error:
         return error
@@ -2747,13 +2893,7 @@ def chat_confirm():
         tool_frames=viz_sink_module.frame_hook(viz_sink),
     )
 
-    response = Response(
-        stream_with_context(_record_stream(chunks, recorder, conversation_id, username)),
-        mimetype="text/event-stream",
-    )
-    for header, value in SSE_HEADERS.items():
-        response.headers[header] = value
-    return response
+    return _stream_response(chunks, recorder, conversation_id, username, ticket)
 
 
 def _read_decisions(raw: Any) -> tuple[dict[str, bool], dict[str, str], str | None]:

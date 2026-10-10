@@ -164,6 +164,7 @@ def transform_order_data(orders):
             "orderid": order.get("nOrdNo", ""),
             "order_status": order.get("ordSt", ""),
             "timestamp": order.get("ordEntTm", ""),
+            "order_tag": order.get("GuiOrdId", ""),
         }
 
         transformed_orders.append(transformed_order)
@@ -238,6 +239,7 @@ def transform_tradebook_data(tradebook_data):
             # adapter) already expect that exact key.
             "tradeid": trade.get("flId", ""),
             "timestamp": trade.get("exTm", ""),
+            "order_tag": trade.get("GuiOrdId", ""),
         }
         transformed_data.append(transformed_trade)
     return transformed_data

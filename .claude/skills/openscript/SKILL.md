@@ -1,6 +1,6 @@
 ---
 name: openscript
-description: Write an OpenScript study or strategy for OpenAlgo, and install it into strategies/openscript/ only after it compiles. Use when asked to create, port or debug an OpenScript indicator, study, strategy, backtest script or .oscript file, including porting a study or strategy written for another charting platform. This is the OpenScript path, not the JavaScript chart-indicator path and not the Python openalgo.ta path.
+description: Write an OpenScript study or strategy for OpenAlgo, and install it into strategies/openscript/ only after it compiles. Use when asked to create, port or debug an OpenScript indicator, study, strategy, backtest script or .oscript file, including porting a study or strategy written for another charting platform, or a JavaScript chart indicator (an openalgo-charts descriptor) into a study that computes the same values. This is the OpenScript path, not the JavaScript chart-indicator path and not the Python openalgo.ta path.
 argument-hint: "[what the study or strategy should do]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
@@ -68,6 +68,11 @@ The compiler accepted the text: the names resolve, the types agree, the calls
 exist, the limits hold. **Nothing here runs a single bar.** It does not mean the
 strategy is any good, that its numbers are right, or that it will make money.
 
+Some refusals wait for a bar, and a pass rules out none of them: a cell written
+outside its grid is `OS4008` on the bar that writes it. `OS6025`, a bar handed
+over with no time, is the platform's data and not the script: report the
+instrument and timeframe rather than changing the script.
+
 `reference/strategies.md` ends with the four steps between a compile and money,
 and they are not optional.
 
@@ -78,12 +83,37 @@ and they are not optional.
 | `reference/library.md` | every one of the 350 names, with what it answers and its warmup. Generated from the installed compiler. |
 | `reference/pitfalls.md` | what goes wrong, with the diagnostic code you will actually see. Every code on it is proved against the compiler. |
 | `reference/strategies.md` | the shapes a strategy takes, and which example answers which ask. |
+| `reference/porting-from-javascript.md` | porting a JavaScript chart indicator into a study that computes the same values: the chart helpers whose OpenScript twin differs, absent values, `fn` scope, markers, tables, inputs, and how to check parity. |
 | `examples/*.oscript` | six worked files, all of which compile. The reasoning is in the comments. |
 
 **Look a name up rather than recalling it.** 350 names is more than anyone holds,
 and the dangerous failure is not reaching for a name that does not exist: it is
 reaching for a neighbour that computes something else, which compiles and
 reports a different strategy than the one that was meant.
+
+## Porting from another chart language
+
+The installed compiler carries an importer for the widely used chart language
+whose scripts open with `//@version=5` or `//@version=6`. Each statement comes
+across with its original meaning, or with a warning stating the difference, or
+as a comment with an error, all in the range `OS9001` to `OS9012`, and what it
+hands back has been compiled. Save the original as `<scratch>/original.txt`,
+then from the repository root (the file is an argument, not standard input):
+
+```bash
+node --input-type=module -e "import { importScript } from './frontend/node_modules/openalgo-script/dist/core/index.js'; import { readFileSync } from 'node:fs'; const r = importScript(readFileSync(process.argv[1], 'utf8')); process.stdout.write(r.source); for (const f of r.findings) console.error(f.code, f.message)" <scratch>/original.txt > <scratch>/ported.oscript
+```
+
+The output is a draft, not a port. Read every finding: a warning marks a place
+where the numbers can differ from the original, and a line kept as a comment is
+behaviour that did not come across. Then take it through `validate.mjs` like
+any other draft.
+
+To port a JavaScript chart indicator (an `openalgo-charts` descriptor handed to
+`registerIndicator`, with `calc(bars, settings)`) into a study, read
+`reference/porting-from-javascript.md` first: there is no importer for that
+direction, and several chart helpers share a name with a built-in that computes
+something else.
 
 ## Three things that cost the most time
 
@@ -107,7 +137,7 @@ of bars and looks like it works.
 
 ## Keeping the skill honest
 
-Two scripts, both of which must pass, and both of which the CI job runs:
+The generator and two checks, all three of which the CI job runs:
 
 ```bash
 node .claude/skills/openscript/generate-reference.mjs   # rewrites reference/library.md
@@ -127,6 +157,11 @@ the wrong spelling must still produce the code named, and the fix offered must
 still come out clean. It also checks that the page and the script name the same
 set of codes, so neither can drift alone. Two claims on the first draft of that
 page were wrong, and this is what found them.
+
+This skill describes `openalgo-script` 0.8.1, the compiler `/trading` pins, with
+the server engine `openscript` at the same version. OpenScript 0.9.0, with
+fixes to the backtest engine, is coming; when the pin moves to it, read its
+changelog for anything a backtest now reports differently and say so here.
 
 **Bumping `openalgo-script` means updating this skill in the same change**, the
 way a chart bump does. Run the generator, run both checks, then update the prose

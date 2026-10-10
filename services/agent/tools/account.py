@@ -51,7 +51,14 @@ from typing import TYPE_CHECKING, Any
 from agno.exceptions import RetryAgentRun
 
 from services.agent.prompts import ASSISTANT_NAME, wrap_tool_result
-from services.agent.tools.base import OpenAlgoToolkit
+from services.agent.tools.base import (
+    SERVICE_BUSY_MESSAGE,
+    OpenAlgoToolkit,
+    _HubTimeout,
+    call_service,
+)
+from services.agent.tools.order_vocab import canonical_product
+from utils import real_threading
 from utils.constants import VALID_EXCHANGES, VALID_PRODUCT_TYPES
 from utils.logging import get_logger
 
@@ -565,8 +572,11 @@ class AccountToolkit(OpenAlgoToolkit):
         reports zero.
 
         The result carries the ``quantity`` for that contract. Positive is long,
-        negative is short, and zero means there is no open position in it, which
-        is a real answer and not a failure. Figures reflect the platform's
+        negative is short, and zero means the position service reported no open
+        quantity for that exact symbol, exchange and product. Zero is not a
+        failure, but some brokers report positions as flat when they are not,
+        so check ``get_positions`` before telling the operator they hold
+        nothing. Figures reflect the platform's
         current mode; in analyzer mode this is the sandbox position, and the
         ``mode`` field says so.
 
@@ -593,7 +603,7 @@ class AccountToolkit(OpenAlgoToolkit):
 
         symbol = self._clean("symbol", symbol)
         exchange = self._clean("exchange", exchange)
-        product = self._clean("product", product)
+        product = canonical_product(self._clean("product", product))
 
         if exchange not in _EXCHANGES:
             self.invalid_argument(
@@ -627,13 +637,18 @@ class AccountToolkit(OpenAlgoToolkit):
             quantity=quantity,
         )
         if looks_flat(quantity):
+            # Worded as what the service reported rather than as a fact about
+            # the account: several brokers read every position as flat even
+            # when it is not, and a symbol or product mismatch reads as zero.
             result["note"] = (
-                f"There is no open {product} position in {symbol} on {exchange}. Zero is a real "
-                "answer, not a failure; the operator is flat in this contract."
+                f"The position service reported no open quantity for {symbol} on {exchange} "
+                f"under {product}. That is the answer for this exact symbol, exchange and "
+                "product, not proof the operator holds nothing: check get_positions before "
+                "telling the operator they are flat."
             )
         return self._result("get_open_position", result, symbol=symbol, exchange=exchange)
 
-    def get_order_status(self, order_id: str) -> str:
+    def get_order_status(self, order_id: str | int) -> str:
         """Fetch the current state of one order placed today.
 
         Use this to answer "did my order go through", to check a fill price, or
@@ -663,6 +678,9 @@ class AccountToolkit(OpenAlgoToolkit):
         """
         from services.orderstatus_service import get_order_status
 
+        # A numeric id often arrives as a JSON number; its decimal text is the id.
+        if isinstance(order_id, int) and not isinstance(order_id, bool):
+            order_id = str(order_id)
         order_id = self._clean("order_id", order_id, upper=False)
         label = "orderstatus_service.get_order_status"
 
@@ -671,15 +689,21 @@ class AccountToolkit(OpenAlgoToolkit):
         # answer here: raising on it would have the model report a failure when
         # the truth is simply that no such order exists.
         try:
-            outcome = get_order_status(
-                {"orderid": order_id, "strategy": STRATEGY_LABEL}, api_key=self.api_key
+            outcome = call_service(
+                get_order_status,
+                {"orderid": order_id, "strategy": STRATEGY_LABEL},
+                api_key=self.api_key,
             )
+        except (real_threading.HubQueueFull, _HubTimeout) as exc:
+            logger.warning("Agent tool get_order_status: %s could not run in time", label)
+            raise RetryAgentRun(SERVICE_BUSY_MESSAGE.format(label=label)) from exc
         except Exception as exc:
             logger.exception("Agent tool get_order_status: %s raised", label)
             raise RetryAgentRun(
-                f"{label} raised {type(exc).__name__}: {exc}. "
-                "Check the order id you passed; if it is correct, this is a platform failure and "
-                "you should report it to the user rather than calling the tool again."
+                f"The platform hit an internal error while looking up order {order_id}. Check "
+                "the order id is exactly as the order book shows it; if it is, this is a "
+                "platform failure with the details in the platform's error log, so tell the "
+                "operator rather than calling the tool again."
             ) from exc
 
         if (

@@ -944,7 +944,7 @@ def test_the_endpoints_own_poll_interval_is_a_floor_not_a_suggestion(token_dir, 
     assert elapsed >= 0.4, f"the endpoint asked for 0.4s between polls, waited {elapsed:.2f}s"
 
 
-def test_no_combination_of_intervals_produces_a_poll_loop_with_no_wait(token_dir, bits):
+def test_no_combination_of_intervals_produces_a_poll_loop_with_no_wait(token_dir, secrets, bits):
     """A zero wait is a hot loop against someone else's auth host, on a real OS
     thread, for a quarter of an hour: a burnt core and a rate limit.
 

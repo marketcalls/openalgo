@@ -254,6 +254,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/whatsapp/notify \
 
 The API refuses with HTTP 409 rather than silently queueing — a trader expects an alert to either deliver or fail loudly, not appear later out of nowhere.
 
+When WhatsApp has logged the paired device out, the same 409 carries the cause instead: `"WhatsApp logged this device out, so alerts cannot be sent. Pair it again from the /whatsapp page in OpenAlgo."` The status and the HTTP code do not change.
+
 #### Recipient Forms
 
 Exactly one of the following must be specified (defaults to `self` if all are omitted):
@@ -399,6 +401,15 @@ Per-user notification toggles (`order_notifications`, `trade_notifications`, `pn
    * Background thread spawned in `_init_databases_and_schedulers` after DB init completes
    * If `whatsapp_config.is_paired` is true, loads the encrypted blob and starts the worker thread without operator intervention
 
+9. **Session kept current**: `WhatsAppBotService._save_session`
+
+   * The running client keeps changing its session (keys and device state) after pairing, in a private file of its own. A restart restores what the database holds, and a restart that restored the snapshot taken at pairing was logged out by WhatsApp.
+   * So the bot thread exports the live session and writes it back (`whatsapp_db.refresh_session_blob`) 60 seconds after each login, every 5 minutes after that, and once more when the bot stops, including on a normal server stop. Only changed bytes are written, only while the device is logged in, and never over a session that was unlinked or replaced by a new pairing in the meantime.
+
+10. **Logged out by WhatsApp**: wars reports whatsapp-rust's `LoggedOut` event through `on_disconnect`
+
+   * WhatsApp does not take a logged-out device back, so the stored session is cleared (`whatsapp_db.clear_rejected_session`) and the device shows as not paired. The server log, the `/whatsapp` page, `/api/v1/whatsapp/notify` and Flow's WhatsApp node all say the device was logged out and must be paired again.
+
 #### Event Flow
 
 ```
@@ -449,6 +460,10 @@ bus.publish(OrderPlacedEvent(api_key, ...))
 2. Check that you have an OpenAlgo API key generated at `/apikey` (slash-commands need it for SDK calls).
 3. Confirm the order actually flowed through `/api/v1/placeorder` (or the SDK / a strategy / any other API path). Orders placed directly via a broker website do NOT trigger event-bus events.
 4. Check the server logs for lines like `WhatsApp alert queued for owner user=<username> type=placeorder`. If present, the alert was dispatched.
+
+#### "WhatsApp logged this device out" (HTTP 409)
+
+WhatsApp ended the linked device's session: it was removed under **Linked devices** on your phone, or WhatsApp refused its login. OpenAlgo has cleared the session it can no longer use. Open `/whatsapp` and pair the device again.
 
 #### "WhatsApp is not paired or not connected" (HTTP 409)
 

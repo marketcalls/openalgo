@@ -96,9 +96,9 @@ describe('workspace pane preference ownership', () => {
     const bar = { time: 1000, open: 100, high: 100, low: 100, close: 100 }
     callbacks.onReplayChange = vi.fn()
     Object.assign(instance, {
-      chart: { panes: () => [], destroy() {} },
+      chart: { panes: () => [], seriesTransform: () => null, destroy() {} },
       price: {},
-      shownBars: [bar, { ...bar, time: 1060 }],
+      rawBars: [bar, { ...bar, time: 1060 }],
       data: { setPaused: paused, destroy() {} },
       loadReplaySubBars: () => pending,
     })

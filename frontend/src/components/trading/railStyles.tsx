@@ -1,13 +1,12 @@
 /**
- * The shared vocabulary of the terminal's two edge rails.
+ * The shared vocabulary of the terminal's two edge rails. Their hover labels
+ * are the terminal's one `Tip`, shared with the toolbar.
  *
  * DrawingRail sits on the left and RightRail on the right, and they are on
  * screen together. Two independent copies of "what a rail button looks like"
  * would survive exactly until the first restyle, after which the two edges of
  * the same workspace would quietly disagree. The metrics live here once.
  */
-
-import { cn } from '@/lib/utils'
 
 /** A rail button at rest: 32px square, quiet until hovered. */
 export const RAIL_BTN =
@@ -35,37 +34,3 @@ export const RAIL_BTN_ON =
  * undo, redo and delete SVGs sit at 1.6 and are not covered by this.
  */
 export const RAIL_ICON_STROKE = 1.5
-
-/**
- * Hover label beside a rail button.
- *
- * The native `title` attribute waits about a second and cannot be styled; a
- * rail of identical glyphs needs its names to appear immediately. Rendered
- * inside the rail rather than portalled, so it still paints when a pane is in
- * the Fullscreen top layer.
- *
- * `side` is which way it opens. The right rail has to open left or the viewport
- * edge clips it.
- */
-export function RailTip({
-  text,
-  chord,
-  side = 'right',
-}: {
-  text: string
-  chord?: string
-  side?: 'left' | 'right'
-}) {
-  return (
-    <span
-      role="tooltip"
-      className={cn(
-        'pointer-events-none absolute top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded border bg-popover px-2 py-1 text-[12px] text-popover-foreground opacity-0 shadow-md transition-opacity duration-75 group-hover:opacity-100',
-        side === 'right' ? 'left-full ml-2' : 'right-full mr-2'
-      )}
-    >
-      {text}
-      {chord && <span className="ml-2 text-muted-foreground">{chord}</span>}
-    </span>
-  )
-}

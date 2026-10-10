@@ -436,20 +436,25 @@ def _litellm_opinion(litellm_id: str, probe: str) -> bool | None:
     ``GET /agent/api/models``, through ``_with_resolved_capabilities``, so merely
     listing a registered ``chatgpt/`` model would hang the request. Reading the
     entry gives the same answer, because the predicate is a lookup in this very
-    table once the provider has been resolved.
+    table once the provider has been resolved. LiteLLM 1.104.0 stopped running
+    the login flow on that path (measured: the same call with no cached token
+    answers in milliseconds), and the table read stays anyway: it costs nothing,
+    and a regression upstream would otherwise hang a page load again.
 
     **The lookup has to include LiteLLM's own bare-name fallback**, and reading
     the prefixed entry alone is not the same answer. ``_supports_factory``
     treats an *absent* key as "this entry does not say" and consults the
     bare-name entry, which is how a sparse provider entry inherits the complete
     metadata (LiteLLM #20885). An explicit ``False`` is respected and does not
-    fall through. Every one of the ten ``chatgpt/`` entries carries
+    fall through. At 1.99.0 every one of the ten ``chatgpt/`` entries carried
     ``supports_vision`` and ``supports_function_calling`` and **none of them
-    carries ``supports_reasoning``**, so reading only the prefixed entry
+    carried ``supports_reasoning``**, so reading only the prefixed entry
     answered False for all ten, against a predicate that answers True for
     eight, ``chatgpt/gpt-5.4`` and ``chatgpt/gpt-5.4-pro`` among them. That
     turned every reasoning model on a plan into a non-reasoning one, silently
     and in the direction that loses a capability the operator is paying for.
+    At 1.104.0 most entries carry the flag themselves, but the fallback stays:
+    an entry that omits it is still legal, and the remote map can ship one.
 
     Args:
         litellm_id: The id that will be sent, provider prefix included.

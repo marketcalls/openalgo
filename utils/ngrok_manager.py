@@ -105,12 +105,23 @@ def _signal_handler(signum, frame):
 
 
 def setup_ngrok_handlers():
-    """Register cleanup and signal handlers for ngrok. Works on Windows, Linux, and macOS."""
+    """Register cleanup and signal handlers for ngrok. Works on Windows, Linux, and macOS.
+
+    A no-op under gunicorn, with either worker. A tunnel is only ever started
+    from app.py's ``__main__`` block (the development server), so there is
+    nothing to clean up, and replacing gunicorn's SIGTERM and SIGINT handlers
+    would take its graceful stop away from a worker that may be mid-order.
+    """
     import platform
+
+    from utils.runtime import under_gunicorn
 
     global _ngrok_initialized, _original_sigint_handler, _original_sigterm_handler
 
     if _ngrok_initialized:
+        return
+    if under_gunicorn():
+        _ngrok_initialized = True
         return
 
     # Register cleanup handlers for graceful shutdown (atexit)

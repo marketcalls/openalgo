@@ -166,9 +166,23 @@ def get_pending_order_by_id(order_id):
         return None
 
 
+# Status transitions are compare-and-set.
+#
+# Reading a row, checking its status and then writing the new one is two steps,
+# and two requests (a double-click, two browser tabs, an approve racing a
+# reject) can both pass the check before either writes. Each transition below
+# is instead one UPDATE whose WHERE clause carries the check, so the database
+# applies it to at most one caller: the one whose UPDATE matched a row. The
+# returned rowcount says which caller that was.
+
+
 def approve_pending_order(order_id, approved_by, user_id):
     """
     Approve a pending order with IST timestamp
+
+    One conditional UPDATE: it applies only while the order is still pending,
+    so of two approvals (or an approval and a rejection) racing for one order,
+    exactly one succeeds.
 
     Args:
         order_id: Order ID
@@ -176,27 +190,29 @@ def approve_pending_order(order_id, approved_by, user_id):
         user_id: ID of the user who owns the order (for security)
 
     Returns:
-        bool: True if successful, False otherwise
+        bool: True if this call moved the order from pending to approved,
+        False otherwise
     """
     try:
-        pending_order = PendingOrder.query.filter_by(
+        approved_at_ist = get_ist_timestamp()
+        updated = PendingOrder.query.filter_by(
             id=order_id, user_id=user_id, status="pending"
-        ).first()
+        ).update(
+            {
+                PendingOrder.status: "approved",
+                PendingOrder.approved_by: approved_by,
+                PendingOrder.approved_at: datetime.utcnow(),
+                PendingOrder.approved_at_ist: approved_at_ist,
+            },
+            synchronize_session=False,
+        )
+        db_session.commit()
 
-        if pending_order:
-            pending_order.status = "approved"
-            pending_order.approved_by = approved_by
-            pending_order.approved_at = datetime.utcnow()
-            pending_order.approved_at_ist = get_ist_timestamp()
-            db_session.commit()
-
-            logger.info(
-                f"Order approved: ID={order_id}, by={approved_by}, time={pending_order.approved_at_ist}"
-            )
+        if updated == 1:
+            logger.info(f"Order approved: ID={order_id}, by={approved_by}, time={approved_at_ist}")
             return True
-        else:
-            logger.warning(f"Cannot approve order {order_id}: not found or not pending")
-            return False
+        logger.warning(f"Cannot approve order {order_id}: not found or not pending")
+        return False
 
     except Exception as e:
         logger.exception(f"Error approving order: {e}")
@@ -208,6 +224,9 @@ def reject_pending_order(order_id, reason, rejected_by, user_id):
     """
     Reject a pending order with IST timestamp
 
+    One conditional UPDATE: it applies only while the order is still pending,
+    so a rejection racing an approval cannot also succeed.
+
     Args:
         order_id: Order ID
         reason: Rejection reason
@@ -215,31 +234,141 @@ def reject_pending_order(order_id, reason, rejected_by, user_id):
         user_id: ID of the user who owns the order (for security)
 
     Returns:
-        bool: True if successful, False otherwise
+        bool: True if this call moved the order from pending to rejected,
+        False otherwise
     """
     try:
-        pending_order = PendingOrder.query.filter_by(
+        rejected_at_ist = get_ist_timestamp()
+        updated = PendingOrder.query.filter_by(
             id=order_id, user_id=user_id, status="pending"
-        ).first()
+        ).update(
+            {
+                PendingOrder.status: "rejected",
+                PendingOrder.rejected_reason: reason,
+                PendingOrder.rejected_by: rejected_by,
+                PendingOrder.rejected_at: datetime.utcnow(),
+                PendingOrder.rejected_at_ist: rejected_at_ist,
+            },
+            synchronize_session=False,
+        )
+        db_session.commit()
 
-        if pending_order:
-            pending_order.status = "rejected"
-            pending_order.rejected_reason = reason
-            pending_order.rejected_by = rejected_by
-            pending_order.rejected_at = datetime.utcnow()
-            pending_order.rejected_at_ist = get_ist_timestamp()
-            db_session.commit()
-
+        if updated == 1:
             logger.info(
-                f"Order rejected: ID={order_id}, by={rejected_by}, time={pending_order.rejected_at_ist}, reason={reason}"
+                f"Order rejected: ID={order_id}, by={rejected_by}, time={rejected_at_ist}, reason={reason}"
             )
             return True
-        else:
-            logger.warning(f"Cannot reject order {order_id}: not found or not pending")
-            return False
+        logger.warning(f"Cannot reject order {order_id}: not found or not pending")
+        return False
 
     except Exception as e:
         logger.exception(f"Error rejecting order: {e}")
+        db_session.rollback()
+        return False
+
+
+#: broker_status while an approved order is on its way to the broker. Written
+#: by claim_pending_order_for_execution before the broker call, and replaced by
+#: a final status on every path that returns. An order left in it by a crash
+#: must never be resent automatically: the operator checks the broker's order
+#: book. The Action Center page shows an order in it as not confirmed, tells
+#: the trader to check the broker's order book before placing it again, and
+#: offers no way to send it again (frontend/src/pages/ActionCenter.tsx).
+SUBMITTING = "submitting"
+
+#: broker_status of an approved smart order that needed no order, because the
+#: position already matched. Final, like any other broker status.
+NO_ACTION = "no_action"
+
+
+def claim_pending_order_for_execution(order_id):
+    """
+    Claim an approved order for sending to the broker, at most once.
+
+    One conditional UPDATE sets broker_status to ``submitting`` only while the
+    order is approved and has no broker status yet. Whoever gets True sends
+    the order; everyone else must not, because it is already on its way.
+
+    Args:
+        order_id: Pending order ID
+
+    Returns:
+        True if this call claimed the order, False if it is not approved or
+        another request already claimed it, and None if the database could not
+        answer. None means nothing was claimed and nothing was sent; it must
+        not be read as "already on its way".
+    """
+    try:
+        updated = PendingOrder.query.filter(
+            PendingOrder.id == order_id,
+            PendingOrder.status == "approved",
+            PendingOrder.broker_status.is_(None),
+        ).update({PendingOrder.broker_status: SUBMITTING}, synchronize_session=False)
+        db_session.commit()
+
+        if updated == 1:
+            logger.info(f"Pending order {order_id} claimed for execution")
+            return True
+        logger.warning(
+            f"Cannot claim order {order_id} for execution: not found, not approved or already sent"
+        )
+        return False
+
+    except Exception as e:
+        logger.exception(f"Error claiming order for execution: {e}")
+        db_session.rollback()
+        return None
+
+
+def return_approved_order_to_pending(order_id, broker_status=None):
+    """
+    Put an approved order that was never sent back in the pending list.
+
+    For an approval whose order provably never reached the broker (the claim
+    could not be written, or the broker pacer refused it before sending), so
+    the operator can approve it again. One conditional UPDATE: it applies only
+    while the order is approved with the given broker status, so it can never
+    reopen an order another request has since sent or finished.
+
+    Args:
+        order_id: Pending order ID
+        broker_status: The broker status the order must still have: None for
+            an order whose claim was never written, SUBMITTING for one this
+            request claimed.
+
+    Returns:
+        bool: True if the order is pending again, False otherwise
+    """
+    try:
+        condition = (
+            PendingOrder.broker_status.is_(None)
+            if broker_status is None
+            else PendingOrder.broker_status == broker_status
+        )
+        updated = PendingOrder.query.filter(
+            PendingOrder.id == order_id,
+            PendingOrder.status == "approved",
+            condition,
+        ).update(
+            {
+                PendingOrder.status: "pending",
+                PendingOrder.broker_status: None,
+                PendingOrder.broker_order_id: None,
+                PendingOrder.approved_by: None,
+                PendingOrder.approved_at: None,
+                PendingOrder.approved_at_ist: None,
+            },
+            synchronize_session=False,
+        )
+        db_session.commit()
+        if updated == 1:
+            logger.info(f"Pending order {order_id} was not sent and is pending again")
+            return True
+        logger.warning(f"Could not put order {order_id} back in the pending list")
+        return False
+
+    except Exception as e:
+        logger.exception(f"Error putting order {order_id} back in the pending list: {e}")
         db_session.rollback()
         return False
 

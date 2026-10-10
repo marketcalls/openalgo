@@ -21,14 +21,27 @@ from broker.aliceblue.mapping.transform_data import (
     transform_modify_order_data,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
+from utils.smart_order_guard import (
+    POSITION_BOOK_TTL_SECONDS,
+    SMART_ORDER_LOCK_WAIT_SECONDS,
+    SymbolLocks,
+)
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 
 # AliceBlue V2 API base URL
 BASE_URL = "https://a3.aliceblueonline.com"
+
+# The messages get_api_response writes when a request failed on our side of
+# the wire, as opposed to an answer AliceBlue sent.
+_REQUEST_FAILURE_PREFIXES = ("HTTP error:", "Invalid JSON response:", "General error:")
 
 
 # ─── API request helper ──────────────────────────────────────────────────────
@@ -79,6 +92,13 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
         return response_data
 
+    except BrokerBusyError:
+        # A request the rate limiter refused under the gthread worker was
+        # never sent. Raise it as is, with its sentence for the trader, rather
+        # than fold it into an error body that reads like a broker failure:
+        # get_positions would turn that into an empty book, and a smart order
+        # would then size itself against no position.
+        raise
     except httpx.HTTPError as e:
         logger.error(f"HTTP error during API request: {str(e)}")
         return {"status": "Error", "message": f"HTTP error: {str(e)}"}
@@ -150,15 +170,29 @@ def get_trade_book(auth):
     return [normalize_trade(trade) for trade in result]
 
 
-def get_positions(auth):
-    """Fetch positions from V2 API and normalize to old field names."""
+def get_positions(auth, strict=False):
+    """Fetch positions from V2 API and normalize to old field names.
+
+    Args:
+        auth: The AliceBlue session token.
+        strict: Read AliceBlue's answer by its published meaning, which the
+            smart order needs. "Failed to retrieve the position book" is the
+            text of EC919, a read that failed, so it is an error here, the
+            same as the bare code. The Positions page and close all (strict
+            False) keep reading it as an empty book, as they always have.
+    """
     response = get_api_response("/open-api/od/v1/positions", auth)
     result = _extract_result(response)
 
     if result is None:
         # V2 API returns error message when there are no positions
         msg = response.get("message", "")
-        if "No position" in msg or "not found" in msg.lower() or "Failed to retrieve" in msg:
+        # A request that never got an answer is not AliceBlue saying the book
+        # is empty, even when the HTTP error text reads "404 Not Found".
+        if isinstance(msg, str) and msg.startswith(_REQUEST_FAILURE_PREFIXES):
+            return {"stat": "Not_Ok", "emsg": msg}
+        failed_to_retrieve = "Failed to retrieve" in msg and not strict
+        if "No position" in msg or "not found" in msg.lower() or failed_to_retrieve:
             logger.debug(f"No positions found: {msg}")
             return []
         return {"stat": "Not_Ok", "emsg": msg or "Failed to fetch positions"}
@@ -212,9 +246,12 @@ _symbol_locks_lock = threading.Lock()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill. This is the cache
+# utils.smart_order_guard.PositionBookCache wraps, kept as a mapping here
+# because this module has always exposed the book as one.
+_position_cache = LockedTTLCache(maxsize=64, ttl=POSITION_BOOK_TTL_SECONDS)
 
 
 def _get_symbol_lock(symbol, exchange, product):
@@ -234,27 +271,47 @@ def _get_symbol_lock(symbol, exchange, product):
         return lock
 
 
+def _acquire_symbol_lock(lock):
+    """Take a symbol lock, giving up after the smart-order bound under gthread.
+
+    Under the gthread worker a smart order queued behind a slow broker call
+    would hold a request thread for the whole wait, so it waits at most
+    SMART_ORDER_LOCK_WAIT_SECONDS, as utils.smart_order_guard.SymbolLocks does
+    for every other broker. Under eventlet and the dev server it waits as long
+    as it takes, exactly as ``with lock:`` did.
+
+    Returns:
+        True once held; False when the bound ran out and nothing was taken.
+    """
+    if not runtime.gthread_active():
+        return lock.acquire()
+    return lock.acquire(timeout=SMART_ORDER_LOCK_WAIT_SECONDS)
+
+
+def _position_book_ok(positions_data):
+    """get_positions returns a list for a book it read, [] included.
+
+    EC920 is AliceBlue's own "No positions found for this user" answer. Every
+    other {"stat": "Not_Ok"} is a failed read.
+    """
+    if isinstance(positions_data, list):
+        return True
+    return isinstance(positions_data, dict) and "EC920" in str(positions_data.get("emsg", ""))
+
+
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get_or_load(
+        auth,
+        lambda: read_position_book(
+            "aliceblue", lambda: get_positions(auth, strict=True), _position_book_ok
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 # ─── Open position lookup ────────────────────────────────────────────────────
@@ -349,6 +406,7 @@ def place_order_api(data, auth):
 
 # ─── Smart order ──────────────────────────────────────────────────────────────
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 
@@ -361,14 +419,21 @@ def place_smartorder_api(data, auth):
     product = data.get("product")
     # Per-symbol lock: serialize smart orders per symbol
     symbol_lock = _get_symbol_lock(symbol, exchange, product)
+    if not _acquire_symbol_lock(symbol_lock):
+        return SymbolLocks.busy(symbol)
 
-    with symbol_lock:
+    try:
         position_size = int(data.get("position_size", "0"))
 
-        # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, reverse_map_product_type(map_product_type(product)), AUTH_TOKEN)
-        )
+        # Get current open position for the symbol. A position read the rate
+        # limiter refused (gthread only) fails the smart order: sizing it
+        # against a book that was never fetched could repeat or reverse a fill.
+        try:
+            current_position = int(
+                get_open_position(symbol, exchange, reverse_map_product_type(map_product_type(product)), AUTH_TOKEN)
+            )
+        except BrokerBusyError as busy:
+            return busy_response(str(busy))
 
         logger.debug(f"position_size : {position_size}")
         logger.debug(f"Open Position : {current_position}")
@@ -427,6 +492,8 @@ def place_smartorder_api(data, auth):
             _invalidate_position_cache(AUTH_TOKEN)
 
             return res, response, orderid
+    finally:
+        symbol_lock.release()
 
 
     # ─── Close all positions ──────────────────────────────────────────────────────

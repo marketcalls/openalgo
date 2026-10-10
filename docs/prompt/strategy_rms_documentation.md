@@ -589,6 +589,12 @@ start() -> bool                          # idempotent; called by runtime
 ```
 
 - Deciding an update is not ours costs one indexed lookup on `broker_order_id`.
+- The order-update executor admits at most 128 queued or running updates. When
+  full, its callback processes the update on the EventBus critical worker so
+  the bus's existing queue bound remains effective. Completed, failed and
+  cancelled futures all release admission. This prevents a second unbounded
+  queue; sustained overload can still reach the EventBus critical cap, whose
+  dropped-callback errors must be investigated against broker order state.
 - **A fill is applied exactly once.** The same fill can arrive from a broker
   postback and from the order-update stream, and applying it twice would add the
   leg's realized profit to the run a second time. The order row's own status is

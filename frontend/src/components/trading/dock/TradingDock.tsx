@@ -7,7 +7,7 @@
  * rendered once under the grid rather than once per pane.
  */
 
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import type { SearchRow } from '@/lib/trading/terminal'
@@ -20,11 +20,21 @@ import {
   type DockPosition,
   isWorking,
   realisedFromTrades,
+  parsePosition,
   sumOpenPnl,
 } from './blotter'
+import type { ChartOrderBridgeRef } from './chartOrderBridge'
 import { DockShell } from './DockShell'
 import type { DockTab } from './dockState'
 import { ModifyOrderDialog, type ModifyValues, sendsPrice, sendsTrigger } from './ModifyOrderDialog'
+import {
+  apiErrorMessage,
+  cancelAllDockOrders,
+  cancelDockOrder,
+  closeAllDockPositions,
+  closeDockPosition,
+  type OrderActionContext,
+} from './orderActions'
 import { OrdersTable } from './OrdersTable'
 import { PnlStrip } from './PnlStrip'
 import { PositionsTable } from './PositionsTable'
@@ -47,15 +57,8 @@ interface Props {
   activeSymbol: string | null
   /** True while any pane is replaying or picking a replay start. */
   tradingLocked(): boolean
-}
-
-/**
- * The trader-facing reason out of an API error, falling back to the
- * transport's message.
- */
-function apiErrorMessage(e: unknown): string {
-  const err = e as { response?: { data?: { message?: string } }; message?: string }
-  return err.response?.data?.message || err.message || 'Request failed'
+  /** Filled with the books and the actions, for the chart's right-click menu. */
+  bridge?: ChartOrderBridgeRef
 }
 
 export function TradingDock({
@@ -65,6 +68,7 @@ export function TradingDock({
   onPick,
   activeSymbol,
   tradingLocked,
+  bridge,
 }: Props) {
   const appMode = useThemeStore((s) => s.appMode)
   const broker = useAuthStore((s) => s.user?.broker)
@@ -95,40 +99,44 @@ export function TradingDock({
     [orders.length, positions.length, trades.length]
   )
 
-  /**
-   * Toasts follow the scalping terminal's split. In analyzer mode the
-   * analyzer_update event toasts every outcome globally, so the dock only
-   * speaks when that handler will not: live mode, or a transport error.
-   */
-  const handledGlobally = useCallback(
-    (e: unknown) => appMode === 'analyzer' && !!(e as { response?: unknown }).response,
-    [appMode]
-  )
-
   const refuse = useCallback(() => {
     if (!tradingLocked()) return false
     showToast.error(REPLAY_REFUSAL)
     return true
   }, [tradingLocked])
 
-  const cancelOrder = useCallback(
-    async (order: DockOrder) => {
-      if (refuse()) return
-      try {
-        const res = await tradingApi.cancelOrder(order.orderid)
-        if (res.status === 'success') {
-          // cancel_order_event only plays the sound in live mode.
-          if (appMode === 'live') showToast.success(`Order cancelled: ${order.orderid}`, 'orders')
-        } else if (appMode === 'live') {
-          showToast.error(res.message || 'Cancel failed', 'orders')
-        }
-      } catch (e) {
-        if (!handledGlobally(e)) showToast.error(apiErrorMessage(e), 'orders')
-      }
-      refresh()
-    },
-    [refuse, appMode, handledGlobally, refresh]
+  /** The context every dock action runs in; the chart's menu builds the same. */
+  const actions = useMemo<OrderActionContext>(
+    () => ({ appMode, refuse, refresh }),
+    [appMode, refuse, refresh]
   )
+  /** Analyzer mode toasts outcomes globally; see orderActions.ts. */
+  const handledGlobally = useCallback(
+    (e: unknown) => appMode === 'analyzer' && !!(e as { response?: unknown }).response,
+    [appMode]
+  )
+
+  // The chart menus read the books at the moment they open, never a copy
+  // taken when the bridge was filled.
+  const bookRef = useRef({ orders, positions })
+  bookRef.current = { orders, positions }
+  useEffect(() => {
+    if (!bridge) return
+    bridge.current = {
+      book: () => bookRef.current,
+      actions,
+      freshPositions: async () => {
+        const res = await tradingApi.getPositions(apiKey)
+        if (res.status === 'error') throw new Error(res.message || 'Position book unavailable')
+        return (res.data ?? []).map(parsePosition)
+      },
+    }
+    return () => {
+      if (bridge.current?.actions === actions) bridge.current = null
+    }
+  }, [bridge, actions, apiKey])
+
+  const cancelOrder = useCallback((order: DockOrder) => cancelDockOrder(order, actions), [actions])
 
   const modifyOrder = useCallback(
     async (order: DockOrder, values: ModifyValues): Promise<boolean> => {
@@ -160,49 +168,9 @@ export function TradingDock({
     [refuse, appMode, handledGlobally, refresh]
   )
 
-  const closePosition = useCallback(
-    async (p: DockPosition) => {
-      if (refuse()) return
-      try {
-        // The per-position web route. Success is toasted by the
-        // close_position_event it raises, in both modes.
-        const res = await tradingApi.closePosition(p.symbol, p.exchange, p.product)
-        if (res.status !== 'success' && appMode === 'live') {
-          showToast.error(res.message || 'Close failed', 'orders')
-        }
-      } catch (e) {
-        if (!handledGlobally(e)) showToast.error(apiErrorMessage(e), 'orders')
-      }
-      refresh()
-    },
-    [refuse, appMode, handledGlobally, refresh]
-  )
-
-  const cancelAll = useCallback(async () => {
-    if (refuse()) return
-    try {
-      const res = await tradingApi.cancelAllOrders()
-      if (res.status !== 'success' && appMode === 'live') {
-        showToast.error(res.message || 'Cancel all failed', 'orders')
-      }
-    } catch (e) {
-      if (!handledGlobally(e)) showToast.error(apiErrorMessage(e), 'orders')
-    }
-    refresh()
-  }, [refuse, appMode, handledGlobally, refresh])
-
-  const closeAll = useCallback(async () => {
-    if (refuse()) return
-    try {
-      const res = await tradingApi.closeAllPositions()
-      if (res.status !== 'success' && appMode === 'live') {
-        showToast.error(res.message || 'Close all failed', 'orders')
-      }
-    } catch (e) {
-      if (!handledGlobally(e)) showToast.error(apiErrorMessage(e), 'orders')
-    }
-    refresh()
-  }, [refuse, appMode, handledGlobally, refresh])
+  const closePosition = useCallback((p: DockPosition) => closeDockPosition(p, actions), [actions])
+  const cancelAll = useCallback(() => cancelAllDockOrders(actions), [actions])
+  const closeAll = useCallback(() => closeAllDockPositions(actions), [actions])
 
   const openModify = useCallback(
     (order: DockOrder) => {

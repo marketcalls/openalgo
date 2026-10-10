@@ -21,22 +21,44 @@ Auth + audit security model summarized:
     single conservative cap, refines per-scope in a follow-up)
   - Pre-write Telegram notification when configured (best-effort)
 
+Under the gthread worker (opt-in through ``OPENALGO_WORKER_CLASS``) every
+request holds one thread from a fixed pool, where the default eventlet worker
+spends only a greenlet. Three things here therefore behave differently under
+gthread, and only there (``utils.runtime.gthread_active()``):
+
+  - A ``GET /mcp`` stream is counted and capped (:data:`MCP_SSE_MAX_STREAMS`),
+    and ends after :data:`MCP_SSE_MAX_SECONDS`; the client reconnects.
+  - Tool calls in flight are capped (:func:`_tool_call_limit`). A call over the
+    cap is refused before anything is sent, with ``retry_safe`` true.
+  - The SDK client the tools use is served by this app on the calling thread
+    (:class:`_InProcessWsgi`) instead of an HTTP loopback, so a tool call never
+    needs a second pool thread to answer it and cannot wait on its own queue.
+
+Under eventlet and on the development server none of this applies and the
+tools reach ``/api/v1/`` over HTTP exactly as before.
+
 See ``docs/prd/remote-mcp.md`` for the full design.
 """
 
 from __future__ import annotations
 
+import collections
+import contextvars
 import hashlib
 import json
 import os
+import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from limiter import limiter
+from utils import runtime, stream_registry
 from utils.logging import get_logger
 from utils.oauth_tokens import AccessTokenError, claims_have_scope, verify_access_token
 
@@ -61,6 +83,40 @@ def _mcp_after_request(response: Response) -> Response:
 # Keepalive cadence for the SSE stream. SSE comment lines (starting with
 # ":") are NOT delivered to the client app but keep the TCP socket warm.
 _SSE_KEEPALIVE_SECONDS = 15
+
+# The GET stream's budget under the gthread worker. Module constants rather
+# than settings: they exist only to keep a keepalive-only stream from holding
+# threads the order path needs, and nothing a trader configures depends on them.
+#
+#: Streams open at once. The stream pushes nothing but keepalives, so one per
+#: connected client is plenty and a handful covers several clients.
+MCP_SSE_MAX_STREAMS = 4
+#: Seconds a stream stays open before it ends cleanly and the client reconnects,
+#: so a half-open connection (a laptop asleep, a NAT that dropped it) cannot
+#: hold a thread for longer than this.
+MCP_SSE_MAX_SECONDS = 300
+#: Reconnect delay advertised on a stream with a lifetime, in milliseconds (the
+#: SSE ``retry`` field).
+MCP_SSE_RETRY_MS = 30_000
+#: The stream_registry kind every GET stream is counted under.
+_SSE_STREAM_KIND = "mcp_sse"
+#: What a client over the stream cap is told.
+SSE_BUSY_MESSAGE = (
+    "OpenAlgo is already holding as many MCP event streams as it allows. Try again in a moment."
+)
+
+# Tool calls in flight under the gthread worker: one call per this many worker
+# threads, and never fewer than two, so MCP cannot take more than a small share
+# of the pool however many calls a client fires in parallel.
+_TOOL_CALL_THREAD_SHARE = 8
+_TOOL_CALL_MIN_LIMIT = 2
+#: The cap when the gthread worker's thread count is not known.
+_TOOL_CALL_FALLBACK_LIMIT = 8
+#: The reason sent with a call refused for being over the cap.
+TOOL_CALLS_BUSY_MESSAGE = (
+    "OpenAlgo is busy with other requests, so this call was not run and nothing "
+    "was sent. Try again in a few seconds."
+)
 
 
 # Per-token rate limits, configurable via env. Defaults match the PRD:
@@ -109,10 +165,39 @@ def _parse_rate_spec(spec: str) -> tuple[int, int]:
     }.get(unit, (count, 60))
 
 
-# In-memory sliding window per (jti, scope). Single eventlet worker, so
-# no shared-state concerns. Cleaned opportunistically — a long-quiet
-# token's entries naturally expire on next access.
-_scope_quota: dict[str, list[float]] = {}
+# In-memory sliding window per (jti, scope). The prune, the test and the
+# append happen in one hold of _scope_quota_lock: under the gthread worker two
+# calls on one token run truly in parallel, and without the lock both could
+# pass the test before either appended, admitting one call over the quota.
+# A plain threading.Lock: only request handlers touch it (green under
+# eventlet, real under gthread) and it guards in-memory work only.
+#
+# Access tokens live fifteen minutes, so a new jti arrives all day in a worker
+# that never restarts. Every _QUOTA_SWEEP_SECONDS the whole dict is swept for
+# buckets whose newest hit is older than the longest window, which bounds it
+# by the tokens active in that window.
+_scope_quota: dict[str, collections.deque] = {}
+_scope_quota_lock = threading.Lock()
+_QUOTA_SWEEP_SECONDS = 300.0
+_last_quota_sweep = 0.0
+
+
+def _longest_quota_window() -> int:
+    """The longest window either quota counts over, in seconds."""
+    return max(_parse_rate_spec(_RATE_LIMIT_READ)[1], _parse_rate_spec(_RATE_LIMIT_WRITE)[1])
+
+
+def _sweep_scope_quota_locked(now: float) -> None:
+    """Drop buckets no call can still count against. Call with the lock held."""
+    global _last_quota_sweep
+
+    if now - _last_quota_sweep < _QUOTA_SWEEP_SECONDS:
+        return
+    _last_quota_sweep = now
+    horizon = now - _longest_quota_window()
+    stale = [key for key, bucket in _scope_quota.items() if not bucket or bucket[-1] < horizon]
+    for key in stale:
+        del _scope_quota[key]
 
 
 def _within_scope_quota(*, jti: str | None, scope: str) -> bool:
@@ -128,14 +213,68 @@ def _within_scope_quota(*, jti: str | None, scope: str) -> bool:
     now = time.time()
     cutoff = now - window
     key = f"{jti}|{scope}"
-    bucket = _scope_quota.setdefault(key, [])
-    # Drop expired hits.
-    while bucket and bucket[0] < cutoff:
-        bucket.pop(0)
-    if len(bucket) >= count:
-        return False
-    bucket.append(now)
-    return True
+    with _scope_quota_lock:
+        _sweep_scope_quota_locked(now)
+        bucket = _scope_quota.get(key)
+        if bucket is None:
+            bucket = collections.deque()
+            _scope_quota[key] = bucket
+        # Drop expired hits.
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= count:
+            return False
+        bucket.append(now)
+        return True
+
+
+# Tool calls in flight, counted in every runtime and capped only under the
+# gthread worker. A plain threading.Lock guarding one integer, touched only by
+# request handlers.
+_tool_calls_lock = threading.Lock()
+_tool_calls_open = 0
+
+
+def _tool_call_limit() -> int | None:
+    """The most tool calls allowed in flight, or None for no limit.
+
+    None under eventlet and on the development server, where a waiting call
+    costs a greenlet or an unpooled thread. Under gthread each call holds a
+    pool thread for as long as its broker round trip takes, so the cap is a
+    share of the configured thread count.
+    """
+    if not runtime.gthread_active():
+        return None
+    threads = runtime.configured_threads()
+    if not threads:
+        return _TOOL_CALL_FALLBACK_LIMIT
+    return max(_TOOL_CALL_MIN_LIMIT, threads // _TOOL_CALL_THREAD_SHARE)
+
+
+def _claim_tool_call() -> bool:
+    """Count one tool call in, unless the limit is already reached."""
+    global _tool_calls_open
+
+    limit = _tool_call_limit()
+    with _tool_calls_lock:
+        if limit is not None and _tool_calls_open >= limit:
+            return False
+        _tool_calls_open += 1
+        return True
+
+
+def _release_tool_call() -> None:
+    """Count one tool call out. Called exactly once per successful claim."""
+    global _tool_calls_open
+
+    with _tool_calls_lock:
+        _tool_calls_open = max(0, _tool_calls_open - 1)
+
+
+def tool_calls_in_flight() -> int:
+    """How many MCP tool calls are running right now, for diagnostics."""
+    with _tool_calls_lock:
+        return _tool_calls_open
 
 
 def _apply_cors(response: Response, origin: str | None) -> Response:
@@ -156,9 +295,7 @@ def _apply_cors(response: Response, origin: str | None) -> Response:
         # Browser-side OAuth clients need to read the discovery hint
         # from the 401 response. Without this header the WWW-Authenticate
         # value is hidden by CORS and the client reports "no OAuth".
-        response.headers["Access-Control-Expose-Headers"] = (
-            "WWW-Authenticate, Link, Content-Type"
-        )
+        response.headers["Access-Control-Expose-Headers"] = "WWW-Authenticate, Link, Content-Type"
         response.headers["Access-Control-Max-Age"] = "600"
         response.headers["Vary"] = "Origin"
     return response
@@ -174,6 +311,16 @@ _AUDIT_PATH = Path(os.getenv("LOG_DIR", "log")) / "mcp.jsonl"
 # last N lines on every write. 5000 is generous for human inspection
 # without blowing past a few MB.
 _AUDIT_MAX_LINES = 5000
+
+# The file size past which a write also trims the log to _AUDIT_MAX_LINES.
+_AUDIT_TRIM_BYTES = 2_000_000
+
+# One append-then-trim at a time. Under the gthread worker file I/O releases
+# the GIL, so without this an append landing between a trim's read and its
+# rewrite was lost, and one landing during the rewrite was torn. A plain
+# threading.Lock: only request handlers write the audit log, and under
+# eventlet the blocking file I/O never yields, so it is never contended there.
+_audit_lock = threading.Lock()
 
 
 # Rate limit choice for v1: a single conservative per-token cap. The
@@ -196,22 +343,116 @@ def _rate_limit_key() -> str:
 
 
 # Pre-flight: HTTP transport refuses to register without a configured
-# api_key + loopback host. The init runs once at Flask boot from app.py.
+# api_key + loopback host. The init runs once per process, on the first
+# /mcp request (app.py only registers the blueprint).
 _initialized = False
+
+# Makes that first-request init single-flight. A hosted client typically sends
+# initialize, tools/list and a GET close together, and each used to run the
+# whole init: two module objects, two SDK clients (one of them leaked), and a
+# third request that saw the flag set before init_for_http had run got no
+# client at all. A plain threading.Lock, deliberately not a real one: under
+# eventlet the holder yields during the database lookup and the module load,
+# and a second greenlet must wait cooperatively.
+_init_lock = threading.Lock()
+
+
+class _InProcessWsgi:
+    """Serve an SDK request with this app, on the calling thread, as its own request.
+
+    Under the gthread worker a tool call runs on a pool thread, and the SDK
+    client it uses would otherwise call back into ``/api/v1/`` over HTTP, which
+    needs a second pool thread to answer. With the pool busy the tool's thread
+    waits on a request queued behind it until the SDK gives up. Handing the
+    SDK an ``httpx.WSGITransport`` over this class runs that request here
+    instead: the same WSGI stack (traffic log, security middleware, routing,
+    API-key check, rate limits) and the same response, with no second thread
+    and no network.
+
+    Each request runs in an empty ``contextvars`` context, so Flask pushes a
+    fresh application context for it exactly as it would for a request from
+    outside, rather than sharing the tool call's ``g``. Its teardown releases
+    the scoped sessions on this thread; the tool call does no database work of
+    its own after the SDK returns, only its audit line, which is a file.
+
+    The body is read in full, and the app's iterable closed, inside that
+    context: the ``/api/v1/`` endpoints the SDK calls all answer with a single
+    JSON body.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    def __call__(self, environ: dict, start_response: Any) -> list[bytes]:
+        return contextvars.Context().run(self._serve, environ, start_response)
+
+    def _serve(self, environ: dict, start_response: Any) -> list[bytes]:
+        result = self._app(environ, start_response)
+        try:
+            return [b"".join(result)]
+        finally:
+            close = getattr(result, "close", None)
+            if close is not None:
+                close()
+
+
+def _serve_sdk_in_process(mcp_module: Any) -> None:
+    """Point the tools' SDK client at this app instead of the HTTP loopback.
+
+    Called only under the gthread worker; see :class:`_InProcessWsgi`. Needs
+    the app, so it is skipped (and the loopback kept) when called outside an
+    application context, and it replaces only an SDK whose HTTP client has the
+    shape this was written against.
+
+    Args:
+        mcp_module: The loaded ``mcp/mcpserver.py`` module, after
+            ``init_for_http`` has built its client.
+    """
+    from flask import current_app, has_app_context
+
+    sdk = getattr(mcp_module, "client", None)
+    previous = getattr(sdk, "client", None)
+    if not has_app_context() or not isinstance(previous, httpx.Client):
+        logger.info("[MCP HTTP] tool calls use the HTTP loopback")
+        return
+    app = current_app._get_current_object()
+    sdk.client = httpx.Client(
+        transport=httpx.WSGITransport(app=_InProcessWsgi(app)),
+        timeout=getattr(sdk, "timeout", 120.0),
+    )
+    try:
+        previous.close()
+    except Exception:
+        logger.exception("[MCP HTTP] could not close the replaced SDK client")
+    logger.info("[MCP HTTP] tool calls are served in process by this worker")
 
 
 def init_http_transport() -> None:
     """Wire the SDK client used by the @mcp.tool() functions.
 
-    Must be called from app.py while MCP_HTTP_ENABLED is True. Looks up
+    Runs once per process, on the first request to this blueprint; every
+    route calls it and every call after the first returns at once. Looks up
     the admin's existing OpenAlgo API key (stored in db/openalgo.db)
     and points the SDK at the local loopback so tool calls go through
     the existing /api/v1/* surface — same code path as the SDK uses
-    everywhere else.
+    everywhere else. Under the gthread worker that surface is reached in
+    process rather than over HTTP (:func:`_serve_sdk_in_process`).
     """
-    global _initialized
     if _initialized:
         return
+    with _init_lock:
+        if _initialized:
+            return
+        _init_http_transport_locked()
+
+
+def _init_http_transport_locked() -> None:
+    """The body of :func:`init_http_transport`. Call only under ``_init_lock``.
+
+    ``_initialized`` is set last, once the SDK client exists, so a request that
+    sees it set never finds the tools without a client.
+    """
+    global _initialized
 
     # Make the legacy stdio module skip its argv check when the HTTP
     # transport boots it. MUST be set BEFORE loading mcp/mcpserver.py.
@@ -265,6 +506,8 @@ def init_http_transport() -> None:
         api_key = "<not-configured>"
 
     mcp_module.init_for_http(api_key, host)
+    if runtime.gthread_active():
+        _serve_sdk_in_process(mcp_module)
     audit_registry()  # warns about scope/annotation drift
     _initialized = True
     logger.info(
@@ -362,28 +605,52 @@ def _params_hash(params: Any) -> str:
 def _audit_log(entry: dict[str, Any]) -> None:
     """Append a single line to log/mcp.jsonl. Best-effort."""
     try:
-        _AUDIT_PATH.parent.mkdir(exist_ok=True)
-        with _AUDIT_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, default=str) + "\n")
-
-        # Cheap rotation: trim to the last _AUDIT_MAX_LINES on every
-        # write. Linear in the file size, but a 5000-line file is small
-        # enough that this is unmeasurable next to a broker call.
-        try:
-            size = _AUDIT_PATH.stat().st_size
-            if size > 2_000_000:  # ~2MB triggers a trim
-                lines = _AUDIT_PATH.read_text(encoding="utf-8").splitlines()
-                if len(lines) > _AUDIT_MAX_LINES:
-                    _AUDIT_PATH.write_text(
-                        "\n".join(lines[-_AUDIT_MAX_LINES:]) + "\n",
-                        encoding="utf-8",
-                    )
-        except OSError:
-            pass
+        line = json.dumps(entry, default=str) + "\n"
+        with _audit_lock:
+            path = _AUDIT_PATH
+            path.parent.mkdir(exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
+            _trim_audit_log_locked(path)
     except Exception as e:
         # Don't let an audit-log failure break the request. Log to the
         # central logger so the operator at least sees the failure.
         logger.exception(f"[MCP audit] failed to write entry: {e}")
+
+
+def _trim_audit_log_locked(path: Path) -> None:
+    """Keep the last _AUDIT_MAX_LINES lines once the file passes _AUDIT_TRIM_BYTES.
+
+    Call with ``_audit_lock`` held. Cheap rotation: linear in the file size,
+    but a 5000-line file is small enough that this is unmeasurable next to a
+    broker call. The kept lines are written to a temporary file beside the log
+    and moved over it, so a crash mid-trim leaves the old log whole rather than
+    truncated. Windows refuses to replace a file another process has open, and
+    there the log is rewritten in place instead, which is what it always was.
+
+    Args:
+        path: The audit log.
+    """
+    try:
+        if path.stat().st_size <= _AUDIT_TRIM_BYTES:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= _AUDIT_MAX_LINES:
+            return
+        kept = "\n".join(lines[-_AUDIT_MAX_LINES:]) + "\n"
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".mcp-audit-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                tmp.write(kept)
+            try:
+                os.replace(tmp_name, path)
+            except PermissionError:
+                path.write_text(kept, encoding="utf-8")
+        finally:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+    except OSError:
+        pass
 
 
 def _notify_pre_write(
@@ -579,11 +846,7 @@ def _dispatch_tool_call(
 ):
     """Handle a tools/call request. Validates scope, runs the tool,
     captures the result, audits, returns JSON-RPC."""
-    from utils.mcp_tool_registry import (
-        SCOPE_WRITE_ORDERS,
-        get_tool_callable,
-        required_scope,
-    )
+    from utils.mcp_tool_registry import get_tool_callable, required_scope
 
     # JSON-RPC 2.0 allows ``params`` to be an object OR an array; we
     # only accept object form. Reject anything else with -32602 instead
@@ -607,13 +870,61 @@ def _dispatch_tool_call(
         # Don't leak the required scope value back to the client beyond
         # the WWW-Authenticate challenge — fold it into the JSON-RPC
         # error data block for clients that look there.
-        return _jsonrpc_error(
-            rpc_id, -32000, "insufficient_scope", data={"required_scope": needed}
-        )
+        return _jsonrpc_error(rpc_id, -32000, "insufficient_scope", data={"required_scope": needed})
 
     fn = get_tool_callable(tool_name)
     if fn is None:
         return _jsonrpc_error(rpc_id, -32601, f"Tool not implemented: {tool_name}")
+
+    # The in-flight cap, which only the gthread worker enforces. Checked before
+    # the quota so a refused call does not use up the token's budget, and
+    # before the pre-write notice so nothing reports an order that never ran.
+    if not _claim_tool_call():
+        _audit_log(
+            {
+                "ts": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "jti": jti,
+                "client_id": client_id,
+                "tool": tool_name,
+                "scope": needed,
+                "params_hash": _params_hash(arguments),
+                "duration_ms": 0,
+                "outcome": "busy",
+                "request_ip": request.remote_addr,
+            }
+        )
+        return _jsonrpc_error(
+            rpc_id,
+            -32000,
+            "server_busy",
+            data={"reason": TOOL_CALLS_BUSY_MESSAGE, "retry_safe": True},
+        )
+    try:
+        return _run_tool_call(
+            rpc_id=rpc_id,
+            fn=fn,
+            tool_name=tool_name,
+            arguments=arguments,
+            needed=needed,
+            client_id=client_id,
+            jti=jti,
+        )
+    finally:
+        _release_tool_call()
+
+
+def _run_tool_call(
+    *,
+    rpc_id: Any,
+    fn: Any,
+    tool_name: str,
+    arguments: dict[str, Any],
+    needed: str,
+    client_id: str,
+    jti: str | None,
+):
+    """Check the quota, run one tool and audit it. Holds a tool-call slot."""
+    from utils.mcp_tool_registry import SCOPE_WRITE_ORDERS
 
     # Per-token-per-scope rate limit (security review finding C-2).
     # The dispatcher-level @limiter.limit on mcp_dispatch caps the
@@ -644,17 +955,14 @@ def _dispatch_tool_call(
 
     started = time.perf_counter()
     outcome = "success"
-    error_detail: str | None = None
     try:
         result_text = fn(**arguments)  # tools accept kwargs only
-    except TypeError as e:
+    except TypeError:
         outcome = "bad_arguments"
-        error_detail = str(e)[:300]
         result_text = None
     except Exception as e:
         # Any tool-internal failure is logged but not leaked verbatim.
         outcome = "error"
-        error_detail = str(e)[:300]
         logger.exception(f"[MCP tool] {tool_name} raised: {e}")
         result_text = None
     duration_ms = int((time.perf_counter() - started) * 1000)
@@ -674,7 +982,7 @@ def _dispatch_tool_call(
     )
 
     if outcome != "success":
-        # Do NOT echo error_detail back to the client — it can carry SQL
+        # Do NOT echo the exception back to the client: it can carry SQL
         # error messages, internal paths, or function-signature reveals
         # (security review finding H-4). The full detail is in the
         # audit log + log/errors.jsonl for the admin to triage. We
@@ -707,6 +1015,16 @@ def mcp_sse():
     initiated messages. v1 keeps the channel open for spec compliance
     but does not push notifications. Validation runs on every
     connection — a stale token gets disconnected.
+
+    Every stream is counted in ``utils.stream_registry`` under
+    ``mcp_sse``. Under the gthread worker each one holds a pool thread, so
+    there, and only there, at most :data:`MCP_SSE_MAX_STREAMS` are open at
+    once (a client over the cap gets 429 with ``Retry-After``), and each
+    ends cleanly after :data:`MCP_SSE_MAX_SECONDS`, having told the client
+    through the SSE ``retry`` field how long to wait before reconnecting.
+    Under eventlet and on the development server a stream stays open until
+    the client leaves, as it always has. In every runtime a stream ends when
+    the server begins shutting down.
     """
     init_http_transport()
 
@@ -718,21 +1036,48 @@ def mcp_sse():
     except AccessTokenError as e:
         return _unauthorized(str(e), "")
 
+    ticket = stream_registry.admit(
+        _SSE_STREAM_KIND, stream_registry.enforced_limit(MCP_SSE_MAX_STREAMS)
+    )
+    if ticket is None:
+        busy = Response(SSE_BUSY_MESSAGE, status=429, mimetype="text/plain")
+        busy.headers["Retry-After"] = str(MCP_SSE_RETRY_MS // 1000)
+        return busy
+    lifetime = MCP_SSE_MAX_SECONDS if runtime.gthread_active() else None
+
     def gen():
-        # Initial comment so the client knows the stream is live.
-        yield ": openalgo-mcp connected\n\n"
-        last_keepalive = time.time()
-        # Loop until the client disconnects. eventlet's cooperative
-        # scheduler handles many of these without blocking other
-        # workers; the single-worker model accepts that.
-        while True:
-            now = time.time()
-            if now - last_keepalive >= _SSE_KEEPALIVE_SECONDS:
-                yield ": keepalive\n\n"
-                last_keepalive = now
-            time.sleep(1)
+        try:
+            # Initial comment so the client knows the stream is live. A stream
+            # that will end by itself first says how long to wait before
+            # reconnecting, so the reconnect does not arrive at once.
+            if lifetime is not None:
+                yield f"retry: {MCP_SSE_RETRY_MS}\n: openalgo-mcp connected\n\n"
+            else:
+                yield ": openalgo-mcp connected\n\n"
+            started = last_keepalive = time.monotonic()
+            # Loop until the client disconnects, the lifetime runs out, or the
+            # server shuts down. One second per pass, as before; wait_stop's
+            # sleep is time.sleep, eventlet's cooperative one under that worker.
+            while True:
+                now = time.monotonic()
+                step = 1.0
+                if lifetime is not None:
+                    left = lifetime - (now - started)
+                    if left <= 0:
+                        return
+                    step = min(step, left)
+                if now - last_keepalive >= _SSE_KEEPALIVE_SECONDS:
+                    yield ": keepalive\n\n"
+                    last_keepalive = now
+                if stream_registry.wait_stop(step, poll=step):
+                    return
+        finally:
+            ticket.release()
 
     response = Response(stream_with_context(gen()), mimetype="text/event-stream")
+    # Also released here: a client that leaves before the first byte closes a
+    # generator that never started, so its finally never runs.
+    response.call_on_close(ticket.release)
     response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Accel-Buffering"] = "no"  # nginx — disable buffering
     response.headers["Connection"] = "keep-alive"

@@ -375,3 +375,186 @@ def test_cancelling_never_takes_agnos_green_lock_from_the_hub():
         """
     )
     assert "OK" in result.stdout, result.stderr + result.stdout
+
+
+# --- LiteLLM's sync-to-async hops (#2081) -------------------------------------
+#
+# LiteLLM's Responses-API bridge, which every GPT-5.4+ model takes once a
+# reasoning effort is set, calls `run_async_function` once per streamed chunk.
+# Under eventlet a LiteLLM logger loop running on a green "thread" of the same
+# OS thread made that call fail part way through an answer.
+
+HOPS = '''
+import asyncio
+
+from litellm.litellm_core_utils import asyncify
+from utils.real_threading import Thread as RealThread, join
+
+
+def with_a_logger_loop_running(fn):
+    """Call fn(coroutine) on a real thread while a green logger loop is mid-run.
+
+    The logger is what LiteLLM's streaming handler submits to its executor: an
+    asyncio.run on a patched thread, which here is a greenlet on the caller's
+    own OS thread.
+    """
+    out = {}
+
+    def agent():
+        def logger():
+            async def work():
+                await asyncio.sleep(0.3)
+            asyncio.run(work())
+        t = threading.Thread(target=logger)
+        t.start()
+        eventlet.sleep(0.05)          # the agent's socket read lets the logger start
+
+        async def hook():
+            return "chunk"
+        try:
+            out["result"] = fn(hook)
+        except Exception as e:
+            out["error"] = repr(e)
+        t.join()
+
+    rt = RealThread(target=agent, daemon=True)
+    rt.start()
+    join(rt, 20)
+    return out
+'''
+
+
+def test_litellms_own_hop_fails_while_a_green_logger_loop_runs():
+    """The defect itself, as LiteLLM ships it, so the fix below cannot pass vacuously."""
+    result = run(
+        HOPS
+        + textwrap.dedent(
+            """
+        out = with_a_logger_loop_running(asyncify.run_async_function)
+        assert "another loop is running" in out.get("error", ""), out
+        print("OK")
+            """
+        )
+    )
+    assert "OK" in result.stdout, result.stderr + result.stdout
+
+
+def test_the_hop_runs_on_a_real_thread_once_installed():
+    result = run(
+        HOPS
+        + textwrap.dedent(
+            """
+        from services.agent import litellm_eventlet
+        assert litellm_eventlet.install() is True
+        assert litellm_eventlet.install() is True            # idempotent
+
+        # The streaming iterator imported the helper by name; it is replaced too.
+        from litellm.responses import streaming_iterator
+        assert streaming_iterator.run_async_function is litellm_eventlet.run_async_function
+        assert asyncify.run_async_function is litellm_eventlet.run_async_function
+
+        out = with_a_logger_loop_running(asyncify.run_async_function)
+        assert out == {"result": "chunk"}, out
+
+        # Results and exceptions come back as LiteLLM's own helper returns them.
+        async def add(a, b):
+            return a + b
+        async def boom():
+            raise ValueError("provider said no")
+        assert asyncify.run_async_function(add, 2, b=3) == 5
+        try:
+            asyncify.run_async_function(boom)
+        except ValueError as e:
+            assert str(e) == "provider said no"
+        else:
+            raise AssertionError("the exception was swallowed")
+        print("OK")
+            """
+        )
+    )
+    assert "OK" in result.stdout, result.stderr + result.stdout
+
+
+def test_a_hop_from_the_hub_keeps_the_hub_alive():
+    """A greenlet waiting for a slow hop polls; the rest of the worker keeps running."""
+    result = run(
+        HOPS
+        + textwrap.dedent(
+            """
+        from services.agent import litellm_eventlet
+        litellm_eventlet.install()
+
+        g, ticks = hub_ticker()
+        eventlet.sleep(0.1)
+
+        async def slow():
+            await asyncio.sleep(0.6)
+            return "done"
+
+        before, t0 = len(ticks), time.monotonic()
+        assert asyncify.run_async_function(slow) == "done"
+        took, during = time.monotonic() - t0, len(ticks) - before
+        g.kill()
+        assert took >= 0.6, took
+        assert during >= 15, f"the hub ran {during} times in {took:.2f}s"
+        print("OK")
+            """
+        )
+    )
+    assert "OK" in result.stdout, result.stderr + result.stdout
+
+
+def test_a_hop_from_the_run_thread_adds_no_polling_delay():
+    """The agent's run thread is real and waits natively: a chunk is not held back."""
+    result = run(
+        HOPS
+        + textwrap.dedent(
+            """
+        from services.agent import litellm_eventlet
+        litellm_eventlet.install()
+
+        async def hook():
+            return 1
+
+        took = {}
+
+        def agent():
+            t0 = time.monotonic()
+            for _ in range(200):
+                asyncify.run_async_function(hook)
+            took["s"] = time.monotonic() - t0
+
+        rt = RealThread(target=agent, daemon=True)
+        rt.start()
+        join(rt, 30)
+        # 200 hops at a 20 ms poll would take 4 s.
+        assert took["s"] < 1.0, took
+        print("OK")
+            """
+        )
+    )
+    assert "OK" in result.stdout, result.stderr + result.stdout
+
+
+def test_nothing_is_replaced_without_eventlet():
+    """gthread and the development server keep LiteLLM's own helper."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                from litellm.litellm_core_utils import asyncify
+                original = asyncify.run_async_function
+                from services.agent import litellm_eventlet
+                assert litellm_eventlet.install() is False
+                assert asyncify.run_async_function is original
+                print("OK")
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert "OK" in result.stdout, result.stderr + result.stdout

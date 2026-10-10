@@ -138,6 +138,7 @@ platform already keeps. Stopping is a signal: the loop leaves at the next check.
 import argparse
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -232,6 +233,18 @@ STATED_FACTS = (
     "hasVolume",
     "hasOpenInterest",
 )
+
+# The session facts this driver states on every bar, by the engine's own names
+# (see ``_execute``). The engine serves ``session.isLastBar`` as well from 0.6.0,
+# answered from a bar fact of its own that this driver does not state, so a
+# script reading it would be told nothing on every bar: a position it meant to
+# close before the session ends would never be closed. It is refused by name in
+# ``_check_readable`` instead, as is any session fact the engine adds later.
+STATED_SESSION_FACTS = ("session.isFirstBar",)
+
+# The ``stdlib.md`` 15.2 units a ``req.timeframe`` read folds by the calendar, in
+# the instrument's zone, rather than by counting. See ``_check_readable``.
+CALENDAR_UNITS = ("D", "W", "M")
 
 # The compiled program tag a program that places orders carries, and the word its
 # meta uses for a program that is one. Both are the compiled program format's own
@@ -382,13 +395,14 @@ class Engine:
     def join_calendar(self, serving) -> bool:
         """Put the calendar calls into this run's library. True once the seam serves them.
 
-        **The engine implements them and its seam leaves them out.** Every call
-        of ``stdlib.md`` 12.2 and 12.5 is in ``openscript.dates``, with the
-        manifest rows a program is checked against (``dates.table()``), and the
-        seam that joins the library to the machine, ``Serving``, is built from
-        the two halves of ``library/`` alone. So a program calling ``date.hour``
-        or ``session.isIn`` is refused at load, OS6004, in every zone including
-        the one the engine reads.
+        **Up to 0.5.0 the engine implemented them and its seam left them out.**
+        Every call of ``stdlib.md`` 12.2 and 12.5 is in ``openscript.dates``,
+        with the manifest rows a program is checked against (``dates.table()``),
+        and the seam that joins the library to the machine, ``Serving``, was
+        built from the two halves of ``library/`` alone. So a program calling
+        ``date.hour`` or ``session.isIn`` was refused at load, OS6004, in every
+        zone including the one the engine reads. From 0.6.0 ``Serving`` joins
+        those rows itself, and the loop below leaves every one of them as it is.
 
         **The seam is the host's to wire.** The engine's own guide says the join
         a host needs lives in the adapter package, beside the conformance
@@ -728,6 +742,60 @@ def interval_seconds(interval: str) -> int:
     return count * units[unit] if count > 0 else 0
 
 
+#: ``stdlib.md`` 15.2's spelling of a timeframe: a count and an optional unit, a
+#: bare count being minutes, with ``M`` a month and ``m`` a minute.
+_ENGINE_INTERVAL = re.compile(r"([0-9]+)(m|h|D|W|M)?")
+
+#: A platform interval code: an optional count and one letter.
+_INTERVAL_CODE = re.compile(r"([0-9]*)([a-zA-Z])")
+
+
+def engine_interval(code: str) -> str | None:
+    """The run's interval as the engine spells it, or nothing where it has no spelling.
+
+    **The two spell a day differently.** This platform writes a day, a week and a
+    month as a bare ``D``, ``W`` and ``M``, and the engine reads ``stdlib.md``
+    15.2's count and unit, ``1D``, ``1W`` and ``1M``, with no reading of a bare
+    letter. From 0.6.0 the engine reads the stated interval for more than
+    ``chart.interval``: every ``req.timeframe`` read is compared with it at load
+    (OS6002, OS6015), and ``chart.intervalMinutes`` and ``chart.isIntraday`` are
+    worked out from it. A daily run stating ``D`` gets neither: the comparison is
+    skipped, so a five minute read on a daily run folds without a word, and both
+    facts are absent.
+
+    **The chart's backtest states this same spelling** (``engineInterval`` in
+    ``frontend/src/lib/trading/backtestRun.ts``), so a script reads one interval
+    in the backtest and in the live run. That is also why a seconds interval
+    states nothing: the grammar has no unit finer than a minute, and a backtest
+    on a seconds chart states no interval either.
+
+    Only what the engine is told changes. The run still asks the platform for
+    its bars in the platform's own spelling.
+    """
+    text = (code or "").strip()
+    written = _ENGINE_INTERVAL.fullmatch(text)
+    if written is not None:
+        return text if int(written.group(1)) >= 1 else None
+    found = _INTERVAL_CODE.fullmatch(text)
+    if found is None:
+        return None
+    count = int(found.group(1)) if found.group(1) else 1
+    if count < 1:
+        return None
+    # Case matters for one letter only, in both spellings: ``M`` is a month and
+    # ``m`` a minute. A bare minute or hour letter names no count, so no length.
+    unit = found.group(2)
+    if unit == "M":
+        return f"{count}M"
+    if unit in ("m", "h", "H"):
+        return f"{count}{unit.lower()}" if found.group(1) else None
+    if unit in ("d", "D"):
+        return f"{count}D"
+    if unit in ("w", "W"):
+        return f"{count}W"
+    return None
+
+
 def expected_settle(lateness: list[float]) -> float:
     """How long after a close to look first, learned from how late bars have been.
 
@@ -842,6 +910,23 @@ def _forget_instruction(run_id: str) -> None:
 
         clear(run_id)
     except Exception:  # noqa: BLE001 - the run goes on either way
+        return
+
+
+def _record_closed(run_id: str) -> None:
+    """Tell the parent the close is done, before this run leaves.
+
+    The parent cannot tell from the exit alone: a run leaves the same way after
+    closing its position as after being told to stop. What it reads instead is
+    this, so a Stop is reported as done only when the position was. Nothing
+    raises: if it cannot be written, the parent says the close could not be
+    confirmed, which is the safe way round to be wrong.
+    """
+    try:
+        from services.openscript_commands import record_closed
+
+        record_closed(run_id)
+    except Exception:  # noqa: BLE001 - the run leaves either way
         return
 
 
@@ -962,6 +1047,10 @@ class Session:
             # A written time is a wall clock reading in the instrument's zone,
             # the one on the trader's chart, and never one read as UTC.
             read_time=engine.time_reader(self.instrument["timezone"]),
+            # The record every ``req.timeframe`` read is planned against at
+            # load: the interval it is compared with and the zone a day is dated
+            # in. Without it the engine compares nothing and dates nothing.
+            instrument=self.instrument,
         )
         if loaded.diagnostic is not None:
             raise Refusal(self._refusal_text(loaded.diagnostic))
@@ -1073,8 +1162,12 @@ class Session:
         record: dict = {
             "symbol": self.options.symbol,
             "exchange": self.options.exchange,
-            "interval": self.options.interval,
         }
+        # In the engine's spelling, and left out where it has none, as the
+        # chart's backtest states it. See ``engine_interval``.
+        interval = engine_interval(self.options.interval)
+        if interval is not None:
+            record["interval"] = interval
         self._facts = facts
         #: The regular window, for every day but a special one, as the engine's
         #: own window; and the special day this run started on, with its window
@@ -1329,11 +1422,20 @@ class Session:
         (``Engine.time_reader``), and refused only where this server cannot read
         a clock in that zone, for the reason ``_join_calendar`` gives.
 
+        **Then a day, a week or a month read by ``req.timeframe``.** The engine
+        folds one by the calendar in the instrument's zone, and its fold reads a
+        calendar in UTC alone: the reader this host supplies reaches the calendar
+        calls (``calendar_reader``) and not the fold. Such a read in any other
+        zone is absent on every bar with nothing said, so it is refused by name.
+        A read in minutes or hours is folded by counting and needs no zone.
+
         **Then the session.** ``session.isFirstBar`` is a fact this driver states
         on every bar, from the session the market calendar holds for the
         exchange (see ``_opening``). Where the calendar holds none, or none was
         handed to this run, every answer would be absence, for the same silent
-        reason, so that script is refused by name.
+        reason, so that script is refused by name. A session fact the engine
+        serves and this driver does not state (``STATED_SESSION_FACTS``) is
+        refused whatever the calendar holds.
         """
         called = {one["name"] for one in raw["lib"]["functions"]}
 
@@ -1352,6 +1454,36 @@ class Session:
                 f"{self.options.script} takes a written time, and this instrument's calendar is "
                 f"{zone}, which this server cannot read a clock in. It would read that time under "
                 "the wrong calendar, so it will not run it."
+            )
+
+        # The reads as the engine planned them at load, each with its timeframe
+        # resolved and the zone it is dated in. A run that makes none has none.
+        undated = sorted(
+            {
+                plan.query.timeframe
+                for plan in getattr(self.run, "plans", ())
+                if plan.timeframe.unit in CALENDAR_UNITS and plan.zone != self.engine.readable_zone
+            }
+        )
+        if undated:
+            raise Refusal(
+                f"{self.options.script} reads {', '.join(undated)} bars with req.timeframe, and "
+                f"the engine on this server can group bars into days, weeks or months only in "
+                f"UTC while this instrument's calendar is {zone}. Every one of those reads would "
+                "come back with no answer and the script would never act on one, so it will not "
+                "be started. Read a timeframe in minutes or hours instead, or remove the read and "
+                "save it again."
+            )
+
+        unstated = sorted(
+            called.intersection(self.engine.session_facts).difference(STATED_SESSION_FACTS)
+        )
+        if unstated:
+            raise Refusal(
+                f"{self.options.script} asks about its trading session with "
+                f"{', '.join(unstated)}, which this runner cannot answer yet. Every answer would "
+                "be empty and the script would never act on one, so a position it means to close "
+                "as the session ends would be left open. Remove it and save it again."
             )
 
         wanted = sorted(called.intersection(self.engine.session_facts))
@@ -1523,7 +1655,20 @@ class Session:
         and exiting is how a position ends up with nothing managing it. That is
         the platform's own rule for a stop whose exit orders were refused, and it
         is why this answers False rather than raising.
+
+        **Nothing of this run may still be working when it measures itself.** Its
+        size is what the fills it has already folded add up to, so an order sent
+        on the last bar that has filled since, or a limit or stop order resting
+        at the broker, is not in it. Every order of this run still out is
+        cancelled first and watched until the broker says it is finished, and
+        what came of each is folded in before the size is read. An order that
+        does not finish, or cannot be read, leaves the run running, for the same
+        reason a close that does not fill does: its fill may still come.
         """
+        until = time.time() + wait_seconds
+        if not self._finish_working_orders(until):
+            return False
+
         held = self._position()
         if not held:
             say("Nothing is open, so this run has nothing to close.")
@@ -1572,7 +1717,8 @@ class Session:
         # Watched to a fill rather than sent and forgotten. An order accepted
         # here and rejected at the broker leaves exactly the position this was
         # pressed to be rid of, and a run that had already exited could not say.
-        until = time.time() + wait_seconds
+        # The same deadline as the cancellations above, so a Stop is answered
+        # within the time the page waits for it.
         while time.time() < until and not self._order_is_done(order_id):
             time.sleep(0.5)
 
@@ -1586,6 +1732,63 @@ class Session:
             "then stop this run again."
         )
         return False
+
+    def _finish_working_orders(self, until: float) -> bool:
+        """Cancel every order of this run still out, and fold what became of them.
+
+        True once none is left working. False when one is still working, or
+        could not be read, at ``until``: its fill may still come, so the size
+        this run would close is not known yet.
+        """
+        if not self._open:
+            return True
+        try:
+            # What the broker has already reported is folded first, so an order
+            # that has filled is counted and is not sent a cancellation.
+            self._fold()
+            asked: set[str] = set()
+            for intent_id in sorted(self._open):
+                order_id = self._orders.get(intent_id)
+                if not order_id or order_id in asked:
+                    continue
+                asked.add(order_id)
+                try:
+                    self.client.cancelorder(order_id=order_id, strategy=self.options.strategy_name)
+                except Exception as unreachable:  # noqa: BLE001 - the fold below decides
+                    say(f"Order {order_id} could not be cancelled this time. ({unreachable})")
+                    continue
+                say(f"Asked for order {order_id} to be cancelled before closing.")
+
+            while True:
+                self._fold()
+                working = self._working_order_ids()
+                if not working or time.time() >= until:
+                    break
+                time.sleep(0.5)
+        except Exception as unreadable:  # noqa: BLE001 - said, and the run stays
+            say(
+                "This run could not settle its own orders before closing, so it has not "
+                f"closed anything and is still here. Check your orders and positions, then "
+                f"stop this run again. ({unreadable})"
+            )
+            return False
+
+        if working:
+            listed = ", ".join(sorted(working))
+            if len(working) == 1:
+                what = f"Order {listed} of this run is still working at the broker or could not be read, so its fill"
+            else:
+                what = f"Orders {listed} of this run are still working at the broker or could not be read, so their fills"
+            say(
+                f"{what} may still come. This run has not closed anything and is still here. "
+                "Check your orders, then stop this run again."
+            )
+            return False
+        return True
+
+    def _working_order_ids(self) -> set[str]:
+        """The broker's ids for the orders of this run that are still out."""
+        return {self._orders[one] for one in self._open if self._orders.get(one)}
 
     def _order_is_done(self, order_id: str) -> bool:
         """Whether this order has filled. Unreadable answers no, deliberately.
@@ -2699,6 +2902,7 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
         asked = _asked_of(session.options.strategy_name)
         if asked == CLOSE:
             if session.flatten():
+                _record_closed(session.options.strategy_name)
                 say("Stopped, holding nothing.")
                 return EXIT_OK
             # Not flat, so this run stays: something has to be able to stop a
@@ -2777,7 +2981,7 @@ def _loop(session, options, feed, bar_seconds: int) -> int:
             # between the press and the closing order. Read every few seconds
             # rather than on every half second, because this is a file and the
             # ordinary case is that there is nothing in it.
-            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name):
+            if waited % ASK_EVERY < 0.5 and _asked_of(session.options.strategy_name) == CLOSE:
                 break
 
     say("Stopped.")

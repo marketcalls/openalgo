@@ -26,11 +26,25 @@ spacing every call by a fixed interval, so a batch goes out at once and only
 the call past the ceiling waits. The slot is reserved under the lock and slept
 for outside it -- holding a lock across ``time.sleep`` would serialise every
 waiter behind the sleeper and turn the allowance back into a queue.
+
+How far ahead a slot may be booked. Under eventlet and the dev server there is
+no limit, as before: past the per-minute ceiling the next caller sleeps until a
+slot frees up, up to a minute. Under the gthread worker that sleep would hold
+one of a fixed number of request threads, so a caller whose slot is further
+away than ``utils.broker_backpressure.max_queue_wait("data")`` is refused with
+BrokerBusyError instead, and books nothing. Every caller of this module is a
+market-data or history request; order placement does not go through it.
 """
 
+import math
 import threading
 import time
 from collections import deque
+
+from utils.broker_backpressure import BrokerBusyError, max_queue_wait
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Broker ceilings for the general budget are 10/sec and 120/min per user. We run
 # under both as margin for clock skew between our rolling windows and however
@@ -81,10 +95,15 @@ def _reserve_slot(lock, reserved, max_per_second, max_per_minute) -> float:
         reserved: the bucket's deque of reserved timestamps.
         max_per_second: per-second ceiling.
         max_per_minute: per-minute ceiling, or ``None`` for no such window.
+
+    Raises:
+        BrokerBusyError: Only under the gthread worker, when the slot is further
+            away than the data ceiling. Nothing is booked.
     """
     # Entries older than the widest window can no longer constrain any future
     # slot, so that horizon is how far back the deque needs to reach.
     horizon = 60.0 if max_per_minute is not None else 1.0
+    ceiling = max_queue_wait("data")
 
     with lock:
         now = time.time()
@@ -97,8 +116,29 @@ def _reserve_slot(lock, reserved, max_per_second, max_per_minute) -> float:
         if max_per_minute is not None and len(reserved) >= max_per_minute:
             slot = max(slot, reserved[-max_per_minute] + 60.0)
 
-        reserved.append(slot)
-        return slot - now
+        wait = slot - now
+        refused = ceiling is not None and wait > ceiling
+        if not refused:
+            reserved.append(slot)
+
+    if refused:
+        logger.warning(
+            f"TradeSmart pacing refused a request whose turn was {wait:.1f}s away "
+            f"(limit {ceiling:.0f}s under gthread)"
+        )
+        raise _busy_error(wait)
+    return wait
+
+
+def _busy_error(wait: float) -> BrokerBusyError:
+    """The refusal for a request whose turn would come ``wait`` seconds from now."""
+    seconds = max(1, math.ceil(wait))
+    return BrokerBusyError(
+        "TradeSmart allows only so many requests each second and each minute, and "
+        "OpenAlgo has already used that allowance for now. This request was not "
+        f"sent. Try again in about {seconds} seconds.",
+        retry_after=wait,
+    )
 
 
 def apply_rate_limit(endpoint: str | None = None) -> None:

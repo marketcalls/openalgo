@@ -398,9 +398,13 @@ class Error(Frame):
     """The run failed. No further frames follow except a :class:`Done`.
 
     Attributes:
-        message: The upstream message verbatim where there is one. A provider
-            distinguishes an invalid key from an unknown model and the operator
-            needs that difference; do not replace it with a generic string.
+        message: A sentence for the trader. For a provider or internal failure
+            it names the cause, when the failure itself states one, and the one
+            thing to do next (`services/agent/error_messages.py`); an invalid
+            key and an unknown model still read differently, but neither shows
+            the provider's JSON, status code or key fragment, which go to the
+            log instead. A tool, input or configuration failure carries the
+            text this platform already wrote for the trader.
         kind: One of :class:`ErrorKind`, naming the layer that failed.
     """
 

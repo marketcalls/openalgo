@@ -2,6 +2,12 @@
 Isolated, multi-client-safe WebSocket client for Kotak broker, using HSWebSocketLib.
 Inspired by AliceBlue architecture, with per-instance state and thread safety.
 Enhanced with partial update handling like AliceBlue's tick feed processing.
+
+DEPRECATION WARNING (Kotak Neo Sept 2026 update):
+HSM (HSWebSocketLib) is deprecated by Kotak. No longer used in their own SDK (v3.0.6+).
+Use KotakSFeedWebSocket (sfeed_websocket.py) instead — it supports new CAS and
+market-status message types, and feeds are resolved dynamically per data centre.
+This client continues to work via the legacy mlhsm endpoint but may be retired by Kotak.
 """
 
 import json

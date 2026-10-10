@@ -1616,9 +1616,20 @@ def check_holiday(date: str, exchange: str | None = None) -> str:
         payload: dict[str, Any] = {"apikey": api_key, "date": date}
         if exchange:
             payload["exchange"] = exchange.upper()
-        with httpx.Client(timeout=30.0) as http:
-            r = http.post(url, json=payload, headers={"Content-Type": "application/json"})
-            return json.dumps(r.json(), indent=2, default=str)
+        headers = {"Content-Type": "application/json"}
+        # Through the SDK's own HTTP client, like every other tool. Under the
+        # gthread worker the remote MCP server points that client at this
+        # process (no second request thread is needed); a private client here
+        # made a real HTTP call back to the server, and with the request pool
+        # nearly full the tool waited 30 seconds for a thread and failed.
+        # Everywhere else the SDK's client is the same HTTP loopback as before.
+        sdk_http = getattr(client, "client", None)
+        if isinstance(sdk_http, httpx.Client):
+            r = sdk_http.post(url, json=payload, headers=headers, timeout=30.0)
+        else:
+            with httpx.Client(timeout=30.0) as http:
+                r = http.post(url, json=payload, headers=headers)
+        return json.dumps(r.json(), indent=2, default=str)
     except Exception as e:
         return _fail("checking holiday", e)
 

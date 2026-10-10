@@ -44,8 +44,9 @@ discovering it at run time:
 
 * the source parses (``ast.parse``),
 * it hardcodes no credential,
-* it reads ``OPENALGO_API_KEY``, ``HOST_SERVER`` and ``WEBSOCKET_URL`` from the
-  environment, which is the contract in ``strategies/README.md``.
+* it reads ``OPENALGO_API_KEY`` and ``HOST_SERVER`` from the environment, and
+  ``WEBSOCKET_URL`` too when it streams, which is the contract in
+  ``strategies/README.md``.
 """
 
 from __future__ import annotations
@@ -99,6 +100,14 @@ MAX_LISTED_FILES = 200
 #: Environment variables a hosted strategy must read, per strategies/README.md.
 REQUIRED_ENV_VARS: tuple[str, ...] = ("OPENALGO_API_KEY", "HOST_SERVER", "WEBSOCKET_URL")
 
+#: The one of those only a strategy that streams needs. A REST-only strategy
+#: never opens a socket, and refusing it for not reading the socket's address
+#: made the model add a read it then never used.
+WEBSOCKET_ENV_VAR = "WEBSOCKET_URL"
+
+#: Modules whose import means the strategy opens a socket of its own.
+_WEBSOCKET_MODULES = frozenset({"websocket", "websockets", "socketio"})
+
 #: The exact snippet from strategies/README.md, handed back when a required
 #: variable is missing so the correction is mechanical rather than inventive.
 ENV_SNIPPET = (
@@ -118,6 +127,15 @@ _CREDENTIAL_NAME = re.compile(
     r"auth[_-]?token|access[_-]?token|refresh[_-]?token|feed[_-]?token|"
     r"client[_-]?secret|private[_-]?key|x[_-]api[_-]key|token)",
     re.IGNORECASE,
+)
+
+#: A derivative trading symbol, ``NIFTY24OCT2425000CE`` or ``CRUDEOIL20MAY24FUT``:
+#: an underlying, a ``DDMMMYY`` expiry with a real month, then a strike and a
+#: right, or ``FUT``. Assigned to ``symbol_token`` it is an instrument, not a
+#: secret, and a random key does not carry a calendar month in that position.
+_TRADING_SYMBOL = re.compile(
+    r"\A[A-Z][A-Z0-9&_-]*?\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2}"
+    r"(?:\d+(?:\.\d+)?(?:CE|PE)|FUT)\Z"
 )
 
 #: Values that name a credential slot without filling it. Assigning one of these
@@ -247,6 +265,40 @@ def environment_names_read(tree: ast.AST) -> set[str]:
     return names
 
 
+def uses_websocket(tree: ast.AST) -> bool:
+    """Report whether a strategy streams market data over a websocket.
+
+    Recognises the SDK's ``subscribe_*`` and ``unsubscribe_*`` calls, a
+    ``ws_url=`` keyword, an import of a websocket client module, and a
+    ``ws://`` or ``wss://`` literal.
+
+    Args:
+        tree: The parsed module.
+
+    Returns:
+        True when any of those appears.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name.split(".")[0] in _WEBSOCKET_MODULES for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] in _WEBSOCKET_MODULES:
+                return True
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr.startswith(
+                ("subscribe_", "unsubscribe_")
+            ):
+                return True
+            if any(keyword.arg == "ws_url" for keyword in node.keywords):
+                return True
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value.strip().lower().startswith(("ws://", "wss://")):
+                return True
+    return False
+
+
 def hardcoded_credentials(tree: ast.AST) -> list[str]:
     """Find literals in the source that look like embedded credentials.
 
@@ -275,7 +327,11 @@ def hardcoded_credentials(tree: ast.AST) -> list[str]:
             findings.append(f"line {line}: {what}")
 
     def flag_named(line: int, name: str, value: str) -> None:
-        if _CREDENTIAL_NAME.search(name) and not _is_placeholder(value):
+        if (
+            _CREDENTIAL_NAME.search(name)
+            and not _is_placeholder(value)
+            and not _TRADING_SYMBOL.match(value.strip())
+        ):
             report(
                 line,
                 f"{name!r} is assigned a {len(value)}-character literal. Read it from the "
@@ -421,8 +477,9 @@ class StrategyGenToolkit(OpenAlgoToolkit):
 
         The source is refused, with the problem named so you can correct it and
         call again, when it does not parse, when it hardcodes a credential, or
-        when it does not read OPENALGO_API_KEY, HOST_SERVER and WEBSOCKET_URL
-        from the environment. Show the user the full source before calling this.
+        when it does not read OPENALGO_API_KEY and HOST_SERVER (and
+        WEBSOCKET_URL, when it streams) from the environment. Show the user the
+        full source before calling this.
 
         Args:
             filename: Base name for the script, for example
@@ -433,8 +490,9 @@ class StrategyGenToolkit(OpenAlgoToolkit):
             source: The complete Python source of the strategy, exactly as it
                 should land on disk. It is written verbatim, byte for byte, so
                 send the same text you showed the user. It must read
-                ``OPENALGO_API_KEY``, ``HOST_SERVER`` and ``WEBSOCKET_URL`` with
-                ``os.getenv`` and must contain no API key, token or password.
+                ``OPENALGO_API_KEY`` and ``HOST_SERVER`` with ``os.getenv``, and
+                ``WEBSOCKET_URL`` too when it subscribes to a stream, and must
+                contain no API key, token or password.
             description: One line saying what the strategy does, for example
                 ``EMA 20/50 crossover on NIFTY futures, MIS``. Recorded with the
                 save and returned in the result; it is not written into the file.
@@ -611,9 +669,15 @@ class StrategyGenToolkit(OpenAlgoToolkit):
 
         Raises:
             RetryAgentRun: When one of :data:`REQUIRED_ENV_VARS` is not read.
+                ``WEBSOCKET_URL`` is required only when the strategy streams.
         """
         found = environment_names_read(tree)
-        missing = [name for name in REQUIRED_ENV_VARS if name not in found]
+        streams = uses_websocket(tree)
+        missing = [
+            name
+            for name in REQUIRED_ENV_VARS
+            if name not in found and (streams or name != WEBSOCKET_ENV_VAR)
+        ]
         if not missing:
             return
         raise RetryAgentRun(

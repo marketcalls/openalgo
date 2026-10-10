@@ -26,7 +26,13 @@ const fake = vi.hoisted(() => ({
   start: vi.fn(),
   stop: vi.fn(),
   destroy: vi.fn(),
-  terminal: { setWorkspaceTransitionLocked: vi.fn(), setArmed: vi.fn(), drawStats: () => ({}) },
+  terminal: {
+    setWorkspaceTransitionLocked: vi.fn(),
+    setArmed: vi.fn(),
+    drawStats: () => ({}),
+    currentInterval: () => '5m',
+    replayPickingBar: () => false,
+  },
   publish: null as null | ((grid: PreparedChartGrid) => void),
   lock: null as null | ((pending: boolean) => void),
   changed: vi.fn(),
@@ -68,6 +74,7 @@ vi.mock('@/lib/trading/workspaceReplay', () => ({
     start = fake.start
     stop = fake.stop
     destroy = fake.destroy
+    subscribePick = () => () => {}
   },
 }))
 vi.mock('@/components/trading/ChartPane', () => ({
@@ -152,7 +159,11 @@ describe('workspace replay page ownership', () => {
   it('publishes visible members, pauses autosave for every replay phase and resumes on cancellation', async () => {
     const view = render(<Trading />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
-    expect(fake.members).toHaveBeenLastCalledWith([{ id: 'p0', terminal: fake.terminal }])
+    // The members are published by an effect that can run just after the
+    // button appears; on a loaded runner the check used to land in between.
+    await waitFor(() =>
+      expect(fake.members).toHaveBeenLastCalledWith([{ id: 'p0', terminal: fake.terminal }])
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Replay p0' }))
     expect(fake.start).toHaveBeenCalledExactlyOnceWith('p0')
     for (const phase of ['picking', 'loading', 'active'] as const) {
@@ -178,5 +189,55 @@ describe('workspace replay page ownership', () => {
     expect(fake.terminal.setWorkspaceTransitionLocked).toHaveBeenLastCalledWith(true)
     view.unmount()
     expect(fake.destroy).toHaveBeenCalledOnce()
+  })
+})
+
+describe('bottom bar', () => {
+  it('spends one strip on the whole grid, however many charts it holds', async () => {
+    const widest = LAYOUTS.reduce((a, b) => (b.cells.length > a.cells.length ? b : a))
+    localStorage.setItem('oa-trading-layout', widest.id)
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(screen.getAllByRole('button', { name: /^Replay p/ })).toHaveLength(widest.cells.length)
+    expect(container.querySelectorAll('[data-trading-bottombar]')).toHaveLength(1)
+    const grid = container.querySelector('[data-trading-bottombar]')?.previousElementSibling
+    expect((grid as HTMLElement).style.bottom).toBe('28px')
+  })
+})
+
+describe('chart grid dividers', () => {
+  const gridOf = (container: HTMLElement) =>
+    container.querySelector('[data-trading-bottombar]')?.previousElementSibling
+      ?.firstElementChild as HTMLElement
+
+  it('opens a layout with nothing stored at equal sizes, with a divider in each gap', async () => {
+    localStorage.setItem('oa-trading-layout', 'grid4')
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(gridOf(container).style.gridTemplateColumns).toBe('1fr 1fr')
+    expect(gridOf(container).style.gridTemplateRows).toBe('1fr 1fr')
+    expect(screen.getAllByRole('separator')).toHaveLength(2)
+  })
+
+  it('draws a stored split, and a double-click puts the layout back and forgets it', async () => {
+    localStorage.setItem('oa-trading-layout', 'grid4')
+    localStorage.setItem(
+      'oa-trading-layout-sizes',
+      JSON.stringify({ grid4: { columns: [1.5, 0.5], rows: [1, 1] } })
+    )
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(gridOf(container).style.gridTemplateColumns).toBe('1.5fr 0.5fr')
+    fireEvent.doubleClick(screen.getByRole('separator', { name: 'Resize chart columns' }))
+    expect(gridOf(container).style.gridTemplateColumns).toBe('1fr 1fr')
+    expect(JSON.parse(localStorage.getItem('oa-trading-layout-sizes')!)).toEqual({})
+    expect(fake.changed).toHaveBeenCalled()
+  })
+
+  it('offers no divider on a single chart', async () => {
+    localStorage.setItem('oa-trading-layout', 'single')
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(screen.queryByRole('separator')).toBeNull()
   })
 })

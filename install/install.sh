@@ -45,6 +45,85 @@ check_status() {
     fi
 }
 
+# >>> Telegram /chart browser (kept identical in install.sh, install-multi.sh and update.sh)
+# Telegram /chart draws its images with Kaleido, which starts a headless Chrome or
+# Chromium as the OpenAlgo service account. A snap browser cannot start as that
+# account: snap needs a writable home, and a service account's home (/var/www) is not
+# one ("cannot create snap home dir"), so every render fails with "The browser seemed
+# to close immediately after starting". Ubuntu's chromium and chromium-browser packages
+# only install that snap, so they are never used here.
+
+# Prints the browser Kaleido will start and succeeds when it is one the service account
+# can run. Kaleido looks for Google Chrome first, then takes the first Chromium on PATH,
+# so the first name found below is the one it uses.
+chart_browser_path() {
+    local name path real
+    for name in chrome google-chrome google-chrome-stable chromium chromium-browser; do
+        path="$(command -v "$name" 2>/dev/null)" || continue
+        real="$(readlink -f "$path")"
+        # A snap command is /snap/bin/<name>, a link to /usr/bin/snap; Ubuntu's
+        # chromium-browser is a small script that starts the snap.
+        case "$path" in /snap/*) return 1 ;; esac
+        [ "$(basename "$real")" = "snap" ] && return 1
+        if [ "$(head -c 2 "$real" 2>/dev/null)" = "#!" ] && grep -qs "/snap/" "$real"; then
+            return 1
+        fi
+        echo "$real"
+        return 0
+    done
+    return 1
+}
+
+# Installs a browser for Telegram /chart when there is none the service account can run.
+# With apt: Google Chrome's .deb on amd64 (it adds Google's apt source, so Chrome
+# updates with the system), else Debian's own chromium package, never Ubuntu's snap.
+# With dnf or yum: the distribution's chromium, else Google Chrome's rpm on x86_64.
+# With pacman: chromium. Never fatal: OpenAlgo runs without it, only /chart cannot draw.
+ensure_chart_browser() {
+    local found tmp candidate
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart browser: $found" "$GREEN"
+        return 0
+    fi
+    log_message "\nInstalling a browser for Telegram /chart rendering..." "$BLUE"
+    if command -v apt-get >/dev/null 2>&1; then
+        if [ "$(dpkg --print-architecture 2>/dev/null)" = "amd64" ]; then
+            tmp="$(mktemp -d)"
+            if curl -fsSL -o "$tmp/google-chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; then
+                sudo apt-get install -y "$tmp/google-chrome.deb" fonts-liberation || true
+            fi
+            rm -rf "$tmp"
+        fi
+        if ! chart_browser_path >/dev/null; then
+            # On Ubuntu the only candidate is the snap stub, whose version names the snap.
+            candidate="$(apt-cache policy chromium 2>/dev/null | awk '/Candidate:/ {print $2}')"
+            if [ -n "$candidate" ] && [ "$candidate" != "(none)" ] && [[ "$candidate" != *snap* ]]; then
+                sudo apt-get install -y chromium fonts-liberation || true
+            fi
+        fi
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        local pm=dnf
+        command -v dnf >/dev/null 2>&1 || pm=yum
+        sudo "$pm" install -y chromium liberation-fonts || true
+        if ! chart_browser_path >/dev/null && [ "$(uname -m)" = "x86_64" ]; then
+            sudo "$pm" install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm liberation-fonts || true
+        fi
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm --needed chromium ttf-liberation || true
+    fi
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart will use $found" "$GREEN"
+        if command -v snap >/dev/null 2>&1 && snap list chromium >/dev/null 2>&1; then
+            log_message "The chromium snap is not used by OpenAlgo. If nothing else needs it: sudo snap remove chromium" "$YELLOW"
+        fi
+    else
+        log_message "No browser the OpenAlgo service can start was installed, so Telegram /chart will not draw charts" "$YELLOW"
+        log_message "Install Google Chrome (amd64) or your distribution's chromium package; on arm64 Ubuntu, Chromium exists only as a snap, which cannot run as a service" "$YELLOW"
+    fi
+    return 0
+}
+# <<< Telegram /chart browser
+
 # Function to check current timezone
 check_timezone() {
     current_tz=$(timedatectl | grep "Time zone" | awk '{print $3}')
@@ -501,20 +580,6 @@ case "$OS_TYPE" in
         # Try to install snapd, but don't fail if unavailable
         sudo apt-get install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         check_status "Failed to install required packages"
-        # Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
-        # Kaleido 1.x ships no bundled browser; it drives a system Chromium via choreographer.
-        # Debian/Raspbian have 'chromium' in main. Ubuntu 19.10+ renamed it to 'chromium-browser'
-        # which is a transitional package that installs the Chromium snap (works headless).
-        # Non-fatal — if nothing sticks we just warn; the rest of openalgo still installs fine.
-        log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
-        if sudo apt-get install -y chromium fonts-liberation 2>/dev/null; then
-            log_message "Installed chromium (Debian package)" "$GREEN"
-        elif sudo apt-get install -y chromium-browser fonts-liberation 2>/dev/null; then
-            log_message "Installed chromium-browser (Ubuntu transitional/snap)" "$GREEN"
-        else
-            log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
-            log_message "You can install it manually later: sudo snap install chromium" "$YELLOW"
-        fi
         ;;
     centos | fedora | rhel | amzn)
         if ! command -v dnf >/dev/null 2>&1; then
@@ -535,26 +600,6 @@ case "$OS_TYPE" in
             sudo dnf install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         fi
         check_status "Failed to install required packages"
-        # Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
-        # Available in EPEL for RHEL/CentOS, main repo for Fedora. Amazon Linux 2023 does
-        # not ship Chromium — in that case the install falls through and /chart is disabled
-        # until the operator installs Chrome/Chromium manually. Non-fatal.
-        log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
-        if command -v dnf >/dev/null 2>&1; then
-            if sudo dnf install -y chromium liberation-fonts 2>/dev/null; then
-                log_message "Installed chromium via dnf" "$GREEN"
-            else
-                log_message "Chromium not available via dnf - Telegram /chart will not render charts" "$YELLOW"
-                log_message "For Amazon Linux 2023, install google-chrome-stable manually" "$YELLOW"
-            fi
-        else
-            if sudo yum install -y chromium liberation-fonts 2>/dev/null; then
-                log_message "Installed chromium via yum" "$GREEN"
-            else
-                log_message "Chromium not available via yum - Telegram /chart will not render charts" "$YELLOW"
-                log_message "Make sure EPEL is enabled, or install google-chrome-stable manually" "$YELLOW"
-            fi
-        fi
         # Enable and start snapd if it was successfully installed
         if command -v snap >/dev/null 2>&1; then
             sudo systemctl enable --now snapd.socket
@@ -566,20 +611,14 @@ case "$OS_TYPE" in
         # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
         sudo pacman -Sy --noconfirm --needed snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         check_status "Failed to install required packages"
-        # Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
-        # Non-fatal — if install fails we warn and continue.
-        log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
-        if sudo pacman -S --noconfirm --needed chromium ttf-liberation 2>/dev/null; then
-            log_message "Installed chromium via pacman" "$GREEN"
-        else
-            log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
-        fi
         # Enable and start snapd if it was successfully installed
         if command -v snap >/dev/null 2>&1; then
             sudo systemctl enable --now snapd.socket
         fi
         ;;
 esac
+
+ensure_chart_browser
 
 # Install uv package installer
 log_message "\nInstalling uv package installer..." "$BLUE"

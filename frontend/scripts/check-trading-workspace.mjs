@@ -136,6 +136,7 @@ export async function checkTradingWorkspace({ page, check, expect, report, reloa
       id: t.sk.replace('oa-trading-', ''), interval: t.interval, active: t.replayActive(),
       bars: t.price.getData().map(bar => ({ ...bar })), state: t.replayState(),
       finer: t.replaySub?.bars.map(bar => ({ ...bar })) ?? [],
+      full: t.rawBars.map(bar => ({ ...bar })),
       comparisons: [...(t.comparisons?.entries.values() ?? [])].map(entry => ({
         bars: entry.handle.series.getData(), future: entry.handle.barAt(t.rawBars.at(-1).time),
       })),
@@ -151,9 +152,21 @@ export async function checkTradingWorkspace({ page, check, expect, report, reloa
         assert(finerSeconds, 'The browser workload must declare each finer interval');
         const available = member.finer.filter(bar => bar.time >= last.time && bar.time + finerSeconds <= clock && bar.time < last.time + seconds);
         assert(available.length, 'A forming bar needs observed finer candles');
-        assert.equal(last.close, available.at(-1).close);
-        assert.equal(last.high, Math.max(...available.map(bar => bar.high)));
-        assert.equal(last.low, Math.min(...available.map(bar => bar.low)));
+        // Charts 2.5.9 contract: the forming bar is the finer aggregate held
+        // inside the displayed bar it closes on (open fixed, extremes and close
+        // clamped, volume capped). Where the feeds agree nothing is held.
+        const final = member.full.find(bar => bar.time === last.time);
+        assert(final, 'The displayed bar the forming bar closes on must be loaded');
+        const top = Math.max(final.high, final.open, final.close), bottom = Math.min(final.low, final.open, final.close);
+        const hold = value => (value > top ? top : value < bottom ? bottom : value);
+        const close = hold(available.at(-1).close);
+        assert.equal(last.open, final.open);
+        assert.equal(last.close, close);
+        assert.equal(last.high, Math.max(final.open, hold(Math.max(...available.map(bar => Math.max(bar.high, bar.open, bar.close)))), close));
+        assert.equal(last.low, Math.min(final.open, hold(Math.min(...available.map(bar => Math.min(bar.low, bar.open, bar.close)))), close));
+        // Volume is the finer bars' sum, capped at the displayed bar's own.
+        const finerVolume = available.reduce((sum, bar) => sum + (bar.volume ?? 0), 0);
+        assert.equal(last.volume, Number.isFinite(final.volume) ? Math.min(finerVolume, final.volume) : finerVolume, 'A forming bar\'s volume must be the finer sum, capped at the displayed bar\'s');
       }
       assert.deepEqual(last ?? null, member.state.bar);
       for (const comparison of member.comparisons) {

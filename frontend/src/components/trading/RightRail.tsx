@@ -8,10 +8,21 @@
  * closes it.
  */
 
-import { Activity, Bell, Bot, FileCode2, FlaskConical, List, Shapes, Table2 } from 'lucide-react'
+import {
+  Activity,
+  Bell,
+  Bot,
+  Crosshair,
+  FileCode2,
+  FlaskConical,
+  List,
+  Shapes,
+  Table2,
+} from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
+import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE } from './railStyles'
+import { Tip } from './Tip'
 
 const PANELS = [
   // Nothing here is a metaphor: the watchlist is a list of instruments, the
@@ -23,23 +34,71 @@ const PANELS = [
   // Every panel carries a glyph. Objects spelled its label down the rail
   // instead, which made one button twice the height of the three beside it
   // and turned a row of icons into a row with a word in it.
-  { id: 'watchlist', label: 'Watchlist', icon: List },
-  { id: 'options', label: 'Option chain', icon: Table2 },
-  { id: 'objects', label: 'Objects', icon: Shapes },
+  {
+    id: 'watchlist',
+    label: 'Watchlist',
+    icon: List,
+    hint: 'Your instruments with live prices; click one to chart it',
+  },
+  {
+    id: 'options',
+    label: 'Option chain',
+    icon: Table2,
+    hint: 'Strikes for the charted underlying; click one to chart it',
+  },
+  {
+    id: 'objects',
+    label: 'Objects',
+    icon: Shapes,
+    hint: 'Every drawing, study and line on this chart',
+  },
   // Beside the objects panel, because both answer "what is on this chart" and
   // an alert line is one of the things drawn on it.
-  { id: 'alerts', label: 'Alerts', icon: Bell },
-  { id: 'scripts', label: 'Scripts', icon: FileCode2 },
+  {
+    id: 'alerts',
+    label: 'Alerts',
+    icon: Bell,
+    hint: 'Alerts on this chart, and every one that fired',
+  },
+  // The values under the crosshair: the bar and every study on it. With the
+  // two above because it too reads the chart rather than the market.
+  {
+    id: 'data',
+    label: 'Data window',
+    icon: Crosshair,
+    hint: 'The values under the crosshair, for the bar and every study',
+  },
+  {
+    id: 'scripts',
+    label: 'Scripts',
+    icon: FileCode2,
+    hint: 'Write and edit OpenScript studies and strategies',
+  },
   // Beside the editor, because writing a strategy and asking what it would
   // have done are one activity seen twice, and a trader moves between the two
   // constantly while a strategy is taking shape.
-  { id: 'backtest', label: 'Backtest', icon: FlaskConical },
+  {
+    id: 'backtest',
+    label: 'Backtest',
+    icon: FlaskConical,
+    hint: "Test a strategy on this chart's history",
+  },
   // After the backtest, because that is the order the work happens in: a
   // strategy is written, tested over history, and only then run. This is the
   // one panel whose rows are processes on the server rather than things in
   // this tab, and they outlive it.
-  { id: 'strategies', label: 'Strategies', icon: Activity },
-  { id: 'agent', label: 'Assistant', icon: Bot },
+  {
+    id: 'strategies',
+    label: 'Strategies',
+    icon: Activity,
+    hint: 'Strategies running on the server, Live or Sandbox',
+  },
+  {
+    id: 'agent',
+    label: 'Assistant',
+    icon: Bot,
+    hint: 'Ask about this chart, or have it changed for you',
+  },
 ] as const
 
 /**
@@ -88,32 +147,35 @@ export function RightRail({ active, onSelect }: Props) {
 
   return (
     <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 no-scrollbar overflow-y-auto border-l bg-background/40 py-1">
-      {PANELS.map(({ id, label, icon: Icon }) => {
+      {PANELS.map(({ id, label, icon: Icon, hint }) => {
         const isOpen = active === id
         return (
-          <div key={id} className="group relative">
-            <button
-              type="button"
-              ref={(node) => {
-                buttonsRef.current[id] = node
-              }}
-              // Clicking the open panel's own button closes it. The rail is the
-              // only way back to a full-width chart, so the button that opened
-              // a panel has to be the button that puts it away.
-              onClick={() => onSelect(isOpen ? null : id)}
-              className={cn(RAIL_BTN, isOpen && RAIL_BTN_ON)}
-              aria-label={label}
-              aria-expanded={isOpen}
-              // Only while the panel exists. Pointing aria-controls at an id
-              // that is not in the document is worse than omitting it.
-              aria-controls={isOpen ? `oa-panel-${id}` : undefined}
-            >
-              <Icon className="h-[18px] w-[18px]" strokeWidth={RAIL_ICON_STROKE} />
-            </button>
-            {/* Opens left: this rail is against the viewport edge, so a tip
-                opening right would be clipped. */}
-            <RailTip text={label} chord={isOpen ? 'Esc' : undefined} side="left" />
-          </div>
+          <Tip
+            key={id}
+            side="left"
+            tip={{ title: label, chord: isOpen ? 'Esc' : undefined, sub: isOpen ? 'Close' : hint }}
+          >
+            <div className="group relative">
+              <button
+                type="button"
+                ref={(node) => {
+                  buttonsRef.current[id] = node
+                }}
+                // Clicking the open panel's own button closes it. The rail is the
+                // only way back to a full-width chart, so the button that opened
+                // a panel has to be the button that puts it away.
+                onClick={() => onSelect(isOpen ? null : id)}
+                className={cn(RAIL_BTN, isOpen && RAIL_BTN_ON)}
+                aria-label={label}
+                aria-expanded={isOpen}
+                // Only while the panel exists. Pointing aria-controls at an id
+                // that is not in the document is worse than omitting it.
+                aria-controls={isOpen ? `oa-panel-${id}` : undefined}
+              >
+                <Icon className="h-[18px] w-[18px]" strokeWidth={RAIL_ICON_STROKE} />
+              </button>
+            </div>
+          </Tip>
         )
       })}
     </div>

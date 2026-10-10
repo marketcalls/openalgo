@@ -59,15 +59,14 @@ platform already holds. ``services/openscript_instrument_service.py`` says where
 each one comes from.
 """
 
-import hashlib
 import json
-import os
+import os  # noqa: F401 - tests patch os.replace through this module's name
 import re
-import tempfile
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
+from services import openscript_store
 from services.openscript_instrument_service import get_instrument_facts
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -83,13 +82,22 @@ logger = get_logger(__name__)
 # requires letters, digits, dot, dash or underscore and an .oscript ending.
 openscript_bp = Blueprint("openscript_bp", __name__, url_prefix="/openscript")
 
-SCRIPTS_DIR = Path("strategies") / "openscript"
-
-# A served or saved filename must match this exactly. ``send_from_directory``
-# already refuses to escape the directory, so this is the second layer: it keeps
-# the route to plain sources and rejects anything with a path separator, a dot
-# segment, or an extension this route does not own.
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.oscript$")
+# The storage rules live in services/openscript_store.py, shared with the
+# agent's save tool so there is one name rule, one size limit, one per-file lock
+# and one replace sequence. They are bound here under their old names because
+# the runner and the tests reach for them on this module. The folder itself is
+# not bound here: it is read from the store at call time, so a test points
+# ``openscript_store.SCRIPTS_DIR`` at a temporary folder and every caller,
+# this blueprint, the runner and the agent's save tool, follows it.
+_SAFE_NAME = openscript_store.SAFE_NAME
+_PROGRAM_SUFFIX = openscript_store.PROGRAM_SUFFIX
+MAX_SOURCE_BYTES = openscript_store.MAX_SOURCE_BYTES
+MAX_PROGRAM_BYTES = openscript_store.MAX_PROGRAM_BYTES
+_FILE_LOCKS = openscript_store.FILE_LOCKS
+_normalised = openscript_store.normalised
+_source_hash = openscript_store.source_hash
+_program_path = openscript_store.program_path
+_stage = openscript_store.stage
 
 # What ``/instrument`` accepts. An exchange is a code (NSE, NSE_INDEX, CRYPTO).
 # A symbol is held to length and printable text only, because the master
@@ -100,45 +108,10 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.oscript$")
 _EXCHANGE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,19}$")
 _MAX_SYMBOL_LENGTH = 64
 
-# What a compiled program is called, appended to the source's own name.
-#
-# Derived from a name that has already been through ``_SAFE_NAME`` and never
-# from anything a caller sent, so one check covers both files. No route here
-# accepts a program name off the wire: a caller names the script, and this
-# module names the file beside it. The suffix also keeps a program outside
-# ``_SAFE_NAME``, so it can never be listed as a source, read through the source
-# route, or written by one.
-_PROGRAM_SUFFIX = ".program.json"
-
-# The largest source this route will store.
-#
-# A script is kilobytes. The ceiling is here because the smallest deployment
-# leaves nginx's request body limit at its 1 MB default, and a limit that is
-# generous on one install and default on another is the default one. Refusing at
-# 256 kB gives a reason a trader can read, where letting the body grow gives them
-# a gateway error with no explanation in it.
-MAX_SOURCE_BYTES = 256 * 1024
-
-# The largest compiled program this route will store.
-#
-# A program runs several times the size of the source it came from, because the
-# instruction list, the constant pool and the debug table are all written out:
-# measured over the scripts in this folder, a 5.4 kB source compiles to 14 kB
-# and a 240 byte one to 2.8 kB. The number is set against the same 1 MB request
-# body the source limit is set against, and the two travel in one body: 256 kB
-# of source and 512 kB of program, each grown by the escaping that carrying them
-# as JSON strings costs, still fits under a default install. A script large
-# enough to reach this has a problem no limit here can fix.
-#
-# It is a latency ceiling as well as a size one. Production is a single
-# cooperatively scheduled worker and the bytes below are written and flushed to
-# the disk inside the request, so this bounds how long one save can hold it.
-MAX_PROGRAM_BYTES = 512 * 1024
-
 
 def _script_dir() -> Path:
-    """The scripts directory, resolved against the app's working directory."""
-    return SCRIPTS_DIR.resolve()
+    """The scripts directory, as the store resolves it, read at call time."""
+    return openscript_store.script_dir()
 
 
 def _rejected(filename: str):
@@ -152,72 +125,6 @@ def _rejected(filename: str):
             ),
         }
     ), 400
-
-
-def _normalised(text: str) -> str:
-    """The source text in the language's own normal form.
-
-    Two rules, both the language's rather than this module's: a leading byte
-    order mark is not part of the text, and a carriage return before a newline
-    is not part of it either. The compiler applies these before it does anything
-    else, so the hash it stamps into a program is taken over the result. A
-    second, slightly different spelling of the rule here would make every save
-    that carries a program look like a mismatch, so it is held to exactly those
-    two rules and nothing else.
-    """
-    without_mark = text[1:] if text.startswith("\ufeff") else text
-    return without_mark.replace("\r\n", "\n")
-
-
-def _source_hash(text: str) -> str:
-    """The identity a compiled program records for the source it came from.
-
-    The same string the compiler writes into the program's ``source.hash``,
-    which is what lets this module answer a question it has no compiler to
-    answer: whether the program in front of it was compiled from the source in
-    front of it.
-    """
-    digest = hashlib.sha256(_normalised(text).encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
-
-
-def _program_path(directory: Path, filename: str) -> Path:
-    """The compiled program that belongs beside one source."""
-    return directory / (filename + _PROGRAM_SUFFIX)
-
-
-def _stage(directory: Path, payload: bytes) -> Path:
-    """Write bytes to a temporary file in the same directory and hand it back.
-
-    Same directory, so the move that follows is a rename rather than a copy
-    across filesystems, which is what makes it atomic. The caller does the
-    renaming; this does the part that can fail, which is getting the bytes onto
-    the disk.
-    """
-    handle, temporary = tempfile.mkstemp(dir=str(directory), suffix=".partial")
-    try:
-        # `mkstemp` hands back a raw descriptor, and production is a single
-        # worker that never restarts, so one leaked on a failure path stays
-        # leaked for the life of the process. Wrapping it before the try that
-        # unlinks means the wrapper owns it from here: `fdopen` either takes the
-        # descriptor and closes it, or raises without taking it, which is the
-        # one case the bare close below covers.
-        out = os.fdopen(handle, "wb")
-    except BaseException:
-        os.close(handle)
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-    try:
-        with out:
-            out.write(payload)
-            out.flush()
-            os.fsync(out.fileno())
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-    return Path(temporary)
 
 
 @openscript_bp.route("/index.json", methods=["GET"])
@@ -236,30 +143,7 @@ def index():
     A runner reads it to find its work without opening every file, and a panel
     reads it to tell a trader which of their scripts are still half a thought.
     """
-    directory = _script_dir()
-    if not directory.is_dir():
-        return jsonify([])
-
-    scripts = []
-    for entry in sorted(directory.iterdir()):
-        if not entry.is_file() or not _SAFE_NAME.match(entry.name):
-            continue
-        try:
-            stat = entry.stat()
-        except OSError:
-            # A file that vanished between listing and stat is not an error
-            # worth failing the whole panel over.
-            logger.exception("Could not stat OpenScript source %s", entry.name)
-            continue
-        scripts.append(
-            {
-                "file": entry.name,
-                "mtime": int(stat.st_mtime),
-                "bytes": stat.st_size,
-                "program": _program_path(directory, entry.name).is_file(),
-            }
-        )
-    return jsonify(scripts)
+    return jsonify(openscript_store.list_scripts(_script_dir()))
 
 
 @openscript_bp.route("/instrument", methods=["GET"])
@@ -532,52 +416,18 @@ def save(filename: str):
             {"status": "error", "message": f"Could not create the scripts folder: {error}"}
         ), 500
 
-    target = directory / filename
-    program_target = _program_path(directory, filename)
-    staged: list[Path] = []
     try:
-        if target.exists():
-            backup = target.with_name(target.name + ".bak")
-            backup.write_bytes(target.read_bytes())
-
-        source_temporary = _stage(directory, encoded)
-        staged.append(source_temporary)
-        program_temporary = None
-        if program_bytes is not None:
-            program_temporary = _stage(directory, program_bytes)
-            staged.append(program_temporary)
-
-        # The order from the docstring, in four lines. Nothing here writes
-        # bytes: it is one unlink and two renames, so the window in which the
-        # pair could disagree is as narrow as a filesystem allows, and every
-        # state inside it is a source with no program.
-        program_target.unlink(missing_ok=True)
-        os.replace(source_temporary, target)
-        staged.remove(source_temporary)
-        if program_temporary is not None:
-            os.replace(program_temporary, program_target)
-            staged.remove(program_temporary)
+        saved = openscript_store.write_script(directory, filename, encoded, program_bytes)
     except OSError as error:
         logger.exception("Could not save OpenScript source %s", filename)
         return jsonify({"status": "error", "message": f"Could not save: {error}"}), 500
-    finally:
-        # Whatever is still staged was never renamed into place, so it is a
-        # temporary file nobody will ever come back for.
-        for leftover in staged:
-            leftover.unlink(missing_ok=True)
 
-    logger.info(
-        "Saved OpenScript source %s (%d bytes, program %s)",
-        filename,
-        len(encoded),
-        "stored" if program_bytes is not None else "none",
-    )
     return jsonify(
         {
             "status": "success",
             "file": filename,
             "bytes": len(encoded),
-            "mtime": int(target.stat().st_mtime),
+            "mtime": int(saved.path.stat().st_mtime),
             "program": program_bytes is not None,
         }
     )
@@ -601,9 +451,12 @@ def remove(filename: str):
     directory = _script_dir()
     target = directory / filename
     try:
-        target.unlink(missing_ok=True)
-        target.with_name(target.name + ".bak").unlink(missing_ok=True)
-        _program_path(directory, filename).unlink(missing_ok=True)
+        # Under the same per-file lock as a save, so a delete cannot land in
+        # the middle of one and leave half of it behind.
+        with _FILE_LOCKS.hold(filename):
+            target.unlink(missing_ok=True)
+            target.with_name(target.name + ".bak").unlink(missing_ok=True)
+            _program_path(directory, filename).unlink(missing_ok=True)
     except OSError as error:
         logger.exception("Could not delete OpenScript source %s", filename)
         return jsonify({"status": "error", "message": f"Could not delete: {error}"}), 500

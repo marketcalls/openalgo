@@ -7,7 +7,6 @@ import asyncio
 import json
 import os
 import struct
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -29,12 +28,13 @@ logger = get_logger("dhan_websocket")
 # OS thread, bypassing the monkey-patch. The bug is invisible in dev (Flask
 # dev server uses standard threading) and only surfaces on production
 # gunicorn+eventlet deployments.
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
 
-    _original_threading = eventlet.patcher.original("threading")
-else:
-    _original_threading = threading
+_original_threading = _runtime.original("threading")
 
 
 class DhanWebSocket:

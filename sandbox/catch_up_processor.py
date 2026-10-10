@@ -9,6 +9,7 @@ Features:
 """
 
 import os
+import threading
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -21,6 +22,10 @@ logger = get_logger(__name__)
 # IST timezone
 IST = pytz.timezone("Asia/Kolkata")
 
+#: Single-flight guard for run_catch_up_tasks. Only ever acquired without
+#: blocking, so nothing waits on it, from a green thread or a real one.
+_catch_up_lock = threading.Lock()
+
 
 def catch_up_mis_squareoff():
     """
@@ -32,8 +37,9 @@ def catch_up_mis_squareoff():
     be added to today_realized_pnl - only to accumulated/all-time realized_pnl
     """
     try:
-        from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
+        from database.sandbox_db import SandboxPositions, db_session
         from sandbox.fund_manager import FundManager
+        from sandbox.position_manager import claim_position_for_settlement
         from sandbox.session_boundary import last_session_expiry_utc
 
         session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
@@ -86,6 +92,21 @@ def catch_up_mis_squareoff():
                 continue
 
             try:
+                # Claim the row first: a second catch-up (another device's
+                # login) or a fill may be acting on it too. The boundary test
+                # is repeated under the claim, so a position traded since the
+                # query is no longer treated as left over from a past session.
+                if not claim_position_for_settlement(
+                    position,
+                    position.quantity,
+                    SandboxPositions.updated_at < last_session_expiry,
+                ):
+                    db_session.rollback()
+                    logger.info(
+                        f"Catch-up: {position.symbol} was settled or changed elsewhere; skipping"
+                    )
+                    continue
+
                 user_id = position.user_id
                 symbol = position.symbol
                 quantity = position.quantity
@@ -100,32 +121,33 @@ def catch_up_mis_squareoff():
 
                 # Calculate realized P&L (apply contract_value for crypto, e.g. 0.01 for ETHUSD.P)
                 from database.token_db import get_symbol_info as _get_sym_info
+
                 _sym_cv = _get_sym_info(symbol, position.exchange)
-                _cv = Decimal(str(_sym_cv.contract_value)) if _sym_cv and _sym_cv.contract_value else Decimal("1.0")
+                _cv = (
+                    Decimal(str(_sym_cv.contract_value))
+                    if _sym_cv and _sym_cv.contract_value
+                    else Decimal("1.0")
+                )
                 if quantity > 0:
                     realized_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * _cv
                 else:
-                    realized_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * _cv
+                    realized_pnl = (
+                        (avg_price - settlement_price) * Decimal(str(abs(quantity))) * _cv
+                    )
 
                 logger.info(
                     f"Catch-up settling stale MIS: {symbol} for {user_id}, "
                     f"qty={quantity}, pnl={realized_pnl}, margin={margin_blocked}"
                 )
 
-                # Update funds - add to realized_pnl but NOT today_realized_pnl
-                funds = SandboxFunds.query.filter_by(user_id=user_id).first()
-                if funds:
-                    # Release margin back to available balance
-                    funds.available_balance += margin_blocked + realized_pnl
-                    funds.used_margin -= margin_blocked
-
-                    # Add to all-time realized P&L only (NOT today_realized_pnl)
-                    funds.realized_pnl = (funds.realized_pnl or Decimal("0.00")) + realized_pnl
-                    funds.total_pnl = funds.realized_pnl + (funds.unrealized_pnl or Decimal("0.00"))
-
-                    # Ensure used_margin doesn't go negative
-                    if funds.used_margin < 0:
-                        funds.used_margin = Decimal("0.00")
+                # Update funds - add to realized_pnl but NOT today_realized_pnl.
+                # Staged as a compare-and-set and committed with the position
+                # below; a missing funds row is left missing, as before.
+                FundManager(user_id).stage_prior_session_release(
+                    margin_blocked,
+                    realized_pnl,
+                    f"Catch-up MIS square-off: {symbol}",
+                )
 
                 # Update position to closed state
                 position.quantity = 0
@@ -164,9 +186,7 @@ def catch_up_t1_settlement():
         # created_at is the database clock (UTC). Build IST midnight, then
         # convert, or the comparison is read as UTC and lands 5.5h late.
         today = datetime.now(IST).date()
-        settlement_cutoff = as_db_utc(
-            IST.localize(datetime.combine(today, datetime.min.time()))
-        )
+        settlement_cutoff = as_db_utc(IST.localize(datetime.combine(today, datetime.min.time())))
 
         pending_positions = (
             SandboxPositions.query.filter_by(product="CNC")
@@ -217,9 +237,9 @@ def catch_up_daily_pnl_reset():
             )
 
             # Reset all today_realized_pnl that are from before session boundary
-            SandboxPositions.query.filter(
-                SandboxPositions.updated_at < last_session_expiry
-            ).update({"today_realized_pnl": Decimal("0.00")})
+            SandboxPositions.query.filter(SandboxPositions.updated_at < last_session_expiry).update(
+                {"today_realized_pnl": Decimal("0.00")}
+            )
 
             SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_expiry).update(
                 {"today_realized_pnl": Decimal("0.00")}
@@ -327,7 +347,23 @@ def run_catch_up_tasks():
 
     Note: Runs regardless of sandbox mode - the sandbox database exists independently
     and positions need to be settled even if user is not in analyzer mode
+
+    One run at a time. Every login starts one on its master-contract thread
+    (up to five devices at once), and two sweeps settling the same stale
+    positions side by side is the race the claims below exist for. A trigger
+    that arrives while a run is under way is skipped: the run in progress
+    does the same work.
     """
+    if not _catch_up_lock.acquire(blocking=False):
+        logger.info("Catch-up tasks are already running; skipping this trigger")
+        return
+    try:
+        _run_catch_up_tasks()
+    finally:
+        _catch_up_lock.release()
+
+
+def _run_catch_up_tasks():
     try:
         logger.info("Running catch-up tasks after master contract download...")
 

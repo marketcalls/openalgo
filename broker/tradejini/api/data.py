@@ -1,3 +1,4 @@
+import functools
 import json
 import threading
 import time
@@ -10,10 +11,104 @@ import pandas as pd
 from broker.tradejini.api.auth_api import API_KEY_MISSING_ERROR, get_api_key
 from broker.tradejini.api.nxtradstream import NxtradStream
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError, max_queue_wait
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# --- How many requests may wait on the Tradejini feed at once, under gthread ---
+# A quote or depth request here subscribes on a WebSocket and then waits
+# seconds for the data, holding its thread the whole time. Under the gthread
+# worker those are request threads from a fixed pool, so at most
+# _FEED_WAITERS_MAX requests wait at once. The next waits at most the data
+# ceiling of utils.broker_backpressure for a place, and is refused with a
+# sentence the trader can act on.
+# Under eventlet and the development server nothing is capped, as before.
+_FEED_WAITERS_MAX = 8
+_feed_waiters = threading.BoundedSemaphore(_FEED_WAITERS_MAX)
+_feed_gate_held = threading.local()
+_FEED_BUSY_MESSAGE = (
+    "Too many live quote and depth requests are already waiting on the Tradejini "
+    "feed. Try again in a few seconds."
+)
+
+
+def _feed_gated(on_busy=None):
+    """Decorate a method that waits on the feed; a no-op outside gthread.
+
+    Args:
+        on_busy: Called with the method's arguments instead of raising when no
+            place frees up in time, for a method that has another way to answer.
+    """
+
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapper(*args, **kwargs):
+            # Nested gated calls on one thread already hold a place.
+            if not runtime.gthread_active() or getattr(_feed_gate_held, "held", False):
+                return method(*args, **kwargs)
+            if not _feed_waiters.acquire(timeout=max_queue_wait("data")):
+                logger.warning(f"Tradejini feed: {method.__name__} refused, all places taken")
+                if on_busy is not None:
+                    return on_busy(*args, **kwargs)
+                raise BrokerBusyError(_FEED_BUSY_MESSAGE)
+            _feed_gate_held.held = True
+            try:
+                return method(*args, **kwargs)
+            finally:
+                _feed_gate_held.held = False
+                _feed_waiters.release()
+
+        return wrapper
+
+    return decorate
+
+
+# --- Waiting on the feed ---------------------------------------------------
+# A quote or depth request subscribes and then waits for its data. It used to
+# look once a second, or wait a fixed time for a batch; it now looks every
+# _FEED_POLL_SECONDS and stops as soon as what it reads is complete. What it
+# reads, and how, is unchanged, so the answer is the same one, only sooner.
+#
+# An L5 packet is a whole book, so the first one is complete. L1 arrives as a
+# snapshot followed by changes, which the stream merges, so an L1 quote counts
+# as complete once it holds every field the answer reads (_L1_FIELDS, and open
+# interest on a derivatives exchange). A quote that never holds them all is read
+# the way it always was: a single quote on the next one second step, a batch at
+# the end of its wait. The pause before a single quote subscribes is not a wait
+# for data and is left as it is.
+_FEED_POLL_SECONDS = 0.05
+_QUOTE_STEP_SECONDS = 1.0
+_QUOTE_STEPS = 40
+_DEPTH_WAIT_SECONDS = 20.0
+_L1_FIELDS = ("ltp", "open", "high", "low", "close", "vol", "bidPrice", "askPrice")
+_OI_EXCHANGES = frozenset({"NFO", "BFO", "CDS", "BCD", "MCX"})
+
+
+def _wait_for_feed(ready, seconds: float) -> bool:
+    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
+
+    True as soon as it is, False once the time is up. time.sleep yields to the
+    other requests under eventlet and holds only this request's thread elsewhere.
+    """
+    deadline = time.monotonic() + seconds
+    while not ready():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_FEED_POLL_SECONDS, remaining))
+    return True
+
+
+def _l1_complete(quote_data, exchange: str) -> bool:
+    """Whether an L1 quote holds every field a quote answer reads."""
+    if not isinstance(quote_data, dict):
+        return False
+    if any(field not in quote_data for field in _L1_FIELDS):
+        return False
+    return exchange not in _OI_EXCHANGES or "OI" in quote_data
 
 
 class TradejiniWebSocket:
@@ -344,6 +439,7 @@ class BrokerData:
                 "oi": 0,  # Include OI with default value
             }
 
+    @_feed_gated()
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """Get real-time quotes for given symbol"""
         try:
@@ -390,7 +486,7 @@ class BrokerData:
             logger.debug("Quote subscription sent successfully, waiting for data...")
 
             # Wait for quote data with retries
-            max_retries = 40
+            max_retries = _QUOTE_STEPS
             retry_count = 0
 
             # Possible symbol key formats the data might arrive with
@@ -405,8 +501,25 @@ class BrokerData:
 
             logger.debug(f"Will look for data with these symbol keys: {symbol_keys}")
 
+            def cached_quote():
+                """The quote the step below would find, in the order it looks."""
+                for check_key in symbol_keys:
+                    if check_key in self.ws.L1_dict:
+                        return self.ws.L1_dict[check_key]
+                last = self.ws.last_quote
+                if last is not None and last.get("symbol", "") in symbol_keys:
+                    return last
+                return None
+
+            def complete_quote():
+                with self.ws.lock:
+                    return _l1_complete(cached_quote(), exchange)
+
             while retry_count < max_retries:
-                time.sleep(1.0)
+                # Up to one step, ending as soon as the quote is complete.
+                if _wait_for_feed(complete_quote, _QUOTE_STEP_SECONDS):
+                    with self.ws.lock:
+                        return self._format_quote(cached_quote(), symbol, exchange)
 
                 with self.ws.lock:
                     # Check L1 cache with different key formats
@@ -517,6 +630,11 @@ class BrokerData:
             else:
                 return self._process_multiquotes_batch(symbols)
 
+        except BrokerBusyError:
+            # Refused by the feed gate before anything was sent (gthread only).
+            # Passed through so the service answers 429 with its sentence; a
+            # 500 here would let an option chain show zero prices as success.
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -527,6 +645,7 @@ class BrokerData:
             except Exception:
                 pass
 
+    @_feed_gated()
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
         Process a batch of symbols using WebSocket subscription
@@ -602,32 +721,43 @@ class BrokerData:
                 )
             return skipped_symbols + results
 
-        # Step 3: Wait for data to arrive
+        def cached_quote(symbol_key, info):
+            """The L1 quote for one symbol, looked up in the order Step 4 always has."""
+            # Try different key formats that Tradejini WebSocket might use
+            ws_exch = info.get("ws_exchange", info["exchange"].replace("_INDEX", ""))
+            possible_keys = [
+                symbol_key,  # token_ws_exchange (e.g., "1234_NSE")
+                f"{info['token']}_{ws_exch}",
+                f"{ws_exch}_{info['token']}",
+                f"{info['token']}_NSE",
+                f"{info['token']}_BSE",
+                str(info["token"]),  # just token
+            ]
+            for key in possible_keys:
+                if key in self.ws.L1_dict:
+                    return key, self.ws.L1_dict[key]
+            return None, None
+
+        def batch_complete():
+            with self.ws.lock:
+                return all(
+                    _l1_complete(cached_quote(symbol_key, info)[1], info["exchange"])
+                    for symbol_key, info in symbol_map.items()
+                )
+
+        # Step 3: Wait for data to arrive, for up to the same time as before,
+        # ending as soon as every symbol's quote is complete.
         # Dynamic wait time based on number of symbols
         wait_time = min(max(len(symbol_keys) * 0.05, 2), 10)  # Between 2-10 seconds
-        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
-        time.sleep(wait_time)
+        logger.debug(f"Waiting up to {wait_time:.1f}s for quote data...")
+        _wait_for_feed(batch_complete, wait_time)
 
         # Step 4: Collect results from L1 cache
         with self.ws.lock:
             for symbol_key, info in symbol_map.items():
-                # Try different key formats that Tradejini WebSocket might use
-                ws_exch = info.get("ws_exchange", info["exchange"].replace("_INDEX", ""))
-                possible_keys = [
-                    symbol_key,  # token_ws_exchange (e.g., "1234_NSE")
-                    f"{info['token']}_{ws_exch}",
-                    f"{ws_exch}_{info['token']}",
-                    f"{info['token']}_NSE",
-                    f"{info['token']}_BSE",
-                    str(info["token"]),  # just token
-                ]
-
-                quote_data = None
-                for key in possible_keys:
-                    if key in self.ws.L1_dict:
-                        quote_data = self.ws.L1_dict[key]
-                        logger.debug(f"Found quote data for {info['symbol']} using key: {key}")
-                        break
+                key, quote_data = cached_quote(symbol_key, info)
+                if quote_data:
+                    logger.debug(f"Found quote data for {info['symbol']} using key: {key}")
 
                 if quote_data:
                     results.append(
@@ -662,6 +792,7 @@ class BrokerData:
         )
         return skipped_symbols + results
 
+    @_feed_gated()
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Get market depth for given symbol"""
         try:
@@ -693,31 +824,24 @@ class BrokerData:
 
             logger.info("Depth subscription sent successfully, waiting for data...")
 
-            # Wait for depth data
-            max_retries = 20
-            retry_count = 0
+            # Wait for depth data, for up to the same 20 seconds, taking the
+            # first book as soon as it arrives: an L5 packet is a whole book.
             symbol_key = f"{token}_{ws_exchange}"
 
-            while retry_count < max_retries:
-                time.sleep(1.0)
+            def cached_depth():
+                # Check L5 cache, then last_depth as fallback
+                if symbol_key in self.ws.L5_dict:
+                    return self.ws.L5_dict[symbol_key]
+                return self.ws.last_depth
 
+            def depth_arrived():
                 with self.ws.lock:
-                    # Check L5 cache
-                    if symbol_key in self.ws.L5_dict:
-                        depth_data = self.ws.L5_dict[symbol_key]
-                        logger.debug(f"Found depth data for {symbol}")
-                        return self._format_depth(depth_data, symbol, exchange)
+                    return cached_depth() is not None
 
-                    # Check last_depth as fallback
-                    if self.ws.last_depth is not None:
-                        logger.debug(f"Found depth data in last_depth for {symbol}")
-                        return self._format_depth(self.ws.last_depth, symbol, exchange)
-
-                retry_count += 1
-                if retry_count % 5 == 0:
-                    logger.debug(
-                        f"Still waiting for depth data... (attempt {retry_count}/{max_retries})"
-                    )
+            if _wait_for_feed(depth_arrived, _DEPTH_WAIT_SECONDS):
+                with self.ws.lock:
+                    logger.debug(f"Found depth data for {symbol}")
+                    return self._format_depth(cached_depth(), symbol, exchange)
 
             # Return default depth structure if no data received
             logger.warning(f"No depth data received for {symbol}")

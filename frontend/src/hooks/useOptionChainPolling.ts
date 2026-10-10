@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { fetchRefusalSentence } from '@/lib/serverSentence'
 import type { OptionChainDataIdentity, OptionChainResponse } from '@/types/option-chain'
 import { usePageVisibility } from './usePageVisibility'
 
@@ -123,7 +124,11 @@ export function useOptionChainPolling(
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        // A busy or conflicting refusal (429, 409) carries a sentence written
+        // for the trader, such as the broker pacing message; show that. Every
+        // other failure keeps the text it always had.
+        const sentence = await fetchRefusalSentence(response)
+        throw new Error(sentence ?? `HTTP error! status: ${response.status}`)
       }
 
       const data: OptionChainResponse = await response.json()

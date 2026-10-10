@@ -13,6 +13,7 @@ from broker.dhan.mapping.gtt_data import (
     transform_place_gtt,
 )
 from database.auth_db import get_user_id, verify_api_key
+from utils.lazy import LazyInit
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -21,14 +22,16 @@ logger = get_logger(__name__)
 # Dedicated HTTP/1.1-only client for Dhan Forever Orders. Their AWS ELB returns
 # bogus 301s (Location: https://api.dhan.co:443/v2/) on HTTP/2 POST/PUT/DELETE
 # to /v2/forever/orders. Dhan's own SDK uses `requests` (HTTP/1.1), which works.
-_dhan_gtt_client = None
+#
+# Built on first use by exactly one caller: two requests placing Forever Orders
+# at once used to build a client each, and the one overwritten was never closed.
+# Constructing an httpx.Client opens no connection, so it is safe under
+# LazyInit's lock.
+_dhan_gtt_client = LazyInit(lambda: httpx.Client(http2=False, timeout=30.0), name="dhan-gtt-http")
 
 
 def _get_client():
-    global _dhan_gtt_client
-    if _dhan_gtt_client is None:
-        _dhan_gtt_client = httpx.Client(http2=False, timeout=30.0)
-    return _dhan_gtt_client
+    return _dhan_gtt_client.get()
 
 
 class _FakeResponse:

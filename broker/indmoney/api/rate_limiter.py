@@ -29,12 +29,14 @@ the right response to a throttle there is to fail loudly rather than sleep and
 retry - see broker/indmoney/api/auth_api.py.
 """
 
+import math
 import threading
 import time
 from datetime import datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+from utils.broker_backpressure import BrokerBusyError, cap_server_delay, max_queue_wait
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -132,22 +134,59 @@ def apply_rate_limit(bucket):
     broker meters a rate, not individual gaps, so bounding the rate is the
     correct trade. broker/definedge, broker/dhan and broker/fyers all take the
     same approach.
+
+    How far ahead a slot may be booked. Under eventlet and the dev server there
+    is no limit, as before. Under the gthread worker each waiting caller holds
+    one of a fixed number of request threads, so a caller whose slot is further
+    away than ``utils.broker_backpressure.max_queue_wait`` is refused with
+    BrokerBusyError instead, and books nothing, so it delays nobody after it.
+
+    Raises:
+        BrokerBusyError: Only under the gthread worker, as above.
     """
     rate = _RATE_PER_SECOND.get(bucket)
     if not rate:
         return
     min_interval = 1.0 / rate
+    kind = _queue_kind(bucket)
+    ceiling = max_queue_wait(kind)
 
     with _lock:
         now = time.monotonic()
         start = max(now, _next_free.get(bucket, 0.0))
-        _next_free[bucket] = start + min_interval
         sleep_for = start - now
+        refused = ceiling is not None and sleep_for > ceiling
+        if not refused:
+            _next_free[bucket] = start + min_interval
+
+    if refused:
+        logger.warning(
+            f"IndMoney pacing ({bucket}) refused a request whose turn was "
+            f"{sleep_for:.1f}s away (limit {ceiling:.0f}s under gthread)"
+        )
+        raise _busy_error(sleep_for, kind)
 
     # Sleep outside the lock so other threads can reserve their own slots.
     if sleep_for > 0:
         logger.debug(f"Rate limiting ({bucket}): sleeping {sleep_for:.3f}s before IndMoney call")
         time.sleep(sleep_for)
+
+
+def _queue_kind(bucket):
+    """Which bounded-wait ceiling applies: order writes, or everything else."""
+    return "order" if bucket == "order" else "data"
+
+
+def _busy_error(wait, kind):
+    """The refusal for a request whose turn would come ``wait`` seconds from now."""
+    what = "This order was not sent" if kind == "order" else "This request was not sent"
+    seconds = max(1, math.ceil(wait))
+    return BrokerBusyError(
+        "IndMoney allows only a few requests each second, and OpenAlgo already has "
+        f"more waiting than it can send in time. {what}. Try again in about "
+        f"{seconds} seconds.",
+        retry_after=wait,
+    )
 
 
 def _record_daily(bucket):
@@ -235,7 +274,15 @@ def rate_limited_request(client, method, url, **kwargs):
             break
 
         if attempt < retries:
-            delay = retry_delay(response.headers, attempt)
+            # Under gthread a delay past the ceiling is not slept out: the 429
+            # is returned as it stands.
+            delay = cap_server_delay(retry_delay(response.headers, attempt), _queue_kind(bucket))
+            if delay is None:
+                logger.warning(
+                    f"IndMoney rate limit hit (429) on {method} {url} [{bucket}]; the "
+                    "requested wait is longer than a request may be held, not retried"
+                )
+                break
             logger.warning(
                 f"IndMoney rate limit hit (429) on {method} {url} [{bucket}]; "
                 f"retry {attempt + 1}/{retries} in {delay:.2f}s"

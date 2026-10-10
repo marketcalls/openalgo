@@ -834,6 +834,13 @@ class BrokerData:
                             # so keep it naive here and localize per-branch below.
                             dt = datetime.strptime(candle[0], "%Y-%m-%dT%H:%M:%S")
 
+                            # 5Paisa answers a range with no sessions in it (e.g.
+                            # a future-dated one) with the latest candle instead
+                            # of an empty list, so keep only candles that fall
+                            # inside the requested chunk.
+                            if not (current_start.date() <= dt.date() <= current_end.date()):
+                                continue
+
                             open_price = float(candle[1])
                             high_price = float(candle[2])
                             low_price = float(candle[3])

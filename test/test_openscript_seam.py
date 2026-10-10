@@ -63,6 +63,7 @@ import services.openscript_runner_service as service
 import utils.session
 from blueprints.openscript import openscript_bp
 from blueprints.openscript_runner import openscript_runner_bp
+from services import openscript_store
 
 #: The repository root, found from this file rather than from the working
 #: directory, so the packaging checks below answer about the checkout being
@@ -724,7 +725,7 @@ def seam(tmp_path, monkeypatch):
     scripts.mkdir(parents=True)
     (scripts / "seam.oscript").write_text(SOURCE, encoding="utf-8")
     (scripts / "seam.oscript.program.json").write_text(PROGRAM, encoding="utf-8")
-    monkeypatch.setattr(openscript, "SCRIPTS_DIR", scripts)
+    monkeypatch.setattr(openscript_store, "SCRIPTS_DIR", scripts)
 
     monkeypatch.setattr(
         settings_store, "CONFIG_FILE", tmp_path / "strategies" / "openscript_run_configs.json"

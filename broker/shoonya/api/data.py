@@ -4,28 +4,49 @@ import os
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
 
-# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
-# asyncio.run() cannot be called under eventlet's monkey-patched event loop
-def _is_eventlet_patched():
-    try:
-        import eventlet.patcher
+def _use_async() -> bool:
+    """Whether a quote batch runs on asyncio: on the development server only.
 
-        return eventlet.patcher.is_monkey_patched("socket")
-    except (ImportError, AttributeError):
-        return False
+    asyncio.run() cannot run under eventlet's monkey-patched hub, so eventlet
+    takes the thread pool path. The gthread worker takes it too, deliberately:
+    production keeps the one path it has always run until the asyncio path has
+    been soaked under gthread (test/shoonya_getquotes_soak.py). Both questions
+    are answered by utils.runtime, which never imports eventlet to ask.
+    """
+    return not (runtime.is_monkey_patched() or runtime.gthread_active())
 
 
-USE_ASYNC = not _is_eventlet_patched()
+USE_ASYNC = _use_async()
+
+# Under gthread the thread pool path runs on one process-wide pool of this size
+# instead of a new pool of real OS threads per quote batch.
+_QUOTE_POOL_WORKERS = 20
+
+
+def _quote_pool(batch: int):
+    """The executor for one quote batch, as a context manager.
+
+    Under eventlet this is a pool of its own per call, exactly as before (green
+    threads there). Under gthread it is the shared pool, which the ``with``
+    block must not shut down.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("shoonya-quotes", _QUOTE_POOL_WORKERS))
+    return ThreadPoolExecutor(max_workers=20)
+
 
 logger = get_logger(__name__)
 
@@ -648,8 +669,10 @@ class BrokerData:
         start_time = time.time()
 
         # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
-        # if called from within an already-running event loop
-        use_async = USE_ASYNC
+        # if called from within an already-running event loop. The worker is
+        # asked again here in case this module was imported before gunicorn
+        # had registered it.
+        use_async = USE_ASYNC and not runtime.gthread_active()
         if use_async:
             try:
                 asyncio.get_running_loop()
@@ -663,7 +686,7 @@ class BrokerData:
         else:
             # ThreadPoolExecutor approach
             results = []
-            with ThreadPoolExecutor(max_workers=20) as executor:
+            with _quote_pool(len(prepared_symbols)) as executor:
                 future_to_symbol = {
                     executor.submit(
                         self._fetch_single_quote_sync,
@@ -784,6 +807,68 @@ class BrokerData:
             "D": 2 * 365 * 24 * 3600,
         }
         return minute_windows.get(interval, 30 * 24 * 3600)
+
+    @staticmethod
+    def _repair_candles(
+        df: pd.DataFrame, exchange: str, symbol: str, interval: str
+    ) -> pd.DataFrame:
+        """Make every candle satisfy low <= open, close <= high with volume >= 0.
+
+        Chart clients validate that invariant and reject the whole series over
+        one bad bar ("History contains an invalid candle"), issue #2154.
+
+        TPSeries reports a bar's volume (`intv`) as the change in the running
+        day volume (`v`), and on NSE that running total drops back at 15:20
+        and recovers a few minutes later. Observed on NSE TCS 18-09-2026 at
+        1m: v=5,382,803 at 15:19, 1,474,589 at 15:20 (intv=-3,908,214), then
+        6,872,536 at 15:28 (intv=+5,383,867). The bar holding 15:20 comes back
+        negative on every interval (the 15:20 bar at 5m, 15:15 at 1h, 13:15 at
+        4h) while BSE and daily bars are clean, which is why NSE intraday
+        charts failed and the rest loaded.
+
+        Same repair as broker/kotak/api/data.py::_repair_candles: the open and
+        the close are prices that actually traded, so the wick is widened to
+        cover them, and a volume that cannot be true is zeroed rather than
+        costing the bar its prices. Rows still missing an OHLC value are
+        dropped: a NaN reaches the client as an invalid candle too, and there
+        is no honest repair.
+        """
+        if df.empty:
+            return df
+
+        ohlc = ["open", "high", "low", "close"]
+
+        usable = df[ohlc].notna().all(axis=1)
+        if not usable.all():
+            logger.warning(
+                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing "
+                f"OHLC for {exchange}:{symbol} {interval}"
+            )
+            df = df[usable].reset_index(drop=True)
+            if df.empty:
+                return df
+
+        high = df[ohlc].max(axis=1)
+        low = df[ohlc].min(axis=1)
+        broken = (high != df["high"]) | (low != df["low"])
+        if broken.any():
+            logger.info(
+                f"HISTORY API - Widened {int(broken.sum())} candle(s) whose high/low "
+                f"excluded their own open/close for {exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df["high"] = high
+            df["low"] = low
+
+        negative = df["volume"] < 0
+        if negative.any():
+            logger.warning(
+                f"HISTORY API - Zeroing {int(negative.sum())} negative volume(s) for "
+                f"{exchange}:{symbol} {interval}"
+            )
+            df = df.copy()
+            df.loc[negative, "volume"] = 0
+        return df
 
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
@@ -1097,6 +1182,7 @@ class BrokerData:
             # Sort by timestamp. Adjacent chunks are half-open, but a candle
             # landing exactly on a boundary would otherwise appear twice.
             df = df.sort_values("timestamp").drop_duplicates(subset="timestamp", keep="last")
+            df = self._repair_candles(df.reset_index(drop=True), oa_exchange, symbol, interval)
             return df.reset_index(drop=True)
 
         except Exception as e:

@@ -576,7 +576,8 @@ class FlowOpenAlgoClient:
             if not whatsapp_bot_service.is_ready():
                 return {
                     "status": "error",
-                    "error": "WhatsApp is not paired or not connected. Pair the device from /whatsapp.",
+                    "error": whatsapp_bot_service.unavailable_reason()
+                    or "WhatsApp is not paired or not connected. Pair the device from /whatsapp.",
                 }
 
             target = None

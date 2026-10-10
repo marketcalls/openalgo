@@ -437,6 +437,15 @@ TOOL_USE_SECTION = PromptSection(
 - Read the whole result before answering. If it carries an error, say what
   failed and what the operator can do about it rather than retrying blindly.
 - One call at a time when a later argument depends on an earlier result.
+  Independent reads, such as the history of two instruments or the news on two
+  companies, may go out together in one turn.
+- Fill every argument a tool requires. A relative range needs no question: for
+  "last 20 days" the end date is today and the start date is 20 calendar days
+  before it, both in IST, and the result will hold only the trading sessions in
+  between.
+- If a tool says its arguments did not arrive or were refused, call it again
+  with them filled in as it describes. That is a correction, not a failure to
+  report.
 - Do not call a tool to restate something already in this conversation, and do
   not loop: if two attempts at the same call fail the same way, stop and report
   it.
@@ -543,7 +552,8 @@ each one as soon as its fence closes. Emit them in exactly this shape.
 - Generated code is never run for you. Writing a strategy writes a file; the
   operator starts it themselves, deliberately, from the Python page.
 - Never hardcode an API key, a password or a token in generated code. Read
-  OPENALGO_API_KEY, HOST_SERVER and WEBSOCKET_URL from the environment.
+  OPENALGO_API_KEY and HOST_SERVER from the environment, and WEBSOCKET_URL too
+  when the script streams.
 """,
 )
 
@@ -577,8 +587,11 @@ Every script opens the same way:
     client = api(
         api_key=os.getenv("OPENALGO_API_KEY"),
         host=os.getenv("HOST_SERVER", "http://127.0.0.1:5000"),
-        ws_url=os.getenv("WEBSOCKET_URL", "ws://127.0.0.1:8765"),
     )
+
+A script that streams live data also passes
+`ws_url=os.getenv("WEBSOCKET_URL", "ws://127.0.0.1:8765")`; one that does not
+leaves it out.
 
 The methods, by area. Call them on `client`.
 
@@ -620,7 +633,7 @@ Two things every generated script must get right:
 
 - **Credentials come from the environment**, never a literal. The strategy host
   injects `OPENALGO_API_KEY`, `HOST_SERVER` and `WEBSOCKET_URL` when it starts a
-  script.
+  script. Read the first two always, and `WEBSOCKET_URL` only when it streams.
 - **A strategy is a loop with a sleep**, not a one-shot. Guard it so an
   exception in one iteration does not kill the process, and log what it did.
 
@@ -698,9 +711,11 @@ Four renderers, chosen by what the data is. Pick by domain, not by preference.
 - **An option analytics question gets its own tool.** plot_open_interest,
   plot_gamma_exposure and plot_volatility_surface cover OI walls, gamma and the
   IV surface.
-- **Everything else is render_ui.** Bar, line, area and pie charts, tables,
-  metric cards and callouts, for general data such as position sizes or a funds
-  breakdown. Its markup is OpenUI Lang, described in its own section below.
+- **Everything else is render_ui, where it is offered.** Bar, line, area and
+  pie charts, tables, metric cards and callouts, for general data such as
+  position sizes or a funds breakdown. Its markup is OpenUI Lang, described in
+  its own section. The chart panel has no render_ui: answer there in a short
+  table or in prose.
 
 Never draw a chart from numbers you remember, were told, or worked out. The
 chart tools fetch their own data, which is why they can be trusted; render_ui
@@ -877,8 +892,11 @@ a few lines.
 
 - THIS SESSION already names the chart's symbol, exchange, interval, viewport
   and last price, read fresh from the panel every message. Never ask what is on
-  screen or which dates to use: no chart tool takes an instrument, an interval
-  or a date, because they all work on the chart in front of the operator.
+  screen or which dates to use: the drawing and analysis tools take no
+  instrument, interval or date, because they work on the chart in front of the
+  operator. For get_history or plot_price_chart, pass the chart's symbol,
+  exchange and interval from THIS SESSION; their dates default to a recent
+  range when left out.
 - **Draw, do not describe.** A level, a line, a zone or a pattern belongs on the
   chart, not in a paragraph, and every one of draw_levels, draw_trendline,
   draw_zone and find_patterns marks what it found. Then say what it means. A
@@ -892,8 +910,12 @@ a few lines.
   way to remove a drawing the operator placed.
 - read_chart is for their own drawings, the indicator settings and which of your
   groups are still on screen. Nothing else needs it.
-- You have no order tools here. If they want to trade, say so and point them at
-  the chat page rather than implying you placed anything.
+- Orders work here exactly as on the chat page, and only when THIS SESSION says
+  trading is enabled. When it is, call the order tool for the instrument on the
+  chart (or the one they name): the run pauses and the operator approves or
+  rejects it on this panel, so state the exact order first and never say it was
+  placed until the tool returns. When trading is not enabled, say it is
+  switched off in the agent settings rather than implying you placed anything.
 """,
 )
 
@@ -992,10 +1014,11 @@ VOICE_SURFACE_SECTION = voice_surface_section()
 #: its own ``order`` weight. A surface not listed here gets the base prompt
 #: alone, which is correct behaviour rather than an error.
 #:
-#: The OpenUI reference is on ``chat`` alone and deliberately so. It is by far
-#: the largest section, the chart panel drives the real ``/trading`` terminal
-#: rather than composing cards, and its ``render_ui`` tool is registered
-#: ``CHAT_ONLY`` to match: a surface is never taught a tool it does not have.
+#: The OpenUI reference is on ``chat`` and ``voice``, the two surfaces whose
+#: ``render_ui`` tool is registered, and deliberately not on the chart panel. It
+#: is by far the largest section, and the chart panel drives the real
+#: ``/trading`` terminal rather than composing cards: a surface is never taught
+#: a tool it does not have.
 #: It is omitted when the generated document is missing, because a heading over
 #: an empty body teaches the model a language it was not given.
 SURFACE_SECTIONS: Mapping[str, tuple[PromptSection, ...]] = {
@@ -1004,10 +1027,13 @@ SURFACE_SECTIONS: Mapping[str, tuple[PromptSection, ...]] = {
     ),
     "chart": (CHART_SURFACE_SECTION,),
     # Voice shares the chat surface's toolkits but none of its output rules, so
-    # it gets its own section and not the chat one. The OpenUI reference is
-    # absent for the same reason it is absent from the chart panel: render_ui is
-    # CHAT_ONLY, and a surface is never taught a tool it does not have.
-    SURFACE_VOICE: (VOICE_SURFACE_SECTION,),
+    # it gets its own section and not the chat one. It does get the OpenUI
+    # reference: render_ui is registered for chat and voice, its description
+    # points at that section, and a surface given a tool is taught its language
+    # just as one without it is never taught it.
+    SURFACE_VOICE: tuple(
+        section for section in (VOICE_SURFACE_SECTION, OPENUI_LANG_SECTION) if section.body.strip()
+    ),
 }
 
 
@@ -1036,7 +1062,9 @@ def runtime_section(
     """
     lines: list[str] = []
     if now is not None:
-        stamp = now.strftime("%Y-%m-%d %H:%M %Z").strip()
+        # The weekday is stated because "last Friday" or "this week" is
+        # otherwise a calculation the model can get wrong.
+        stamp = now.strftime("%A, %Y-%m-%d %H:%M %Z").strip()
         lines.append(f"- Current date and time: {stamp}.")
 
     if trading_enabled:

@@ -46,6 +46,8 @@ const AUTHOR_FACING = [
   'stoch', 'cci', 'roc', 'change', 'connorsStreak', 'nulls',
   // ohlc studies
   'trueRange', 'atr', 'rsi', 'supertrend', 'pivotHigh', 'pivotLow',
+  // 2.5.4: crossings and slope, where a missing value reads as no signal
+  'crossesAbove', 'crossesBelow', 'crosses', 'rising', 'falling',
   // 2.4.0: the higher-timeframe fold, and the error a calc throws for an
   // input the user can fix.
   'securitySeries', 'IndicatorInputError',
@@ -119,9 +121,11 @@ const CAPABILITIES = [
   ["input 'select'", "type: 'select'"],
   ["input 'source'", "type: 'source'"],
   // The five types this list used to demand -- 'session', 'timeframe', 'symbol',
-  // 'price', 'time' -- were never in the library. Requiring them here is what
+  // 'price', 'time' -- were not in the library then. Requiring them here is what
   // kept them in the docs, and the widget drops an unknown type in silence, so
-  // a study written from that example installed and lost its control.
+  // a study written from that example installed and lost its control. 'time'
+  // arrived in 2.4.0 and is listed below; 'session', 'symbol' and 'price'
+  // arrived in 2.5.4, but /trading's loader still refuses them.
   ["input tooltip", "tooltip:"],
   ["plot priceFormat", "priceFormat:"],
   // 2.4.0. Listed for the same reason as everything above: the library gaining

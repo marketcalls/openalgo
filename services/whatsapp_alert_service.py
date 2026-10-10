@@ -273,7 +273,10 @@ class WhatsAppAlertService:
         from services.whatsapp_bot_service import whatsapp_bot_service
 
         if not whatsapp_bot_service.is_ready():
-            logger.debug("WhatsApp alert dropped: bot not paired/connected")
+            logger.debug(
+                "WhatsApp alert dropped: %s",
+                whatsapp_bot_service.unavailable_reason() or "bot not paired/connected",
+            )
             return False
 
         try:

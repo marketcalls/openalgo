@@ -1,10 +1,13 @@
 import asyncio
 import json
+import math
 import os
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime, timedelta
+from datetime import time as dt_time
 
 import httpx
 import pandas as pd
@@ -15,22 +18,41 @@ from broker.flattrade.api.rate_limit import (
     rate_limit_retry_delay,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
-
-# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
-# asyncio.run() cannot be called under eventlet's monkey-patched event loop
-def _is_eventlet_patched():
-    try:
-        import eventlet.patcher
-        return eventlet.patcher.is_monkey_patched("socket")
-    except (ImportError, AttributeError):
-        return False
-
-USE_ASYNC = not _is_eventlet_patched()
+# Which quote fan-out this process uses. asyncio.run() cannot run under
+# eventlet's monkey-patched loop, so production has always taken the thread
+# pool path; only the dev server takes the asyncio one. The gthread worker
+# stays on the thread pool too: production must not switch to a path it has
+# never run. utils.runtime answers both questions without importing eventlet.
+USE_ASYNC = not (runtime.is_monkey_patched() or runtime.gthread_active())
 
 logger = get_logger(__name__)
+
+#: Threads in the shared quote pool. Matches the multiquote batch size, which is
+#: the most one request fans out at a time.
+QUOTE_POOL_SIZE = 10
+
+#: Workers in the pool each call starts for itself off gthread, as it always has.
+PER_CALL_QUOTE_WORKERS = 40
+
+
+def _quote_pool():
+    """The executor for one quote batch, as a context manager.
+
+    Under the gthread worker it is one process-wide pool, which the ``with``
+    block must not shut down: a pool per call started real OS threads for
+    every batch of every request. Under eventlet and on the development server
+    it is a pool of its own per call, exactly as before, so no threads outlive
+    the call and the health monitor counts what it always counted.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("flattrade-quotes", QUOTE_POOL_SIZE))
+    return ThreadPoolExecutor(max_workers=PER_CALL_QUOTE_WORKERS)
 
 # Request pacing for Flattrade data APIs (issue #1663).
 #
@@ -42,6 +64,25 @@ logger = get_logger(__name__)
 _apply_rate_limit = DATA_LIMITER.acquire
 _apply_rate_limit_async = DATA_LIMITER.acquire_async
 _is_rate_limit_error = is_rate_limit_error
+
+
+def _candle_number(candle: dict, key: str) -> float | None:
+    """A numeric candle field, or None when Flattrade sent it null, empty or not at all.
+
+    ``float(candle.get(key, 0))`` raised TypeError on a null (which the candle
+    loop does not catch, so one bad row failed the whole history request) and
+    turned a missing price into a real-looking 0. NaN and infinity are treated
+    as missing too: float() accepts them, a NaN price would be charted, and
+    int(inf) raises OverflowError, which the candle loop does not catch.
+    """
+    value = candle.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
@@ -161,6 +202,8 @@ class BrokerData:
                 "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
@@ -460,9 +503,10 @@ class BrokerData:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
-            # ThreadPoolExecutor approach (works in any context)
+            # Thread pool approach (works in any context); see _quote_pool.
+            # DATA_LIMITER, not the pool size, owns the pacing.
             results = []
-            with ThreadPoolExecutor(max_workers=40) as executor:
+            with _quote_pool() as executor:
                 future_to_symbol = {
                     executor.submit(
                         self._fetch_single_quote_sync,
@@ -565,6 +609,8 @@ class BrokerData:
                 "oi": int(response.get("oi", 0)),  # Open Interest
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
@@ -596,6 +642,9 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+            # Keep the OpenAlgo exchange: get_quotes below must resolve the token
+            # against it, not the broker exchange (SENSEX lives under BSE_INDEX).
+            oa_exchange = exchange
 
             if exchange == "NSE_INDEX":
                 exchange = "NSE"
@@ -636,6 +685,8 @@ class BrokerData:
                         "/PiConnectAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
@@ -671,64 +722,86 @@ class BrokerData:
                     candle = json.loads(candle)
 
                 try:
+                    # Both endpoints use into/inth/intl/intc for OHLC and intv for
+                    # volume. A candle missing any price is skipped rather than
+                    # filled with 0, which would chart as a crash to zero.
+                    op = _candle_number(candle, "into")
+                    hi = _candle_number(candle, "inth")
+                    lo = _candle_number(candle, "intl")
+                    cl = _candle_number(candle, "intc")
+                    if None in (op, hi, lo, cl):
+                        logger.warning(f"Skipping Flattrade candle with missing OHLC: {candle}")
+                        continue
+                    volume = int(_candle_number(candle, "intv") or 0)
+                    oi = int(_candle_number(candle, "oi") or 0)
+
                     # Parse timestamp based on interval
                     if interval == "D":
-                        # EOD data format: "21-SEP-2022"
-                        timestamp = int(candle.get("ssboe", 0))  # Use ssboe for timestamp
+                        # EOD data format: "21-SEP-2022"; ssboe is the epoch timestamp
+                        ssboe = _candle_number(candle, "ssboe")
+                        if ssboe is None:
+                            logger.warning(f"Skipping Flattrade EOD candle with no ssboe: {candle}")
+                            continue
+                        timestamp = int(ssboe)
+                        # Flattrade's BSE index EOD rows (SENSEX) often carry a close
+                        # outside the day's high/low. Widen the range to cover open
+                        # and close so the candle stays valid for charting.
+                        if hi < max(op, cl) or lo > min(op, cl):
+                            logger.debug(f"Inconsistent EOD candle from Flattrade: {candle}")
+                            hi = max(hi, op, cl)
+                            lo = min(lo, op, cl)
                         data.append(
                             {
                                 "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),  # EOD uses 'into' for open
-                                "high": float(candle.get("inth", 0)),  # EOD uses 'inth' for high
-                                "low": float(candle.get("intl", 0)),  # EOD uses 'intl' for low
-                                "close": float(candle.get("intc", 0)),  # EOD uses 'intc' for close
-                                "volume": int(
-                                    float(candle.get("intv", 0))
-                                ),  # EOD uses 'intv' for volume
-                                "oi": int(float(candle.get("oi", 0))),  # Open Interest
+                                "open": op,
+                                "high": hi,
+                                "low": lo,
+                                "close": cl,
+                                "volume": volume,
+                                "oi": oi,
                             }
                         )
                     else:
                         # Intraday format: "02-06-2020 15:46:23"
                         try:
-                            timestamp = int(
-                                datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S").timestamp()
-                            )
+                            candle_dt = datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S")
+                            timestamp = int(candle_dt.timestamp())
                         except ValueError:
                             logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
-                        # Skip candles with all zero values
+                        # On NSE/BSE cash and F&O, TPSeries adds a 09:14 bar holding
+                        # the pre-open discovered price: flat OHLC, zero bar volume.
+                        # The session opens at 09:15, so drop it (QA HS-07).
                         if (
-                            float(candle.get("into", 0)) == 0
-                            and float(candle.get("inth", 0)) == 0
-                            and float(candle.get("intl", 0)) == 0
-                            and float(candle.get("intc", 0)) == 0
+                            exchange in ("NSE", "BSE", "NFO", "BFO")
+                            and candle_dt.time() < dt_time(9, 15)
                         ):
+                            continue
+
+                        # Skip candles with all zero values
+                        if op == 0 and hi == 0 and lo == 0 and cl == 0:
                             continue
 
                         data.append(
                             {
                                 "timestamp": timestamp,
-                                "open": float(
-                                    candle.get("into", 0)
-                                ),  # Intraday also uses 'into' for open
-                                "high": float(
-                                    candle.get("inth", 0)
-                                ),  # Intraday also uses 'inth' for high
-                                "low": float(
-                                    candle.get("intl", 0)
-                                ),  # Intraday also uses 'intl' for low
-                                "close": float(
-                                    candle.get("intc", 0)
-                                ),  # Intraday also uses 'intc' for close
-                                "volume": int(
-                                    float(candle.get("intv", 0))
-                                ),  # Intraday also uses 'intv' for volume
-                                "oi": int(float(candle.get("oi", 0))),  # Open Interest
+                                "open": op,
+                                "high": hi,
+                                "low": lo,
+                                "close": cl,
+                                # During the NSE closing session (15:15-15:30)
+                                # Flattrade's cumulative 'v' switches to a separate
+                                # counter and back, so 'intv' (its bar-to-bar
+                                # difference) goes negative, e.g. INFY -13,357,992
+                                # at 15:20. A bar cannot trade negative volume and
+                                # the chart rejects the whole history on one, so
+                                # floor it at 0.
+                                "volume": max(volume, 0),
+                                "oi": oi,
                             }
                         )
-                except (KeyError, ValueError) as e:
+                except (KeyError, TypeError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
             df = pd.DataFrame(data)
@@ -750,7 +823,7 @@ class BrokerData:
                     if df.empty or df["timestamp"].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            quotes = self.get_quotes(symbol, exchange)
+                            quotes = self.get_quotes(symbol, oa_exchange)
 
                             if quotes:
                                 today_data = {
@@ -783,6 +856,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}")
 

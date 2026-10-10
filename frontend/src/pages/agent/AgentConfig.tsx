@@ -42,6 +42,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { AddModelDialog } from '@/components/agent/config/AddModelDialog'
 import { ChatGptSubscriptionPanel } from '@/components/agent/config/ChatGptSubscriptionPanel'
+import { McpPanel } from '@/components/agent/config/McpPanel'
 import { ProviderCatalogPanel } from '@/components/agent/config/ProviderCatalogPanel'
 import { RegisteredModelsTable } from '@/components/agent/config/RegisteredModelsTable'
 import { TradingPanel } from '@/components/agent/config/TradingPanel'
@@ -156,6 +157,9 @@ export default function AgentConfig() {
             </Section>
             <Section name="Web search">
               <WebSearchPanel />
+            </Section>
+            <Section name="External data">
+              <McpPanel />
             </Section>
           </div>
         </div>

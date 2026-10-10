@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import Plot from '@/lib/Plot2D'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -198,12 +199,15 @@ export default function OIProfile() {
       if (requestIdRef.current !== requestId) return
       if (response.status === 'success') {
         setProfileData(response)
+        // A success can still carry a note, when the daily OI change covers
+        // only some contracts because loading the rest took too long.
+        if (response.message) showToast.warning(response.message)
       } else {
         showToast.error(response.message || 'Failed to fetch OI Profile data')
       }
-    } catch {
+    } catch (error) {
       if (requestIdRef.current !== requestId) return
-      showToast.error('Failed to fetch OI Profile data')
+      showToast.error(serverSentence(error, 'Failed to fetch OI Profile data'))
     } finally {
       if (requestIdRef.current === requestId) setIsLoading(false)
     }
