@@ -1,4 +1,4 @@
-"""Smart orders on the 17 brokers_b plugins: one order per decision, and a fresh book.
+"""Smart orders on the 18 brokers_b plugins: one order per decision, and a fresh book.
 
 A smart order reads the open position, works out the order that takes it to the
 target size, and places it. Each of these plugins carries the same two guards:
@@ -37,6 +37,7 @@ BROKERS = [
     "paytm",
     "pocketful",
     "rmoney",
+    "rupeezy",
     "samco",
     "shoonya",
     "tradejini",

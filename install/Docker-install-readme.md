@@ -520,6 +520,7 @@ sudo rm -rf /var/lib/docker
 | Paytm Money | `paytm` | No |
 | Pocketful | `pocketful` | No |
 | RMoney | `rmoney` | Yes |
+| Rupeezy | `rupeezy` | No |
 | Samco | `samco` | No |
 | Shoonya | `shoonya` | No |
 | Tradejini | `tradejini` | No |
