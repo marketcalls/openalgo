@@ -296,6 +296,10 @@ class IPBan(LogBase):
             for ip_address in expired_ips:
                 _ip_ban_cache.invalidate(ip_address)
 
+            # Drop leftover cache entries so an out-of-band SQLite edit
+            # (deleting a row from logs.db) is visible without a restart.
+            _ip_ban_cache.invalidate()
+
             # Return active bans
             return IPBan.query.all()
         except Exception as e:
