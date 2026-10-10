@@ -8,6 +8,13 @@ echo "[OpenAlgo] Starting up..."
 # Determine writable .env location
 ENV_FILE="/app/.env"
 
+# Check if .env exists but is unreadable
+if [ -f "$ENV_FILE" ] && [ ! -r "$ENV_FILE" ]; then
+    echo "⚠️  [OpenAlgo] .env file exists but is NOT readable (Permission denied)"
+    echo "   Attempting to fix permissions..."
+    chmod 644 "$ENV_FILE" 2>/dev/null || echo "   Failed to change permissions via script."
+fi
+
 # Check if .env exists, is readable, and has content (not empty)
 if [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ] && [ -s "$ENV_FILE" ]; then
     echo "[OpenAlgo] Using existing .env file"
