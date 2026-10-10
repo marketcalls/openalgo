@@ -822,6 +822,8 @@ class BrokerData:
                     "bid": 0,  # Will be updated from depth
                     "ask": 0,  # Will be updated from depth
                     "prev_close": float(ohlc.get("close", 0)),
+                    # exchange day VWAP, see get_multiquotes.
+                    "average_price": float(quote_data.get("average_price") or 0),
                 }
 
                 # Update bid/ask from depth if available
@@ -1076,6 +1078,9 @@ class BrokerData:
                     "prev_close": float(ohlc.get("close", 0)),
                     "volume": int(float(volume)),
                     "oi": int(float(oi)),
+                    # Dhan returns the exchange day VWAP as
+                    # average_price in /marketfeed/quote; pass it through instead of dropping it.
+                    "average_price": float(quote_data.get("average_price") or 0),
                 },
             }
             results.append(result_item)
