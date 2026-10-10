@@ -255,11 +255,13 @@ def get_pnl_data():
         from services.positionbook_service import get_positionbook
 
         current_positions = {}
+        tracker_positions = []  # raw rows, for services/pnl_tracker_m2m.py
         try:
             success, positions_response, _ = get_positionbook(api_key=api_key)
 
             if success and "data" in positions_response:
                 positions_data = positions_response.get("data", [])
+                tracker_positions = list(positions_data or [])
 
                 # Store current positions for reference
                 logger.info(f"Number of positions: {len(positions_data) if positions_data else 0}")
@@ -308,6 +310,37 @@ def get_pnl_data():
                     },
                 }
             ), 200
+
+        # Build the curve per symbol AND product from today's fills, the carried
+        # quantity and the previous close, on the chosen basis: the broker's own
+        # P&L (the default, what the Positions page shows) or today's M2M. It
+        # returns None whenever it cannot be exact, and the code below runs
+        # instead.
+        try:
+            from services.pnl_tracker_m2m import build_m2m_tracker_response
+            from services.quotes_service import get_multiquotes
+
+            body = request.get_json(silent=True)
+            requested_basis = (body.get("basis") if isinstance(body, dict) else None) or (
+                request.args.get("basis")
+            )
+
+            m2m_response = build_m2m_tracker_response(
+                basis="m2m" if requested_basis == "m2m" else "pnl",
+                api_key=api_key,
+                positions=tracker_positions,
+                trades=trades,
+                parse_time=parse_trade_timestamp,
+                to_ist=convert_timestamp_to_ist,
+                rate_limiter=history_rate_limiter,
+                get_history_fn=get_history,
+                get_multiquotes_fn=get_multiquotes,
+            )
+        except Exception as e:
+            logger.exception(f"M2M tracker curve failed, using the built-in curve: {e}")
+            m2m_response = None
+        if m2m_response is not None:
+            return jsonify({"status": "success", "data": m2m_response}), 200
 
         # Process trades to build portfolio MTM
         portfolio_pnl = None
@@ -1096,6 +1129,9 @@ def get_pnl_data():
                     "max_drawdown": round(max_drawdown, 2),
                     "pnl_series": pnl_series,
                     "drawdown_series": drawdown_series,
+                    # The built-in curve, not the per-product one above: a page that
+                    # asked for M2M can tell it did not get it.
+                    "basis": "legacy",
                 },
             }
         ), 200

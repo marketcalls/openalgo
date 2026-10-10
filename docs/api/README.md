@@ -25,7 +25,7 @@ Never put broker credentials or broker access tokens in these requests. The Open
 
 ## Registered REST Inventory
 
-The current v1 surface contains **66 method/path pairs**. A resource with both GET and POST counts as two endpoints.
+The current v1 surface contains **67 method/path pairs**. A resource with both GET and POST counts as two endpoints.
 
 ### Order Management
 
@@ -58,6 +58,7 @@ The current v1 surface contains **66 method/path pairs**. A resource with both G
 | POST | `/tradebook` | [Trade book](./account-services/tradebook.md) |
 | POST | `/positionbook` | [Position book](./account-services/positionbook.md) |
 | POST | `/holdings` | [Holdings](./account-services/holdings.md) |
+| POST | `/pnl/attribution` | [P&L attribution](./account-services/pnl-attribution.md) |
 
 ### Market Data And Symbols
 
