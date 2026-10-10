@@ -45,6 +45,9 @@ from broker.fivepaisa.streaming.fivepaisa_adapter import FivepaisaWebSocketAdapt
 # Import the fivepaisaxts_adapter
 from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter
 
+# Import the acagarwalxts_adapter
+from broker.acagarwalxts.streaming.acagarwalxts_adapter import AcagarwalXTSWebSocketAdapter
+
 # Import the flattrade_adapter
 from broker.flattrade.streaming.flattrade_adapter import FlattradeWebSocketAdapter
 
@@ -129,6 +132,7 @@ register_adapter("ibulls", IbullsWebSocketAdapter)
 register_adapter("compositedge", CompositedgeWebSocketAdapter)
 register_adapter("fivepaisa", FivepaisaWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
+register_adapter("acagarwalxts", AcagarwalXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
 register_adapter("iiflcapital", IiflcapitalWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
