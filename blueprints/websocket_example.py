@@ -3,7 +3,8 @@ Example blueprint showing how to use the WebSocket service layer
 for internal UI components without authentication overhead.
 """
 
-from flask import Blueprint, current_app, jsonify, render_template, request, session
+from flask import Blueprint, current_app, jsonify, make_response, render_template, request, session
+from functools import wraps
 from flask_socketio import emit, join_room, leave_room
 
 from extensions import socketio
@@ -41,6 +42,19 @@ def get_username_from_session():
     """Get username from current session"""
     username = session.get("user")
     return username if username else None
+
+
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = make_response(f(*args, **kwargs))
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
 
 
 @websocket_bp.route("/websocket/dashboard")
@@ -163,6 +177,7 @@ def api_websocket_market_data():
 
 
 @websocket_bp.route("/api/websocket/apikey", methods=["GET"])
+@no_store_headers
 def api_get_websocket_apikey():
     """Get API key for WebSocket authentication"""
     username = get_username_from_session()
