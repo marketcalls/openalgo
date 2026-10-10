@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { AttributedRow, StrategyAttribution } from '@/api/trading'
 import type { Holding, Position } from '@/types/trading'
-import { applyM2m, groupByStrategy, narrowHoldingsToStrategy } from './strategyAttribution'
+import {
+  applyCostBasis,
+  applyM2m,
+  groupByStrategy,
+  hasCarryForwardValuation,
+  narrowHoldingsToStrategy,
+} from './strategyAttribution'
 
 const pos = (over: Partial<Position> = {}): Position => ({
   symbol: 'NIFTYX',
@@ -346,5 +352,101 @@ describe('narrowHoldingsToStrategy', () => {
 
   it('returns nothing without an attribution', () => {
     expect(narrowHoldingsToStrategy([holding], null, 'EBP')).toEqual([])
+  })
+})
+
+describe('applyCostBasis', () => {
+  // Kotak's overnight valuation shown as the "average" (the previous settlement), measured on a short leg
+  const flagged = (over: Partial<Position> = {}): Position =>
+    pos({
+      quantity: -130,
+      average_price: 12.35,
+      ltp: 16.65,
+      pnl: -559,
+      pnlpercent: -34.82,
+      average_price_basis: 'carry_forward_valuation',
+      ...over,
+    })
+
+  it('puts the strategy book entry average on a flagged, fully explained row and recomputes P&L', () => {
+    const rows = [flagged()]
+    const out = applyCostBasis(rows, attribution([{ slices: [slice('NDS', -130, 59.85)] }]))
+    expect(out[0].average_price).toBeCloseTo(59.85)
+    expect(out[0].average_price_basis).toBe('strategy_book')
+    // short 130 from 59.85, now 16.65: +5,616, not Kotak's -559
+    expect(out[0].pnl).toBeCloseTo(130 * (59.85 - 16.65))
+    expect(out[0].pnlpercent).toBeCloseTo(((130 * (59.85 - 16.65)) / (130 * 59.85)) * 100)
+    expect(rows[0].average_price).toBe(12.35) // the input row is not mutated
+  })
+
+  it('corrects a long leg too', () => {
+    const out = applyCostBasis(
+      [flagged({ quantity: 130, ltp: 6.2, pnl: 0 })],
+      attribution([{ slices: [slice('NDS', 130, 22.65)] }])
+    )
+    expect(out[0].average_price).toBeCloseTo(22.65)
+    expect(out[0].pnl).toBeCloseTo(130 * (6.2 - 22.65))
+  })
+
+  it('weights the average by quantity when two strategies share the row', () => {
+    const out = applyCostBasis(
+      [flagged()],
+      attribution([{ slices: [slice('A', -100, 50), slice('B', -30, 60)] }])
+    )
+    expect(out[0].average_price).toBeCloseTo((100 * 50 + 30 * 60) / 130)
+  })
+
+  it('adds what the strategies realized today on the contract', () => {
+    const out = applyCostBasis(
+      [flagged()],
+      attribution([{ slices: [slice('NDS', -130, 59.85, 400)] }])
+    )
+    expect(out[0].pnl).toBeCloseTo(130 * (59.85 - 16.65) + 400)
+  })
+
+  it('shows only the realized part when there is no live price yet', () => {
+    const out = applyCostBasis(
+      [flagged({ ltp: 0 })],
+      attribution([{ slices: [slice('NDS', -130, 59.85, 250)] }])
+    )
+    expect(out[0].average_price).toBeCloseTo(59.85)
+    expect(out[0].pnl).toBe(250)
+  })
+
+  it('returns rows without the broker flag as the very same objects', () => {
+    const plain = pos({ quantity: -130, average_price: 59.85 })
+    const out = applyCostBasis([plain], attribution([{ slices: [slice('NDS', -130, 40)] }]))
+    expect(out[0]).toBe(plain)
+  })
+
+  it('keeps Kotak figures when the book does not fully explain the row', () => {
+    const attributed = attribution([{ slices: [slice('NDS', -100, 59.85), slice('Unattributed', -30, 12.35)] }])
+    expect(applyCostBasis([flagged()], attributed)[0].average_price).toBe(12.35)
+    const short = attribution([{ slices: [slice('NDS', -100, 59.85)] }]) // 100 of 130
+    expect(applyCostBasis([flagged()], short)[0].average_price).toBe(12.35)
+    const wrongSide = attribution([{ slices: [slice('NDS', 130, 59.85)] }])
+    expect(applyCostBasis([flagged()], wrongSide)[0].average_price).toBe(12.35)
+    const mismatch = attribution([{ slices: [slice('NDS', -130, 59.85)], mismatch: true }])
+    expect(applyCostBasis([flagged()], mismatch)[0].average_price).toBe(12.35)
+    expect(applyCostBasis([flagged()], attribution([{ slices: [] }]))[0].average_price).toBe(12.35)
+  })
+
+  it('leaves a closed row and a row for another contract alone', () => {
+    const closed = flagged({ quantity: 0, average_price: 0 })
+    expect(
+      applyCostBasis([closed], attribution([{ slices: [slice('NDS', -130, 59.85)] }]))[0]
+    ).toBe(closed)
+    const other = flagged({ symbol: 'OTHER' })
+    expect(
+      applyCostBasis([other], attribution([{ slices: [slice('NDS', -130, 59.85)] }]))[0]
+    ).toBe(other)
+  })
+
+  it('does nothing without attribution, and says whether any row needs it', () => {
+    const rows = [flagged()]
+    expect(applyCostBasis(rows, null)).toBe(rows)
+    expect(hasCarryForwardValuation(rows)).toBe(true)
+    expect(hasCarryForwardValuation([pos()])).toBe(false)
+    expect(hasCarryForwardValuation([flagged({ quantity: 0 })])).toBe(false)
   })
 })

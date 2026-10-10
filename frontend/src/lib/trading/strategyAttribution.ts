@@ -45,6 +45,71 @@ export type SlicedPosition = Position & { sliced?: boolean; m2mBase?: number }
 /** Which P&L a page shows: the broker's own, or today's move only (M2M). */
 export type PnlBasis = 'pnl' | 'm2m'
 
+/** The broker's own flag: this row's average price is an overnight valuation, not an entry price. */
+export const CARRY_FORWARD_BASIS = 'carry_forward_valuation' as const
+/** Our marker: the average price now comes from the strategy book. */
+export const STRATEGY_BOOK_BASIS = 'strategy_book' as const
+
+/** True when at least one open row carries the broker's carry-forward valuation as its "average". */
+export function hasCarryForwardValuation(positions: Position[]): boolean {
+  return positions.some(
+    (p) => p.average_price_basis === CARRY_FORWARD_BASIS && (Number(p.quantity) || 0) !== 0
+  )
+}
+
+/**
+ * Put the real entry average on rows whose broker "average" is an overnight re-valuation (Kotak
+ * carried legs report the previous settlement price: upstream #2061, and `upldPrc` is 0.00 on our
+ * accounts, so the cost basis is not reachable through Kotak's API at all).
+ *
+ * The strategy book (services/strategy_attribution.py) keeps the real fills per strategy, so a
+ * flagged row is corrected only when the book fully explains it: every open slice attributed, all on
+ * the broker's side, adding up to exactly the broker quantity, with no mismatch. Anything else keeps
+ * Kotak's figures (still flagged, so the page can say what they are). Rows without the flag, closed
+ * rows, and every other broker's rows are returned untouched, as the same objects.
+ *
+ * P&L and percent are recomputed from the corrected average and the live price, plus what the
+ * strategies realized today on the contract; without a price only the realized part is shown.
+ * The live-price hook recomputes P&L from `average_price`, so this runs before it.
+ */
+export function applyCostBasis(
+  positions: Position[],
+  attribution: StrategyAttribution | null
+): Position[] {
+  if (!attribution || !hasCarryForwardValuation(positions)) return positions
+  const byKey = new Map(attribution.rows.map((r) => [`${r.symbol}|${r.exchange}|${r.product}`, r]))
+
+  return positions.map((pos): Position => {
+    if (pos.average_price_basis !== CARRY_FORWARD_BASIS) return pos
+    const qty = Number(pos.quantity) || 0
+    if (qty === 0) return pos
+
+    const row = byKey.get(`${pos.symbol}|${pos.exchange}|${pos.product}`)
+    if (!row || row.mismatch) return pos
+    const open = row.slices.filter((s) => s.quantity !== 0)
+    if (open.length === 0 || open.some((s) => !s.attributed)) return pos
+    if (open.some((s) => Math.sign(s.quantity) !== Math.sign(qty))) return pos
+    const sliceQty = open.reduce((sum, s) => sum + s.quantity, 0)
+    if (Math.abs(sliceQty - qty) > 1e-9) return pos
+
+    const weight = open.reduce((sum, s) => sum + Math.abs(s.quantity), 0)
+    const average = open.reduce((sum, s) => sum + Math.abs(s.quantity) * s.average_price, 0) / weight
+    if (!Number.isFinite(average) || average <= 0) return pos
+
+    const realized = row.slices.reduce((sum, s) => sum + (s.today_realized_pnl || 0), 0)
+    const ltp = Number(pos.ltp)
+    const pnl = Number.isFinite(ltp) && ltp > 0 ? qty * (ltp - average) + realized : realized
+    const invested = Math.abs(qty) * average
+    return {
+      ...pos,
+      average_price: average,
+      pnl,
+      pnlpercent: invested > 0 ? (pnl / invested) * 100 : 0,
+      average_price_basis: STRATEGY_BOOK_BASIS,
+    }
+  })
+}
+
 /**
  * Show today's M2M instead of the broker's P&L (services/position_m2m.py). The
  * server returns the part of M2M that does not move with the price

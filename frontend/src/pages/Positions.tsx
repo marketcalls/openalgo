@@ -56,9 +56,13 @@ import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import {
+  applyCostBasis,
   applyM2m,
+  CARRY_FORWARD_BASIS,
   groupByStrategy,
+  hasCarryForwardValuation,
   type PnlBasis,
+  STRATEGY_BOOK_BASIS,
   type SlicedPosition,
 } from '@/lib/trading/strategyAttribution'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
@@ -192,13 +196,22 @@ export default function Positions() {
   const pnlBasisRef = useRef<PnlBasis>('pnl')
   pnlBasisRef.current = pnlBasis
 
+  // Kotak reports a carried-over leg's overnight valuation (the previous settlement price) as its
+  // "average". Where the strategy book fully explains such a row, show the real entry average instead.
+  // Done before the live-price hook, which recomputes P&L from average_price. Rows without the
+  // broker's flag are returned as they are.
+  const costBasisPositions = useMemo(
+    () => applyCostBasis(positions, attribution),
+    [positions, attribution]
+  )
+
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
   const {
     data: enhancedPositions,
     isLive,
     isPaused,
-  } = useLivePrice(positions, {
+  } = useLivePrice(costBasisPositions, {
     enabled: positions.length > 0,
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
@@ -285,7 +298,11 @@ export default function Positions() {
         if (response.status === 'success' && response.data) {
           setPositions(response.data)
           setError(null)
-          if (groupingRef.current === 'strategy' || pnlBasisRef.current === 'm2m')
+          if (
+            groupingRef.current === 'strategy' ||
+            pnlBasisRef.current === 'm2m' ||
+            hasCarryForwardValuation(response.data)
+          )
             void fetchAttribution()
         } else {
           setError(response.message || 'Failed to fetch positions')
@@ -1142,8 +1159,20 @@ export default function Positions() {
                                 >
                                   {position.quantity}
                                 </TableCell>
-                                <TableCell className="w-[120px] text-right font-mono">
+                                <TableCell
+                                  className="w-[120px] text-right font-mono"
+                                  title={
+                                    position.average_price_basis === CARRY_FORWARD_BASIS
+                                      ? "Kotak's overnight valuation (the previous settlement price), not your entry price"
+                                      : position.average_price_basis === STRATEGY_BOOK_BASIS
+                                        ? "Entry average from the strategy book (Kotak reports its overnight valuation here)"
+                                        : undefined
+                                  }
+                                >
                                   {formatCurrency(position.average_price)}
+                                  {position.average_price_basis === CARRY_FORWARD_BASIS && (
+                                    <sup className="ml-0.5 text-muted-foreground">*</sup>
+                                  )}
                                 </TableCell>
                                 <TableCell className="w-[120px] text-right font-mono">
                                   {position.ltp !== undefined ? formatCurrency(position.ltp) : '-'}
