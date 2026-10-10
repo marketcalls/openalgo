@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openalgo
+  labels:
+    name: openalgo
+    app.kubernetes.io/name: openalgo
+    app.kubernetes.io/component: trading-platform
