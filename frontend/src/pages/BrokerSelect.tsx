@@ -1,5 +1,6 @@
-import { BookOpen, ExternalLink, Info, Loader2 } from 'lucide-react'
+import { BookOpen, ExternalLink, Info, Loader2, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
 import { Button } from '@/components/ui/button'
@@ -317,6 +318,16 @@ export default function BrokerSelect() {
 
               <div className="mt-6 text-center text-sm">
                 <BrokerAuthSignOut />
+              </div>
+
+              <div className="mt-4 text-center text-sm">
+                <Link
+                  to="/profile"
+                  className="inline-flex items-center gap-1.5 text-muted-foreground underline-offset-4 hover:underline"
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                  Wrong broker? Open broker settings
+                </Link>
               </div>
             </CardContent>
           </Card>
