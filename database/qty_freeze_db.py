@@ -168,8 +168,10 @@ def _load_freeze_qty_cache_locked() -> bool:
         return True
 
     except Exception as e:
-        # As before, a failed load leaves the cache empty rather than stale.
-        _freeze_qty_cache = {}
+        # Keep the last published limits: a failed RE-load (transient DB error
+        # during a runtime/admin reload) must not wipe known limits to "none"
+        # (0) while still marked loaded. A failed first load leaves the cache
+        # empty and unloaded, so the next lookup retries.
         logger.exception(f"Error loading freeze qty cache: {e}")
         return False
 
@@ -247,6 +249,16 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
     for idx_sym in index_symbols:
         if option_symbol.upper().startswith(idx_sym):
             return get_freeze_qty(idx_sym, exchange)
+
+    # Stock symbols: the underlying is everything before the DDMMMYY expiry.
+    # Matching the date (with a real month) rather than "letters up to the first
+    # digit" keeps digit-leading underlyings such as 360ONE resolvable.
+    dated = re.match(
+        r"^([A-Z0-9&-]+?)\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2}",
+        option_symbol.upper(),
+    )
+    if dated:
+        return get_freeze_qty(dated.group(1), exchange)
 
     # For stock symbols, extract up to the first digit
     match = re.match(r"^([A-Z&-]+)", option_symbol.upper())
