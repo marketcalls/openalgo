@@ -5,10 +5,11 @@ from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 
+import httpx
 import pytest
 import pytz
 
-from broker.deltaexchange.api import order_api
+from broker.deltaexchange.api import data, order_api
 from broker.deltaexchange.mapping import order_data
 from services import tradebook_service
 
@@ -69,11 +70,18 @@ def read_book(monkeypatch):
             calls.append((endpoint, method))
             if endpoint == "/v2/fills":
                 return {"success": True, "result": deepcopy(rows), "meta": {"after": None}}
-            product_id = endpoint.rsplit("/", 1)[-1]
-            product = (products or {}).get(product_id)
-            return {"success": product is not None, "result": deepcopy(product)}
+            pytest.fail("Native fills are the only authenticated tradebook read")
+
+        def public(path, timeout=15.0, params=None):
+            calls.append((path, "GET"))
+            symbol = path.rsplit("/", 1)[-1]
+            product = next((p for p in (products or {}).values() if p["symbol"] == symbol), None)
+            return httpx.Response(
+                200, json={"success": product is not None, "result": deepcopy(product)}
+            )
 
         monkeypatch.setattr(order_api, "get_api_response", native)
+        monkeypatch.setattr(data, "_public_get", public)
         result = tradebook_service.get_tradebook_with_auth("test-auth", "deltaexchange")
         return result, calls
 
@@ -154,7 +162,7 @@ def test_omitted_spot_product_metadata_is_resolved_once_for_mixed_book(read_book
         [first, option, second], products={"303": spot_product()}
     )
     assert success and code == 200 and len(response["data"]) == 3
-    assert calls == [("/v2/fills", "GET"), ("/v2/products/303", "GET")]
+    assert calls == [("/v2/fills", "GET"), ("/v2/products/BTC_INR", "GET")]
     assert [row["product"] for row in response["data"]] == ["CNC", "NRML", "CNC"]
 
 

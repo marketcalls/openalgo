@@ -209,43 +209,104 @@ def get_order_book(auth):
 
 
 TRADEBOOK_MAX_PRODUCTS = 100
+TRADEBOOK_PRODUCT_MAX_PAGES = 3
+TRADEBOOK_PRODUCT_PAGE_SIZE = 500
 
 
 def _attach_native_fill_products(trades, auth):
-    """Resolve omitted contract metadata without trusting legacy multiplier defaults."""
-    products = {}
-    for trade in trades:
-        if trade.get("product") is not None:
-            continue
-        product_id = str(trade.get("product_id") or "")
-        if not product_id.isdigit() or int(product_id) <= 0:
-            return {
-                "status": "error",
-                "message": "Delta fill has no native product identity",
-                "data": {},
-            }
-        if product_id not in products:
-            if len(products) >= TRADEBOOK_MAX_PRODUCTS:
-                return {
-                    "status": "error",
-                    "message": "Delta fill product lookup exceeded its limit",
-                    "data": {},
-                }
-            response = get_api_response(f"/v2/products/{product_id}", auth, method="GET")
-            product = response.get("result") if isinstance(response, dict) else None
+    """Resolve omitted native metadata without spending authenticated order quota."""
+    from urllib.parse import quote
+
+    from broker.deltaexchange.api.data import _public_get
+
+    try:
+        missing = {}
+        for trade in trades:
+            if trade.get("product") is not None:
+                continue
+            product_id = str(trade.get("product_id") or "")
+            symbol = trade.get("product_symbol")
             if (
-                not isinstance(response, dict)
-                or response.get("success") is not True
-                or not isinstance(product, dict)
+                not product_id.isdigit()
+                or int(product_id) <= 0
+                or not isinstance(symbol, str)
+                or not symbol.strip()
             ):
-                return {
-                    "status": "error",
-                    "message": "Delta fill product metadata is unavailable",
-                    "data": {},
-                }
+                raise ValueError("Delta fill has no native product identity")
+            product_id = str(int(product_id))
+            if product_id in missing and missing[product_id] != symbol:
+                raise ValueError("Conflicting native fill product symbols")
+            missing[product_id] = symbol
+        if len(missing) > TRADEBOOK_MAX_PRODUCTS:
+            raise ValueError("Delta fill product lookup exceeded its limit")
+        if not missing:
+            return trades
+
+        products = {}
+
+        def read(path, params=None):
+            response = _public_get(path, timeout=15.0, params=params)
+            if response.status_code != 200:
+                raise ValueError("Delta public product lookup failed")
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("success") is not True:
+                raise ValueError("Delta public product metadata is unavailable")
+            return payload
+
+        def retain(product):
+            if not isinstance(product, dict):
+                raise ValueError("Invalid Delta native product metadata")
+            product_id = str(product.get("id") or "")
+            if product_id not in missing:
+                return
+            if product.get("symbol") != missing[product_id]:
+                raise ValueError("Delta native product identity does not match its fill")
+            if product_id in products and products[product_id] != product:
+                raise ValueError("Conflicting Delta native product metadata")
             products[product_id] = product
-        trade["product"] = products[product_id]
-    return trades
+
+        # A few public catalogue pages replace many repeated symbol requests.
+        # Expired products can be absent from the live catalogue, so each still
+        # missing symbol is resolved directly after this bounded prefetch.
+        if len(missing) > 1:
+            params = {"page_size": TRADEBOOK_PRODUCT_PAGE_SIZE, "states": "live"}
+            cursors = set()
+            for _ in range(TRADEBOOK_PRODUCT_MAX_PAGES):
+                payload = read("/v2/products", params=params)
+                batch = payload.get("result")
+                meta = payload.get("meta")
+                if not isinstance(batch, list) or not isinstance(meta, dict) or "after" not in meta:
+                    raise ValueError("Invalid Delta product catalogue page")
+                after = meta["after"]
+                if after is not None and (not isinstance(after, str) or not after):
+                    raise ValueError("Invalid Delta product catalogue cursor")
+                for product in batch:
+                    retain(product)
+                if len(products) == len(missing) or after is None:
+                    break
+                if after in cursors:
+                    raise ValueError("Repeated Delta product catalogue cursor")
+                cursors.add(after)
+                params = {**params, "after": after}
+
+        for product_id, symbol in missing.items():
+            if product_id not in products:
+                payload = read(f"/v2/products/{quote(symbol, safe='')}")
+                product = payload.get("result")
+                if not isinstance(product, dict) or str(product.get("id")) != product_id:
+                    raise ValueError("Delta native product identity does not match its fill")
+                retain(product)
+        for trade in trades:
+            if trade.get("product") is None:
+                trade["product"] = products[str(int(trade["product_id"]))]
+        return trades
+    except Exception:
+        logger.exception("Delta fill product enrichment failed")
+        return {
+            "status": "error",
+            "message": "Delta fill product metadata is unavailable",
+            "data": {},
+        }
 
 
 def get_trade_book(auth):

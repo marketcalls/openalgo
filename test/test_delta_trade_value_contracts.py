@@ -5,10 +5,11 @@ from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
+import httpx
 import pytest
 import pytz
 
-from broker.deltaexchange.api import order_api
+from broker.deltaexchange.api import data, order_api
 from broker.deltaexchange.mapping import order_data
 from services import tradebook_service
 
@@ -74,6 +75,12 @@ def read_pages(monkeypatch, pages):
         return deepcopy(next(responses))
 
     monkeypatch.setattr(order_api, "get_api_response", read)
+
+    def public(path, timeout=15.0, params=None):
+        calls.append((path, "GET", params))
+        return httpx.Response(200, json=deepcopy(next(responses)))
+
+    monkeypatch.setattr(data, "_public_get", public)
     return calls
 
 
@@ -185,7 +192,7 @@ def test_missing_embedded_product_is_resolved_once_from_native_product_route(mon
     result = order_api.get_trade_book("test-auth")
     assert len(result) == 2
     assert all(row["product"] == product() for row in result)
-    assert calls[-1] == ("/v2/products/101", "GET", None)
+    assert calls[-1] == ("/v2/products/P-ETH-2500-121026", "GET", None)
     assert len(calls) == 2
 
 
