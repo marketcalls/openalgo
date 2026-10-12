@@ -71,6 +71,64 @@ def test_normal_indian_broker_uses_weighted_trade_prices(status):
     assert float(result["average_price"]) == pytest.approx(3200 / 30)
 
 
+def test_delta_exact_fractional_quantity_certifies_full_order_coverage(status):
+    native_quantity = "0.100000000000000001"
+    rows = [
+        {
+            "orderid": "101:201",
+            "quantity": float(native_quantity),
+            "fill_quantity": native_quantity,
+            "fill_price": "10.30",
+            "average_price": 10.3,
+        }
+    ]
+    result = status(order(quantity=native_quantity), rows)
+    assert result["average_price"] == 10.3
+
+
+def test_delta_exact_fractional_fills_produce_weighted_average(status):
+    quantities = ("0.123456789012345678", "0.876543210987654322")
+    prices = ("10.30", "11.20001")
+    rows = [
+        {
+            "orderid": "101:201",
+            "quantity": float(quantity),
+            "fill_quantity": quantity,
+            "fill_price": price,
+            "average_price": round(float(price), 2),
+        }
+        for quantity, price in zip(quantities, prices, strict=True)
+    ]
+    result = status(order(quantity="1"), rows)
+    expected = sum(Decimal(q) * Decimal(p) for q, p in zip(quantities, prices, strict=True))
+    assert result["average_price"] == pytest.approx(float(expected), rel=1e-12)
+
+
+@pytest.mark.parametrize("native_quantity", [None, "NaN", "invalid", "0", "-1"])
+def test_invalid_preserved_delta_quantity_cannot_fall_back_to_display_quantity(
+    status, native_quantity
+):
+    rows = [
+        {
+            "orderid": "101:201",
+            "quantity": 101,
+            "fill_quantity": native_quantity,
+            "fill_price": "10.30",
+            "average_price": 10.3,
+        }
+    ]
+    assert status(order(), rows)["average_price"] == 0.0
+
+
+def test_other_broker_weights_its_quantity_without_using_delta_native_field(status):
+    rows = [
+        {"orderid": "12345", "quantity": 10, "fill_quantity": "999", "average_price": 100},
+        {"orderid": "12345", "quantity": 20, "fill_quantity": "1", "average_price": 110},
+    ]
+    result = status(order(orderid="12345", quantity=30), rows, broker="zerodha")
+    assert result["average_price"] == pytest.approx(3200 / 30)
+
+
 def test_native_average_without_complete_quantity_is_not_accepted(status):
     rows = [
         {"orderid": "101:201", "quantity": 101, "average_price": 10.2, "fill_price": "10.20001"}

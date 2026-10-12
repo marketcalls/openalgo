@@ -223,7 +223,12 @@ def get_order_status_with_auth(
                     total_quantity = Decimal(0)
                     total_value = Decimal(0)
                     for trade in matching:
-                        quantity = Decimal(str(trade.get("quantity")))
+                        quantity_value = (
+                            trade.get("fill_quantity", trade.get("quantity"))
+                            if broker == "deltaexchange"
+                            else trade.get("quantity")
+                        )
+                        quantity = Decimal(str(quantity_value))
                         price = Decimal(str(trade.get("fill_price", trade.get("average_price"))))
                         if (
                             not quantity.is_finite()
