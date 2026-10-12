@@ -30,6 +30,7 @@ def test_incomplete_read_keeps_technical_detail_in_exception_log(monkeypatch, ca
     assert len(failures) == 1
     assert failures[0].levelname == "ERROR"
     assert failures[0].exc_info[0] is RuntimeError
+    assert str(failures[0].exc_info[1]) == "synthetic internal protocol detail"
 
 
 def product(**overrides):
