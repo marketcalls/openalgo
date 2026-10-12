@@ -67,6 +67,30 @@ def test_fractional_native_fill_facts_survive_numeric_display_formatting():
     assert row["average_price"] == "7.12345"
 
 
+@pytest.mark.parametrize(
+    "updates,missing",
+    [
+        ({"size": None}, None),
+        ({"size": "NaN"}, None),
+        ({"unfilled_size": None}, None),
+        ({"unfilled_size": "NaN"}, None),
+        ({"unfilled_size": 251}, None),
+        ({"unfilled_size": 250}, None),
+        ({"size": 0, "unfilled_size": 0}, None),
+        ({}, "size"),
+        ({}, "unfilled_size"),
+    ],
+)
+def test_unconfirmed_fill_cannot_export_native_average(updates, missing):
+    native = native_order(**updates)
+    if missing:
+        native.pop(missing)
+    evidence = order_data._delta_fill_evidence(native)
+    assert "average_price" not in evidence
+    if updates.get("unfilled_size") == 250 or updates.get("size") == 0:
+        assert evidence["filled_quantity"] == "0"
+
+
 @pytest.mark.parametrize("average", [0, "0", "0.00000"])
 @pytest.mark.parametrize("unfilled,state", [(250, "open"), (0, "closed")])
 def test_zero_native_average_is_not_execution_price_evidence(average, unfilled, state):
