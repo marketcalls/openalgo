@@ -3,6 +3,7 @@ import os
 import random
 import threading
 import time
+from urllib.parse import urlencode
 
 from broker.deltaexchange.api.baseurl import get_auth_headers, get_url
 from broker.deltaexchange.api.rate_limiter import (
@@ -50,12 +51,12 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     """
     api_secret = os.getenv("BROKER_API_SECRET", "")
 
-    # Build query string manually so the signature and the URL are always in sync.
+    # Encode the same query bytes for the signature and URL, including opaque cursors.
     # Delta Exchange signature formula: METHOD + timestamp + path + query_string + body
     # query_string must include the leading '?' when present.
     query_string = ""
     if params:
-        query_string = "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        query_string = "?" + urlencode(sorted(params.items()))
 
     body = payload if payload else ""
 
@@ -208,39 +209,115 @@ def get_order_book(auth):
         return []
 
 
+TRADEBOOK_PAGE_SIZE = 50
+TRADEBOOK_MAX_PAGES = 100
+TRADEBOOK_MAX_ROWS = 5000
+
+
 def get_trade_book(auth):
-    """Fetch closed / filled orders (fills) for today only."""
+    """Return today's distinct fills only after a complete bounded native read.
+
+    Read a fixed IST day using Delta's epoch-microsecond filters. A short page
+    or an old fill is not a completeness signal. Only an explicit
+    null ``meta.after`` certifies EOF; transport failures, bad facts, cursor loops
+    and safety limits return the error envelope consumed by tradebook_service.
+    """
     try:
-        from datetime import datetime
+        from datetime import datetime, timedelta
+        from decimal import Decimal, InvalidOperation
+
         import pytz
-        
-        # Get today's date in IST
+
         ist = pytz.timezone("Asia/Kolkata")
         today_date = datetime.now(ist).date()
-        
-        result = get_api_response("/v2/fills", auth, method="GET")
-        logger.debug(f"[DeltaExchange] /v2/fills count={len(result.get('result', []))}")
-        if result.get("success"):
-            all_trades = result.get("result", [])
-            today_trades = []
-            for trade in all_trades:
-                created_at = trade.get("created_at")
-                if created_at:
-                    try:
-                        # Parse UTC timestamp and convert to IST
-                        dt_utc = datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=pytz.UTC)
-                        dt_ist = dt_utc.astimezone(ist)
-                        if dt_ist.date() == today_date:
-                            today_trades.append(trade)
-                    except Exception as e:
-                        logger.warning(f"Error parsing date {created_at}: {e}")
-            return today_trades
-            
-        logger.warning(f"[DeltaExchange] get_trade_book unexpected response: {result}")
-        return []
-    except Exception as e:
-        logger.error(f"[DeltaExchange] Exception in get_trade_book: {e}")
-        return []
+        start = ist.localize(datetime.combine(today_date, datetime.min.time()))
+        end = start + timedelta(days=1)
+        # The filters are integer microseconds, not the candle API's seconds.
+        window = {
+            "start_time": int(start.timestamp()) * 1000000,
+            "end_time": int(end.timestamp()) * 1000000 - 1,
+        }
+        today_trades = []
+        fills = {}
+        seen_cursors = set()
+        cursor = None
+        row_count = 0
+        for _ in range(TRADEBOOK_MAX_PAGES):
+            params = {**window, "page_size": TRADEBOOK_PAGE_SIZE}
+            if cursor is not None:
+                params["after"] = cursor
+            response = get_api_response("/v2/fills", auth, method="GET", params=params)
+            rows = response.get("result") if isinstance(response, dict) else None
+            if (
+                not isinstance(response, dict)
+                or response.get("success") is not True
+                or not isinstance(rows, list)
+            ):
+                raise ValueError("Delta trade book encountered a failed or invalid native page")
+            row_count += len(rows)
+            if row_count > TRADEBOOK_MAX_ROWS:
+                raise ValueError("Delta trade book exceeded its row limit")
+            for trade in rows:
+                if not isinstance(trade, dict):
+                    raise ValueError("Delta trade book encountered an invalid fill row")
+                for key in ("id", "order_id"):
+                    reference = trade.get(key)
+                    if (
+                        isinstance(reference, bool)
+                        or not isinstance(reference, (str, int))
+                        or (isinstance(reference, int) and reference <= 0)
+                        or (isinstance(reference, str) and not reference.strip())
+                    ):
+                        raise ValueError(
+                            "Delta trade book encountered a fill without native identity"
+                        )
+                if (
+                    not str(trade.get("product_id") or "").isdigit()
+                    or int(trade["product_id"]) <= 0
+                ):
+                    raise ValueError("Delta trade book encountered a fill without native identity")
+                try:
+                    quantity = Decimal(str(trade["size"]))
+                    price = Decimal(str(trade["price"]))
+                    if (
+                        not quantity.is_finite()
+                        or quantity <= 0
+                        or not price.is_finite()
+                        or price < 0
+                        or trade.get("side") not in ("buy", "sell")
+                    ):
+                        raise ValueError
+                    timestamp = datetime.fromisoformat(trade["created_at"].replace("Z", "+00:00"))
+                    if timestamp.tzinfo is None:
+                        raise ValueError
+                except (KeyError, TypeError, AttributeError, ValueError, InvalidOperation) as exc:
+                    raise ValueError(
+                        "Delta trade book encountered invalid native fill facts"
+                    ) from exc
+                fill_id = str(trade["id"])
+                previous = fills.get(fill_id)
+                if previous is not None:
+                    if previous != trade:
+                        raise ValueError(
+                            "Delta trade book encountered conflicting native fill identity"
+                        )
+                    continue
+                fills[fill_id] = trade
+                if timestamp.astimezone(ist).date() == today_date:
+                    today_trades.append(trade)
+            meta = response.get("meta")
+            if not isinstance(meta, dict) or "after" not in meta:
+                raise ValueError("Delta trade book has no explicit pagination completeness")
+            cursor = meta["after"]
+            if cursor is None:
+                return today_trades
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise ValueError("Delta trade book encountered an invalid or repeated cursor")
+            seen_cursors.add(cursor)
+        raise ValueError("Delta trade book exceeded its page limit")
+    except Exception as exc:
+        logger.warning("Incomplete Delta trade book: %s", exc)
+        return {"status": "error", "message": str(exc), "data": {}}
 
 
 # ---------------------------------------------------------------------------
