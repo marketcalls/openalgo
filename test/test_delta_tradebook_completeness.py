@@ -13,6 +13,25 @@ from broker.deltaexchange.api import order_api
 from services import tradebook_service
 
 
+def test_incomplete_read_keeps_technical_detail_in_exception_log(monkeypatch, caplog):
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("synthetic internal protocol detail")
+
+    monkeypatch.setattr(order_api, "get_api_response", unavailable)
+    result = order_api.get_trade_book("test-auth")
+    assert result == {
+        "status": "error",
+        "message": "Unable to load all Delta trades. Please try again.",
+        "data": {},
+    }
+    failures = [
+        record for record in caplog.records if "Incomplete Delta trade book" in record.message
+    ]
+    assert len(failures) == 1
+    assert failures[0].levelname == "ERROR"
+    assert failures[0].exc_info[0] is RuntimeError
+
+
 def product(**overrides):
     return {
         "id": 101,

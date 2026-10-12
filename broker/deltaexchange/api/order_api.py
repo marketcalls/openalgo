@@ -315,9 +315,13 @@ def get_trade_book(auth):
                 raise ValueError("Delta trade book encountered an invalid or repeated cursor")
             seen_cursors.add(cursor)
         raise ValueError("Delta trade book exceeded its page limit")
-    except Exception as exc:
-        logger.warning("Incomplete Delta trade book: %s", exc)
-        return {"status": "error", "message": str(exc), "data": {}}
+    except Exception:
+        logger.exception("Incomplete Delta trade book")
+        return {
+            "status": "error",
+            "message": "Unable to load all Delta trades. Please try again.",
+            "data": {},
+        }
 
 
 # ---------------------------------------------------------------------------
