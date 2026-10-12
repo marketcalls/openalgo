@@ -5,7 +5,8 @@ from decimal import Decimal
 
 import pytest
 
-from services import orderbook_service, orderstatus_service
+from broker.deltaexchange.mapping import order_data
+from services import orderbook_service, orderstatus_service, tradebook_service
 
 
 @pytest.fixture
@@ -51,6 +52,43 @@ def order(**kwargs):
     }
 
 
+@pytest.fixture
+def mapped_fills(monkeypatch):
+    """Use the production Delta producer and display formatting for native rows."""
+    monkeypatch.setattr(order_data, "get_symbol", lambda *args: None)
+
+    def run(quantities, prices, spot=True):
+        product = {
+            "id": 101,
+            "symbol": "ETH_INR" if spot else "P-TEST-100-010130",
+            "contract_type": "spot" if spot else "put_options",
+            "underlying_asset": {"symbol": "TEST"},
+            "quoting_asset": {"symbol": "INR" if spot else "USD"},
+            "settling_asset": None if spot else {"symbol": "USD"},
+            "contract_value": "0.01",
+            "contract_unit_currency": "TEST",
+            "notional_type": "vanilla",
+        }
+        raw = [
+            {
+                "id": index + 1,
+                "product_id": 101,
+                "product_symbol": product["symbol"],
+                "product": deepcopy(product),
+                "order_id": 201,
+                "size": quantity,
+                "price": price,
+                "side": "buy",
+                "created_at": "2026-10-12T07:00:00Z",
+            }
+            for index, (quantity, price) in enumerate(zip(quantities, prices, strict=True))
+        ]
+        mapped = order_data.map_trade_data(raw)
+        return tradebook_service.format_trade_data(order_data.transform_tradebook_data(mapped))
+
+    return run
+
+
 def test_weighted_partial_fills_use_quantities_and_preserved_native_price(status):
     rows = [
         {"orderid": "101:201", "quantity": 1, "average_price": 10.3, "fill_price": "10.30"},
@@ -71,36 +109,32 @@ def test_normal_indian_broker_uses_weighted_trade_prices(status):
     assert float(result["average_price"]) == pytest.approx(3200 / 30)
 
 
-def test_delta_exact_fractional_quantity_certifies_full_order_coverage(status):
+def test_delta_exact_fractional_quantity_certifies_full_order_coverage(status, mapped_fills):
     native_quantity = "0.100000000000000001"
-    rows = [
-        {
-            "orderid": "101:201",
-            "quantity": float(native_quantity),
-            "fill_quantity": native_quantity,
-            "fill_price": "10.30",
-            "average_price": 10.3,
-        }
-    ]
+    rows = mapped_fills([native_quantity], ["10.30"])
+    assert rows[0]["fill_quantity"] == native_quantity
     result = status(order(quantity=native_quantity), rows)
     assert result["average_price"] == 10.3
 
 
-def test_delta_exact_fractional_fills_produce_weighted_average(status):
+def test_delta_exact_fractional_fills_produce_weighted_average(status, mapped_fills):
     quantities = ("0.123456789012345678", "0.876543210987654322")
     prices = ("10.30", "11.20001")
-    rows = [
-        {
-            "orderid": "101:201",
-            "quantity": float(quantity),
-            "fill_quantity": quantity,
-            "fill_price": price,
-            "average_price": round(float(price), 2),
-        }
-        for quantity, price in zip(quantities, prices, strict=True)
-    ]
+    rows = mapped_fills(quantities, prices)
+    assert [row["fill_quantity"] for row in rows] == list(quantities)
+    assert [row["fill_price"] for row in rows] == list(prices)
+    assert rows[1]["average_price"] == 11.2
     result = status(order(quantity="1"), rows)
     expected = sum(Decimal(q) * Decimal(p) for q, p in zip(quantities, prices, strict=True))
+    assert result["average_price"] == pytest.approx(float(expected), rel=1e-12)
+
+
+def test_native_price_precision_survives_real_tradebook_formatting(status, mapped_fills):
+    rows = mapped_fills(["1", "100"], ["10.30", "10.20001"], spot=False)
+    assert rows[1]["average_price"] == 10.2
+    assert rows[1]["fill_price"] == "10.20001"
+    result = status(order(), rows)
+    expected = (Decimal("10.30") + 100 * Decimal("10.20001")) / 101
     assert result["average_price"] == pytest.approx(float(expected), rel=1e-12)
 
 
