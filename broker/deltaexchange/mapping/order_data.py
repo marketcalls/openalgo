@@ -258,10 +258,10 @@ def transform_order_data(orders):
 
 
 def map_trade_data(trade_data):
-    """Map native contract fills without inventing identity or contract units.
+    """Map native fills using spot base units or authoritative contract units.
 
     Native product metadata is authoritative, including for expired contracts
-    absent from the current symbol cache. Missing or unsupported metadata fails
+    absent from the current symbol cache. Unsupported derivative metadata fails
     the request instead of valuing a contract as one underlying unit.
     """
     if not isinstance(trade_data, list):
@@ -284,38 +284,60 @@ def map_trade_data(trade_data):
             raise ValueError("Delta trade book encountered a fill without native identity")
         product_id = str(trade["product_id"])
         product = trade.get("product")
-        if (
-            not isinstance(product, dict)
-            or str(product.get("id")) != product_id
-            or product.get("contract_type")
-            not in {"call_options", "put_options", "futures", "perpetual_futures"}
-            or product.get("notional_type") != "vanilla"
-        ):
+        if not isinstance(product, dict) or str(product.get("id")) != product_id:
             raise ValueError("Delta trade book has missing or unsupported native contract metadata")
-        multiplier = _trade_decimal(product.get("contract_value"), "contract value", positive=True)
         underlying = product.get("underlying_asset")
         quoting = product.get("quoting_asset")
-        settling = product.get("settling_asset")
-        if (
-            not all(
-                isinstance(asset, dict) and asset.get("symbol")
-                for asset in (underlying, quoting, settling)
-            )
-            or product.get("contract_unit_currency") != underlying["symbol"]
-            or quoting["symbol"] != settling["symbol"]
+        if not all(
+            isinstance(asset, dict)
+            and isinstance(asset.get("symbol"), str)
+            and asset["symbol"].strip()
+            for asset in (underlying, quoting)
         ):
             raise ValueError("Delta trade book has unsupported native contract currency units")
+        if product.get("contract_type") == "spot":
+            # Spot size is already in base-asset units. It has no derivative
+            # multiplier, notional convention or required settlement asset.
+            multiplier = Decimal("1")
+            product_type = "CNC"
+            unit_currency = underlying["symbol"]
+            settlement_currency = None
+        else:
+            if (
+                product.get("contract_type")
+                not in {"call_options", "put_options", "futures", "perpetual_futures"}
+                or product.get("notional_type") != "vanilla"
+            ):
+                raise ValueError(
+                    "Delta trade book has missing or unsupported native contract metadata"
+                )
+            multiplier = _trade_decimal(
+                product.get("contract_value"), "contract value", positive=True
+            )
+            settling = product.get("settling_asset")
+            if (
+                not isinstance(settling, dict)
+                or not isinstance(settling.get("symbol"), str)
+                or not settling["symbol"].strip()
+                or product.get("contract_unit_currency") != underlying["symbol"]
+                or quoting["symbol"] != settling["symbol"]
+            ):
+                raise ValueError("Delta trade book has unsupported native contract currency units")
+            product_type = "NRML"
+            unit_currency = product["contract_unit_currency"]
+            settlement_currency = settling["symbol"]
         facts = (
             product.get("symbol"),
             product["contract_type"],
-            multiplier,
-            product["contract_unit_currency"],
+            underlying["symbol"],
             quoting["symbol"],
-            settling["symbol"],
+            multiplier,
+            unit_currency,
+            settlement_currency,
         )
         if product_id not in products:
             symbol = get_symbol(product_id, "CRYPTO") or product.get("symbol")
-            if not symbol:
+            if not isinstance(symbol, str) or not symbol.strip():
                 raise ValueError("Delta trade book native product has no symbol")
             products[product_id] = (symbol, facts)
         symbol, previous_facts = products[product_id]
@@ -332,7 +354,7 @@ def map_trade_data(trade_data):
                 **trade,
                 "tradingSymbol": symbol,
                 "exchangeSegment": "CRYPTO",
-                "productType": "NRML",
+                "productType": product_type,
                 "orderId": f"{product_id}:{trade['order_id']}",
                 "tradedQuantity": str(quantity),
                 "tradedPrice": str(price),
@@ -383,6 +405,7 @@ def transform_tradebook_data(tradebook_data):
                 "fillid": str(trade["id"]),
                 # Decimal strings preserve native precision through display formatting.
                 "fill_price": str(price),
+                "fill_quantity": str(quantity),
                 "contract_value": str(multiplier),
                 "trade_value_currency": trade.get("tradeValueCurrency"),
             }
