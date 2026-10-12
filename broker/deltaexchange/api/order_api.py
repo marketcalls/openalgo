@@ -208,6 +208,46 @@ def get_order_book(auth):
         return []
 
 
+TRADEBOOK_MAX_PRODUCTS = 100
+
+
+def _attach_native_fill_products(trades, auth):
+    """Resolve omitted contract metadata without trusting legacy multiplier defaults."""
+    products = {}
+    for trade in trades:
+        if trade.get("product") is not None:
+            continue
+        product_id = str(trade.get("product_id") or "")
+        if not product_id.isdigit() or int(product_id) <= 0:
+            return {
+                "status": "error",
+                "message": "Delta fill has no native product identity",
+                "data": {},
+            }
+        if product_id not in products:
+            if len(products) >= TRADEBOOK_MAX_PRODUCTS:
+                return {
+                    "status": "error",
+                    "message": "Delta fill product lookup exceeded its limit",
+                    "data": {},
+                }
+            response = get_api_response(f"/v2/products/{product_id}", auth, method="GET")
+            product = response.get("result") if isinstance(response, dict) else None
+            if (
+                not isinstance(response, dict)
+                or response.get("success") is not True
+                or not isinstance(product, dict)
+            ):
+                return {
+                    "status": "error",
+                    "message": "Delta fill product metadata is unavailable",
+                    "data": {},
+                }
+            products[product_id] = product
+        trade["product"] = products[product_id]
+    return trades
+
+
 def get_trade_book(auth):
     """Fetch closed / filled orders (fills) for today only."""
     try:
@@ -234,7 +274,7 @@ def get_trade_book(auth):
                             today_trades.append(trade)
                     except Exception as e:
                         logger.warning(f"Error parsing date {created_at}: {e}")
-            return today_trades
+            return _attach_native_fill_products(today_trades, auth)
             
         logger.warning(f"[DeltaExchange] get_trade_book unexpected response: {result}")
         return []
