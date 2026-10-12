@@ -631,6 +631,7 @@ class OrderManager:
                     pending_quantity=0,
                     rejection_reason=cnc_sell_rejection_reason,
                     margin_blocked=Decimal("0"),  # No margin blocked for rejected orders
+                    margin_blocked_recorded=True,
                     # Deliberately NOT correlated to the GTT leg. The column is
                     # unique and recovery reads it as proof the GTT fired, so a
                     # rejected attempt claiming it would both mark the GTT
@@ -697,6 +698,7 @@ class OrderManager:
                 pending_quantity=quantity,
                 rejection_reason=None,
                 margin_blocked=actual_margin_to_block,  # Store exact margin blocked
+                margin_blocked_recorded=True,
                 gtt_leg_id=order_data.get("gtt_leg_id"),
                 order_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
             )
@@ -1010,16 +1012,39 @@ class OrderManager:
             release_amount = None
             release_note = None
 
-            # A recorded zero is meaningful: reducing orders reserve no new
-            # margin. Only NULL/absent values need the legacy recalculation.
-            has_recorded_margin = (
-                hasattr(order, "margin_blocked") and order.margin_blocked is not None
+            # Older migrations defaulted missing reservations to zero. The
+            # recorded flag distinguishes those legacy rows from a real zero.
+            margin_recorded = getattr(order, "margin_blocked_recorded", False)
+            recorded_amount = getattr(order, "margin_blocked", None)
+            has_recorded_margin = margin_recorded or (
+                recorded_amount is not None and recorded_amount > 0
             )
+
+            # Rows created between the old zero-only schema and this marker
+            # can still be recognized as no-margin closes while their position
+            # is open. Other unmarked zeros use the legacy recalculation.
+            if not has_recorded_margin and recorded_amount == 0:
+                position = SandboxPositions.query.filter_by(
+                    user_id=self.user_id,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    product=order.product,
+                ).first()
+                has_recorded_margin = bool(
+                    position
+                    and position.quantity != 0
+                    and order.quantity <= abs(position.quantity)
+                    and (
+                        (position.quantity > 0 and order.action == "SELL")
+                        or (position.quantity < 0 and order.action == "BUY")
+                    )
+                )
+
             if has_recorded_margin:
-                if order.margin_blocked > 0:
-                    release_amount = order.margin_blocked
+                if recorded_amount and recorded_amount > 0:
+                    release_amount = recorded_amount
                     release_note = (
-                        f"Released margin ₹{order.margin_blocked} for cancelled order {orderid}"
+                        f"Released margin ₹{recorded_amount} for cancelled order {orderid}"
                     )
                 else:
                     release_note = f"No margin to release for cancelled order {orderid}"
