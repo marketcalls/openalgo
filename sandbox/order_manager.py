@@ -18,7 +18,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytz
-from sqlalchemy import update
+from sqlalchemy import null, update
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -630,7 +630,7 @@ class OrderManager:
                     filled_quantity=0,
                     pending_quantity=0,
                     rejection_reason=cnc_sell_rejection_reason,
-                    margin_blocked=Decimal("0"),  # No margin blocked for rejected orders
+                    margin_blocked=Decimal("0"),  # Rejected orders never release margin
                     # Deliberately NOT correlated to the GTT leg. The column is
                     # unique and recovery reads it as proof the GTT fired, so a
                     # rejected attempt claiming it would both mark the GTT
@@ -696,7 +696,13 @@ class OrderManager:
                 filled_quantity=0,
                 pending_quantity=quantity,
                 rejection_reason=None,
-                margin_blocked=actual_margin_to_block,  # Store exact margin blocked
+                # NULL is an explicit zero reservation; migrated legacy rows
+                # have 0.00 and still use the recalculation fallback.
+                # Use SQL NULL explicitly so the mapped Python default does not
+                # replace the zero-reservation sentinel with 0.00.
+                margin_blocked=(
+                    actual_margin_to_block if actual_margin_to_block > 0 else null()
+                ),
                 gtt_leg_id=order_data.get("gtt_leg_id"),
                 order_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
             )
@@ -1010,16 +1016,41 @@ class OrderManager:
             release_amount = None
             release_note = None
 
-            # Release blocked margin using the exact amount that was blocked
-            if (
-                hasattr(order, "margin_blocked")
-                and order.margin_blocked
-                and order.margin_blocked > 0
-            ):
-                release_amount = order.margin_blocked
-                release_note = (
-                    f"Released margin ₹{order.margin_blocked} for cancelled order {orderid}"
+            # New zero reservations are stored as NULL; old migrations used
+            # zero as the column default, so those rows still need fallback.
+            recorded_amount = getattr(order, "margin_blocked", None)
+            has_recorded_margin = hasattr(order, "margin_blocked") and (
+                recorded_amount is None or recorded_amount > 0
+            )
+
+            # Rows created before the NULL sentinel can still be recognized as
+            # no-margin closes while their position is open. Other legacy zeros
+            # use the recalculation fallback.
+            if not has_recorded_margin and recorded_amount == 0:
+                position = SandboxPositions.query.filter_by(
+                    user_id=self.user_id,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    product=order.product,
+                ).first()
+                has_recorded_margin = bool(
+                    position
+                    and position.quantity != 0
+                    and order.quantity <= abs(position.quantity)
+                    and (
+                        (position.quantity > 0 and order.action == "SELL")
+                        or (position.quantity < 0 and order.action == "BUY")
+                    )
                 )
+
+            if has_recorded_margin:
+                if recorded_amount and recorded_amount > 0:
+                    release_amount = recorded_amount
+                    release_note = (
+                        f"Released margin ₹{recorded_amount} for cancelled order {orderid}"
+                    )
+                else:
+                    release_note = f"No margin to release for cancelled order {orderid}"
             else:
                 # Fallback for old orders without margin_blocked field
                 # Need to recalculate margin that was blocked based on order parameters
