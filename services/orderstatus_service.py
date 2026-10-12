@@ -1,5 +1,5 @@
 import copy
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
