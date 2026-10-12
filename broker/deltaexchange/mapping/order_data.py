@@ -209,7 +209,7 @@ def _delta_fill_evidence(order):
 
     try:
         average = Decimal(str(order["average_fill_price"]))
-        if average.is_finite() and average >= 0:
+        if average.is_finite() and average > 0:
             # Strings survive the display formatter's two-decimal rounding.
             evidence["average_price"] = str(average)
     except (KeyError, InvalidOperation, TypeError, ValueError):

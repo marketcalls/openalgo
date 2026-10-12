@@ -67,6 +67,16 @@ def test_fractional_native_fill_facts_survive_numeric_display_formatting():
     assert row["average_price"] == "7.12345"
 
 
+@pytest.mark.parametrize("average", [0, "0", "0.00000"])
+@pytest.mark.parametrize("unfilled,state", [(250, "open"), (0, "closed")])
+def test_zero_native_average_is_not_execution_price_evidence(average, unfilled, state):
+    row = project(native_order(average_fill_price=average, unfilled_size=unfilled, state=state))
+
+    assert Decimal(row["filled_quantity"]) == Decimal(250 - unfilled)
+    assert "average_price" not in row
+    assert row["client_order_id"] == "synthetic-client-reference"
+
+
 def test_native_client_reference_survives_direct_projection():
     (row,) = order_data.transform_order_data(native_order())
     assert row["client_order_id"] == "synthetic-client-reference"

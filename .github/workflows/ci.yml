@@ -71,6 +71,7 @@ jobs:
             test/test_requirements_parity.py \
             test/test_fyers_index_hsm_mapping.py \
             test/test_delta_order_evidence.py \
+            test/test_orderstatus_native_fill_average.py \
             -v --timeout=60
 
   # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
