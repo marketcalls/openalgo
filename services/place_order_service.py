@@ -167,6 +167,9 @@ def place_order_with_auth(
     analyze_mode = get_analyze_mode() and not force_live
     route_error = _reduce_only_route_error(order_data, broker, analyze_mode)
     if route_error is not None:
+        if analyze_mode:
+            route_error[1]["mode"] = "analyze"
+            emit_analyzer_error(original_data, route_error[1]["message"])
         return route_error
 
     # If in analyze mode, route to sandbox for sandbox trading.
@@ -370,10 +373,14 @@ def place_order(
                         {"status": "error", "message": "API key authentication failed", "data": {}},
                         403,
                     )
+                pending_analyze = get_analyze_mode()
                 route_error = _reduce_only_route_error(
-                    order_data, pending_broker, get_analyze_mode()
+                    order_data, pending_broker, pending_analyze
                 )
                 if route_error is not None:
+                    if pending_analyze:
+                        route_error[1]["mode"] = "analyze"
+                        emit_analyzer_error(original_data, route_error[1]["message"])
                     return route_error
             return queue_order(api_key, original_data, "placeorder")
 

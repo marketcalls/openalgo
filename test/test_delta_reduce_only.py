@@ -139,6 +139,40 @@ def test_non_boolean_is_refused_before_native_submission(bridge, value):
     assert bridge.submitted == []
 
 
+@pytest.mark.parametrize("path", ["rest", "pending", "dispatch"])
+def test_analyze_reduce_only_refusal_publishes_sanitized_error(bridge, monkeypatch, path):
+    from events import AnalyzerErrorEvent
+    from services import order_router_service
+
+    published = []
+    queued = []
+    monkeypatch.setattr(bridge.service.bus, "publish", published.append)
+    monkeypatch.setattr(bridge.service, "get_analyze_mode", lambda: True)
+    monkeypatch.setattr(
+        order_router_service, "should_route_to_pending", lambda *args: path == "pending"
+    )
+    monkeypatch.setattr(order_router_service, "queue_order", lambda *args: queued.append(args))
+    body = order_payload(reduce_only=True)
+    if path == "dispatch":
+        success, response, code = bridge.service.place_order_with_auth(
+            body, "test-auth", "deltaexchange", body, emit_event=False
+        )
+        assert not success
+    else:
+        result = bridge.post(body)
+        response, code = result.get_json(), result.status_code
+    assert code == 422 and response["failure_class"] == "unsupported_reduce_only"
+    assert response["mode"] == "analyze" and response["data"] == {}
+    assert queued == [] and bridge.submitted == []
+    assert len(published) == 1 and isinstance(published[0], AnalyzerErrorEvent)
+    event = published[0]
+    assert event.mode == "analyze" and event.api_type == "placeorder"
+    assert event.error_message == response["message"]
+    assert event.response_data["mode"] == "analyze"
+    assert event.request_data["reduce_only"] is True
+    assert "apikey" not in event.request_data
+
+
 @pytest.mark.parametrize(
     "broker,analyze",
     [
