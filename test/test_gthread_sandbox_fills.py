@@ -144,6 +144,30 @@ def test_a_stop_loss_release_cannot_reopen_a_cancelled_order():
     assert _counts(orderid)["status"] == "cancelled"
 
 
+def test_cancel_closing_mis_order_does_not_release_unreserved_margin():
+    from database.sandbox_db import SandboxOrders, db_session
+    from sandbox.order_manager import OrderManager
+
+    # Open a long MIS position, then leave a SELL limit resting to close it.
+    _place(price_type="MARKET", product="MIS")
+    closing_orderid = _place(
+        action="SELL", product="MIS", price_type="LIMIT", price=2700
+    )
+    closing_order = SandboxOrders.query.filter_by(orderid=closing_orderid).first()
+    assert closing_order.order_status == "open"
+    assert closing_order.margin_blocked == 0
+    used_before_cancel = funds_of(USER)["used"]
+    db_session.remove()
+
+    ok, response, status_code = run_in_thread(
+        lambda: OrderManager(USER).cancel_order(closing_orderid)
+    )
+
+    assert ok and status_code == 200, response
+    assert _counts(closing_orderid)["status"] == "cancelled"
+    assert funds_of(USER)["used"] == used_before_cancel
+
+
 def test_a_modify_after_the_fill_was_decided_is_not_filled_at_the_old_terms():
     """A price change landing between the decision and the write stops the fill."""
     from database.sandbox_db import SandboxOrders, db_session

@@ -1010,16 +1010,19 @@ class OrderManager:
             release_amount = None
             release_note = None
 
-            # Release blocked margin using the exact amount that was blocked
-            if (
-                hasattr(order, "margin_blocked")
-                and order.margin_blocked
-                and order.margin_blocked > 0
-            ):
-                release_amount = order.margin_blocked
-                release_note = (
-                    f"Released margin ₹{order.margin_blocked} for cancelled order {orderid}"
-                )
+            # A recorded zero is meaningful: reducing orders reserve no new
+            # margin. Only NULL/absent values need the legacy recalculation.
+            has_recorded_margin = (
+                hasattr(order, "margin_blocked") and order.margin_blocked is not None
+            )
+            if has_recorded_margin:
+                if order.margin_blocked > 0:
+                    release_amount = order.margin_blocked
+                    release_note = (
+                        f"Released margin ₹{order.margin_blocked} for cancelled order {orderid}"
+                    )
+                else:
+                    release_note = f"No margin to release for cancelled order {orderid}"
             else:
                 # Fallback for old orders without margin_blocked field
                 # Need to recalculate margin that was blocked based on order parameters
