@@ -169,7 +169,7 @@ def test_cancel_closing_mis_order_does_not_release_unreserved_margin(monkeypatch
     )
     closing_order = SandboxOrders.query.filter_by(orderid=closing_orderid).first()
     assert closing_order.order_status == "open"
-    assert closing_order.margin_blocked == 0
+    assert closing_order.margin_blocked is None
     used_before_cancel = funds_of(USER)["used"]
     db_session.remove()
 
@@ -190,9 +190,8 @@ def test_cancel_legacy_zero_margin_field_recalculates_opening_order_reservation(
     orderid = _place(product="MIS")
     order = SandboxOrders.query.filter_by(orderid=orderid).first()
     assert funds_of(USER)["used"] > 0
-    # Simulate a pre-marker row whose migration supplied zero for the new field.
+    # Simulate a legacy row whose migration supplied zero for the old field.
     order.margin_blocked = 0
-    order.margin_blocked_recorded = False
     db_session.commit()
     db_session.remove()
 
@@ -214,8 +213,9 @@ def test_cancel_pre_marker_zero_margin_closing_order_preserves_position_margin(m
         action="SELL", product="MIS", price_type="LIMIT", price=2700
     )
     closing_order = SandboxOrders.query.filter_by(orderid=closing_orderid).first()
-    assert closing_order.margin_blocked == 0
-    closing_order.margin_blocked_recorded = False
+    assert closing_order.margin_blocked is None
+    # Rows from before the NULL sentinel were stored as zero by the migration.
+    closing_order.margin_blocked = 0
     used_before_cancel = funds_of(USER)["used"]
     db_session.commit()
     db_session.remove()

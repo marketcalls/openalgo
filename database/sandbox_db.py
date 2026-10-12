@@ -90,10 +90,7 @@ class SandboxOrders(Base):
     rejection_reason = Column(Text, nullable=True)
     margin_blocked = Column(
         DECIMAL(10, 2), nullable=True, default=0.00
-    )  # Margin blocked at order placement
-    margin_blocked_recorded = Column(
-        Boolean, nullable=False, default=False
-    )  # False on migrated rows whose margin defaulted to zero
+    )  # NULL means a recorded zero; migrated legacy rows retain default zero
     # Set only on an order a GTT leg placed, and written in the same INSERT as
     # the order itself. That atomicity is the point: SandboxGTTLeg.triggered_order_id
     # is written in a later commit, so a crash in between would leave the order
@@ -441,7 +438,6 @@ def init_db():
 
     _migrate_add_gtt_trigger_direction()
     _migrate_add_order_gtt_leg_id()
-    _migrate_add_margin_blocked_recorded()
 
     # Initialize default configuration
     init_default_config()
@@ -470,27 +466,6 @@ def _migrate_add_order_gtt_leg_id():
             logger.info("Added sandbox_orders.gtt_leg_id")
     except Exception as e:
         logger.exception(f"Could not add sandbox_orders.gtt_leg_id: {e}")
-
-
-def _migrate_add_margin_blocked_recorded():
-    """Distinguish exact zero reservations from legacy default-zero rows."""
-    from sqlalchemy import text
-
-    try:
-        with engine.connect() as conn:
-            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(sandbox_orders)"))}
-            if not existing or "margin_blocked_recorded" in existing:
-                return
-            conn.execute(
-                text(
-                    "ALTER TABLE sandbox_orders ADD COLUMN "
-                    "margin_blocked_recorded BOOLEAN NOT NULL DEFAULT 0"
-                )
-            )
-            conn.commit()
-            logger.info("Added sandbox_orders.margin_blocked_recorded")
-    except Exception as e:
-        logger.exception(f"Could not add sandbox_orders.margin_blocked_recorded: {e}")
 
 
 def _migrate_add_gtt_trigger_direction():

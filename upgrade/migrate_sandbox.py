@@ -95,7 +95,6 @@ def create_all_tables(conn):
             pending_quantity INTEGER NOT NULL,
             rejection_reason TEXT,
             margin_blocked DECIMAL(10, 2) DEFAULT 0.00,
-            margin_blocked_recorded BOOLEAN NOT NULL DEFAULT 0,
             order_timestamp DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
             update_timestamp DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
         )
@@ -270,15 +269,6 @@ def add_missing_columns(conn):
         """)
         )
         logger.info("Added margin_blocked column to sandbox_orders")
-
-    if "margin_blocked_recorded" not in columns:
-        conn.execute(
-            text("""
-            ALTER TABLE sandbox_orders
-            ADD COLUMN margin_blocked_recorded BOOLEAN NOT NULL DEFAULT 0
-        """)
-        )
-        logger.info("Added margin_blocked_recorded column to sandbox_orders")
 
     # Check and add accumulated_realized_pnl to sandbox_positions if missing
     result = conn.execute(text("PRAGMA table_info(sandbox_positions)"))
