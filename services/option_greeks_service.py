@@ -224,7 +224,7 @@ def parse_option_symbol(
         # Anchor the pattern so malformed trailing text is not silently accepted.
         # Strike can have a decimal point for currencies.
         match = re.match(
-            r"^([A-Z0-9&-]+?)(\d{2})([A-Z]{3})(\d{2})([\d.]+)(CE|PE)$",
+            r"^([A-Z0-9&-]+?)(\d{2})([A-Z]{3})(\d{2})([\d.]+)(CE|PE)\Z",
             symbol.upper(),
         )
 

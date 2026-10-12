@@ -22,6 +22,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 from services.iv_chart_service import calculate_time_to_expiry_at  # noqa: E402
 from services.option_greeks_service import (  # noqa: E402
@@ -58,6 +59,11 @@ def test_parse_option_symbols_with_punctuation_and_digits_in_underlying():
         assert expiry.date() == expected_expiry.date()
         assert strike == expected_strike
         assert option_type == expected_type
+
+
+def test_parse_option_symbol_rejects_trailing_newline():
+    with pytest.raises(ValueError, match="Invalid option symbol format"):
+        parse_option_symbol(f"{SYMBOL}\n", "NFO")
 
 
 def test_expiry_compares_against_a_naive_datetime():
