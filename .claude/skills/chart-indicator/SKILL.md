@@ -59,6 +59,11 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.6.2: nothing for a descriptor to change.** A fix in the widget tier:
+  the bottom bar's ranges and Go to no longer report missing history across a
+  gap no session trades in. The registry stays at 112, the index below at 433
+  names, and all thirteen examples pass the validator on 2.6.2 unchanged.
+
 - **2.6.1: nothing for a descriptor to change.** No built-in was added or
   removed (the registry stays at 112, so pitfall 13's collision list is
   unchanged), the export index below still lists 433 names, and all thirteen
