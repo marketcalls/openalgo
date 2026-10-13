@@ -11,6 +11,7 @@ from broker.dhan.api import data as dhan_data  # noqa: E402
 from broker.fyers.api import data as fyers_data  # noqa: E402
 from broker.zebu.api import data as zebu_data  # noqa: E402
 from services import option_symbol_service as oss  # noqa: E402
+from services import quotes_service  # noqa: E402
 
 
 def test_only_dhan_uses_the_single_upstream_request_batch(monkeypatch):
@@ -27,6 +28,17 @@ def test_only_dhan_uses_the_single_upstream_request_batch(monkeypatch):
             lambda _api_key, broker=broker: ("auth-token", broker),
         )
         assert oss._get_option_symbol_quote_batch_limit("test-api-key") == 1
+
+
+def test_batch_limit_comes_from_the_broker_module_not_the_shared_service():
+    assert dhan_data.SINGLE_REQUEST_MULTIQUOTE_LIMIT == 1000
+    assert quotes_service.get_single_request_multiquote_limit("dhan") == 1000
+    assert not hasattr(oss, "OPTION_SYMBOL_QUOTE_BATCH_LIMITS")
+
+    # A module without the attribute, a missing module and a blank name all
+    # fall back to one instrument per request.
+    for broker in ("zebu", "no_such_broker", "", None):
+        assert quotes_service.get_single_request_multiquote_limit(broker) == 1
 
 
 def test_dhan_multiquote_batch_makes_one_upstream_request(monkeypatch):

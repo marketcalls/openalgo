@@ -42,7 +42,11 @@ from typing import Any, Optional
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from services.flow_node_contracts import parse_underlying_symbol
-from services.quotes_service import get_multiquotes, get_quotes
+from services.quotes_service import (
+    get_multiquotes,
+    get_quotes,
+    get_single_request_multiquote_limit,
+)
 from utils import real_threading
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
@@ -125,12 +129,6 @@ def clear_strikes_cache():
 #: CRUDEOIL19AUG26FUT but no plain CRUDEOIL, so asking for a spot quote there
 #: returns nothing and the whole chain comes back empty.
 NO_SPOT_EXCHANGES = frozenset({"MCX", "CDS", "BCD", "NCDEX", "NCO"})
-# Only adapters whose multiquote method makes one upstream request for a batch
-# may use the combined underlying-and-option request. Keep this allowlist
-# explicit because some adapters fan out internally despite exposing the same
-# method, which would erase the latency win.
-OPTION_SYMBOL_QUOTE_BATCH_LIMITS = {"dhan": 1000}
-DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT = 1
 
 
 def _extract_multiquote_data(
@@ -277,18 +275,21 @@ def _has_usable_ltp(quote: Any) -> bool:
 
 
 def _get_option_symbol_quote_batch_limit(credential: str | None) -> int:
-    """Return the authenticated broker's safe single-request quote limit."""
+    """Return how many quotes the authenticated broker serves in one request.
+
+    The broker adapter owns the limit (see get_single_request_multiquote_limit);
+    a broker that declares none returns 1, which disables the combined request.
+    """
     if not isinstance(credential, str) or not credential:
-        return DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT
+        return 1
 
     try:
         _, broker_name = get_auth_token_broker(credential)
     except Exception:
         logger.exception("Unable to determine broker for option-symbol quote batching")
-        return DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT
+        return 1
 
-    broker_key = broker_name.strip().lower() if isinstance(broker_name, str) else ""
-    return OPTION_SYMBOL_QUOTE_BATCH_LIMITS.get(broker_key, DEFAULT_OPTION_SYMBOL_QUOTE_BATCH_LIMIT)
+    return get_single_request_multiquote_limit(broker_name)
 
 
 def validate_option_type(option_type: Any) -> str:
