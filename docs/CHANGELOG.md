@@ -33,9 +33,6 @@ OpenAlgo; the chart is part of the built frontend.
 custom chart indicator: no built-in id was added or removed, and the
 chart-indicator skill's index and examples pass on 2.6.1.
 
-**Not modelled yet.** The form is on the desktop toolbar; on a phone the same
-options are under Chart settings, Price.
-
 ### Agent: reliable tool calls on /agent and /trading
 
 No database migration and no `update.sh` run are needed. Restart OpenAlgo after
