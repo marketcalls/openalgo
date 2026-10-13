@@ -456,6 +456,9 @@ export function ChartPane({
   const [intervalGroups, setIntervalGroups] = useState<IntervalGroup[]>([])
   const [interval, setIntervalState] = useState('5m')
   const [chartType, setChartTypeState] = useState('candlestick')
+  // The type on screen now, for a reply that lands after the type has moved on.
+  const chartTypeRef = useRef(chartType)
+  chartTypeRef.current = chartType
   const [sym, setSym] = useState<SymbolView | null>(null)
   const [branding, setBranding] = useState<BrandingLink | null>(null)
   const [qty, setQty] = useState(1)
@@ -608,6 +611,11 @@ export function ChartPane({
         if (kind === 'ok') showToast.success(msg)
         else if (kind === 'err') showToast.error(msg)
         else showToast.info(msg)
+      },
+      // Undo and redo change the type inside the terminal; the toolbar follows it.
+      onChartTypeChange: (ct) => {
+        if (!current) return
+        setChartTypeState(ct)
       },
       onIntervalChange: (iv) => {
         if (!current) return
@@ -1293,7 +1301,11 @@ export function ChartPane({
                   const type = chartType
                   void terminalRef.current
                     ?.chartSettings()
-                    .then((cs) => cs && setBoxSettings({ type, req: cs }))
+                    // A switch while the request was out leaves this reply for a type no
+                    // longer on screen, and its options would land on the new type.
+                    .then((cs) => {
+                      if (cs && chartTypeRef.current === type) setBoxSettings({ type, req: cs })
+                    })
                 }}
               >
                 <SlidersHorizontal className="h-4 w-4" />

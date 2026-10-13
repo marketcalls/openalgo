@@ -14,7 +14,16 @@
  * The colour rows are read from the request rather than named here, so the
  * dialog offers exactly the colours the renderer paints.
  */
-import { type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useState } from 'react'
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { ChartSettingsPairField, ChartSettingsRequest } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { ColorPairRow } from './ChartSettingsDialog'
@@ -119,6 +128,38 @@ export function BoxChartSettingsDialog({ type, req, onApply, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [req, onClose])
 
+  // A modal takes the keyboard while it is open and hands it back when it
+  // closes, so Tab cannot wander into the chart controls it covers.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const open = req !== null
+  useEffect(() => {
+    if (!open) return
+    const before = document.activeElement as HTMLElement | null
+    dialogRef.current?.focus()
+    return () => before?.focus?.()
+  }, [open])
+  const keepFocus = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || !dialogRef.current) return
+    const focusable = [
+      ...dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled])'
+      ),
+    ]
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (
+      e.shiftKey &&
+      (document.activeElement === first || document.activeElement === dialogRef.current)
+    ) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+
   const colorRows = useMemo(() => {
     const price = req?.tabs.find((t) => t.id === 'price')?.inputs ?? []
     return COLOR_ROWS[type].flatMap((key) =>
@@ -208,10 +249,13 @@ export function BoxChartSettingsDialog({ type, req, onApply, onClose }: Props) {
       role="presentation"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}
-        className="flex max-h-[92%] w-[380px] flex-col rounded-lg border bg-popover shadow-2xl"
+        tabIndex={-1}
+        onKeyDown={keepFocus}
+        className="flex max-h-[92%] w-[380px] flex-col rounded-lg border bg-popover shadow-2xl outline-none"
       >
         <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-3">
           <h3 id={`${id}-title`} className="text-[15px] font-semibold tracking-tight">

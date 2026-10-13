@@ -141,18 +141,51 @@ describe('BoxChartSettingsDialog', () => {
     expect(onApply).toHaveBeenCalledWith({ 'transform.reversal': 2, 'transform.method': 'close' })
   })
 
-  it('resets its own keys to the terminal baseline, and Cancel writes nothing', async () => {
+  it('applies a reset to the terminal baseline on Ok', async () => {
     const user = userEvent.setup()
     const req = request('renko')
     req.values = { ...req.values, 'transform.mode': 'percent', 'transform.percent': 2 }
-    const { onApply, onClose } = open('renko', req)
+    const { onApply } = open('renko', req)
     const reset = screen.getByRole('button', { name: 'Reset to defaults' })
     expect(reset).toBeEnabled()
     await user.click(reset)
     expect(screen.getByLabelText('Measured as')).toHaveValue('fixed')
     expect(screen.getByLabelText('Size')).toHaveValue('12.5')
+    await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith({ 'transform.mode': 'fixed', 'transform.percent': 1 })
+  })
+
+  it('writes nothing on Cancel', async () => {
+    const user = userEvent.setup()
+    const { onApply, onClose } = open('renko')
+    await user.click(screen.getByRole('button', { name: '1%' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onApply).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('takes focus when it opens, keeps Tab inside, and hands focus back when it closes', async () => {
+    const user = userEvent.setup()
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+    opener.focus()
+    const { unmount } = render(
+      <BoxChartSettingsDialog
+        type="renko"
+        req={request('renko')}
+        onApply={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Renko settings' })
+    expect(dialog).toHaveFocus()
+    screen.getByRole('button', { name: 'Ok' }).focus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(screen.getByRole('button', { name: 'Ok' })).toHaveFocus()
+    unmount()
+    expect(opener).toHaveFocus()
+    opener.remove()
   })
 })
