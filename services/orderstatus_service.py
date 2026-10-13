@@ -1,4 +1,5 @@
 import copy
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
@@ -192,9 +193,27 @@ def get_order_status_with_auth(
         f"[OrderStatus] Order status is '{order_status}', checking if tradebook lookup needed"
     )
 
-    # Only fetch average_price for complete orders
-    # Order statuses can be: open, complete, rejected
-    if order_status.lower() == "complete":
+    native_average_valid = False
+    if broker == "deltaexchange":
+        # Native VWAP describes the confirmed filled quantity, including an
+        # open partial fill. A complete order also needs full quantity proof.
+        try:
+            native_average = Decimal(str(order_found["average_price"]))
+            filled = Decimal(str(order_found["filled_quantity"]))
+            quantity = Decimal(str(order_found["quantity"]))
+            native_average_valid = (
+                native_average.is_finite() and native_average > 0
+                and filled.is_finite() and quantity.is_finite()
+                and 0 < filled <= quantity
+                and (order_status.lower() != "complete" or filled == quantity)
+            )
+            if native_average_valid:
+                average_price = order_found["average_price"]
+        except (KeyError, InvalidOperation, TypeError, ValueError):
+            pass
+
+    # Only fetch average_price for complete orders without native fill proof.
+    if order_status.lower() == "complete" and not native_average_valid:
         logger.info("[OrderStatus] Order is complete, fetching average price from tradebook")
         try:
             # Use tradebook_service to get trade data
@@ -241,6 +260,8 @@ def get_order_status_with_auth(
         except Exception as e:
             logger.error(f"[OrderStatus] Exception while fetching tradebook: {e}", exc_info=True)
             # Continue without average price if tradebook fetch fails
+    elif native_average_valid:
+        logger.debug("[OrderStatus] Using native Delta average for confirmed fills")
     else:
         logger.info(
             f"[OrderStatus] Order status '{order_status}' is not complete (open/rejected/other) - skipping average_price fetch"

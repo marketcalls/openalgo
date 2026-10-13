@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, InvalidOperation
 
 from database.token_db import get_oa_symbol, get_symbol, get_symbol_info
 from utils.logging import get_logger
@@ -195,6 +196,30 @@ def calculate_order_statistics(order_data):
         }
 
 
+def _delta_fill_evidence(order):
+    """Preserve native fill facts without losing precision to display formatting."""
+    evidence = {}
+    try:
+        size = Decimal(str(order["size"]))
+        unfilled = Decimal(str(order["unfilled_size"]))
+        if size.is_finite() and unfilled.is_finite() and 0 <= unfilled <= size:
+            evidence["filled_quantity"] = str(size - unfilled)
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        pass
+
+    try:
+        average = Decimal(str(order["average_fill_price"]))
+        if (
+            average.is_finite() and average > 0
+            and Decimal(evidence.get("filled_quantity", "0")) > 0
+        ):
+            # Strings survive the display formatter's two-decimal rounding.
+            evidence["average_price"] = str(average)
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        pass
+    return evidence
+
+
 def transform_order_data(orders):
     try:
         # Handle None input
@@ -246,7 +271,9 @@ def transform_order_data(orders):
                 "orderid": order.get("orderId", ""),
                 "order_status": order.get("orderStatus", ""),
                 "timestamp": order.get("updateTime", ""),
+                "client_order_id": order.get("clientOrderId") or order.get("client_order_id"),
             }
+            transformed_order.update(_delta_fill_evidence(order))
 
             transformed_orders.append(transformed_order)
 
