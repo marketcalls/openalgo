@@ -132,6 +132,30 @@ describe('ChartSettingsDialog', () => {
     expect(onApply).not.toHaveBeenCalled()
   })
 
+  it('says there is nothing to configure when every control on a tab is hidden', () => {
+    renderDialog(vi.fn(), {
+      tabs: [
+        {
+          id: 'box',
+          label: 'Box',
+          inputs: [
+            {
+              key: 'pnf.boxSize',
+              type: 'number',
+              label: 'Box size',
+              default: 1,
+              visibleWhen: { key: 'pnf.boxMode', is: 'fixed' },
+            },
+          ],
+        },
+      ],
+      values: { 'pnf.boxMode': 'atr', 'pnf.boxSize': 1 },
+      defaults: { 'pnf.boxMode': 'atr', 'pnf.boxSize': 1 },
+    })
+    expect(screen.queryByText('Box size')).not.toBeInTheDocument()
+    expect(screen.getByText('Nothing to configure here.')).toBeInTheDocument()
+  })
+
   it('renders a tab per schema entry and opens on the first', () => {
     renderDialog()
     expect(screen.getByRole('button', { name: 'Price' })).toBeInTheDocument()

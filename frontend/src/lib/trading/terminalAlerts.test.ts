@@ -13,6 +13,8 @@ type State = {
   sym: SymbolView
   interval: string
   rawBars: Bar[]
+  ctype: string
+  volume: SeriesApi
   buildChart(): void
   loadIndicators(): Promise<void>
   syncIndicators(): void
@@ -366,6 +368,65 @@ describe('terminal alert integration', () => {
     expect(b.onToast).not.toHaveBeenCalled()
   })
 
+  it('delivers every alert event one update raises, each from its own bar', async () => {
+    // Since 2.6.0 an update that appends several elements (a bar that completes
+    // two Renko bricks) has each judged, so one update can raise several
+    // `alert:triggered` events, each dated at its own element. Each is its own
+    // delivery: its own notice, its own log entry, its own numbers.
+    const { terminal, state, onToast } = await mount()
+    const fired = vi.fn()
+    ;(terminal as unknown as { cb: Record<string, unknown> }).cb.onAlertFired = fired
+    const host = state as unknown as { rawBars: Bar[]; setPriceData(): void }
+    host.rawBars = [bar(60, 100), bar(120, 101), bar(180, 102), bar(240, 103)]
+    host.setPriceData()
+    onToast.mockClear()
+    for (const [time, index] of [
+      [180, 2],
+      [240, 3],
+    ]) {
+      state.chart.emit('alert:triggered', {
+        alertId: 'every',
+        title: 'Every',
+        message: 'closed at {{close}}',
+        time,
+        index,
+      })
+    }
+    expect(onToast.mock.calls.map((call) => call[0])).toEqual([
+      'closed at 102.00',
+      'closed at 103.00',
+    ])
+    expect(fired).toHaveBeenCalledTimes(2)
+    expect(fired.mock.calls.map((call) => call[0].firedAt)).toEqual([180, 240])
+  })
+
+  it('fills {{volume}} on a Kagi chart with the volume under the line, not its thickness', async () => {
+    const { state, onToast } = await mount()
+    state.ctype = 'kagi'
+    state.rawBars = [100, 101, 102, 103].map((close, i) => ({
+      ...bar(60 * (i + 1), close),
+      volume: [10, 20, 30, 60][i],
+    }))
+    state.buildChart()
+    await state.chartToolsReady
+    const elements = state.chart.primaryBars()
+    const last = elements.at(-1)!
+    // The element itself carries the line's thickness, 0 or 1.
+    expect(last.volume === 0 || last.volume === 1).toBe(true)
+    const under = state.volume.getData().at(-1)?.close
+    expect(under).toBeGreaterThan(1)
+
+    onToast.mockClear()
+    state.chart.emit('alert:triggered', {
+      alertId: 'kagi',
+      title: 'Kagi',
+      message: 'volume {{volume}}',
+      time: last.time,
+      index: elements.length - 1,
+    })
+    expect(onToast.mock.calls.map((call) => call[0])).toEqual([`volume ${under}`])
+  })
+
   it('preserves a study anchor through rebuild and reload without evaluating history', async () => {
     const a = await mount()
     const study = a.state.chart.addIndicator('ema', { length: 1 })
@@ -467,5 +528,38 @@ describe('terminal alert integration', () => {
     expect(state.alerts.list()[0].state).toBe('armed')
     state.price.update(bar(300, 110))
     expect(state.alerts.list()[0].state).toBe('triggered')
+  })
+})
+
+describe('the Objects panel rows', () => {
+  it('names a drawing as the drawing rail names its tool', async () => {
+    // Without the rail's names the engine spells the id: "Anchored vwap".
+    const { terminal, state } = await mount()
+    await terminal.setDrawTool(null)
+    state.draw.add({
+      id: 'avwap',
+      tool: 'anchored-vwap',
+      paneIndex: 0,
+      points: [{ time: 120, price: 100 }],
+      style: {},
+    })
+    state.draw.add({
+      id: 'line',
+      tool: 'trend-line',
+      paneIndex: 0,
+      points: [
+        { time: 60, price: 100 },
+        { time: 180, price: 100 },
+      ],
+      style: {},
+    })
+    const objects = (
+      terminal as unknown as { objects: { list(): { kind: string; name: string }[] } }
+    ).objects
+    const rows = objects
+      .list()
+      .filter((row) => row.kind === 'drawing')
+      .map((row) => row.name)
+    expect(rows.sort()).toEqual(['Anchored VWAP', 'Trend Line'])
   })
 })

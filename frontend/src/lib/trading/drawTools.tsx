@@ -161,6 +161,16 @@ export const DRAW_GROUPS: DrawGroupDef[] = [
     ],
   },
   {
+    key: 'volume',
+    label: 'Volume studies',
+    iconKey: 'fixed-range-volume-profile',
+    sections: [
+      {
+        tools: tools('anchored-vwap', 'fixed-range-volume-profile'),
+      },
+    ],
+  },
+  {
     key: 'measure',
     label: 'Measurers',
     iconKey: 'measure',

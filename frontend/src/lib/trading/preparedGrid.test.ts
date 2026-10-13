@@ -126,3 +126,37 @@ describe('prepared chart grid ownership', () => {
     expect(() => grid.capture('left', sync)).toThrow(/closed/i)
   })
 })
+
+describe('a dragged split', () => {
+  async function ready() {
+    const grid = new PreparedChartGrid(payload())
+    const left = terminal('left'),
+      right = terminal('right')
+    grid.register('left', left)
+    grid.register('right', right)
+    grid.initialized('left', left)
+    grid.initialized('right', right)
+    await grid.ready
+    return grid
+  }
+
+  it('saves exactly the document geometry until a divider is dragged', async () => {
+    const grid = await ready()
+    expect(grid.weights()).toEqual({ columns: [1, 1], rows: [1] })
+    expect(grid.capture('left', sync).layout).toEqual(payload().layout)
+    grid.destroy()
+  })
+
+  it('writes the dragged weights into the next save', async () => {
+    const grid = await ready()
+    grid.setWeights({ columns: [1.5, 0.5], rows: [1] })
+    expect(grid.weights()).toEqual({ columns: [1.5, 0.5], rows: [1] })
+    expect(grid.capture('left', sync).layout).toMatchObject({
+      columnWeights: [1.5, 0.5],
+      rowWeights: [1],
+      preset: 'cols2',
+    })
+    expect(() => grid.setWeights({ columns: [1], rows: [1] })).toThrow(/does not match/)
+    grid.destroy()
+  })
+})

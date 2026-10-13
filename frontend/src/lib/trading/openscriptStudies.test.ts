@@ -117,6 +117,17 @@ describe('what reaches the chart', () => {
     expect(descriptorFor.mock.calls[0][1]).toMatchObject({ simulateOrders: true })
   })
 
+  it('tells the adapter which chart it draws on', async () => {
+    // Catches the option left out. Without it the adapter assumes a chart too
+    // old for a band coloured per bar or for a second grid, and refuses every
+    // study declaring either (OS6024) although this chart draws both.
+    serving('a-study.oscript')
+
+    await loadOpenScriptStudies()
+
+    expect(firstOptions().chartVersion).toBe(charts.VERSION)
+  })
+
   it('never asks for a destination for a study', async () => {
     // Catches the option passed to everything. A study places no orders, so a
     // venue for it is a thing built and never used, and an option set where it

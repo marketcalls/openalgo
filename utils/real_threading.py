@@ -66,6 +66,8 @@ Full = _queue.Full
 #: The real OS thread id, whatever eventlet has done to ``threading.get_ident``
 #: (under eventlet the patched one returns a greenlet id).
 _real_get_ident = _threading.get_ident
+#: The calling OS thread's id, the same for every greenlet on that thread.
+get_ident = _real_get_ident
 
 #: The unpatched ``time.sleep``: it blocks the calling OS thread. Only for real
 #: threads; a greenlet calling it stops the hub for the whole sleep.
@@ -456,6 +458,7 @@ __all__ = [
     "Thread",
     "hub_worker_running",
     "is_monkey_patched",
+    "get_ident",
     "join",
     "on_hub_thread",
     "run_on_hub",

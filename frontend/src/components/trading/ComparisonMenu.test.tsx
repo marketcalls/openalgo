@@ -32,6 +32,7 @@ const state: TerminalComparisonState = {
       label: 'NSE:INFY',
       color: '#6688ff',
       status: 'loading',
+      visible: true,
     },
     {
       id: 'two',
@@ -41,6 +42,7 @@ const state: TerminalComparisonState = {
       color: '#ee8844',
       status: 'error',
       error: 'No comparison history',
+      visible: true,
     },
   ],
 }
@@ -63,8 +65,8 @@ describe('selected chart comparisons', () => {
     expect(screen.getByText('No comparison history')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Remove NSE:BHEL' }))
     expect(remove).toHaveBeenCalledExactlyOnceWith('two')
-    fireEvent.change(screen.getByLabelText('Comparison scale'), { target: { value: 'percentage' } })
-    expect(mode).toHaveBeenCalledExactlyOnceWith('percentage')
+    fireEvent.change(screen.getByLabelText('Comparison scale'), { target: { value: 'percent' } })
+    expect(mode).toHaveBeenCalledExactlyOnceWith('percent')
   })
 
   it('uses comparison search and reports a rejected add without an unhandled rejection', async () => {
@@ -85,5 +87,98 @@ describe('selected chart comparisons', () => {
     fireEvent.click(choose)
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('History unavailable'))
     expect(add).toHaveBeenCalledExactlyOnceWith('INFY', 'NSE')
+  })
+})
+
+describe('comparison rows', () => {
+  const ready: TerminalComparisonState = {
+    mode: 'indexed',
+    items: [
+      {
+        id: 'one',
+        symbol: 'INFY',
+        exchange: 'NSE',
+        label: 'NSE:INFY',
+        color: '#6688ff',
+        status: 'ready',
+        visible: true,
+        close: 1523.4,
+        change: -0.42,
+      },
+      {
+        id: 'two',
+        symbol: 'TCS',
+        exchange: 'NSE',
+        label: 'NSE:TCS',
+        color: '#ee8844',
+        status: 'ready',
+        visible: false,
+      },
+      {
+        id: 'three',
+        symbol: 'BHEL',
+        exchange: 'NSE',
+        label: 'NSE:BHEL',
+        color: '#22d3ee',
+        status: 'error',
+        error: 'No comparison history for this interval',
+        visible: true,
+      },
+    ],
+  }
+
+  it('offers all four scales and explains the one chosen', () => {
+    const mode = vi.fn()
+    render(
+      <ComparisonMenu
+        state={ready}
+        search={async () => []}
+        onAdd={async () => {}}
+        onRemove={() => {}}
+        onModeChange={mode}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Comparisons' }))
+    const select = screen.getByLabelText('Comparison scale') as HTMLSelectElement
+    expect([...select.options].map((option) => option.text)).toEqual([
+      'Price',
+      'Percentage',
+      'Indexed to 100',
+      'Own scale',
+    ])
+    expect(select.value).toBe('indexed')
+    expect(screen.getByText('Every line starts at 100')).toBeVisible()
+    fireEvent.change(select, { target: { value: 'own' } })
+    expect(mode).toHaveBeenCalledExactlyOnceWith('own')
+  })
+
+  it('shows the value and change, hides and shows a line, and retries a failed one', async () => {
+    const toggle = vi.fn()
+    const retry = vi.fn().mockRejectedValue(new Error('Still no history'))
+    render(
+      <ComparisonMenu
+        state={ready}
+        search={async () => []}
+        onAdd={async () => {}}
+        onRemove={() => {}}
+        onModeChange={() => {}}
+        onToggle={toggle}
+        onRetry={retry}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Comparisons' }))
+    expect(screen.getByText('1,523.40')).toBeVisible()
+    expect(screen.getByText('-0.42%')).toBeVisible()
+    expect(screen.getByText('Hidden')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide NSE:INFY' }))
+    expect(toggle).toHaveBeenCalledWith('one', false)
+    fireEvent.click(screen.getByRole('button', { name: 'Show NSE:TCS' }))
+    expect(toggle).toHaveBeenCalledWith('two', true)
+    expect(screen.queryByRole('button', { name: 'Retry NSE:INFY' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry NSE:BHEL' }))
+    expect(retry).toHaveBeenCalledExactlyOnceWith('three')
+    await waitFor(() =>
+      expect(screen.getAllByRole('alert').at(-1)).toHaveTextContent('Still no history')
+    )
   })
 })

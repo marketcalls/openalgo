@@ -206,6 +206,25 @@ def _symbols(count, exchange="NSE"):
     return [{"symbol": f"S{i}", "exchange": exchange} for i in range(count)]
 
 
+def _count_per_call_pools(monkeypatch, module):
+    """Record every ``ThreadPoolExecutor`` the plugin builds for itself.
+
+    The shared pool comes from ``utils.shared_executors`` and is not counted.
+    Asserting on this rather than ``threading.active_count()`` keeps the check
+    free of threads other tests start in the same interpreter, and catches a
+    per-call pool however few threads a fast mock lets it spawn.
+    """
+    built = []
+    real = module.ThreadPoolExecutor
+
+    def counting(*args, **kwargs):
+        built.append(kwargs.get("max_workers"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "ThreadPoolExecutor", counting)
+    return built
+
+
 def test_under_gthread_definedge_quotes_run_on_one_shared_pool(definedge, monkeypatch):
     from utils import runtime
     from utils.shared_executors import executor_stats
@@ -215,14 +234,15 @@ def test_under_gthread_definedge_quotes_run_on_one_shared_pool(definedge, monkey
     _patch_client(monkeypatch, recorder)
     broker = definedge.BrokerData("key:::susertoken:::token")
 
-    before = threading.active_count()
+    built = _count_per_call_pools(monkeypatch, definedge)
     for _ in range(3):
         results = broker._process_quotes_batch(_symbols(10))
         assert [r["data"]["ltp"] for r in results] == [101.5] * 10
     stats = executor_stats()["definedge-quotes"]
     assert stats["max_workers"] == definedge.QUOTE_POOL_SIZE
-    # Three batches did not start three pools of threads.
-    assert threading.active_count() - before <= definedge.QUOTE_POOL_SIZE
+    assert stats["threads"] <= definedge.QUOTE_POOL_SIZE
+    # Three batches did not start a pool of threads each.
+    assert built == []
 
 
 def test_definedge_concurrent_chains_stay_inside_the_per_host_pace(definedge, monkeypatch):
@@ -278,13 +298,15 @@ def test_under_gthread_flattrade_quotes_run_on_one_shared_pool(monkeypatch):
     monkeypatch.setattr(data, "get_httpx_client", lambda: client)
 
     broker = data.BrokerData("susertoken")
-    before = threading.active_count()
+    built = _count_per_call_pools(monkeypatch, data)
     for _ in range(3):
         results = broker._process_quotes_batch(_symbols(10))
         assert sorted(r["data"]["ltp"] for r in results) == [101.5] * 10
     stats = executor_stats()["flattrade-quotes"]
     assert stats["max_workers"] == data.QUOTE_POOL_SIZE
-    assert threading.active_count() - before <= data.QUOTE_POOL_SIZE
+    assert stats["threads"] <= data.QUOTE_POOL_SIZE
+    # Three batches did not start a pool of threads each.
+    assert built == []
 
 
 def test_off_gthread_the_quote_fanouts_leave_no_threads_behind(definedge, monkeypatch):
@@ -302,16 +324,27 @@ def test_off_gthread_the_quote_fanouts_leave_no_threads_behind(definedge, monkey
     client = httpx.Client(transport=httpx.MockTransport(recorder))
     monkeypatch.setattr(flattrade, "get_httpx_client", lambda: client)
 
-    before = threading.active_count()
+    before = set(threading.enumerate())
     results = flattrade.BrokerData("susertoken")._process_quotes_batch(_symbols(10))
     assert sorted(r["data"]["ltp"] for r in results) == [101.5] * 10
     results = definedge.BrokerData("key:::susertoken:::token")._process_quotes_batch(_symbols(10))
     assert [r["data"]["ltp"] for r in results] == [101.5] * 10
 
+    # Only a quote pool's threads are counted: the suite shares one
+    # interpreter, and a thread something else starts meanwhile is not ours.
+    prefixes = ("ThreadPoolExecutor-", "openalgo-definedge-quotes", "openalgo-flattrade-quotes")
+
+    def left_behind():
+        return [
+            t.name
+            for t in threading.enumerate()
+            if t not in before and t.is_alive() and t.name.startswith(prefixes)
+        ]
+
     deadline = time.monotonic() + 5
-    while threading.active_count() > before and time.monotonic() < deadline:
+    while left_behind() and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert threading.active_count() == before, "a quote fan-out left threads running"
+    assert left_behind() == [], "a quote fan-out left threads running"
 
 
 # --- the OI cache -----------------------------------------------------------------

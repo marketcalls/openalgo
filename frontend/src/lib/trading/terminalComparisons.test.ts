@@ -5,6 +5,7 @@ import {
   createChart,
   exportChartDataCsv,
   type OpenAlgoWsFeed,
+  PaneLegend,
   ReplayController,
   type SocketLike,
 } from 'openalgo-charts'
@@ -485,5 +486,107 @@ describe('terminal comparison ownership', () => {
     expect(sockets.filter((socket) => !socket.closed)).toHaveLength(0)
     expect(vi.getTimerCount()).toBe(baseline)
     expect(target.getState().series).toHaveLength(1)
+  })
+})
+
+describe('comparison scales, legend rows and retry', () => {
+  it('holds the pane in the engine mode each scale stands for', async () => {
+    const { instance } = helper()
+    const target = chart()
+    await instance.replace([spec()], 'percent')
+    await instance.bind(target, context)
+    const engine = comparisonController(target)
+    instance.setMode('indexed')
+    expect(engine.mode).toBe('indexed-to-100')
+    expect(target.priceScaleOptions().mode).toBe('indexed-to-100')
+    expect(instance.mode).toBe('percent')
+    instance.setMode('own')
+    expect(engine.mode).toBe('none')
+    expect(target.priceScaleOptions().mode).toBe('linear')
+    expect(instance.mode).toBe('price')
+    instance.setMode('percent')
+    expect(engine.mode).toBe('percentage')
+    instance.setMode('price')
+    expect(engine.mode).toBe('none')
+    expect(instance.scale).toBe('price')
+  })
+
+  it('opens a chart saved with price on its own scale, as it was drawn before', async () => {
+    const { instance } = helper()
+    await instance.replace([spec()], 'price')
+    expect(instance.scale).toBe('own')
+    await instance.replace([spec()], 'price', 'price')
+    expect(instance.scale).toBe('price')
+    await instance.replace([spec()], 'percent', 'indexed')
+    expect(instance.scale).toBe('indexed')
+  })
+
+  it('puts the lines on the price axis itself when Price is chosen', async () => {
+    const { instance } = helper()
+    const target = chart()
+    await instance.replace([spec()], 'price', 'price')
+    await instance.bind(target, context)
+    target.applySize(800, 500)
+    const handle = comparisonController(target).list()[0]
+    const axis = target.panes()[0].priceScale.priceRange()
+    // The fit holds the comparison's closes (200 to 240) beside the chart's own (100 to 120).
+    expect(axis.min).toBeLessThanOrEqual(100)
+    expect(axis.max).toBeGreaterThanOrEqual(240)
+    expect(handle.priceScale().priceRange()).toEqual(axis)
+    instance.setMode('own')
+    target.applySize(800, 501)
+    expect(handle.priceScale().priceRange()).not.toEqual(target.panes()[0].priceScale.priceRange())
+  })
+
+  it('adds a legend row per comparison with its value and change, and acts on its buttons', async () => {
+    const { instance, onChange } = helper()
+    const target = chart()
+    const added: unknown[] = []
+    const addPrimitive = target.addPrimitive.bind(target)
+    vi.spyOn(target, 'addPrimitive').mockImplementation((primitive, where) => {
+      added.push(primitive)
+      addPrimitive(primitive, where)
+    })
+    await instance.replace([spec()], 'percent')
+    await instance.bind(target, context)
+    const row = instance.rows(180)[0]
+    expect(row.close).toBe(240)
+    expect(row.change).toBeCloseTo((240 / 220 - 1) * 100, 9)
+    const legend = added.find((item): item is PaneLegend => item instanceof PaneLegend)
+    expect(legend?.options()).toMatchObject({
+      id: 'cmp:other',
+      title: 'OTHER',
+      color: '#eeaa00',
+      actions: ['hide', 'close'],
+      hidden: false,
+    })
+    const click = (id: string) =>
+      (target as unknown as { emit(name: string, payload: unknown): void }).emit('click', { id })
+    onChange.mockClear()
+    click('cmp:other::hide')
+    expect(instance.specs()[0].visible).toBe(false)
+    expect(instance.rows(180)[0].close).toBeNull()
+    expect(legend?.options().hidden).toBe(true)
+    click('cmp:other::hide')
+    expect(instance.specs()[0].visible).toBe(true)
+    click('cmp:unknown::close')
+    expect(instance.specs()).toHaveLength(1)
+    click('cmp:other::close')
+    expect(instance.specs()).toHaveLength(0)
+    expect(onChange).toHaveBeenCalled()
+  })
+
+  it('loads a failed comparison again on retry', async () => {
+    const getBars = vi.fn(async (_request: BarsRequest): Promise<Bar[]> => {
+      throw new Error('History unavailable')
+    })
+    const { instance } = helper(getBars)
+    await instance.replace([spec()], 'percent')
+    await expect(instance.bind(chart(), context)).rejects.toThrow('History unavailable')
+    expect(instance.rows()[0].status).toBe('error')
+    getBars.mockResolvedValue([bar(60, 200), bar(120, 220), bar(180, 240)])
+    await instance.retry('other')
+    expect(getBars).toHaveBeenCalledTimes(2)
+    expect(instance.rows(180)[0]).toMatchObject({ status: 'ready', close: 240 })
   })
 })

@@ -670,6 +670,16 @@ if [ "$SERVER_MODE" = true ]; then
     sudo chown -R "$WEB_USER:$WEB_GROUP" "$OPENALGO_PATH"
     sudo chmod 700 "$OPENALGO_PATH/keys"
 
+    # The recursive chmod 755 above opens every file to all local accounts,
+    # undoing step 4b. Close the files that hold secrets again, as install.sh
+    # and install-multi.sh do: .env (APP_KEY, API_KEY_PEPPER, broker
+    # credentials) and the databases (sessions, auth tokens, orders).
+    # gunicorn and the migrations run as the owner, so owner-only is enough.
+    if [ -f "$OPENALGO_PATH/.env" ]; then
+        sudo chmod 600 "$OPENALGO_PATH/.env"
+    fi
+    sudo find "$OPENALGO_PATH/db" -type f -exec chmod 600 {} +
+
     log_message "Permissions set successfully" "$GREEN"
 
     # Run migrations as the web user (database files are owned by web user)

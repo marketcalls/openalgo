@@ -341,8 +341,13 @@ eventlet you can leave the line in place; it does no harm.
 - **Going back to an older OpenAlgo release.** A switched service starts
   OpenAlgo through `install/openalgo-gunicorn.sh`, which older releases do not
   have. Run `sudo bash install/switch-worker.sh --restore` **first**, while
-  the script is still there; otherwise the service cannot start after the
-  rollback. If that has already happened: in `/etc/systemd/system`, copy back
+  the script is still there. A service switched with this release or later
+  still starts if you forget: when the launcher is missing it starts OpenAlgo
+  on eventlet exactly as before the switch, and says so in
+  `journalctl -u openalgo`. A service switched with an earlier copy of the
+  script cannot start after the rollback (systemd keeps restarting it); to
+  give it the same safety net, run `--restore` and then switch again, outside
+  market hours. If the service is already failing: in `/etc/systemd/system`, copy back
   the file named in the comment just above the service's `ExecStart` line (it
   ends in `.pre-launcher-<date>`), set `OPENALGO_WORKER_CLASS = 'eventlet'` in
   `.env`, then run `sudo systemctl daemon-reload` and restart the service.

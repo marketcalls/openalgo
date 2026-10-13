@@ -12,6 +12,7 @@ import {
 import { Input } from '@/components/ui/input'
 import type { ChartWorkspaceCatalogState } from '@/hooks/useChartWorkspaceCatalog'
 import { TickBox } from './TickBox'
+import { Tip } from './Tip'
 
 interface Props extends ChartWorkspaceCatalogState {
   activeId: string | null
@@ -57,6 +58,8 @@ export function WorkspaceMenu({
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [message, setMessage] = useState('')
+  /** Deleting waits for a second, explicit press: a saved workspace is not in any undo history. */
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const action = useRef(0)
   const inFlight = useRef(false)
   const selected = catalog?.workspaces.find((item) => item.id === selectedId)
@@ -71,6 +74,10 @@ export function WorkspaceMenu({
   useEffect(() => {
     setSavedName(selected?.name ?? '')
   }, [selected?.name])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the question belongs to the workspace it was asked about
+  useEffect(() => {
+    setConfirmDelete(false)
+  }, [selected?.id])
 
   async function perform(operation: () => Promise<Result>) {
     if (disabled || inFlight.current) return
@@ -103,17 +110,23 @@ export function WorkspaceMenu({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          data-workspace-control
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0 px-2.5 text-xs"
-          title={active ? `Workspace: ${active.name}` : 'Save or open a complete chart grid'}
-        >
-          Workspaces
-        </Button>
-      </DialogTrigger>
+      <Tip
+        tip={{
+          title: active ? `Workspace: ${active.name}` : 'Workspaces',
+          sub: 'Save or open a complete chart grid',
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button
+            data-workspace-control
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 px-2.5 text-xs"
+          >
+            Workspaces
+          </Button>
+        </DialogTrigger>
+      </Tip>
       <DialogContent
         data-workspace-control
         className="max-h-[90dvh] overflow-y-auto sm:max-w-xl"
@@ -285,22 +298,50 @@ export function WorkspaceMenu({
                 </Button>
                 <Button
                   variant="outline"
-                  disabled={disabled}
-                  onClick={() =>
-                    void perform(async () => {
-                      await run((repository) => repository.remove('workspace', selected.id))
-                      onRemoved(selected.id)
-                      return {
-                        message:
-                          'Saved workspace deleted; the displayed charts are still available',
-                        select: '',
-                      }
-                    })
-                  }
+                  disabled={disabled || confirmDelete}
+                  onClick={() => setConfirmDelete(true)}
                 >
                   Delete
                 </Button>
               </div>
+              {confirmDelete && (
+                <div
+                  role="alertdialog"
+                  aria-label="Delete workspace"
+                  className="grid gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+                >
+                  <p className="text-sm">
+                    Delete the saved workspace {selected.name}?
+                    {selected.id === activeId
+                      ? ' It is open now: the charts on screen stay, as an unnamed workspace.'
+                      : ''}{' '}
+                    This cannot be undone.
+                  </p>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+                      Keep workspace
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      disabled={disabled}
+                      onClick={() =>
+                        void perform(async () => {
+                          await run((repository) => repository.remove('workspace', selected.id))
+                          onRemoved(selected.id)
+                          setConfirmDelete(false)
+                          return {
+                            message:
+                              'Saved workspace deleted; the displayed charts are still available',
+                            select: '',
+                          }
+                        })
+                      }
+                    >
+                      Delete workspace
+                    </Button>
+                  </div>
+                </div>
+              )}
               <label htmlFor={`${id}-rename`} className="text-sm font-medium">
                 Saved workspace name
               </label>

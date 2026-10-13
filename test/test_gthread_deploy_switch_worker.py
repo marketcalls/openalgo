@@ -61,13 +61,13 @@ case "$cmd" in
     line=$(tr -d '\r' < "$unit" | awk '
       !b && /^[[:space:]]*ExecStart=/ { b = 1; sub(/^[[:space:]]*ExecStart=/, "") }
       b { l = $0; m = (l ~ /\\[[:space:]]*$/); sub(/\\[[:space:]]*$/, "", l); printf "%s ", l; if (!m) exit }')
-    if printf '%s' "$line" | grep -q openalgo-gunicorn.sh; then
-      [ -f "$SHIM_STATE/fail_launcher" ] && exit 0
-      class=$(eval "$line --dry-run" 2>/dev/null | awk '/^ARG --worker-class$/ { getline; print $2; exit }')
-    else
-      [ -f "$SHIM_STATE/fail_old" ] && exit 0
-      class=$(printf '%s' "$line" | grep -oE -- '--worker-class [a-z]+' | awk '{print $2}')
-    fi
+    # Run the real command. The fake gunicorn records what it was started
+    # with; only the launcher passes the hooks file.
+    rm -f "$SHIM_STATE/gunicorn_args"
+    eval "$line" > "$SHIM_STATE/start.out" 2>&1
+    if grep -q gunicorn_hooks.py "$SHIM_STATE/gunicorn_args" 2>/dev/null; then via=launcher; else via=old; fi
+    [ -f "$SHIM_STATE/fail_$via" ] && exit 0
+    class=$(awk 'p { print; exit } $0 == "--worker-class" { p = 1 }' "$SHIM_STATE/gunicorn_args" 2>/dev/null)
     mkdir -p "$SHIM_STATE/proc/4242"
     printf 'gunicorn\0--worker-class\0%s\0app:app\0' "$class" > "$SHIM_STATE/proc/4242/cmdline"
     echo 4242 > "$SHIM_STATE/mainpid"
@@ -97,6 +97,15 @@ fi
 exit 0
 """,
 }
+
+
+# A gunicorn that records the arguments of a server start and ignores version queries.
+GUNICORN = r"""#!/bin/sh
+case " $* " in
+  *" app:app "*) printf '%s\n' "$@" > "$SHIM_STATE/gunicorn_args" ;;
+esac
+exit 0
+"""
 
 
 def _executable(path: Path, text: str) -> Path:
@@ -157,7 +166,8 @@ class Box:
         venv = app / venv_name
         (venv / "bin").mkdir(parents=True)
         _executable(venv / "bin" / "python", f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
-        _executable(venv / "bin" / "gunicorn", "#!/bin/sh\nexit 0\n")
+        _executable(venv / "bin" / "gunicorn", GUNICORN)
+        (venv / "bin" / "activate").write_text("")
         return app, venv
 
     def single(self, env_text: str = "OPENALGO_WORKER_CLASS = 'gthread'\n") -> Path:
@@ -462,6 +472,40 @@ def test_restore_puts_the_installer_file_back(box):
     assert result.returncode == 0, result.stdout + result.stderr
     assert unit.read_bytes() == original
     assert (box.state / "running_class").read_text().strip() == "eventlet"
+
+
+@pytest.mark.parametrize("layout", ["single", "multi"])
+def test_a_rollback_without_the_launcher_starts_as_before_the_switch(box, layout):
+    """A switched service whose code is rolled back to a release without the
+    launcher, before --restore is run, used to name a missing file in ExecStart
+    and restart in a loop. It now starts gunicorn as the installer's file did."""
+    unit = box.single() if layout == "single" else box.multi(1)
+    app = box.root / ("openalgo" if layout == "single" else "openalgo-flask/openalgo1")
+    assert box.run("--yes").returncode == 0
+    assert (box.state / "running_class").read_text().strip() == "gthread"
+
+    (app / "install" / "openalgo-gunicorn.sh").unlink()  # the rolled-back code has no launcher
+    subprocess.run(
+        [str(box.bin / "systemctl"), "restart", unit.stem], env=box.env(), check=True, timeout=60
+    )
+
+    assert (box.state / "running_class").read_text().strip() == "eventlet"
+    started = (box.state / "gunicorn_args").read_text().split()
+    assert started == [
+        "--worker-class",
+        "eventlet",
+        "-w",
+        "1",
+        "--bind",
+        f"unix:{app / 'openalgo.sock'}",
+        "--timeout",
+        "300",
+        "--log-level",
+        "info",
+        "app:app",
+    ]
+    said = (box.state / "start.out").read_text()
+    assert "install/openalgo-gunicorn.sh is missing" in said
 
 
 def test_several_services_need_a_name_or_all(box):

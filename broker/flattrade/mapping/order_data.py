@@ -190,7 +190,7 @@ def transform_order_data(orders):
         return []
 
     if not orders:
-        logger.info("No orders found - empty list")
+        logger.debug("No orders found - empty list")
         return []
 
     transformed_orders = []

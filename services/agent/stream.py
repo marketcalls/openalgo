@@ -1098,6 +1098,7 @@ def _requirement_payloads(event: Any) -> list[dict[str, Any]]:
                 "tool_call_id": str(getattr(execution, "tool_call_id", "") or ""),
                 "tool_name": str(getattr(execution, "tool_name", "") or ""),
                 "args": _safe_args(getattr(execution, "tool_args", None)),
+                "missing": _missing_args(execution),
                 "kind": _requirement_kind(execution),
             }
         )
@@ -1114,6 +1115,7 @@ def _requirement_payloads(event: Any) -> list[dict[str, Any]]:
                 "tool_call_id": str(getattr(execution, "tool_call_id", "") or ""),
                 "tool_name": str(getattr(execution, "tool_name", "") or ""),
                 "args": _safe_args(getattr(execution, "tool_args", None)),
+                "missing": _missing_args(execution),
                 "kind": _requirement_kind(execution),
             }
         )
@@ -1129,6 +1131,32 @@ def _requirement_kind(execution: Any) -> str:
     if getattr(execution, "external_execution_required", False):
         return "external_execution"
     return "confirmation"
+
+
+def _missing_args(execution: Any) -> list[str]:
+    """Name the required arguments a paused call does not carry.
+
+    Read from the raw arguments, not the redacted copy, because a redacted
+    value is still a value. Never raises: an unreadable signature costs the
+    card this check, not the pause.
+
+    Args:
+        execution: The paused agno ``ToolExecution``.
+
+    Returns:
+        The missing argument names, empty when the call is complete.
+    """
+    try:
+        from services.agent.tool_guard import missing_arguments
+
+        args = getattr(execution, "tool_args", None)
+        return missing_arguments(
+            str(getattr(execution, "tool_name", "") or ""),
+            args if isinstance(args, Mapping) else None,
+        )
+    except Exception:
+        logger.exception("Could not check a paused call's arguments")
+        return []
 
 
 def _safe_args(args: Any) -> dict[str, Any]:

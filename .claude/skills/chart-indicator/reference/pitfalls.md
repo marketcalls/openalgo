@@ -105,6 +105,19 @@ Always coerce with a floor:
 const length = Math.max(2, Math.floor(Number(settings.length) || 20))
 ```
 
+A fraction needs the same care. The number field hands one through, and the
+exported helpers do not round it: given a period of 14.5, `sma`, `rsi`, `atr`
+and the older family return NaN past the first window, which draws an empty
+pane and raises nothing, while the 2.5.4 statistics helpers (`rollingMedian`,
+`rising` and the rest) throw a `RangeError`. Since 2.6.0 every built-in reads
+14.5 as 15, so a study meant to agree with a built-in on the same setting
+rounds with `Math.round` rather than flooring.
+
+When a setting cannot be made to work at all, throw `IndicatorInputError`
+rather than a plain `Error`. From 2.6.0 a saved study whose first pass throws
+that comes back on reload in its error status beside the others; any other
+throw on that first pass still stops the whole restore.
+
 *Validator: ERROR. It runs every calc with all text and number inputs cleared.*
 
 ---
@@ -211,8 +224,13 @@ never draws.
 ## 13. Reusing a built-in id overrides it
 
 Custom modules register after the built-in tier, so a duplicate id replaces the
-built-in for the whole app. There are 105 of them; `sma`, `rsi`, `macd`,
+built-in for the whole app. There are 112 of them; `sma`, `rsi`, `macd`,
 `supertrend`, `vwap`, `range-analysis` are all taken.
+
+**2.6.0 adds seven more reserved ids:** `elder-ray`, `schaff-trend-cycle`,
+`high-low-52-week`, `vidya`, `zigzag`, `zlema` and `volatility-squeeze`. A
+custom ZigZag or Zero Lag EMA written under the obvious id now replaces the
+built-in; rename it unless the override is the point.
 
 **2.4.5 adds three more reserved ids:** `open-interest`, `open-interest-change`
 and `open-interest-buildup`. Check an existing custom file against those ids
@@ -294,6 +312,10 @@ Do not try to defeat it by keeping your own state in `store`.
 
 Every alert needs an `id` and a `title`. The `title` is what a host shows.
 
+From 2.6.0 a pass that appended several bars at once judges each of them in
+order, handing `when` and `message` the bars and values through the bar being
+judged. Read that bar at `ctx.index`, which is then also the last index.
+
 *Validator: ERROR on a missing id or title, or a `when` that throws.*
 
 ---
@@ -322,6 +344,14 @@ existing indicator is untouched.
 
 `symbol` and `interval` can be `undefined`: the engine is handed bars, not an
 instrument, and only a host that supplies them will have them. Guard before use.
+
+`transformed` (2.6.0) is the same kind of field. `/trading` has the chart apply
+Heikin Ashi, Renko, range bars and line break itself, so on such a chart a
+study computing on the chart's bars (Compute on: Chart bars, the default) is
+told `transformed: true`: its bars are the elements drawn, and a Renko brick is
+not a period of time. Set to Underlying bars, the study computes on the time
+bars under them and the flag is absent, as it is on every plain chart. Read it
+to warn or to skip a time-based reading, never to change what a value means.
 
 ---
 
@@ -361,9 +391,11 @@ run('ema', bars, { length: 20 }).ema     // WRONG: undefined
 run('ema', bars, { length: 20 }).ma      // right
 ```
 
-Every moving-average built-in plots under `ma`. `macd` plots `macd`, `signal`
-and `histogram`. `bollinger` plots `upper`, `basis`, `lower`, not `middle`.
-Check before assuming:
+Only `sma`, `ema` and `wma` plot under `ma`. The other averages plot under
+their own id (`hma`, `dema`, `tema`, `alma`, `smma`, `t3`, `kama`, `lsma`,
+`vwma`, and from 2.6.0 `zlema` and `vidya`), and McGinley Dynamic under `mg`.
+`macd` plots `macd`, `signal` and `histogram`. `bollinger` plots `upper`,
+`basis`, `lower`, not `middle`. Check before assuming:
 
 ```js
 getIndicator('bollinger').plots.map((p) => p.key)   // ['upper','basis','lower']
@@ -388,3 +420,53 @@ unless it is also plotted. A typo there is invisible.
 
 *Validator: ERROR. The hooks are handed a recording view of `values`, so a read
 of a column that does not exist is caught.*
+
+---
+
+## 24. Copying a built-in copies its Timeframe row and drops its tail
+
+From 2.6.0, twenty-nine built-ins (most averages, the bands, `supertrend`,
+`atr`, `rsi`, `macd`, `stochastic`, `cci`, `adx` and others) carry
+`{ key: 'timeframe', type: 'interval', default: '' }` after their ungrouped
+`inputs`.
+
+```js
+inputs: [...getIndicator('rsi').inputs, ...mine]   // brings a Timeframe row along
+```
+
+Only the built-in's own `calc` reads that key. A descriptor that copies the
+inputs and computes with the `rsi` helper shows a Timeframe select that does
+nothing, which is worse than no control. Drop the row, or hand the settings to
+`getIndicator('rsi').calc` so the fold happens; for a study of your own,
+`withTimeframe(descriptor)` adds the row and the fold together.
+
+The tail does not come along either. Since 2.5.8 a built-in holds `calcTail`
+as a property a spread does not copy, so `{ ...getIndicator('ema'), id: 'x' }`
+recomputes in full. Copy it by name only when your `calc` returns the
+built-in's result unchanged.
+
+*Validator: no check. A copied input renders, and nothing can tell whether
+`calc` honours it.*
+
+---
+
+## 25. The library takes fields `/trading` does not
+
+The library's own documentation describes more than the terminal renders, so a
+field copied from it can install and do nothing, or not install at all.
+
+| Since | Field | On `/trading` |
+| --- | --- | --- |
+| 2.5.4 | input types `symbol`, `session`, `multiline`, `price`, `timestamp` | the loader refuses the file |
+| 2.5.4 | `allowStudyOutputs` on a `source` input | the dialog offers price sources only |
+| 2.5.6 | `visibleWhen`, `activeWhen`, `inline` on an input | ignored: every input shows, on its own row |
+| 2.5.6 | `background` returning a list of `{ colors, overlay?, plot? }` | the chart draws it; this validator refuses it |
+
+A session stays a `text` input parsed with `parseSessionSpec`, a price an
+input of `type: 'number'`, and shading keeps to the plain one-colour-per-bar
+`background`, which lands in the study's own pane: to shade behind the
+candles, make the study `onchart`.
+
+*Validator: ERROR on the five input types and on the list form of
+`background`; `allowStudyOutputs` and the presentation fields are not
+checked.*

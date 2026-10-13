@@ -125,6 +125,13 @@ describe('named workspace menu', () => {
     await user.click(screen.getByRole('button', { name: 'Duplicate' }))
     await screen.findByRole('option', { name: 'Afternoon copy' })
     await user.click(screen.getByRole('button', { name: 'Delete', exact: true }))
+    expect(screen.getByRole('alertdialog', { name: 'Delete workspace' })).toHaveTextContent(
+      'Delete the saved workspace Afternoon copy?'
+    )
+    await user.click(screen.getByRole('button', { name: 'Keep workspace' }))
+    expect(host.saved()?.workspaces).toHaveLength(2)
+    await user.click(screen.getByRole('button', { name: 'Delete', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Delete workspace' }))
     await waitFor(() => expect(host.saved()?.workspaces).toHaveLength(1))
   })
 

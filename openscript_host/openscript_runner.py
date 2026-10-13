@@ -138,6 +138,7 @@ platform already keeps. Stopping is a signal: the loop leaves at the next check.
 import argparse
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -232,6 +233,18 @@ STATED_FACTS = (
     "hasVolume",
     "hasOpenInterest",
 )
+
+# The session facts this driver states on every bar, by the engine's own names
+# (see ``_execute``). The engine serves ``session.isLastBar`` as well from 0.6.0,
+# answered from a bar fact of its own that this driver does not state, so a
+# script reading it would be told nothing on every bar: a position it meant to
+# close before the session ends would never be closed. It is refused by name in
+# ``_check_readable`` instead, as is any session fact the engine adds later.
+STATED_SESSION_FACTS = ("session.isFirstBar",)
+
+# The ``stdlib.md`` 15.2 units a ``req.timeframe`` read folds by the calendar, in
+# the instrument's zone, rather than by counting. See ``_check_readable``.
+CALENDAR_UNITS = ("D", "W", "M")
 
 # The compiled program tag a program that places orders carries, and the word its
 # meta uses for a program that is one. Both are the compiled program format's own
@@ -382,13 +395,14 @@ class Engine:
     def join_calendar(self, serving) -> bool:
         """Put the calendar calls into this run's library. True once the seam serves them.
 
-        **The engine implements them and its seam leaves them out.** Every call
-        of ``stdlib.md`` 12.2 and 12.5 is in ``openscript.dates``, with the
-        manifest rows a program is checked against (``dates.table()``), and the
-        seam that joins the library to the machine, ``Serving``, is built from
-        the two halves of ``library/`` alone. So a program calling ``date.hour``
-        or ``session.isIn`` is refused at load, OS6004, in every zone including
-        the one the engine reads.
+        **Up to 0.5.0 the engine implemented them and its seam left them out.**
+        Every call of ``stdlib.md`` 12.2 and 12.5 is in ``openscript.dates``,
+        with the manifest rows a program is checked against (``dates.table()``),
+        and the seam that joins the library to the machine, ``Serving``, was
+        built from the two halves of ``library/`` alone. So a program calling
+        ``date.hour`` or ``session.isIn`` was refused at load, OS6004, in every
+        zone including the one the engine reads. From 0.6.0 ``Serving`` joins
+        those rows itself, and the loop below leaves every one of them as it is.
 
         **The seam is the host's to wire.** The engine's own guide says the join
         a host needs lives in the adapter package, beside the conformance
@@ -728,6 +742,60 @@ def interval_seconds(interval: str) -> int:
     return count * units[unit] if count > 0 else 0
 
 
+#: ``stdlib.md`` 15.2's spelling of a timeframe: a count and an optional unit, a
+#: bare count being minutes, with ``M`` a month and ``m`` a minute.
+_ENGINE_INTERVAL = re.compile(r"([0-9]+)(m|h|D|W|M)?")
+
+#: A platform interval code: an optional count and one letter.
+_INTERVAL_CODE = re.compile(r"([0-9]*)([a-zA-Z])")
+
+
+def engine_interval(code: str) -> str | None:
+    """The run's interval as the engine spells it, or nothing where it has no spelling.
+
+    **The two spell a day differently.** This platform writes a day, a week and a
+    month as a bare ``D``, ``W`` and ``M``, and the engine reads ``stdlib.md``
+    15.2's count and unit, ``1D``, ``1W`` and ``1M``, with no reading of a bare
+    letter. From 0.6.0 the engine reads the stated interval for more than
+    ``chart.interval``: every ``req.timeframe`` read is compared with it at load
+    (OS6002, OS6015), and ``chart.intervalMinutes`` and ``chart.isIntraday`` are
+    worked out from it. A daily run stating ``D`` gets neither: the comparison is
+    skipped, so a five minute read on a daily run folds without a word, and both
+    facts are absent.
+
+    **The chart's backtest states this same spelling** (``engineInterval`` in
+    ``frontend/src/lib/trading/backtestRun.ts``), so a script reads one interval
+    in the backtest and in the live run. That is also why a seconds interval
+    states nothing: the grammar has no unit finer than a minute, and a backtest
+    on a seconds chart states no interval either.
+
+    Only what the engine is told changes. The run still asks the platform for
+    its bars in the platform's own spelling.
+    """
+    text = (code or "").strip()
+    written = _ENGINE_INTERVAL.fullmatch(text)
+    if written is not None:
+        return text if int(written.group(1)) >= 1 else None
+    found = _INTERVAL_CODE.fullmatch(text)
+    if found is None:
+        return None
+    count = int(found.group(1)) if found.group(1) else 1
+    if count < 1:
+        return None
+    # Case matters for one letter only, in both spellings: ``M`` is a month and
+    # ``m`` a minute. A bare minute or hour letter names no count, so no length.
+    unit = found.group(2)
+    if unit == "M":
+        return f"{count}M"
+    if unit in ("m", "h", "H"):
+        return f"{count}{unit.lower()}" if found.group(1) else None
+    if unit in ("d", "D"):
+        return f"{count}D"
+    if unit in ("w", "W"):
+        return f"{count}W"
+    return None
+
+
 def expected_settle(lateness: list[float]) -> float:
     """How long after a close to look first, learned from how late bars have been.
 
@@ -979,6 +1047,10 @@ class Session:
             # A written time is a wall clock reading in the instrument's zone,
             # the one on the trader's chart, and never one read as UTC.
             read_time=engine.time_reader(self.instrument["timezone"]),
+            # The record every ``req.timeframe`` read is planned against at
+            # load: the interval it is compared with and the zone a day is dated
+            # in. Without it the engine compares nothing and dates nothing.
+            instrument=self.instrument,
         )
         if loaded.diagnostic is not None:
             raise Refusal(self._refusal_text(loaded.diagnostic))
@@ -1090,8 +1162,12 @@ class Session:
         record: dict = {
             "symbol": self.options.symbol,
             "exchange": self.options.exchange,
-            "interval": self.options.interval,
         }
+        # In the engine's spelling, and left out where it has none, as the
+        # chart's backtest states it. See ``engine_interval``.
+        interval = engine_interval(self.options.interval)
+        if interval is not None:
+            record["interval"] = interval
         self._facts = facts
         #: The regular window, for every day but a special one, as the engine's
         #: own window; and the special day this run started on, with its window
@@ -1346,11 +1422,20 @@ class Session:
         (``Engine.time_reader``), and refused only where this server cannot read
         a clock in that zone, for the reason ``_join_calendar`` gives.
 
+        **Then a day, a week or a month read by ``req.timeframe``.** The engine
+        folds one by the calendar in the instrument's zone, and its fold reads a
+        calendar in UTC alone: the reader this host supplies reaches the calendar
+        calls (``calendar_reader``) and not the fold. Such a read in any other
+        zone is absent on every bar with nothing said, so it is refused by name.
+        A read in minutes or hours is folded by counting and needs no zone.
+
         **Then the session.** ``session.isFirstBar`` is a fact this driver states
         on every bar, from the session the market calendar holds for the
         exchange (see ``_opening``). Where the calendar holds none, or none was
         handed to this run, every answer would be absence, for the same silent
-        reason, so that script is refused by name.
+        reason, so that script is refused by name. A session fact the engine
+        serves and this driver does not state (``STATED_SESSION_FACTS``) is
+        refused whatever the calendar holds.
         """
         called = {one["name"] for one in raw["lib"]["functions"]}
 
@@ -1369,6 +1454,36 @@ class Session:
                 f"{self.options.script} takes a written time, and this instrument's calendar is "
                 f"{zone}, which this server cannot read a clock in. It would read that time under "
                 "the wrong calendar, so it will not run it."
+            )
+
+        # The reads as the engine planned them at load, each with its timeframe
+        # resolved and the zone it is dated in. A run that makes none has none.
+        undated = sorted(
+            {
+                plan.query.timeframe
+                for plan in getattr(self.run, "plans", ())
+                if plan.timeframe.unit in CALENDAR_UNITS and plan.zone != self.engine.readable_zone
+            }
+        )
+        if undated:
+            raise Refusal(
+                f"{self.options.script} reads {', '.join(undated)} bars with req.timeframe, and "
+                f"the engine on this server can group bars into days, weeks or months only in "
+                f"UTC while this instrument's calendar is {zone}. Every one of those reads would "
+                "come back with no answer and the script would never act on one, so it will not "
+                "be started. Read a timeframe in minutes or hours instead, or remove the read and "
+                "save it again."
+            )
+
+        unstated = sorted(
+            called.intersection(self.engine.session_facts).difference(STATED_SESSION_FACTS)
+        )
+        if unstated:
+            raise Refusal(
+                f"{self.options.script} asks about its trading session with "
+                f"{', '.join(unstated)}, which this runner cannot answer yet. Every answer would "
+                "be empty and the script would never act on one, so a position it means to close "
+                "as the session ends would be left open. Remove it and save it again."
             )
 
         wanted = sorted(called.intersection(self.engine.session_facts))

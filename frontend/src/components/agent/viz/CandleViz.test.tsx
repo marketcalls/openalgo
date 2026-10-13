@@ -33,6 +33,8 @@ interface ChartStub {
   addSeries: (type: string, options?: Record<string, unknown>) => SeriesStub
   addPrimitive: (primitive: unknown, pane: number) => void
   addIndicator: (id: string) => void
+  /** The price series' bars as drawn: what it was last fed, as no transform runs here. */
+  primaryBars: () => unknown[]
   fitContent: () => void
   timeScale: { barSpacing: number; setBarSpacing: (value: number) => void }
   destroy: () => void
@@ -40,6 +42,9 @@ interface ChartStub {
 
 const harness = vi.hoisted(() => {
   const charts: ChartStub[] = []
+  // What a transform formed from the bars, when a test stands one in: the
+  // stub runs no transform of its own.
+  const formed: { elements: unknown[] | null } = { elements: null }
   const createChart = vi.fn((_host: HTMLElement, options: Record<string, unknown>) => {
     const chart: ChartStub = {
       options,
@@ -76,6 +81,8 @@ const harness = vi.hoisted(() => {
         if (id === 'not-an-indicator') throw new Error('unknown indicator')
         chart.indicators.push(id)
       },
+      primaryBars: () =>
+        formed.elements ?? (chart.series[0]?.setData.mock.calls.at(-1)?.[0] as unknown[]) ?? [],
       fitContent: () => {
         chart.fitted += 1
       },
@@ -95,7 +102,7 @@ const harness = vi.hoisted(() => {
       this.options = options
     }
   }
-  return { charts, createChart, LogoWatermark }
+  return { charts, createChart, LogoWatermark, formed }
 })
 
 vi.mock('openalgo-charts', () => ({
@@ -106,13 +113,8 @@ vi.mock('openalgo-charts', () => ({
   LogoWatermark: harness.LogoWatermark,
 }))
 
-vi.mock('openalgo-charts/transform', () => ({
-  runTransform: (_transform: unknown, bars: unknown) => bars,
-  HeikinAshiTransform: class {},
-  LineBreakTransform: class {},
-  RangeBarsTransform: class {},
-  RenkoTransform: class {},
-}))
+// Imported for its registration only: the chart applies a transform itself.
+vi.mock('openalgo-charts/transform', () => ({}))
 
 vi.mock('openalgo-charts/indicators', () => ({}))
 
@@ -138,6 +140,7 @@ const SPEC = {
 beforeEach(() => {
   harness.charts.length = 0
   harness.createChart.mockClear()
+  harness.formed.elements = null
 })
 
 describe('CandleViz', () => {
@@ -192,6 +195,31 @@ describe('CandleViz', () => {
     // No volume series: not one bar carried any.
     expect(harness.charts[0].series).toHaveLength(1)
     expect(screen.getByText('2 bars')).toBeInTheDocument()
+  })
+
+  it('draws the traded volume under each brick of a transformed chart', async () => {
+    // Renko bricks carry no volume of their own. The first brick is formed by
+    // the first two bars, the second by the third.
+    harness.formed.elements = [
+      { time: 1780531200, open: 1300, high: 1320, low: 1300, close: 1320 },
+      { time: 1780617600, open: 1320, high: 1340, low: 1320, close: 1340 },
+    ]
+    const renko = {
+      ...SPEC,
+      chart_type: 'renko',
+      indicators: [],
+      bars: [bar(1780444800, 1315, 1000), bar(1780531200, 1320, 2000), bar(1780617600, 1340, 4000)],
+    }
+    render(<CandleViz spec={renko} />)
+
+    await waitFor(() => expect(harness.charts).toHaveLength(1))
+    const [, volume] = harness.charts[0].series
+    expect(volume?.type).toBe('histogram')
+    const drawn = volume.setData.mock.calls[0][0] as { time: number; close: number }[]
+    expect(drawn.map((row) => [row.time, row.close])).toEqual([
+      [1780531200, 3000],
+      [1780617600, 4000],
+    ])
   })
 
   it('drops a bar with no usable time or close, and orders what is left', async () => {

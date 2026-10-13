@@ -66,6 +66,7 @@ inside a live trading account, and the model is untrusted input.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -214,7 +215,12 @@ def _pick(result: Mapping[str, Any], label: str) -> list[Any] | None:
     values = result.get("values") or {}
     if label in values:
         return values[label]
-    if label == result.get("indicator") and len(values) == 1:
+    # "RSI < 30" is the same condition as "rsi < 30"; output names are all lower case.
+    folded = label.lower()
+    for key, series in values.items():
+        if str(key).lower() == folded:
+            return series
+    if folded == str(result.get("indicator") or "").lower() and len(values) == 1:
         return next(iter(values.values()))
     return None
 
@@ -434,7 +440,7 @@ class IndicatorsToolkit(OpenAlgoToolkit):
         exchange: str,
         indicator: str,
         interval: str = DEFAULT_INTERVAL,
-        params: dict | None = None,
+        params: dict[str, str | int | float | bool | None] | str | None = None,
         last_n: int = 10,
         lookback_bars: int = 0,
         compare_symbol: str = "",
@@ -468,7 +474,9 @@ class IndicatorsToolkit(OpenAlgoToolkit):
                 matters: ``1m`` is one minute and ``M`` is one month.
             params: Indicator parameters, for example ``{"period": 21}`` or
                 ``{"period": 10, "multiplier": 3}``. Call
-                ``describe_indicator`` for the names and defaults. Leave it out
+                ``describe_indicator`` for the names and defaults. ``length``,
+                ``fast``, ``slow``, ``signal`` and ``std`` are read as the
+                indicator's own name where that is unambiguous. Leave it out
                 to use the library's own defaults.
             last_n: How many recent values to return per output, at most 120.
                 Defaults to 10. Ask for what the answer needs: every value costs
@@ -503,7 +511,7 @@ class IndicatorsToolkit(OpenAlgoToolkit):
             notices.append(interval_notice)
 
         tail = self._tail(last_n, 10)
-        arguments = params if isinstance(params, Mapping) else {}
+        arguments = self._params(params, "params")
         bars = self._lookback(lookback_bars) or required_bars(spec, arguments, tail)
 
         frame, fetched = self._frame(symbol, exchange, interval, source, bars)
@@ -560,7 +568,7 @@ class IndicatorsToolkit(OpenAlgoToolkit):
         self,
         symbol: str,
         exchange: str,
-        indicators: list,
+        indicators: list[str | dict] | dict | str,
         interval: str = DEFAULT_INTERVAL,
         last_n: int = 10,
         lookback_bars: int = 0,
@@ -658,12 +666,12 @@ class IndicatorsToolkit(OpenAlgoToolkit):
 
     def scan_symbols(
         self,
-        symbols: list,
+        symbols: list[str] | str,
         exchange: str,
         indicator: str,
         condition: str,
         interval: str = DEFAULT_INTERVAL,
-        params: dict | None = None,
+        params: dict[str, str | int | float | bool | None] | str | None = None,
         source: str = "api",
     ) -> str:
         """Screen several instruments for one indicator condition.
@@ -717,7 +725,7 @@ class IndicatorsToolkit(OpenAlgoToolkit):
         wanted = self._scan_symbols(symbols)
         source = normalise_source(source)
         interval, interval_notice = normalise_interval(interval, source, self._intervals.accepted())
-        arguments = params if isinstance(params, Mapping) else {}
+        arguments = self._params(params, "params")
         bars = required_bars(spec, arguments, 5)
 
         matched: list[dict[str, Any]] = []
@@ -1065,7 +1073,8 @@ class IndicatorsToolkit(OpenAlgoToolkit):
             RetryAgentRun: When the argument is empty, too long, or carries no
                 usable entry.
         """
-        if isinstance(indicators, (str, Mapping)):
+        indicators = self._decoded_list(indicators)
+        if isinstance(indicators, Mapping):
             indicators = [indicators]
         if not isinstance(indicators, (list, tuple)) or not indicators:
             self.invalid_argument(
@@ -1093,8 +1102,7 @@ class IndicatorsToolkit(OpenAlgoToolkit):
                 # used compute_indicator reaches for that word. Refusing it
                 # costs a whole round trip to learn one synonym.
                 name = str(lowered.get("name") or lowered.get("indicator") or "").strip().lower()
-                raw = lowered.get("params")
-                arguments = dict(raw) if isinstance(raw, Mapping) else {}
+                arguments = self._params(lowered.get("params"), f"indicators (entry {index + 1})")
             else:
                 self.invalid_argument(
                     "indicators",
@@ -1118,6 +1126,59 @@ class IndicatorsToolkit(OpenAlgoToolkit):
             requests.append((name, arguments))
         return requests
 
+    def _params(self, value: Any, field: str) -> dict[str, Any]:
+        """Normalise an indicator's parameters, including a JSON object sent as text.
+
+        Args:
+            value: Whatever the model passed for the parameters.
+            field: Argument name, used in the failure message.
+
+        Returns:
+            The parameters as a dict, empty when none were given.
+
+        Raises:
+            RetryAgentRun: For a string that is not a JSON object.
+        """
+        if isinstance(value, Mapping):
+            return dict(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                decoded = None
+            if not isinstance(decoded, Mapping):
+                self.invalid_argument(
+                    field,
+                    f"{value.strip()[:60]!r} is not a set of named parameters",
+                    'Pass an object, for example {"period": 21}.',
+                )
+            return dict(decoded)
+        return {}
+
+    @staticmethod
+    def _decoded_list(value: Any) -> Any:
+        """Turn a list a model sent as text into a list.
+
+        A JSON array or object is decoded, and plain text is split on commas so
+        ``"SBIN, INFY"`` is two entries. Anything that is not a string is
+        returned unchanged for the caller's own checks.
+
+        Args:
+            value: The raw argument.
+
+        Returns:
+            A list, a mapping, or ``value`` unchanged.
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith(("[", "{")):
+            try:
+                return json.loads(text)
+            except ValueError:
+                pass
+        return [part.strip() for part in text.split(",") if part.strip()]
+
     def _scan_symbols(self, symbols: Any) -> list[str]:
         """Normalise the ``symbols`` argument of :meth:`scan_symbols`.
 
@@ -1131,8 +1192,7 @@ class IndicatorsToolkit(OpenAlgoToolkit):
             RetryAgentRun: When the argument is empty, not a list, or longer
                 than the cap.
         """
-        if isinstance(symbols, str):
-            symbols = [symbols]
+        symbols = self._decoded_list(symbols)
         if not isinstance(symbols, (list, tuple)) or not symbols:
             self.invalid_argument(
                 "symbols",

@@ -261,6 +261,8 @@ export interface AgentSettings {
   allow_bulk_destructive: boolean
   kill_switch: boolean
   kill_switch_file: string
+  /** External data (MCP) switch. On by default: the servers are read-only. */
+  mcp_enabled: boolean
 }
 
 /**
@@ -691,6 +693,12 @@ export interface ConfirmRequirement {
   tool_name: string
   /** Model supplied and already redacted by the server. */
   args: Record<string, unknown>
+  /**
+   * Required arguments the call does not carry, named by the server from the
+   * tool's own signature. Absent on a requirement stored before it existed.
+   * A tool that takes no arguments has none missing, so it stays approvable.
+   */
+  missing?: string[]
   kind: RequirementKind
 }
 
@@ -904,6 +912,59 @@ export async function updateSettings(values: AgentSettingsUpdate): Promise<Agent
     values
   )
   return response.data.data
+}
+
+// -----------------------------------------------------------------------------
+// External data (MCP)
+//
+// The switch itself is `mcp_enabled` on AgentSettings and is written through
+// updateSettings. These two calls add the registered servers and a real
+// connection test, which the settings payload cannot carry.
+// -----------------------------------------------------------------------------
+
+/** One registered external data server, read from the server registry. */
+export interface McpServer {
+  key: string
+  title: string
+  description: string
+  url: string
+}
+
+export interface McpServersResponse {
+  enabled: boolean
+  servers: McpServer[]
+}
+
+/** The outcome of one connection test. A failure is `ok: false`, not an HTTP error. */
+export interface McpServerCheck {
+  key: string
+  title: string
+  ok: boolean
+  latency_ms: number
+  tool_count: number
+  /** A sentence written for the operator. */
+  message: string
+  server_name: string
+}
+
+export async function getMcpServers(): Promise<McpServersResponse> {
+  const response = await webClient.get<McpServersResponse>(`${AGENT_API_BASE}/mcp`)
+  return response.data
+}
+
+/**
+ * Test the connection to every registered server, or to one.
+ *
+ * Each test starts a fresh session and lists the server's tools. A server that
+ * is down answers `ok: false` with the reason, so the operator can tell an
+ * outage on the provider's side from a problem on this instance.
+ */
+export async function testMcpServers(server?: string): Promise<McpServerCheck[]> {
+  const response = await webClient.post<{ results: McpServerCheck[] }>(
+    `${AGENT_API_BASE}/mcp/test`,
+    server ? { server } : {}
+  )
+  return response.data.results
 }
 
 /**
@@ -1324,6 +1385,9 @@ export const agentQueryKeys = {
   // answers with the same refreshed object, so one cache entry stays correct
   // and a second key would only be a second thing to invalidate.
   websearch: () => [...agentQueryKeys.all, 'websearch'] as const,
+  // The registered external data servers. Static per release; the switch
+  // itself lives on the settings key above.
+  mcp: () => [...agentQueryKeys.all, 'mcp'] as const,
   // One key for the whole voice configuration, for the same reason: every
   // mutation (a tunable, the stored key, its removal) answers with the same
   // refreshed object, so one cache entry stays correct.

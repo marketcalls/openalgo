@@ -25,6 +25,7 @@ def test_slow_update_worker_bounds_retained_events_and_applies_every_update(monk
     started = threading.Event()
     caller = threading.get_ident()
     applied = []
+    held_too_long = []
     refs = []
     pool = ThreadPoolExecutor(max_workers=1)
     monkeypatch.setattr(order_events, "_POOL", pool)
@@ -34,7 +35,12 @@ def test_slow_update_worker_bounds_retained_events_and_applies_every_update(monk
     def apply(order_id, event):
         if threading.get_ident() != caller:
             started.set()
-            assert release.wait(10)
+            # Generous, and never a bare assert: an assertion raised here lands
+            # in the pool's Future, where nobody reads it, and the update then
+            # simply goes missing. On a busy CI runner that read as "511 of 512
+            # applied", a lost update the code under test never made.
+            if not release.wait(60):
+                held_too_long.append(order_id)
         applied.append(order_id)
 
     monkeypatch.setattr(order_events, "_apply_update", apply)
@@ -53,6 +59,7 @@ def test_slow_update_worker_bounds_retained_events_and_applies_every_update(monk
         release.set()
         pool.shutdown(wait=True)
     gc.collect()
+    assert not held_too_long, f"the test held updates {held_too_long} for over a minute"
     assert len(applied) == 512 and len(set(applied)) == 512
     assert not any(ref() is not None for ref in refs)
 

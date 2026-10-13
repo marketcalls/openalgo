@@ -635,7 +635,12 @@ class BrokerSymbolCache:
         if exchange_rows is not None:
             symbols_to_search = exchange_rows
         else:
-            symbols_to_search = snap.symbols.values()
+            # Not snap.symbols: that dict is keyed by token alone, and brokers
+            # reuse a token across exchanges (Shoonya NSE INFY and a CDS
+            # EURINR option are both 1594), so the row loaded later hides the
+            # other from every unfiltered search. by_token_exchange holds
+            # every row.
+            symbols_to_search = snap.by_token_exchange.values()
 
         # (score, length, symbol, tie-break sequence, row) — 0 = exact symbol
         # match, 1 = symbol starts with the query, 2 = query is a substring of
@@ -744,8 +749,10 @@ class BrokerSymbolCache:
         if exchange_rows is not None:
             symbols_to_search = exchange_rows
         else:
-            # Fallback to all symbols if no exchange filter
-            symbols_to_search = snap.symbols.values()
+            # Fallback to all symbols if no exchange filter. by_token_exchange,
+            # not the token-keyed snap.symbols, which drops rows whose token
+            # another exchange reuses (see search_symbols).
+            symbols_to_search = snap.by_token_exchange.values()
 
         for symbol_data in symbols_to_search:
             # Underlying filter (use extracted underlying from OpenAlgo symbol format)

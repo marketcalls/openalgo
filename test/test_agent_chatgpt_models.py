@@ -51,14 +51,14 @@ class TestTheModelsAreAdded:
 
 
 class TestTheBareNameCollision:
-    """PINNED DEFECT. Eight plan models share a name with an OpenAI model."""
+    """PINNED DEFECT. Most plan models share a name with an OpenAI model."""
 
     def test_an_openai_entry_for_the_same_name_does_not_block_registration(self):
         # Exactly the real registry: the bare name is present, priced, and
         # belongs to a different provider.
         fake = _litellm(
             cost={
-                "gpt-5.6-sol": {
+                "gpt-6-astra": {
                     "litellm_provider": "openai",
                     "input_cost_per_token": 2.5e-06,
                 }
@@ -67,27 +67,27 @@ class TestTheBareNameCollision:
 
         added = chatgpt_models.register(fake)
 
-        assert "chatgpt/gpt-5.6-sol" in added
-        assert fake.model_cost["chatgpt/gpt-5.6-sol"]["litellm_provider"] == "chatgpt"
+        assert "chatgpt/gpt-6-astra" in added
+        assert fake.model_cost["chatgpt/gpt-6-astra"]["litellm_provider"] == "chatgpt"
 
     def test_the_openai_entry_is_left_exactly_as_it_was(self):
         openai_entry = {"litellm_provider": "openai", "input_cost_per_token": 2.5e-06}
-        fake = _litellm(cost={"gpt-5.6-sol": dict(openai_entry)})
+        fake = _litellm(cost={"gpt-6-astra": dict(openai_entry)})
 
         chatgpt_models.register(fake)
 
-        assert fake.model_cost["gpt-5.6-sol"] == openai_entry
+        assert fake.model_cost["gpt-6-astra"] == openai_entry
 
 
 class TestLitellmsOwnEntryWins:
     def test_a_real_chatgpt_entry_is_never_overwritten(self):
         shipped = {"litellm_provider": "chatgpt", "mode": "responses", "shipped": True}
-        fake = _litellm(cost={"chatgpt/gpt-5.5": dict(shipped)})
+        fake = _litellm(cost={"chatgpt/gpt-6-astra": dict(shipped)})
 
         added = chatgpt_models.register(fake)
 
-        assert "chatgpt/gpt-5.5" not in added
-        assert fake.model_cost["chatgpt/gpt-5.5"] == shipped
+        assert "chatgpt/gpt-6-astra" not in added
+        assert fake.model_cost["chatgpt/gpt-6-astra"] == shipped
 
 
 class TestTheEntriesThemselves:

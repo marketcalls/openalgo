@@ -138,11 +138,15 @@ class WhatsAppNotify(Resource):
         # alerts never went out. The /whatsapp admin UI is the only place
         # pairing happens.
         if not whatsapp_bot_service.is_ready():
+            # Only the message names the cause when the service knows it
+            # (WhatsApp logged the device out). The status and the 409 are
+            # what callers have always been given.
             return make_response(
                 jsonify(
                     {
                         "status": "error",
-                        "message": (
+                        "message": whatsapp_bot_service.unavailable_reason()
+                        or (
                             "WhatsApp is not paired or not connected. Pair the device "
                             "first from the /whatsapp page in OpenAlgo before sending."
                         ),

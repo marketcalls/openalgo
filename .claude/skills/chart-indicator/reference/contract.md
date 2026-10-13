@@ -230,11 +230,13 @@ which is exactly what a warmup gap should do.
 Every input needs `key`, `type`, `label`, `default`. Valid sources: `open`,
 `high`, `low`, `close`, `hl2`, `hlc3`, `ohlc4`, `volume`.
 
-**Those eight are the whole union** (six before 2.4.0). There is no `session`,
-`symbol`, `price` or `enum` input type. A renderer switches on `input.type`
-with no default case, so an unrecognised type is dropped in silence: the
-default still applies and the study computes correctly, while the control never
-appears and the user cannot change it. A session is a `text` input you parse
+**Those eight are all `/trading` takes** (six before 2.4.0). The library
+added `symbol`, `session`, `multiline`, `price` and `timestamp` in 2.5.4, but
+the terminal's loader refuses a descriptor that declares one, and so does the
+validator (pitfall 25). There is no `enum` type. A renderer switches on
+`input.type` with no default case, so an unrecognised type is dropped in
+silence: the default still applies and the study computes correctly, while the
+control never appears and the user cannot change it. A session is a `text` input you parse
 yourself; a fixed set of choices is a `select`. `/trading`'s own dialog
 whitelists input types, so `interval` and `time` reach it only once it lists
 them; on an older host they are dropped the same silent way.
@@ -254,7 +256,9 @@ mark with nothing behind it.
 A cleared text or number field arrives as `''`, not as the default. Always
 coerce: `Math.max(2, Math.floor(Number(settings.length) || 20))`.
 
-`group` buckets inputs in the dialog.
+`group` buckets inputs in the dialog. `visibleWhen`, `activeWhen` and
+`inline` (2.5.6) are presentation hints the library's own form honours;
+`/trading`'s dialog ignores them, so every input shows on its own row.
 
 ## Plots
 
@@ -361,9 +365,8 @@ table:  (ctx) => ({
 })   // or null
 ```
 
-A level's `lineStyle` is `'solid' | 'dashed' | 'dotted'` (a Pine `hline` with
-`line.style_dotted` maps directly); `dashed: true` is the older two-state form
-and `lineStyle` wins when both are given.
+A level's `lineStyle` is `'solid' | 'dashed' | 'dotted'`; `dashed: true` is
+the older two-state form and `lineStyle` wins when both are given.
 
 `range` applies only when the indicator created its own pane; two indicators
 sharing a pane would otherwise fight over it. It is a fixed range, so navigation
@@ -376,9 +379,10 @@ seasonality matrix. Its `options` are the whole `ChartTableOptions` geometry:
 `heightPercent` to stretch to a share of the plot, `rowWeights`, `fontSize`
 (a number, or `'auto'` from 2.4.0 to fit each cell), `borderColor`,
 `borderWidth` and `background`. Each cell is a `TableCell` with `text`,
-`bgColor`, `textColor`, `align`, `fontSize` and `bold`. So a source's dashboard
-position, size, text size and per-cell colours all port; what does not exist is
-a cell tooltip.
+`bgColor`, `textColor`, `align`, `fontSize` and `bold`, and from 2.5.4 also
+`tooltip`, `italic`, `fontFamily`, `verticalAlign`, `colSpan` and `rowSpan`.
+So a source's dashboard position, size, text size, per-cell colours, merged
+cells and cell tooltips all port.
 
 ## calcTail
 
@@ -400,8 +404,11 @@ removed the tick-rate problem, so `calcTail` now only matters when a single pass
 over the loaded history is itself too slow, which means deep history rather than
 a fast feed.
 
-No built-in implements `calcTail` today. Reach for it when your `calc` is heavy
-and the chart carries tens of thousands of bars, not by default.
+Twenty-three built-ins carry one (sixteen from 2.5.8, and the seven 2.6.0
+added), held as a property a spread does not copy (pitfall 24). For your own
+study, reach for it when your `calc` is heavy and the chart carries tens of
+thousands of bars, not by default. Return every column `calc` returns: from
+2.6.0 a tail that leaves one out is dropped for a full `calc`.
 
 **If you also implement `markers`, skip `calcTail`**: markers re-run in full
 after every recompute, so it saves nothing.

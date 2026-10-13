@@ -46,7 +46,7 @@ import {
   readScript,
   type StoredScript,
 } from '@/lib/trading/openscriptFiles'
-import { BacktestChart } from './BacktestChart'
+import { BacktestResultTabs } from './BacktestResultTabs'
 import { StrategyInputs } from './StrategyInputs'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
@@ -76,7 +76,10 @@ interface Props {
    * loading its history reaches, so the panel can say the chart was not marked
    * rather than leaving a reader to wonder where the arrows are.
    */
-  onMarkChart?(markers: readonly unknown[]): boolean
+  onMarkChart?(
+    markers: readonly unknown[],
+    owner?: { file: string; onCleared: () => void }
+  ): boolean
   /**
    * A strategy another panel wants run, or null.
    *
@@ -120,6 +123,9 @@ function isoDaysAgo(days: number): string {
 function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+/** Whether runs mark their trades on the chart, per browser. */
+const MARKS_KEY = 'trading.panel.backtest.marks'
 
 function money(value: unknown, digits = 2): string {
   const n = Number(value)
@@ -210,6 +216,44 @@ export function BacktestPanel({
   onRan,
 }: Props) {
   const [marked, setMarked] = useState<number | null>(null)
+  // Whether a run marks its trades on the chart. Remembered in this browser:
+  // a trader reading the report alone turns it off once, not once per run.
+  const [showMarks, setShowMarks] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(MARKS_KEY) !== 'off'
+    } catch {
+      return true
+    }
+  })
+  // Closing the panel takes its marks off the chart: they are this panel's
+  // report, and with the panel gone nothing on screen would explain them.
+  const markChart = useRef(onMarkChart)
+  markChart.current = onMarkChart
+  useEffect(() => () => void markChart.current?.([]), [])
+
+  const clearMarks = () => {
+    onMarkChart?.([])
+    setMarked(0)
+  }
+
+  /** Off clears the marks now; on puts this run's marks back without running again. */
+  const toggleMarks = (on: boolean) => {
+    setShowMarks(on)
+    try {
+      window.localStorage.setItem(MARKS_KEY, on ? 'on' : 'off')
+    } catch {
+      // Not remembered; the choice still applies now.
+    }
+    if (!onMarkChart) return
+    if (!on) {
+      clearMarks()
+      return
+    }
+    if (outcome?.ok && file) {
+      const marks = chartMarkersFrom(outcome.markers ?? [])
+      setMarked(onMarkChart(marks, { file, onCleared: () => setMarked(0) }) ? marks.length : null)
+    }
+  }
   /** What the trader typed into an input box, by key. Only what they changed. */
   const [edited, setEdited] = useState<Record<string, string>>({})
   /**
@@ -461,8 +505,16 @@ export function BacktestPanel({
       // are replaced rather than added to, and a run that produced none clears
       // them, so what is on the chart is always this run and only this run.
       if (onMarkChart) {
-        const marks = result.ok ? chartMarkersFrom(result.markers ?? []) : []
-        setMarked(onMarkChart(marks) ? marks.length : null)
+        if (showMarks) {
+          const marks = result.ok ? chartMarkersFrom(result.markers ?? []) : []
+          // Tied to the strategy, so removing it from the chart takes these
+          // marks down with it, and the count beside the button stops.
+          const owner = { file: which, onCleared: () => setMarked(0) }
+          setMarked(onMarkChart(marks, owner) ? marks.length : null)
+        } else {
+          onMarkChart([])
+          setMarked(0)
+        }
       }
     } catch {
       if (!controller.signal.aborted) {
@@ -472,7 +524,7 @@ export function BacktestPanel({
       if (!controller.signal.aborted) setRunning(false)
     }
     },
-    [apiKey, declarations, edited, from, getChartContext, onMarkChart, to]
+    [apiKey, declarations, edited, from, getChartContext, onMarkChart, showMarks, to]
   )
 
   const run = useCallback(() => runNamed(file), [file, runNamed])
@@ -595,6 +647,88 @@ export function BacktestPanel({
         >
           {running ? 'Running' : 'Run backtest'}
         </button>
+
+        {onMarkChart && (
+          <div className="flex items-center gap-2 text-[11px]">
+            <label className="flex cursor-pointer items-center gap-1.5 text-muted-foreground">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-primary"
+                checked={showMarks}
+                onChange={(event) => toggleMarks(event.target.checked)}
+              />
+              Show trades on chart
+            </label>
+            {marked !== null && marked > 0 && (
+              <button
+                type="button"
+                className="ml-auto rounded border border-border px-2 py-0.5 hover:bg-accent"
+                onClick={clearMarks}
+              >
+                Clear marks ({marked})
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* The results first: what a run found is what a trader opened the
+            panel to see, so it sits under the button, above the settings. */}
+        {summary && (
+          <>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Figure
+                label="Net profit"
+                value={money(summary.netProfit)}
+                tone={Number(summary.netProfit) >= 0 ? 'good' : 'bad'}
+              />
+              <Figure label="Return" value={percent(summary.returnPercent)} />
+              <Figure label="Trades" value={String(summary.tradeCount ?? '-')} />
+              <Figure label="Win rate" value={orDash(summary.winRate, percent)} />
+              <Figure label="Profit factor" value={orDash(summary.profitFactor, (v) => money(v))} />
+              <Figure label="Expectancy" value={money(summary.expectancy)} />
+              <Figure label="Max drawdown" value={money(summary.maxDrawdown)} tone="bad" />
+              {/* Shown only when the engine reports it. The run-up is a newer
+                  figure than the pinned engine computes, so on that engine this
+                  tile was a dash on every run: an empty box beside real numbers
+                  reads as data that failed to arrive rather than as a figure
+                  this version does not have. Rendering it conditionally means it
+                  appears on its own the day the engine supplies it. */}
+              {summary.maxRunUp !== undefined && summary.maxRunUp !== null && (
+                <Figure label="Max run-up" value={money(summary.maxRunUp)} tone="good" />
+              )}
+            </div>
+
+            {outcome && <BacktestResultTabs outcome={outcome} money={money} />}
+
+            <p className="text-[10px] text-muted-foreground">
+              {marked !== null && marked > 0
+                ? `${marked} fills marked on the chart. `
+                : marked === null && onMarkChart
+                  ? 'The chart has no price series to mark yet. '
+                  : ''}
+              {outcome?.barCount?.toLocaleString()} bars, {Math.round(outcome?.ranMs ?? 0)}ms
+              {outcome?.contract?.usedFallback
+                ? '. This instrument has no stored tick or lot size, so the run used a tick of ' +
+                  `${outcome.contract.tickSize} and a lot of ${outcome.contract.lotSize}. Every figure in money rests on those.`
+                : `. Tick ${outcome?.contract?.tickSize}, lot ${outcome?.contract?.lotSize}.`}
+              {/* Said because the absence is otherwise invisible: a session
+                  strategy with no hours to read never trades, and its report
+                  looks like a strategy that found nothing to do. */}
+              {outcome?.instrument && !outcome.instrument.session
+                ? ' No trading hours were available for this instrument, so everything the script reads from its session was empty in this run.'
+                : ''}
+            </p>
+
+            {Number(summary.openTradeCount) > 0 && (
+              <p className="text-[10px] text-muted-foreground">
+                {String(summary.openTradeCount)} trade(s) were still open at the last bar. Their
+                charges are counted and their profit is not, because it has not been realised.
+              </p>
+            )}
+
+          </>
+        )}
+
 
         {file !== '' && (declarations.length > 0 || declared) && (
           <div className="rounded border border-border">
@@ -769,100 +903,6 @@ export function BacktestPanel({
               your broker because of it. Add it under Strategies to trade it.
             </p>
           </div>
-        )}
-
-        {summary && (
-          <>
-            <div className="grid grid-cols-2 gap-1.5">
-              <Figure
-                label="Net profit"
-                value={money(summary.netProfit)}
-                tone={Number(summary.netProfit) >= 0 ? 'good' : 'bad'}
-              />
-              <Figure label="Return" value={percent(summary.returnPercent)} />
-              <Figure label="Trades" value={String(summary.tradeCount ?? '-')} />
-              <Figure label="Win rate" value={orDash(summary.winRate, percent)} />
-              <Figure label="Profit factor" value={orDash(summary.profitFactor, (v) => money(v))} />
-              <Figure label="Expectancy" value={money(summary.expectancy)} />
-              <Figure label="Max drawdown" value={money(summary.maxDrawdown)} tone="bad" />
-              {/* Shown only when the engine reports it. The run-up is a newer
-                  figure than the pinned engine computes, so on that engine this
-                  tile was a dash on every run: an empty box beside real numbers
-                  reads as data that failed to arrive rather than as a figure
-                  this version does not have. Rendering it conditionally means it
-                  appears on its own the day the engine supplies it. */}
-              {summary.maxRunUp !== undefined && summary.maxRunUp !== null && (
-                <Figure label="Max run-up" value={money(summary.maxRunUp)} tone="good" />
-              )}
-            </div>
-
-            <BacktestChart points={outcome?.equity ?? []} />
-
-            <p className="text-[10px] text-muted-foreground">
-              {marked !== null && marked > 0
-                ? `${marked} fills marked on the chart. `
-                : marked === null && onMarkChart
-                  ? 'The chart has no price series to mark yet. '
-                  : ''}
-              {outcome?.barCount?.toLocaleString()} bars, {Math.round(outcome?.ranMs ?? 0)}ms
-              {outcome?.contract?.usedFallback
-                ? '. This instrument has no stored tick or lot size, so the run used a tick of ' +
-                  `${outcome.contract.tickSize} and a lot of ${outcome.contract.lotSize}. Every figure in money rests on those.`
-                : `. Tick ${outcome?.contract?.tickSize}, lot ${outcome?.contract?.lotSize}.`}
-              {/* Said because the absence is otherwise invisible: a session
-                  strategy with no hours to read never trades, and its report
-                  looks like a strategy that found nothing to do. */}
-              {outcome?.instrument && !outcome.instrument.session
-                ? ' No trading hours were available for this instrument, so everything the script reads from its session was empty in this run.'
-                : ''}
-            </p>
-
-            {Number(summary.openTradeCount) > 0 && (
-              <p className="text-[10px] text-muted-foreground">
-                {String(summary.openTradeCount)} trade(s) were still open at the last bar. Their
-                charges are counted and their profit is not, because it has not been realised.
-              </p>
-            )}
-
-            {outcome?.trades && outcome.trades.length > 0 && (
-              <div className="flex flex-col gap-1">
-                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Trades
-                </span>
-                <div className="max-h-56 overflow-y-auto rounded border border-border">
-                  <table className="w-full text-[10px]">
-                    <thead className="sticky top-0 bg-muted/60 text-muted-foreground">
-                      <tr>
-                        <th className="px-1.5 py-1 text-left font-normal">Side</th>
-                        <th className="px-1.5 py-1 text-right font-normal">Entry</th>
-                        <th className="px-1.5 py-1 text-right font-normal">Exit</th>
-                        <th className="px-1.5 py-1 text-right font-normal">Net</th>
-                      </tr>
-                    </thead>
-                    <tbody className="font-mono tabular-nums">
-                      {outcome.trades.map((t) => (
-                        <tr key={String(t.index)} className="border-t border-border">
-                          <td className="px-1.5 py-1">{String(t.side)}</td>
-                          <td className="px-1.5 py-1 text-right">{money(t.entryPrice)}</td>
-                          <td className="px-1.5 py-1 text-right">
-                            {t.isOpen ? 'open' : money(t.exitPrice)}
-                          </td>
-                          <td
-                            className={cn(
-                              'px-1.5 py-1 text-right',
-                              Number(t.netProfit) >= 0 ? 'text-emerald-500' : 'text-destructive'
-                            )}
-                          >
-                            {money(t.netProfit)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </>
         )}
 
         <p className="mt-auto text-[10px] leading-relaxed text-muted-foreground">

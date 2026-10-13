@@ -65,6 +65,8 @@ export class WorkspaceReplayCoordinator {
   private revision = 0
   private closing = false
   private destroyed = false
+  /** Told when the hovered start bar moves, apart from the snapshot. */
+  private readonly pickListeners = new Set<() => void>()
   private readonly callbacks: {
     onChange: (snapshot: WorkspaceReplaySnapshot) => void
     onError: (error: unknown) => void
@@ -169,6 +171,7 @@ export class WorkspaceReplayCoordinator {
             if (!Number.isFinite(time)) throw new Error('Choose a candle with a valid replay time')
             session.previewTime = time
             this.preview(session)
+            this.notifyPick()
           } catch (error) {
             this.finish(session, error)
           }
@@ -185,6 +188,7 @@ export class WorkspaceReplayCoordinator {
       if (!Number.isFinite(time)) throw new Error('Choose a candle with a valid replay time')
       this.preview(session, true)
       if (this.session !== session) return
+      this.notifyPick()
       this.phase = 'loading'
       this.publish()
       if (this.session !== session) return
@@ -406,6 +410,7 @@ export class WorkspaceReplayCoordinator {
     this.groupState = null
     this.phase = 'idle'
     this.closing = false
+    attempt(() => this.notifyPick())
     attempt(() => this.publish())
     if (failure !== undefined) this.callbacks.onError(failure)
   }
@@ -414,6 +419,7 @@ export class WorkspaceReplayCoordinator {
     if (this.destroyed) return
     this.destroyed = true
     this.stop()
+    this.pickListeners.clear()
     let failure: unknown
     for (const member of this.members) {
       try {
@@ -424,6 +430,24 @@ export class WorkspaceReplayCoordinator {
     }
     this.members = []
     if (failure !== undefined) this.callbacks.onError(failure)
+  }
+
+  /**
+   * Listen for the start bar moving under the pointer while one is chosen.
+   *
+   * Kept out of the snapshot on purpose: the snapshot reaches every pane, and
+   * a crosshair sweep would re-render all of them for a label that only the
+   * replay bar shows.
+   */
+  subscribePick(listener: () => void): () => void {
+    this.pickListeners.add(listener)
+    return () => {
+      this.pickListeners.delete(listener)
+    }
+  }
+
+  private notifyPick(): void {
+    for (const listener of [...this.pickListeners]) listener()
   }
 
   private publish(): void {

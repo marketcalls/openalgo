@@ -17,14 +17,44 @@
  * One place where a study has to be told apart from a JavaScript indicator: an
  * OpenScript interval input takes only the language's timeframes, so its
  * choices are rebuilt from the terminal's (see `openscriptIntervals.ts`).
+ *
+ * On a transformed chart (Heikin Ashi, Renko, range bars, line break) the
+ * Inputs tab leads with Compute on: the elements drawn, or the raw bars under
+ * them. It is not one of the study's own inputs, so it is held apart from them
+ * and handed back beside the patch.
  */
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { numberProblem, pickedPrice } from '@/lib/trading/inputValidation'
 import { isScriptInstance } from '@/lib/trading/openscriptFiles'
 import { scriptIntervalChoices } from '@/lib/trading/openscriptIntervals'
-import type { IndicatorField, IndicatorSettingsRequest } from '@/lib/trading/terminal'
+import type { IndicatorField, IndicatorSettingsRequest, InputPick } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { PlotStyleRow } from './PlotStyleRow'
 import { TickBox } from './TickBox'
+
+type BarSource = NonNullable<IndicatorSettingsRequest['barSource']>
+
+/** The Compute on row, drawn by the same control as the study's own selects. */
+const BAR_SOURCE_FIELD: IndicatorField = {
+  key: 'barSource',
+  type: 'select',
+  label: 'Compute on',
+  options: [
+    { label: 'Chart bars', value: 'chart' },
+    { label: 'Underlying bars', value: 'underlying' },
+  ],
+  tooltip:
+    'Chart bars are the bricks or candles drawn. Underlying bars are the time bars they are built from, read at the bar each one completed on.',
+}
 
 interface Props {
   req: IndicatorSettingsRequest | null
@@ -36,9 +66,37 @@ interface Props {
    * is left out rather than guessed.
    */
   chartInterval?: string
-  onApply(instanceId: string, patch: Record<string, unknown>): void
+  /** `barSource` is passed only when the form offered the choice. */
+  onApply(instanceId: string, patch: Record<string, unknown>, barSource?: BarSource): void
   onDefaults(instanceId: string): Promise<Record<string, unknown> | null>
   onClose(): void
+  /**
+   * Take the next click on the chart as this input's value. Returns the
+   * cancel; `onValue` gets null when the pick ends without one. Absent, the
+   * form offers no Pick buttons.
+   */
+  onPick?(field: IndicatorField, onValue: (value: InputPick | null) => void): () => void
+}
+
+/** Input types a click on the chart can fill: a price, a bar time, or a wall clock. */
+const PICKABLE = new Set(['price', 'timestamp', 'time'])
+
+/** The form's values after a pick, the paired time included when the input has one. */
+function withPick(
+  values: Record<string, unknown>,
+  field: IndicatorField,
+  pick: InputPick,
+  inputs: readonly IndicatorField[]
+): Record<string, unknown> {
+  const out = { ...values }
+  if (field.type === 'price') {
+    if (pick.price !== undefined) out[field.key] = pickedPrice(pick.price)
+    const pair = field.timeKey ? inputs.find((f) => f.key === field.timeKey) : undefined
+    if (pair) out[pair.key] = pair.type === 'time' ? pick.clock : pick.time
+  } else if (field.type === 'time') {
+    if (pick.clock !== undefined) out[field.key] = pick.clock
+  } else if (pick.time !== undefined) out[field.key] = pick.time
+  return out
 }
 
 /** A field as the dialog draws it: the terminal's shape, help text included. */
@@ -73,8 +131,18 @@ export function IndicatorSettingsDialog({
   onApply,
   onDefaults,
   onClose,
+  onPick,
 }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>({})
+  /** The input waiting for a click on the chart, and how to stop waiting. */
+  const [picking, setPicking] = useState<{ label: string; kind: string; cancel(): void } | null>(
+    null
+  )
+  const pickingRef = useRef(picking)
+  pickingRef.current = picking
+  // A form closed mid-pick takes the pick with it.
+  useEffect(() => () => pickingRef.current?.cancel(), [])
+  const [barSource, setBarSource] = useState<BarSource | undefined>(undefined)
   const [tab, setTab] = useState<'inputs' | 'style'>('inputs')
   const script = req !== null && isScriptInstance(req.instanceId)
 
@@ -102,13 +170,20 @@ export function IndicatorSettingsDialog({
 
   useEffect(() => {
     setValues(req ? normalise({ ...req.values }) : {})
-    setTab(req && req.inputs.length === 0 ? 'style' : 'inputs')
+    setBarSource(req?.barSource)
+    setTab(req && req.inputs.length === 0 && req.barSource === undefined ? 'style' : 'inputs')
   }, [req, normalise])
 
-  useEffect(() => {
+  // Attached before the form is painted. The form mounts on its first opening,
+  // and a passive effect can run after the first paint, so an Escape pressed
+  // the moment the form appeared went unheard.
+  useLayoutEffect(() => {
     if (!req) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      // Escape while picking puts the form back rather than closing it.
+      if (pickingRef.current) pickingRef.current.cancel()
+      else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -128,27 +203,77 @@ export function IndicatorSettingsDialog({
   if (!req) return null
 
   const set = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v }))
+  const startPick = (field: IndicatorField) => {
+    if (!onPick || pickingRef.current) return
+    let finished = false
+    const cancel = onPick(field, (pick) => {
+      finished = true
+      setPicking(null)
+      if (pick) setValues((prev) => withPick(prev, field, pick, req.inputs))
+    })
+    if (!finished)
+      setPicking({ label: field.label, kind: field.type === 'price' ? 'price' : 'time', cancel })
+  }
   const apply = () => {
-    onApply(req.instanceId, values)
+    // A number the engine would refuse keeps the form open on the tab that
+    // holds it, where its message already says what is wrong.
+    const refused = [
+      ...req.inputs.map((field) => ['inputs', field] as const),
+      ...req.styleInputs.map((field) => ['style', field] as const),
+    ].find(([, field]) => field.key in values && numberProblem(field, values[field.key]))
+    if (refused) {
+      setTab(refused[0])
+      return
+    }
+    if (barSource === undefined) onApply(req.instanceId, values)
+    else onApply(req.instanceId, values, barSource)
     onClose()
   }
   const reset = async () => {
     const d = await onDefaults(req.instanceId)
     if (d) setValues(normalise(d))
+    if (barSource !== undefined) setBarSource('chart')
   }
 
   const tabs: { key: 'inputs' | 'style'; label: string; n: number }[] = [
-    { key: 'inputs', label: 'Inputs', n: req.inputs.length },
+    {
+      key: 'inputs',
+      label: 'Inputs',
+      n: req.inputs.length + (req.barSource === undefined ? 0 : 1),
+    },
     { key: 'style', label: 'Style', n: req.styleInputs.length },
   ]
 
   return (
     <div
-      className="absolute inset-0 z-40 flex items-center justify-center bg-black/50"
+      className={cn(
+        'absolute inset-0 z-40 flex items-center justify-center',
+        picking ? 'pointer-events-none' : 'bg-black/50'
+      )}
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       role="presentation"
     >
-      <div className="flex max-h-[92%] w-[340px] flex-col rounded-lg border bg-popover shadow-2xl">
+      {picking && (
+        <output className="pointer-events-auto absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-3 rounded-lg border bg-popover px-3 py-2 text-xs shadow-lg">
+          <span>
+            Click the chart to pick the {picking.kind} for{' '}
+            <span className="font-medium">{picking.label}</span>
+          </span>
+          <button
+            type="button"
+            className="rounded border border-border px-2 py-1 hover:bg-accent"
+            onClick={() => picking.cancel()}
+          >
+            Cancel
+          </button>
+        </output>
+      )}
+      <div
+        className={cn(
+          'flex max-h-[92%] w-[340px] flex-col rounded-lg border bg-popover shadow-2xl',
+          picking && 'invisible'
+        )}
+      >
         {/* Title */}
         <div className="flex items-center justify-between px-4 pb-2 pt-3">
           <h3 className="text-[15px] font-semibold tracking-tight">{req.name}</h3>
@@ -211,6 +336,14 @@ export function IndicatorSettingsDialog({
             </div>
           ) : (
             <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
+              {barSource !== undefined && (
+                <SettingsField
+                  field={BAR_SOURCE_FIELD}
+                  id={`${req.instanceId}-barSource`}
+                  value={barSource}
+                  onChange={(v) => setBarSource(v === 'underlying' ? 'underlying' : 'chart')}
+                />
+              )}
               {inputGroupsOf(fields).map(([heading, group]) => (
                 <Fragment key={heading}>
                   {heading !== '' && (
@@ -225,13 +358,14 @@ export function IndicatorSettingsDialog({
                       id={`${req.instanceId}-${f.key}`}
                       value={values[f.key]}
                       onChange={(v) => set(f.key, v)}
+                      onPick={onPick && PICKABLE.has(f.type) ? () => startPick(f) : undefined}
                     />
                   ))}
                 </Fragment>
               ))}
             </div>
           )}
-          {fields.length === 0 && (
+          {fields.length === 0 && (tab === 'style' || barSource === undefined) && (
             <p className="py-3 text-[13px] text-muted-foreground">Nothing to configure here.</p>
           )}
         </div>
@@ -314,11 +448,14 @@ export function SettingsField({
   id,
   value,
   onChange,
+  onPick,
 }: {
   field: SettingsFieldShape
   id: string
   value: unknown
   onChange(v: unknown): void
+  /** Offer a Pick button that fills this input from a click on the chart. */
+  onPick?: () => void
 }) {
   const label = (
     <label htmlFor={id} title={field.unavailable} className="text-[13px] text-muted-foreground">
@@ -330,13 +467,39 @@ export function SettingsField({
   // hover is not there on a touch screen or to a keyboard, and the sentence is
   // the part of the row that says what the number does.
   const helpId = field.tooltip ? `${id}-help` : undefined
+  const problem = numberProblem(field, value)
+  const errorId = problem ? `${id}-error` : undefined
+  const describedBy = [helpId, errorId].filter(Boolean).join(' ') || undefined
+  const pick = onPick ? (
+    <button
+      type="button"
+      onClick={onPick}
+      disabled={!!field.unavailable}
+      aria-label={`Pick ${field.label} on the chart`}
+      className="h-7 shrink-0 rounded border border-border px-1.5 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-40"
+    >
+      Pick
+    </button>
+  ) : null
   const row = (control: ReactNode) => (
     <>
       {label}
-      {control}
+      {pick ? (
+        <div className="flex w-full min-w-0 items-center gap-1">
+          {control}
+          {pick}
+        </div>
+      ) : (
+        control
+      )}
       {field.tooltip && (
         <p id={helpId} className="col-span-2 -mt-2 text-[11px] leading-snug text-muted-foreground">
           {field.tooltip}
+        </p>
+      )}
+      {problem && (
+        <p id={errorId} aria-live="polite" className="col-span-2 -mt-2 text-[11px] text-destructive">
+          {problem}
         </p>
       )}
     </>
@@ -429,7 +592,7 @@ export function SettingsField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={TEXT_PLACEHOLDER[field.type]}
         aria-describedby={helpId}
-        className={cn(CONTROL, 'w-full')}
+        className={cn(CONTROL, 'w-full min-w-0')}
       />
     )
   }
@@ -447,7 +610,13 @@ export function SettingsField({
     onChange(Number(clamped.toFixed(String(step).split('.')[1]?.length ?? 0)))
   }
   return row(
-    <div className={cn(CONTROL, 'flex w-full items-center gap-1 p-0 pl-2')}>
+    <div
+      className={cn(
+        CONTROL,
+        'flex w-full min-w-0 items-center gap-1 p-0 pl-2',
+        problem && 'border-destructive'
+      )}
+    >
       <input
         id={id}
         type="number"
@@ -457,7 +626,8 @@ export function SettingsField({
         max={field.max}
         step={step}
         onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
-        aria-describedby={helpId}
+        aria-describedby={describedBy}
+        aria-invalid={problem ? true : undefined}
         // The native spinner is a bright, oversized chrome control; ours
         // matches the theme and is always visible.
         className="w-full min-w-0 bg-transparent text-[13px] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"

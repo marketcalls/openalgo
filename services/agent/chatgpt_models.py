@@ -1,8 +1,9 @@
 """Models the ChatGPT subscription serves that LiteLLM does not yet list.
 
-LiteLLM's registry carries ten `chatgpt/*` entries, the newest `gpt-5.4`. The
-Codex backend behind a ChatGPT plan serves more than that, and the omission is
-not cosmetic: a model absent from the registry has no `mode`, so LiteLLM routes
+LiteLLM 1.104.0's bundled registry carries fourteen `chatgpt/*` entries, the
+newest the three `gpt-5.6` variants and `gpt-5.5`, which used to be supplied
+here. The Codex backend behind a ChatGPT plan serves more than that, and the
+omission is not cosmetic: a model absent from the registry has no `mode`, so LiteLLM routes
 it through the chat-completions bridge instead of `/v1/responses`. That request
 never reaches the API at all. It lands on a Cloudflare interstitial and comes
 back as `403 Enable JavaScript and cookies to continue`, which reads like an
@@ -37,6 +38,11 @@ turn is reported as subscription usage rather than as costing zero. See
 
 This module exists to be deleted. When LiteLLM ships these names, its own entry
 wins and this one is skipped, so the only cost of the overlap is this file.
+LiteLLM 1.104.0 shipped four of the five, and they were removed from
+`SUPPLEMENTAL`. The one left, `gpt-6-astra`, is already in the model map LiteLLM
+fetches from GitHub at import, so on an online install this module adds nothing;
+it stays for the install whose fetch fails and falls back to the bundled map,
+where it is still absent.
 """
 
 import warnings
@@ -64,12 +70,9 @@ _BASE: dict[str, Any] = {
 
 #: Bare model name -> the fields that differ from `_BASE`. Context windows are
 #: the ones LiteLLM records for the same model on the API path, because it is
-#: the same model reached by a different route.
+#: the same model reached by a different route. `gpt-5.5` and the three
+#: `gpt-5.6` variants left this map when LiteLLM 1.104.0 shipped them.
 SUPPLEMENTAL: dict[str, dict[str, Any]] = {
-    "gpt-5.5": {"max_input_tokens": 1050000},
-    "gpt-5.6-sol": {"max_input_tokens": 922000},
-    "gpt-5.6-luna": {"max_input_tokens": 922000},
-    "gpt-5.6-terra": {"max_input_tokens": 922000},
     "gpt-6-astra": {"max_input_tokens": 922000},
 }
 

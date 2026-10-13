@@ -11,8 +11,9 @@
 #   1. finds the service file and checks that an OpenAlgo installer wrote it
 #      (a customised file is left alone, with an explanation);
 #   2. saves a copy next to it as <file>.pre-launcher-<date>;
-#   3. points ExecStart at the launcher and gives systemd enough time to let
-#      a stop finish;
+#   3. points ExecStart at the launcher (falling back to the previous gunicorn
+#      command when the launcher is missing, as after a code rollback) and
+#      gives systemd enough time to let a stop finish;
 #   4. restarts OpenAlgo and checks that the service is running, the page
 #      answers, the live update channel answers, and the web server is the
 #      one .env asks for;
@@ -430,7 +431,7 @@ restart_and_check() {
 
 # Switch one service. Returns the exit status described at the top.
 switch_one() {
-    local unit="$1" service workdir user execs cmd execline backup tmpdir rendered add_timeout
+    local unit="$1" service workdir user execs cmd execline launch previous backup tmpdir rendered add_timeout
     local expected dry_output previous=""
     service="$(basename "$unit" .service)"
     workdir="$(unit_value "$unit" WorkingDirectory)"
@@ -508,9 +509,18 @@ switch_one() {
         return 3
     fi
 
-    execline="/bin/bash $workdir/$LAUNCHER_REL --venv $OLD_VENV --bind $OLD_BIND --proxy-mode subprocess --log-level $OLD_LOG_LEVEL --timeout $OLD_TIMEOUT"
-    [ -n "$OLD_GRACEFUL" ] && execline="$execline --graceful-timeout $OLD_GRACEFUL"
-    [ -n "$OLD_TMP_DIR" ] && execline="$execline --worker-tmp-dir $OLD_TMP_DIR"
+    launch="/bin/bash $workdir/$LAUNCHER_REL --venv $OLD_VENV --bind $OLD_BIND --proxy-mode subprocess --log-level $OLD_LOG_LEVEL --timeout $OLD_TIMEOUT"
+    [ -n "$OLD_GRACEFUL" ] && launch="$launch --graceful-timeout $OLD_GRACEFUL"
+    [ -n "$OLD_TMP_DIR" ] && launch="$launch --worker-tmp-dir $OLD_TMP_DIR"
+    # The command this file ran before the switch. If the code is rolled back
+    # to a release without the launcher before --restore is run, ExecStart
+    # would name a missing file and systemd would restart it in a loop; this
+    # starts OpenAlgo the old way instead.
+    previous="$OLD_VENV/bin/gunicorn --worker-class ${OLD_WORKER:-eventlet} -w 1 --bind $OLD_BIND --timeout $OLD_TIMEOUT --log-level $OLD_LOG_LEVEL"
+    [ -n "$OLD_GRACEFUL" ] && previous="$previous --graceful-timeout $OLD_GRACEFUL"
+    [ -n "$OLD_TMP_DIR" ] && previous="$previous --worker-tmp-dir $OLD_TMP_DIR"
+    previous="$previous app:app"
+    execline="/bin/bash -c 'if [ -f $workdir/$LAUNCHER_REL ]; then exec $launch; fi; echo \"$LAUNCHER_REL is missing, so OpenAlgo starts the way it did before the switch. The service file from before the switch is named in the comment above ExecStart.\" >&2; source $OLD_VENV/bin/activate; exec $previous'"
     add_timeout=""
     stop_window_ok "$unit" || add_timeout="$STOP_WINDOW"
     backup="$unit.pre-launcher-$TIMESTAMP"

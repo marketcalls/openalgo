@@ -17,7 +17,8 @@ Exchange Segments (Numeric):
 
 import json
 import struct
-from typing import Dict, List
+import threading
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 import requests
@@ -44,6 +45,7 @@ class RMoneyWebSocketClient:
     # Engine.IO write-loop timeout floor to avoid premature
     # "packet queue is empty, aborting" disconnects on quiet streams.
     MIN_ENGINEIO_ACTIVITY_TIMEOUT = 300
+    MAX_SUBSCRIPTION_INSTRUMENTS = 50
 
     # Subscription modes (mapped to XTS message codes)
     MODE_LTP = 1       # Last Traded Price - maps to 1501 (Touchline)
@@ -135,6 +137,7 @@ class RMoneyWebSocketClient:
 
         # Reusable HTTP session for connection pooling (avoids FD churn)
         self._http_session = requests.Session()
+        self._subscription_http_lock = threading.Lock()
 
         # Initialize Socket.IO client
         self._setup_socketio()
@@ -404,7 +407,14 @@ class RMoneyWebSocketClient:
             self._http_session.close()
             self.logger.info("[CLEANUP] HTTP session closed")
 
-    def subscribe(self, correlation_id: str, mode: int, instruments: List[Dict]) -> None:
+    def subscribe(
+        self,
+        correlation_id: str,
+        mode: int,
+        instruments: List[Dict],
+        *,
+        raise_on_duplicate: bool = False,
+    ) -> None:
         """
         Subscribe to market data using XTS HTTP API.
 
@@ -447,18 +457,24 @@ class RMoneyWebSocketClient:
                 f"[SUBSCRIBE] Code: {xts_message_code}, Instruments: {len(instruments)}"
             )
 
-            response = self._http_session.post(
-                self.subscription_url,
-                json=subscription_request,
-                headers=headers,
-                timeout=10,
-            )
+            with self._subscription_http_lock:
+                response = self._http_session.post(
+                    self.subscription_url,
+                    json=subscription_request,
+                    headers=headers,
+                    timeout=10,
+                )
             try:
                 if response.status_code == 200:
                     result = response.json()
                     self.logger.debug(f"[SUBSCRIBE] Response: {result}")
                     if result.get("type") != "success":
                         error_desc = result.get("description") or result.get("message") or str(result)
+                        if "already subscribed" in error_desc.lower() or "e-session-0002" in error_desc.lower():
+                            self.logger.info("[SUBSCRIBE] Instrument already subscribed (non-fatal)")
+                            if raise_on_duplicate:
+                                raise RuntimeError("XTS instrument already subscribed")
+                            return
                         self.logger.error(f"[SUBSCRIBE] API error response: {error_desc}")
                         raise RuntimeError(error_desc)
 
@@ -489,6 +505,8 @@ class RMoneyWebSocketClient:
                     # "Instrument Already Subscribed" is non-fatal (expected after reconnect)
                     if "Already Subscribed" in response.text or "e-session-0002" in response.text:
                         self.logger.info(f"[SUBSCRIBE] Instrument already subscribed (non-fatal)")
+                        if raise_on_duplicate:
+                            raise RuntimeError("XTS instrument already subscribed")
                         return
                     # Handle Invalid Token by re-authenticating and retrying once.
                     # This happens when data.py refreshes the feed token, which creates
@@ -503,12 +521,13 @@ class RMoneyWebSocketClient:
                                 "authorization": self.market_data_token,
                                 "Content-Type": "application/json",
                             }
-                            retry_response = self._http_session.post(
-                                self.subscription_url,
-                                json=subscription_request,
-                                headers=retry_headers,
-                                timeout=10,
-                            )
+                            with self._subscription_http_lock:
+                                retry_response = self._http_session.post(
+                                    self.subscription_url,
+                                    json=subscription_request,
+                                    headers=retry_headers,
+                                    timeout=10,
+                                )
                             try:
                                 if retry_response.status_code == 200:
                                     retry_result = retry_response.json()
@@ -544,6 +563,71 @@ class RMoneyWebSocketClient:
         except Exception as e:
             self.logger.error(f"[SUBSCRIBE] Exception: {e}")
             raise
+
+    def subscribe_batch(
+        self,
+        batch_id: str,
+        mode: int,
+        subscriptions: List[tuple[str, List[Dict]]],
+        *,
+        should_subscribe: Optional[Callable[[str], bool]] = None,
+    ) -> None:
+        """Send capped requests while retaining each instrument's identity."""
+        xts_message_code = self.MODE_TO_XTS_CODE.get(
+            mode, self.XTS_MESSAGE_CODES["TOUCHLINE"]
+        )
+        pending = [
+            (correlation_id, instrument)
+            for correlation_id, items in subscriptions
+            for instrument in items
+        ]
+
+        for offset in range(0, len(pending), self.MAX_SUBSCRIPTION_INSTRUMENTS):
+            chunk = pending[offset : offset + self.MAX_SUBSCRIPTION_INSTRUMENTS]
+            chunk_id = f"{batch_id}_{offset // self.MAX_SUBSCRIPTION_INSTRUMENTS}"
+            instruments = [instrument for _, instrument in chunk]
+            try:
+                self.subscribe(chunk_id, mode, instruments, raise_on_duplicate=True)
+            except RuntimeError as exc:
+                if "already subscribed" not in str(exc).lower():
+                    self.subscriptions.pop(chunk_id, None)
+                    raise
+                # XTS may reject a mixed batch when one instrument is already
+                # active. Retry individually so non-duplicates still start;
+                # each HTTP request releases the client lock before the next.
+                self.subscriptions.pop(chunk_id, None)
+                for correlation_id, instrument in chunk:
+                    if should_subscribe and not should_subscribe(correlation_id):
+                        continue
+                    previous = self.subscriptions.get(correlation_id)
+                    try:
+                        self.subscribe(
+                            correlation_id, mode, [instrument], raise_on_duplicate=True
+                        )
+                    except RuntimeError as item_exc:
+                        if "already subscribed" not in str(item_exc).lower():
+                            if previous is None:
+                                self.subscriptions.pop(correlation_id, None)
+                            else:
+                                self.subscriptions[correlation_id] = previous
+                            raise
+                        self.subscriptions[correlation_id] = {
+                            "mode": mode,
+                            "instruments": [instrument],
+                            "xts_message_code": xts_message_code,
+                        }
+            except Exception:
+                self.subscriptions.pop(chunk_id, None)
+                raise
+            else:
+                self.subscriptions.pop(chunk_id, None)
+                for correlation_id, instrument in chunk:
+                    entry = self.subscriptions.setdefault(
+                        correlation_id,
+                        {"mode": mode, "instruments": [], "xts_message_code": xts_message_code},
+                    )
+                    if instrument not in entry["instruments"]:
+                        entry["instruments"].append(instrument)
 
     def unsubscribe(self, correlation_id: str, mode: int, instruments: List[Dict]) -> bool:
         """
@@ -585,12 +669,13 @@ class RMoneyWebSocketClient:
                 f"[UNSUBSCRIBE] Code: {xts_message_code}, Instruments: {len(instruments)}"
             )
 
-            response = self._http_session.put(
-                self.subscription_url,
-                json=unsubscription_request,
-                headers=headers,
-                timeout=10,
-            )
+            with self._subscription_http_lock:
+                response = self._http_session.put(
+                    self.subscription_url,
+                    json=unsubscription_request,
+                    headers=headers,
+                    timeout=10,
+                )
             try:
                 if response.status_code == 200:
                     result = response.json()

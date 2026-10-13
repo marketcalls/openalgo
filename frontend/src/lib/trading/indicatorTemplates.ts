@@ -1,3 +1,4 @@
+import type { IndicatorBarSource } from 'openalgo-charts'
 import { parseIndicatorStates, WorkspaceDocumentError } from 'openalgo-charts/workspace'
 
 export { type IndicatorTemplateMode, planIndicatorTemplate } from 'openalgo-charts/workspace'
@@ -9,6 +10,12 @@ export interface StoredIndicatorRecord {
   visible?: boolean
   /** Legacy preferences let the descriptor choose its pane. */
   paneIndex?: number
+  /**
+   * `'underlying'` for a study set to compute on the raw bars under a
+   * transformed chart (Renko, Heikin Ashi). Written only then, as the chart's
+   * own saved state does.
+   */
+  barSource?: IndicatorBarSource
 }
 
 /** Heal old race-generated repeats only when reading an unversioned save. */

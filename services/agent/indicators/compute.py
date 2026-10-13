@@ -44,6 +44,7 @@ __all__ = [
     "IndicatorError",
     "compute",
     "required_bars",
+    "resolve_param_aliases",
     "search_specs",
     "spec_to_dict",
 ]
@@ -75,6 +76,48 @@ class IndicatorError(Exception):
 # Argument handling
 # ---------------------------------------------------------------------------
 
+#: Parameter names a model borrows from other charting platforms, and the real
+#: names each may stand for. An alias is applied only when exactly one of its
+#: candidates is a parameter of the indicator being called, so ``fast`` means
+#: ``fast_period`` on macd and ``fast_length`` on kama, and is never guessed
+#: between two.
+_PARAM_ALIASES: dict[str, tuple[str, ...]] = {
+    "length": ("period",),
+    "fast": ("fast_period", "fast_length"),
+    "slow": ("slow_period", "slow_length"),
+    "signal": ("signal_period", "signal_length"),
+    "std": ("std_dev",),
+    "stdev": ("std_dev",),
+    "stddev": ("std_dev",),
+    "deviation": ("std_dev",),
+}
+
+
+def resolve_param_aliases(spec: IndicatorSpec, params: Any) -> dict[str, Any]:
+    """Rename borrowed parameter names to the indicator's own.
+
+    ``{"length": 14}`` for rsi is unambiguous, and refusing it costs a whole
+    round trip to learn one word. A name the indicator really has is never
+    renamed, an alias whose real name was also supplied is left for
+    :func:`_coerce_params` to refuse, and keys are matched case-insensitively.
+
+    Args:
+        spec: The indicator being called.
+        params: The parameters the caller supplied, or None.
+
+    Returns:
+        A new dict with each resolvable alias replaced by the real name.
+    """
+    lowered = {str(key).strip().lower(): value for key, value in (params or {}).items()}
+    out: dict[str, Any] = {}
+    for key, value in lowered.items():
+        if key not in spec.params:
+            matches = [name for name in _PARAM_ALIASES.get(key, ()) if name in spec.params]
+            if len(matches) == 1 and matches[0] not in lowered:
+                key = matches[0]
+        out[key] = value
+    return out
+
 
 def _coerce_params(spec: IndicatorSpec, params: dict[str, Any] | None) -> dict[str, Any]:
     """Cast JSON-decoded arguments into what the library will actually accept.
@@ -97,7 +140,7 @@ def _coerce_params(spec: IndicatorSpec, params: dict[str, Any] | None) -> dict[s
             whole positive number, or a string outside a validated enum.
     """
     out: dict[str, Any] = {}
-    for key, value in (params or {}).items():
+    for key, value in resolve_param_aliases(spec, params).items():
         if key not in spec.params:
             raise IndicatorError(
                 f"{spec.name} has no parameter {key!r}. Valid parameters: "
@@ -191,7 +234,7 @@ def required_bars(spec: IndicatorSpec, params: dict[str, Any] | None = None, wan
         A bar count, never below :data:`MIN_BARS`.
     """
     warmup = int(spec.warmup or 0)
-    for key, value in (params or {}).items():
+    for key, value in resolve_param_aliases(spec, params).items():
         pspec = spec.params.get(key)
         if not pspec or pspec.kind != "int":
             continue
@@ -482,7 +525,9 @@ def compute(
             **clean_params,
         },
         "bars_used": int(len(frame)),
-        "defaults_applied": sorted(key for key in clean_params if key not in (params or {}))
+        "defaults_applied": sorted(
+            key for key in clean_params if key not in resolve_param_aliases(target, params)
+        )
         or None,
         "outputs": list(outputs),
         "values_returned": min(tail, len(frame)),

@@ -296,7 +296,7 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 (`frontend/src/lib/trading/customIndicators.ts`).
 
 - **Never bundle them.** `frontend/dist/` is built by CI from what is committed, so a bundled indicator would need committing first and the next `git pull` would erase it. Runtime loading keeps them outside the build: no Node.js, no rebuild, untouched by upgrades.
-- **They register after the built-ins**, so a custom id that collides with one of the 105 built-ins overrides it.
+- **They register after the built-ins**, so a custom id that collides with one of the 112 built-ins overrides it.
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
 
@@ -574,8 +574,10 @@ app. Everything about the agent's provider catalogue is read live from LiteLLM
 precisely so a package bump brings new models with it. This provider is the one
 exception, and it needs a person.
 
-**The symptom, if you do not know this.** LiteLLM's registry carries ten
-`chatgpt/*` entries, newest `gpt-5.4`, while the backend serves more. A model
+**The symptom, if you do not know this.** LiteLLM's registry lags the backend:
+at 1.104.0 its bundled map carries fourteen `chatgpt/*` entries, newest the
+`gpt-5.6` variants, while the backend serves more. The map LiteLLM fetches from
+GitHub at import is usually ahead of the bundled one, so check both. A model
 absent from that registry has no `mode`, so LiteLLM routes it through the
 chat-completions bridge instead of `/v1/responses`. The request never reaches
 the API: it lands on a Cloudflare interstitial and returns

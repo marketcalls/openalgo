@@ -1,5 +1,6 @@
 import { type ChartObjects, createLinkGroup } from 'openalgo-charts'
 import { parseWorkspacePayload, type WorkspacePayload } from 'openalgo-charts/workspace'
+import type { GridWeights } from './gridSizes'
 import type { TradingTerminal } from './terminal'
 import { workspaceGridGeometry } from './workspaceGrid'
 
@@ -22,6 +23,8 @@ export class PreparedChartGrid {
   private closed = false
   private failure: unknown
   private locked = true
+  /** The split the trader dragged to, once they have; until then the document's own. */
+  private dragged: GridWeights | null = null
 
   get disposed(): boolean {
     return this.closed
@@ -77,10 +80,37 @@ export class PreparedChartGrid {
     }
   }
 
+  /** The row and column weights the grid is drawn with. */
+  weights(): GridWeights {
+    if (this.dragged) return { columns: [...this.dragged.columns], rows: [...this.dragged.rows] }
+    const { layout } = this.payload
+    return {
+      columns: layout.columnWeights ?? Array<number>(layout.columns).fill(1),
+      rows: layout.rowWeights ?? Array<number>(layout.rows).fill(1),
+    }
+  }
+
+  /** Keep a dragged split, so the next save writes it into the document. */
+  setWeights(weights: GridWeights): void {
+    const { layout } = this.payload
+    if (weights.columns.length !== layout.columns || weights.rows.length !== layout.rows)
+      throw new Error('The split does not match the grid')
+    this.dragged = { columns: [...weights.columns], rows: [...weights.rows] }
+  }
+
   capture(activePaneId: string, sync: WorkspacePayload['sync']): WorkspacePayload {
     this.assertReady()
     return parseWorkspacePayload({
       ...this.payload,
+      ...(this.dragged
+        ? {
+            layout: {
+              ...this.payload.layout,
+              columnWeights: this.dragged.columns,
+              rowWeights: this.dragged.rows,
+            },
+          }
+        : {}),
       activePaneId,
       sync,
       panes: this.payload.panes.map((pane) =>

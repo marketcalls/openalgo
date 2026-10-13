@@ -99,8 +99,35 @@ describe('named indicator templates', () => {
     await screen.findByRole('option', { name: 'Trend copy' })
     expect(host.saved()?.templates).toHaveLength(2)
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    // Nothing goes until the trader confirms; keeping it puts the question away.
+    expect(screen.getByRole('alertdialog', { name: 'Delete template' })).toHaveTextContent(
+      'Delete the template Trend copy?'
+    )
+    await user.click(screen.getByRole('button', { name: 'Keep template' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(host.saved()?.templates).toHaveLength(2)
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete template' }))
     await waitFor(() => expect(host.saved()?.templates).toHaveLength(1))
     expect(host.saved()?.templates[0].name).toBe('Trend')
+  })
+
+  it('updates a selected template with the studies on the selected chart', async () => {
+    const host = harness()
+    const user = await open()
+    await save(user)
+    const now = [
+      { indicatorId: 'rsi', settings: { period: 14 }, paneIndex: 1 },
+      { indicatorId: 'ema', settings: { period: 50 }, paneIndex: 0 },
+    ] as IndicatorState[]
+    host.select({
+      captureIndicatorTemplate: vi.fn(() => structuredClone(now)),
+      applyIndicatorTemplate: vi.fn(async () => {}),
+    })
+    await user.click(screen.getByRole('button', { name: 'Update with current chart' }))
+    await screen.findByText('Momentum now holds the 2 studies on the selected chart')
+    expect(host.saved()?.templates).toHaveLength(1)
+    expect(host.saved()?.templates[0].indicators).toEqual(now)
   })
 
   it('imports an empty template with a fresh identity and clears studies on replace', async () => {

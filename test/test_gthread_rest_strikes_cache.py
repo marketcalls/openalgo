@@ -320,11 +320,19 @@ def test_greenlets_and_a_real_thread_share_the_cache_under_eventlet(tmp_path):
         oss.db_session = S()
         real_threading = eventlet.patcher.original("threading")
 
+        # The longest gap between two ticks is how long the hub was blocked.
+        # Counting ticks instead measured how long the run took: a fast run
+        # finished in five and failed with a hub that was never blocked.
         ticks = [0]
+        longest_gap = [0.0]
         stop = [False]
 
         def ticker():
+            last = time.monotonic()
             while not stop[0]:
+                now = time.monotonic()
+                longest_gap[0] = max(longest_gap[0], now - last)
+                last = now
                 ticks[0] += 1
                 eventlet.sleep(0.01)
 
@@ -353,7 +361,8 @@ def test_greenlets_and_a_real_thread_share_the_cache_under_eventlet(tmp_path):
         stop[0] = True
         tick.wait()
         assert done == [True], "the real thread never finished its lookups"
-        assert ticks[0] > 5, ticks[0]
+        assert ticks[0] > 0, "the ticker never ran"
+        assert longest_gap[0] < 0.5, longest_gap[0]
         print("OK", round(time.monotonic() - started, 2))
     """
     result = subprocess.run(

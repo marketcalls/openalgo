@@ -8,6 +8,9 @@ export interface WhatsAppBotStatus {
   own_phone: string | null
   bot_username: string | null
   paired_at: string | null
+  // Set when WhatsApp has logged the paired device out: what to tell the
+  // operator, in the words the send endpoints use. Absent on older servers.
+  status_message?: string | null
 }
 
 export interface WhatsAppConfig {
@@ -23,6 +26,7 @@ export interface WhatsAppConfig {
   rate_limit_per_minute: number
   broadcast_enabled: boolean
   is_running?: boolean
+  status_message?: string | null
 }
 
 export type WhatsAppPairStatus = 'idle' | 'starting' | 'awaiting_scan' | 'paired' | 'failed'
@@ -97,4 +101,5 @@ export interface WhatsAppPairedEvent {
 export interface WhatsAppStatusEvent {
   is_running: boolean
   is_paired: boolean
+  status_message?: string | null
 }

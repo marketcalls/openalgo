@@ -10,6 +10,7 @@ from broker.rmoney.streaming.rmoney_websocket import RMoneyWebSocketClient
 from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
 from utils.logging import get_logger
+from utils import runtime as _runtime
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -20,9 +21,13 @@ from websocket_proxy.mapping import SymbolMapper
 
 from .rmoney_mapping import RMoneyCapabilityRegistry, RMoneyExchangeMapper
 
+_real_threading = _runtime.original("threading")
+
 
 class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """RMoney XTS specific implementation of the WebSocket adapter"""
+
+    BATCH_DELAY = 0.5
 
     def __init__(self):
         super().__init__()
@@ -35,10 +40,12 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
-        self.lock = threading.Lock()
-        self._reconnect_worker_lock = threading.Lock()
+        self.lock = _real_threading.Lock()
+        self._reconnect_worker_lock = _real_threading.Lock()
         self._reconnect_worker: threading.Thread | None = None
-        self._stop_event = threading.Event()  # Interruptible sleep for reconnect
+        self._stop_event = _real_threading.Event()  # Interruptible sleep for reconnect
+        self.subscription_queue = {}
+        self.batch_timer = None
 
         # Log the ZMQ port being used
         self.logger.info(f"RMoney XTS adapter initialized with ZMQ port: {self.zmq_port}")
@@ -218,7 +225,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 return
 
-            self._reconnect_worker = threading.Thread(
+            self._reconnect_worker = _real_threading.Thread(
                 target=self._connect_with_retry,
                 daemon=True,
                 name=f"rmoney-reconnect-{self.user_id or 'unknown'}",
@@ -258,6 +265,11 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
         # Wake up any sleeping reconnect worker immediately
         self._stop_event.set()
+        with self.lock:
+            if self.batch_timer is not None:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
         self.logger.info(
             "Set running=False and max reconnect attempts to prevent auto-reconnection"
         )
@@ -416,6 +428,9 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "instruments": instruments,
                 "is_fallback": is_fallback,
             }
+            if self.connected and self.ws_client:
+                self.subscription_queue[correlation_id] = self.subscriptions[correlation_id]
+                self._start_batch_timer_locked()
             # Don't log the actual token value for security, but log its type and length
             token_info = (
                 f"type={type(token_value)}, len={len(str(token_value))}, value={str(token_value)[:4]}...{str(token_value)[-4:]}"
@@ -425,14 +440,6 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.debug(
                 f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}"
             )
-
-        # Subscribe if connected
-        if self.connected and self.ws_client:
-            try:
-                self.ws_client.subscribe(correlation_id, mode, instruments)
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
         # Return success with capability info
         return self._create_success_response(
@@ -509,21 +516,35 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         ]
 
         # Generate correlation ID
-        correlation_id = f"{symbol}_{exchange}_{mode}"
-
-        # Remove from subscriptions
+        prefix = f"{symbol}_{exchange}_{mode}"
+        removed = []
+        needs_wire_unsubscribe = False
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
+            matches = [
+                (key, sub)
+                for key, sub in self.subscriptions.items()
+                if (key == prefix or key.startswith(prefix + "_"))
+                and sub["symbol"] == symbol
+                and sub["exchange"] == exchange
+                and sub["mode"] == mode
+            ]
+            for key, sub in matches:
+                removed.append((key, sub))
+                self.subscriptions.pop(key, None)
+                if self.subscription_queue.pop(key, None) is None:
+                    needs_wire_unsubscribe = True
+            if removed:
                 self.logger.info(f"Removed {symbol}.{exchange} from subscription registry")
 
         # Unsubscribe if connected
-        if self.connected and self.ws_client:
+        if needs_wire_unsubscribe and self.connected and self.ws_client:
             try:
                 self.logger.info(
                     f"Sending unsubscribe request for {symbol}.{exchange} to XTS server"
                 )
-                unsubscribe_ok = self.ws_client.unsubscribe(correlation_id, mode, instruments)
+                unsubscribe_ok = self.ws_client.unsubscribe(
+                    removed[0][0], mode, instruments
+                )
                 if unsubscribe_ok:
                     self.logger.info(
                         f"Successfully sent unsubscribe request for {symbol}.{exchange}"
@@ -546,7 +567,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
-        else:
+        elif not removed:
             self.logger.warning("Not connected to XTS server, skipping unsubscribe request")
 
         return self._create_success_response(
@@ -562,38 +583,74 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._resubscribe_all()
 
     def _resubscribe_all(self):
-        """Resubscribe to all stored subscriptions, respecting 50 instrument limit"""
-        MAX_SUBSCRIPTIONS = 50
-        count = 0
+        """Queue saved subscriptions for mode-grouped reconnect batches."""
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                if count >= MAX_SUBSCRIPTIONS:
-                    self.logger.warning(
-                        f"Reached RMoney subscription limit ({MAX_SUBSCRIPTIONS}), "
-                        f"skipping remaining {len(self.subscriptions) - count} subscriptions"
-                    )
-                    break
-                try:
-                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                    count += 1
-                except Exception as e:
-                    error_str = str(e)
-                    # Stop on any session-level error that won't resolve by retrying
-                    if any(term in error_str for term in [
-                        "Subscription limit exceeded",
-                        "Invalid Token",
-                        "not connected",
-                        "e-session-0004",
-                        "e-session-0007",
-                    ]):
-                        self.logger.warning(
-                            f"Stopping resubscription after {count} instruments: {error_str[:100]}"
+            self.subscription_queue.update(self.subscriptions)
+            if self.subscription_queue:
+                self._start_batch_timer_locked()
+
+    def _start_batch_timer_locked(self) -> None:
+        if self.batch_timer is not None and self.batch_timer.is_alive():
+            return
+        self.batch_timer = threading.Timer(
+            self.BATCH_DELAY, self._process_batch_subscriptions
+        )
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        with self.lock:
+            self.batch_timer = None
+            if not self.connected or not self.ws_client or not self.subscription_queue:
+                return
+            queued = list(self.subscription_queue.items())
+            self.subscription_queue.clear()
+
+        mode_groups = {}
+        for correlation_id, sub in queued:
+            mode_groups.setdefault(sub["mode"], []).append((correlation_id, sub))
+
+        for mode, subscriptions in mode_groups.items():
+            batch_id = f"__openalgo_batch_{mode}"
+            batch = []
+            try:
+                with self.lock:
+                    batch = [
+                        (correlation_id, sub)
+                        for correlation_id, sub in subscriptions
+                        if self.subscriptions.get(correlation_id) is sub
+                    ]
+                if not batch:
+                    continue
+
+                def is_still_subscribed(correlation_id: str) -> bool:
+                    with self.lock:
+                        return any(
+                            current_id == correlation_id and self.subscriptions.get(current_id) is sub
+                            for current_id, sub in batch
                         )
-                        break
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+
+                self.ws_client.subscribe_batch(
+                    batch_id,
+                    mode,
+                    [
+                        (correlation_id, sub["instruments"])
+                        for correlation_id, sub in batch
+                    ],
+                    should_subscribe=is_still_subscribed,
+                )
+                count = sum(len(sub["instruments"]) for _, sub in batch)
+                self.logger.info(
+                    f"Batch subscribed {count} RMoney instruments in mode {mode}"
+                )
+            except Exception as e:
+                with self.lock:
+                    for correlation_id, sub in batch:
+                        if self.subscriptions.get(correlation_id) is sub:
+                            self.subscription_queue[correlation_id] = sub
+                    if self.subscription_queue:
+                        self._start_batch_timer_locked()
+                self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""

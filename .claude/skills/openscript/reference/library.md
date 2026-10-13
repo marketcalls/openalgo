@@ -2,7 +2,7 @@
 
 # The OpenScript library, every name
 
-Read from `openalgo-script@0.5.0`, the compiler this app ships, so it is
+Read from `openalgo-script@0.8.1`, the compiler this app ships, so it is
 what the browser will actually accept. `coverage.mjs` holds this page to the
 compiler in both directions: a name the compiler has and this page lacks fails,
 and so does a name here the compiler does not have.
@@ -458,24 +458,24 @@ Drawing on the chart: lines, boxes, labels.
 |---|---|---|
 | `draw.box` | A zone: supply, demand, an opening range | bar 0 |
 | `draw.count` | How many objects this script currently holds | bar 0 |
-| `draw.delete` | box | bar 0 |
+| `draw.delete` | Remove one object | bar 0 |
 | `draw.deleteAll` | Remove every object this script created | bar 0 |
 | `draw.label` | A plate of text at a point | bar 0 |
 | `draw.line` | A trendline between two points | bar 0 |
 | `draw.polyline` | A path or a closed shape through many points | bar 0 |
 | `draw.setAt` | Move a label | bar 0 |
-| `draw.setBounds` | nothing | bar 0 |
-| `draw.setColor` | box | bar 0 |
+| `draw.setBounds` | Move both anchors in one call | bar 0 |
+| `draw.setColor` | Change the line or border colour | bar 0 |
 | `draw.setExtend` | Continue a line to the pane edge | bar 0 |
-| `draw.setFillColor` | nothing | bar 0 |
-| `draw.setFrom` | nothing | bar 0 |
+| `draw.setFillColor` | Change a box's or polyline's fill | bar 0 |
+| `draw.setFrom` | Move a line's or box's first anchor | bar 0 |
 | `draw.setPoints` | Replace a polyline's path | bar 0 |
 | `draw.setStyle` | `"solid"`, `"dashed"` or `"dotted"` | bar 0 |
-| `draw.setText` | nothing | bar 0 |
-| `draw.setTextColor` | nothing | bar 0 |
-| `draw.setTo` | nothing | bar 0 |
-| `draw.setTooltip` | nothing | bar 0 |
-| `draw.setWidth` | polyline, width)` | bar 0 |
+| `draw.setText` | Change a label's or box's caption | bar 0 |
+| `draw.setTextColor` | Change the text colour | bar 0 |
+| `draw.setTo` | Move its second anchor | bar 0 |
+| `draw.setTooltip` | Detail shown while the pointer rests on the object | bar 0 |
+| `draw.setWidth` | Change the line thickness | bar 0 |
 
 ## `req.`
 

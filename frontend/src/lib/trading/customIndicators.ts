@@ -85,7 +85,7 @@ let loading: Promise<CustomIndicatorLoad> | null = null
  *
  * A custom indicator that reuses a built-in id silently replaces it for the
  * whole app. That is a legitimate way to override one, but it is far more often
- * an accident: the catalogue has grown to 102, and ids like `t3`, `smma`,
+ * an accident: the catalogue has grown to 112, and ids like `t3`, `smma`,
  * `net-volume` and `standard-deviation` arrived recently enough that a user file
  * written before them can shadow one without either side knowing.
  *
@@ -479,7 +479,7 @@ async function readIndex(): Promise<CustomModule[] | null> {
  * Fetch, import and run every user module that has not been seen yet.
  *
  * Never throws. A missing folder, a logged-out session and a syntax error in one
- * user file all have to leave the other 105 indicators working, so the index is
+ * user file all have to leave the other 112 indicators working, so the index is
  * treated as optional and each module is isolated from the next.
  *
  * This is the complete load the picker needs. A chart restoring a saved layout

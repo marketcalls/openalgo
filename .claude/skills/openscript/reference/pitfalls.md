@@ -1,8 +1,9 @@
 # What goes wrong, and what the compiler says about it
 
-Every entry here was hit while writing the six files in `examples/`. None is
-hypothetical, and each names the diagnostic code you will actually see, because
-a code is a promise and the wording around it is allowed to improve.
+Every entry here was hit while writing the six files in `examples/` or arrived
+with a compiler upgrade. None is hypothetical, and each names the diagnostic
+code you will actually see, because a code is a promise and the wording around
+it is allowed to improve.
 
 `check-pitfalls.mjs` compiles both halves of every entry below: the wrong
 spelling must still produce the code named, and the fix offered must still
@@ -122,6 +123,46 @@ trendLine = sma(close, 20)
 plot(close > open ? trendLine : none, "Trend", red)
 ```
 
+### `OS8005`: a `"lookahead"` read, and a mode written third is a mode
+
+```
+dayHigh = req.timeframe("1D", high, "lookahead")   // OS8005
+dayHigh = req.timeframe("1D", high)                // the last finished day
+```
+
+A lookahead read answers a higher timeframe bar's **final** value from that
+bar's first chart bar: the day's high is known at the open. Since 0.6.0 a
+backtest reads it that way too (it used to answer the day so far, so such a
+report changes on upgrade), and a strategy that trades on one reports trades
+nobody could have taken. Drop the mode unless the study is a picture of what the
+higher bar went on to do, and never trade from one.
+
+The mode is the third argument of `req.timeframe` and the fifth of
+`req.symbol`, written positionally or as `mode =`. Before 0.8.1 a positional
+mode was accepted and ignored, so the first line above ran confirmed and said
+nothing; it now runs as written. A positional mode that is not one of the three
+words written out, one taken from an input for instance, is `OS3003`.
+
+A program compiled before 0.8.1 keeps the mode it was compiled with. The chart
+compiles the source afresh and the runner reads the stored program, so until a
+script that writes its mode positionally is reinstalled with
+`validate.mjs --install`, the two run different modes.
+
+### `OS8019`: a deleted drawing is still held
+
+```
+var zones: array<box> = []
+push(zones, draw.box(time, low, time, high))
+if size(zones) > 20
+    draw.delete(element(zones, 0))   // OS8019: zones still holds it
+    shift(zones)                     // and now it does not
+```
+
+`draw.delete` removes the object and touches neither the name nor the array
+element that refers to it, which is left stale rather than `none`. The next call
+that reaches the stale one stops the bar, usually many bars later. Take the element out of the array with the
+delete, or assign `none` to the name on the same path.
+
 ### `OS8010` and `OS8018`: assigned and never read, declared and never read
 
 An input declared and never read still appears in the settings dialog, so a
@@ -237,23 +278,37 @@ fill(upper, lower, blue)
 is built from the inputs a file declares, so an input inside a branch is an
 input that exists on some bars.
 
-### `OS6018`: a declaration option cannot be an expression over an input
+### `OS3025`: a declaration option cannot be an expression over an input
 
 This one is worth knowing before it happens, because the boundary is not
 guessable from the call:
 
 ```
 plot(close, "c", aqua, width = n)        // fine: one input, carried as a reference
-plot(close, "c", aqua, width = n + 1)    // OS6018
+plot(close, "c", aqua, width = n + 1)    // OS3025
 plot(close, "c", close > open ? lime : red)   // fine: colour varies per bar
-fill(u, l, blue, opacity = show ? 0.3 : 0)    // OS6018
+fill(u, l, blue, opacity = show ? 0.3 : 0)    // OS3025
+fill(u, l, show ? blue : none, opacity = 0.3) // fine: the colour switches it off
 ```
 
-A **colour** may vary bar by bar, which is how a line is coloured by condition.
-A declaration option such as `width`, `opacity`, `style` or `precision` may not:
-the compiled program holds a value or a reference to one input, and an
-expression is neither, so it cannot be carried. Compute it before the call, or
-declare the input to hold the final number.
+A **colour** may vary bar by bar, which is how a line or a band is coloured by
+condition. A declaration option such as `width`, `opacity`, `precision` or a
+grid's `position` may not: it is fixed before bar 0, the compiled program holds
+a value or a reference to one input, and an expression is neither. Compute it
+before the call, or declare the input to hold the final number. An input's own
+default, `min` and `max` may not read another input at all.
+
+The same line also reports `OS6018`, whose message calls it a compiler defect
+when nothing else was reported. Beside `OS3025` it is not one: fix the `OS3025`
+and both go.
+
+`style` is stricter: it is `OS3026` even as the whole of an input, because the
+compiled program holds it as a plain string. Write it out.
+
+```
+plot(close, "c", aqua, style = st)       // OS3026, st = input("line", ...)
+plot(close, "c", aqua, style = "step")   // correct
+```
 
 ### `OS3020`: `fill` takes plot handles, not titles
 

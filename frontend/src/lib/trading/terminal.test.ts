@@ -308,7 +308,8 @@ describe('chart object lifecycle', () => {
     }))
     const syncIndicators = vi.fn()
     const terminal = Object.assign(Object.create(TradingTerminal.prototype), {
-      chart: { addIndicator },
+      // Read after a restore, for a study whose inputs the chart refused.
+      chart: { addIndicator, indicators: () => [] },
       destroyed: false,
       activeIndicators: [
         { indicatorId: 'ema', settings: { period: 9 }, visible: false },
@@ -337,6 +338,7 @@ describe('chart object lifecycle', () => {
             restored.push({ id: record.indicatorId, paneIndex: record.paneIndex })
           return { applied: true, indicators: input.indicators.length }
         },
+        indicators: () => [],
       },
       destroyed: false,
       activeIndicators: [
@@ -399,6 +401,7 @@ describe('chart object lifecycle', () => {
       name: 'EMA',
       settings: () => ({ period: 9 }),
       visible: () => false,
+      barSource: () => 'chart',
     }
     const chart = { indicators: () => [indicator] }
     const terminal = Object.assign(Object.create(TradingTerminal.prototype), {

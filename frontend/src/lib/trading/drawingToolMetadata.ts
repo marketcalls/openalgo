@@ -3,22 +3,22 @@
 export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: string; text: boolean; fields?: readonly string[] }>> = {
   "trend-line": {
     "name": "Trend Line",
-    "path": "M4 20 20 4",
+    "path": "M6 18 18 6M5 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM17 6a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "ray": {
     "name": "Ray",
-    "path": "M4 20 20 4M2 18 6 22",
+    "path": "M4 18 22 6M3 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "extended-line": {
     "name": "Extended Line",
-    "path": "M2 22 22 2",
+    "path": "M2 22 22 2M7 16a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM15 8a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "arrow": {
     "name": "Arrow",
-    "path": "M4 20 18 6M18 6h-6M18 6v6",
+    "path": "M4 20 15 9M20 4l-2 8-6-6z",
     "text": false
   },
   "horizontal-line": {
@@ -28,7 +28,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "horizontal-ray": {
     "name": "Horizontal Ray",
-    "path": "M6 12H22M4 10V14",
+    "path": "M8 12h14M7 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "vertical-line": {
@@ -38,7 +38,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "cross-line": {
     "name": "Cross Line",
-    "path": "M2 12h20M12 2v20",
+    "path": "M2 12h20M12 2v20M11 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "rectangle": {
@@ -68,12 +68,12 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "long-position": {
     "name": "Long Position",
-    "path": "M3 15h18v5H3zM3 5h18v5H3zM12 10v5",
+    "path": "M2 14h4M6 3h15v17H6zM6 14h15M10 11l3-4 3 4z",
     "text": false
   },
   "short-position": {
     "name": "Short Position",
-    "path": "M3 5h18v5H3zM3 15h18v5H3zM12 10v5",
+    "path": "M2 10h4M6 4h15v17H6zM6 10h15M10 13l3 4 3-4z",
     "text": false
   },
   "forecast": {
@@ -88,12 +88,12 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "price-range": {
     "name": "Price Range",
-    "path": "M12 4v16M8 8l4-4 4 4M8 16l4 4 4-4",
+    "path": "M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5",
     "text": false
   },
   "date-range": {
     "name": "Date Range",
-    "path": "M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4",
+    "path": "M4 12h16M9 7l-5 5 5 5M15 7l5 5-5 5",
     "text": false
   },
   "circle": {
@@ -108,7 +108,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "polyline": {
     "name": "Polyline",
-    "path": "M2 18 8 8l4 6 4-10 4 4",
+    "path": "M4 19 9 7l5 9 6-11M2 19a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM7 7a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12 16a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "arc": {
@@ -210,12 +210,13 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
       "text.backgroundColor",
       "text.backgroundOpacity",
       "text.border",
-      "text.borderColor"
+      "text.borderColor",
+      "space"
     ]
   },
   "path": {
     "name": "Path",
-    "path": "M2 18 8 8l4 6 4-10",
+    "path": "M3 20 7 7l5 9 5-5M20 8l-6 2 4 4z",
     "text": false
   },
   "price-label": {
@@ -234,7 +235,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "callout": {
     "name": "Callout",
-    "path": "M3 4h18v11H3zM8 15l-2 5 6-5",
+    "path": "M3 3h18v9H11l-6 8 1-8H3z",
     "text": true,
     "fields": [
       "style.color",
@@ -360,7 +361,8 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
       "text.backgroundColor",
       "text.backgroundOpacity",
       "text.border",
-      "text.borderColor"
+      "text.borderColor",
+      "space"
     ]
   },
   "arrow-left": {
@@ -390,27 +392,27 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "pitchfork": {
     "name": "Pitchfork",
-    "path": "M4 21 16 9M4 9 16 21M10 15 22 3M4 9 10 3M16 21l6-6",
+    "path": "M5 2v8h14V2M12 2v19M11 21a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "schiff-pitchfork": {
     "name": "Schiff Pitchfork",
-    "path": "M4 19 18 5M4 11 12 19M8 15 20 3M4 11l6-6M12 19l8-8",
+    "path": "M5 2v8h14V2M12 2v12h7M18 14a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "modified-schiff-pitchfork": {
     "name": "Modified Schiff Pitchfork",
-    "path": "M4 20 20 4M4 12 12 20M8 16 20 4M4 12l8-8M12 20l8-8",
+    "path": "M5 2v8h14V2M12 2v13M5 10l14 10M18 20a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "inside-pitchfork": {
     "name": "Inside Pitchfork",
-    "path": "M4 20 20 4M6 10 14 18M6 10l6-6M14 18l6-6",
+    "path": "M5 2v8h14V2M12 2v8M5 10l7 10 7-10M11 20a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "info-line": {
     "name": "Info Line",
-    "path": "M4 20 20 4M8 8h8",
+    "path": "M6 18 18 6M3 3h8v5H3zM5 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM17 6a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "trend-angle": {
@@ -425,7 +427,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "fib-speed-resistance-fan": {
     "name": "Fib Speed Resistance Fan",
-    "path": "M3 21V3M3 21h18M3 21 21 3M3 21 12 3M3 21 21 12",
+    "path": "M3 3h18v18M3 21 21 3M21 12 3 21 12 3",
     "text": false
   },
   "icon-stamp": {
@@ -440,22 +442,22 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "fib-circles": {
     "name": "Fib Circles",
-    "path": "M12 20A5 5 0 0 1 12 10M12 20A9 9 0 0 1 12 2M10 20h4",
+    "path": "M9 12a3 3 0 0 0 6 0a3 3 0 0 0 -6 0zM6 12a6 6 0 0 0 12 0a6 6 0 0 0 -12 0zM3 12a9 9 0 0 0 18 0a9 9 0 0 0 -18 0z",
     "text": false
   },
   "fib-speed-resistance-arcs": {
     "name": "Fib Speed Resistance Arcs",
-    "path": "M3 21a6 6 0 0 0 6-6M3 21a12 12 0 0 0 12-12M3 21a18 18 0 0 0 18-18M3 21 21 3",
+    "path": "M10 14 22 2M2 6a8 8 0 0 1 16 16M6 10a4 4 0 0 1 8 8",
     "text": false
   },
   "fib-wedge": {
     "name": "Fib Wedge",
-    "path": "M3 20 21 4M3 20 21 12M3 20a12 12 0 0 0 10-6",
+    "path": "M20 18H5l9-12M10 18A5 5 0 0 0 8 14M15 18A10 10 0 0 0 11 10M20 18A15 15 0 0 0 14 6",
     "text": false
   },
   "fib-spiral": {
     "name": "Fib Spiral",
-    "path": "M12 13A3 3 0 1 1 15 10A7 7 0 1 1 8 3A9 9 0 1 1 21 12",
+    "path": "M8 10A2 2 0 0 0 10 8 3 3 0 0 0 7 5 5 5 0 0 0 2 10 8 8 0 0 0 10 18 13 13 0 0 0 22 10",
     "text": false
   },
   "gann-square": {
@@ -465,7 +467,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "dedekind-tessellation": {
     "name": "Dedekind Tessellation",
-    "path": "M3 21a9 9 0 0 1 18 0M3 21a4 4 0 0 1 8 0M13 21a4 4 0 0 1 8 0M12 3v18",
+    "path": "M3 3h18v18H3zM3 3A18 18 0 0 1 21 21M21 3A18 18 0 0 0 3 21M3 21a6 6 0 0 1 12 0M9 21a6 6 0 0 1 12 0M12 3 12 21",
     "text": false
   },
   "sonic": {
@@ -475,7 +477,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "supersonic": {
     "name": "Supersonic",
-    "path": "M3 12 21 3M3 12l18 9M7 12a5 5 0 0 1 10 0M10 12a3 3 0 0 1 6 0",
+    "path": "M22 3 2 12l20 9M5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM8 12a4 4 0 0 0 8 0a4 4 0 0 0 -8 0z",
     "text": false
   },
   "golden-sonic": {
@@ -485,7 +487,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "golden-supersonic": {
     "name": "Golden Supersonic",
-    "path": "M3 12 21 3M3 12l18 9M6 12a6 6 0 0 1 12 0M10 12a2 2 0 0 1 4 0M18 11v2",
+    "path": "M22 5 2 12l20 7M5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM8 12a3 3 0 0 0 6 0a3 3 0 0 0 -6 0zM12 12a5 5 0 0 0 10 0a5 5 0 0 0 -10 0z",
     "text": false
   },
   "xabcd-pattern": {
@@ -515,32 +517,42 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "gartley": {
     "name": "Gartley",
-    "path": "M3 20 7 3 12 13 16 7 21 17M3 20 12 13 21 17",
+    "path": "M2 21 7 3 12 14 17 7 22 17M2 21 12 14 22 17",
     "text": false
   },
   "bat": {
     "name": "Bat",
-    "path": "M3 21 7 3 12 11 16 6 21 19M7 3 16 6M3 21 21 19",
+    "path": "M2 21 7 3 12 11 17 5 22 19M2 21 12 11 22 19",
     "text": false
   },
   "butterfly": {
     "name": "Butterfly",
-    "path": "M3 16 7 3 12 14 16 7 21 21M3 16 12 14 21 21",
+    "path": "M2 16 7 3 12 13 17 6 22 21M2 16 12 13 22 21",
     "text": false
   },
   "crab": {
     "name": "Crab",
-    "path": "M3 12 7 3 12 10 16 5 21 22M3 12 12 10 21 22",
+    "path": "M2 14 7 2 12 9 17 4 22 21M2 14 12 9 22 21",
     "text": false
   },
   "shark": {
     "name": "Shark",
-    "path": "M3 17 7 10 12 20 16 3 21 18M3 17 21 18M7 10 16 3",
+    "path": "M2 22 7 5 12 13 17 2 22 22M2 22 12 13 22 22",
     "text": false
   },
   "cypher": {
     "name": "Cypher",
-    "path": "M3 20 7 9 12 16 16 3 21 18M3 20 12 16M7 9 16 3",
+    "path": "M2 21 7 7 12 14 17 2 22 17M2 21 12 14 22 17",
+    "text": false
+  },
+  "anchored-vwap": {
+    "name": "Anchored VWAP",
+    "path": "M4 4v16M4 15 8 12 12 14 16 8 20 6M2 4h4",
+    "text": false
+  },
+  "fixed-range-volume-profile": {
+    "name": "Fixed Range Volume Profile",
+    "path": "M4 3v18M4 5h8v3H4M4 10h16v3H4M4 15h12v3H4",
     "text": false
   }
 }

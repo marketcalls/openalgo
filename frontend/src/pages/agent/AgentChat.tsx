@@ -62,6 +62,7 @@ import { VoiceButton } from '@/components/agent/VoiceButton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
+import { useModelChoice } from '@/lib/agent/useModelChoice'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
 import type { VoiceController, VoiceTranscriptLine } from '@/lib/agent/voice'
 import { cn } from '@/lib/utils'
@@ -84,7 +85,8 @@ const COLUMN = 'mx-auto w-full max-w-3xl'
 const AGENT_SURFACES = ['chat', 'voice'] as const
 
 export default function AgentChat() {
-  const [modelId, setModelId] = useState<number | null>(null)
+  // Remembered in this browser and shared with the /trading panel.
+  const [modelId, setModelId] = useModelChoice()
   // Per turn, not persisted: effort belongs to the question being asked.
   const [effort, setEffort] = useState<ReasoningEffort>('off')
   const [editError, setEditError] = useState<string | null>(null)

@@ -2,6 +2,7 @@
 # Mapping Kotak Neo API Parameters
 
 import math
+import uuid
 from decimal import Decimal
 
 from database.token_db import get_br_symbol, get_symbol_info
@@ -141,8 +142,20 @@ def _fmt_price(value):
 
 
 # Kotak echoes `ig` back as GuiOrdId and rejects a blank one, so it is always
-# set. Place Order only - the modify payload takes no `ig`.
-ORDER_TAG = "openalgo"
+# set. It is also a client order id: a value already used on the account is
+# rejected with "Client OrderID already exists", so a fixed tag lets only the
+# first order of the day through (#2177). Every Place Order therefore gets a
+# fresh `<prefix>-<uuid4>`, the shape Kotak's own apps send (e.g.
+# "W0BDV-<uuid4>"), keeping OpenAlgo orders recognisable. A caller-supplied
+# order_tag becomes the prefix, capped so the tag stays within the 52-character
+# ids Kotak itself issues. Place Order only - the modify payload takes no `ig`.
+ORDER_TAG_PREFIX = "openalgo"
+_MAX_TAG_PREFIX = 15
+
+
+def _order_tag(data):
+    prefix = str(data.get("order_tag") or data.get("ig") or ORDER_TAG_PREFIX).strip()
+    return f"{(prefix or ORDER_TAG_PREFIX)[:_MAX_TAG_PREFIX]}-{uuid.uuid4()}"
 
 
 def transform_data(data, token):
@@ -171,7 +184,7 @@ def transform_data(data, token):
         "tt": "B" if action == "BUY" else ("S" if action == "SELL" else "None"),
     }
 
-    transformed["ig"] = ORDER_TAG
+    transformed["ig"] = _order_tag(data)
 
     _apply_slm_conversion(transformed, data)
 

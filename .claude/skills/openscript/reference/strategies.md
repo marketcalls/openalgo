@@ -33,6 +33,29 @@ one that trades is the one somebody has to be able to audit at speed.
 If the answer is "it should draw, and also trade", it is a strategy. Every
 strategy can plot.
 
+## What `/trading` draws of a study
+
+Two things are drawn on `/trading` with openalgo-script 0.8.1 that were not
+with 0.5.0, because the platform now tells the chart adapter which chart
+version it draws on:
+
+- **A band whose colour is computed per bar.** The band in
+  `study-bands.oscript` is one (`shade ? aqua : none`), and so is a colour that
+  follows `close > open`. Each bar is shaded in the colour computed there, an
+  absent colour leaves that bar unshaded, and `opacity` dims it as it dims a
+  constant colour.
+- **More than one grid.** Every `table` a study declares is drawn, each in the
+  corner its own `position` names. Two grids pinned to the same corner are drawn
+  one over the other, so give each its own corner.
+
+0.5.0 dropped the second grid and the computed colour without a word, and 0.6.0
+to 0.7.2 refused both with `OS6024` before a bar ran. A study that was split in
+two, or had its band flattened to one colour, to get round that can be put back.
+
+A cell written outside its grid compiles. It is `OS4008` on the bar that writes
+it, naming the row, the column and the grid's shape: declare the grid with the
+shape the script writes.
+
 ---
 
 ## Long only
@@ -171,7 +194,10 @@ A compile is not a backtest and a backtest is not a live run.
 1. `validate.mjs` says the compiler accepted it. That is all it says. Nothing
    here has run a single bar.
 2. Backtest it in `/trading`. Read the trade list, not the equity curve: the
-   curve hides a strategy that took three trades.
+   curve hides a strategy that took three trades. A `"lookahead"` read
+   (`OS8005`) gives the backtest a higher timeframe bar's final value from its
+   first bar, so a strategy that trades on one is tested on numbers it could
+   not have had.
 3. Run it in **analyzer mode**, where orders go to the sandbox rather than to a
    broker, and watch the orders it actually sends against the signals you
    expected.

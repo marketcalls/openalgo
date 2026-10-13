@@ -68,7 +68,12 @@ import {
   parseInterval,
   unavailableReason,
 } from '@/lib/historify/intervals'
-import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
+import {
+  CHART_TYPE_GROUPS,
+  CHART_TYPES,
+  chartTypeIcon,
+  widgetChartType,
+} from '@/lib/trading/chartTypes'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
@@ -616,7 +621,7 @@ export function HistorifyChartPane({
           symbol={state.symbol}
           exchange={state.exchange}
           interval={state.interval}
-          chartType={state.chartType}
+          chartType={widgetChartType(state.chartType)}
           persistKey={persistKey}
           topbar={false}
           onReady={(instance) => {
