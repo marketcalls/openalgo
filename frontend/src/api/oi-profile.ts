@@ -27,10 +27,19 @@ export interface OIProfileDataResponse {
   atm_strike?: number
   lot_size?: number
   expiry_date?: string
+  expiry_dates?: string[]
   futures_symbol?: string | null
   interval?: string
   candles?: CandleData[]
   oi_chain?: OIProfileChainItem[]
+  window_start?: number | null
+  window_end?: number | null
+  strike_count?: number
+  /** Whether the options exchange is in session. A closed market cannot move. */
+  market_open?: boolean
+  /** Some legs' previous-session OI is still being fetched in the background,
+   *  so the change columns are incomplete. Ask again shortly. */
+  oi_change_pending?: boolean
 }
 
 export interface IntervalsResponse {
@@ -53,8 +62,14 @@ export const oiProfileApi = {
     underlying: string
     exchange: string
     expiry_date: string
+    expiry_dates?: string[]
     interval: string
     days: number
+    window_start?: number
+    window_end?: number
+    strike_count?: number
+    include_change?: boolean
+    include_candles?: boolean
   }): Promise<OIProfileDataResponse> => {
     const response = await webClient.post<OIProfileDataResponse>(
       '/oiprofile/api/profile-data',
