@@ -245,9 +245,8 @@ export function BoxChartSettingsDialog({ type, req, onApply, onClose }: Props) {
             ))}
 
             {heading(type === 'renko' ? 'Brick size' : 'Box size')}
-            <div
-              className="col-span-2 flex flex-wrap gap-1.5"
-              role="group"
+            <fieldset
+              className="col-span-2 m-0 flex min-w-0 flex-wrap gap-1.5 border-0 p-0"
               aria-label="Percent presets"
             >
               {PRESETS[type].map((p) => {
@@ -269,7 +268,7 @@ export function BoxChartSettingsDialog({ type, req, onApply, onClose }: Props) {
                   </button>
                 )
               })}
-            </div>
+            </fieldset>
 
             <label htmlFor={`${id}-size`} className="text-[13px] text-muted-foreground">
               Size
