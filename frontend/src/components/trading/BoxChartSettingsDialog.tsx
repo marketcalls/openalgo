@@ -135,9 +135,12 @@ export function BoxChartSettingsDialog({ type, req, onApply, onClose }: Props) {
   useEffect(() => {
     if (!open) return
     const before = document.activeElement as HTMLElement | null
-    dialogRef.current?.focus()
+    // The size is the control a trader reaches for, and a visible one: focus on
+    // the bare container would show no ring.
+    const size = document.getElementById(`${id}-size`)
+    ;(size ?? dialogRef.current)?.focus()
     return () => before?.focus?.()
-  }, [open])
+  }, [open, id])
   const keepFocus = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !dialogRef.current) return
     const focusable = [

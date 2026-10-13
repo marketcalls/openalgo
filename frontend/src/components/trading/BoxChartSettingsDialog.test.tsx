@@ -177,8 +177,10 @@ describe('BoxChartSettingsDialog', () => {
         onClose={vi.fn()}
       />
     )
-    const dialog = screen.getByRole('dialog', { name: 'Renko settings' })
-    expect(dialog).toHaveFocus()
+    expect(screen.getByRole('dialog', { name: 'Renko settings' })).toContainElement(
+      document.activeElement as HTMLElement
+    )
+    expect(screen.getByLabelText('Size')).toHaveFocus()
     screen.getByRole('button', { name: 'Ok' }).focus()
     await user.tab()
     expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus()
