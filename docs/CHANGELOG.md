@@ -8,6 +8,36 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### /trading: Renko and point and figure settings, openalgo-charts 2.6.2
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- A Renko or Point & Figure chart now has a settings button beside the chart
+  type. It opens a short form: the up and down colours, percent presets, the
+  box size and how it is measured (an absolute price, a percent of price, a
+  multiple of the ATR, or a percent of the ATR), the ATR length, the reversal
+  for point and figure, and whether the boxes follow the close only or each
+  bar's high and low.
+- Renko bricks can now be sized from price or from the ATR, and built from
+  the high and low. Point and figure gains the percent-of-ATR box. The same
+  options also appear in Chart settings under Price, and the two always agree.
+- A choice is kept for that instrument and chart type, the way the box size
+  already was, because a box is a price: a 30 point brick chosen on NIFTY would
+  draw nothing on a 100 rupee stock. Reset to defaults in the form goes back
+  to the box sized from the instrument's price.
+- The range buttons under the chart (1D, 5D, 1M and the rest) and Go to no
+  longer say older history cannot load when the only gap before the loaded
+  bars is a weekend, a holiday or the hours before the market opens. A month
+  that was whole used to be reported as cut short on the days a month back
+  fell on a Sunday or a Monday.
+
+**Dependencies.** `openalgo-charts` 2.6.0 to 2.6.2. Nothing changes for a
+custom chart indicator: no built-in id was added or removed, and the
+chart-indicator skill's index and examples pass on 2.6.2.
+
 ### Agent: reliable tool calls on /agent and /trading
 
 No database migration and no `update.sh` run are needed. Restart OpenAlgo after
