@@ -10,6 +10,7 @@ import {
   Scissors,
   Search,
   Settings,
+  SlidersHorizontal,
   Trash2,
 } from 'lucide-react'
 import type { ChartObjects, LinkGroup } from 'openalgo-charts'
@@ -42,7 +43,12 @@ import {
   createChartStateGate,
   LOADING_DELAY_MS,
 } from '@/lib/trading/chartState'
-import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
+import {
+  CHART_TYPE_GROUPS,
+  CHART_TYPES,
+  chartTypeIcon,
+  isBoxChartType,
+} from '@/lib/trading/chartTypes'
 import { MOD_KEY } from '@/lib/trading/drawingKeys'
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
@@ -98,6 +104,9 @@ const ChartDataDialog = lazy(() =>
 )
 const ChartSettingsDialog = lazy(() =>
   import('./ChartSettingsDialog').then((m) => ({ default: m.ChartSettingsDialog }))
+)
+const BoxChartSettingsDialog = lazy(() =>
+  import('./BoxChartSettingsDialog').then((m) => ({ default: m.BoxChartSettingsDialog }))
 )
 const IndicatorSettingsDialog = lazy(() =>
   import('./IndicatorSettingsDialog').then((m) => ({ default: m.IndicatorSettingsDialog }))
@@ -521,6 +530,15 @@ export function ChartPane({
   // Read from the chart each time the gear is clicked rather than held: the
   // schema depends on the live series type, theme and timezone.
   const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
+  // The Renko or point and figure dialog. It belongs to the type it was opened
+  // for, so a switch to any other type closes it.
+  const [boxSettings, setBoxSettings] = useState<{
+    type: 'renko' | 'point-figure'
+    req: ChartSettingsRequest
+  } | null>(null)
+  useEffect(() => {
+    setBoxSettings((open) => (open && open.type !== chartType ? null : open))
+  }, [chartType])
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
   /** The CSV download's choices, while its dialog is open. */
   const [dataExport, setDataExport] = useState<{
@@ -1255,6 +1273,34 @@ export function ChartPane({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          {/* Box settings, beside the type they belong to and only while it is
+            on screen: the size, how it is measured, and the reversal are what
+            a trader changes while reading boxes, so they get a click rather
+            than a trip through the chart settings Price tab. */}
+          {isBoxChartType(chartType) && (
+            <Tip
+              tip={{
+                title: `${chartTypeDef.label} settings`,
+                sub: 'Box size, reversal and colours',
+              }}
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 shrink-0 p-0"
+                aria-label={`${chartTypeDef.label} settings`}
+                onClick={() => {
+                  const type = chartType
+                  void terminalRef.current
+                    ?.chartSettings()
+                    .then((cs) => cs && setBoxSettings({ type, req: cs }))
+                }}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+              </Button>
+            </Tip>
+          )}
+
           {/* Product. Always exactly two options (MIS|CNC for equity, MIS|NRML
             for derivatives), so a segmented control spends double the width to
             show one you are not using — this toggles and names the other. */}
@@ -1631,6 +1677,18 @@ export function ChartPane({
                 void terminalRef.current?.applyChartSettings(patch)
               }}
               onClose={() => setChartSettings(null)}
+            />
+          </Suspense>
+        )}
+        {boxSettings && (
+          <Suspense fallback={null}>
+            <BoxChartSettingsDialog
+              type={boxSettings.type}
+              req={boxSettings.req}
+              onApply={(patch) => {
+                void terminalRef.current?.applyChartSettings(patch)
+              }}
+              onClose={() => setBoxSettings(null)}
             />
           </Suspense>
         )}

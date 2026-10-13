@@ -115,6 +115,14 @@ export const CHART_TYPES: Record<string, ChartTypeDef> = Object.fromEntries(
 )
 
 /**
+ * The types built from price boxes, which carry a settings dialog of their own
+ * beside the chart type: box size and how it is measured, reversal, prices.
+ */
+export function isBoxChartType(value: string): value is 'renko' | 'point-figure' {
+  return value === 'renko' || value === 'point-figure'
+}
+
+/**
  * The chart type id the packaged widget knows a value by. The widget applies
  * a transform itself under the transform's own id, so `range` is `range-bars`
  * there; every other value is the same word.
