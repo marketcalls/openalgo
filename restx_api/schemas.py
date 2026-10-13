@@ -19,6 +19,15 @@ def _coerce_quantity_to_int(data):
     return data
 
 
+class StrictBoolean(fields.Boolean):
+    """Safety flags accept JSON booleans without string or numeric coercion."""
+
+    def _deserialize(self, value, attr, data, **kwargs):
+        if type(value) is not bool:
+            raise ValidationError("Must be a JSON boolean.")
+        return value
+
+
 class OrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
@@ -46,6 +55,7 @@ class OrderSchema(Schema):
     underlying_ltp = fields.Float(
         missing=None, allow_none=True
     )  # Optional: passed from options order for execution reference
+    reduce_only = StrictBoolean(required=False, allow_none=False)
 
     @post_load
     def coerce_quantity(self, data, **kwargs):

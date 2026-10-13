@@ -117,6 +117,21 @@ def validate_order_data(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | No
         return False, None, str(err)
 
 
+def _reduce_only_route_error(order_data, broker, analyze_mode):
+    if order_data.get("reduce_only") is True and (broker != "deltaexchange" or analyze_mode):
+        return (
+            False,
+            {
+                "status": "error",
+                "message": "reduce_only requires live Delta Exchange execution",
+                "data": {},
+                "failure_class": "unsupported_reduce_only",
+            },
+            422,
+        )
+    return None
+
+
 def place_order_with_auth(
     order_data: dict[str, Any],
     auth_token: str,
@@ -149,6 +164,14 @@ def place_order_with_auth(
 
     api_key = original_data.get("apikey", "")
 
+    analyze_mode = get_analyze_mode() and not force_live
+    route_error = _reduce_only_route_error(order_data, broker, analyze_mode)
+    if route_error is not None:
+        if analyze_mode:
+            route_error[1]["mode"] = "analyze"
+            emit_analyzer_error(original_data, route_error[1]["message"])
+        return route_error
+
     # If in analyze mode, route to sandbox for sandbox trading.
     #
     # force_live opts out, for a caller that already decided the pipe. The
@@ -163,7 +186,7 @@ def place_order_with_auth(
     # (see orderbook_service). This is the same idea made explicit, because a
     # write path should not infer intent from whether a logging argument
     # happens to be None.
-    if get_analyze_mode() and not force_live:
+    if analyze_mode:
         from services.sandbox_service import sandbox_place_order
 
         if not api_key:
@@ -342,6 +365,23 @@ def place_order(
         from services.order_router_service import queue_order, should_route_to_pending
 
         if should_route_to_pending(api_key, "placeorder"):
+            if order_data.get("reduce_only") is True:
+                token, pending_broker = get_auth_token_broker(api_key)
+                if token is None:
+                    return (
+                        False,
+                        {"status": "error", "message": "API key authentication failed", "data": {}},
+                        403,
+                    )
+                pending_analyze = get_analyze_mode()
+                route_error = _reduce_only_route_error(
+                    order_data, pending_broker, pending_analyze
+                )
+                if route_error is not None:
+                    if pending_analyze:
+                        route_error[1]["mode"] = "analyze"
+                        emit_analyzer_error(original_data, route_error[1]["message"])
+                    return route_error
             return queue_order(api_key, original_data, "placeorder")
 
     # Validate the order data
