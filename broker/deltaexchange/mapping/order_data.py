@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, InvalidOperation
 
 from database.token_db import get_oa_symbol, get_symbol, get_symbol_info
 from utils.logging import get_logger
@@ -257,75 +258,123 @@ def transform_order_data(orders):
 
 
 def map_trade_data(trade_data):
+    """Map native fills using spot base units or authoritative contract units.
+
+    Native product metadata is authoritative, including for expired contracts
+    absent from the current symbol cache. Unsupported derivative metadata fails
+    the request instead of valuing a contract as one underlying unit.
     """
-    Normalises a list of Delta Exchange fill/trade dicts to the OpenAlgo internal format.
-
-    Delta Exchange fill fields (from GET /v2/fills or order history):
-        id             – fill ID
-        product_id     – contract ID
-        product_symbol – contract symbol
-        side           – "buy" | "sell"
-        size           – contracts traded
-        price          – execution price (string)
-        order_id       – associated order ID
-        created_at     – fill timestamp
-    """
-    try:
-        # Check if 'data' is None
-        if trade_data is None:
-            logger.info("No trade data available.")
-            return []
-
-        # Check if trade_data is an error response (dict with status)
-        if isinstance(trade_data, dict) and "status" in trade_data:
-            if trade_data.get("status") in ["error", "failure"]:
-                logger.error(f"Error in trade data: {trade_data.get('message', 'Unknown error')}")
-                return []
-
-        # Check if trade_data is a string (unexpected response)
-        if isinstance(trade_data, str):
-            logger.error(f"Received string response instead of trade data: {trade_data[:200]}...")
-            return []
-
-        # Ensure trade_data is a list
-        if not isinstance(trade_data, list):
-            logger.warning(f"Expected list but got {type(trade_data)}: {trade_data}")
-            return []
-
-        for trade in trade_data:
-            if not isinstance(trade, dict):
-                logger.warning(f"Skipping non-dictionary trade: {type(trade)}")
-                continue
-
-            product_id = trade.get("product_id", "")
-            product_symbol = trade.get("product_symbol", "")
-            order_id = trade.get("order_id", "")
-
-            # Resolve symbol from DB; fall back to product_symbol
-            symbol_from_db = get_symbol(str(product_id), "CRYPTO") if product_id else None
-            trade["tradingSymbol"] = symbol_from_db or product_symbol
-
-            trade["exchangeSegment"] = "CRYPTO"
-            trade["productType"] = "NRML"
-
-            # Composite order ID for reference
-            trade["orderId"] = f"{product_id}:{order_id}" if product_id else str(order_id)
-
-            trade["tradedQuantity"] = trade.get("size", 0)
-            trade["tradedPrice"] = float(trade.get("price") or 0)
-            trade["transactionType"] = trade.get("side", "").upper()
-            trade["updateTime"] = trade.get("created_at", "")
-
-            logger.debug(
-                f"Mapped fill {trade.get('id', '')}: "
-                f"symbol={trade['tradingSymbol']} side={trade['transactionType']}"
+    if not isinstance(trade_data, list):
+        raise ValueError("Delta trade book requires a list of native fills")
+    mapped = []
+    products = {}
+    for trade in trade_data:
+        if not isinstance(trade, dict):
+            raise ValueError("Delta trade book encountered an invalid fill row")
+        for key in ("id", "order_id"):
+            reference = trade.get(key)
+            if (
+                isinstance(reference, bool)
+                or not isinstance(reference, (str, int))
+                or (isinstance(reference, int) and reference <= 0)
+                or (isinstance(reference, str) and not reference.strip())
+            ):
+                raise ValueError("Delta trade book encountered a fill without native identity")
+        if not str(trade.get("product_id") or "").isdigit() or int(trade["product_id"]) <= 0:
+            raise ValueError("Delta trade book encountered a fill without native identity")
+        product_id = str(trade["product_id"])
+        product = trade.get("product")
+        if not isinstance(product, dict) or str(product.get("id")) != product_id:
+            raise ValueError("Delta trade book has missing or unsupported native contract metadata")
+        underlying = product.get("underlying_asset")
+        quoting = product.get("quoting_asset")
+        if not all(
+            isinstance(asset, dict)
+            and isinstance(asset.get("symbol"), str)
+            and asset["symbol"].strip()
+            for asset in (underlying, quoting)
+        ):
+            raise ValueError("Delta trade book has unsupported native contract currency units")
+        if product.get("contract_type") == "spot":
+            # Spot size is already in base-asset units. It has no derivative
+            # multiplier, notional convention or required settlement asset.
+            multiplier = Decimal("1")
+            product_type = "CNC"
+            unit_currency = underlying["symbol"]
+            settlement_currency = None
+        else:
+            if (
+                product.get("contract_type")
+                not in {"call_options", "put_options", "futures", "perpetual_futures"}
+                or product.get("notional_type") != "vanilla"
+            ):
+                raise ValueError(
+                    "Delta trade book has missing or unsupported native contract metadata"
+                )
+            multiplier = _trade_decimal(
+                product.get("contract_value"), "contract value", positive=True
             )
+            settling = product.get("settling_asset")
+            if (
+                not isinstance(settling, dict)
+                or not isinstance(settling.get("symbol"), str)
+                or not settling["symbol"].strip()
+                or product.get("contract_unit_currency") != underlying["symbol"]
+                or quoting["symbol"] != settling["symbol"]
+            ):
+                raise ValueError("Delta trade book has unsupported native contract currency units")
+            product_type = "NRML"
+            unit_currency = product["contract_unit_currency"]
+            settlement_currency = settling["symbol"]
+        facts = (
+            product.get("symbol"),
+            product["contract_type"],
+            underlying["symbol"],
+            quoting["symbol"],
+            multiplier,
+            unit_currency,
+            settlement_currency,
+        )
+        if product_id not in products:
+            symbol = get_symbol(product_id, "CRYPTO") or product.get("symbol")
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ValueError("Delta trade book native product has no symbol")
+            products[product_id] = (symbol, facts)
+        symbol, previous_facts = products[product_id]
+        if previous_facts != facts or (
+            trade.get("product_symbol") and trade["product_symbol"] != product.get("symbol")
+        ):
+            raise ValueError("Delta trade book encountered conflicting native product identity")
+        quantity = _trade_decimal(trade.get("size"), "fill quantity", positive=True)
+        price = _trade_decimal(trade.get("price"), "fill price")
+        if trade.get("side") not in {"buy", "sell"}:
+            raise ValueError("Delta trade book encountered an invalid fill side")
+        mapped.append(
+            {
+                **trade,
+                "tradingSymbol": symbol,
+                "exchangeSegment": "CRYPTO",
+                "productType": product_type,
+                "orderId": f"{product_id}:{trade['order_id']}",
+                "tradedQuantity": str(quantity),
+                "tradedPrice": str(price),
+                "contractValue": str(multiplier),
+                "tradeValueCurrency": quoting["symbol"],
+                "transactionType": trade["side"].upper(),
+                "updateTime": trade.get("created_at", ""),
+            }
+        )
+    return mapped
 
-        return trade_data
 
-    except Exception as e:
-        logger.error(f"Exception in map_trade_data: {e}")
-        return []
+def _trade_decimal(value, field, positive=False):
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite() or number < 0 or (positive and number == 0):
+            raise ValueError
+        return number
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"Delta trade book encountered an invalid {field}") from exc
 
 
 def transform_tradebook_data(tradebook_data):
@@ -333,49 +382,35 @@ def transform_tradebook_data(tradebook_data):
     Transform Delta Exchange fill/trade data to OpenAlgo standard format.
     Expects list of dicts pre-normalised by map_trade_data().
     """
-    try:
-        # Handle None input
-        if tradebook_data is None:
-            return []
-
-        # Handle non-list inputs
-        if not isinstance(tradebook_data, list):
-            logger.warning(f"Expected list but got {type(tradebook_data)}")
-            return []
-
-        transformed_data = []
-        for trade in tradebook_data:
-            # Ensure each trade is a dictionary
-            if not isinstance(trade, dict):
-                logger.warning(f"Skipping non-dictionary trade: {type(trade)}")
-                continue
-
-            try:
-                quantity = float(trade.get("tradedQuantity", 0) or 0)
-            except (TypeError, ValueError):
-                quantity = 0.0
-
-            try:
-                price = float(trade.get("tradedPrice", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                price = 0.0
-
-            transformed_trade = {
+    if not isinstance(tradebook_data, list):
+        raise ValueError("Delta trade book requires a list of mapped fills")
+    transformed_data = []
+    for trade in tradebook_data:
+        if not isinstance(trade, dict):
+            raise ValueError("Delta trade book encountered an invalid mapped fill")
+        quantity = _trade_decimal(trade.get("tradedQuantity"), "fill quantity", positive=True)
+        price = _trade_decimal(trade.get("tradedPrice"), "fill price")
+        multiplier = _trade_decimal(trade.get("contractValue"), "contract value", positive=True)
+        transformed_data.append(
+            {
                 "symbol": trade.get("tradingSymbol", ""),
                 "exchange": trade.get("exchangeSegment", ""),
                 "product": trade.get("productType", ""),
                 "action": trade.get("transactionType", ""),
-                "quantity": quantity,
-                "average_price": price,
-                "trade_value": quantity * price,
+                "quantity": float(quantity),
+                "average_price": float(price),
+                "trade_value": float(quantity * price * multiplier),
                 "orderid": trade.get("orderId", ""),
                 "timestamp": trade.get("updateTime", ""),
+                "fillid": str(trade["id"]),
+                # Decimal strings preserve native precision through display formatting.
+                "fill_price": str(price),
+                "fill_quantity": str(quantity),
+                "contract_value": str(multiplier),
+                "trade_value_currency": trade.get("tradeValueCurrency"),
             }
-            transformed_data.append(transformed_trade)
-        return transformed_data
-    except Exception as e:
-        logger.error(f"Exception in transform_tradebook_data: {e}")
-        return []
+        )
+    return transformed_data
 
 
 def map_position_data(position_data):
