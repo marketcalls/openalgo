@@ -616,6 +616,12 @@ schema forever and the change silently never reaches the ~290k live deployments.
 - **Backfill from the data, not from a default.** A new column defaulted
   uniformly is usually wrong for existing rows; derive each row's value from
   what the row already says.
+- **A revised seed file needs a migration too.** `data/qtyfreeze.csv` and the
+  other seed data load only into an empty table, so a new value reaches new
+  installs and nobody else. Ship a migration that updates the rows, guarded on
+  every value OpenAlgo shipped or the exchange published before, and leave an
+  empty table to the seed: one inserted row stops the seed from running.
+  `upgrade/migrate_qty_freeze_oct_2026.py` is the pattern.
 - **SQLite limits shape the approach.** It cannot alter a `CHECK` constraint or
   add a `UNIQUE` column in place: rebuild the table (see
   `migrate_sandbox_trigger_pending.py`) or add a partial unique index instead.

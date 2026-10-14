@@ -750,8 +750,8 @@ def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, brok
                 400,
             )
 
-        # Whole-lot freeze cap: floor(freeze / lotsize) * lotsize (NIFTY 1800/65 =>
-        # 27 lots = 1755). Unknown freeze (non-NFO default / cache empty) falls back
+        # Whole-lot freeze cap: floor(freeze / lotsize) * lotsize (NIFTY 3510/65 =>
+        # 54 lots = 3510). Unknown freeze (non-NFO default / cache empty) falls back
         # to a conservative MAX_LOTS-lot chunk so exits never exceed the real freeze.
         freeze = 0
         try:
