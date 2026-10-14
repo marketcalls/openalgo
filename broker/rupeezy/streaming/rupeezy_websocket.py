@@ -305,7 +305,11 @@ class RupeezyWebSocket:
 
     def subscribe(self, ticker, mode):
         """Subscribe (or change mode). Recorded first, so it is replayed on
-        (re)connect even if the socket is down or drops mid-send."""
+        (re)connect even if the socket is down. If the frame cannot be sent
+        on a socket that still looks open, the connection is recycled so the
+        replay delivers it rather than the subscription silently never
+        reaching Vortex."""
+        recycle = False
         with self.lock:
             if (
                 ticker not in self.subscriptions
@@ -313,7 +317,11 @@ class RupeezyWebSocket:
             ):
                 raise ValueError("Rupeezy allows at most 1000 instruments per connection.")
             self.subscriptions[ticker] = mode
-            self._try_send(ticker, mode, "subscribe")
+            if self.connected and self.ws:
+                recycle = not self._try_send(ticker, mode, "subscribe")
+        if recycle:
+            logger.warning(f"Rupeezy subscribe for {ticker} not sent; reconnecting the feed")
+            self._recycle_connection()
 
     def unsubscribe(self, ticker):
         """Stop a ticker. If the frame cannot be sent on a socket that still

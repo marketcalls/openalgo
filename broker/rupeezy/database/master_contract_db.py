@@ -179,7 +179,12 @@ def process_master(df):
             for sym, oa_exchange in zip(base[is_index], out.loc[is_index, "exchange"], strict=True)
         ]
 
-    out = out[out["exchange"].notna() & (out["exchange"] != "") & (out["brsymbol"] != "")]
+    # Vortex marks a contract it does not allow trading with eligibility 0.
+    # Index rows always carry 0 (they are not tradable, but are needed for
+    # quotes, charts and option chains), so only non-index rows are dropped.
+    eligible = df["eligibility"].fillna("1").str.strip() != "0"
+    keep = eligible | is_index
+    out = out[keep & out["exchange"].notna() & (out["exchange"] != "") & (out["brsymbol"] != "")]
     out = out.drop_duplicates(subset=["symbol", "exchange"], keep="first")
     return out
 

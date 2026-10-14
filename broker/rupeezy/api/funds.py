@@ -16,6 +16,20 @@ def _f(value):
         return 0.0
 
 
+def _open_positions_mtm(auth_token):
+    """Sum of open-position P&L at live prices. 0 if positions or prices
+    cannot be read, so funds still load."""
+    from broker.rupeezy.api.order_api import get_positions
+    from broker.rupeezy.mapping.order_data import map_position_data, position_pnl
+
+    try:
+        rows = map_position_data(get_positions(auth_token))
+        return sum(position_pnl(p) or 0.0 for p in rows if _f(p.get("quantity")))
+    except Exception:
+        logger.exception("Could not compute Rupeezy unrealised MTM")
+        return 0.0
+
+
 def get_margin_data(auth_token):
     """Funds -> OpenAlgo margin dict. Returns {} on error."""
     try:
@@ -45,8 +59,9 @@ def get_margin_data(auth_token):
     return {
         "availablecash": f"{total('net_available'):.2f}",
         "collateral": f"{total('collateral'):.2f}",
-        # Vortex does not split unrealised MTM out of the funds call.
-        "m2munrealized": "0.00",
+        # Vortex's funds call has no unrealised figure; it is the live P&L of
+        # the open positions, priced from batched quotes.
+        "m2munrealized": f"{_open_positions_mtm(auth_token):.2f}",
         "m2mrealized": f"{total('booked_profit') + total('mtm_and_booked_loss'):.2f}",
         "utiliseddebits": f"{abs(total('total_utilization')):.2f}",
     }

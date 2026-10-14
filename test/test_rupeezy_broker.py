@@ -251,8 +251,9 @@ def test_position_pnl_is_booked_only_once_flat():
     from broker.rupeezy.mapping.order_data import position_pnl
 
     assert position_pnl({"quantity": 0, "buy_value": 1000, "sell_value": 1100}) == 100
-    # An open position needs a live price, which this plugin does not fetch.
-    assert position_pnl({"quantity": 5, "buy_value": 1000, "sell_value": 0}) == 0.0
+    # An open position without a price has an unknown P&L, not a zero one.
+    assert position_pnl({"quantity": 5, "buy_value": 1000, "sell_value": 0}) is None
+    assert position_pnl({"quantity": 5, "buy_value": 1000, "sell_value": 0, "ltp": 210}) == 50
 
 
 def test_funds_sum_nse_and_mcx(monkeypatch):
@@ -688,7 +689,7 @@ def test_close_all_reports_refused_square_offs(close_all, monkeypatch):
         "quantity": 1,
         "lot_size": 1,
     }
-    monkeypatch.setattr(close_all, "get_positions", lambda auth: _book(position))
+    monkeypatch.setattr(close_all, "get_positions", lambda auth, **k: _book(position))
     monkeypatch.setattr(
         close_all,
         "place_order_api",
@@ -705,7 +706,9 @@ def test_close_all_reports_refused_square_offs(close_all, monkeypatch):
 
 def test_close_all_does_not_call_an_unreadable_book_empty(close_all, monkeypatch):
     monkeypatch.setattr(
-        close_all, "get_positions", lambda auth: {"status": "error", "message": "Invalid session"}
+        close_all,
+        "get_positions",
+        lambda auth, **k: {"status": "error", "message": "Invalid session"},
     )
     body, status = close_all.close_all_positions("key", "tok")
     assert status == 502 and "Invalid session" in body["message"]
@@ -714,7 +717,7 @@ def test_close_all_does_not_call_an_unreadable_book_empty(close_all, monkeypatch
 def test_close_all_success_when_every_order_is_accepted(close_all, monkeypatch):
     position = {"ticker": "NSE:SBIN", "exchange": "NSE_EQ", "product": "INTRADAY", "quantity": -5}
     sent = []
-    monkeypatch.setattr(close_all, "get_positions", lambda auth: _book(position))
+    monkeypatch.setattr(close_all, "get_positions", lambda auth, **k: _book(position))
     monkeypatch.setattr(
         close_all,
         "place_order_api",
@@ -862,7 +865,7 @@ def test_close_all_uses_the_master_lot_size_when_the_row_has_none(close_all, mon
         "quantity": 2,
     }
     sent = []
-    monkeypatch.setattr(close_all, "get_positions", lambda auth: _book(position))
+    monkeypatch.setattr(close_all, "get_positions", lambda auth, **k: _book(position))
     monkeypatch.setattr(close_all, "lot_size_for", lambda row, symbol, exchange: 100)
     monkeypatch.setattr(
         close_all, "place_order_api", lambda order, auth: sent.append(order) or (None, {}, "OID")
@@ -1053,3 +1056,231 @@ def test_an_unsubscribe_while_offline_does_not_recycle():
     ws.connected, ws.ws = False, None
     ws.unsubscribe("NSE:SBIN")  # nothing to send, nothing to close
     assert ws.subscriptions == {}
+
+
+# --- second review: valuations, auth header, eligibility, subscribe, soak ---------
+
+
+def test_open_positions_get_live_ltp_and_pnl(close_all, monkeypatch):
+    import broker.rupeezy.mapping.order_data as od
+
+    monkeypatch.setattr(od, "get_oa_symbol", lambda brsymbol, exchange: brsymbol)
+    book = _book(
+        # long 10 SBIN bought at 950 -> at 954: +40
+        {
+            "ticker": "NSE:SBIN",
+            "exchange": "NSE_EQ",
+            "product": "INTRADAY",
+            "quantity": 10,
+            "buy_value": 9500,
+            "sell_value": 0,
+            "average_price": 950,
+            "lot_size": 1,
+        },
+        # closed today: booked +25, needs no price
+        {
+            "ticker": "NSE:INFY",
+            "exchange": "NSE_EQ",
+            "product": "INTRADAY",
+            "quantity": 0,
+            "buy_value": 1000,
+            "sell_value": 1025,
+            "average_price": 0,
+            "lot_size": 1,
+        },
+        # MCX long 2 lots GOLDPETAL, lot 1, multiplier 1 -> 2 units at +5 = +10
+        {
+            "ticker": "MCX:GOLDPETAL26OCTFUT",
+            "exchange": "MCX_FO",
+            "product": "DELIVERY",
+            "quantity": 2,
+            "buy_value": 29860,
+            "sell_value": 0,
+            "lot_size": 1,
+            "multiplier": 1,
+        },
+    )
+    asked = []
+
+    def fake_request(method, endpoint, auth, params=None, **_):
+        if endpoint == "/trading/portfolio/positions":
+            return book
+        asked.extend(v for k, v in params if k == "q")
+        return {
+            "status": "success",
+            "data": {
+                "NSE:SBIN": {"last_trade_price": 954.0},
+                "MCX:GOLDPETAL26OCTFUT": {"last_trade_price": 14935.0},
+            },
+        }
+
+    monkeypatch.setattr(close_all, "request_json", fake_request)
+    rows = {
+        r["symbol"]: r
+        for r in od.transform_positions_data(od.map_position_data(close_all.get_positions("tok")))
+    }
+    assert sorted(asked) == ["MCX:GOLDPETAL26OCTFUT", "NSE:SBIN"]  # open rows only, one call
+    assert (rows["SBIN"]["ltp"], rows["SBIN"]["pnl"]) == (954.0, 40.0)
+    assert (rows["INFY"]["ltp"], rows["INFY"]["pnl"]) == (0.0, 25.0)
+    assert rows["GOLDPETAL26OCTFUT"]["pnl"] == 10.0
+
+
+def test_smart_orders_read_positions_without_quotes(close_all, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        close_all,
+        "request_json",
+        lambda method, endpoint, auth, **k: calls.append(endpoint) or _book(),
+    )
+    close_all.get_positions("tok", with_ltp=False)
+    assert calls == ["/trading/portfolio/positions"]
+
+
+def test_holdings_without_last_price_are_priced_from_quotes(close_all, monkeypatch):
+    def fake_request(method, endpoint, auth, params=None, **_):
+        if endpoint == "/trading/portfolio/holdings":
+            return {
+                "status": "Success",
+                "data": [
+                    {"nse": {"ticker": "NSE:IDEA"}, "total_free": 3, "average_price": 12.7},
+                    {
+                        "nse": {"ticker": "NSE:SBIN"},
+                        "total_free": 1,
+                        "average_price": 900,
+                        "last_price": 954,
+                    },
+                ],
+            }
+        assert [v for k, v in params if k == "q"] == ["NSE:IDEA"]  # only the unpriced row
+        return {"status": "success", "data": {"NSE:IDEA": {"last_trade_price": 13.21}}}
+
+    monkeypatch.setattr(close_all, "request_json", fake_request)
+    rows = close_all.get_holdings("tok")["data"]
+    assert [r["last_price"] for r in rows] == [13.21, 954]
+
+
+def test_funds_report_unrealised_mtm_from_open_positions(monkeypatch):
+    import broker.rupeezy.api.funds as funds
+
+    monkeypatch.setattr(
+        funds, "request_json", lambda *a, **k: {"exchange_combined": {"net_available": 100}}
+    )
+    monkeypatch.setattr(funds, "_open_positions_mtm", lambda auth: 40.0)
+    assert funds.get_margin_data("tok")["m2munrealized"] == "40.00"
+
+
+def test_authenticated_calls_send_the_api_key(monkeypatch):
+    from broker.rupeezy.api.baseurl import get_rupeezy_headers
+
+    monkeypatch.setenv("BROKER_API_SECRET", "SECRET01")
+    headers = get_rupeezy_headers("tok", with_json=True)
+    assert headers["Authorization"] == "Bearer tok" and headers["x-api-key"] == "SECRET01"
+
+
+def test_ineligible_contracts_are_dropped_but_indices_kept():
+    from broker.rupeezy.database.master_contract_db import process_master
+
+    sample = MASTER_SAMPLE + (
+        "999001,NSE_EQ,DEADCO,EQUITIES,EQ,,,,5,1,0,DEAD COMPANY LTD,,,INE000000000,NSE:DEADCO,false\n"
+    )
+    df = process_master(pd.read_csv(io.StringIO(sample), dtype=str))
+    symbols = set(zip(df["symbol"], df["exchange"], strict=True))
+    assert ("DEADCO", "NSE") not in symbols  # eligibility 0, not an index
+    assert ("NIFTY", "NSE_INDEX") in symbols and (
+        "SENSEX",
+        "BSE_INDEX",
+    ) in symbols  # eligibility 0, kept
+
+
+def test_a_refused_subscribe_leaves_no_stale_adapter_entry(monkeypatch):
+    from broker.rupeezy.streaming import rupeezy_adapter as ra
+
+    adapter = ra.RupeezyWebSocketAdapter.__new__(ra.RupeezyWebSocketAdapter)
+    adapter.instruments, adapter.logger = {}, __import__("logging").getLogger("t")
+    adapter._create_error_response = lambda code, msg: {"status": "error", "code": code}
+
+    class _Full:
+        def subscribe(self, ticker, mode):
+            raise ValueError("Rupeezy allows at most 1000 instruments per connection.")
+
+    adapter.ws_client = _Full()
+    monkeypatch.setattr(
+        ra,
+        "get_symbol_info",
+        lambda s, e: SimpleNamespace(token="3045", brexchange="NSE_EQ", brsymbol="SBIN"),
+    )
+    result = adapter.subscribe("SBIN", "NSE", mode=3)
+    assert result["status"] == "error" and adapter.instruments == {}
+
+
+def test_an_unsent_subscribe_recycles_the_connection():
+    from broker.rupeezy.streaming.rupeezy_websocket import RupeezyWebSocket
+
+    class _Flaky:
+        closed = False
+
+        def send(self, _):
+            raise ConnectionError("send failed")
+
+        def close(self):
+            self.closed = True
+
+    ws = RupeezyWebSocket("tok")
+    sock = _Flaky()
+    ws.connected, ws.ws = True, sock
+    ws.subscribe("NSE:SBIN", "full")
+    assert ws.subscriptions == {"NSE:SBIN": "full"} and sock.closed  # replayed after reconnect
+
+
+def test_feed_soak_releases_threads_and_fds(monkeypatch):
+    """50 start / subscribe / reconnect / unsubscribe / stop cycles against a
+    fake socket: threads and open file descriptors must return to baseline."""
+    import gc
+    import threading
+    import time as _time
+
+    import psutil
+
+    from broker.rupeezy.streaming import rupeezy_websocket as rw
+
+    class _FakeApp:
+        def __init__(self, url, on_open=None, on_message=None, on_error=None, on_close=None):
+            self._done = threading.Event()
+            self.on_open, self.on_close, self.on_message = on_open, on_close, on_message
+            self.sent = []
+
+        def run_forever(self, **kwargs):
+            self.on_open(self)
+            self.on_message(self, b"\x00")  # heartbeat frame
+            self._done.wait(5)
+            self.on_close(self, 1000, "bye")
+
+        def send(self, frame):
+            self.sent.append(frame)
+
+        def close(self):
+            self._done.set()
+
+    monkeypatch.setattr(rw.websocket, "WebSocketApp", _FakeApp)
+    monkeypatch.setattr(rw.RupeezyWebSocket, "RECONNECT_BASE_DELAY", 0.01)
+    process = psutil.Process()
+
+    def settle():
+        gc.collect()
+        deadline = _time.monotonic() + 5
+        while threading.active_count() > base_threads and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+
+    base_threads, base_fds = threading.active_count(), process.num_fds()
+    for _ in range(50):
+        ws = rw.RupeezyWebSocket("tok")
+        ws.start()
+        assert ws.wait_for_connection(5)
+        ws.subscribe("NSE:SBIN", "full")
+        ws._recycle_connection()  # forces a reconnect + replay
+        ws.wait_for_connection(5)
+        ws.unsubscribe("NSE:SBIN")
+        ws.stop()
+    settle()
+    assert threading.active_count() <= base_threads
+    assert process.num_fds() <= base_fds + 2  # small slack for interpreter-level handles

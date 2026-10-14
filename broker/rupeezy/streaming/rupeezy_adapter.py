@@ -121,11 +121,21 @@ class RupeezyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
             key, ticker = resolved
 
+            is_new = key not in self.instruments
             entry = self.instruments.setdefault(
                 key, {"symbol": symbol, "exchange": exchange, "ticker": ticker, "modes": set()}
             )
+            mode_was_new = mode not in entry["modes"]
             entry["modes"].add(mode)
-            self.ws_client.subscribe(ticker, self._richest_mode(entry["modes"]))
+            try:
+                self.ws_client.subscribe(ticker, self._richest_mode(entry["modes"]))
+            except Exception:
+                # Refused (e.g. the 1000-instrument limit): leave no stale entry.
+                if is_new:
+                    self.instruments.pop(key, None)
+                elif mode_was_new:
+                    entry["modes"].discard(mode)
+                raise
 
             return self._create_success_response(
                 f"Subscribed {exchange}:{symbol}",

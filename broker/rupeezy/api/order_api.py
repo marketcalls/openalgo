@@ -9,7 +9,12 @@ from broker.rupeezy.mapping.exchange import (
     oa_exchange_for,
     split_ticker,
 )
-from broker.rupeezy.mapping.order_data import OPEN_STATUSES, lot_size_for, map_status
+from broker.rupeezy.mapping.order_data import (
+    OPEN_STATUSES,
+    holding_listing,
+    lot_size_for,
+    map_status,
+)
 from broker.rupeezy.mapping.transform_data import (
     map_product_type,
     resolve_instrument,
@@ -111,15 +116,70 @@ def get_trade_book(auth):
     return payload
 
 
-def get_positions(auth):
-    """Position book. Vortex returns no LTP here, and quotes are outside this
-    plugin's scope, so open positions carry no live P&L."""
-    return request_json("GET", "/trading/portfolio/positions", auth)
+# /data/quotes takes up to 1000 tickers per request.
+_LTP_BATCH = 1000
+
+
+def fetch_ltps(auth, tickers):
+    """{ticker: ltp} from batched /data/quotes (mode=ltp).
+
+    Best effort: a failed batch leaves its tickers out, so the caller shows
+    those prices as unavailable instead of failing the whole book.
+    """
+    tickers = sorted({t for t in tickers if t})
+    ltps = {}
+    for i in range(0, len(tickers), _LTP_BATCH):
+        batch = tickers[i : i + _LTP_BATCH]
+        try:
+            payload = request_json(
+                "GET", "/data/quotes", auth, params=[("q", t) for t in batch] + [("mode", "ltp")]
+            )
+        except BrokerBusyError:
+            raise
+        except Exception:
+            logger.exception("Rupeezy LTP lookup failed")
+            continue
+        if payload.get("status") != "success":
+            logger.warning(f"Rupeezy LTP lookup failed: {payload.get('message')}")
+            continue
+        for ticker, quote in (payload.get("data") or {}).items():
+            ltp = _f((quote or {}).get("last_trade_price"))
+            if ltp:
+                ltps[ticker] = ltp
+    return ltps
+
+
+def get_positions(auth, with_ltp=True):
+    """Position book. Vortex returns no price on positions, so with `with_ltp`
+    each open `net` row gets an `ltp` from one batched quotes call. Smart
+    orders and close all read without it: they only need quantities, and an
+    order should not wait on a quote."""
+    payload = request_json("GET", "/trading/portfolio/positions", auth)
+    data = payload.get("data") if isinstance(payload, dict) else None
+    rows = data.get("net") if isinstance(data, dict) else None
+    if with_ltp and rows:
+        open_rows = [p for p in rows if _f(p.get("quantity"))]
+        ltps = fetch_ltps(auth, [p.get("ticker") for p in open_rows])
+        for position in open_rows:
+            if position.get("ticker") in ltps:
+                position["ltp"] = ltps[position["ticker"]]
+    return payload
 
 
 def get_holdings(auth):
-    """Holdings. Each row carries Vortex's own `last_price`."""
-    return request_json("GET", "/trading/portfolio/holdings", auth)
+    """Holdings. Each row normally carries Vortex's `last_price`; rows that
+    arrive without one are priced from a batched quotes call instead."""
+    payload = request_json("GET", "/trading/portfolio/holdings", auth)
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(rows, list):
+        missing = [h for h in rows if not _f(h.get("last_price"))]
+        if missing:
+            ltps = fetch_ltps(auth, [holding_listing(h).get("ticker") for h in missing])
+            for holding in missing:
+                ticker = holding_listing(holding).get("ticker")
+                if ticker in ltps:
+                    holding["last_price"] = ltps[ticker]
+    return payload
 
 
 # --- Smart-order position cache and per-symbol lock --------------------------
@@ -135,7 +195,9 @@ def _position_book_ok(payload):
 def _get_cached_positions(auth):
     return _position_cache.get(
         auth,
-        lambda: read_position_book("rupeezy", lambda: get_positions(auth), _position_book_ok),
+        lambda: read_position_book(
+            "rupeezy", lambda: get_positions(auth, with_ltp=False), _position_book_ok
+        ),
     )
 
 
@@ -266,7 +328,7 @@ def close_all_positions(current_api_key, auth):
     an error (not "no positions"), and any square-off Vortex refuses (for
     example the static-IP check) is listed with its reason.
     """
-    payload = get_positions(auth)
+    payload = get_positions(auth, with_ltp=False)
     if not _position_book_ok(payload):
         message = payload.get("message") if isinstance(payload, dict) else None
         return {

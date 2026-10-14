@@ -206,14 +206,24 @@ def map_position_data(position_data):
 
 
 def position_pnl(position):
-    """Booked P&L of a closed position (sell_value - buy_value).
+    """P&L of a net position: sell_value - buy_value plus the open quantity
+    at its `ltp` (attached by order_api.get_positions).
 
-    An open position's P&L needs a live price, and Vortex quotes are outside
-    this plugin's scope, so open positions report 0.
+    The open quantity is in units; for MCX (and NSE_CUR) Vortex reports lots,
+    and the docs give actual quantity = quantity x lot_size x multiplier.
+    Returns None for an open position with no price, so it is not reported
+    as a real zero.
     """
-    if _f(position.get("quantity")):
-        return 0.0
-    return _f(position.get("sell_value")) - _f(position.get("buy_value"))
+    booked = _f(position.get("sell_value")) - _f(position.get("buy_value"))
+    qty = _f(position.get("quantity"))
+    if not qty:
+        return booked
+    ltp = _f(position.get("ltp"))
+    if not ltp:
+        return None
+    if position.get("exchange") in ("MCX_FO", "NSE_CUR"):
+        qty *= _f(position.get("lot_size") or 1) * _f(position.get("multiplier") or 1)
+    return booked + qty * ltp
 
 
 def transform_positions_data(positions_data):
@@ -227,9 +237,11 @@ def transform_positions_data(positions_data):
                 "exchange": position["_exchange"],
                 "product": position["_product"],
                 "quantity": str(_units(position, "quantity")),
-                "pnl": round(position_pnl(position), 2),
+                # No price for an open position means its P&L is unknown, not
+                # zero; 0.0 is still sent because the contract requires a number.
+                "pnl": round(position_pnl(position) or 0.0, 2),
                 "average_price": f"{_f(position.get('average_price')):.2f}",
-                "ltp": 0.0,
+                "ltp": round(_f(position.get("ltp")), 2),
             }
         )
     return transformed

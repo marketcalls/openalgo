@@ -13,6 +13,7 @@ import hashlib
 import os
 
 from broker.rupeezy.api.baseurl import BASE_URL
+from broker.rupeezy.api.rate_limiter import wait_for_slot
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -44,6 +45,8 @@ def authenticate_broker(auth_code):
         }
 
         client = get_httpx_client()
+        # /user/session shares the 1/sec limit of the other /user endpoints.
+        wait_for_slot("account")
         response = client.post(
             f"{BASE_URL}/user/session",
             json=payload,

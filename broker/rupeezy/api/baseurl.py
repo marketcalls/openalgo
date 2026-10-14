@@ -25,8 +25,12 @@ WS_URL = "wss://wire.rupeezy.in/ws"
 
 
 def get_rupeezy_headers(auth_token, with_json=False):
-    """Bearer-token headers for authenticated Vortex calls."""
+    """Headers for authenticated Vortex calls: the user's bearer token plus the
+    app's `x-api-key`, which the Vortex usage docs list as required."""
     headers = {"Authorization": f"Bearer {auth_token}"}
+    api_key = os.getenv("BROKER_API_SECRET")
+    if api_key:
+        headers["x-api-key"] = api_key
     if with_json:
         headers["Content-Type"] = "application/json"
     return headers
