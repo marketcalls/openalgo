@@ -38,7 +38,30 @@ import {
   isBoxChartType,
 } from '@/lib/trading/chartTypes'
 import { MOD_KEY } from '@/lib/trading/drawingKeys'
-import { ChromeIcon, lineStroke24 } from '@/lib/trading/glyphs'
+import { ChromeIcon, chromeStroke, lineStroke24 } from '@/lib/trading/glyphs'
+
+/**
+ * The snapshot glyph: a rounded body, a softened hump and an open lens ring, on
+ * the engine's 16 unit grid at its line. The engine's own camera is square
+ * cornered with a dot for a lens, which reads as a box at 16px.
+ */
+function CameraIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={chromeStroke(16)}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3.5 4.5h1.6l.9-1.3c.2-.3.5-.45.85-.45h2.3c.35 0 .65.15.85.45l.9 1.3h1.6a1.75 1.75 0 0 1 1.75 1.75v5.25a1.75 1.75 0 0 1-1.75 1.75h-9A1.75 1.75 0 0 1 1.75 11.5V6.25A1.75 1.75 0 0 1 3.5 4.5z" />
+      <circle cx="8" cy="8.6" r="2.4" />
+    </svg>
+  )
+}
 
 /**
  * The Indicators glyph: a derived series read against a level. Kept over the
@@ -1461,7 +1484,7 @@ export function ChartPane({
                   }}
                   aria-label="Chart snapshot"
                 >
-                  <ChromeIcon id="camera" />
+                  <CameraIcon className="h-4 w-4" />
                 </button>
               </Tip>
               {snapOpen && (
