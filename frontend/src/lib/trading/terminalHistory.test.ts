@@ -14,6 +14,7 @@ import {
   type SymbolExpression,
 } from 'openalgo-charts/transform'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { quietVolumeStyle } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { type SymbolView, TradingTerminal } from './terminal'
 import { WorkspaceReplayCoordinator } from './workspaceReplay'
@@ -731,21 +732,26 @@ describe('built-in volume and average', () => {
     ).toBe(true)
   })
 
+  /**
+   * The colour a volume bar wears for a candle colour: the same hue, quietened
+   * towards the chart background so the histogram stays under the price.
+   */
+  const asVolume = (state: { chart: { theme(): { background: string } } }, color: string) =>
+    quietVolumeStyle({ upColor: color }, state.chart.theme().background).upColor
+
   it('follows candle colours and corrects direction on a live replacement', () => {
     const { state } = mount()
     state.price.applyOptions({ upColor: '#00aa00', downColor: '#aa0000' })
     state.rawBars[1] = { ...state.rawBars[1], open: 105, close: 101 }
     state.setPriceData()
-    expect(state.volume.getData().map((b) => b.color)).toEqual([
-      '#00aa00',
-      '#aa0000',
-      '#00aa00',
-      '#00aa00',
-    ])
+    const up = asVolume(state, '#00aa00')
+    const down = asVolume(state, '#aa0000')
+    expect(up).not.toBe(down)
+    expect(state.volume.getData().map((b) => b.color)).toEqual([up, down, up, up])
     const update = { ...state.rawBars[3], open: 105, close: 102 }
     state.rawBars[3] = update
     state.updateLiveBar(update)
-    expect(state.volume.getData()[3].color).toBe('#aa0000')
+    expect(state.volume.getData()[3].color).toBe(down)
   })
 
   it('exposes volume controls and updates a configurable average on the volume scale', async () => {
@@ -790,7 +796,7 @@ describe('built-in volume and average', () => {
   it('follows custom candle colours after settings changes without refetching history', async () => {
     const { terminal, state } = mount()
     await terminal.applyChartSettings({ 'symbol.upColor': '#112233' })
-    expect(state.volume.getData()[0].color).toBe('#112233')
+    expect(state.volume.getData()[0].color).toBe(asVolume(state, '#112233'))
     state.price.applyOptions({
       colorByPreviousClose: true,
       upColor: '#00aa00',
@@ -798,7 +804,7 @@ describe('built-in volume and average', () => {
     })
     state.rawBars[1] = { ...state.rawBars[1], open: 90, close: 99 }
     state.setPriceData()
-    expect(state.volume.getData()[1].color).toBe('#aa0000')
+    expect(state.volume.getData()[1].color).toBe(asVolume(state, '#aa0000'))
   })
 
   it.each([
@@ -824,7 +830,12 @@ describe('built-in volume and average', () => {
     const theme = state.chart.theme()
     expect(volumes.map((b) => b.color)).toEqual(
       prices.map((b) =>
-        b.close >= b.open ? (style.upColor ?? theme.upColor) : (style.downColor ?? theme.downColor)
+        asVolume(
+          state,
+          b.close >= b.open
+            ? (style.upColor ?? theme.upColor)
+            : (style.downColor ?? theme.downColor)
+        )
       )
     )
     await state.beginReplayAt(1)
