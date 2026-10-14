@@ -47,7 +47,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
   "exchange": "NFO",
   "lotsize": 65,
   "tick_size": 5,
-  "freeze_qty": 1800,
+  "freeze_qty": 3510,
   "underlying_ltp": 25966.4
 }
 ```
@@ -74,7 +74,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
   "exchange": "NFO",
   "lotsize": 65,
   "tick_size": 5,
-  "freeze_qty": 1800,
+  "freeze_qty": 3510,
   "underlying_ltp": 25966.4
 }
 ```
@@ -101,7 +101,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
   "exchange": "NFO",
   "lotsize": 65,
   "tick_size": 5,
-  "freeze_qty": 1800,
+  "freeze_qty": 3510,
   "underlying_ltp": 25966.4
 }
 ```
