@@ -17,9 +17,9 @@ OpenAlgo; the chart is part of the built frontend.
 
 - /trading uses the whole screen. The app's navigation bar is gone from this
   page only; a Dashboard button at the left of the toolbar takes you back, and
-  the broker name, the Live or Analyze badge, the mode switch, the light and
-  dark toggle and your profile menu sit at the right of the same toolbar, at
-  every screen width.
+  the Live or Analyze badge, the mode switch, the light and dark toggle and your
+  profile menu sit at the right of the same toolbar at every screen width, with
+  the broker name beside them on wider screens.
 - The toolbar is one slim band: borderless controls with thin dividers between
   groups, a chevron on every control that opens a list, and a soft tint in the
   mode's colour on whatever is switched on (violet in Analyze mode). One-Click

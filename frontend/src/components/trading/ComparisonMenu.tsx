@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { COMPARISON_SCALES, type ComparisonScale } from '@/lib/trading/comparisonScale'
-import type { SearchRow, TerminalComparisonState } from '@/lib/trading/terminal'
 import { ChromeIcon } from '@/lib/trading/glyphs'
+import type { SearchRow, TerminalComparisonState } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 import { Tip } from './Tip'
@@ -90,12 +90,7 @@ export function ComparisonMenu({
           }}
         >
           <PopoverTrigger asChild>
-            <button
-              type="button"
-              className={TB_BTN}
-              disabled={disabled}
-              aria-label="Comparisons"
-            >
+            <button type="button" className={TB_BTN} disabled={disabled} aria-label="Comparisons">
               <ChromeIcon id="compare" />
               <span className={TB_LABEL_WIDE}>Compare</span>
               {/* The same count chip Indicators wears, because it says the same

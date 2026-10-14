@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +7,6 @@ import { LAYOUTS } from '@/lib/chart/layouts'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { TradingTerminal } from '@/lib/trading/terminal'
 import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
-import userEvent from '@testing-library/user-event'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@/test/test-utils'
 import Trading from './Trading'
 
@@ -298,6 +298,7 @@ describe('terminal header', () => {
       dashboard,
       profile,
       screen.getByRole('button', { name: 'Switch to Analyze mode' }),
+      screen.getByRole('button', { name: /^Switch to (dark|light) mode$/ }),
     ]) {
       expect(host.contains(control)).toBe(false)
       expect(host.parentElement?.contains(control)).toBe(true)

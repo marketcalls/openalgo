@@ -154,7 +154,8 @@ const ROW_ON =
 const HEAD =
   'px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground/80'
 const NOTE = 'px-2 pb-1 pt-1.5 text-[11px] leading-snug text-muted-foreground'
-const CHORD = 'min-w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground/80'
+const CHORD =
+  'min-w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground/80'
 
 export function DrawingRail({
   stats,
@@ -282,7 +283,10 @@ export function DrawingRail({
         </Tip>
         {menuContent(
           <>
-            <DropdownMenuItem onSelect={() => onPick(null)} className={cn(ROW, !stats.tool && ROW_ON)}>
+            <DropdownMenuItem
+              onSelect={() => onPick(null)}
+              className={cn(ROW, !stats.tool && ROW_ON)}
+            >
               {rowTool('cursor')}
               <span className="flex-1">Cursor</span>
               <span className={CHORD}>Esc</span>
@@ -540,7 +544,11 @@ export function DrawingRail({
 
         <Tip
           side="right"
-          tip={{ title: 'Undo chart change', chord: `${MOD_KEY} + Z`, sub: 'Orders are never undone' }}
+          tip={{
+            title: 'Undo chart change',
+            chord: `${MOD_KEY} + Z`,
+            sub: 'Orders are never undone',
+          }}
         >
           <div className="oa-rail__slot">
             <button

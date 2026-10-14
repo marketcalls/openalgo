@@ -34,13 +34,28 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
   [
     { value: 'bar', label: 'Bars (OHLC)', iconKey: 'chart-bar', series: 'bar' },
     { value: 'candlestick', label: 'Candles', iconKey: 'chart-candlestick', series: 'candlestick' },
-    { value: 'hollow-candle', label: 'Hollow Candles', iconKey: 'chart-hollow-candle', series: 'hollow-candle' },
-    { value: 'volume-candle', label: 'Volume Candles', iconKey: 'chart-volume-candle', series: 'volume-candle' },
+    {
+      value: 'hollow-candle',
+      label: 'Hollow Candles',
+      iconKey: 'chart-hollow-candle',
+      series: 'hollow-candle',
+    },
+    {
+      value: 'volume-candle',
+      label: 'Volume Candles',
+      iconKey: 'chart-volume-candle',
+      series: 'volume-candle',
+    },
     { value: 'high-low', label: 'High-Low', iconKey: 'chart-high-low', series: 'high-low' },
   ],
   [
     { value: 'line', label: 'Line', iconKey: 'chart-line', series: 'line' },
-    { value: 'line-markers', label: 'Line + Markers', iconKey: 'chart-line-markers', series: 'line-markers' },
+    {
+      value: 'line-markers',
+      label: 'Line + Markers',
+      iconKey: 'chart-line-markers',
+      series: 'line-markers',
+    },
     { value: 'step', label: 'Step', iconKey: 'chart-step', series: 'step' },
     { value: 'area', label: 'Area', iconKey: 'chart-area', series: 'area' },
     { value: 'hlc-area', label: 'HLC Area', iconKey: 'chart-hlc-area', series: 'hlc-area' },

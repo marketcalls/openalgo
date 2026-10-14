@@ -119,12 +119,7 @@ export function WorkspaceMenu({
         }}
       >
         <DialogTrigger asChild>
-          <button
-            type="button"
-            data-workspace-control
-            className={TB_BTN}
-            aria-label="Workspaces"
-          >
+          <button type="button" data-workspace-control className={TB_BTN} aria-label="Workspaces">
             <ChromeIcon id="folder" />
             <span className={TB_LABEL_WIDE}>Workspaces</span>
           </button>

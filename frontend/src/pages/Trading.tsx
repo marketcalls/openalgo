@@ -38,6 +38,8 @@ const WatchlistPanel = lazy(() =>
   import('@/components/trading/WatchlistPanel').then((m) => ({ default: m.WatchlistPanel }))
 )
 
+import type { MagnetMode } from 'openalgo-charts/draw'
+import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import {
   BOTTOM_BAR_PX,
   type BottomBarControl,
@@ -46,10 +48,9 @@ import {
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail, DrawingRailTab } from '@/components/trading/DrawingRail'
 import {
-  type ChartOrderBridgeRef,
   ChartOrderBridgeContext,
+  type ChartOrderBridgeRef,
 } from '@/components/trading/dock/chartOrderBridge'
-import { GridDividers } from '@/components/trading/GridDividers'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
 import {
   type DockTab,
@@ -58,11 +59,10 @@ import {
   writeDockTab,
 } from '@/components/trading/dock/dockState'
 import { TradingDock } from '@/components/trading/dock/TradingDock'
+import { GridDividers } from '@/components/trading/GridDividers'
 import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
-import { idForScript } from '@/lib/trading/openscriptFiles'
-import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { Tip } from '@/components/trading/Tip'
 import { TB_BTN, TB_ICON, TB_ON, ToolbarDivider } from '@/components/trading/toolbarStyles'
@@ -84,10 +84,10 @@ import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon, type LayoutPreset } from '@/lib/chart/layouts'
 import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
-import { historyChord } from '@/lib/trading/chartHistory'
-import { ChromeIcon } from '@/lib/trading/glyphs'
-import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
+import { historyChord } from '@/lib/trading/chartHistory'
+import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
+import { ChromeIcon } from '@/lib/trading/glyphs'
 import {
   type GridWeights,
   parseAreas,
@@ -96,8 +96,8 @@ import {
   tracksTemplate,
   writeGridWeights,
 } from '@/lib/trading/gridSizes'
+import { idForScript } from '@/lib/trading/openscriptFiles'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
-import type { MagnetMode } from 'openalgo-charts/draw'
 import type {
   AlertFire,
   AlertsView,
@@ -1535,10 +1535,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
                 {/* The grid stops above the bottom bar's strip, kept clear from
                     the first render so nothing moves when the bar arrives. */}
                 {!showRail && (
-                  <DrawingRailTab
-                    onUnfold={() => setShowRail(true)}
-                    bottom={RAIL_TAB_BOTTOM}
-                  />
+                  <DrawingRailTab onUnfold={() => setShowRail(true)} bottom={RAIL_TAB_BOTTOM} />
                 )}
                 <div className="absolute inset-x-0 top-0" style={{ bottom: BOTTOM_BAR_PX }}>
                   {!workspace.current && (

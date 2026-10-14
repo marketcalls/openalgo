@@ -1016,6 +1016,13 @@
   .oa-rail__chev.is-shown {
     opacity: 1;
   }
+  /* No hover on a touch screen: the caret would be invisible yet still take the
+     tap on the button's corner, so it stays shown there. */
+  @media (hover: none) {
+    .oa-rail__chev {
+      opacity: 1;
+    }
+  }
   .oa-rail__chev:hover {
     background: var(--oa-rail-elev-2);
     color: var(--oa-rail-tx);

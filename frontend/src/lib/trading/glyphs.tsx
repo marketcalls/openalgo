@@ -84,8 +84,9 @@ export function ChromeIcon({
 
 /**
  * A tool-grid glyph from its path data, with the tool's accent marks filled.
- * Sized by its container when `size` is omitted; the stroke then assumes the
- * rail's 20px, which is what the engine draws the tool set for.
+ * It carries its own width and height (the rail's 20px unless `size` says
+ * otherwise): an SVG with only a viewBox falls back to 300 by 150 wherever a
+ * container does not size it, and the cursor glyph sits in a bare button.
  */
 export function toolGlyph(
   path: string,
@@ -97,6 +98,8 @@ export function toolGlyph(
   return (
     <svg
       viewBox="0 0 24 24"
+      width={size}
+      height={size}
       fill="none"
       stroke="currentColor"
       strokeWidth={toolStroke(size)}

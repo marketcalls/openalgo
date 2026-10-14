@@ -18,10 +18,10 @@ import type {
   IndicatorBarSource,
   IndicatorInputCondition,
   IndicatorState,
-  SeriesTransformSpec,
   LinkGroup,
   SeriesMarker,
   SeriesMarkers,
+  SeriesTransformSpec,
 } from 'openalgo-charts'
 import {
   AlertController,
@@ -95,6 +95,15 @@ import type { AlertFacts } from './alertMessage'
 import { fillAlertMessage } from './alertMessage'
 import { askToNotify } from './alertNotify'
 import { mergeAlertRuntime } from './alertRuntime'
+import { csvOptions, type DataExportOptions } from './chartDataExport'
+import { chartMotionOptions } from './chartMotion'
+import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
+import {
+  type ComparisonScale,
+  comparisonScaleOf,
+  isComparisonScale,
+  storedComparisonMode,
+} from './comparisonScale'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
   type IndicatorTemplateMode,
@@ -102,16 +111,14 @@ import {
   readStoredIndicators,
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
-import { chartMotionOptions } from './chartMotion'
-import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
 import { openInterestCapability } from './openInterest'
 import {
   isPriceAxisSetting,
   PRICE_AXIS_DEFAULTS,
-  PriceAxisController,
   type PriceAxisCommand,
-  pinOnceMeasured,
+  PriceAxisController,
   type PriceAxisMenu,
+  pinOnceMeasured,
   priceAxisPatch,
   priceAxisSettingsView,
   priceAxisShortcuts,
@@ -119,14 +126,7 @@ import {
 import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
 import { replayTiming } from './replayTiming'
 import { applySessionHours } from './sessionHours'
-import { csvOptions, type DataExportOptions } from './chartDataExport'
 import { TerminalComparisons } from './terminalComparisons'
-import {
-  type ComparisonScale,
-  comparisonScaleOf,
-  isComparisonScale,
-  storedComparisonMode,
-} from './comparisonScale'
 import type { PreparedReplayMember } from './workspaceReplay'
 import {
   createWorkspacePanePreferences,
@@ -213,7 +213,15 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
+import { type HistoryDirection, TerminalHistory } from './chartHistory'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
+import {
+  foldedStudyIds,
+  panesToFold,
+  readFoldedStudyIds,
+  type StudyMenu,
+  studyMenuAt,
+} from './chartPaneActions'
 import {
   applyChartDialogMetrics,
   buildChartTheme,
@@ -222,14 +230,6 @@ import {
   resolveCssColor,
   volumeColor,
 } from './chartTheme'
-import { type HistoryDirection, TerminalHistory } from './chartHistory'
-import {
-  foldedStudyIds,
-  panesToFold,
-  readFoldedStudyIds,
-  type StudyMenu,
-  studyMenuAt,
-} from './chartPaneActions'
 import { CHART_TYPES, volumeUnderElements } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
 import {

@@ -11,8 +11,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import type { ChartWorkspaceCatalogState } from '@/hooks/useChartWorkspaceCatalog'
-import type { TradingTerminal } from '@/lib/trading/terminal'
 import { ChromeIcon } from '@/lib/trading/glyphs'
+import type { TradingTerminal } from '@/lib/trading/terminal'
 import { Tip } from './Tip'
 import { TB_BTN, TB_LABEL_WIDE } from './toolbarStyles'
 
@@ -110,12 +110,7 @@ export function IndicatorTemplates({
         }}
       >
         <DialogTrigger asChild>
-          <button
-            type="button"
-            data-workspace-control
-            className={TB_BTN}
-            aria-label="Templates"
-          >
+          <button type="button" data-workspace-control className={TB_BTN} aria-label="Templates">
             <ChromeIcon id="template" />
             <span className={TB_LABEL_WIDE}>Templates</span>
           </button>
