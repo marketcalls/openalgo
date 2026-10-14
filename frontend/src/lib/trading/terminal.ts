@@ -2503,6 +2503,13 @@ export class TradingTerminal {
       // pane under the pointer instead, and a second press puts the stack back.
       // Reset stays on the toolbar button, the right-click menu and Home.
       doubleClick: 'maximize',
+      // The wheel zooms about the latest bar, which stays at the right edge while
+      // history compresses or opens out beside it; Ctrl or Cmd with the wheel
+      // zooms about the pointer. The engine's default holds the bar under the
+      // pointer instead, so a zoom out with the pointer in the middle or over the
+      // empty space past the last bar pushed the bars left and the gap beside
+      // the latest one kept widening.
+      zoomAnchor: 'right',
       shortcuts: {
         disabledCommands: ['screenshot', 'toggleGridVert', 'toggleGridHorz'],
         customShortcuts: [

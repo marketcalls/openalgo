@@ -32,6 +32,9 @@ OpenAlgo; the chart is part of the built frontend.
   click the caret to pick another tool of that group. A dot marks a tool held
   for repeated use, and the magnet shows a solid dot for strong and a ring for
   weak.
+- Zooming out with the mouse wheel keeps the latest bar at the right edge and
+  compresses history beside it, instead of opening a widening gap after the last
+  bar. Hold Ctrl (Cmd on a Mac) while scrolling to zoom about the pointer.
 - The drawing rail can fold away: the last button hides it and a small tab at
   the bottom left of the chart brings it back. The choice is remembered, and
   tools, drawings and shortcuts keep working while it is folded.
