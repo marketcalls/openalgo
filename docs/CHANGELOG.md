@@ -8,6 +8,21 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### /trading: openalgo-charts 2.6.4
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- The mouse wheel and a trackpad zoom the chart in one smooth motion, however
+  fast the wheel turns, instead of a jolt per notch.
+- A logarithmic price scale fills the chart again. It used to leave an empty
+  band under a long series, because its margins were measured in price rather
+  than on the log scale.
+- The drawing tool icons draw a finer line, and the horizontal ray icon is
+  redrawn for it.
+
 ### /trading: Renko and point and figure settings, openalgo-charts 2.6.2
 
 No database migration and no `update.sh` run are needed. Pull and restart

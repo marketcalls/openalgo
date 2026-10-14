@@ -59,6 +59,19 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.6.4: nothing for a descriptor to change.** An order flow release in the
+  profile tier: the footprint compares a cell beside an untraded row with
+  zero, gains a delta-shaded volume view, zone alerts (`onZoneAlert`), a
+  choice of zone kinds and lookback, part colours and six named themes
+  (`FOOTPRINT_THEMES`). The registry stays at 112, the index below at 433
+  names, and all thirteen examples pass the validator on 2.6.4 unchanged.
+
+- **2.6.3: nothing for a descriptor to change.** A finish release: drawing
+  tool and chrome glyphs at one finer line (`/trading` regenerates its rail
+  metadata from the installed build), a smoother wheel zoom, a log scale that
+  pads in log space, and widget drag and zoom defaults. Indicators are not
+  affected; the registry and the index are unchanged.
+
 - **2.6.2: nothing for a descriptor to change.** A fix in the widget tier:
   the bottom bar's ranges and Go to no longer report missing history across a
   gap no session trades in. The registry stays at 112, the index below at 433
