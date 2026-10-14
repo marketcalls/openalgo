@@ -1,4 +1,5 @@
 import copy
+from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
@@ -215,21 +216,34 @@ def get_order_status_with_auth(
                 logger.info(
                     f"[OrderStatus] Searching for OrderID {orderid} in {len(trades_list)} trades"
                 )
-                for trade_idx, trade in enumerate(trades_list):
-                    trade_orderid = str(trade.get("orderid"))
-                    # Log all trades for better debugging
-                    logger.debug(
-                        f"[OrderStatus] Trade {trade_idx + 1}: OrderID={trade_orderid}, Symbol={trade.get('symbol')}, AvgPrice={trade.get('average_price')}"
-                    )
-
-                    if trade_orderid == str(orderid):
-                        # Extract average_price from trade data
-                        avg_price_raw = trade.get("average_price", 0.0)
-                        average_price = float(avg_price_raw) if avg_price_raw else 0.0
-                        logger.info(
-                            f"[OrderStatus] Found trade for OrderID {orderid}, average_price: {average_price} (raw: {avg_price_raw})"
+                matching = [
+                    trade for trade in trades_list if str(trade.get("orderid")) == str(orderid)
+                ]
+                if matching:
+                    total_quantity = Decimal(0)
+                    total_value = Decimal(0)
+                    for trade in matching:
+                        quantity_value = (
+                            trade.get("fill_quantity", trade.get("quantity"))
+                            if broker == "deltaexchange"
+                            else trade.get("quantity")
                         )
-                        break
+                        quantity = Decimal(str(quantity_value))
+                        price = Decimal(str(trade.get("fill_price", trade.get("average_price"))))
+                        if (
+                            not quantity.is_finite()
+                            or quantity <= 0
+                            or not price.is_finite()
+                            or price < 0
+                        ):
+                            raise ValueError("Invalid matching trade quantity or price")
+                        total_quantity += quantity
+                        total_value += quantity * price
+                    if broker == "deltaexchange":
+                        expected_quantity = Decimal(str(order_found.get("quantity")))
+                        if not expected_quantity.is_finite() or total_quantity != expected_quantity:
+                            raise ValueError("Delta fills do not cover the complete order quantity")
+                    average_price = float(total_value / total_quantity)
                 else:
                     logger.warning(
                         f"[OrderStatus] No trade found for OrderID {orderid} in tradebook. Available order IDs: {[str(t.get('orderid')) for t in trades_list[:5]]}"

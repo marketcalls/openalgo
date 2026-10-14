@@ -312,6 +312,9 @@ def map_trade_data(trade_data):
             trade["orderId"] = f"{product_id}:{order_id}" if product_id else str(order_id)
 
             trade["tradedQuantity"] = trade.get("size", 0)
+            # Keep execution evidence separate from numeric display values.
+            trade["fill_quantity"] = str(trade.get("size"))
+            trade["fill_price"] = str(trade.get("price"))
             trade["tradedPrice"] = float(trade.get("price") or 0)
             trade["transactionType"] = trade.get("side", "").upper()
             trade["updateTime"] = trade.get("created_at", "")
@@ -370,6 +373,11 @@ def transform_tradebook_data(tradebook_data):
                 "trade_value": quantity * price,
                 "orderid": trade.get("orderId", ""),
                 "timestamp": trade.get("updateTime", ""),
+                **{
+                    field: trade[field]
+                    for field in ("fill_price", "fill_quantity")
+                    if field in trade
+                },
             }
             transformed_data.append(transformed_trade)
         return transformed_data
