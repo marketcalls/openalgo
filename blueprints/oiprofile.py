@@ -28,6 +28,11 @@ MAX_EXPIRIES = 6
 # Strikes either side of ATM. Each one is two legs to quote, so the ceiling is
 # what keeps a careless request from asking the broker for the whole chain.
 DEFAULT_STRIKE_COUNT = 20
+
+# An underlying as OpenAlgo names it. '&' and '-' belong to real F&O names
+# (M&M, BAJAJ-AUTO); letters and digits alone refused both with "Invalid input
+# format", so neither the chart overlay nor this page could profile them.
+UNDERLYING_RE = re.compile(r"^[A-Z0-9][A-Z0-9&-]*$")
 MAX_STRIKE_COUNT = 50
 # 2100-01-01 UTC: far past any chart, well inside what a datetime can hold.
 MAX_WINDOW_TS = 4102444800
@@ -117,7 +122,7 @@ def profile_data():
                 }
             ), 400
 
-        if not re.match(r"^[A-Z0-9]+$", underlying) or not re.match(r"^[A-Z0-9_]+$", exchange):
+        if not UNDERLYING_RE.match(underlying) or not re.match(r"^[A-Z0-9_]+$", exchange):
             return jsonify({"status": "error", "message": "Invalid input format"}), 400
 
         if any(not re.match(r"^\d{2}[A-Z]{3}\d{2}$", e) for e in expiry_dates):

@@ -90,7 +90,9 @@ test('attach() subscribes to the legs, repaints from a tick, unsubscribes on tea
   }
   const mod = (await import(new URL('../../strategies/indicators/oi_profile_live.js', import.meta.url))).default
 
-  let subscribed = null
+  // Each leg is subscribed on its own, so the set streamed can change by
+  // difference; collect every call.
+  const subscribed = []
   let onTick = null
   let unsubscribed = 0
   let descriptor
@@ -98,7 +100,7 @@ test('attach() subscribes to the legs, repaints from a tick, unsubscribes on tea
     registerIndicator: (d) => { descriptor = d },
     nulls: (a) => a,
     subscribeQuotes: (symbols, cb) => {
-      subscribed = symbols
+      subscribed.push(...symbols)
       onTick = cb
       return () => { unsubscribed += 1 }
     },
@@ -159,7 +161,7 @@ test('attach() subscribes to the legs, repaints from a tick, unsubscribes on tea
   } finally {
     teardown()
   }
-  assert.equal(unsubscribed, 1)
+  assert.equal(unsubscribed, 2, 'teardown drops both legs')
 })
 
 test('a host without subscribeQuotes still loads and polls', async () => {

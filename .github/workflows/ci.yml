@@ -325,6 +325,16 @@ jobs:
         run: node frontend/scripts/generate-drawing-tools.mjs --check
       - name: toolbar and rail glyphs match the pinned package
         run: node frontend/scripts/generate-chrome-icons.mjs --check
+      # The shipped indicators are loaded at runtime, never bundled, so the
+      # frontend build never touches them: these two steps are the only thing
+      # that runs them before a trader does. The tests existed for months with
+      # nothing executing them.
+      - name: shipped indicators register against the pinned openalgo-charts
+        run: |
+          node .claude/skills/chart-indicator/validate.mjs strategies/indicators/oi_profile_live.js
+          node .claude/skills/chart-indicator/validate.mjs strategies/indicators/open_range_breakout.js
+      - name: shipped indicator tests
+        run: node --test test/indicators/*.test.mjs
 
   # The openscript skill documents the openalgo-script compiler that /trading
   # actually pins, and the same reasoning applies: a version bump that leaves the

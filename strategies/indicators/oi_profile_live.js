@@ -58,6 +58,16 @@ function formatLakh(value) {
   return `${sign}${Math.round(abs)}`
 }
 
+// "+26.37L (+43.3%)": the day's change in OI, signed, and its size against
+// what the strike carried into the day. A strike that carried nothing in has
+// no percentage to give, so it reads "new".
+function changeText(oi, prev) {
+  const chg = (Number(oi) || 0) - (Number(prev) || 0)
+  const sign = chg > 0 ? '+' : ''
+  const pct = prev > 0 ? `${sign}${((chg / prev) * 100).toFixed(1)}%` : 'new'
+  return `${sign}${formatLakh(chg)} (${pct})`
+}
+
 // Sensibull reads calls as resistance and paints them red; the rest of
 // OpenAlgo, including the /oiprofile page, paints calls green. Both are in
 // use, so the chart offers both rather than picking a side.
@@ -101,23 +111,69 @@ function maxPainStrike(chain) {
 }
 
 /**
+ * The chain as one expiry sees it, for max pain.
+ *
+ * Max pain is where ONE expiry settles. With several expiries combined, the
+ * bars sum their open interest per strike, and a max pain taken over that sum
+ * is a blend no contract ever settles at. So it is taken over the legs of the
+ * nearest expiry alone, picked by symbol prefix (NIFTY + 22SEP26), each at its
+ * live OI where `legOi` has one.
+ *
+ * Returns null when the chain carries no legs to filter, so the caller keeps
+ * the summed chain rather than computing max pain over nothing.
+ */
+export function nearestExpiryRows(chain, prefix, legOi = (leg) => Number(leg.oi) || 0) {
+  if (!prefix) return null
+  const p = String(prefix).toUpperCase()
+  let sawLeg = false
+  const rows = chain.map((row) => {
+    const sum = (legs) => {
+      let total = 0
+      for (const leg of legs ?? []) {
+        if (!String(leg.symbol).toUpperCase().startsWith(p)) continue
+        sawLeg = true
+        total += legOi(leg)
+      }
+      return total
+    }
+    return { strike: row.strike, ce_oi: sum(row.ce_legs), pe_oi: sum(row.pe_legs) }
+  })
+  return sawLeg ? rows : null
+}
+
+export { maxPainStrike }
+
+/**
  * Half the height of one strike row, in pixels. Few strikes on screen get fat
  * readable rows; a crowded pane gets thin ones that cannot overlap.
  */
 function rowHalfHeight(rows) {
   const n = rows.length
-  if (n < 5) return 20
-  if (n < 10) return 15
-  if (n < 15) return 10
-  if (n < 20) return 7.5
-  const gap = Math.abs(rows[n - 1].y - rows[0].y) / n / 2
-  return Math.max(2, Math.min(5, gap))
+  // Never taller than the real spacing between neighbouring strikes. The
+  // sizes below assume a full-height pane; in a small pane (a multi-chart
+  // grid) a 20px half row over strikes 12px apart drew every row over its
+  // neighbours.
+  let minGap = Infinity
+  for (let i = 1; i < n; i++) minGap = Math.min(minGap, Math.abs(rows[i].y - rows[i - 1].y))
+  const fit = Number.isFinite(minGap) ? Math.max(1.5, minGap / 2) : Infinity
+  let half
+  if (n < 5) half = 20
+  else if (n < 10) half = 15
+  else if (n < 15) half = 10
+  else if (n < 20) half = 7.5
+  else half = Math.max(2, Math.min(5, Math.abs(rows[n - 1].y - rows[0].y) / n / 2))
+  return Math.min(half, fit)
 }
 
 /**
  * The settings that change what the server is asked for. A change to any of
- * them has to refetch; a change to anything else (colours, bar width, the
- * markers) only has to repaint, which happens on the next frame anyway.
+ * them clears the chart and refetches; a change to anything else (colours, bar
+ * width, the markers) only has to repaint, which happens on the next frame.
+ *
+ * Mode and the outline are not here: they choose which columns of the same
+ * answer are drawn. Keying on them cleared the chart and refetched both passes
+ * on every toggle, although the change columns were usually already loaded.
+ * viewKey() handles them.
  */
 function dataKey(settings, symbol) {
   return [
@@ -126,6 +182,12 @@ function dataKey(settings, symbol) {
     String(settings.expiryDate ?? '').toUpperCase(),
     String(settings.expiries ?? 1),
     String(settings.strikes ?? 25),
+  ].join('|')
+}
+
+/** The settings that only choose what is drawn from the data already held. */
+function viewKey(settings) {
+  return [
     settings.mode === 'oi' ? 'oi' : 'change',
     settings.outline === false ? 'plain' : 'outline',
   ].join('|')
@@ -331,6 +393,13 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         updatedAt: 0,
         problem: null,
         loadingFor: '',
+        // Set from each answer. `nearestPrefix` names the nearest expiry's
+        // contracts (NIFTY22SEP26) when several expiries are combined, so max
+        // pain can be taken over that expiry alone; null for a single expiry.
+        nearestPrefix: null,
+        nearestExpiry: '',
+        optionsExchange: '',
+        atmStrike: null,
       }
 
       // Where every bar lands this frame. draw() paints from it and hitTest()
@@ -401,6 +470,10 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // it cannot go stale: the chart clears hoverId when the pointer leaves.
       let hoverPoint = null
 
+      // The strikes the last frame actually drew, lowest and highest. The live
+      // feed streams the legs around these rather than the whole chain.
+      let visibleRange = null
+
       // One line, written for a trader: when the bars were last refreshed, or
       // why they are not there. Every failure used to be silent, so a profile
       // that could not load looked the same as one with nothing to show.
@@ -420,12 +493,25 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         }
         if (!hasChain) return state.loadingFor ? `OI Profile: loading ${state.loadingFor}` : ''
         let text = `OI Profile: ${updated}`
-        if (state.changePending && state.mode !== 'oi') text += ', change still loading'
+        // Change mode with no change columns yet shows totals for now; say so
+        // rather than let them pass for the change.
+        if (state.mode !== 'oi' && (state.changePending || !state.hasChange)) {
+          text += ', change still loading'
+        }
         if (!state.marketOpen) text += ' (market closed)'
+        // Put/call ratio over every strike fetched (Strikes Around ATM either
+        // side), the one number most readers look for first.
+        let ce = 0
+        let pe = 0
+        for (const r of state.chain) {
+          ce += Number(r.ce_oi) || 0
+          pe += Number(r.pe_oi) || 0
+        }
+        if (ce > 0) text += ` | PCR ${(pe / ce).toFixed(2)}`
         return text
       }
 
-      const drawStatus = (canvasCtx, rc, dpr) => {
+      const drawStatus = (canvasCtx, rc, dpr, settings) => {
         const text = statusText()
         if (!text) return
         const fontPx = 10
@@ -434,7 +520,12 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         canvasCtx.textBaseline = 'top'
         const w = canvasCtx.measureText(text).width / dpr
         const pad = 4
-        const x = Math.max(4, rc.plotWidth - w - pad * 2 - 6)
+        // Left of the bar column, not over it: at the top right it hid the
+        // bars of whichever strike sat near the top of the pane. Seen on the
+        // live chart, not in a test. A pane too narrow for both gives the
+        // line its left edge.
+        const barColumn = Math.min(rc.plotWidth * 0.6, Math.max(20, Number(settings.barWidth) || 140))
+        const x = Math.max(4, rc.plotWidth - barColumn - w - pad * 2 - 10)
         const y = 6
         canvasCtx.globalAlpha = 0.85
         canvasCtx.fillStyle = TOOLTIP_BG
@@ -487,7 +578,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
 
           // Painted before the early return below: an empty profile is exactly
           // when the reader most needs to be told why.
-          if (settings.statusLine !== false) drawStatus(canvasCtx, rc, dpr)
+          if (settings.statusLine !== false) drawStatus(canvasCtx, rc, dpr, settings)
 
           const chain = state.chain
           if (!Array.isArray(chain) || chain.length === 0) return
@@ -497,6 +588,13 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           const geom = layout(rc, settings)
           if (!geom) return
           const { rows, halfPx, scale, originX, rightEdge, maxWidthPx, minVal } = geom
+          let lo = Infinity
+          let hi = -Infinity
+          for (const r of rows) {
+            lo = Math.min(lo, r.strike)
+            hi = Math.max(hi, r.strike)
+          }
+          visibleRange = { lo, hi }
 
           canvasCtx.save()
           // Read live, so dragging the slider repaints on the next frame.
@@ -567,7 +665,11 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
               canvasCtx.font = `${10 * dpr}px ui-sans-serif, system-ui, sans-serif`
               canvasCtx.textBaseline = 'bottom'
               canvasCtx.fillText(
-                `Max Pain ${strike}`,
+                // With expiries combined, say which one it is for: it is the
+                // nearest expiry's, not the summed bars'.
+                state.nearestPrefix
+                  ? `Max Pain ${strike} (${state.nearestExpiry})`
+                  : `Max Pain ${strike}`,
                 (rightEdge - maxWidthPx) * dpr,
                 (row.y - 2) * dpr
               )
@@ -612,6 +714,24 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
                 color: scheme.pe,
               },
             ]
+            // The other half of the picture, so one hover answers both "how
+            // much is there" and "how much of it is today's": the change (with
+            // its size against what the strike carried in) under Open
+            // Interest, the totals under Change in OI, and the strike's PCR.
+            if (isChange) {
+              lines.push({
+                text: `Totals: Call ${formatLakh(hoveredRow.ceOi)}, Put ${formatLakh(hoveredRow.peOi)}`,
+                color: null,
+              })
+            } else if (state.hasChange) {
+              lines.push(
+                { text: `Call Chg: ${changeText(hoveredRow.ceOi, hoveredRow.cePrev)}`, color: scheme.ce },
+                { text: `Put Chg: ${changeText(hoveredRow.peOi, hoveredRow.pePrev)}`, color: scheme.pe }
+              )
+            }
+            if (hoveredRow.ceOi > 0) {
+              lines.push({ text: `PCR: ${(hoveredRow.peOi / hoveredRow.ceOi).toFixed(2)}`, color: null })
+            }
 
             canvasCtx.globalAlpha = 1
             const fontPx = 11
@@ -774,7 +894,9 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
 
       // Everything derived from a chain is derived once, here, rather than on
       // every animation frame.
-      const applyChain = (body, valueMode, hasChange) => {
+      // `meta` is what the request was for: the nearest expiry's symbol prefix
+      // when several expiries are combined (for max pain), else null.
+      const applyChain = (body, valueMode, hasChange, meta = {}) => {
         const chain = Array.isArray(body.oi_chain) ? body.oi_chain : null
         polledChain = chain
         state.valueMode = valueMode
@@ -782,7 +904,11 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         state.marketOpen = body.market_open !== false
         state.updatedAt = Date.now()
         state.problem = null
-        watchLegs(chain, body.options_exchange)
+        state.nearestPrefix = meta.prefix ?? null
+        state.nearestExpiry = meta.expiry ?? ''
+        state.optionsExchange = body.options_exchange ?? ''
+        state.atmStrike = Number.isFinite(Number(body.atm_strike)) ? Number(body.atm_strike) : null
+        syncLive()
         redraw()
       }
 
@@ -793,8 +919,27 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       let polledChain = null
       const liveOi = new Map()
       let liveDirty = false
-      let unsubscribeLive = null
-      let watchedLegs = ''
+      // One subscription per streamed leg, symbol -> unsubscribe, so a change
+      // in which legs are wanted adds and drops only the difference.
+      const liveSubs = new Map()
+      let liveExchange = ''
+
+      // At most this many legs stream at once. The broker feed is shared with
+      // every chart and watchlist on the account (about 3,000 symbols per
+      // broker), and the whole chain was up to 1,212 legs (50 strikes either
+      // side, six expiries). The legs streamed are the ones around the strikes
+      // on screen, which is where a live number can be seen at all.
+      const MAX_LIVE_LEGS = 160
+      // Strikes beyond the visible edge still streamed, so a small pan does not
+      // start with stale bars at the edge.
+      const LIVE_MARGIN_STRIKES = 3
+
+      // The live OI of one leg if a fresh tick holds it, else its polled OI.
+      const legOi = (leg) => {
+        const t = liveOi.get(String(leg.symbol).toUpperCase())
+        if (t && t.oi > 0 && Date.now() - t.at <= beatSeconds() * 1000) return t.oi
+        return Number(leg.oi) || 0
+      }
 
       const redraw = () => {
         const chain = polledChain
@@ -804,56 +949,106 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           chain && liveOi.size
             ? overlayLiveOi(chain, liveOi, Date.now(), beatSeconds() * 1000).chain
             : chain
-        state.maxPain = state.chain ? maxPainStrike(state.chain) : null
+        if (state.chain) {
+          const nearest = chain ? nearestExpiryRows(chain, state.nearestPrefix, legOi) : null
+          state.maxPain = maxPainStrike(nearest ?? state.chain)
+        } else {
+          state.maxPain = null
+        }
         ctx.requestRecompute()
       }
 
-      const stopLive = () => {
-        if (unsubscribeLive) unsubscribeLive()
-        unsubscribeLive = null
-        watchedLegs = ''
-        liveOi.clear()
+      const onTick = (tick) => {
+        const oi = Number(tick?.data?.oi)
+        // A 0 is "not carried" on some brokers, so it must not replace the
+        // last good value; that one ages out on its own if the feed stops.
+        if (!(oi > 0)) return
+        // When OI last arrived, not when this tick did: the host merges
+        // ticks, so a price-only tick re-sends the old OI and must not keep
+        // it fresh. An older host without the stamp falls back to now.
+        const at = Number(tick.data.oi_updated_at) || Date.now()
+        const key = String(tick.symbol).toUpperCase()
+        const prev = liveOi.get(key)
+        liveOi.set(key, { oi, at })
+        if (prev?.oi !== oi) liveDirty = true
       }
 
-      const watchLegs = (chain, exchange) => {
-        if (typeof subscribeQuotes !== 'function' || !exchange || !state.marketOpen) {
+      const stopLive = () => {
+        for (const unsubscribe of liveSubs.values()) unsubscribe()
+        liveSubs.clear()
+        liveOi.clear()
+        liveExchange = ''
+      }
+
+      // The legs worth streaming: those of the strikes nearest the middle of
+      // the screen (or ATM, before the first frame), out to the visible edges
+      // plus a margin, capped at MAX_LIVE_LEGS.
+      const wantedLegs = (chain) => {
+        const rows = (chain ?? []).filter((r) => Number.isFinite(Number(r.strike)))
+        if (rows.length === 0) return new Set()
+        const strikes = rows.map((r) => Number(r.strike)).sort((a, b) => a - b)
+        let step = Infinity
+        for (let i = 1; i < strikes.length; i++) {
+          const d = strikes[i] - strikes[i - 1]
+          if (d > 0) step = Math.min(step, d)
+        }
+        if (!Number.isFinite(step)) step = 0
+        let lo = -Infinity
+        let hi = Infinity
+        let centre
+        if (visibleRange) {
+          lo = visibleRange.lo - LIVE_MARGIN_STRIKES * step
+          hi = visibleRange.hi + LIVE_MARGIN_STRIKES * step
+          centre = (visibleRange.lo + visibleRange.hi) / 2
+        } else {
+          centre = state.atmStrike ?? strikes[Math.floor(strikes.length / 2)]
+        }
+        const near = rows
+          .filter((r) => Number(r.strike) >= lo && Number(r.strike) <= hi)
+          .sort((a, b) => Math.abs(Number(a.strike) - centre) - Math.abs(Number(b.strike) - centre))
+        const wanted = new Set()
+        for (const row of near) {
+          for (const leg of [...(row.ce_legs ?? []), ...(row.pe_legs ?? [])]) {
+            if (wanted.size >= MAX_LIVE_LEGS) return wanted
+            if (leg?.symbol) wanted.add(leg.symbol)
+          }
+        }
+        return wanted
+      }
+
+      // Bring the streamed legs in line with wantedLegs(). Only the difference
+      // is subscribed or dropped: a recentred chain or a pan keeps every leg
+      // still in view streaming, with its last tick. Replacing the whole set
+      // dropped every live number whenever ATM moved one strike.
+      const syncLive = () => {
+        const exchange = state.optionsExchange
+        if (typeof subscribeQuotes !== 'function' || !exchange || !state.marketOpen || !polledChain) {
           stopLive()
           return
         }
-        const symbols = new Set()
-        for (const row of chain ?? []) {
-          for (const leg of row.ce_legs ?? []) symbols.add(leg.symbol)
-          for (const leg of row.pe_legs ?? []) symbols.add(leg.symbol)
+        if (liveExchange && liveExchange !== exchange) stopLive()
+        liveExchange = exchange
+        const wanted = wantedLegs(polledChain)
+        for (const [symbol, unsubscribe] of liveSubs) {
+          if (wanted.has(symbol)) continue
+          unsubscribe()
+          liveSubs.delete(symbol)
+          if (liveOi.delete(String(symbol).toUpperCase())) liveDirty = true
         }
-        const key = `${exchange}|${[...symbols].sort().join(',')}`
-        if (key === watchedLegs) return
-        stopLive()
-        if (symbols.size === 0) return
-        watchedLegs = key
-        unsubscribeLive = subscribeQuotes(
-          [...symbols].map((symbol) => ({ symbol, exchange })),
-          (tick) => {
-            const oi = Number(tick?.data?.oi)
-            // A 0 is "not carried" on some brokers, so it must not replace the
-            // last good value; that one ages out on its own if the feed stops.
-            if (!(oi > 0)) return
-            // When OI last arrived, not when this tick did: the host merges
-            // ticks, so a price-only tick re-sends the old OI and must not keep
-            // it fresh. An older host without the stamp falls back to now.
-            const at = Number(tick.data.oi_updated_at) || Date.now()
-            const key = String(tick.symbol).toUpperCase()
-            const prev = liveOi.get(key)
-            liveOi.set(key, { oi, at })
-            if (prev?.oi !== oi) liveDirty = true
-          }
-        )
+        for (const symbol of wanted) {
+          if (liveSubs.has(symbol)) continue
+          liveSubs.set(symbol, subscribeQuotes([{ symbol, exchange }], onTick))
+        }
       }
 
       // Ticks arrive far faster than bars need repainting; fold them in on a
-      // slow beat instead of recomputing on every one.
+      // slow beat instead of recomputing on every one. The same beat follows
+      // the visible strikes, so a pan or zoom streams what is now on screen.
       const LIVE_REDRAW_MS = 2000
       const liveTimer = setInterval(() => {
-        if (!liveDirty || cancelled) return
+        if (cancelled) return
+        if (liveSubs.size || polledChain) syncLive()
+        if (!liveDirty) return
         liveDirty = false
         redraw()
       }, LIVE_REDRAW_MS)
@@ -931,6 +1126,11 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           // outline needs them even when the bars themselves show OI.
           const wantsChange = state.mode !== 'oi' || settings.outline !== false
 
+          // Several expiries combined: max pain is taken over the nearest one's
+          // contracts alone, which share this symbol prefix (NIFTY22SEP26).
+          const meta =
+            expiries.length > 1 ? { prefix: `${underlying}${expiries[0]}`, expiry: expiries[0] } : {}
+
           // Open interest comes back in well under a second. The change
           // columns need yesterday's close for every leg, which is one broker
           // history call each on the first request of the session - so on a
@@ -947,13 +1147,13 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           if (!wantsChange || !state.hasChange) {
             const oiBody = await request(false)
             if (!oiBody) return
-            applyChain(oiBody, 'oi', false)
+            applyChain(oiBody, 'oi', false, meta)
             if (!wantsChange) return
           }
 
           const changeBody = await request(true)
           if (!changeBody) return
-          applyChain(changeBody, state.mode === 'oi' ? 'oi' : 'change', true)
+          applyChain(changeBody, state.mode === 'oi' ? 'oi' : 'change', true, meta)
           // An underlying nobody has looked at today has no previous-session
           // OI cached for its legs. The backend fetches those in the
           // background rather than holding the request, so the change columns
@@ -1005,11 +1205,38 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // what a person notices, and comparing a joined string costs nothing.
       const SETTINGS_POLL_MS = 1000
       let watchedKey = dataKey(ctx.settings(), ctx.symbol?.())
+      let watchedView = viewKey(ctx.settings())
+
+      // Mode or outline changed: draw the other columns of what is already
+      // held. Only when the change columns are missing does it fetch them, and
+      // without clearing the bars on screen.
+      const applyView = () => {
+        const settings = ctx.settings()
+        state.mode = settings.mode === 'oi' ? 'oi' : 'change'
+        const wantsChange = state.mode !== 'oi' || settings.outline !== false
+        if (state.hasChange || !wantsChange) {
+          state.valueMode = state.hasChange ? state.mode : 'oi'
+          ctx.requestRecompute()
+          return
+        }
+        ctx.requestRecompute()
+        fetchChain(true).finally(() => scheduleNext())
+      }
+
       const watcher = setInterval(() => {
         if (cancelled) return
-        const next = dataKey(ctx.settings(), ctx.symbol?.())
-        if (next === watchedKey) return
+        const settings = ctx.settings()
+        const next = dataKey(settings, ctx.symbol?.())
+        if (next === watchedKey) {
+          const view = viewKey(settings)
+          if (view !== watchedView) {
+            watchedView = view
+            applyView()
+          }
+          return
+        }
         watchedKey = next
+        watchedView = viewKey(settings)
         // A changed instrument invalidates what is on screen; clear it rather
         // than leave the previous underlying's bars up while the new one loads.
         polledChain = null

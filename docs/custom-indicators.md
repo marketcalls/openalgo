@@ -550,9 +550,14 @@ stops the slow answer for the instrument you have left from painting over the
 one you are looking at.
 
 **Live between polls, from ticks already flowing.** Where the broker's feed
-carries open interest, the indicator subscribes to every contract on screen
-through `subscribeQuotes` (see below) and moves the bars as ticks arrive,
-repainting at most every two seconds. The poll then only sets the anchors and
+carries open interest, the indicator streams the contracts of the strikes on
+screen, plus three either side, through `subscribeQuotes` (see below) and moves
+the bars as ticks arrive, repainting at most every two seconds. It streams at
+most 160 contracts, the ones nearest the middle of the screen, because the
+broker feed is shared with every chart and watchlist on the account. Each
+contract is its own subscription, so a pan, a zoom or a chain recentred on a
+new ATM adds and drops only the difference: a contract still on screen keeps
+streaming and keeps its last tick. The poll then only sets the anchors and
 picks up contracts the feed does not cover. Brokers whose feed sends no `oi`
 keep the polled numbers; see
 [oi-profile-live-oi.md](oi-profile-live-oi.md) for which brokers send it.
@@ -566,7 +571,8 @@ routine refresh asks once, because the change answer already carries the open
 interest: asking twice cost two option-chain quotes per beat and, while the
 second was on its way, swapped the change bars for totals.
 
-**A profile that cannot load says why.** A status line at the top right shows
+**A profile that cannot load says why.** A status line at the top of the pane,
+just left of the bars so it never covers one, shows
 when the bars were last refreshed, or the reason they are not there: no option
 expiries for the underlying, or a refresh that failed and is being retried (the
 last good bars stay up). Every one of those used to be silent, so a profile
@@ -583,12 +589,22 @@ which strike is under the pointer and hands the winner back on `rc.hoverId` -
 so the tooltip appears and vanishes with the cursor without the indicator
 tracking a single listener. It prints what the bars currently are: totals under
 **Open Interest**, the session's build under **Change in OI**, in lakhs and
-crores the way the numbers are actually read.
+crores the way the numbers are actually read. It also prints the other half -
+the day's change with its percentage under Open Interest, the totals under
+Change in OI - and that strike's put/call ratio. The status line adds the
+overall PCR across every strike fetched.
+
+**Mode and outline repaint; they never refetch.** Both choose which columns of
+the same answer are drawn, so switching them redraws from data already held.
+Only when the change columns have not been loaded yet does a switch fetch them,
+and the bars stay on screen while it does.
 
 Settings worth knowing: **Strikes Around ATM** (5/10/25/50) is the one that
 decides how much work a refresh is; **Previous Session Outline** draws the
 dashed box showing what each strike carried into the day; **Max Pain Marker**
-labels the strike where the most option value expires worthless; **Colours**
+labels the strike where the most option value expires worthless (with expiries
+combined, it is the nearest expiry's and names it: max pain is where one expiry
+settles, and the summed bars are not an expiry); **Colours**
 switches between calls-red (Sensibull, Upstox) and calls-green (the OpenAlgo
 `/oiprofile` page); **Exchange** left on Auto sends SENSEX and BANKEX to BFO,
 tries NFO for everything else, and falls back to BFO and then MCX when the
