@@ -1,3 +1,4 @@
+import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -87,7 +88,7 @@ import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import { historyChord } from '@/lib/trading/chartHistory'
 import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
-import { ChromeIcon } from '@/lib/trading/glyphs'
+import { ChromeIcon, lineStroke24 } from '@/lib/trading/glyphs'
 import {
   type GridWeights,
   parseAreas,
@@ -1236,7 +1237,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
             data-workspace-control
             aria-label={`Chart layout: ${activeLayoutLabel}`}
           >
-            <ChromeIcon id="layout" />
+            <LayoutGrid className="h-4 w-4" strokeWidth={lineStroke24(16)} />
           </button>
         </DropdownMenuTrigger>
       </Tip>
@@ -1314,7 +1315,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
               className={cn(TB_BTN, TB_ICON, syncOn && paneCount > 1 && TB_ON)}
               aria-label="Chart sync"
             >
-              <ChromeIcon id="link" />
+              <LinkIcon className="h-4 w-4" strokeWidth={lineStroke24(16)} />
             </button>
           </DropdownMenuTrigger>
         </span>

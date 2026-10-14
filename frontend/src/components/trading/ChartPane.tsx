@@ -39,6 +39,32 @@ import {
 } from '@/lib/trading/chartTypes'
 import { MOD_KEY } from '@/lib/trading/drawingKeys'
 import { ChromeIcon, lineStroke24 } from '@/lib/trading/glyphs'
+
+/**
+ * The Indicators glyph: a derived series read against a level. Kept over the
+ * engine's formula glyph at the user's request, because traders already know
+ * this mark; it is drawn at the toolbar's line weight so the set still reads as
+ * one. The dashed rule and the dot survive 16px.
+ */
+function IndicatorIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={lineStroke24(16)}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3 12h18" strokeDasharray="2.5 2.6" opacity={0.55} />
+      <path d="M3 17.5c2.2 0 2.4-9 5-9s2.6 8 5 8 2.6-9 5-9 2.6 4.5 3 5" />
+      <circle cx="13" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import { isProfileKind } from '@/lib/trading/profileSettings'
@@ -1084,6 +1110,7 @@ export function ChartPane({
             </button>
           </Tip>
 
+          <ToolbarDivider />
           {/* Timeframe */}
           <DropdownMenu>
             <Tip
@@ -1129,6 +1156,7 @@ export function ChartPane({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <ToolbarDivider />
           {/* Chart type */}
           <DropdownMenu>
             <Tip tip={{ title: 'Chart type', sub: chartTypeDef.label }}>
@@ -1244,7 +1272,7 @@ export function ChartPane({
                 void openIndicators()
               }}
             >
-              <ChromeIcon id="indicators" />
+              <IndicatorIcon className="h-4 w-4" />
               <span className={TB_LABEL_2XL}>Indicators</span>
               {indicators.length > 0 && <span className={TB_COUNT}>{indicators.length}</span>}
             </button>
