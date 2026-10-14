@@ -83,6 +83,39 @@ fine on the dev server and **breaks under eventlet**. That is the single most
 common way a change passes locally and fails on deploy. SQLite locking is also
 stricter on Windows.
 
+### The gthread suite passes before every commit and pull request
+
+The `gthread-migration` CI job runs every `test/test_gthread_*.py` file under a
+real gunicorn on Linux. Most of those files skip on Windows, so a green
+`uv run pytest` on a Windows checkout says nothing about them. Before committing
+or raising a pull request, run the job's own command on Linux or in WSL (in a
+copy on the Linux filesystem, not under `/mnt/c`):
+
+```bash
+uv sync
+uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
+.venv/bin/python -m pytest test/test_gthread_*.py -o addopts="" --timeout=120 -rs
+```
+
+- **Main stays green.** Check `gh run list --workflow CI --branch main` before
+  starting. A red `gthread-migration` on main is fixed first, in its own pull
+  request, before new work lands on top of it.
+- **A flaky test is fixed, never re-run into green.** Find the race and write a
+  test that reproduces it. The one that broke main after #2217: the control case
+  in `test_gthread_deploy_shutdown.py` lets the arbiter SIGKILL the worker, and
+  the kill landed between the hook creating its marker file and writing to it.
+  The empty file made `split()[0]` raise `IndexError`.
+- **Read a file a killed process writes as possibly cut off.** A marker, pid or
+  log file can exist and still be empty or end mid-line. Count only complete
+  lines (`_first_mark` in that file) and treat an empty file as "not reached".
+- **A thread-leak check names the threads it owns.** The suite shares one
+  interpreter, and importing `blueprints.python_strategy` starts APScheduler,
+  whose default executor is an unnamed pool (`ThreadPoolExecutor-0_0`) that
+  starts a thread whenever a scheduled job fires. Counting every new
+  `ThreadPoolExecutor-` thread made `test_gthread_brokers_a_quote_paths.py`
+  fail at random. Record the pools the code under test builds and check their
+  own threads, or match a `thread_name_prefix` only that code uses.
+
 ## Invariants — do not break these
 
 ### ZeroMQ bus: SUB binds, PUBs connect
