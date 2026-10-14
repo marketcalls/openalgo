@@ -300,6 +300,44 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
 
+### /trading is a full-screen terminal
+
+Traders compare /trading with the best charting terminals they use, so its
+finish is held to that bar: borrow their craft (density, crispness, one icon
+weight, quiet states), never their layout, grouping or wording, and **no brand or
+product names anywhere in /trading**: code, comments, class names, tooltips and
+copy describe things generically.
+
+- **No app navbar on /trading.** The terminal takes the whole viewport. Its one
+  toolbar band carries a Dashboard link at the left and the account controls at
+  the right: broker badge, Live or Analyze badge, mode switch, theme toggle and
+  profile menu. Both the navbar and the terminal render the same
+  `components/layout/AccountControls.tsx`; never fork that logic into the
+  terminal, or mode switching and its warning toasts drift apart.
+- **Those four (Dashboard, mode switch, theme toggle, profile menu) are visible
+  at every width**, outside the toolbar's scrolling part. Everything else gives
+  way first: labels collapse to icons with tooltips on narrower screens, and the
+  row must fit at 1366 px. `Trading.test.tsx` pins the four by accessible name.
+- **Every glyph comes from the chart engine**, through the generated
+  `chromeIcons.ts` and `drawingToolMetadata.ts` and the `ChromeIcon` component in
+  `lib/trading/glyphs.tsx`, at the engine's line weight. The toolbar never imports
+  `openalgo-charts/draw` for an icon: that would load the drawing renderer with
+  the toolbar. Where the engine has no glyph, the app icon kept in its place is
+  drawn at the same weight.
+- **The drawing rail follows the engine's reference host rail**
+  (`examples/yfinance/src/rail.js` in openalgo-charts): glyph sizes, group carets
+  and flyouts, held-tool and magnet dots, the pinned controls block, and the fold
+  with its tab at the chart's lower left (`oa-trading-rail-folded` in local
+  storage). Change both together, or the two drift.
+- **Three looks, one source.** Live light, live dark and analyzer (the violet
+  accent) all come from the app's theme tokens through
+  `lib/trading/chartTheme.ts` and the tokens in `index.css`; no component carries
+  a palette of its own. A visual change is checked in all three, and the theme
+  toggle stays disabled in analyzer, as it is in the navbar.
+- **The chart the toolbar drives** is chosen from the layout menu ("Selected
+  chart"), and the focused pane's frame shows the accent. Keep the toolbar's
+  `data-toolbar-pane` attribute: the browser harness reads it.
+
 ### Bumping openalgo-charts also updates the chart-indicator skill
 
 The skill documents a specific build. `reference/api.md` carries the full export
@@ -312,7 +350,21 @@ change, not two.**
 cd frontend && npm install openalgo-charts@<version> --save-exact
 node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
 node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
+node scripts/generate-drawing-tools.mjs                       # rail glyphs and names, from the installed draw tier
+node scripts/generate-chrome-icons.mjs                        # toolbar and rail chrome glyphs
 ```
+
+The two generators write `src/lib/trading/drawingToolMetadata.ts` and
+`src/lib/trading/chromeIcons.ts`; CI runs both with `--check`, so a bump that
+changes a glyph and skips them fails the build. Never edit either file by hand.
+
+A bump that changes what /trading loads also runs the browser harness that lives
+in the openalgo-charts repo: `node scripts/check-openalgo-compat.mjs --frontend
+<worktree>/frontend --browser <chromium|firefox|webkit> --navigation true` (14
+checks). It needs a linked `git worktree` of this repo with `node_modules`
+copied, not linked. On Windows copy it with `robocopy <src> <dst> /E /XJ`: without
+`/XJ` robocopy follows the junctions inside `node_modules` and copies the same
+trees over and over (9 GB instead of 730 MB), which once filled the system drive.
 
 Then read the upstream changelog for the range you skipped and update the prose
 by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
@@ -564,7 +616,9 @@ have cost to write it down.
 
 **No icons or emojis anywhere** — source, comments, log messages, commit
 messages, PR descriptions, changelogs, release notes, or any generated text
-including drafts for Discord or Telegram. Use plain text labels.
+including drafts for Discord or Telegram. Use plain text labels. That covers the
+automated attribution line at the end of a PR description too: keep its text and
+link, drop the emoji in front of it.
 
 ### The ChatGPT subscription model list is ours to maintain
 
@@ -647,6 +701,7 @@ to `main` after every successful push.
 - **Production servers and backend-only contributors need no Node.js.** A plain `git pull` from `main` brings the latest UI. This is the canonical upgrade path.
 - **React developers** run `cd frontend && npm install && npm run build` (or `npm run dev`) locally, since the local `.gitignore` will not track their output. Build only — tests run in CI.
 - **Feature branches** CI has not built may carry stale or missing `dist/`. Build locally or rebase onto recent `main`.
+- **A local build on a branch cut from `main` rewrites tracked files under `frontend/dist/`.** Never stage them (`git add -A -- . ':!frontend/dist'`); `git checkout -- frontend/dist` restores them. A user testing a branch with `uv run app.py` needs that local build, and the commit still carries source only.
 
 Config lives in `.env` (copy from `.sample.env`); `VALID_BROKERS` gates which
 broker plugins load, and plugins are discovered at startup only.
