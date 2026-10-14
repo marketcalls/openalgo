@@ -356,7 +356,9 @@ node scripts/generate-chrome-icons.mjs                        # toolbar and rail
 
 The two generators write `src/lib/trading/drawingToolMetadata.ts` and
 `src/lib/trading/chromeIcons.ts`; CI runs both with `--check`, so a bump that
-changes a glyph and skips them fails the build. Never edit either file by hand.
+changes a glyph and skips them fails the build. Never edit either file by hand,
+and never run a formatter over them: `frontend/biome.json` leaves them out, because
+the check compares the generator's exact output and a reformatted file fails it.
 
 A bump that changes what /trading loads also runs the browser harness that lives
 in the openalgo-charts repo: `node scripts/check-openalgo-compat.mjs --frontend
