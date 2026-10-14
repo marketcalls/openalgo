@@ -72,19 +72,26 @@ def test_an_existing_install_moves_to_the_new_limits(tmp_path):
     assert rows[("MCX", "CRUDEOIL")] == 10000
 
 
-def test_finnifty_moves_from_either_earlier_limit(tmp_path):
-    """1,200 is the shipped seed; 1,800 is NSE's limit from 1 February 2026."""
-    engine = _engine(tmp_path, {("NFO", "FINNIFTY"): 1800, ("NFO", "NIFTY"): 1800})
+@pytest.mark.parametrize(
+    "symbol,published,new",
+    [
+        ("FINNIFTY", 1800, 3240),  # NSE's limit in most months; the seed shipped 1,200
+        ("BANKNIFTY", 900, 1440),  # NSE's limit from 1 April to 30 June 2026
+    ],
+)
+def test_an_earlier_published_limit_moves_too(tmp_path, symbol, published, new):
+    """An admin who copied in an NSE value that has since gone stale is updated."""
+    engine = _engine(tmp_path, {("NFO", symbol): published, ("NFO", "NIFTY"): 1800})
     try:
         assert migration.apply(engine)
-        assert _rows(engine)[("NFO", "FINNIFTY")] == 3240
+        assert _rows(engine)[("NFO", symbol)] == new
     finally:
         engine.dispose()
 
 
 def test_an_admin_value_is_left_alone(tmp_path):
     rows = dict(SHIPPED)
-    rows[("NFO", "BANKNIFTY")] = 900
+    rows[("NFO", "BANKNIFTY")] = 750
     del rows[("NFO", "NIFTYNXT50")]  # an admin deleted it
     engine = _engine(tmp_path, rows)
     try:
@@ -96,7 +103,7 @@ def test_an_admin_value_is_left_alone(tmp_path):
     finally:
         engine.dispose()
 
-    assert after[("NFO", "BANKNIFTY")] == 900
+    assert after[("NFO", "BANKNIFTY")] == 750
     assert ("NFO", "NIFTYNXT50") not in after
     assert after[("NFO", "NIFTY")] == 3510
 

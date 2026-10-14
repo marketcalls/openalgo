@@ -17,8 +17,12 @@ only seeds an empty table, so an existing install would keep splitting orders
 at the old limits forever. This migration updates the NFO rows in place.
 
 It only changes a row that still holds a value OpenAlgo shipped or NSE
-published before this revision (FINNIFTY was 1,200 in the shipped seed and
-1,800 from 1 February 2026). A row an admin set to anything else on the Freeze
+published before this revision. NSE revised the index limits almost every month
+from November 2025 to September 2026, and the values it published in that time
+were NIFTY 1,800; BANKNIFTY 600 or 900 (900 from 1 April to 30 June 2026);
+FINNIFTY 1,200 or 1,800 (1,200, the shipped seed, in December 2025 and
+January and March 2026); MIDCPNIFTY 2,800; NIFTYNXT50 600; NIFTYFPI 8,500
+(from 1 September 2026). A row an admin set to anything else on the Freeze
 Quantities page is left alone and reported. A missing NIFTYFPI row is added,
 because no release ever seeded one; a missing row for the other five was
 deleted by an admin, so it stays deleted.
@@ -59,7 +63,7 @@ EXCHANGE = "NFO"
 #: None in the old values means the row may be absent and is then added.
 REVISION = {
     "NIFTY": (3510, {1800}),
-    "BANKNIFTY": (1440, {600}),
+    "BANKNIFTY": (1440, {600, 900}),
     "FINNIFTY": (3240, {1200, 1800}),
     "MIDCPNIFTY": (5760, {2800}),
     "NIFTYNXT50": (1125, {600}),
