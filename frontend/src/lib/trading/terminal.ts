@@ -218,6 +218,7 @@ import {
   applyChartDialogMetrics,
   buildChartTheme,
   mutedTradeColors,
+  quietVolumeStyle,
   resolveCssColor,
   volumeColor,
 } from './chartTheme'
@@ -1898,11 +1899,12 @@ export class TradingTerminal {
 
   private volumeCandleStyle(): SeriesStyle {
     const theme = this.chart?.theme()
-    return {
+    const style: SeriesStyle = {
       upColor: theme?.upColor,
       downColor: theme?.downColor,
       ...this.chart?.primarySeriesInfo()?.style,
     }
+    return theme ? quietVolumeStyle(style, theme.background) : style
   }
 
   private volumeAvailable(): boolean {

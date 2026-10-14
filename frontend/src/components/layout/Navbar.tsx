@@ -1,17 +1,7 @@
-import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
+import { BookOpen, Menu } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router'
-import { authApi } from '@/api/auth'
-import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
-import { Badge } from '@/components/ui/badge'
+import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import {
   Sheet,
   SheetContent,
@@ -23,9 +13,7 @@ import {
 import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'
 import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/authStore'
-import { useThemeStore } from '@/stores/themeStore'
-import { showToast } from '@/utils/toast'
+import { AccountControls } from './AccountControls'
 
 interface NavbarProps {
   /**
@@ -43,45 +31,10 @@ interface NavbarProps {
 
 export function Navbar({ fluid = false }: NavbarProps = {}) {
   const location = useLocation()
-  const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
-  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
-  const { user, logout } = useAuthStore()
 
   // Profile menu filtered by broker capabilities (shared hook, issue #1480)
   const filteredProfileMenuItems = useProfileMenuItems()
-
-  const handleLogout = async () => {
-    try {
-      await authApi.logout()
-      logout()
-      navigate('/login')
-      showToast.success('Logged out successfully')
-    } catch {
-      logout()
-      navigate('/login')
-    }
-  }
-
-  const handleModeToggle = async () => {
-    const result = await toggleAppMode()
-    if (result.success) {
-      const newMode = useThemeStore.getState().appMode
-      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
-
-      // Show warning toast when enabling analyzer mode (like old UI)
-      if (newMode === 'analyzer') {
-        setTimeout(() => {
-          showToast.warning('Analyzer (Sandbox) mode is for testing purposes only', undefined, {
-            duration: 10000,
-          })
-        }, 2000)
-      }
-    } else {
-      showToast.error(result.message || 'Failed to toggle mode')
-    }
-  }
 
   const isActive = (href: string) => isActiveRoute(location.pathname, href)
 
@@ -267,125 +220,11 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
           })}
         </nav>
 
-        {/* Right Side */}
+        {/* Right Side: shared with the charting terminal's toolbar row. */}
         <div className="ml-auto flex items-center gap-1 2xl:gap-2">
-          {/* Broker Badge — hidden below lg to keep the bar within narrow
-              (portrait/small-laptop) widths */}
-          {user?.broker && (
-            <Badge variant="outline" className="hidden lg:flex text-xs">
-              {user.broker}
-            </Badge>
-          )}
-
-          {/* Mode Badge */}
-          <Badge
-            variant={appMode === 'live' ? 'default' : 'secondary'}
-            className={cn(
-              'text-xs',
-              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
-            )}
-          >
-            <span className="hidden 2xl:inline">
-              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
-            </span>
-            <span className="2xl:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
-          </Badge>
-
-          {/* Mode Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={handleModeToggle}
-            disabled={isTogglingMode}
-            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
-            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
-          >
-            {isTogglingMode ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            ) : appMode === 'live' ? (
-              <Zap className="h-4 w-4" />
-            ) : (
-              <BarChart3 className="h-4 w-4" />
-            )}
-          </Button>
-
-          {/* Theme Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={toggleMode}
-            disabled={appMode !== 'live'}
-            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-          >
-            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
-
-          {/* Profile Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
-                aria-label="Open user menu"
-              >
-                <span className="text-sm font-medium">
-                  {user?.username?.[0]?.toUpperCase() || 'O'}
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              {filteredProfileMenuItems.map((item) =>
-                item.external ? (
-                  <DropdownMenuItem key={item.href} asChild className="cursor-pointer">
-                    <a href={item.href} className="flex items-center">
-                      <item.icon className="h-4 w-4 mr-2" />
-                      {item.label}
-                    </a>
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem
-                    key={item.href}
-                    onSelect={() => navigate(item.href)}
-                    className="cursor-pointer"
-                  >
-                    <item.icon className="h-4 w-4 mr-2" />
-                    {item.label}
-                  </DropdownMenuItem>
-                )
-              )}
-              <DropdownMenuItem asChild>
-                <a
-                  href="https://docs.openalgo.in"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2"
-                >
-                  <BookOpen className="h-4 w-4" />
-                  Docs
-                </a>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => setShowLogoutDialog(true)}
-                className="text-destructive focus:text-destructive"
-              >
-                <LogOut className="h-4 w-4 mr-2" />
-                Logout
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <AccountControls />
         </div>
       </div>
-
-      <LogoutConfirmDialog
-        open={showLogoutDialog}
-        onOpenChange={setShowLogoutDialog}
-        onConfirm={handleLogout}
-      />
     </nav>
   )
 }

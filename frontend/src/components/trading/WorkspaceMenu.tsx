@@ -11,8 +11,10 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import type { ChartWorkspaceCatalogState } from '@/hooks/useChartWorkspaceCatalog'
+import { ChromeIcon } from '@/lib/trading/glyphs'
 import { TickBox } from './TickBox'
 import { Tip } from './Tip'
+import { TB_BTN, TB_LABEL_WIDE } from './toolbarStyles'
 
 interface Props extends ChartWorkspaceCatalogState {
   activeId: string | null
@@ -117,14 +119,15 @@ export function WorkspaceMenu({
         }}
       >
         <DialogTrigger asChild>
-          <Button
+          <button
+            type="button"
             data-workspace-control
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0 px-2.5 text-xs"
+            className={TB_BTN}
+            aria-label="Workspaces"
           >
-            Workspaces
-          </Button>
+            <ChromeIcon id="folder" />
+            <span className={TB_LABEL_WIDE}>Workspaces</span>
+          </button>
         </DialogTrigger>
       </Tip>
       <DialogContent
