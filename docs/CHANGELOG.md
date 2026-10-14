@@ -8,6 +8,55 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### /trading: a full-screen terminal with a cleaner toolbar and drawing rail
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- /trading uses the whole screen. The app's navigation bar is gone from this
+  page only; a Dashboard button at the left of the toolbar takes you back, and
+  the Live or Analyze badge, the mode switch, the light and dark toggle and your
+  profile menu sit at the right of the same toolbar at every screen width, with
+  the broker name beside them on wider screens.
+- The toolbar is one slim band: borderless controls with thin dividers between
+  groups, a chevron on every control that opens a list, and a soft tint in the
+  mode's colour on whatever is switched on (violet in Analyze mode). One-Click
+  keeps its name at every width and turns red while it is on. The "Chart 1"
+  button is gone; with several charts open, choosing which one the toolbar
+  drives is in the layout menu, and the chosen chart's frame is highlighted.
+- Every icon in the toolbar, the drawing rail, the right rail, the drawing style
+  bar and the chart's right-click menu is drawn at one fine line weight.
+- The drawing rail shows a small caret on a group of tools when you hover it;
+  click the caret to pick another tool of that group. A dot marks a tool held
+  for repeated use, and the magnet shows a solid dot for strong and a ring for
+  weak.
+- Zooming out with the mouse wheel keeps the latest bar at the right edge and
+  compresses history beside it, instead of opening a widening gap after the last
+  bar. Hold Ctrl (Cmd on a Mac) while scrolling to zoom about the pointer.
+- The drawing rail can fold away: the last button hides it and a small tab at
+  the bottom left of the chart brings it back. The choice is remembered, and
+  tools, drawings and shortcuts keep working while it is folded.
+- New chart colours in Live dark, Live light and Analyze mode: a fainter grid,
+  clearer up and down candles, quieter volume bars, crosshair labels in the
+  mode's colour, and a gradient under the area chart.
+
+### /trading: openalgo-charts 2.6.4
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- The mouse wheel and a trackpad zoom the chart in one smooth motion, however
+  fast the wheel turns, instead of a jolt per notch.
+- A logarithmic price scale fills the chart again. It used to leave an empty
+  band under a long series, because its margins were measured in price rather
+  than on the log scale.
+- The drawing tool icons draw a finer line, and the horizontal ray icon is
+  redrawn for it.
+
 ### /trading: Renko and point and figure settings, openalgo-charts 2.6.2
 
 No database migration and no `update.sh` run are needed. Pull and restart

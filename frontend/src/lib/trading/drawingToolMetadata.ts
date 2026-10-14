@@ -28,7 +28,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "horizontal-ray": {
     "name": "Horizontal Ray",
-    "path": "M8 12h14M7 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M10 12h12M9 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
     "text": false
   },
   "vertical-line": {
@@ -561,7 +561,7 @@ export const DRAW_TOOL_ICON_ATTRS = {
   "viewBox": "0 0 24 24",
   "fill": "none",
   "stroke": "currentColor",
-  "strokeWidth": 2,
+  "strokeWidth": 1.6,
   "strokeLinecap": "round",
   "strokeLinejoin": "round"
 } as const
