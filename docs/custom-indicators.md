@@ -557,11 +557,20 @@ picks up contracts the feed does not cover. Brokers whose feed sends no `oi`
 keep the polled numbers; see
 [oi-profile-live-oi.md](oi-profile-live-oi.md) for which brokers send it.
 
-**Two passes, fastest first.** Current open interest answers in under a second;
-the open interest each leg carried into the session costs one broker history
-call per leg the first time it is asked for in a session. So the bars are painted from the fast answer
-immediately and upgraded when the slow one lands, rather than leaving the chart
-empty while it runs.
+**Two passes on a first load, one after that.** Current open interest answers in
+under a second; the open interest each leg carried into the session costs one
+broker history call per leg the first time it is asked for in a session. So a
+first load paints the bars from the fast answer immediately and upgrades them
+when the slow one lands, rather than leaving the chart empty while it runs. A
+routine refresh asks once, because the change answer already carries the open
+interest: asking twice cost two option-chain quotes per beat and, while the
+second was on its way, swapped the change bars for totals.
+
+**A profile that cannot load says why.** A status line at the top right shows
+when the bars were last refreshed, or the reason they are not there: no option
+expiries for the underlying, or a refresh that failed and is being retried (the
+last good bars stay up). Every one of those used to be silent, so a profile
+that could not load looked the same as one with nothing to show.
 
 **A toolbar control of its own.** Because it is a view of the whole option
 chain rather than one more line on the price, `/trading` gives OI Profile a
@@ -581,7 +590,10 @@ decides how much work a refresh is; **Previous Session Outline** draws the
 dashed box showing what each strike carried into the day; **Max Pain Marker**
 labels the strike where the most option value expires worthless; **Colours**
 switches between calls-red (Sensibull, Upstox) and calls-green (the OpenAlgo
-`/oiprofile` page).
+`/oiprofile` page); **Exchange** left on Auto sends SENSEX and BANKEX to BFO,
+tries NFO for everything else, and falls back to BFO and then MCX when the
+first guess lists no options, so a CRUDEOIL or GOLD chart needs no setting
+either; **Status Line** turns the top-right status off.
 
 ---
 

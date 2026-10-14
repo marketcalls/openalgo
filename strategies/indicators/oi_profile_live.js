@@ -144,13 +144,41 @@ function resolveUnderlying(settings, symbol) {
     // console errors every time an option was charted.
     .replace(/\d{2}[A-Z]{3}\d{2}FUT$/, '')
     .replace(/\d{2}[A-Z]{3}\d{2}[\d.]*(?:CE|PE)$/, '')
-    .replace(/[^A-Z0-9]/g, '')
+    // '&' and '-' are part of real underlyings (M&M, BAJAJ-AUTO). Stripping
+    // them asked for "MM" and "BAJAJAUTO", which have no expiries, and the
+    // profile stayed blank on those charts.
+    .replace(/[^A-Z0-9&-]/g, '')
+}
+
+/** Whether the Exchange setting is left on Auto (or was never set). */
+function isAutoExchange(settings) {
+  const typed = String(settings.exchange ?? '').trim().toUpperCase()
+  return !typed || typed === 'AUTO'
+}
+
+// Where Auto looks for an underlying's options when its first guess has none.
+const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX']
+
+/** HH:MM in the chart's zone, for the status line. */
+function clockTime(ms, timeZone) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: timeZone || undefined,
+    }).format(ms)
+  } catch {
+    return new Date(ms).toTimeString().slice(0, 5)
+  }
 }
 
 /**
- * The F&O exchange the underlying's options live on. Left on Auto - which is
- * the default - the BSE indices go to BFO and everything else to NFO, so a
- * SENSEX chart needs no setting at all. A saved 'NFO' or 'BFO' still wins.
+ * The F&O exchange to try first for the underlying's options. Left on Auto -
+ * which is the default - the BSE indices go to BFO and everything else to NFO,
+ * so a SENSEX chart needs no setting at all; an underlying with no options
+ * there (CRUDEOIL, GOLD) is then found on the other F&O exchanges by
+ * resolveExpiries. A saved 'NFO', 'BFO' or 'MCX' always wins.
  */
 function resolveExchange(settings, underlying) {
   const typed = String(settings.exchange ?? '').trim().toUpperCase()
@@ -234,6 +262,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           { label: 'Auto', value: 'auto' },
           { label: 'NFO', value: 'NFO' },
           { label: 'BFO', value: 'BFO' },
+          { label: 'MCX', value: 'MCX' },
         ],
       },
       { key: 'expiries', type: 'number', label: 'Expiries To Combine', default: 1, min: 1, max: 6, step: 1, group: 'Instrument' },
@@ -266,6 +295,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       { key: 'barWidth', type: 'number', label: 'Max Bar Width (px)', default: 140, min: 20, max: 400, step: 10, group: 'Display' },
       { key: 'opacity', type: 'number', label: 'Bar Opacity (%)', default: 55, min: 10, max: 100, step: 5, group: 'Display' },
       { key: 'refreshSeconds', type: 'number', label: 'Refresh (seconds)', default: 180, min: 60, max: 900, step: 30, group: 'Display' },
+      { key: 'statusLine', type: 'boolean', label: 'Status Line (last update, problems)', default: true, group: 'Display' },
     ],
 
     // Required by the contract (at least one plot); the real drawing is the
@@ -296,6 +326,11 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         // fetched, so the change columns are incomplete and the next beat
         // should come soon rather than in three minutes.
         changePending: false,
+        // What the status line says. `updatedAt` is when the last chain landed;
+        // `problem` is why the latest attempt did not, or null when it did.
+        updatedAt: 0,
+        problem: null,
+        loadingFor: '',
       }
 
       // Where every bar lands this frame. draw() paints from it and hitTest()
@@ -366,6 +401,52 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // it cannot go stale: the chart clears hoverId when the pointer leaves.
       let hoverPoint = null
 
+      // One line, written for a trader: when the bars were last refreshed, or
+      // why they are not there. Every failure used to be silent, so a profile
+      // that could not load looked the same as one with nothing to show.
+      const statusText = () => {
+        const p = state.problem
+        const hasChain = Array.isArray(state.chain) && state.chain.length > 0
+        const updated = state.updatedAt
+          ? `Updated ${clockTime(state.updatedAt, ctx.timezone?.())}`
+          : ''
+        if (p?.kind === 'no-expiries') {
+          return `OI Profile: no option expiries found for ${p.underlying}. Check the Underlying and Exchange settings.`
+        }
+        if (p?.kind === 'failed') {
+          return hasChain
+            ? `OI Profile: ${updated}. The last refresh failed; retrying.`
+            : `OI Profile: could not load ${p.underlying}; retrying.`
+        }
+        if (!hasChain) return state.loadingFor ? `OI Profile: loading ${state.loadingFor}` : ''
+        let text = `OI Profile: ${updated}`
+        if (state.changePending && state.mode !== 'oi') text += ', change still loading'
+        if (!state.marketOpen) text += ' (market closed)'
+        return text
+      }
+
+      const drawStatus = (canvasCtx, rc, dpr) => {
+        const text = statusText()
+        if (!text) return
+        const fontPx = 10
+        canvasCtx.save()
+        canvasCtx.font = `${fontPx * dpr}px ui-sans-serif, system-ui, sans-serif`
+        canvasCtx.textBaseline = 'top'
+        const w = canvasCtx.measureText(text).width / dpr
+        const pad = 4
+        const x = Math.max(4, rc.plotWidth - w - pad * 2 - 6)
+        const y = 6
+        canvasCtx.globalAlpha = 0.85
+        canvasCtx.fillStyle = TOOLTIP_BG
+        canvasCtx.beginPath()
+        canvasCtx.roundRect(x * dpr, y * dpr, (w + pad * 2) * dpr, (fontPx + pad * 2) * dpr, 4 * dpr)
+        canvasCtx.fill()
+        canvasCtx.globalAlpha = 1
+        canvasCtx.fillStyle = state.problem ? MAX_PAIN_COLOR : TOOLTIP_FG
+        canvasCtx.fillText(text, (x + pad) * dpr, (y + pad) * dpr)
+        canvasCtx.restore()
+      }
+
       const primitive = {
         zOrder() {
           return 'top'
@@ -393,9 +474,6 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         },
 
         draw(canvasCtx, rc) {
-          const chain = state.chain
-          if (!Array.isArray(chain) || chain.length === 0) return
-
           // The canvas is sized in device pixels while the scales answer in
           // CSS pixels, so every coordinate is worked out in CSS pixels and
           // multiplied by `dpr` at the moment it is painted. Skip that and the
@@ -406,6 +484,13 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           // Read at paint time, so flipping the scheme repaints immediately
           // instead of waiting for the next poll.
           const settings = ctx.settings()
+
+          // Painted before the early return below: an empty profile is exactly
+          // when the reader most needs to be told why.
+          if (settings.statusLine !== false) drawStatus(canvasCtx, rc, dpr)
+
+          const chain = state.chain
+          if (!Array.isArray(chain) || chain.length === 0) return
           const scheme = COLOR_SCHEMES[settings.colors] ?? COLOR_SCHEMES.sensibull
           const key = state.valueMode === 'oi' ? 'ce_oi' : 'ce_oi_change'
           const putKey = state.valueMode === 'oi' ? 'pe_oi' : 'pe_oi_change'
@@ -585,7 +670,16 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
             .then((res) => (res.ok ? res.json() : null))
             .then((body) => {
               csrfToken = body?.csrf_token ?? null
+              // No token is not an answer to keep: ask again next time.
+              if (!csrfToken) csrfPromise = null
               return csrfToken
+            })
+            .catch((err) => {
+              // A network blip must not be cached. Kept, the rejected promise
+              // was handed back on every later beat without a new request, so
+              // one failed fetch stopped the profile until the page reloaded.
+              csrfPromise = null
+              throw err
             })
         }
         return csrfPromise
@@ -612,29 +706,56 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // so the cache is held for half an hour, not for the life of the page.
       const EXPIRY_CACHE_MS = 30 * 60 * 1000
       let expiryCacheKey = null
-      let expiryCache = []
+      let expiryCache = { exchange: '', expiries: [] }
       let expiryCachedAt = 0
+      // The exchange Auto found an underlying's options on, so a hand-picked
+      // expiry list for CRUDEOIL is asked of MCX rather than of NFO.
+      const foundOn = new Map()
 
       // `expiryDate` is a comma-separated pick list, the way Sensibull ticks
       // its expiries. A single value is the old override and still works.
-      const resolveExpiries = async (settings, exchange, underlying) => {
+      // Answers { exchange, expiries }: on Auto the exchange is whichever one
+      // actually lists options for the underlying.
+      const resolveExpiries = async (settings, underlying) => {
+        const preferred = resolveExchange(settings, underlying)
+        const auto = isAutoExchange(settings)
         const picked = String(settings.expiryDate ?? '')
           .toUpperCase()
           .split(',')
           .map((e) => e.replace(/[^A-Z0-9]/g, ''))
           .filter(Boolean)
-        if (picked.length) return picked
+        if (picked.length) {
+          const exchange = auto ? (foundOn.get(underlying) ?? preferred) : preferred
+          return { exchange, expiries: picked }
+        }
 
         const count = Math.min(6, Math.max(1, Math.floor(Number(settings.expiries) || 1)))
-        const key = `${exchange}|${underlying}|${count}`
+        const key = `${auto ? 'AUTO' : preferred}|${underlying}|${count}`
         const fresh = Date.now() - expiryCachedAt < EXPIRY_CACHE_MS
-        if (key !== expiryCacheKey || expiryCache.length === 0 || !fresh) {
-          const answer = await fetchNearestExpiries(exchange, underlying, count)
+        if (key !== expiryCacheKey || expiryCache.expiries.length === 0 || !fresh) {
+          let answer = {
+            exchange: preferred,
+            expiries: await fetchNearestExpiries(preferred, underlying, count),
+          }
+          // Auto's first guess is only a guess: CRUDEOIL has no options on NFO
+          // and used to draw nothing at all. One cheap symbol-database lookup
+          // per exchange, and only when the guess came back empty.
+          if (answer.expiries.length === 0 && auto) {
+            for (const exchange of FNO_EXCHANGES) {
+              if (exchange === preferred) continue
+              const expiries = await fetchNearestExpiries(exchange, underlying, count)
+              if (expiries.length > 0) {
+                answer = { exchange, expiries }
+                break
+              }
+            }
+          }
+          if (answer.expiries.length > 0) foundOn.set(underlying, answer.exchange)
           // An empty answer for the instrument already on screen is far more
           // likely a lookup hiccup than expiries vanishing: keep the last good
           // list (and its age, so the next beat asks again) rather than blank
           // a chart that was right a moment ago.
-          if (answer.length > 0 || key !== expiryCacheKey) {
+          if (answer.expiries.length > 0 || key !== expiryCacheKey) {
             expiryCache = answer
             expiryCacheKey = key
             expiryCachedAt = Date.now()
@@ -659,6 +780,8 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         state.valueMode = valueMode
         state.hasChange = hasChange
         state.marketOpen = body.market_open !== false
+        state.updatedAt = Date.now()
+        state.problem = null
         watchLegs(chain, body.options_exchange)
         redraw()
       }
@@ -755,23 +878,32 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         const stale = () => cancelled || mine !== generation
         const settings = ctx.settings()
         const underlying = resolveUnderlying(settings, ctx.symbol?.())
-        const exchange = resolveExchange(settings, underlying)
         state.mode = settings.mode === 'oi' ? 'oi' : 'change'
         watchedKey = dataKey(settings, ctx.symbol?.())
         if (!underlying) {
           polledChain = null
           stopLive()
           state.chain = null
+          state.hasChange = false
+          state.problem = null
+          state.loadingFor = ''
           return
         }
+        state.loadingFor = underlying
+        if (!state.chain) ctx.requestRecompute()
 
         try {
-          const expiries = await resolveExpiries(settings, exchange, underlying)
+          const { exchange, expiries } = await resolveExpiries(settings, underlying)
           if (stale()) return
           // Nothing to ask for. Leave the screen as it is: a changed
           // instrument was already cleared by the settings watcher, and an
           // unchanged one keeps its last good chain through a failed lookup.
-          if (expiries.length === 0) return
+          // Say so, though: a blank profile with no reason was the worst of it.
+          if (expiries.length === 0) {
+            state.problem = { kind: 'no-expiries', underlying }
+            ctx.requestRecompute()
+            return
+          }
 
           const request = async (includeChange) => {
             const res = await postProfileData({
@@ -787,25 +919,37 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
               // costs a broker history call per refresh for nothing.
               include_candles: false,
             })
-            if (!res.ok || stale()) return null
+            if (stale()) return null
+            if (!res.ok) throw new Error(`profile request answered ${res.status}`)
             const body = await res.json()
-            if (stale() || body?.status !== 'success') return null
+            if (stale()) return null
+            if (body?.status !== 'success') throw new Error('profile request was refused')
             return body
           }
-
-          // Open interest comes back in well under a second. The change
-          // columns need yesterday's close for every leg, which is one broker
-          // history call each on the first request of the session - so draw
-          // the fast answer straight away and upgrade it when the slow one
-          // lands, rather than showing an empty chart while it runs.
-          const oiBody = await request(false)
-          if (!oiBody) return
-          applyChain(oiBody, 'oi', false)
 
           // The change columns carry yesterday's open interest too, so the
           // outline needs them even when the bars themselves show OI.
           const wantsChange = state.mode !== 'oi' || settings.outline !== false
-          if (!wantsChange) return
+
+          // Open interest comes back in well under a second. The change
+          // columns need yesterday's close for every leg, which is one broker
+          // history call each on the first request of the session - so on a
+          // first load, draw the fast answer straight away and upgrade it when
+          // the slow one lands, rather than showing an empty chart while it
+          // runs.
+          //
+          // Only on a first load. Once change columns are on screen, a routine
+          // refresh asks once: the change answer already carries the open
+          // interest. Asking twice cost two option-chain quotes per beat (the
+          // server caches the two shapes separately) and, in between, swapped
+          // the change bars for totals and dropped the outline for as long as
+          // the second request took - up to twenty seconds every refresh.
+          if (!wantsChange || !state.hasChange) {
+            const oiBody = await request(false)
+            if (!oiBody) return
+            applyChain(oiBody, 'oi', false)
+            if (!wantsChange) return
+          }
 
           const changeBody = await request(true)
           if (!changeBody) return
@@ -816,7 +960,12 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           // arrive over the next few beats instead of all at once.
           state.changePending = changeBody.oi_change_pending === true
         } catch {
-          // A failed poll is not worth tearing the indicator down for.
+          // A failed poll is not worth tearing the indicator down for, but it
+          // is worth saying: the bars on screen (if any) are now older than
+          // they look. The next beat retries on its own.
+          if (stale()) return
+          state.problem = { kind: 'failed', underlying }
+          ctx.requestRecompute()
         }
       }
 
@@ -868,6 +1017,11 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         state.chain = null
         state.maxPain = null
         state.changePending = false
+        // The new selection has no change columns yet, so its first load takes
+        // the fast open-interest pass again.
+        state.hasChange = false
+        state.problem = null
+        state.updatedAt = 0
         ctx.requestRecompute()
         fetchChain(true).finally(() => scheduleNext())
       }, SETTINGS_POLL_MS)

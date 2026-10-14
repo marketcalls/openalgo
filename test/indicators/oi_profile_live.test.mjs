@@ -81,10 +81,12 @@ assert.ok(c.texts.includes('Strike: 23300'), c.texts.join(' | '))
 assert.ok(c.texts.includes('Call OI Chg: 26.37L'), c.texts.join(' | '))
 assert.ok(c.texts.includes('Put OI Chg: 15.42L'), c.texts.join(' | '))
 
-// No hover -> no tooltip.
+// No hover -> no tooltip. The status line is still painted, and says when the
+// bars were last refreshed.
 c = canvas()
 primitive.draw(c, rc(null))
-assert.equal(c.texts.length, 0, 'no hoverId must paint no tooltip')
+assert.ok(!c.texts.some((t) => t.startsWith('Strike:')), 'no hoverId must paint no tooltip')
+assert.ok(c.texts.some((t) => /^OI Profile: Updated \d{2}:\d{2}/.test(t)), c.texts.join(' | '))
 
 // Open Interest mode: totals, and the label drops "Chg".
 // The settings dialog fires no change event, so the indicator polls it once a
