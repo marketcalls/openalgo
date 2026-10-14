@@ -311,7 +311,7 @@ class _IiflClient:
 
 
 @pytest.fixture
-def iifl(monkeypatch):
+def iifl(monkeypatch, module_sleep):
     import broker.iiflcapital.api.order_api as oa
 
     client = _IiflClient()
@@ -327,7 +327,7 @@ def iifl(monkeypatch):
         "transform_data",
         lambda data, token: {"quantity": data["quantity"], "transactionType": data["action"]},
     )
-    monkeypatch.setattr(oa.time, "sleep", lambda seconds: slept.append(seconds))
+    module_sleep(oa, lambda seconds: slept.append(seconds))
     return oa, client, slept
 
 
@@ -360,7 +360,7 @@ def test_iifl_smart_order_on_the_dev_server_still_sleeps_and_retries(dev, iifl):
     assert client.posts == []  # 75 held, 75 wanted: nothing to send
 
 
-def test_upstox_read_throttled_past_the_ceiling_is_busy(gthread, monkeypatch):
+def test_upstox_read_throttled_past_the_ceiling_is_busy(gthread, monkeypatch, module_sleep):
     import broker.upstox.api.data as data
     import broker.upstox.api.order_api as order
 
@@ -374,7 +374,7 @@ def test_upstox_read_throttled_past_the_ceiling_is_busy(gthread, monkeypatch):
     for module in (order, data):
         monkeypatch.setattr(module, "apply_rate_limit", lambda *a, **k: None)
         monkeypatch.setattr(module, "get_httpx_client", lambda: Client())
-        monkeypatch.setattr(module.time, "sleep", lambda s: pytest.fail("slept past the ceiling"))
+        module_sleep(module, lambda s: pytest.fail("slept past the ceiling"))
 
     with pytest.raises(BrokerBusyError):
         order.get_positions("tok")
@@ -382,7 +382,7 @@ def test_upstox_read_throttled_past_the_ceiling_is_busy(gthread, monkeypatch):
         data.get_api_response("/v3/market-quote/quotes", "tok")
 
 
-def test_upstox_read_on_the_dev_server_sleeps_and_retries(dev, monkeypatch):
+def test_upstox_read_on_the_dev_server_sleeps_and_retries(dev, monkeypatch, module_sleep):
     import broker.upstox.api.order_api as order
 
     replies = [
@@ -398,7 +398,7 @@ def test_upstox_read_on_the_dev_server_sleeps_and_retries(dev, monkeypatch):
     monkeypatch.setenv("BROKER_API_KEY", "k")
     monkeypatch.setattr(order, "apply_rate_limit", lambda *a, **k: None)
     monkeypatch.setattr(order, "get_httpx_client", lambda: Client())
-    monkeypatch.setattr(order.time, "sleep", lambda s: slept.append(s))
+    module_sleep(order, lambda s: slept.append(s))
 
     assert order.get_positions("tok") == {"status": "success", "data": []}
     assert slept == [30.0]
