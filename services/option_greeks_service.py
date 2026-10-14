@@ -220,9 +220,13 @@ def parse_option_symbol(
         # CRYPTO canonical format (BTC28FEB2580000CE) uses the same
         # Indian F&O-style symbology as NFO/MCX — the regex below handles both.
 
-        # Pattern: SYMBOL + DD + MMM + YY + STRIKE + CE/PE
-        # Strike can have decimal point for currencies
-        match = re.match(r"([A-Z]+)(\d{2})([A-Z]{3})(\d{2})([\d.]+)(CE|PE)", symbol.upper())
+        # Underlying symbols may contain digits, ampersands, and hyphens.
+        # Anchor the pattern so malformed trailing text is not silently accepted.
+        # Strike can have a decimal point for currencies.
+        match = re.match(
+            r"^([A-Z0-9&-]+?)(\d{2})([A-Z]{3})(\d{2})([\d.]+)(CE|PE)\Z",
+            symbol.upper(),
+        )
 
         if not match:
             raise ValueError(f"Invalid option symbol format: {symbol}")

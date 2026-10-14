@@ -1205,6 +1205,78 @@ def test_websearch_provider(provider: str):
 
 
 # ---------------------------------------------------------------------------
+# External data (MCP)
+#
+# The on/off switch is the `mcp_enabled` row and travels through
+# `/api/settings` like the trading switch. These two routes add what that
+# payload cannot: the registered servers, and a real connection test.
+# ---------------------------------------------------------------------------
+
+
+@agent_bp.route("/api/mcp", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_mcp_servers():
+    """The registered external data servers and whether the switch is on.
+
+    Reads the registry only; no server is contacted.
+    """
+    from services.agent.mcp.registry import registered_servers
+
+    try:
+        enabled = agent_settings.is_mcp_enabled(fresh=True)
+    except Exception:
+        logger.exception("Could not read the agent MCP setting")
+        return _error("Could not read the external data setting", 500)
+    return _ok(
+        {
+            "enabled": enabled,
+            "servers": [
+                {
+                    "key": spec.key,
+                    "title": spec.title,
+                    "description": spec.description,
+                    "url": spec.url,
+                }
+                for spec in registered_servers()
+            ],
+        }
+    )
+
+
+@agent_bp.route("/api/mcp/test", methods=["POST"])
+@check_session_validity
+@_test_limit
+def test_mcp_servers():
+    """Test the connection to every registered server, or to the one named.
+
+    The same rule as the model and web search tests: a server that fails is a
+    200 carrying ``ok: false`` and a sentence for the operator, not an HTTP
+    error. Each test starts a fresh session and lists the tools, ignoring the
+    circuit breaker, because the operator asked whether the server answers now.
+
+    Returns:
+        ``{results: [{key, title, ok, latency_ms, tool_count, message}]}``.
+    """
+    from services.agent.mcp.client import check_servers
+    from services.agent.mcp.registry import server_by_key
+
+    body = request.get_json(silent=True)
+    if body is not None and not isinstance(body, dict):
+        return _error("The request body must be a JSON object", 400)
+    server = (body or {}).get("server")
+    if server is not None and (not isinstance(server, str) or server_by_key(server) is None):
+        return _error("Unknown external data server", 400)
+
+    try:
+        results = check_servers([server] if server else None)
+    except Exception:
+        logger.exception("The MCP connection test could not be run")
+        return _error("Could not run the external data test", 500)
+    return _ok({"results": results})
+
+
+# ---------------------------------------------------------------------------
 # ChatGPT subscription
 # ---------------------------------------------------------------------------
 

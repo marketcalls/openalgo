@@ -269,6 +269,7 @@ def premium_interval(value: Any, accepted: list[str] | None) -> tuple[str, str |
         f"{fallback!r}, the first size it does serve."
     )
 
+
 #: Trading sessions a premium series spans when the model does not ask for more.
 DEFAULT_PREMIUM_DAYS = 1
 
@@ -365,7 +366,7 @@ def leg_entries(value: Any, field: str) -> list[Any]:
         return []
     if isinstance(raw, str):
         text = raw.strip()
-        if text.startswith("["):
+        if text.startswith(("[", "{")):
             try:
                 raw = json.loads(text)
             except ValueError:
@@ -440,6 +441,123 @@ def leg_lots(value: Any, position: int) -> int:
     return normalise_int(value, f"legs (leg {position} lots)", 1, 100)
 
 
+#: Keys a model uses for a leg's side. ``action`` and ``transaction_type`` are
+#: the order API's own words, so a model that has just placed an order reaches
+#: for them.
+_SIDE_KEYS: tuple[str, ...] = ("side", "action", "transaction_type")
+
+#: Keys a model uses for a leg's size in units rather than lots.
+_QUANTITY_KEYS: tuple[str, ...] = ("quantity", "qty")
+
+#: One expiry parser for every toolkit: the spellings a model produces
+#: (``28NOV25``, ``28-NOV-25``, ``28 NOV 25``, ``28NOV2025``, ``2025-11-28``)
+#: all read as ``DDMMMYY``. Keywords such as ``current_month`` are resolved by
+#: the callers against the listed expiries before this is reached.
+normalise_leg_expiry = normalise_expiry
+
+
+def leg_side_and_lots(
+    entry: Any,
+    position: int,
+    lot_size: Callable[[], int | None],
+    notices: list[str],
+) -> tuple[str, int]:
+    """Read a leg's side and lot count, whatever keys the model spelled them with.
+
+    Keys are matched case-insensitively, the side may arrive as ``side``,
+    ``action`` or ``transaction_type``, and a size given as ``quantity`` is
+    converted to lots with the contract's lot size. Reading only ``side`` and
+    ``lots`` drew ``{"action": "SELL"}`` as a bought leg of one lot, silently.
+
+    Args:
+        entry: One entry of the ``legs`` argument. A string carries neither, so
+            it is a single bought lot.
+        position: Its place in the list, named in failure messages.
+        lot_size: Returns the contract's lot size from the instrument master, or
+            None when the master has none. Called only for a quantity.
+        notices: Collected notices, appended to when a null lot count defaults.
+
+    Returns:
+        The side, ``BUY`` or ``SELL``, and a whole number of lots.
+
+    Raises:
+        RetryAgentRun: For an unreadable side, a lot count out of range, or a
+            quantity that cannot be expressed in whole lots.
+    """
+    if not isinstance(entry, Mapping):
+        return _BUY, 1
+    lowered = {str(key).strip().lower(): value for key, value in entry.items()}
+    side_value = next(
+        (lowered[key] for key in _SIDE_KEYS if lowered.get(key) not in (None, "")), None
+    )
+    side = leg_side(side_value, position)
+
+    if "lots" in lowered and lowered["lots"] is not None:
+        return side, leg_lots(lowered["lots"], position)
+
+    quantity_key = next((key for key in _QUANTITY_KEYS if lowered.get(key) is not None), None)
+    if quantity_key is None:
+        if "lots" in lowered:
+            notices.append(f"Leg {position} gave no lot count, so one lot was used.")
+        return side, 1
+
+    field = f"legs (leg {position} {quantity_key})"
+    quantity = normalise_int(lowered[quantity_key], field, 1, 10_000_000)
+    size = lot_size()
+    if not size:
+        invalid_argument(
+            field,
+            "a quantity was given, but the instrument master has no lot size for this "
+            "contract, so it cannot be turned into lots",
+            "Pass 'lots' instead, for example {\"lots\": 1}.",
+        )
+    if quantity % size:
+        invalid_argument(
+            field,
+            f"{quantity} is not a whole number of lots; one lot of this contract is {size}",
+            f"Pass a multiple of {size}, or pass 'lots' instead.",
+        )
+    return side, leg_lots(quantity // size, position)
+
+
+def master_lot_size(call: Callable[..., Any], symbol: str, exchange: str) -> int | None:
+    """Read one contract's lot size from the instrument master.
+
+    Args:
+        call: The toolkit's ``service_call``.
+        symbol: The OpenAlgo symbol.
+        exchange: The exchange it lists on.
+
+    Returns:
+        The lot size, or None when the master holds no positive one.
+    """
+    payload = call(symbol_service.get_symbol_info, symbol=symbol, exchange=exchange)
+    info = payload.get("data") if isinstance(payload, Mapping) else None
+    size = as_number(info.get("lotsize")) if isinstance(info, Mapping) else None
+    return int(size) if size and size > 0 else None
+
+
+def _json_text(value: Any) -> Any:
+    """Decode a JSON object a model sent as a string, leaving anything else alone.
+
+    The list normalisers already decode a JSON array, but a single object sent
+    as text would be split on its commas. A string that is not valid JSON is
+    passed through unchanged so the normaliser's own message reports it.
+
+    Args:
+        value: The raw argument.
+
+    Returns:
+        The decoded object, or ``value`` unchanged.
+    """
+    if isinstance(value, str) and value.strip().startswith("{"):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
 def leg_symbol(entry: Any, position: int, underlying: str, expiry: str) -> tuple[str, str]:
     """Read the symbol and the exchange one leg entry names.
 
@@ -466,6 +584,11 @@ def leg_symbol(entry: Any, position: int, underlying: str, expiry: str) -> tuple
         lowered = {str(key).strip().lower(): value for key, value in entry.items()}
         symbol = str(lowered.get("symbol") or lowered.get("tradingsymbol") or "").strip().upper()
         exchange = str(lowered.get("exchange") or "").strip().upper()
+        right = str(lowered.get("option_type") or lowered.get("right") or "").strip().upper()
+        strike = as_number(lowered.get("strike"))
+        if not symbol and strike is not None and right in ("CE", "PE"):
+            # {"strike": 23850.5, "option_type": "CE"} is the shorthand as an object.
+            symbol = f"{format(strike, 'f').rstrip('0').rstrip('.')}{right}"
     elif isinstance(entry, str):
         symbol = entry.strip().upper()
     else:
@@ -844,7 +967,7 @@ def choose_expiry(listed: Sequence[str], value: Any, notices: list[str]) -> str:
         )
         return picked
 
-    exact = normalise_expiry(str(value).strip().upper(), "", allow_embedded=False)
+    exact = normalise_leg_expiry(value, "expiry")
     if exact not in listed:
         invalid_argument(
             "expiry",
@@ -885,7 +1008,7 @@ def resolve_expiry(
     if text and _expiry_keyword(text) is None:
         # An exact date, so the listed set is not needed and the round trip to
         # fetch it is saved. This is the common call.
-        return normalise_expiry(text.upper(), base, allow_embedded=False)
+        return normalise_leg_expiry(text, "expiry_date")
 
     listed = listed_expiries(call, base, venue)
     if not listed:
@@ -1015,10 +1138,13 @@ class OptionVizToolkit(OpenAlgoToolkit):
         underlying: str = "",
         exchange: str = "",
         expiry_date: str = "",
-        legs: list[str | dict[str, str | int]] | None = None,
+        legs: list[str | dict[str, str | int | float | bool | None]]
+        | dict[str, str | int | float | bool | None]
+        | str
+        | None = None,
         interval: str = DEFAULT_PREMIUM_INTERVAL,
         days: int = DEFAULT_PREMIUM_DAYS,
-        indicators: list[str | dict[str, Any]] | None = None,
+        indicators: list[str | dict] | dict | str | None = None,
     ) -> str:
         """Chart the combined premium of several option legs over time.
 
@@ -1076,8 +1202,10 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 ``{"symbol": "NIFTY08SEP2623850CE", "exchange": "NFO", "side":
                 "SELL", "lots": 1}``. ``side`` defaults to BUY, so a plain list
                 of two symbols is their sum; a sold leg is subtracted, which is
-                what makes a spread come out as a spread. A contract that is not
-                in the instrument master is refused, never guessed.
+                what makes a spread come out as a spread. ``action`` is read as
+                ``side``, and a ``quantity`` in units is converted to lots with
+                the contract's lot size. A contract that is not in the
+                instrument master is refused, never guessed.
             interval: Candle size, defaulting to ``5m``. Call ``get_intervals``
                 for the ones this broker accepts. Case matters: ``1m`` is one
                 minute and ``M`` is one month.
@@ -1103,7 +1231,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         interval, notice = premium_interval(interval, self._intervals.accepted())
         notices = [notice] if notice else []
         sessions = normalise_int(days, "days", 1, MAX_PREMIUM_DAYS)
-        overlays = normalise_indicators(indicators)
+        overlays = normalise_indicators(_json_text(indicators))
 
         if entries:
             return self._fixed_legs(
@@ -1246,7 +1374,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         base = str(underlying or "").strip().upper()
         shorthand_expiry = str(expiry_date or "").strip().upper()
         if shorthand_expiry:
-            shorthand_expiry = normalise_expiry(shorthand_expiry, base, allow_embedded=False)
+            shorthand_expiry = normalise_leg_expiry(shorthand_expiry, "expiry_date")
 
         legs: list[dict[str, Any]] = []
         for index, entry in enumerate(entries, start=1):
@@ -1254,17 +1382,22 @@ class OptionVizToolkit(OpenAlgoToolkit):
             symbol, exchange = leg_symbol(entry, index, base, shorthand_expiry)
             exchange = _resolve_leg_exchange(symbol, exchange, where)
             option_type = symbol[-2:] if _OPTION_SUFFIX.search(symbol) else ""
+            segment = _segment_of(symbol, where)
+            side, lots = leg_side_and_lots(
+                entry,
+                index,
+                lambda symbol=symbol, exchange=exchange: master_lot_size(
+                    self.service_call, symbol, exchange
+                ),
+                notices,
+            )
             legs.append(
                 {
                     "symbol": symbol,
                     "exchange": exchange,
-                    "segment": _segment_of(symbol, where),
-                    "side": leg_side(
-                        entry.get("side") if isinstance(entry, Mapping) else None, index
-                    ),
-                    "lots": leg_lots(
-                        entry.get("lots") if isinstance(entry, Mapping) else None, index
-                    ),
+                    "segment": segment,
+                    "side": side,
+                    "lots": lots,
                     "option_type": option_type,
                 }
             )
@@ -1388,7 +1521,10 @@ class OptionVizToolkit(OpenAlgoToolkit):
 
     def plot_payoff(
         self,
-        legs: list[str | dict[str, str | int]] | None = None,
+        legs: list[str | dict[str, str | int | float | bool | None]]
+        | dict[str, str | int | float | bool | None]
+        | str
+        | None = None,
         underlying: str = "",
         expiry_date: str = "",
         include_open_positions: bool = False,
@@ -1428,7 +1564,9 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 ``"23850CE"`` when ``underlying`` and ``expiry_date`` are set,
                 or an object such as ``{"symbol": "NIFTY08SEP2623850CE",
                 "exchange": "NFO", "side": "SELL", "lots": 2}``. ``side``
-                defaults to BUY and ``lots`` to 1. Leave the whole argument out
+                defaults to BUY and ``lots`` to 1; ``action`` is read as
+                ``side``, and a ``quantity`` in units is converted to lots with
+                the contract's lot size. Leave the whole argument out
                 to chart the operator's own open positions instead. A contract
                 that is not in the instrument master is refused, never guessed.
             underlying: Optional, and only used to expand a shorthand leg such
@@ -1450,13 +1588,13 @@ class OptionVizToolkit(OpenAlgoToolkit):
         base = str(underlying or "").strip().upper()
         shorthand_expiry = str(expiry_date or "").strip().upper()
         if shorthand_expiry:
-            shorthand_expiry = normalise_expiry(shorthand_expiry, base, allow_embedded=False)
+            shorthand_expiry = normalise_leg_expiry(shorthand_expiry, "expiry_date")
 
         notices: list[str] = []
         excluded: list[dict[str, str]] = []
         sources = ["symbol_service", "quotes_service"]
 
-        named = self._named_legs(entries, base, shorthand_expiry)
+        named = self._named_legs(entries, base, shorthand_expiry, notices)
         held: list[dict[str, Any]] = []
         if not named or include_open_positions:
             held = self._position_legs(excluded)
@@ -1558,13 +1696,16 @@ class OptionVizToolkit(OpenAlgoToolkit):
 
     # -- leg resolution ------------------------------------------------------
 
-    def _named_legs(self, entries: Sequence[Any], base: str, expiry: str) -> list[dict[str, Any]]:
+    def _named_legs(
+        self, entries: Sequence[Any], base: str, expiry: str, notices: list[str]
+    ) -> list[dict[str, Any]]:
         """Resolve the contracts the operator named against the symbol master.
 
         Args:
             entries: The raw ``legs`` entries.
             base: The call's underlying, used to expand a shorthand leg.
             expiry: The call's expiry, used to expand a shorthand leg.
+            notices: Collected notices, appended to when a leg's size defaults.
 
         Returns:
             One resolved contract per entry, carrying the master's own lot size,
@@ -1579,11 +1720,13 @@ class OptionVizToolkit(OpenAlgoToolkit):
         for index, entry in enumerate(entries, start=1):
             symbol, exchange = leg_symbol(entry, index, base, expiry)
             contract = resolve_contract(self.service_call, symbol, exchange, f"leg {index}")
-            contract["side"] = leg_side(
-                entry.get("side") if isinstance(entry, Mapping) else None, index
-            )
-            contract["lots"] = leg_lots(
-                entry.get("lots") if isinstance(entry, Mapping) else None, index
+            contract["side"], contract["lots"] = leg_side_and_lots(
+                entry,
+                index,
+                lambda contract=contract: master_lot_size(
+                    self.service_call, contract["symbol"], contract["exchange"]
+                ),
+                notices,
             )
             contract["origin"] = "named"
             legs.append(contract)

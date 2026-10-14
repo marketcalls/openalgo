@@ -715,6 +715,10 @@ class _HubTimeout(TimeoutError):
 def call_service(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call a service function where the web app's own code runs.
 
+    The allowance is :data:`AGENT_SERVICE_TIMEOUT_SECONDS`. A caller whose own
+    request may legitimately take that long uses :func:`call_on_hub` with an
+    allowance above its request timeout instead.
+
     Under eventlet the agent's thread is a real OS thread and the service layer
     takes green locks, so the call is run on the hub; everywhere else it is
     simply made, on the caller's thread, exactly as before.
@@ -724,6 +728,32 @@ def call_service(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         *args: Its positional arguments.
         **kwargs: Its keyword arguments, passed through untouched (a service
             keyword named ``timeout`` included).
+
+    Returns:
+        Whatever ``fn`` returned.
+
+    Raises:
+        real_threading.HubQueueFull: The hub already had too much waiting.
+        _HubTimeout: The hub did not finish the call in time.
+        Exception: Whatever ``fn`` raised.
+    """
+    return call_on_hub(fn, *args, hub_wait=AGENT_SERVICE_TIMEOUT_SECONDS, **kwargs)
+
+
+def call_on_hub(fn: Callable[..., Any], *args: Any, hub_wait: float, **kwargs: Any) -> Any:
+    """Run ``fn`` where the web app's own code runs, waiting at most ``hub_wait``.
+
+    The same crossing as :func:`call_service`, for any callable that touches
+    green state: the shared HTTP client is one, because its pool locks were
+    built after eventlet patched the standard library and its event hooks read
+    Flask's ``g``. Under gthread and the development server it simply calls.
+
+    Args:
+        fn: The callable.
+        *args: Its positional arguments.
+        hub_wait: Seconds to wait for the hub, which must exceed any timeout
+            ``fn`` applies itself or a slow but healthy call is abandoned.
+        **kwargs: Its keyword arguments, passed through untouched.
 
     Returns:
         Whatever ``fn`` returned.
@@ -744,7 +774,7 @@ def call_service(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
             outcome["error"] = exc
 
     try:
-        real_threading.run_on_hub(call, timeout=AGENT_SERVICE_TIMEOUT_SECONDS)
+        real_threading.run_on_hub(call, timeout=hub_wait)
     except TimeoutError as exc:
         raise _HubTimeout(str(exc)) from exc
     if "error" in outcome:
@@ -1154,7 +1184,7 @@ class OpenAlgoToolkit(Toolkit):
             A message naming the call, the reason, the arguments that look
             wrong, and what the model should do next.
         """
-        detail = _extract_detail(payload)
+        detail = extract_detail(payload)
         parts = [f"{label} failed" + (f" (HTTP {status})" if status else "")]
         parts[0] += f": {detail}" if detail else "."
 
@@ -1522,7 +1552,7 @@ def _as_status_code(value: Any) -> int | None:
     return None
 
 
-def _extract_detail(payload: Any) -> str:
+def extract_detail(payload: Any) -> str:
     """Pull the human-readable reason out of a service error payload.
 
     Args:

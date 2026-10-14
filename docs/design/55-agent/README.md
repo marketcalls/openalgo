@@ -35,6 +35,8 @@ services/agent/
   catalog.py            model catalog (LiteLLM price/context snapshot)
   chatgpt_oauth.py      device flow, token custody, billing verdict
   chatgpt_models.py     plan models LiteLLM's registry does not list
+  litellm_tool_args.py  restores parallel tool-call arguments LiteLLM drops
+  tool_guard.py         agent-wide hook: a refused argument set -> a correction
   builder.py            Agent construction + the tool factory
   stream.py             real-thread bridge; agno events -> frames
   frames.py             the wire contract, standalone, no agno import
@@ -44,20 +46,31 @@ services/agent/
   chart_contract.py     the /trading wire contract, both directions
   chart_geometry.py     levels and zones computed from real bars
   indicators/           registry, compute and descriptions for openalgo.ta
+  skills/
+    registry.py         SkillSpec: which skill folders, on which surfaces
+    loader.py           reads a skill folder live, path-checked, never executes
+    prompt.py           the SKILLS prompt section
+  mcp/
+    registry.py         McpServerSpec: the external data servers
+    client.py           sync streamable-HTTP client, breaker, caches
+    prompt.py           the EXTERNAL DATA (MCP) prompt section
   safety/
     __init__.py
     risk.py             pure-python order guard
     audit.py            append-only audit of every mutating call
   tools/
     __init__.py         registry: build_toolkits(context) -> list
-    base.py             OpenAlgoToolkit
+    base.py             OpenAlgoToolkit, call_service, call_on_hub
     market.py account.py orders.py symbols.py options.py instrument.py
     live.py indicators.py chart.py viz.py option_viz.py openui.py
-    websearch.py strategy_gen.py flow_gen.py
+    websearch.py strategy_gen.py flow_gen.py openscript_gen.py
+    skills.py mcp.py
 
+services/openscript_store.py  the one OpenScript write path, shared with /trading
 database/agent_db.py    schema + store
 blueprints/agent.py     session API
 upgrade/migrate_agent.py
+scripts/mcp_live_check.py     opt-in live check of the MCP servers
 
 frontend/src/
   api/agent.ts
@@ -66,6 +79,7 @@ frontend/src/
   lib/agent/subscription.ts telling a plan row from an API row
   pages/agent/               AgentIndex, AgentChat, AgentConfig
   components/agent/          AgentSetupGate is the gate, config/ the settings
+                             (config/McpPanel.tsx is the external data switch)
 ```
 
 There is no `runtime.py` and no `generators/` package. Generation is two
@@ -165,7 +179,9 @@ value longer than 8 characters, else `"...????"`.
 
 Key/value, one row per setting. `key` is the primary key, `value` is Text.
 Holds the system-prompt override, default reasoning effort, trading-enabled
-flag, and anything added later without a migration.
+flag, the external data switch `mcp_enabled`, and anything added later without
+a migration. A key with no row reads its default, which is how `mcp_enabled`
+reached existing installs already on: see **External data (MCP)**.
 
 ### `ag_conversation` and `ag_message`
 
@@ -698,6 +714,59 @@ Three measured agno behaviours the translator must handle:
 - `ToolCallCompleted` with an error is followed by a separate `ToolCallError`.
   Suppress the second so a failure is not reported twice.
 
+### Parallel tool calls and the Responses bridge
+
+**The symptom.** A question naming two or more instruments ("history of TCS and
+INFY", "expiries for crude, gold and silver") failed every tool call in the
+batch, each within milliseconds, with `Missing required argument` for every
+parameter. The model retried until it fell back to one call per turn, which
+worked. A question naming one instrument never failed, so the defect read as
+the model being clumsy rather than as anything in the platform.
+
+**The cause, measured on the wire.** Every GPT-5 model run with a reasoning
+effort, and every `chatgpt/` subscription model, reaches LiteLLM's
+chat-completions bridge over the Responses API
+(`litellm.completion_extras.litellm_responses_transformation`). For one tool
+call the backend streams the arguments as `function_call_arguments.delta`
+events. For a batch of parallel calls it frequently sends no deltas at all:
+each call's complete arguments arrive once in
+`response.function_call_arguments.done` and again in
+`response.output_item.done`. LiteLLM 1.104.0 builds the chat stream from the
+`output_item.added` event (id and name, empty arguments) plus the deltas, and
+ignores both `done` events, so agno assembles `arguments: ""` and pydantic
+refuses the call before the tool body runs.
+
+**The repair.** `services/agent/litellm_tool_args.py` wraps the bridge's
+`chunk_parser`. It records, per stream, which output items have already
+delivered argument text, and when a `done` event arrives for one that delivered
+none, it emits the complete arguments as a single delta at the tool-call index
+the bridge already assigned. Agno concatenates argument fragments by index, so
+the call is whole by the time it runs. An item that did stream its deltas is
+left alone, so nothing is delivered twice. Where the announcement itself was
+missed, the call id and name travel with the arguments.
+
+Three properties keep it a repair rather than a second bridge:
+
+- **Installed from `builder._register_chatgpt_models`**, beside
+  `litellm_eventlet.install()`, so it is in place before any model is built and
+  never imported from a request path that must stay free of LiteLLM (see
+  **Listing a model must not start a login**).
+- **Idempotent and quiet on an unfamiliar LiteLLM.** A bridge without
+  `_sequential_tool_call_index` logs a warning and is left unpatched, and any
+  exception inside the wrapper falls back to LiteLLM's own chunk. A LiteLLM it
+  does not recognise costs the repair, never the agent.
+- **It has an expiry date, and a test says when.**
+  `test/test_agent_litellm_tool_args.py` drives LiteLLM's real iterator with
+  event sequences captured from the backend. The first test fails on an
+  unpatched LiteLLM; `test_a_streamed_call_is_never_delivered_twice` fails the
+  day LiteLLM emits the `done` arguments itself. That failure is the signal to
+  delete the module, not to adjust it.
+
+The tool-use section of the prompt tells the model that independent reads may
+go out together in one turn, and the tool guard (see **Tools**) names the
+fallback, one call at a time, should calls in a batch keep arriving empty for
+some other reason.
+
 ## Tools
 
 ### The base
@@ -711,7 +780,13 @@ repeats:
 - `to_json(obj)` -> JSON-safe, NaN-safe, capped at 12000 characters with a
   well-formed truncation marker rather than a cut-off string,
 - audit hooks for mutating tools,
-- the `api_key` and `conversation_id` for the current run.
+- the `api_key` and `conversation_id` for the current run,
+- `call_service(fn, ...)` and `call_on_hub(fn, ..., hub_wait=...)`, the module
+  functions that run a callable where the web app's own code runs: on the hub
+  under eventlet, inline under gthread and the development server. The first
+  waits `AGENT_SERVICE_TIMEOUT_SECONDS`; the second takes its own wait for a
+  callable whose own timeout is longer, which must exceed that timeout or a
+  slow but healthy call is abandoned.
 
 Docstrings **are** the schema. Every argument needs a real type hint and a
 matching Google-style `Args:` line, or the generated schema is unusable.
@@ -726,9 +801,125 @@ def build_toolkits(context) -> list[Toolkit]
 
 and `builder.py` passes it as a **callable factory** to `Agent(tools=...)`, so
 it is re-evaluated on every run against `run_context.session_state`. A session
-that has not enabled trading never sees order tools in its schema at all; the
-chart surface sees chart tools and no order tools. Adding a capability is a file
-plus a registry entry.
+that has not enabled trading never sees order tools in its schema at all, on any
+surface. A capability is a boolean on `ToolContext` that a spec names in
+`requires`: `trading_enabled`, `web_search_enabled` and `mcp_enabled` today,
+each ANDed with the operator's own setting by `builder.build_session_state` so a
+request cannot ask its way past a switch that is off. Adding a capability is a
+file plus a registry entry.
+
+### Refused arguments come back as a correction
+
+Agno wraps every tool in pydantic's `validate_call`. When a call arrives with an
+argument missing, of the wrong type, or with none at all, the tool body never
+runs and pydantic's own text becomes the tool result: `5 validation errors for
+MarketToolkit.get_history ... [type=missing_argument, input_value=ArgsKwargs(())
+...] For further information visit https://errors.pydantic.dev`. A model reading
+that has to work out which arguments mattered, and agno logs a full traceback
+for what is an ordinary correction.
+
+`services/agent/tool_guard.py:argument_guard` is passed as
+`Agent(tool_hooks=[...])`, so it sits outermost on every tool. It rewrites
+exactly one case, a `ValidationError` whose title is the tool being called,
+into a `RetryAgentRun` that names each missing argument, each wrong one with
+pydantic's reason, and each the tool does not take. That is the same channel
+every tool already uses for a bad value, so the model reads one kind of
+correction rather than two. When the arguments arrived empty it also says so
+and suggests making batched calls one at a time, the fallback for the bridge
+defect above.
+
+Everything else passes through untouched: the tool's own `RetryAgentRun` or
+`StopAgentRun`, a cancellation, and a `ValidationError` raised by some model
+deep inside a tool body, which is a defect to see in the log rather than a
+correction to hand the model. The hook runs on the agent's thread, does no I/O
+and takes no lock. It never sees a paused confirmation: agno pauses before the
+tool executes, so an approved call reaches it on resume like any other.
+`test/test_agent_tool_guard.py` pins each case.
+
+**Two budgets keep a long thread from teaching the wrong lesson.**
+
+- `max_tool_calls_from_history = DEFAULT_MAX_TOOL_CALLS_FROM_HISTORY` (20) in
+  `build_agent`. Agno replays `DEFAULT_NUM_HISTORY_RUNS` (8) earlier runs, and
+  without a cap every tool call and result in them goes back to the provider on
+  every turn. Agno keeps the newest calls and drops the rest in pairs, so the
+  conversation's answers survive, a tool-heavy thread stops re-sending old
+  payloads, and a refused call from an earlier turn stops being shown to the
+  model as an example to repeat.
+- `DEFAULT_MAX_PROMPT_CHARS` is 40000. `render_sections` enforces it by dropping
+  a **whole** unpinned section from the end, with only a log line, so an
+  overshoot deletes a different section from the one that grew. The cap has
+  moved four times, each with the measurement in the constant's comment: 24000
+  to 28000 for the OpenUI reference, to 30000 for the live card section, to
+  34000 when voice received the OpenUI reference and the tool-use section gained
+  its date and retry rules, and to 40000 when the skills and external data
+  sections joined, at which point chat measured 32,956 characters and voice
+  32,582. Each further skill adds roughly a thousand characters to every surface
+  it is offered on. The budget tests in `test_agent_openui_tool.py`,
+  `test_agent_skills.py` and `test_agent_mcp.py` render every surface whole and
+  fail before production does.
+
+### Argument normalisation
+
+A tool that refuses a spelling the model obviously meant spends a whole turn
+learning one word, and for an order tool that refusal lands **after** the
+operator approved, so every one costs a second approval. Each toolkit therefore
+reads the spellings models really send, translates them to OpenAlgo's own, and
+says so in a `notices` entry when it changed something the model may repeat.
+Two rules bound it: a translation is applied only where it is unambiguous, and a
+genuinely invalid value is still refused with the accepted form spelled out
+rather than passed on to fail at the broker.
+
+The type hints were widened to match (`order_id: str | int`,
+`price: float | None`, `workflow_json: str | dict`), because pydantic validates
+the hint before the body's normaliser runs, and a hint narrower than the
+normaliser refuses the call the normaliser exists to accept.
+
+| argument | accepted and translated | where |
+| --- | --- | --- |
+| date | `YYYY-MM-DD`, an ISO datetime's date, `DD-MM-YYYY`, `YYYY/MM/DD`, `09-Oct-2026`, `today`, `yesterday` (IST) | `market.normalise_date` |
+| history range | missing end is today (IST); missing start covers `DEFAULT_HISTORY_BARS` (100) candles at the interval | `market.history_range` |
+| interval | `1d`/`day`/`daily` to `D`, weekly to `W`, monthly to `M`, `5min` to `5m`, `2hours` to `2h`; a case-only mismatch such as `5M` corrected to the broker's own. `W` or `M` on a broker that serves neither is fetched daily and rolled up (first open, highest high, lowest low, last close, summed volume) with a notice, so a weekly question is answered rather than refused | `market.normalise_interval`, `market.plan_interval`, `market.roll_up_candles` |
+| exchange | `nse index`, `NSE-INDEX` read as `NSE_INDEX`, in every toolkit through one function | `market.clean_exchange` |
+| `EXCH:SYM` symbol | market tools: the prefix wins over the exchange argument, with a notice. Order tools: used when the exchange is empty or agrees, **refused** when they disagree, because guessing could trade a different instrument from the one approved | `market.normalise_pair`, `orders.split_exchange_prefix` |
+| index underlying | `NIFTY` on `NSE` moved to `NSE_INDEX` (BSE to `BSE_INDEX`), only when the symbol database says the index is listed there, so a stock stays put | `options.index_underlying`, `market.resolve_exchange` |
+| expiry | `28OCT26`, `28-OCT-26`, `28OCT2026`, `8OCT26`, `28 OCT 26`, `2026-10-28` all to `DDMMMYY`; a day the calendar lacks is refused | `options.normalise_expiry` |
+| expiry keyword | `nearest`, `weekly`, `this week`, `next`, `monthly`, `front month` and the like to `current_week`, `next_week`, `current_month`, `next_month` | `option_viz.EXPIRY_CHOICES` |
+| option type | `C`, `CALL`, `CALLS` to `CE`; `P`, `PUT`, `PUTS` to `PE` | `options.normalise_option_type` |
+| strike offset | `otm-2`, `OTM 2` to `OTM2`; `ATM0` to `ATM`; a signed `ATM+2` refused with the CE/PE rule, because its direction depends on the right | `options.normalise_offset` |
+| whole numbers | `"5"` and `5.0` accepted where an int is wanted | `options.normalise_int` |
+| leg side and size | side from `side`, `action` or `transaction_type`; `quantity` or `qty` converted to lots with the master's lot size | `option_viz.leg_side_and_lots` |
+| order product | `INTRADAY` to `MIS`, `DELIVERY` to `CNC`, `CARRYFORWARD`/`NORMAL` to `NRML` | `orders.PRODUCT_ALIASES` |
+| order price type | `SL M`, `SL-M`, `sl_m`, `SLM`, `STOPLOSS_MARKET` to `SL-M`; `STOPLOSS`, `STOP_LOSS_LIMIT` to `SL` | `orders.PRICE_TYPE_ALIASES` |
+| order action | `B` to `BUY`, `S` to `SELL` | `orders.ACTION_ALIASES` |
+| nulls | a null price or trigger price reads as zero; a null width, lot count or exchange as the argument's default | order and option tools |
+| order id | a numeric id accepted and read as a string | `get_order_status`, `modify_order`, `cancel_order` |
+| live symbols and mode | a bare `NSE:INFY` or a comma-separated run is a list; mode `1`, `2`, `3` to `LTP`, `Quote`, `Depth` | `live.symbols_argument`, `live.normalise_mode` |
+| indicator params | `length` to `period`, `fast`/`slow`/`signal` to the indicator's own name, `std`/`stddev`/`deviation` to `std_dev`, applied only when exactly one candidate fits | `indicators/compute.resolve_param_aliases` |
+| chart words | indicator ids `bb`/`bbands` to `bollinger`, `sar`/`psar` to `parabolic-sar`; zone `consolidation`/`sideways`/`box` to `range`; group plurals and `all` | `viz._INDICATOR_ALIASES`, `chart._ZONE_KIND_ALIASES`, `chart._GROUP_ALIASES` |
+| web search count | out of range clamped with a notice rather than refused | `websearch._validated_max_results` |
+
+The order aliases are listed exhaustively for a reason: each maps to exactly one
+code, so translating one after approval cannot turn the order the operator read
+into a different one. A word that could mean two products is not an alias.
+
+Two order behaviours sit beside the table because they are refusals, not
+translations. An order on a quote-only index code (`NSE_INDEX`, `BSE_INDEX`,
+`MCX_INDEX`, `GLOBAL_INDEX`) is refused by `orders.index_refusal` naming where
+the tradable contracts live (`NFO`, `BFO`, `MCX`, or nowhere for a global
+index). And `close_position`, when the position service reads zero, sends
+nothing and answers `status: nothing_to_close` with `ok: false`, releasing its
+claim on the guard. Zero is not reported as success because it is not proof of
+a flat book: several brokers read every position as flat, and a symbol,
+exchange or product that differs from the position book also reads as zero. The
+result tells the model to check `get_positions` before saying anything is
+closed, because telling an operator a position is closed while it is still open
+is the dangerous direction to be wrong in.
+
+The cases are pinned in `test/test_agent_tool_arguments.py` (market, chart,
+symbol and option tools), `test/test_agent_order_tool_arguments.py` (order,
+account, live and Flow) and `test/test_agent_viz_tool_arguments.py`, each
+pairing a newly accepted spelling with an invalid one that must still be
+refused.
 
 ### Confirmation and risk
 
@@ -736,6 +927,20 @@ Every mutating tool is named in its toolkit's `requires_confirmation_tools`.
 Agno pauses; the UI approves; **then** `safety/risk.py` runs inside the tool
 body before the service is called. The guard is pure Python and reads no prompt,
 so nothing the model or user says can talk past it.
+
+**The approval card refuses a call missing a required argument.** Agno pauses
+before the arguments are validated, so a call emptied by the bridge defect above
+would otherwise be shown as an order with no symbol or quantity, approved, and
+only then refused by the tool. `stream._requirement_payloads` therefore adds a
+`missing` list to each pending requirement, built by
+`tool_guard.missing_arguments` from the tool method's own signature (a value
+sent as null or empty counts as missing). `PendingConfirm` in
+`components/agent/Message.tsx` disables Approve while that list is non-empty and
+names what did not arrive. It is deliberately not "the arguments are empty":
+`cancel_all_orders` and `close_all_positions` take no arguments at all, and an
+empty-arguments rule made them impossible to approve. It is one component, so
+the chat page and the `/trading` panel behave the same; `AgentPanel.test.tsx`
+pins both cases and `test_agent_tool_guard.py` pins the server side.
 
 Order of checks: kill switch, trading enabled, analyzer mode if required,
 symbol, exchange, product, quantity, session cap, duplicate window, notional and
@@ -891,6 +1096,21 @@ knowingly.
   audit rows, never to a result. Extending the order tools' filter to every
   toolkit is the fix; until it lands this bullet says so, per the meta-rule
   above.
+- **A registered MCP server receives what the model asks it, from the
+  operator's server.** None is registered today (see **External data (MCP)**).
+  Once one is, with the external data switch on (the default), `call_mcp_tool`
+  sends the model's arguments, typically a symbol, an index or a date, to that
+  server over HTTPS, with a `User-Agent` naming OpenAlgo and its version, from
+  the server's own IP. No OpenAlgo key or broker credential goes with it:
+  `McpToolkit.inject_api_key` is False and `McpServerSpec` has no credential
+  field by design. Nothing about the account is sent unless the model puts it in
+  an argument. **NOT IMPLEMENTED: the taint boundary is not applied to MCP
+  arguments**, which are passed through as the model wrote them, capped at
+  `MAX_ARGUMENT_CHARS` (4000), so a model steered by injected text could place
+  account data in one. The operator's control is the switch on
+  `/agent/config`, which withholds the toolkit from every surface on the next
+  message. Close this gap before registering a server run by a third party the
+  operator has no reason to trust.
 
 ### Generated code never runs itself
 
@@ -1077,9 +1297,15 @@ the audit, is what enforces policy.
 
 ### Python strategies
 
-Emit a script matching `strategies/README.md`: read `OPENALGO_API_KEY`,
-`HOST_SERVER`/`OPENALGO_HOST` and `WEBSOCKET_URL` from the environment, never
-hardcode a credential. Write to `strategies/scripts/` using the existing
+Emit a script matching `strategies/README.md`: read `OPENALGO_API_KEY` and
+`HOST_SERVER`/`OPENALGO_HOST` from the environment, and `WEBSOCKET_URL` only
+when the script streams, and never hardcode a credential. `strategy_gen` decides
+"streams" from the parsed source (`uses_websocket`: a `subscribe_*` call, a
+`ws_url=` keyword, a websocket client import or a `ws://` literal). Requiring the
+socket address of every script made the model add a read a REST-only strategy
+then never used. A derivative trading symbol such as `NIFTY24OCT2425000CE`
+assigned to a credential-looking name like `symbol_token` is an instrument, not
+a secret, and is not flagged. Write to `strategies/scripts/` using the existing
 sanitize-and-contain rules from `blueprints/python_strategy.py`: `secure_filename`,
 strip to `[A-Za-z0-9_-]`, timestamp suffix, and a `resolve()` containment check
 against the directory even though we control the name.
@@ -1104,6 +1330,105 @@ model can iterate as many times as it needs without a confirmation, and
 
 Never invent a node type. If a requirement has no matching node, say so in
 prose.
+
+### OpenScript
+
+`tools/openscript_gen.py:OpenScriptToolkit` offers `list_openscripts` and
+`save_openscript`, on the chat page and the `/trading` panel but not voice: a
+study is written beside the chart it plots on, and `/trading` is where it
+compiles.
+
+**Saved as source, by necessity.** The OpenScript compiler is TypeScript and
+runs in the browser. Production carries no JavaScript runtime and this server
+has no compiler, so the agent can store a script's source and nothing more. That
+is a state the platform already gives a meaning to: a `<name>.oscript` with no
+`<name>.oscript.program.json` beside it opens in the `/trading` editor, which
+compiles it, plots it and lists any errors, and nothing on the server will run
+it until the trader saves it from that editor with a clean console, which is
+what writes the compiled program a strategy needs. Every result says so in
+`next_step` and carries `compiled: false`, because "saved" must not be read as
+"compiled" or "deployed", and the tool's own description tells the model never
+to say it compiled or is running.
+
+**One write path.** `services/openscript_store.py:write_script` is the single
+implementation of the replace sequence, the name rule (`SAFE_NAME`), the size
+limit (`MAX_SOURCE_BYTES`, 256 kB) and the per-file lock (`FILE_LOCKS`), and
+both `blueprints/openscript.py` and this toolkit call it. Two copies of a
+sequence whose whole purpose is keeping a source and its compiled program in
+step is how a runner ends up executing a program built from different text. A
+save that replaces a script keeps the old source as `.bak` and **removes any
+compiled program**, which no longer matches. `FILE_LOCKS` holds stdlib locks,
+green under eventlet, so the toolkit reaches the store through `call_service`
+on the hub rather than from the agent's real thread.
+
+`save_openscript` is in `requires_confirmation_tools`, as `save_flow` and
+`save_python_strategy` are: it writes a file the trader may later run.
+`test/test_agent_openscript_tool.py` pins that the route and the tool write
+through the same store objects, that a tool save removes the program a route
+save stored, and the surfaces.
+
+## Skills
+
+A skill is a folder of written authoring guidance, a `SKILL.md` plus reference
+pages, shared with Claude Code under `.claude/skills/`. Two are offered today:
+
+| skill | folder | surfaces | hands off to |
+| --- | --- | --- | --- |
+| `openscript` | `.claude/skills/openscript` | chat, chart | `save_openscript` |
+| `flow-builder` | `.claude/skills/flow-builder` | chat | `validate_flow`, `save_flow` |
+
+**Progressive disclosure.** `skills/prompt.py:skills_section` puts only each
+skill's name, its frontmatter description and its `agent_notes` into a SKILLS
+prompt section. `tools/skills.py:SkillsToolkit` offers
+`get_skill_instructions` and `get_skill_reference`, so a 34,000-character
+reference costs nothing on a turn that does not need it. Long text is **paged,
+never truncated**: each call returns a contiguous slice with `total_chars` and
+`next_offset`, because a reference cut to fit would hand the model the first
+third of a name table and let it believe it had read all of it.
+
+**Read live.** `skills/loader.py` reads the folder on every call, caching parsed
+files under a key that includes modification time and size in a
+`LockedTTLCache` (real lock, because the prompt summary is built on the request
+side and the tools run on the agent's thread). An edited `SKILL.md` applies on
+the next message with no restart. A missing or malformed skill is skipped with
+one warning per file version and costs that skill, never the run.
+
+**The model names a skill and a path, so both are hostile input.** A skill is
+found only through the registry, never by joining a model-chosen name onto a
+path, and a skill not offered on the run's surface is not found. A reference
+must sit in one of the spec's `reference_dirs` with an allowed suffix, is
+resolved through any symlink and checked to remain inside the skill folder, and
+is capped at `MAX_FILE_BYTES` (256 kB). **Nothing in a skill folder is ever
+executed.**
+
+**Why not agno's own `Skills` toolkit.** Two reasons, both measured against the
+installed agno. Its loader reads references only from `references/`, while the
+CI generators here write `reference/`, so the name tables an author most needs
+would be invisible. And it offers `get_skill_script(..., execute=True)`, which
+runs a skill's scripts on the server with arguments the model chooses. That is
+code execution chosen by the model, a capability nothing else in this module
+grants, and it would be one `scripts/` folder away from live however today's
+folders happen to be laid out. Agno's own skills prompt
+snippet would not appear anyway, because the builder passes a verbatim system
+message.
+
+**The skills were written for a reader that can run commands.** Each
+`SkillSpec.agent_notes` maps those steps onto the agent's tools ("You cannot run
+validate.mjs ... save it with save_openscript") and is shown both in the prompt
+and with the instructions.
+
+**Adding a skill is one `SkillSpec` in `skills/registry.py:SKILLS`**: a name,
+the folder, the surfaces and the notes, plus `reference_dirs` and
+`reference_suffixes` when the defaults (`reference/` and `references/`; `.md`,
+`.txt`, `.json`) do not fit, as `openscript` widens them to serve its compiled
+`examples/` as text. The one thing an entry cannot widen alone is the surfaces
+the skills toolkit is built for in `tools/__init__.py` (chat and chart).
+`test_the_real_registry_never_reaches_a_surface_the_toolkit_is_not_built_for`
+fails if it tries, so a skill is never listed in a prompt whose tools cannot
+read it, and `test_every_tool_a_skill_note_names_is_offered_where_the_skill_is`
+holds the notes to the tools that exist on those surfaces. Each skill adds about
+a thousand characters to every surface it is offered on; see the prompt budget
+under **Tools**.
 
 ## Acceptance
 
@@ -1134,8 +1459,8 @@ browser against a running instance rather than asserted in a test:
 **Code generation**
 - Ask for an `openalgo.ta` indicator snippet and get runnable Python.
 - Ask for a full strategy and get a script matching the `strategies/README.md`
-  contract: reads `OPENALGO_API_KEY`, `HOST_SERVER` and `WEBSOCKET_URL` from the
-  environment, hardcodes no credential.
+  contract: reads `OPENALGO_API_KEY` and `HOST_SERVER` from the environment,
+  and `WEBSOCKET_URL` when it streams, and hardcodes no credential.
 - Read it syntax-highlighted and whole, not as a grey `<pre>` and not behind an
   inner scroll region that hides the tail.
 - Copy it, and ask for it to be saved to `strategies/scripts/`. **It never runs
@@ -1174,6 +1499,18 @@ browser against a running instance rather than asserted in a test:
 - Ask it to analyse the chart and have it read the current symbol and interval.
 - Ask it to draw, and see markup appear on the existing chart, namespaced so
   `clear` never removes the operator's own drawings.
+- With trading on in `/agent/config`, ask for an order beside the chart and see
+  the same approval card as `/agent` in the panel; with it off, be told trading
+  is switched off rather than shown a Buy or Sell control.
+- Ask for an OpenScript study, see the full source, approve the save, and open
+  it in the `/trading` OpenScript editor, where it compiles.
+
+**External data**
+- With no server registered (today), `/agent/config` shows no External data
+  section and no MCP tool reaches the model.
+- Once a server is registered: with the switch on, ask for a figure it publishes
+  and get an answer from it rather than from web search; press Test connection
+  and see it pass, or fail with a sentence naming whose side the fault is on.
 
 ## Web search
 
@@ -1200,8 +1537,10 @@ enter the context wearing the authority of primary sources.
 
 ### The safety envelope
 
-Web search is the only tool that leaves the process, so it carries ragz's full
-set of controls and they are not optional:
+Web search sends the operator's words to a third party, so it carries ragz's
+full set of controls and they are not optional. (The MCP tools also leave the
+process, to whichever MCP server is registered, and do not carry this envelope;
+**Third-party data egress** says what that means.)
 
 - **The taint boundary applies here first.** The model's requested query never
   reaches the provider. The outgoing query is constructed so that every token in
@@ -1220,6 +1559,119 @@ set of controls and they are not optional:
   content so the model does not present a random page with the authority of the
   broker's own position book.
 - **The decision is logged, never the query.**
+
+### Requests run on the hub
+
+Tavily and Perplexity are called through `websearch._post`, which hands the
+whole request to `base.call_on_hub`. The agent's tools run on a real OS thread,
+and the shared `utils/httpx_client` client is green: its connection-pool locks
+were built after eventlet patched the standard library, and its event hooks read
+Flask's `g`. A request made on that client straight from the agent's thread is
+direction A of the eventlet boundary in `CLAUDE.md`: correct on the development
+server and under gthread, able to wedge the single worker under eventlet. The
+client is **looked up** on the hub as well, because on first use that lookup
+builds it, and it has to be built in the world that owns it.
+
+The hub's wait is the request's own timeout plus `HUB_WAIT_MARGIN_SECONDS` (10),
+so httpx's timeout fires first and a slow but healthy answer (Perplexity's
+research call may take up to `RESEARCH_TIMEOUT_SECONDS`, 60) is not abandoned
+while it is still arriving. Under gthread and the development server
+`call_on_hub` simply calls inline. DuckDuckGo is not on this path: `ddgs`
+brings its own transport and never touches the shared client.
+`test/test_agent_websearch_transport.py` pins both the crossing and the longer
+wait.
+
+## External data (MCP)
+
+The agent can read read-only data servers over the Model Context Protocol beside
+the broker. **No server is registered today**, so the toolkit is not built, the
+prompt says nothing about it and the config page shows no External data section.
+
+NSE's two MCP servers (the end-of-day bhavcopy service at
+`mcp.nseindia.in/bhavcopy/cm/mcp` and the live cash-market snapshot at
+`mcp.nseindia.in/cmmkt/mcp`) were the first entries and were removed on
+2026-10-09. In repeated live checks both stalled for 10 to 20 seconds and then
+timed out, after a burst of a few quick answers; curl and httpx behaved the
+same, so the fault was upstream. Every NSE question cost the trader a long wait
+for no answer, which is worse than not offering the source. The framework stays
+so a reliable server can be added as one registry entry.
+
+When a server is registered, the prompt section is generated from its spec and
+tells the model to use the broker first for quotes, intraday candles, depth,
+chains and the account, and to prefer the server over web search for any figure
+it publishes; both tool descriptions name the servers offered, built from the
+same registry, because a model picks a tool by its description.
+
+**Why a client of our own, not the `mcp` SDK or agno's `MCPTools`.** Both are
+asyncio, and eventlet, the default worker, cannot host an event loop in request
+code. The transport is plain JSON-RPC 2.0 over HTTP POST answered with JSON or a
+short `text/event-stream`, and four methods cover everything (`initialize`,
+`notifications/initialized`, `tools/list`, `tools/call`), so
+`mcp/client.py:McpClient` speaks them synchronously. Only streamable HTTP is
+implemented: the older HTTP+SSE transport is deprecated, and stdio would start a
+subprocess per server in a worker that never restarts. Every request goes
+through the shared httpx client **on the hub**, for the reason **Requests run on
+the hub** gives, and only a plain reply of status, headers and text crosses
+back.
+
+**Failure handling is shaped by the gateway.** NSE's gateway answers the same
+request in 0.3 s, with a 504 after 10 s, or not at all for 40 s, from one minute
+to the next. So each request carries the spec's connect and read timeouts, one tool
+call is bounded by `call_deadline_s` (25 s) across its retry and any session
+re-initialisation, a timeout or 5xx is retried at most once and only when the
+deadline has room, and a per-server **circuit breaker** pauses a server after
+three consecutive failures, answers "unavailable" at once for 60 s, then lets one
+trial call through. A tool error the server reports counts as an answer, not a
+failure. The tool list is cached an hour and a failed fetch remembered 30 s, so
+a model asking again straight away is answered at once. Every error is typed and
+carries a sentence a trader can read; status codes stay in the log.
+
+**Two tools, whatever the number of servers.** Registering each server's tools
+with agno would put three dozen schemas in every request. `tools/mcp.py:McpToolkit`
+offers `list_mcp_tools(server, tool="")`, a compact catalogue or one tool in
+full, and `call_mcp_tool(server, tool, arguments, page=1)`, which checks the
+server and tool against the registry and the live list and passes the
+arguments through. They are **not** checked against the server's schema: NSE
+marks every argument required while accepting an omitted one, so a local check
+would refuse calls the server answers. Building the toolkit does no network
+work, so an NSE outage costs only the turn that asked for NSE data. A long
+answer is paged, a JSON one by rows of its largest list so every page is still
+parsed JSON, and the full text is kept five minutes (`RESULT_CACHE_TTL_S`, at
+most `RESULT_CACHE_CHARS` in all) so page two needs no second call; page one
+always calls, so a live snapshot is never served from memory. Every result, and
+a server's own error text, is wrapped `trust="third-party"` by
+`wrap_tool_result`. The tools are read-only and need no approval.
+
+**The operator switch.** `mcp_enabled` in `ag_setting` ships **on**, unlike the
+trading switch, because the toolkit is read-only; an unreadable store also
+reads as on, since this is not a safety switch that must fail closed. The
+builder resolves it in the request with `settings.is_mcp_enabled(fresh=True)`
+and ANDs it into the session state, so turning it off withholds the toolkit and
+its prompt section from every surface on the next message. agno's run state does
+not carry that key back to the tool factory, so `build_agent` also hands the
+factory a context holding the effective flag, and the factory falls back to it.
+The first version defaulted the missing key to off: every toolkit test passed,
+because they called the factory with a state that did carry it, and the model
+never received an MCP tool on a real run. `TestTheBuiltAgentOffersTheToolkit`
+in `test_agent_mcp.py` drives the factory with an empty run state, as agno does.
+`components/agent/config/McpPanel.tsx` is the External data section of
+`/agent/config`: the switch, the registered servers from `GET /agent/api/mcp`,
+and **Test connection**, `POST /agent/api/mcp/test`, which starts a fresh
+session and lists the tools for each server (or the one named), ignoring the
+breaker because the operator is asking whether it answers now. A failing server
+is a 200 with `ok: false` and a sentence, as the model and web search tests are.
+
+**Adding a server is one `McpServerSpec` in `mcp/registry.py:MCP_SERVERS`.**
+The toolkit, the prompt section, the settings page and the connection test all
+read that tuple. The key is what the model passes as `server`, so keep it short
+and stable. The spec is checked at import: an https URL, a known transport,
+positive timeouts, and no tool both allowed and denied. It carries no
+credential; a server that needs a key gets one through `ag_secret` and the
+settings page, the way web search does. `scripts/mcp_live_check.py` is the
+opt-in live check (`uv run python scripts/mcp_live_check.py --server <key>`):
+it initialises, lists and makes one read-only call per server through the same
+client, and is never run by the test suite. `test/test_agent_mcp.py` covers the
+client, breaker, caches, paging and wiring without the network.
 
 ## Visualization
 
@@ -1305,13 +1757,15 @@ backend cannot break an older client mid-turn.
   characters with the rules and examples OpenUI ships. The 22-component subset
   the agent is given costs 8,184, and the committed file is 8,343 with its
   provenance banner, against the 8,800 the generator enforces. `build_agent`
-  caps the whole system prompt at `DEFAULT_MAX_PROMPT_CHARS = 30000`, and the
-  worst chat configuration renders whole at 28,474 (chart, 20,875). Overshooting
-  does not truncate the section that overshot: `render_sections` drops a
-  **different** whole unpinned section from the end with only a log line, which
-  is why every surface's fit is asserted rather than left for the next addition
-  to find in production. Inject it on the **chat surface only**: the chart
-  surface drives the real `/trading` chart and needs none of it.
+  caps the whole system prompt at `DEFAULT_MAX_PROMPT_CHARS = 40000`; the
+  measured worst cases and the history of the number are under **Tools**.
+  Overshooting does not truncate the section that overshot: `render_sections`
+  drops a **different** whole unpinned section from the end with only a log
+  line, which is why every surface's fit is asserted rather than left for the
+  next addition to find in production. Inject it on **chat and voice**, the two
+  surfaces whose `render_ui` tool is registered, and never on the chart panel,
+  which drives the real `/trading` chart and has no `render_ui`: a surface is
+  never taught a tool it does not have.
 - **Do not reimplement palettes, and pass animation off where it is on.**
   `isAnimationActive` is a prop, not a hardcoded value, and it defaults to
   `false` on the area, bar, horizontal bar, line, radar, radial and scatter
@@ -1458,10 +1912,47 @@ Geometry is computed from real bars server-side, in
 `services/agent/chart_geometry.py`. The model narrates; it does not invent a
 price.
 
-The panel runs the **default** model: `AgentPanel` passes `modelId={null}` and
-`resolve_model(None)` falls through to the `is_default` row. There is no picker
-on this surface, so changing the default changes which billing path the chart
-agent runs on, an API key or a ChatGPT plan, with nothing here saying so.
+The panel has a `ModelPicker` and shares its choice with `/agent` through
+`lib/agent/useModelChoice.ts`, remembered in this browser under
+`oa-agent-model`. With nothing chosen, or a remembered model that is no longer
+enabled, it sends no model and `resolve_model(None)` falls through to the
+`is_default` row, so changing the default changes which billing path an
+unpinned panel runs on, an API key or a ChatGPT plan.
+
+### Orders on the panel
+
+The panel was first built with no order tools at all, because it had no
+approval card and an order tool without one is a tool that cannot be used
+safely. It renders the same `Message` component as `/agent` now, approval card
+included, so the order toolkit is registered for `ALL_SURFACES` and reaches the
+panel exactly as it reaches the chat page: only through the trading capability.
+
+- **The panel asks for trading only when the operator's switch is on.**
+  `AgentPanel` reads `trading_enabled` from the agent settings, under the same
+  query key the chat page reads, and passes it to `useAgentStream`.
+  `build_session_state` ANDs that request with the same setting again, so a
+  stale page cannot ask its way past a switch that is off, and a session with
+  trading off has no order tool in its schema on this surface either.
+- **Every order pauses for the human.** `onConfirm` is wired to the stream's
+  `confirm`, the card appears in the panel's thread, and nothing reaches a
+  broker until it is approved, after which the risk guard still runs inside the
+  tool. A call missing a required argument cannot be approved (see
+  **Confirmation and risk**).
+- **What a trader sees follows the switch.** With trading off, the empty state
+  says it places no orders because trading is off in the agent settings, and an
+  answer's Buy and Sell controls are withheld (`canOrder={tradingEnabled}`),
+  because a control that writes a request this panel can only refuse reads as a
+  route to a trade. The chart section of the prompt tells the model to state the
+  exact order first, never to say it was placed until the tool returns, and,
+  with trading off, to say it is switched off rather than imply anything was
+  placed.
+
+`test/test_agent_chart_surface.py` pins that the order toolkit is offered on
+the chart with trading on, withheld with it off, and that every mutating order
+tool is in `requires_confirmation_tools` there. `AgentPanel.test.tsx` pins the
+request, the card and the refusal of an empty call. The panel also gets the
+skills, OpenScript and external data toolkits; it does not get `render_ui`, so
+the prompt tells it to answer general data in a short table or prose.
 
 ## HTTP surface
 
@@ -1481,6 +1972,8 @@ limit, CSRF on by default.
 | GET/PUT | `/websearch` | web-search settings |
 | PUT/DELETE | `/websearch/providers/<provider>/key` | store, remove a search key |
 | POST | `/websearch/providers/<provider>/test` | validate a search key |
+| GET | `/mcp` | the external data switch and the registered servers; contacts none |
+| POST | `/mcp/test` | test every server, or the one named in `{"server": key}`; on the tighter limit |
 | GET | `/chatgpt/status` | is a plan authorised, plus any login in flight |
 | POST | `/chatgpt/login` | start the device flow; body `{"force": bool}` |
 | POST | `/chatgpt/cancel` | stop a login in flight |
@@ -1492,9 +1985,11 @@ limit, CSRF on by default.
 | POST | `/chat/confirm` | SSE, resume a paused run |
 | POST | `/chat/<run_id>/cancel` | cancel |
 
-Twenty-eight routes in all, counting each method separately. The shared limit is
-240 per minute, with 30 on the streaming routes and 12 on the ones that reach
-upstream.
+Thirty routes in all, counting each method separately, plus the eight voice
+routes documented in `docs/design/56-voice-agent/`. The shared limit is 240 per
+minute, with 30 on the streaming routes and 12 on the ones that reach upstream.
+The external data switch has no route of its own: it is the `mcp_enabled` field
+of `/settings`, like the trading switch.
 
 `login.state` is `idle`, `pending`, `authorised`, `expired`, `failed` or
 `cancelled`, and `pending` is the only non-terminal one, so a client stops
