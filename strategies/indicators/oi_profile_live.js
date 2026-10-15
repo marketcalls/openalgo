@@ -144,6 +144,16 @@ export function nearestExpiryRows(chain, prefix, legOi = (leg) => Number(leg.oi)
 export { maxPainStrike }
 
 /**
+ * Whether a strike side's change in OI is known: at least one of its contracts
+ * has yesterday's OI (`base`). A side with no contract list at all comes from
+ * an older server, which only ever sent known changes.
+ */
+function changeKnown(legs) {
+  if (!Array.isArray(legs) || legs.length === 0) return true
+  return legs.some((leg) => leg?.base != null)
+}
+
+/**
  * Half the height of one strike row, in pixels. Few strikes on screen get fat
  * readable rows; a crowded pane gets thin ones that cannot overlap.
  */
@@ -163,6 +173,33 @@ function rowHalfHeight(rows) {
   else if (n < 20) half = 7.5
   else half = Math.max(2, Math.min(5, Math.abs(rows[n - 1].y - rows[0].y) / n / 2))
   return Math.min(half, fit)
+}
+
+/** The Mode setting as one of 'oi', 'change' or 'both'. */
+function modeOf(settings) {
+  const m = settings.mode
+  return m === 'oi' || m === 'both' ? m : 'change'
+}
+
+// Space between the change column and the open interest column in Both, so
+// the change bars' right edge cannot read as the start of the OI bars.
+const COLUMN_GAP_PX = 14
+
+/**
+ * How wide each bar column is, and the gap between them. One column is the
+ * Max Bar Width setting. Both draws two columns of that width, unless the pair
+ * would take more than 60% of the pane, the share one column is capped at:
+ * then they share it, so a narrow pane keeps its candles visible.
+ */
+function columnWidths(rc, settings, valueMode) {
+  const cap = rc.plotWidth * 0.6
+  const want = Math.max(20, Number(settings.barWidth) || 140)
+  if (valueMode !== 'both') {
+    const width = Math.min(cap, want)
+    return { width, gap: 0, total: width }
+  }
+  const width = Math.max(20, Math.min(want, (cap - COLUMN_GAP_PX) / 2))
+  return { width, gap: COLUMN_GAP_PX, total: width * 2 + COLUMN_GAP_PX }
 }
 
 /**
@@ -188,7 +225,7 @@ function dataKey(settings, symbol) {
 /** The settings that only choose what is drawn from the data already held. */
 function viewKey(settings) {
   return [
-    settings.mode === 'oi' ? 'oi' : 'change',
+    modeOf(settings),
     settings.outline === false ? 'plain' : 'outline',
   ].join('|')
 }
@@ -309,6 +346,30 @@ export function overlayLiveOi(chain, liveOi, now = Date.now(), maxAgeMs = Number
   return { chain: next, live }
 }
 
+/**
+ * The last answer per selection, kept across indicator instances.
+ *
+ * The /trading settings dialog does not hand an instance its new settings: Ok
+ * removes the indicator and attaches a fresh one. Every Mode switch therefore
+ * started from nothing - bars cleared, "loading" shown, both passes asked for
+ * again - although the answer in hand was seconds old. A new instance paints
+ * from here at once, and asks the server only when this is older than a
+ * refresh beat. Bounded: a handful of selections, oldest dropped first.
+ */
+const lastAnswers = new Map()
+const LAST_ANSWERS_MAX = 8
+
+function rememberAnswer(key, answer) {
+  lastAnswers.delete(key)
+  lastAnswers.set(key, answer)
+  while (lastAnswers.size > LAST_ANSWERS_MAX) lastAnswers.delete(lastAnswers.keys().next().value)
+}
+
+/** Drops every remembered answer. For tests, which each expect a cold start. */
+export function forgetAnswers() {
+  lastAnswers.clear()
+}
+
 export default function ({ registerIndicator, nulls, subscribeQuotes }) {
   registerIndicator({
     id: 'oi-profile-live',
@@ -331,9 +392,11 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       { key: 'expiryDate', type: 'expiries', label: 'Expiry Used', default: '', group: 'Instrument' },
       {
         key: 'mode', type: 'select', label: 'Mode', default: 'oi', group: 'Display',
+        tooltip: 'Both shows open interest and its change since yesterday side by side, each on its own scale.',
         options: [
           { label: 'Open Interest', value: 'oi' },
           { label: 'Change in OI (Daily)', value: 'change' },
+          { label: 'Both, side by side', value: 'both' },
         ],
       },
       {
@@ -352,7 +415,13 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           { label: '50', value: '50' },
         ],
       },
-      { key: 'outline', type: 'boolean', label: 'Previous Session Outline', default: true, group: 'Display' },
+      {
+        key: 'outline', type: 'boolean', label: 'Previous Session Outline', default: true, group: 'Display',
+        // Drawn over open interest bars only; a change bar has no previous total.
+        // Said in words rather than greyed out: /trading's settings dialog does
+        // not apply `activeWhen`.
+        tooltip: "Yesterday's open interest outlined over today's bar. Open Interest and Both only.",
+      },
       { key: 'maxPain', type: 'boolean', label: 'Max Pain Marker (strikes fetched)', default: true, group: 'Display' },
       { key: 'barWidth', type: 'number', label: 'Max Bar Width (px)', default: 140, min: 20, max: 400, step: 10, group: 'Display' },
       { key: 'opacity', type: 'number', label: 'Bar Opacity (%)', default: 55, min: 10, max: 100, step: 5, group: 'Display' },
@@ -409,13 +478,8 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         const chain = state.chain
         if (!Array.isArray(chain) || chain.length === 0) return null
 
-        const key = state.valueMode === 'oi' ? 'ce_oi' : 'ce_oi_change'
-        const putKey = state.valueMode === 'oi' ? 'pe_oi' : 'pe_oi_change'
         const rightEdge = rc.plotWidth
         const paneHeight = rc.plotHeight
-        // Read live: a width typed into the settings dialog should move the
-        // bars on the next frame, not on the next poll three minutes away.
-        const maxWidthPx = Math.min(rightEdge * 0.6, Math.max(20, Number(settings.barWidth) || 140))
 
         // Only strikes whose price is on screen are worth a rectangle. A
         // zoomed-in chart then draws a handful of rows instead of forty.
@@ -425,40 +489,62 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           if (!Number.isFinite(strike)) continue
           const y = rc.priceScale.priceToY(strike)
           if (y == null || Number.isNaN(y) || y < -20 || y > paneHeight + 20) continue
+          const ceOi = Number(s.ce_oi) || 0
+          const peOi = Number(s.pe_oi) || 0
+          const ceChg = Number(s.ce_oi_change) || 0
+          const peChg = Number(s.pe_oi_change) || 0
           rows.push({
             strike,
             y,
-            ce: Number(s[key]) || 0,
-            pe: Number(s[putKey]) || 0,
-            // Total OI regardless of the view, for max pain; and what the
-            // strike carried into the day, which is simply the total less
-            // what changed during it.
-            ceOi: Number(s.ce_oi) || 0,
-            peOi: Number(s.pe_oi) || 0,
-            cePrev: (Number(s.ce_oi) || 0) - (Number(s.ce_oi_change) || 0),
-            pePrev: (Number(s.pe_oi) || 0) - (Number(s.pe_oi_change) || 0),
+            ceOi,
+            peOi,
+            ceChg,
+            peChg,
+            // Whether the change is known at all. The server sends 0 for a
+            // strike none of whose contracts has yesterday's OI yet (`base`
+            // null), which read as "no change": the tooltip said
+            // "Call Chg: 0 (0.0%)" on CRUDEOIL while it was still loading.
+            ceKnown: changeKnown(s.ce_legs),
+            peKnown: changeKnown(s.pe_legs),
+            // What the strike carried into the day: the total less what
+            // changed during it.
+            cePrev: ceOi - ceChg,
+            pePrev: peOi - peChg,
           })
         }
         if (rows.length === 0) return null
         rows.sort((a, b) => a.y - b.y)
 
-        // Change in OI is signed, so the scale spans both sides of zero and
-        // the origin moves inward. Without this an unwind and a build draw
-        // the same bar.
-        let maxVal = 0
-        let minVal = 0
-        for (const r of rows) {
-          maxVal = Math.max(maxVal, r.ce, r.pe)
-          minVal = Math.min(minVal, r.ce, r.pe)
+        // One column per thing shown, each on its own scale: a change of 2L
+        // next to a total of 80L would be a sliver on a shared one. Both puts
+        // the open interest at the right edge, where the single view has it,
+        // and the change in a column of its own to its left.
+        const { width, gap } = columnWidths(rc, settings, state.valueMode)
+        const column = (kind, right) => {
+          const ce = kind === 'oi' ? 'ceOi' : 'ceChg'
+          const pe = kind === 'oi' ? 'peOi' : 'peChg'
+          // Change in OI is signed, so the scale spans both sides of zero and
+          // the origin moves inward. Without this an unwind and a build draw
+          // the same bar.
+          let maxVal = 0
+          let minVal = 0
+          for (const r of rows) {
+            maxVal = Math.max(maxVal, r[ce], r[pe])
+            minVal = Math.min(minVal, r[ce], r[pe])
+          }
+          const scale = width / (maxVal - minVal || 1)
+          return { kind, ce, pe, right, width, scale, originX: right - Math.abs(minVal) * scale, minVal }
         }
-        const span = maxVal - minVal || 1
-        const scale = maxWidthPx / span
-        const originX = rightEdge - Math.abs(minVal) * scale
+        const columns =
+          state.valueMode === 'both'
+            ? [column('change', rightEdge - width - gap), column('oi', rightEdge)]
+            : [column(state.valueMode === 'oi' ? 'oi' : 'change', rightEdge)]
 
         // Row height follows how many strikes share the pane, so rows never
         // merge into a smear when the chart is zoomed out.
         const halfPx = rowHalfHeight(rows)
-        return { rows, halfPx, scale, originX, rightEdge, maxWidthPx, minVal, maxVal }
+        const left = columns[0].right - width
+        return { rows, halfPx, columns, rightEdge, left, totalWidth: rightEdge - left }
       }
 
       // The strike whose pair of bars straddles this y, or null.
@@ -477,7 +563,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // One line, written for a trader: when the bars were last refreshed, or
       // why they are not there. Every failure used to be silent, so a profile
       // that could not load looked the same as one with nothing to show.
-      const statusText = () => {
+      const statusText = (settings = {}) => {
         const p = state.problem
         const hasChain = Array.isArray(state.chain) && state.chain.length > 0
         const updated = state.updatedAt
@@ -507,12 +593,27 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           ce += Number(r.ce_oi) || 0
           pe += Number(r.pe_oi) || 0
         }
-        if (ce > 0) text += ` | PCR ${(pe / ce).toFixed(2)}`
+        // Named with its window: Sensibull's PCR covers ATM +-10 by default and
+        // this one Strikes Around ATM (25 by default), so the two read 1.22
+        // and 1.34 on the same NIFTY chain and both are right. Over the same
+        // strikes they agreed exactly.
+        if (ce > 0) {
+          const window = Math.max(1, Math.floor(Number(settings.strikes) || 25))
+          text += ` | PCR ${(pe / ce).toFixed(2)} (ATM ±${window})`
+        }
+        // Max pain in words as well as the marker: the marker sits on its
+        // strike's row, which is often above or below the visible prices
+        // (M&M at 2830 with max pain at 2900 drew nothing at all), and then
+        // nothing on screen said where it was.
+        if (settings.maxPain !== false && state.maxPain != null) {
+          text += ` | Max Pain ${state.maxPain}`
+          if (state.nearestPrefix) text += ` (${state.nearestExpiry})`
+        }
         return text
       }
 
       const drawStatus = (canvasCtx, rc, dpr, settings) => {
-        const text = statusText()
+        const text = statusText(settings)
         if (!text) return
         const fontPx = 10
         canvasCtx.save()
@@ -524,7 +625,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         // bars of whichever strike sat near the top of the pane. Seen on the
         // live chart, not in a test. A pane too narrow for both gives the
         // line its left edge.
-        const barColumn = Math.min(rc.plotWidth * 0.6, Math.max(20, Number(settings.barWidth) || 140))
+        const barColumn = columnWidths(rc, settings, state.valueMode).total
         const x = Math.max(4, rc.plotWidth - barColumn - w - pad * 2 - 10)
         const y = 6
         canvasCtx.globalAlpha = 0.85
@@ -551,7 +652,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           const geom = layout(rc, ctx.settings())
           if (!geom) return null
           // Only over the bars themselves, not the whole width of the pane.
-          if (x < geom.rightEdge - geom.maxWidthPx || x > geom.rightEdge) return null
+          if (x < geom.left || x > geom.rightEdge) return null
           const row = rowAt(geom, y)
           if (!row) return null
           hoverPoint = { x, y }
@@ -583,11 +684,9 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           const chain = state.chain
           if (!Array.isArray(chain) || chain.length === 0) return
           const scheme = COLOR_SCHEMES[settings.colors] ?? COLOR_SCHEMES.sensibull
-          const key = state.valueMode === 'oi' ? 'ce_oi' : 'ce_oi_change'
-          const putKey = state.valueMode === 'oi' ? 'pe_oi' : 'pe_oi_change'
           const geom = layout(rc, settings)
           if (!geom) return
-          const { rows, halfPx, scale, originX, rightEdge, maxWidthPx, minVal } = geom
+          const { rows, halfPx, columns, rightEdge, left } = geom
           let lo = Infinity
           let hi = -Infinity
           for (const r of rows) {
@@ -595,59 +694,99 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
             hi = Math.max(hi, r.strike)
           }
           visibleRange = { lo, hi }
+          const both = columns.length > 1
 
           canvasCtx.save()
           // Read live, so dragging the slider repaints on the next frame.
           const barAlpha = Math.min(1, Math.max(0.1, (Number(settings.opacity) || 55) / 100))
-          canvasCtx.globalAlpha = barAlpha
-          const bar = (value, top, color) => {
-            const width = value * scale
-            if (Math.abs(width) < 0.5) return
-            canvasCtx.beginPath()
-            canvasCtx.fillStyle = color
-            canvasCtx.fillRect(
-              (width >= 0 ? originX - width : originX) * dpr,
-              top * dpr,
-              Math.abs(width) * dpr,
-              Math.max(1, halfPx - 1) * dpr
-            )
-            canvasCtx.closePath()
-          }
-          for (const r of rows) {
-            bar(r.ce, r.y - halfPx, scheme.ce)
-            bar(r.pe, r.y + 1, scheme.pe)
-          }
-
-          // Yesterday's open interest, outlined over today's bar: the gap
-          // between the two edges is the day's build or unwind, without
-          // having to switch the view to read it. Only meaningful while the
-          // bars are open interest - on a change scale there is no such thing
-          // as a previous total.
-          if (settings.outline !== false && state.valueMode === 'oi' && state.hasChange) {
-            canvasCtx.globalAlpha = 0.9
-            canvasCtx.strokeStyle = OUTLINE_COLOR
-            canvasCtx.lineWidth = Math.max(1, dpr)
-            canvasCtx.setLineDash([3 * dpr, 2 * dpr])
-            const outline = (value, top) => {
-              const width = value * scale
-              if (Math.abs(width) < 1.5) return
-              canvasCtx.strokeRect(
-                (width >= 0 ? originX - width : originX) * dpr,
+          for (const col of columns) {
+            canvasCtx.globalAlpha = barAlpha
+            const bar = (value, top, color) => {
+              const width = value * col.scale
+              if (Math.abs(width) < 0.5) return
+              canvasCtx.beginPath()
+              canvasCtx.fillStyle = color
+              canvasCtx.fillRect(
+                (width >= 0 ? col.originX - width : col.originX) * dpr,
                 top * dpr,
                 Math.abs(width) * dpr,
                 Math.max(1, halfPx - 1) * dpr
               )
+              canvasCtx.closePath()
             }
             for (const r of rows) {
-              outline(r.cePrev, r.y - halfPx)
-              outline(r.pePrev, r.y + 1)
+              bar(r[col.ce], r.y - halfPx, scheme.ce)
+              bar(r[col.pe], r.y + 1, scheme.pe)
             }
-            canvasCtx.setLineDash([])
+
+            // Yesterday's open interest, outlined over today's bar: the gap
+            // between the two edges is the day's build or unwind, without
+            // having to switch the view to read it. Only on an open interest
+            // column - on a change scale there is no such thing as a previous
+            // total.
+            if (col.kind === 'oi' && settings.outline !== false && state.hasChange) {
+              canvasCtx.globalAlpha = 0.9
+              canvasCtx.strokeStyle = OUTLINE_COLOR
+              canvasCtx.lineWidth = Math.max(1, dpr)
+              canvasCtx.setLineDash([3 * dpr, 2 * dpr])
+              const outline = (value, top) => {
+                const width = value * col.scale
+                if (Math.abs(width) < 1.5) return
+                canvasCtx.strokeRect(
+                  (width >= 0 ? col.originX - width : col.originX) * dpr,
+                  top * dpr,
+                  Math.abs(width) * dpr,
+                  Math.max(1, halfPx - 1) * dpr
+                )
+              }
+              for (const r of rows) {
+                // An unknown previous total would outline today's own bar.
+                if (r.ceKnown) outline(r.cePrev, r.y - halfPx)
+                if (r.peKnown) outline(r.pePrev, r.y + 1)
+              }
+              canvasCtx.setLineDash([])
+            }
+
+            // The zero rule, drawn only when something is negative.
+            if (col.minVal < 0) {
+              canvasCtx.globalAlpha = 0.5
+              canvasCtx.lineWidth = dpr
+              canvasCtx.beginPath()
+              canvasCtx.moveTo(col.originX * dpr, (rows[0].y - halfPx * 2) * dpr)
+              canvasCtx.lineTo(col.originX * dpr, (rows[rows.length - 1].y + halfPx * 2) * dpr)
+              canvasCtx.strokeStyle = ZERO_LINE_COLOR
+              canvasCtx.stroke()
+              canvasCtx.closePath()
+            }
+          }
+
+          // Two columns on two scales need naming, or a short change bar
+          // reads as a small open interest. Sits at the foot of the pane,
+          // clear of the status line at the top.
+          if (both) {
+            canvasCtx.globalAlpha = 1
+            canvasCtx.font = `${10 * dpr}px ui-sans-serif, system-ui, sans-serif`
+            canvasCtx.textBaseline = 'bottom'
+            for (const col of columns) {
+              const label = col.kind === 'oi' ? 'Open Interest' : 'Change in OI'
+              const w = canvasCtx.measureText(label).width / dpr
+              const x = col.right - col.width / 2 - w / 2
+              const y = rc.plotHeight - 6
+              canvasCtx.globalAlpha = 0.85
+              canvasCtx.fillStyle = TOOLTIP_BG
+              canvasCtx.beginPath()
+              canvasCtx.roundRect((x - 4) * dpr, (y - 14) * dpr, (w + 8) * dpr, 16 * dpr, 4 * dpr)
+              canvasCtx.fill()
+              canvasCtx.globalAlpha = 1
+              canvasCtx.fillStyle = TOOLTIP_FG
+              canvasCtx.fillText(label, x * dpr, (y - 1) * dpr)
+            }
           }
 
           // Max pain: where the most option value expires worthless. Taken
           // over the whole chain and cached with it, so panning and zooming
-          // cost nothing and never move the line.
+          // cost nothing and never move the line. Across every column, since
+          // it belongs to the strike rather than to either view of it.
           if (settings.maxPain !== false) {
             const strike = state.maxPain
             const row = rows.find((r) => r.strike === strike)
@@ -657,7 +796,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
               canvasCtx.lineWidth = Math.max(1, dpr)
               canvasCtx.setLineDash([5 * dpr, 3 * dpr])
               canvasCtx.beginPath()
-              canvasCtx.moveTo((rightEdge - maxWidthPx) * dpr, row.y * dpr)
+              canvasCtx.moveTo(left * dpr, row.y * dpr)
               canvasCtx.lineTo(rightEdge * dpr, row.y * dpr)
               canvasCtx.stroke()
               canvasCtx.setLineDash([])
@@ -670,23 +809,12 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
                 state.nearestPrefix
                   ? `Max Pain ${strike} (${state.nearestExpiry})`
                   : `Max Pain ${strike}`,
-                (rightEdge - maxWidthPx) * dpr,
+                left * dpr,
                 (row.y - 2) * dpr
               )
             }
           }
 
-          // The zero rule, drawn only when something is negative.
-          if (minVal < 0) {
-            canvasCtx.globalAlpha = 0.5
-            canvasCtx.lineWidth = dpr
-            canvasCtx.beginPath()
-            canvasCtx.moveTo(originX * dpr, (rows[0].y - halfPx * 2) * dpr)
-            canvasCtx.lineTo(originX * dpr, (rows[rows.length - 1].y + halfPx * 2) * dpr)
-            canvasCtx.strokeStyle = ZERO_LINE_COLOR
-            canvasCtx.stroke()
-            canvasCtx.closePath()
-          }
           // The hovered strike, named. `rc.hoverId` is the chart's own pick,
           // so this appears and disappears with the pointer without the
           // indicator tracking it.
@@ -702,22 +830,31 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
             // Named for what the bars currently are. Showing "Chg" over totals
             // (or the reverse) is worse than showing nothing: the reader has
             // no way to tell it is wrong.
-            const isChange = state.valueMode !== 'oi'
+            const isChange = state.valueMode === 'change'
+            // Said instead of a number for a side whose change is not known:
+            // still being fetched, or (once the server has finished) not
+            // available from the broker at all.
+            const unknownChange = state.changePending ? 'loading' : 'not available'
             const lines = [
               { text: `Strike: ${hoveredRow.strike}`, color: null },
               {
-                text: `Call OI${isChange ? ' Chg' : ''}: ${formatLakh(hoveredRow.ce)}`,
+                text: isChange
+                  ? `Call OI Chg: ${hoveredRow.ceKnown ? formatLakh(hoveredRow.ceChg) : unknownChange}`
+                  : `Call OI: ${formatLakh(hoveredRow.ceOi)}`,
                 color: scheme.ce,
               },
               {
-                text: `Put OI${isChange ? ' Chg' : ''}: ${formatLakh(hoveredRow.pe)}`,
+                text: isChange
+                  ? `Put OI Chg: ${hoveredRow.peKnown ? formatLakh(hoveredRow.peChg) : unknownChange}`
+                  : `Put OI: ${formatLakh(hoveredRow.peOi)}`,
                 color: scheme.pe,
               },
             ]
             // The other half of the picture, so one hover answers both "how
             // much is there" and "how much of it is today's": the change (with
             // its size against what the strike carried in) under Open
-            // Interest, the totals under Change in OI, and the strike's PCR.
+            // Interest and Both, the totals under Change in OI, and the
+            // strike's PCR.
             if (isChange) {
               lines.push({
                 text: `Totals: Call ${formatLakh(hoveredRow.ceOi)}, Put ${formatLakh(hoveredRow.peOi)}`,
@@ -725,8 +862,14 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
               })
             } else if (state.hasChange) {
               lines.push(
-                { text: `Call Chg: ${changeText(hoveredRow.ceOi, hoveredRow.cePrev)}`, color: scheme.ce },
-                { text: `Put Chg: ${changeText(hoveredRow.peOi, hoveredRow.pePrev)}`, color: scheme.pe }
+                {
+                  text: `Call Chg: ${hoveredRow.ceKnown ? changeText(hoveredRow.ceOi, hoveredRow.cePrev) : unknownChange}`,
+                  color: scheme.ce,
+                },
+                {
+                  text: `Put Chg: ${hoveredRow.peKnown ? changeText(hoveredRow.peOi, hoveredRow.pePrev) : unknownChange}`,
+                  color: scheme.pe,
+                }
               )
             }
             if (hoveredRow.ceOi > 0) {
@@ -748,7 +891,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
             // Sits to the left of the bars, where it covers the empty margin
             // rather than the profile the reader is pointing at. Clamped so
             // it cannot slide off the top or bottom of the pane.
-            let boxX = Math.min(hoverPoint.x, rightEdge - maxWidthPx) - boxW - 10
+            let boxX = Math.min(hoverPoint.x, left) - boxW - 10
             if (boxX < 4) boxX = Math.min(hoverPoint.x + 14, rightEdge - boxW - 4)
             const boxY = Math.max(4, Math.min(hoveredRow.y - boxH / 2, rc.plotHeight - boxH - 4))
 
@@ -1073,8 +1216,9 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         const stale = () => cancelled || mine !== generation
         const settings = ctx.settings()
         const underlying = resolveUnderlying(settings, ctx.symbol?.())
-        state.mode = settings.mode === 'oi' ? 'oi' : 'change'
-        watchedKey = dataKey(settings, ctx.symbol?.())
+        state.mode = modeOf(settings)
+        const requestKey = dataKey(settings, ctx.symbol?.())
+        watchedKey = requestKey
         if (!underlying) {
           polledChain = null
           stopLive()
@@ -1148,17 +1292,23 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
             const oiBody = await request(false)
             if (!oiBody) return
             applyChain(oiBody, 'oi', false, meta)
-            if (!wantsChange) return
+            if (!wantsChange) {
+              rememberAnswer(requestKey, { body: oiBody, hasChange: false, changePending: false, meta, at: Date.now() })
+              return
+            }
           }
 
           const changeBody = await request(true)
           if (!changeBody) return
-          applyChain(changeBody, state.mode === 'oi' ? 'oi' : 'change', true, meta)
+          applyChain(changeBody, state.mode, true, meta)
           // An underlying nobody has looked at today has no previous-session
           // OI cached for its legs. The backend fetches those in the
           // background rather than holding the request, so the change columns
           // arrive over the next few beats instead of all at once.
           state.changePending = changeBody.oi_change_pending === true
+          rememberAnswer(requestKey, {
+            body: changeBody, hasChange: true, changePending: state.changePending, meta, at: Date.now(),
+          })
         } catch {
           // A failed poll is not worth tearing the indicator down for, but it
           // is worth saying: the bars on screen (if any) are now older than
@@ -1212,7 +1362,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // without clearing the bars on screen.
       const applyView = () => {
         const settings = ctx.settings()
-        state.mode = settings.mode === 'oi' ? 'oi' : 'change'
+        state.mode = modeOf(settings)
         const wantsChange = state.mode !== 'oi' || settings.outline !== false
         if (state.hasChange || !wantsChange) {
           state.valueMode = state.hasChange ? state.mode : 'oi'
@@ -1253,7 +1403,25 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         fetchChain(true).finally(() => scheduleNext())
       }, SETTINGS_POLL_MS)
 
-      fetchChain().finally(() => scheduleNext())
+      // A fresh instance of a selection answered moments ago (the settings
+      // dialog's Ok makes one) paints that answer now and keeps the beat it
+      // was on, instead of clearing the chart and asking again.
+      const held = lastAnswers.get(watchedKey)
+      const heldAge = held ? Date.now() - held.at : Infinity
+      const startSettings = ctx.settings()
+      const startWantsChange = modeOf(startSettings) !== 'oi' || startSettings.outline !== false
+      if (held && heldAge < beatSeconds() * 1000) {
+        state.mode = modeOf(startSettings)
+        applyChain(held.body, held.hasChange ? state.mode : 'oi', held.hasChange, held.meta)
+        state.updatedAt = held.at
+        state.changePending = held.changePending
+        lastFetchAt = held.at
+      }
+      if (held && heldAge < beatSeconds() * 1000 && (held.hasChange || !startWantsChange) && !held.changePending) {
+        scheduleNext(Math.max(1, beatSeconds() - heldAge / 1000))
+      } else {
+        fetchChain().finally(() => scheduleNext())
+      }
 
       // A tab brought back to the front should not wait out the rest of a beat
       // it slept through - but flicking between tabs must not turn into a

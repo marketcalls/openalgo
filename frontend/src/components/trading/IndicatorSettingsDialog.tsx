@@ -362,7 +362,7 @@ export function IndicatorSettingsDialog({
                         id={`${req.instanceId}-${f.key}`}
                         value={values[f.key]}
                         count={Number(values.expiries) || 1}
-                        exchange={exchangeOf(
+                        exchanges={exchangesOf(
                           values.exchange,
                           underlyingOf(values.underlying, symbol)
                         )}
@@ -449,8 +449,14 @@ const EXPIRY_CHOICES = 8
 // blueprints/oiprofile.py) and drops the rest, so the picker stops there too.
 const MAX_PICKED_EXPIRIES = 6
 
-/** Same derivation the OI Profile indicator uses: typed name, else the chart's. */
-function underlyingOf(typed: unknown, symbol: string | undefined): string {
+/**
+ * Same derivation the OI Profile indicator uses (`resolveUnderlying` in
+ * strategies/indicators/oi_profile_live.js): typed name, else the chart's,
+ * with a future's or an option's contract stripped. '&' and '-' stay: they are
+ * part of M&M and BAJAJ-AUTO, and this copy dropping them listed no expiries
+ * for either after the indicator itself had been fixed.
+ */
+export function underlyingOf(typed: unknown, symbol: string | undefined): string {
   const t = String(typed ?? '')
     .trim()
     .toUpperCase()
@@ -458,16 +464,25 @@ function underlyingOf(typed: unknown, symbol: string | undefined): string {
   return String(symbol ?? '')
     .toUpperCase()
     .replace(/\d{2}[A-Z]{3}\d{2}FUT$/, '')
-    .replace(/[^A-Z0-9]/g, '')
+    .replace(/\d{2}[A-Z]{3}\d{2}[\d.]*(?:CE|PE)$/, '')
+    .replace(/[^A-Z0-9&-]/g, '')
 }
 
-/** Same Auto rule the OI Profile uses: the BSE indices trade on BFO. */
-function exchangeOf(typed: unknown, underlying: string): string {
+const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX']
+
+/**
+ * Where to look for the underlying's expiries, in order. Same Auto rule the
+ * OI Profile uses: the BSE indices on BFO, everything else on NFO, then the
+ * other F&O exchanges when the first has none (CRUDEOIL and GOLD are on MCX).
+ * A chosen exchange is the only place looked.
+ */
+export function exchangesOf(typed: unknown, underlying: string): string[] {
   const t = String(typed ?? '')
     .trim()
     .toUpperCase()
-  if (t && t !== 'AUTO') return t
-  return /^(SENSEX|BANKEX)/.test(underlying) ? 'BFO' : 'NFO'
+  if (t && t !== 'AUTO') return [t]
+  const first = /^(SENSEX|BANKEX)/.test(underlying) ? 'BFO' : 'NFO'
+  return [first, ...FNO_EXCHANGES.filter((e) => e !== first)]
 }
 
 /** 22SEP26 -> "22 Sep", which is how a trader reads an expiry off a chain. */
@@ -481,7 +496,7 @@ function ExpiryPicker({
   id,
   value,
   count,
-  exchange,
+  exchanges,
   underlying,
   onChange,
 }: {
@@ -489,39 +504,52 @@ function ExpiryPicker({
   id: string
   value: unknown
   count: number
-  exchange: string
+  exchanges: string[]
   underlying: string
   onChange(v: unknown): void
 }) {
   const [available, setAvailable] = useState<string[]>([])
+  // 'No expiries found' is an answer, so it waits for one: shown while the
+  // lookup was still running, it told a trader BHEL had no options.
+  const [lookup, setLookup] = useState<'loading' | 'done' | 'failed'>('loading')
+  const exchangeList = exchanges.join(',')
 
   useEffect(() => {
     // A new underlying's list is not the old one's: clear it at once, so an
     // old expiry can never be ticked and saved while the new list loads, or
     // after it fails to load.
     setAvailable([])
+    setLookup('loading')
     if (!underlying) return
     let alive = true
-    const url =
-      `/search/api/expiries?exchange=${encodeURIComponent(exchange)}` +
-      `&underlying=${encodeURIComponent(underlying)}&instrumenttype=options`
-    fetch(url, { credentials: 'same-origin' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (!alive) return
-        const list = Array.isArray(body?.expiries) ? body.expiries : []
-        // The search API answers 26-NOV-25; the profile wants 26NOV25.
-        setAvailable(
-          list
-            .slice(0, EXPIRY_CHOICES)
-            .map((e: unknown) => String(e).replace(/-/g, '').toUpperCase())
-        )
-      })
-      .catch(() => {})
+    const fetchOn = async (exchange: string): Promise<string[]> => {
+      const url =
+        `/search/api/expiries?exchange=${encodeURIComponent(exchange)}` +
+        `&underlying=${encodeURIComponent(underlying)}&instrumenttype=options`
+      const r = await fetch(url, { credentials: 'same-origin' })
+      if (!r.ok) throw new Error('expiry lookup refused')
+      const body = await r.json()
+      return Array.isArray(body?.expiries) ? body.expiries : []
+    }
+    ;(async () => {
+      let list: string[] = []
+      for (const exchange of exchangeList.split(',')) {
+        list = await fetchOn(exchange)
+        if (list.length > 0) break
+      }
+      if (!alive) return
+      // The search API answers 26-NOV-25; the profile wants 26NOV25.
+      setAvailable(
+        list.slice(0, EXPIRY_CHOICES).map((e: unknown) => String(e).replace(/-/g, '').toUpperCase())
+      )
+      setLookup('done')
+    })().catch(() => {
+      if (alive) setLookup('failed')
+    })
     return () => {
       alive = false
     }
-  }, [exchange, underlying])
+  }, [exchangeList, underlying])
 
   const picked = String(value ?? '')
     .toUpperCase()
@@ -548,7 +576,13 @@ function ExpiryPicker({
       <>
         {label}
         <span className="text-[13px] text-muted-foreground">
-          {underlying ? 'No expiries found' : 'Set an underlying'}
+          {!underlying
+            ? 'Set an underlying'
+            : lookup === 'loading'
+              ? 'Loading expiries...'
+              : lookup === 'failed'
+                ? 'Could not load expiries. Close and reopen to try again.'
+                : 'No expiries found'}
         </span>
       </>
     )

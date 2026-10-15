@@ -13,9 +13,12 @@
  * - none of that was ever shown: a profile that could not load was blank.
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { beforeEach, test } from 'node:test'
 
-const mod = (await import(new URL('../../strategies/indicators/oi_profile_live.js', import.meta.url))).default
+const indicator = await import(new URL('../../strategies/indicators/oi_profile_live.js', import.meta.url))
+const mod = indicator.default
+// Each test expects a cold start, not the previous test's remembered answer.
+beforeEach(() => indicator.forgetAnswers())
 
 const CHAIN = [
   {
@@ -243,7 +246,7 @@ test('a profile that cannot load says why instead of staying blank', async () =>
   try {
     await waitFor(() => failing.texts().includes('Call OI: 87.21L'), 'the first load')
     assert.ok(
-      failing.texts().some((t) => /^OI Profile: Updated \d{2}:\d{2}( \| PCR \d+\.\d{2})?$/.test(t)),
+      failing.texts().some((t) => /^OI Profile: Updated \d{2}:\d{2}( \| PCR \d+\.\d{2} \(ATM ±5\))?$/.test(t)),
       failing.texts().join(' | ')
     )
     fail = true
@@ -363,7 +366,7 @@ test('the tooltip gives both totals and change, with the strike PCR; the status 
     assert.ok(oiView.includes('Call Chg: +26.37L (+43.3%)'), oiView.join(' | '))
     assert.ok(oiView.includes('Put Chg: +15.42L (+28.8%)'), oiView.join(' | '))
     assert.ok(oiView.includes('PCR: 0.79'), oiView.join(' | '))
-    assert.ok(oiView.some((t) => /^OI Profile: Updated \d{2}:\d{2} \| PCR 0\.79$/.test(t)), oiView.join(' | '))
+    assert.ok(oiView.some((t) => /^OI Profile: Updated \d{2}:\d{2} \| PCR 0\.79 \(ATM ±5\)$/.test(t)), oiView.join(' | '))
 
     settings.mode = 'change'
     await waitFor(() => h.texts().includes('Call OI Chg: 26.37L'), 'change mode')

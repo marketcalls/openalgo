@@ -594,10 +594,22 @@ the day's change with its percentage under Open Interest, the totals under
 Change in OI - and that strike's put/call ratio. The status line adds the
 overall PCR across every strike fetched.
 
+**Both views at once.** Mode has a third value, **Both, side by side**: the
+change in OI in one column and the open interest in another to its right, each
+on its own scale and each labelled at the foot of the pane. One shared scale
+would shrink the change to a sliver beside the totals. The live feed updates
+both columns together, because a tick's OI also moves its change against the
+previous session's close. In a narrow pane the two share the width one column
+would take (60% of the pane), so the candles stay visible.
+
 **Mode and outline repaint; they never refetch.** Both choose which columns of
 the same answer are drawn, so switching them redraws from data already held.
 Only when the change columns have not been loaded yet does a switch fetch them,
-and the bars stay on screen while it does.
+and the bars stay on screen while it does. The `/trading` settings dialog
+applies Ok by replacing the indicator rather than updating it, so the module
+also keeps the last few answers it received (eight selections at most): a new
+instance paints the one for its selection at once and asks the server only
+when it is older than a refresh beat.
 
 Settings worth knowing: **Strikes Around ATM** (5/10/25/50) is the one that
 decides how much work a refresh is; **Previous Session Outline** draws the
