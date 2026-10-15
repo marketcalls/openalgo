@@ -9,6 +9,13 @@ export interface Position {
   pnlpercent: number
   lot_size?: number // contract_value multiplier (e.g. 0.01 for ETHUSD.P)
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
+  /**
+   * Set by the Kotak adapter when `average_price` is Kotak's overnight re-valuation (the previous
+   * settlement price) and not what the leg cost. Absent everywhere else. The Positions page
+   * replaces it with the strategy book's entry average when the book fully explains the row,
+   * and then sets this to 'strategy_book'.
+   */
+  average_price_basis?: 'carry_forward_valuation' | 'strategy_book'
 }
 
 export interface Order {
