@@ -1324,3 +1324,49 @@ def test_order_ids_with_reserved_characters_are_escaped_in_the_path():
         == "/trading/orders/regular/OFPIM00001%3F%3A"
     )
     assert order_path("/trading/orders/gtt", "fc3e3201-8d34") == "/trading/orders/gtt/fc3e3201-8d34"
+
+
+def _expiring_feed(monkeypatch, stored_token):
+    """A feed whose first handshake is refused as unauthorized (what Vortex
+    does once the daily token has expired). Returns the client and the URLs it
+    dialled; a second connection stops the run loop."""
+    import broker.rupeezy.streaming.rupeezy_websocket as rw
+
+    urls = []
+
+    class _FakeApp:
+        def __init__(self, url, on_open, on_message, on_error, on_close):
+            self.url, self.on_error = url, on_error
+            urls.append(url)
+
+        def run_forever(self, **kwargs):
+            if len(urls) == 1:
+                self.on_error(self, "Handshake status 401 Unauthorized")
+            else:
+                client._stop_event.set()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rw.websocket, "WebSocketApp", _FakeApp)
+    monkeypatch.setattr(rw, "get_auth_token", lambda user_id, bypass_cache=False: stored_token)
+    client = rw.RupeezyWebSocket("old-token", user_id="u1")
+    client.RECONNECT_BASE_DELAY = 0
+    client.running = True
+    return client, urls
+
+
+def test_expired_token_with_no_new_login_stops_the_feed(monkeypatch):
+    client, urls = _expiring_feed(monkeypatch, stored_token="old-token")
+    client._run()
+    assert len(urls) == 1  # no reconnect loop on a dead session
+    assert client.running is False
+
+
+def test_expired_token_reconnects_with_the_token_from_a_new_login(monkeypatch):
+    client, urls = _expiring_feed(monkeypatch, stored_token="new-token")
+    client._run()
+    assert len(urls) == 2
+    assert urls[0].endswith("auth_token=old-token")
+    assert urls[1].endswith("auth_token=new-token")
+    assert client.access_token == "new-token"
