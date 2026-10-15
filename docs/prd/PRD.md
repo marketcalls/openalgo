@@ -149,7 +149,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 
 ## Broker Support
 
-Current broker count is 36. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules were found only for Dhan and Zerodha. Trace: `DISCOVERY_MAP.md` `Broker Plugins`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
+Current broker count is 37. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules were found only for Dhan and Zerodha. Trace: `DISCOVERY_MAP.md` `Broker Plugins`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
 
 | Broker key | Plugin name | Type | Leverage config | Exchanges |
 |---|---|---|---|---|
@@ -164,6 +164,7 @@ Current broker count is 36. Broker support is plugin-based and loaded from `brok
 | firstock | Firstock | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX |
 | fivepaisa | fivepaisa | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | fivepaisaxts | 5paisa (XTS) | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
+| acagarwalxts | AC Agarwal (XTS) | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
 | flattrade | Flattrade | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | fyers | fyers | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | groww | groww | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
@@ -229,10 +230,11 @@ OpenAlgo is configured as a self-hosted application with session routes and API-
 
 ## Out Of Scope And Known Gaps
 
-- Broker-specific response payload shapes are not exhaustively verified for all 36 brokers.
+- Broker-specific response payload shapes are not exhaustively verified for all 37 brokers.
 - Static route inventory may differ from runtime registration when Remote MCP is disabled or `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in implementation need review before one env var is documented as authoritative.
-- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 36 plugin directories.
+- Sandbox GTT tables exist, but analyzer GTT services return 501.
+- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 37 plugin directories.
 - Blueprint-route BDD coverage remains representative rather than one scenario per route. The RESTX method/path inventory and broker-plugin inventory are explicitly covered by scenario outlines.
 - `/pnltracker/legacy` references a template that is absent from the current source tree and is not a supported fallback UI.
 - Telegram REST webhook dispatch and broadcast fan-out are registered placeholders, not completed delivery paths.

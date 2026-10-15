@@ -21,6 +21,7 @@ Feature: Broker plugin inventory
       | firstock | IN_stock |
       | fivepaisa | IN_stock |
       | fivepaisaxts | IN_stock |
+      | acagarwalxts | IN_stock |
       | flattrade | IN_stock |
       | fyers | IN_stock |
       | groww | IN_stock |

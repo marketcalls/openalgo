@@ -37,7 +37,7 @@ chmod +x docker-run.sh
 3. Generates secure APP_KEY and API_KEY_PEPPER
 4. Prompts for broker name (with validation)
 5. Prompts for API credentials
-6. For **XTS brokers** (fivepaisaxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom): prompts for market data credentials
+6. For **XTS brokers** (fivepaisaxts, acagarwalxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom): prompts for market data credentials
 7. Pulls and starts the Docker container
 8. **Runs database migrations automatically** on startup
 
@@ -116,6 +116,7 @@ chmod -R 755 db/ strategies/ log/
 
 These brokers require **additional market data credentials**:
 - fivepaisaxts
+- acagarwalxts
 - compositedge
 - ibulls
 - iifl
@@ -495,6 +496,7 @@ sudo rm -rf /var/lib/docker
 |--------|------|---------|
 | 5paisa | `fivepaisa` | No |
 | 5paisa XTS | `fivepaisaxts` | Yes |
+| AC Agarwal (XTS) | `acagarwalxts` | Yes |
 | AliceBlue | `aliceblue` | No |
 | Angel One | `angel` | No |
 | Arrow | `arrow` | No |

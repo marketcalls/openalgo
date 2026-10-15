@@ -20,7 +20,7 @@ OpenAlgo is no longer just "an API layer in front of your broker." Today it comb
 
 | Surface | Route | Who it's for |
 | --- | --- | --- |
-| **Unified Broker API** | `/api/v1/` | External platforms: TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One contract across 36 plugins, with optional operations varying by adapter. |
+| **Unified Broker API** | `/api/v1/` | External platforms: TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One contract across 37 plugins, with optional operations varying by adapter. |
 | **Python Strategy Host** | `/python` | Traders who code: paste any Python script into the in-browser CodeMirror editor, schedule it on IST start/stop times, run multiple strategies in parallel with process isolation, watch real-time logs. No external server, no Docker, no cron. |
 | **Flow: No-Code Strategy Builder** | `/flow` | Traders who don't code: drag-and-drop nodes for market data, indicators, conditions, order execution, and notifications. Webhook triggers for TradingView and external signals built in. JSON import/export for sharing strategies. |
 | **AI Agent** | `/agent` | Traders who would rather ask: a chat that reads your own market data through OpenAlgo's services, draws charts and payoff diagrams, computes indicators, marks up the `/trading` chart from a right-side panel, and can place orders only with your explicit approval on every single one. Bring your own model from any LiteLLM provider, or a ChatGPT Plus or Pro subscription, or run it locally against Ollama. |
@@ -44,12 +44,13 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 
 **Requires Python 3.12 or newer.**
 
-## Supported Brokers (36 plugins)
+## Supported Brokers (37 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>
 
 - 5paisa (Standard + XTS)
+- AC Agarwal (XTS)
 - AliceBlue
 - AngelOne
 - Arrow
