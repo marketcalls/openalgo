@@ -8,6 +8,59 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### /trading: OI Profile shows open interest and its change side by side
+
+No database migration and no `update.sh` run are needed. The indicator is
+loaded at runtime, so pulling and reloading the chart is enough.
+
+- **New Mode, "Both, side by side".** The change in OI since the previous
+  session and the open interest are drawn at once, as two labelled columns:
+  change on the left, open interest at the right edge where it always was.
+  Each has its own scale, so a small change beside a large total is still
+  readable. Both update live from the feed between refreshes, and one hover
+  gives the strike's open interest, its change with the percentage, and PCR.
+  In a narrow pane the two share the width one column would take.
+- **M&M, BAJAJ-AUTO and every other underlying with `&` or `-` in its name**
+  now draw, on the chart and on `/oiprofile`. The overlay asked for `MM` and
+  `BAJAJAUTO`, and the server's input check refused the real names as
+  "Invalid input format". The settings dialog's Expiry Used list had the same
+  fault in its own copy of the rule.
+- **MCX underlyings (CRUDEOIL, GOLD and the rest) now draw.** Exchange on Auto
+  only ever looked on NFO or BFO. It now falls back to BFO and then MCX when
+  its first guess lists no options, in the overlay and in the Expiry Used
+  list, which also says "Loading expiries..." instead of "No expiries found"
+  while it looks.
+- **A change that is not known yet says "loading"** ("not available" if the
+  broker has no previous-day figure) instead of "Call Chg: 0 (0.0%)", which
+  showed on SENSEX and CRUDEOIL while their previous-day open interest was
+  being fetched.
+- **Changing any setting no longer blanks the bars.** The settings dialog's
+  Ok replaces the indicator; the new instance now paints the answer already
+  held and asks the server only when it is older than a refresh.
+- **A refresh is one request instead of two**, and one failed network call
+  no longer stops the profile until a page reload.
+- **A status line** beside the bars says when they were last refreshed, or
+  why they are not there, and carries the PCR with its strike window
+  ("PCR 1.34 (ATM ±25)") and the max pain, which can be read even when its
+  strike is off screen. Sensibull's PCR covers ATM +-10 by default; over the
+  same strikes the two agreed exactly on NIFTY, BANKNIFTY and RELIANCE.
+- **Max Pain with expiries combined** is the nearest expiry's, labelled with
+  it. It used to be taken over the summed open interest, which no contract
+  settles at.
+- **Live OI streams at most 160 contracts**, those around the strikes on
+  screen, and a pan or a recentred chain changes only the difference.
+- **Bars no longer overlap in a small pane**, and an option charted on its
+  own profiles its underlying.
+- The OI Profile toggle and its settings gear follow the redesigned toolbar.
+- The shipped indicators' validator and tests now run in CI.
+- Checked against the broker on NIFTY, BANKNIFTY, RELIANCE, SENSEX (BFO),
+  CRUDEOIL (MCX), BHEL and M&M, and against Sensibull's OI vs Strike on
+  NIFTY, BANKNIFTY, RELIANCE and SENSEX: the previous day's open interest
+  was identical to the contract on every strike compared.
+- Not changed: on BFO and MCX the previous day's open interest takes one
+  broker history call per contract (the NSE file covers only NFO), so the
+  change columns for SENSEX or CRUDEOIL fill over a minute or more.
+
 ### NSE index freeze limits from 5 October 2026
 
 NSE circular NSE/FAOP/76693 raised the quantity freeze limits for index
