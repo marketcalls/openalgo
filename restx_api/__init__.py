@@ -45,6 +45,7 @@ from .ping import api as ping_ns
 from .place_gtt_order import api as place_gtt_order_ns
 from .place_order import api as place_order_ns
 from .place_smart_order import api as place_smart_order_ns
+from .pnl_attribution import api as pnl_attribution_ns
 from .pnl_symbols import api as pnl_symbols_ns
 from .portfolio import api as portfolio_ns
 from .sip import api as sip_ns
@@ -104,6 +105,7 @@ api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
+api.add_namespace(pnl_attribution_ns, path="/pnl")
 api.add_namespace(place_gtt_order_ns, path="/placegttorder")
 api.add_namespace(modify_gtt_order_ns, path="/modifygttorder")
 api.add_namespace(cancel_gtt_order_ns, path="/cancelgttorder")

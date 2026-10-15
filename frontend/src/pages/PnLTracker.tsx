@@ -1,7 +1,10 @@
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -30,6 +33,7 @@ import {
 // scale. Drawdown is always <= 0 and usually an order of magnitude smaller than
 // MTM, so overlaying the two flattened both. Split 3:1 in favour of the PnL
 // curve, which is the one being read closely.
+const BASIS_STORAGE_KEY = 'openalgo_pnltracker_basis'
 const CHART_HEIGHT = 500
 const PNL_PANE_RATIO = 3
 const DRAWDOWN_PANE_RATIO = 1
@@ -60,6 +64,8 @@ interface PnLData {
   max_drawdown: number
   pnl_series: PnLDataPoint[]
   drawdown_series: PnLDataPoint[]
+  /** The curve the server actually built: the broker's P&L, M2M, or the built-in curve it falls back to. */
+  basis?: 'pnl' | 'm2m' | 'legacy'
 }
 
 export default function PnLTracker() {
@@ -71,6 +77,27 @@ export default function PnLTracker() {
   // State
   const [isLoading, setIsLoading] = useState(false)
   const [isCapturing, setIsCapturing] = useState(false)
+
+  // Off: the broker's own P&L (the default, as on Positions). On: today's M2M,
+  // where a position carried from a previous day is measured from yesterday's close.
+  const [m2mBasis, setM2mBasis] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(BASIS_STORAGE_KEY) === 'm2m'
+    } catch {
+      return false
+    }
+  })
+  const basisRef = useRef<'pnl' | 'm2m'>(m2mBasis ? 'm2m' : 'pnl')
+  basisRef.current = m2mBasis ? 'm2m' : 'pnl'
+  // What the server actually delivered. It can differ from what was asked for: when
+  // M2M cannot be worked out exactly (a commodity position, a missing price) the
+  // built-in curve comes back, and the page must not title that "M2M".
+  const [deliveredBasis, setDeliveredBasis] = useState<'pnl' | 'm2m' | 'legacy' | null>(null)
+  const basisLabel = (deliveredBasis ? deliveredBasis === 'm2m' : m2mBasis) ? 'M2M' : 'P&L'
+  const m2mNotDelivered = m2mBasis && deliveredBasis !== null && deliveredBasis !== 'm2m'
+  // Only the newest request may update the page: switching quickly can leave an
+  // older response arriving last.
+  const loadSeq = useRef(0)
   const [metrics, setMetrics] = useState({
     currentMtm: 0,
     maxMtm: 0,
@@ -285,6 +312,7 @@ export default function PnLTracker() {
 
   // Load PnL data
   const loadPnLData = useCallback(async () => {
+    const seq = ++loadSeq.current
     setIsLoading(true)
     try {
       const csrfToken = await fetchCSRFToken()
@@ -296,14 +324,17 @@ export default function PnLTracker() {
           'X-CSRFToken': csrfToken,
         },
         credentials: 'include',
+        body: JSON.stringify({ basis: basisRef.current }),
       })
 
       if (!response.ok) throw new Error('Failed to fetch PnL data')
 
       const result = await response.json()
+      if (seq !== loadSeq.current) return
 
       if (result.status === 'success') {
         const data: PnLData = result.data
+        setDeliveredBasis(data.basis ?? null)
 
         // Update metrics
         setMetrics({
@@ -353,9 +384,10 @@ export default function PnLTracker() {
         showToast.error(result.message || 'Failed to load PnL data', 'positions')
       }
     } catch (_error) {
+      if (seq !== loadSeq.current) return
       showToast.error('Failed to load PnL data. Please try again.', 'positions')
     } finally {
-      setIsLoading(false)
+      if (seq === loadSeq.current) setIsLoading(false)
     }
   }, [])
 
@@ -450,6 +482,22 @@ export default function PnLTracker() {
     }
   }, [initChart, loadPnLData])
 
+  // Remember the basis and reload the curve when it changes (the first load is
+  // the one above, so this skips the initial render)
+  const basisFirstRun = useRef(true)
+  useEffect(() => {
+    try {
+      localStorage.setItem(BASIS_STORAGE_KEY, m2mBasis ? 'm2m' : 'pnl')
+    } catch {
+      // storage unavailable: the choice just is not remembered
+    }
+    if (basisFirstRun.current) {
+      basisFirstRun.current = false
+      return
+    }
+    loadPnLData()
+  }, [m2mBasis, loadPnLData])
+
   // Re-initialize chart on theme change
   useEffect(() => {
     if (chartRef.current) {
@@ -467,7 +515,21 @@ export default function PnLTracker() {
           <h1 className="text-3xl font-bold">PnL Tracker</h1>
           <p className="text-muted-foreground">Monitor your intraday profit and loss</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <div
+            className="flex items-center gap-2 mr-2"
+            title="Off: the broker's own P&L. On: today's M2M, where carried positions are measured from yesterday's close."
+          >
+            <Label htmlFor="tracker-m2m" className="cursor-pointer text-sm">
+              Today's M2M
+            </Label>
+            <Switch
+              id="tracker-m2m"
+              checked={m2mBasis}
+              onCheckedChange={setM2mBasis}
+              className="data-[state=checked]:bg-pink-500"
+            />
+          </div>
           <Button variant="secondary" onClick={takeScreenshot} disabled={isCapturing}>
             {isCapturing ? (
               <>
@@ -497,6 +559,16 @@ export default function PnLTracker() {
         </div>
       </div>
 
+      {m2mNotDelivered && (
+        <Alert variant="default" className="mb-6 bg-amber-500/10 border-amber-500/30">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-700 dark:text-amber-400">
+            Today's M2M could not be worked out for your positions (for example a commodity
+            position, or a price that is not available), so the built-in curve is shown.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Screenshot Container */}
       <div ref={screenshotContainerRef}>
         {/* Metrics Cards */}
@@ -505,7 +577,7 @@ export default function PnLTracker() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Current MTM
+                Current {basisLabel}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -528,7 +600,7 @@ export default function PnLTracker() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
                 <TrendingUp className="h-4 w-4 text-green-500" />
-                Max MTM
+                Max {basisLabel}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -544,7 +616,7 @@ export default function PnLTracker() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
                 <TrendingDown className="h-4 w-4 text-red-500" />
-                Min MTM
+                Min {basisLabel}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -584,7 +656,7 @@ export default function PnLTracker() {
                     <span className="h-full w-1/2 bg-green-500" />
                     <span className="h-full w-1/2 bg-red-500" />
                   </span>
-                  MTM PnL
+                  {basisLabel} curve
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-3 h-3 rounded-full bg-yellow-500"></span>
