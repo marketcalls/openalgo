@@ -13,8 +13,6 @@
  */
 
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronDown,
   GripVertical,
   MoreHorizontal,
@@ -267,6 +265,42 @@ function rowGrid(columns: typeof COLUMNS): string {
   return `1fr ${columns.map((c) => `${c.width}px`).join(' ')} 16px`
 }
 
+/**
+ * One column header: its label, and while it is the sorted column the
+ * direction as a word. The accessible name carries the same state, e.g.
+ * "Chg%, sorted ascending", so a screen reader hears what a sighted user sees.
+ */
+function SortHeader({
+  label,
+  dir,
+  onClick,
+  className,
+}: {
+  label: string
+  dir: 'asc' | 'desc' | null
+  onClick(): void
+  className?: string
+}) {
+  const state =
+    dir === 'asc' ? 'sorted ascending' : dir === 'desc' ? 'sorted descending' : 'not sorted'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`${label}, ${state}`}
+      aria-pressed={dir !== null}
+      className={cn(
+        'flex items-center gap-1 hover:text-foreground',
+        dir && 'text-foreground',
+        className
+      )}
+    >
+      {label}
+      {dir && <span className="text-[9px] font-normal normal-case tracking-normal">{dir}</span>}
+    </button>
+  )
+}
+
 export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) {
   const [lists, setLists] = useState<Watchlist[]>([])
   const [activeId, setActiveId] = useState<number | null>(null)
@@ -292,7 +326,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
   }, [display])
 
   /**
-   * Column-header sort, TradingView-style: click cycles ascending, descending,
+   * Column-header sort: click cycles ascending, descending,
    * then back to the list's own drag order (null). Persisted per browser like
    * the other display prefs, since it is a "how I like this list" choice.
    */
@@ -503,7 +537,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
    * Rows in display order: the list's own drag order when unsorted, or by the
    * clicked column otherwise. A row with no quote yet (or a column with no
    * value for it, e.g. no previous close) sorts to the bottom regardless of
-   * direction -- matching TradingView rather than treating "unknown" as zero,
+   * direction -- as charting terminals do, rather than treating "unknown" as zero,
    * which would park it among the biggest losers.
    */
   const sortedItems = useMemo(() => {
@@ -907,40 +941,28 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
       </div>
 
       {/* Column header, built from the same selection as the rows below.
-          Each cell is a sort toggle, TradingView-style: click cycles
-          ascending, descending, then back to the list's own drag order. */}
+          Each cell is a sort toggle: click cycles ascending, descending, then
+          back to the list's own drag order. The direction is a word, not an
+          arrow glyph (the terminal draws no icons of its own), and the label
+          says it too, which the arrows never did for a screen reader. */}
       <div
         className="grid shrink-0 gap-x-1.5 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70"
         style={{ gridTemplateColumns: gridTemplate }}
       >
-        <button
-          type="button"
+        <SortHeader
+          label="Symbol"
+          dir={sort?.id === 'symbol' ? sort.dir : null}
           onClick={() => toggleSort('symbol')}
-          className="flex items-center gap-0.5 text-left hover:text-foreground"
-        >
-          Symbol
-          {sort?.id === 'symbol' &&
-            (sort.dir === 'asc' ? (
-              <ArrowUp className="h-2.5 w-2.5" />
-            ) : (
-              <ArrowDown className="h-2.5 w-2.5" />
-            ))}
-        </button>
+          className="justify-start text-left"
+        />
         {shownColumns.map((column) => (
-          <button
+          <SortHeader
             key={column.id}
-            type="button"
+            label={column.label}
+            dir={sort?.id === column.id ? sort.dir : null}
             onClick={() => toggleSort(column.id)}
-            className="flex items-center justify-end gap-0.5 text-right hover:text-foreground"
-          >
-            {column.label}
-            {sort?.id === column.id &&
-              (sort.dir === 'asc' ? (
-                <ArrowUp className="h-2.5 w-2.5" />
-              ) : (
-                <ArrowDown className="h-2.5 w-2.5" />
-              ))}
-          </button>
+            className="justify-end text-right"
+          />
         ))}
         <span />
       </div>
