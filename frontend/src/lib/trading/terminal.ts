@@ -7725,7 +7725,26 @@ export class TradingTerminal {
     } catch (error) {
       if (this.initialWorkspacePane) this.destroy()
       throw error
+    } finally {
+      this.settleReady()
     }
+  }
+
+  private settleReady: () => void = () => {}
+  private readonly ready = new Promise<void>((resolve) => {
+    this.settleReady = resolve
+  })
+
+  /**
+   * Settles once `init` has finished, whether or not it succeeded.
+   *
+   * The pane is handed to the page before its data feed exists and before it
+   * has loaded its remembered instrument. A symbol loaded from outside before
+   * this settles is either refused for want of a feed or overtaken by that
+   * first load, so a caller that is not reacting to a click waits for it.
+   */
+  whenReady(): Promise<void> {
+    return this.ready
   }
 
   private async initialize(): Promise<void> {

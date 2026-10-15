@@ -33,7 +33,10 @@ const fake = vi.hoisted(() => ({
     drawStats: () => ({}),
     currentInterval: () => '5m',
     replayPickingBar: () => false,
+    loadSymbol: vi.fn(async () => true),
+    whenReady: () => fake.ready,
   },
+  ready: Promise.resolve(),
   publish: null as null | ((grid: PreparedChartGrid) => void),
   lock: null as null | ((pending: boolean) => void),
   changed: vi.fn(),
@@ -160,6 +163,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
+  fake.ready = Promise.resolve()
 })
 
 describe('workspace replay page ownership', () => {
@@ -341,5 +346,35 @@ describe('folding the drawing rail', () => {
     expect(screen.getByTestId('drawing-rail')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Show drawing tools' })).toBeNull()
     expect(localStorage.getItem('oa-trading-rail-folded')).toBe('0')
+  })
+})
+
+describe('opening a chart from a link', () => {
+  it('loads the linked instrument once the chart is ready, then drops it from the address', async () => {
+    let settle = () => {}
+    fake.ready = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    window.history.replaceState(null, '', '/trading?symbol=NIFTY28MAR2420800CE&exchange=NFO')
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    await waitFor(() => expect(window.location.search).toBe(''))
+    // Loaded before the chart had a feed, the pane's own first load would
+    // overtake it and the trader would land on the wrong instrument.
+    expect(fake.terminal.loadSymbol).not.toHaveBeenCalled()
+
+    await act(async () => settle())
+    expect(fake.terminal.loadSymbol).toHaveBeenCalledExactlyOnceWith({
+      symbol: 'NIFTY28MAR2420800CE',
+      exchange: 'NFO',
+    })
+  })
+
+  it('drops a symbol without its exchange instead of guessing one', async () => {
+    window.history.replaceState(null, '', '/trading?symbol=SBIN')
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    await waitFor(() => expect(window.location.search).toBe(''))
+    expect(fake.terminal.loadSymbol).not.toHaveBeenCalled()
   })
 })

@@ -2,7 +2,7 @@ import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { AccountControls } from '@/components/layout/AccountControls'
 
 // Lazy, because the panel pulls the markdown renderer and the syntax
@@ -87,6 +87,7 @@ import { LAYOUTS, LayoutIcon, type LayoutPreset } from '@/lib/chart/layouts'
 import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
 import { historyChord } from '@/lib/trading/chartHistory'
+import { hasChartRequest, readChartRequest, withoutChartRequest } from '@/lib/trading/chartLink'
 import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
 import { ChromeIcon, lineStroke24 } from '@/lib/trading/glyphs'
 import {
@@ -1162,6 +1163,34 @@ function TradingWorkspace({ account }: { account: string | null }) {
       (item) => item.id === workspaceCatalog.catalog?.activeWorkspaceId
     )
     if (document) void openWorkspace(document).catch(() => {})
+  })
+  /**
+   * A chart link from the order book, trade book or positions page.
+   *
+   * Applied after the saved workspace has had its turn: declared after the
+   * restore above, which locks the page synchronously when it opens one, so a
+   * restore can never land on top of the instrument the link asked for. The
+   * parameters are dropped once applied, so a refresh keeps whatever the
+   * trader has charted since.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  const handledChartQuery = useRef<string | null>(null)
+  useEffect(() => {
+    if (!hasChartRequest(searchParams)) return
+    const query = searchParams.toString()
+    if (handledChartQuery.current === query) return
+    if (workspacePending.current || workspaceCatalog.loading) return
+    if (workspaceCatalog.catalog && !restoreAttempted.current) return
+    const request = readChartRequest(searchParams)
+    if (request) {
+      const target = panelTarget()
+      if (!target) return
+      void target.whenReady().then(() => {
+        if (!workspacePending.current) sendToFocusedPane(request)
+      })
+    }
+    handledChartQuery.current = query
+    setSearchParams(withoutChartRequest(searchParams), { replace: true })
   })
   const workspaceMenu = (
     <WorkspaceMenu
