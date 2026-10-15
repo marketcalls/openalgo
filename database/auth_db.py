@@ -1594,6 +1594,10 @@ def _auth_token_broker(provided_api_key, include_feed_token=False):
     cached_result = auth_cache.get(cache_key)
     if cached_result is not None:
         # Security: Still check if auth is revoked even with cached data
+        # Taken before the query, as on the miss path below: a re-login that
+        # commits after this read saw the row revoked must not find the
+        # negative result stored over the cache it just cleared.
+        generation = _generation(auth_cache)
         user_id = verify_api_key(provided_api_key)
         if user_id:
             try:
@@ -1610,7 +1614,7 @@ def _auth_token_broker(provided_api_key, include_feed_token=False):
                     # negative entry then does the job it was added for.
                     negative_result = (None, None, None) if include_feed_token else (None, None)
                     if cached_result != negative_result:
-                        auth_cache[cache_key] = negative_result
+                        _fill(auth_cache, cache_key, negative_result, generation)
                         logger.warning(f"Cached auth token was revoked for user_id '{user_id}'.")
                     return negative_result
                 # Not revoked, return cached result
