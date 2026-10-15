@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Navbar } from './Navbar'
 
 vi.mock('@/hooks/useProfileMenuItems', () => ({
@@ -73,6 +73,71 @@ describe('Navbar', () => {
     expect(profile).toHaveAttribute('aria-current', 'page')
     expect(trading).not.toHaveAttribute('aria-current')
     expect(currentLinks(sheet)).toEqual([profile])
+  })
+})
+
+describe('Navbar More menu', () => {
+  const originalMatchMedia = window.matchMedia
+
+  /** Answer the navbar's lg and xl queries as a screen this wide would. */
+  function screenWidth(px: number) {
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches:
+        (query === '(min-width: 64rem)' && px >= 1024) ||
+        (query === '(min-width: 80rem)' && px >= 1280),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia
+  })
+
+  async function moreMenuLabels() {
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'More' }))
+    const menu = await screen.findByRole('menu')
+    return within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent)
+  }
+
+  it('lists only the pages a small laptop bar leaves out', async () => {
+    screenWidth(1024)
+    renderNavbar('/dashboard')
+
+    expect(await moreMenuLabels()).toEqual(['Platforms', 'Strategies', 'Logs', 'Tools'])
+  })
+
+  it('takes Tradebook and Trading as well below lg', async () => {
+    screenWidth(800)
+    renderNavbar('/dashboard')
+
+    expect(await moreMenuLabels()).toEqual([
+      'Tradebook',
+      'Trading',
+      'Platforms',
+      'Strategies',
+      'Logs',
+      'Tools',
+    ])
+  })
+
+  it('is underlined only when the current page is inside it', () => {
+    screenWidth(1024)
+    const { unmount } = renderNavbar('/logs')
+    expect(screen.getByRole('button', { name: 'More' })).toHaveClass('text-foreground')
+    unmount()
+
+    // Tradebook is in the bar at this width, so More is not the current tab.
+    renderNavbar('/tradebook')
+    expect(screen.getByRole('button', { name: 'More' })).not.toHaveClass('text-foreground')
   })
 })
 
