@@ -680,7 +680,7 @@ def _restore_schedules_locked():
         logger.exception("Could not put back the OpenScript runs after a restart")
 
     _RESTORED = True
-    logger.info(
+    logger.debug(
         "Restored %d of %d OpenScript schedules and started the reaper every %d minutes",
         restored,
         len(schedules),

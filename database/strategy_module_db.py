@@ -535,7 +535,7 @@ class SmStrategyEvent(Base):
 
 def init_db() -> None:
     """Create the strategy-module tables if they do not exist."""
-    logger.info("Initializing Strategy Module DB")
+    logger.debug("Initializing Strategy Module DB")
     Base.metadata.create_all(bind=engine)
 
 
