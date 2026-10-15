@@ -1364,7 +1364,7 @@ export function ChartPane({
 
           {/* OI Profile. One click on and off, with its settings a click away,
             because it is a view of the whole option chain rather than one more
-            line on the price - the same place Sensibull puts it. Hidden unless
+            line on the price, so it sits in the toolbar. Hidden unless
             the indicator is actually installed. */}
           {oiProfileInstalled && (
             <div className="flex shrink-0 items-center gap-0.5">

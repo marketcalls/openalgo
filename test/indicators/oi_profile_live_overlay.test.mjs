@@ -106,7 +106,7 @@ test('attach() subscribes to the legs, repaints from a tick, unsubscribes on tea
     },
   })
 
-  const settings = { barWidth: 140, colors: 'sensibull', maxPain: false, outline: false, mode: 'oi', strikes: 5, expiries: 1 }
+  const settings = { barWidth: 140, colors: 'calls-red', maxPain: false, outline: false, mode: 'oi', strikes: 5, expiries: 1 }
   let primitive
   const teardown = descriptor.attach({
     settings: () => settings, symbol: () => 'NIFTY22SEP26FUT',

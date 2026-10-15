@@ -78,7 +78,8 @@ function harness({ settings, fetchImpl, plotWidth = 800, priceToY = (p) => 400 -
     return { texts, rects, outlines, placed }
   }
   const tick = (symbol, oi) => ticks.get(symbol)?.({ symbol, data: { oi, oi_updated_at: Date.now() } })
-  return { teardown, frame, tick, ticks }
+  const draw = (canvas) => primitive.draw(canvas, rc(null))
+  return { teardown, frame, tick, ticks, draw }
 }
 
 const routine = (log = []) => async (url, opts) => {

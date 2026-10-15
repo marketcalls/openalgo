@@ -436,7 +436,7 @@ function groupsOf(fields: IndicatorField[]): [string, IndicatorField[]][] {
 }
 
 /**
- * The expiry pick list, the way Sensibull ticks its own: the nearest option
+ * The expiry pick list, ticked the way option analytics tools do: the nearest option
  * expiries for the underlying, each a checkbox, stored as a comma-separated
  * string so it stays one ordinary indicator setting.
  *

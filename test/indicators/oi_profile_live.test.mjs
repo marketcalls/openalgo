@@ -6,7 +6,7 @@
 // The chart-indicator skill's validate.mjs proves the descriptor registers;
 // this proves the part a user actually touches - hovering a strike - still
 // names the right strike, follows the Open Interest / Change in OI mode, and
-// prints the lakh figures Sensibull's own profile prints.
+// prints the lakh figures option analytics tools print.
 import assert from 'node:assert/strict'
 
 globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} }
@@ -29,7 +29,7 @@ const mod = (await import(new URL('../../strategies/indicators/oi_profile_live.j
 let descriptor
 mod({ registerIndicator: (d) => { descriptor = d }, nulls: (a) => a })
 
-const settings = { barWidth: 140, colors: 'sensibull', maxPain: false, outline: false, mode: 'change', strikes: 5, expiries: 1 }
+const settings = { barWidth: 140, colors: 'calls-red', maxPain: false, outline: false, mode: 'change', strikes: 5, expiries: 1 }
 let primitive
 const ctx = {
   settings: () => settings, symbol: () => 'NIFTY22SEP26FUT',
@@ -74,7 +74,7 @@ assert.equal(hit.externalId, 'oi-profile-strike:23300', hit.externalId)
 
 assert.equal(primitive.hitTest(100, 300, rc()), null, 'cursor left of the bars must not hit')
 
-// Change mode: the tooltip names the change, in lakhs, like Sensibull.
+// Change mode: the tooltip names the change, in lakhs, as option analytics tools print it.
 let c = canvas()
 primitive.draw(c, rc('oi-profile-strike:23300'))
 assert.ok(c.texts.includes('Strike: 23300'), c.texts.join(' | '))

@@ -1,10 +1,10 @@
 /**
  * OI Profile — live open interest bars pinned to the right edge of the pane,
- * matching Sensibull's own OI Profile overlay.
+ * the way option analytics platforms draw their own OI profile.
  *
  * The first version used `draws()` box geometry (time+price anchored), which
  * scrolls with the data — fine for a trendline anchored to a pivot, wrong
- * here: Sensibull's bars stay glued to the screen's right edge regardless of
+ * here: these bars stay glued to the screen's right edge regardless of
  * pan/zoom. That's screen-space, not data-space, so `draws()` cannot express
  * it (its anchors are always `{time, price}`). `ctx.addPrimitive()` is the
  * documented escape hatch for exactly this — a raw `IPrimitive` with its own
@@ -20,7 +20,7 @@
  * column carries the data any more; `plots` still needs one entry (the
  * contract requires at least one), so it's a hidden no-op line.
  *
- * Expiries: like Sensibull, the profile can sum several expiries. Leave the
+ * Expiries: the profile can sum several expiries. Leave the
  * pick list blank and it fetches the nearest N option expiries for the
  * underlying itself; tick the ones you want to pin it to exactly those.
  *
@@ -47,7 +47,7 @@ const TOOLTIP_FG = '#f8fafc'
 const HOVER_ID = 'oi-profile-strike:'
 
 // Open interest is read in lakhs and crores by everyone who trades these, and
-// that is how Sensibull prints it, so "26.37L" rather than "2,637,000".
+// that is how option analytics tools print it, so "26.37L" rather than "2,637,000".
 function formatLakh(value) {
   const n = Number(value) || 0
   const sign = n < 0 ? '-' : ''
@@ -68,11 +68,11 @@ function changeText(oi, prev) {
   return `${sign}${formatLakh(chg)} (${pct})`
 }
 
-// Sensibull reads calls as resistance and paints them red; the rest of
+// Option analytics tools commonly read calls as resistance and paint them red; the rest of
 // OpenAlgo, including the /oiprofile page, paints calls green. Both are in
 // use, so the chart offers both rather than picking a side.
 const COLOR_SCHEMES = {
-  sensibull: { ce: RED, pe: GREEN },
+  'calls-red': { ce: RED, pe: GREEN },
   openalgo: { ce: GREEN, pe: RED },
 }
 
@@ -404,9 +404,9 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         ],
       },
       {
-        key: 'colors', type: 'select', label: 'Colours', default: 'sensibull', group: 'Display',
+        key: 'colors', type: 'select', label: 'Colours', default: 'calls-red', group: 'Display',
         options: [
-          { label: 'Calls red, Puts green', value: 'sensibull' },
+          { label: 'Calls red, Puts green', value: 'calls-red' },
           { label: 'Calls green, Puts red', value: 'openalgo' },
         ],
       },
@@ -607,10 +607,10 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           ce += Number(r.ce_oi) || 0
           pe += Number(r.pe_oi) || 0
         }
-        // Named with its window: Sensibull's PCR covers ATM +-10 by default and
-        // this one Strikes Around ATM (25 by default), so the two read 1.22
-        // and 1.34 on the same NIFTY chain and both are right. Over the same
-        // strikes they agreed exactly.
+        // Named with its window: option analytics screens commonly cover ATM
+        // +-10 by default and this one Strikes Around ATM (25 by default), so
+        // the two read 1.22 and 1.34 on the same NIFTY chain and both are
+        // right. Over the same strikes they agreed exactly.
         if (ce > 0) {
           const window = Math.max(1, Math.floor(Number(settings.strikes) || 25))
           text += ` | PCR ${(pe / ce).toFixed(2)} (ATM ±${window})`
@@ -661,7 +661,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           return 'top'
         },
 
-        // Hovering a strike names it, the way Sensibull's profile does. The
+        // Hovering a strike names it, as OI profiles on option analytics tools do. The
         // chart owns hover state - it calls this as the pointer moves and
         // reports the winner back on `rc.hoverId` - so there is no listener
         // to add and nothing to clean up when the pointer leaves.
@@ -700,7 +700,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
 
           const chain = state.chain
           if (!Array.isArray(chain) || chain.length === 0) return
-          const scheme = COLOR_SCHEMES[settings.colors] ?? COLOR_SCHEMES.sensibull
+          const scheme = COLOR_SCHEMES[settings.colors] ?? COLOR_SCHEMES['calls-red']
           const geom = layout(rc, settings)
           if (!geom) return
           const { rows, halfPx, columns, rightEdge, left } = geom
@@ -992,7 +992,7 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
       // expiry list for CRUDEOIL is asked of MCX rather than of NFO.
       const foundOn = new Map()
 
-      // `expiryDate` is a comma-separated pick list, the way Sensibull ticks
+      // `expiryDate` is a comma-separated pick list, the way option analytics tools tick
       // its expiries. A single value is the old override and still works.
       // Answers { exchange, expiries }: on Auto the exchange is whichever one
       // actually lists options for the underlying.
