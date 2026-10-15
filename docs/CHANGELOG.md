@@ -64,6 +64,32 @@ loaded at runtime, so pulling and reloading the chart is enough.
   broker history call per contract (the NSE file covers only NFO), so the
   change columns for SENSEX or CRUDEOIL fill over a minute or more.
 
+## [2.0.2.8] - 2026-10-15
+
+### Freeze Limits and Full-Screen Terminal Release
+
+13 commits since 2.0.2.7, excluding automated frontend build commits. Full
+notes: [version-2.0.2.8-released.md](releases/version-2.0.2.8-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling, then restart. The Ubuntu
+and Windows updaters and a Docker restart run it for you.
+
+### Highlights
+
+- The NSE index freeze limits move to the values in force from 5 October 2026,
+  so large index orders are split into fewer slices, and NIFTYFPI gets a limit
+  of its own instead of NIFTY's.
+- `/trading` takes the whole screen on openalgo-charts 2.6.4, with a slimmer
+  toolbar, a foldable drawing rail, smooth wheel zoom, and Renko and Point &
+  Figure settings.
+- The agent's tool calls work the first time on questions about several
+  instruments, and the `/trading` assistant can place orders behind the same
+  approval card as `/agent`.
+- A cancelled sandbox closing order no longer credits margin it never blocked.
+- Master contract, history and order fixes for Groww, Flattrade, 5 Paisa,
+  Firstock and Tradejini.
+
 ### NSE index freeze limits from 5 October 2026
 
 NSE circular NSE/FAOP/76693 raised the quantity freeze limits for index
@@ -233,6 +259,56 @@ agent now recovers them.
   of the full notional.
 - Web search requests now run on the web server's own event loop under the
   default eventlet worker, which removes a way they could stall the server.
+
+### Sandbox
+
+- Cancelling a sandbox order that reserved no margin, such as one closing an
+  open position, no longer releases a recalculated margin and raises available
+  funds by an amount that was never taken (#2207).
+
+### Brokers
+
+- **Groww** - SL and SL-M orders use Groww's documented order types and SL
+  orders carry their limit price; cancel and modify report success only when
+  Groww confirms; the order book and trade book read every page, map the
+  exchange correctly (stocks such as ICICIBANK were shown as NFO), cover every
+  Groww status and no longer invent trades when Groww's trades call fails;
+  indices are EQ rows on NSE_INDEX and BSE_INDEX, BSE F&O and NSE commodity
+  symbols use the OpenAlgo format, and SENSEX and BANKEX quotes return data
+  (#2194).
+- **Flattrade** - SENSEX and BANKEX daily charts load (#2196); index rows are
+  typed EQ, stale BSE rows with no exchange are dropped, and history skips
+  invalid candles, the 09:14 pre-open bar and negative closing-session volume
+  that made the chart reject the whole history; a failed master contract
+  refresh keeps the existing symbols (#2198); an empty order book is no longer
+  logged at info level (#2206).
+- **Firstock and Tradejini** - a failed master contract refresh keeps the
+  existing symbols and is reported as failed instead of emptying the table
+  (#2198).
+- **5 Paisa** - duplicate symbol and exchange pairs reduced to one, about 600
+  BE-series stocks typed EQ, and a history range with no sessions returns
+  nothing instead of today's candle (#2195).
+- Option symbols whose underlying contains digits, ampersands or hyphens
+  (M&M, BAJAJ-AUTO, 360ONE) are parsed for Greeks, and a symbol with trailing
+  text is rejected (#2206).
+
+### Dependencies
+
+- `openalgo-charts` 2.6.0 to 2.6.4. No built-in chart id was added or removed.
+- No Python dependencies changed. The pinned `openalgo` SDK stays at 2.0.5.
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; NSE index freeze limits
+  and their migration (#2218); the full-screen `/trading` terminal on
+  openalgo-charts 2.6.4 (#2216), Renko and Point & Figure settings (#2215) and
+  the restored glyph modules (#2217); reliable agent tool calls and chart
+  orders; the two flaky gthread-migration test fixes.
+- **@Kalaiviswa** - Groww alignment with Groww's API documentation (#2194);
+  5 Paisa master contract and history fixes (#2195); Flattrade BSE index daily
+  charts (#2196), master contract, history and refresh safety with Firstock
+  and Tradejini (#2198); Flattrade log noise and option symbols with special
+  underlyings (#2206); sandbox cancellation of zero-margin orders (#2207).
 
 ## [2.0.2.7] - 2026-10-08
 
