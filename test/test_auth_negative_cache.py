@@ -22,6 +22,7 @@ import atexit
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -132,6 +133,44 @@ def test_a_fresh_login_after_the_storm_is_served_the_new_token(fresh_db, warning
         "feed-2",
         "fyers",
     )
+    assert auth_db.get_auth_token_broker(API_KEY) == ("tok-2", "fyers")
+
+
+def test_a_relogin_racing_the_revocation_check_is_not_undone(fresh_db, warnings, monkeypatch):
+    # The hit path reads the row revoked, and before it stores the negative a
+    # re-login commits and clears the cache. Storing the negative over that
+    # clear would refuse the new session until the entry's TTL ran out, so the
+    # store must go through the generation taken before the read, as the miss
+    # path's does.
+    auth_db.upsert_auth(USER, "tok-1", "fyers")
+    assert auth_db.get_auth_token_broker(API_KEY) == ("tok-1", "fyers")
+    auth_db.Auth.query.filter_by(name=USER).first().is_revoked = True
+    auth_db.db_session.commit()
+
+    real_query = next(k.__dict__["query"] for k in auth_db.Auth.__mro__ if "query" in k.__dict__)
+
+    class ReloginAfterRead:
+        """The first lookup returns what it read, then a re-login commits."""
+
+        staged = False
+
+        def filter_by(self, **kwargs):
+            query = real_query.__get__(None, auth_db.Auth).filter_by(**kwargs)
+            if self.staged:
+                return query
+            self.staged = True
+            seen = SimpleNamespace(is_revoked=query.first().is_revoked)
+            auth_db.upsert_auth(USER, "tok-2", "fyers")
+            return SimpleNamespace(first=lambda: seen)
+
+        def __getattr__(self, name):
+            return getattr(real_query.__get__(None, auth_db.Auth), name)
+
+    monkeypatch.setattr(auth_db.Auth, "query", ReloginAfterRead())
+
+    # This caller read the row before the re-login and is refused for it.
+    assert auth_db.get_auth_token_broker(API_KEY) == (None, None)
+    # Everyone after the re-login gets the new token.
     assert auth_db.get_auth_token_broker(API_KEY) == ("tok-2", "fyers")
 
 
