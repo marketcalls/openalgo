@@ -903,6 +903,36 @@ def test_modify_reports_an_unreadable_order_as_an_error_not_missing(close_all, m
     assert status == 502 and "Invalid session" in body["message"]
 
 
+def test_modify_reads_order_history_under_the_orders_key(close_all, monkeypatch):
+    # Live Vortex returns order history as {"status", "metadata", "orders"}.
+    calls = []
+
+    def fake(method, endpoint, auth, payload=None):
+        calls.append((method, endpoint, payload))
+        if method == "GET":
+            return {"status": "success", "metadata": {}, "orders": [{"traded_quantity": 0}]}
+        return {"status": "success", "data": {"order_id": "OFPIM00003?:"}}
+
+    monkeypatch.setattr(close_all, "resolve_instrument", lambda s, e: ("NSE:IDEA", "NSE_EQ", 1))
+    monkeypatch.setattr(close_all, "request_json", fake)
+    body, status = close_all.modify_order(
+        {
+            "orderid": "OFPIM00003?:",
+            "symbol": "IDEA",
+            "exchange": "NSE",
+            "action": "BUY",
+            "product": "MIS",
+            "pricetype": "LIMIT",
+            "quantity": 1,
+            "price": 11.4,
+        },
+        "tok",
+    )
+    assert status == 200, body
+    assert calls[-1][0] == "PUT"
+    assert calls[-1][1] == "/trading/orders/regular/OFPIM00003%3F%3A"
+
+
 def test_smart_order_keeps_the_busy_answer(close_all, monkeypatch):
     from utils.broker_backpressure import BrokerBusyError
 

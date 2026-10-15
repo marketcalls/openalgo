@@ -401,7 +401,8 @@ def _latest_order_state(orderid, auth):
     payload = request_json("GET", order_path("/trading/orders", orderid), auth)
     if payload.get("status") != "success":
         raise RupeezyAPIError(payload.get("message") or "Could not read the order from Rupeezy.")
-    rows = payload.get("data") or []
+    # Live Vortex returns the history under "orders"; the docs say "data".
+    rows = payload.get("orders") or payload.get("data") or []
     return rows[0] if rows else None
 
 
