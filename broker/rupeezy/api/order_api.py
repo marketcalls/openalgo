@@ -3,7 +3,7 @@
 # Orders and books over the Vortex trading API
 # (https://vortex.rupeezy.in/docs/latest/regular-order/).
 
-from broker.rupeezy.api.client import RupeezyAPIError, request, request_json
+from broker.rupeezy.api.client import RupeezyAPIError, order_path, request, request_json
 from broker.rupeezy.mapping.exchange import (
     from_vortex_quantity,
     oa_exchange_for,
@@ -382,7 +382,7 @@ def close_all_positions(current_api_key, auth):
 
 def cancel_order(orderid, auth):
     try:
-        payload = request_json("DELETE", f"/trading/orders/regular/{orderid}", auth)
+        payload = request_json("DELETE", order_path("/trading/orders/regular", orderid), auth)
         if payload.get("status") == "success":
             return {"status": "success", "orderid": orderid}, 200
         return {"status": "error", "message": payload.get("message", "Failed to cancel order")}, 400
@@ -398,7 +398,7 @@ def _latest_order_state(orderid, auth):
     RupeezyAPIError when the history could not be read at all, so a session
     or server error is not reported as a missing order.
     """
-    payload = request_json("GET", f"/trading/orders/{orderid}", auth)
+    payload = request_json("GET", order_path("/trading/orders", orderid), auth)
     if payload.get("status") != "success":
         raise RupeezyAPIError(payload.get("message") or "Could not read the order from Rupeezy.")
     rows = payload.get("data") or []
@@ -429,7 +429,9 @@ def modify_order(data, auth):
         return {"status": "error", "message": f"Failed to modify order: {e}"}, 500
 
     logger.debug(f"Rupeezy modify order payload: {payload}")
-    response_data = request_json("PUT", f"/trading/orders/regular/{orderid}", auth, payload=payload)
+    response_data = request_json(
+        "PUT", order_path("/trading/orders/regular", orderid), auth, payload=payload
+    )
     if response_data.get("status") == "success":
         return {
             "status": "success",

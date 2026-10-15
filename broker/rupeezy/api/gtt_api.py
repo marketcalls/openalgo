@@ -6,7 +6,7 @@
 #
 # Vortex triggers on its own LTP, so unlike Kite no `last_price` is needed.
 
-from broker.rupeezy.api.client import request_json
+from broker.rupeezy.api.client import order_path, request_json
 from broker.rupeezy.mapping.gtt_data import map_gtt_book, transform_modify_gtt, transform_place_gtt
 from utils.logging import get_logger
 
@@ -72,7 +72,7 @@ def modify_gtt_order(data, auth):
         return {"status": "error", "message": str(e)}, 400
 
     logger.debug(f"Rupeezy modify GTT {trigger_id} payload: {body}")
-    payload = request_json("PUT", f"{_GTT}/{trigger_id}", auth, payload=body)
+    payload = request_json("PUT", order_path(_GTT, trigger_id), auth, payload=body)
     if payload.get("status") == "success":
         return {"status": "success", "trigger_id": str(trigger_id)}, 200
     return {"status": "error", "message": payload.get("message", "Failed to modify GTT")}, 400
@@ -82,7 +82,7 @@ def cancel_gtt_order(trigger_id, auth):
     """Cancel a GTT. Returns (response_dict, status_code)."""
     if not trigger_id:
         return {"status": "error", "message": "trigger_id is required"}, 400
-    payload = request_json("DELETE", f"{_GTT}/{trigger_id}", auth)
+    payload = request_json("DELETE", order_path(_GTT, trigger_id), auth)
     if payload.get("status") == "success":
         return {"status": "success", "trigger_id": str(trigger_id)}, 200
     return {"status": "error", "message": payload.get("message", "Failed to cancel GTT")}, 400

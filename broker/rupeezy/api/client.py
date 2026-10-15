@@ -9,6 +9,7 @@
 import time
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from urllib.parse import quote
 
 import httpx
 
@@ -31,6 +32,13 @@ _RETRYABLE_READ_ERRORS = (httpx.TimeoutException, httpx.RemoteProtocolError, htt
 
 class RupeezyAPIError(Exception):
     pass
+
+
+def order_path(base, order_id):
+    """Endpoint for one order or GTT. Vortex order ids can contain '?' and ':'
+    (e.g. 'OFPIM00001?:'), so the id is percent-encoded rather than pasted in,
+    or everything after '?' would be sent as a query string."""
+    return f"{base}/{quote(str(order_id), safe='')}"
 
 
 def _retry_after_seconds(response, attempt):

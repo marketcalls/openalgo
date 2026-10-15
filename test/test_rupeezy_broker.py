@@ -1284,3 +1284,13 @@ def test_feed_soak_releases_threads_and_fds(monkeypatch):
     settle()
     assert threading.active_count() <= base_threads
     assert process.num_fds() <= base_fds + 2  # small slack for interpreter-level handles
+
+
+def test_order_ids_with_reserved_characters_are_escaped_in_the_path():
+    from broker.rupeezy.api.client import order_path
+
+    assert (
+        order_path("/trading/orders/regular", "OFPIM00001?:")
+        == "/trading/orders/regular/OFPIM00001%3F%3A"
+    )
+    assert order_path("/trading/orders/gtt", "fc3e3201-8d34") == "/trading/orders/gtt/fc3e3201-8d34"
