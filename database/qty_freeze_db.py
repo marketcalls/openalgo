@@ -239,9 +239,11 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
     # Examples: NIFTY24DEC24FUT, NIFTY24DEC2424000CE, SENSEX25DEC2480000PE
 
     # Try to match known index symbols first. Longest-prefix-first so e.g. NIFTYNXT50
-    # is not shadowed by NIFTY, and SENSEX50 is not shadowed by SENSEX.
+    # and NIFTYFPI are not shadowed by NIFTY, and SENSEX50 is not shadowed by SENSEX.
+    # NIFTYFPI's freeze limit (53,900) is fifteen times NIFTY's, so falling through
+    # to NIFTY split its orders into far more slices than the exchange requires.
     index_symbols = [
-        "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTY",
+        "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI", "NIFTY",
         "SENSEX50", "BANKEX", "SENSEX",
     ]
     for idx_sym in index_symbols:

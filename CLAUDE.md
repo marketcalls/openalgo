@@ -83,6 +83,39 @@ fine on the dev server and **breaks under eventlet**. That is the single most
 common way a change passes locally and fails on deploy. SQLite locking is also
 stricter on Windows.
 
+### The gthread suite passes before every commit and pull request
+
+The `gthread-migration` CI job runs every `test/test_gthread_*.py` file under a
+real gunicorn on Linux. Most of those files skip on Windows, so a green
+`uv run pytest` on a Windows checkout says nothing about them. Before committing
+or raising a pull request, run the job's own command on Linux or in WSL (in a
+copy on the Linux filesystem, not under `/mnt/c`):
+
+```bash
+uv sync
+uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
+.venv/bin/python -m pytest test/test_gthread_*.py -o addopts="" --timeout=120 -rs
+```
+
+- **Main stays green.** Check `gh run list --workflow CI --branch main` before
+  starting. A red `gthread-migration` on main is fixed first, in its own pull
+  request, before new work lands on top of it.
+- **A flaky test is fixed, never re-run into green.** Find the race and write a
+  test that reproduces it. The one that broke main after #2217: the control case
+  in `test_gthread_deploy_shutdown.py` lets the arbiter SIGKILL the worker, and
+  the kill landed between the hook creating its marker file and writing to it.
+  The empty file made `split()[0]` raise `IndexError`.
+- **Read a file a killed process writes as possibly cut off.** A marker, pid or
+  log file can exist and still be empty or end mid-line. Count only complete
+  lines (`_first_mark` in that file) and treat an empty file as "not reached".
+- **A thread-leak check names the threads it owns.** The suite shares one
+  interpreter, and importing `blueprints.python_strategy` starts APScheduler,
+  whose default executor is an unnamed pool (`ThreadPoolExecutor-0_0`) that
+  starts a thread whenever a scheduled job fires. Counting every new
+  `ThreadPoolExecutor-` thread made `test_gthread_brokers_a_quote_paths.py`
+  fail at random. Record the pools the code under test builds and check their
+  own threads, or match a `thread_name_prefix` only that code uses.
+
 ## Invariants — do not break these
 
 ### ZeroMQ bus: SUB binds, PUBs connect
@@ -300,6 +333,44 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
 
+### /trading is a full-screen terminal
+
+Traders compare /trading with the best charting terminals they use, so its
+finish is held to that bar: borrow their craft (density, crispness, one icon
+weight, quiet states), never their layout, grouping or wording, and **no brand or
+product names anywhere in /trading**: code, comments, class names, tooltips and
+copy describe things generically.
+
+- **No app navbar on /trading.** The terminal takes the whole viewport. Its one
+  toolbar band carries a Dashboard link at the left and the account controls at
+  the right: broker badge, Live or Analyze badge, mode switch, theme toggle and
+  profile menu. Both the navbar and the terminal render the same
+  `components/layout/AccountControls.tsx`; never fork that logic into the
+  terminal, or mode switching and its warning toasts drift apart.
+- **Those four (Dashboard, mode switch, theme toggle, profile menu) are visible
+  at every width**, outside the toolbar's scrolling part. Everything else gives
+  way first: labels collapse to icons with tooltips on narrower screens, and the
+  row must fit at 1366 px. `Trading.test.tsx` pins the four by accessible name.
+- **Every glyph comes from the chart engine**, through the generated
+  `chromeIcons.ts` and `drawingToolMetadata.ts` and the `ChromeIcon` component in
+  `lib/trading/glyphs.tsx`, at the engine's line weight. The toolbar never imports
+  `openalgo-charts/draw` for an icon: that would load the drawing renderer with
+  the toolbar. Where the engine has no glyph, the app icon kept in its place is
+  drawn at the same weight.
+- **The drawing rail follows the engine's reference host rail**
+  (`examples/yfinance/src/rail.js` in openalgo-charts): glyph sizes, group carets
+  and flyouts, held-tool and magnet dots, the pinned controls block, and the fold
+  with its tab at the chart's lower left (`oa-trading-rail-folded` in local
+  storage). Change both together, or the two drift.
+- **Three looks, one source.** Live light, live dark and analyzer (the violet
+  accent) all come from the app's theme tokens through
+  `lib/trading/chartTheme.ts` and the tokens in `index.css`; no component carries
+  a palette of its own. A visual change is checked in all three, and the theme
+  toggle stays disabled in analyzer, as it is in the navbar.
+- **The chart the toolbar drives** is chosen from the layout menu ("Selected
+  chart"), and the focused pane's frame shows the accent. Keep the toolbar's
+  `data-toolbar-pane` attribute: the browser harness reads it.
+
 ### Bumping openalgo-charts also updates the chart-indicator skill
 
 The skill documents a specific build. `reference/api.md` carries the full export
@@ -312,7 +383,23 @@ change, not two.**
 cd frontend && npm install openalgo-charts@<version> --save-exact
 node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
 node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
+node scripts/generate-drawing-tools.mjs                       # rail glyphs and names, from the installed draw tier
+node scripts/generate-chrome-icons.mjs                        # toolbar and rail chrome glyphs
 ```
+
+The two generators write `src/lib/trading/drawingToolMetadata.ts` and
+`src/lib/trading/chromeIcons.ts`; CI runs both with `--check`, so a bump that
+changes a glyph and skips them fails the build. Never edit either file by hand,
+and never run a formatter over them: `frontend/biome.json` leaves them out, because
+the check compares the generator's exact output and a reformatted file fails it.
+
+A bump that changes what /trading loads also runs the browser harness that lives
+in the openalgo-charts repo: `node scripts/check-openalgo-compat.mjs --frontend
+<worktree>/frontend --browser <chromium|firefox|webkit> --navigation true` (14
+checks). It needs a linked `git worktree` of this repo with `node_modules`
+copied, not linked. On Windows copy it with `robocopy <src> <dst> /E /XJ`: without
+`/XJ` robocopy follows the junctions inside `node_modules` and copies the same
+trees over and over (9 GB instead of 730 MB), which once filled the system drive.
 
 Then read the upstream changelog for the range you skipped and update the prose
 by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
@@ -529,6 +616,12 @@ schema forever and the change silently never reaches the ~290k live deployments.
 - **Backfill from the data, not from a default.** A new column defaulted
   uniformly is usually wrong for existing rows; derive each row's value from
   what the row already says.
+- **A revised seed file needs a migration too.** `data/qtyfreeze.csv` and the
+  other seed data load only into an empty table, so a new value reaches new
+  installs and nobody else. Ship a migration that updates the rows, guarded on
+  every value OpenAlgo shipped or the exchange published before, and leave an
+  empty table to the seed: one inserted row stops the seed from running.
+  `upgrade/migrate_qty_freeze_oct_2026.py` is the pattern.
 - **SQLite limits shape the approach.** It cannot alter a `CHECK` constraint or
   add a `UNIQUE` column in place: rebuild the table (see
   `migrate_sandbox_trigger_pending.py`) or add a partial unique index instead.
@@ -564,7 +657,9 @@ have cost to write it down.
 
 **No icons or emojis anywhere** — source, comments, log messages, commit
 messages, PR descriptions, changelogs, release notes, or any generated text
-including drafts for Discord or Telegram. Use plain text labels.
+including drafts for Discord or Telegram. Use plain text labels. That covers the
+automated attribution line at the end of a PR description too: keep its text and
+link, drop the emoji in front of it.
 
 ### The ChatGPT subscription model list is ours to maintain
 
@@ -647,6 +742,7 @@ to `main` after every successful push.
 - **Production servers and backend-only contributors need no Node.js.** A plain `git pull` from `main` brings the latest UI. This is the canonical upgrade path.
 - **React developers** run `cd frontend && npm install && npm run build` (or `npm run dev`) locally, since the local `.gitignore` will not track their output. Build only — tests run in CI.
 - **Feature branches** CI has not built may carry stale or missing `dist/`. Build locally or rebase onto recent `main`.
+- **A local build on a branch cut from `main` rewrites tracked files under `frontend/dist/`.** Never stage them (`git add -A -- . ':!frontend/dist'`); `git checkout -- frontend/dist` restores them. A user testing a branch with `uv run app.py` needs that local build, and the commit still carries source only.
 
 Config lives in `.env` (copy from `.sample.env`); `VALID_BROKERS` gates which
 broker plugins load, and plugins are discovered at startup only.

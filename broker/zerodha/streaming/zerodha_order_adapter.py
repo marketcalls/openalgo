@@ -19,6 +19,7 @@ zerodha_websocket.py::_refresh_access_token, which splits on ":").
 
 import json
 
+from broker.zerodha.mapping.order_data import ZERODHA_ORDER_STATUS_MAP, map_order_status
 from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
@@ -35,25 +36,8 @@ def _units(value, data, exchange):
 
 logger = get_logger(__name__)
 
-# Kite order "status" values -> OpenAlgo's lowercase order_status vocabulary.
-# The in-flight OMS states (PUT ORDER REQ RECEIVED, VALIDATION PENDING,
-# OPEN PENDING, MODIFY..., TRIGGER PENDING) are all still-working -> "open".
-_STATUS_MAP = {
-    "COMPLETE": "complete",
-    "REJECTED": "rejected",
-    "CANCELLED": "cancelled",
-    "OPEN": "open",
-    "UPDATE": "open",
-    "TRIGGER PENDING": "trigger pending",
-    "VALIDATION PENDING": "open",
-    "PUT ORDER REQ RECEIVED": "open",
-    "OPEN PENDING": "open",
-    "MODIFY VALIDATION PENDING": "open",
-    "MODIFY PENDING": "open",
-    "CANCEL PENDING": "open",
-    "AMO REQ RECEIVED": "open",
-}
-
+# Kept for the postback normalizer and existing integrations that import it.
+_STATUS_MAP = ZERODHA_ORDER_STATUS_MAP
 
 class ZerodhaOrderUpdateAdapter(BaseOrderUpdateAdapter):
     """Order-update adapter for Zerodha (Kite ticker text frames)."""
@@ -85,8 +69,7 @@ class ZerodhaOrderUpdateAdapter(BaseOrderUpdateAdapter):
             return None  # "message"/"error" broker notices — not order events
 
         data = message.get("data") or {}
-        raw_status = str(data.get("status", "")).upper()
-        order_status = _STATUS_MAP.get(raw_status, raw_status.lower() or "open")
+        order_status = map_order_status(data.get("status"))
 
         # Kite's order_type (MARKET/LIMIT/SL/SL-M) and product (CNC/NRML/MIS)
         # already match OpenAlgo's constants — no mapping tables needed.

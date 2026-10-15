@@ -74,7 +74,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/symbol \
     "brsymbol": "NIFTY FUT 25 AUG 26",
     "exchange": "NFO",
     "expiry": "25-AUG-26",
-    "freeze_qty": 1800,
+    "freeze_qty": 3510,
     "id": 57900,
     "instrumenttype": "FUT",
     "lotsize": 65,

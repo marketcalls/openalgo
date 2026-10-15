@@ -9,6 +9,8 @@ credentials below are still setdefault(), since those are only placeholders.
 
 import os
 
+import pytest
+
 os.environ.setdefault("API_KEY_PEPPER", "0" * 64)
 os.environ.setdefault("APP_KEY", "test-only-app-key")
 
@@ -25,6 +27,16 @@ import dotenv
 
 dotenv.load_dotenv = lambda *args, **kwargs: False
 dotenv.main.load_dotenv = dotenv.load_dotenv
+
+# Bind ``openalgo`` to the installed SDK before pytest sets up the repository
+# root. The root carries an ``__init__.py``, so pytest imports it as a package
+# named ``openalgo`` during setup and puts its parent directory first on
+# sys.path. A module that first imported ``openalgo.ta`` after that point got
+# the repository instead of the SDK, and every agent toolkit built on it was
+# silently skipped, so whether a test saw the market tools depended on which
+# test had happened to import the SDK first. Production never has the parent
+# directory on sys.path; this is confined to the test harness.
+import openalgo  # noqa: E402,F401
 
 # Assigned unconditionally: test isolation must not be overridable from the
 # environment.
@@ -88,3 +100,42 @@ def _isolate_openscript_state() -> None:
 
 
 _isolate_openscript_state()
+
+
+# A fake sleep for one module, never for the whole interpreter.
+#
+# ``monkeypatch.setattr(module.time, "sleep", fake)`` looks local but is not:
+# ``module.time`` is the one shared ``time`` module, so every thread in the
+# process gets the fake. The suite shares one interpreter with threads earlier
+# tests left running, and chartink's order loop idles on ``time.sleep(0.1)``.
+# Given a recorder, that loop spun at full speed appending 0.1 to the test's
+# list, the test's ``assert slept == []`` failed on millions of entries, and
+# formatting that failure while the loop held the GIL ran past the 120s timeout
+# (gthread-migration on main, run 38561590951).
+#
+# This swaps the module's own ``time`` name for a proxy instead: the fake
+# answers ``sleep`` and everything else is the real module.
+class _ModuleTime:
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        import time
+
+        return getattr(time, name)
+
+
+@pytest.fixture
+def module_sleep(monkeypatch):
+    """Return ``patch(module, fake)``, which fakes ``time.sleep`` for that module only."""
+    import time
+
+    def patch(module, fake):
+        current = getattr(module, "time", None)
+        assert current is time or isinstance(current, _ModuleTime), (
+            f"{module.__name__} does not reach sleep through 'import time'"
+        )
+        monkeypatch.setattr(module, "time", _ModuleTime(fake))
+        return fake
+
+    return patch

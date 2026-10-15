@@ -903,24 +903,34 @@ class TestWithoutAChartNothingIsInvented:
         assert commands_of(sink) == [{"op": "clear", "group": None}]
 
 
-class TestTheChartSurfaceIsOfferedNoOrderTools:
-    """Structural, not a matter of prompt wording: the order toolkit is CHAT_ONLY,
-    so even with trading enabled it is absent from the model's schema."""
+class TestTheChartSurfaceOrdersOnlyWithTradingEnabled:
+    """Structural, not a matter of prompt wording: the order toolkit reaches the
+    chart panel only through the trading capability, exactly as on the chat page,
+    and every order tool still pauses for the operator's approval."""
 
-    def test_the_order_toolkit_is_withheld_even_with_trading_enabled(self):
-        chart = {
+    def _keys(self, surface: str, trading: bool) -> set[str]:
+        return {
             spec.key
             for spec in select_specs(
-                ToolContext(api_key="k", surface="chart", trading_enabled=True)
+                ToolContext(api_key="k", surface=surface, trading_enabled=trading)
             )
         }
-        chat = {
-            spec.key
-            for spec in select_specs(ToolContext(api_key="k", surface="chat", trading_enabled=True))
-        }
+
+    def test_the_order_toolkit_is_offered_with_trading_enabled(self):
+        chart = self._keys("chart", True)
+        chat = self._keys("chat", True)
         assert "orders" in chat, "the fixture is wrong if the chat surface has no order tools"
-        assert "orders" not in chart
+        assert "orders" in chart
         assert "chart" in chart and "chart" not in chat
+
+    def test_the_order_toolkit_is_withheld_with_trading_disabled(self):
+        assert "orders" not in self._keys("chart", False)
+
+    def test_every_order_tool_pauses_for_approval_on_the_chart_panel(self):
+        from services.agent.tools.orders import MUTATING_TOOLS, OrdersToolkit
+
+        kit = OrdersToolkit(ToolContext(api_key="k", surface="chart", trading_enabled=True))
+        assert set(MUTATING_TOOLS) <= set(kit.requires_confirmation_tools)
 
     def test_no_chart_tool_requires_confirmation_because_none_mutates_anything(self, toolkit):
         kit, _sink = toolkit

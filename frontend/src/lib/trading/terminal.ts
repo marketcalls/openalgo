@@ -226,6 +226,7 @@ import {
   applyChartDialogMetrics,
   buildChartTheme,
   mutedTradeColors,
+  quietVolumeStyle,
   resolveCssColor,
   volumeColor,
 } from './chartTheme'
@@ -413,6 +414,8 @@ export interface TerminalCallbacks {
   onWorkspaceChange?(): void
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
   onIntervalChange?(interval: string): void
+  /** The chart type changed from inside the terminal, such as an undo or redo. */
+  onChartTypeChange?(chartType: string): void
   onContextMenu?(menu: TerminalContextMenu): void
   onToast(msg: string, kind: ToastKind): void
   onWsState(state: string): void
@@ -1901,11 +1904,12 @@ export class TradingTerminal {
 
   private volumeCandleStyle(): SeriesStyle {
     const theme = this.chart?.theme()
-    return {
+    const style: SeriesStyle = {
       upColor: theme?.upColor,
       downColor: theme?.downColor,
       ...this.chart?.primarySeriesInfo()?.style,
     }
+    return theme ? quietVolumeStyle(style, theme.background) : style
   }
 
   private volumeAvailable(): boolean {
@@ -2504,6 +2508,13 @@ export class TradingTerminal {
       // pane under the pointer instead, and a second press puts the stack back.
       // Reset stays on the toolbar button, the right-click menu and Home.
       doubleClick: 'maximize',
+      // The wheel zooms about the latest bar, which stays at the right edge while
+      // history compresses or opens out beside it; Ctrl or Cmd with the wheel
+      // zooms about the pointer. The engine's default holds the bar under the
+      // pointer instead, so a zoom out with the pointer in the middle or over the
+      // empty space past the last bar pushed the bars left and the gap beside
+      // the latest one kept widening.
+      zoomAnchor: 'right',
       shortcuts: {
         disabledCommands: ['screenshot', 'toggleGridVert', 'toggleGridHorz'],
         customShortcuts: [
@@ -7117,6 +7128,7 @@ export class TradingTerminal {
     this.stopReplay()
     this.ctype = v
     this.lsSet('ctype', v)
+    this.cb.onChartTypeChange?.(v)
     if (interval !== this.interval) {
       this.setInterval(interval)
       this.toast(`Using ${interval} bars for ${CHART_TYPES[v].label}`, '')

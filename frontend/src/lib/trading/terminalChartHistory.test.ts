@@ -62,7 +62,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function mount() {
+function mount(extra: { onChartTypeChange?: (type: string) => void } = {}) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const terminal = new TradingTerminal({
@@ -78,6 +78,7 @@ function mount() {
       onWsState() {},
       onSymbolLoaded() {},
       onLtp() {},
+      ...extra,
     },
   })
   terminals.push(terminal)
@@ -187,6 +188,21 @@ describe('chart-wide undo', () => {
     await settle(state)
     expect(terminal.historyPress('undo')).toBe(true)
     expect(state.interval).toBe('5m')
+  })
+
+  it('tells the toolbar the chart type an undo or redo put back', async () => {
+    // The toolbar's chart type, and the box settings button beside it, follow this.
+    const types: string[] = []
+    const { terminal, state } = mount({ onChartTypeChange: (type) => types.push(type) })
+    await build(state)
+    expect(terminal.chooseChartType('renko')).toBe('renko')
+    await settle(state)
+    types.length = 0
+    expect(terminal.historyPress('undo')).toBe(true)
+    expect(types).toEqual(['candlestick'])
+    await settle(state)
+    expect(terminal.historyPress('redo')).toBe(true)
+    expect(types).toEqual(['candlestick', 'renko'])
   })
 })
 

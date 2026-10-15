@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -122,6 +123,47 @@ _CANDLE_FIELDS: tuple[str, ...] = ("timestamp", "open", "high", "low", "close", 
 _EPOCH_MILLISECOND_FLOOR = 100_000_000_000
 
 _DATE_FORMAT = "%Y-%m-%d"
+
+#: Candles a history or chart call covers when the model names no start date.
+#: About five months of daily bars, or a little over a session of five minute
+#: bars, which answers "show me NIFTY" without asking which dates to use.
+DEFAULT_HISTORY_BARS = 100
+
+#: Month abbreviations in calendar order. Spelled out rather than taken from
+#: ``%b``, which follows the server locale.
+MONTHS: tuple[str, ...] = (
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+)
+
+# The date spellings a model reaches for besides YYYY-MM-DD. Each is read in one
+# fixed order, so 09-10-2026 is always the ninth of October, never September.
+_ISO_DATETIME = re.compile(r"\A(\d{4}-\d{2}-\d{2})[T ]")
+_DAY_MONTH_YEAR = re.compile(r"\A(\d{1,2})-(\d{1,2})-(\d{4})\Z")
+_YEAR_SLASH = re.compile(r"\A(\d{4})/(\d{1,2})/(\d{1,2})\Z")
+_DAY_MONTHNAME_YEAR = re.compile(r"\A(\d{1,2})-([A-Za-z]{3})-(\d{4})\Z")
+
+# Interval spellings a model uses for OpenAlgo's own D, W, M, Nm and Nh. Matched
+# case-insensitively, which is safe because none of them is a bare 'm' or 'M':
+# those are minutes and months, and only the case tells them apart.
+_DAILY_ALIAS = re.compile(r"\A(?:1\s*d|1\s*day|day|daily)\Z", re.IGNORECASE)
+_WEEKLY_ALIAS = re.compile(r"\A(?:1\s*w|1\s*week|week|weekly)\Z", re.IGNORECASE)
+_MONTHLY_ALIAS = re.compile(r"\A(?:1\s*mo|1\s*month|month|monthly)\Z", re.IGNORECASE)
+_MINUTE_ALIAS = re.compile(r"\A(\d+)\s*(?:min|mins|minute|minutes)\Z", re.IGNORECASE)
+_HOUR_ALIAS = re.compile(r"\A(\d+)\s*(?:hr|hrs|hour|hours)\Z", re.IGNORECASE)
+
+#: Spellings of the daily interval a broker might advertise, in preference order.
+_DAILY_SPELLINGS: tuple[str, ...] = ("D", "1D", "1d", "day", "1day")
 
 
 # ---------------------------------------------------------------------------
@@ -631,8 +673,31 @@ def resolve_exchange(symbol: str, exchange: str) -> tuple[str, str | None]:
     return exchange, None
 
 
+def clean_exchange(value: Any) -> str:
+    """Spell an exchange code the way OpenAlgo stores it.
+
+    The one place this happens, so ``nse index``, ``NSE-INDEX`` and
+    ``NSE_INDEX`` mean the same thing in every toolkit rather than in whichever
+    one happened to copy the replacement. It only spells; whether the code is
+    one the caller accepts is the caller's check.
+
+    Args:
+        value: The exchange the model supplied.
+
+    Returns:
+        The code in capitals with spaces and hyphens as underscores, or an
+        empty string when nothing was given.
+    """
+    text = "" if value is None else str(value).strip().upper()
+    return re.sub(r"[\s-]+", "_", text)
+
+
 def normalise_pair(symbol: Any, exchange: Any) -> tuple[str, str, list[str]]:
     """Normalise one symbol and exchange, correcting an index exchange.
+
+    A symbol written as ``EXCHANGE:SYMBOL`` (``NSE:INFY``) is split, and its
+    prefix wins over the exchange argument, which may then be empty. A prefix
+    that is not an exchange code leaves the symbol as given.
 
     Args:
         symbol: The symbol the model supplied.
@@ -646,7 +711,21 @@ def normalise_pair(symbol: Any, exchange: Any) -> tuple[str, str, list[str]]:
         RetryAgentRun: If either argument is empty or the exchange is not an
             OpenAlgo exchange code.
     """
+    notices: list[str] = []
     cleaned_symbol = str(symbol or "").strip().upper()
+    cleaned_exchange = clean_exchange(exchange)
+
+    prefix, colon, rest = cleaned_symbol.partition(":")
+    if colon and clean_exchange(prefix) in VALID_EXCHANGES:
+        prefixed = clean_exchange(prefix)
+        if cleaned_exchange and cleaned_exchange != prefixed:
+            notices.append(
+                f"The symbol was written as {cleaned_symbol!r}, so {prefixed} was used rather "
+                f"than the exchange {cleaned_exchange} passed beside it."
+            )
+        cleaned_symbol = rest.strip()
+        cleaned_exchange = prefixed
+
     if not cleaned_symbol:
         invalid_argument(
             "symbol",
@@ -654,7 +733,6 @@ def normalise_pair(symbol: Any, exchange: Any) -> tuple[str, str, list[str]]:
             "Pass the OpenAlgo symbol in capitals, for example 'INFY' or 'NIFTY'.",
         )
 
-    cleaned_exchange = str(exchange or "").strip().upper().replace(" ", "_").replace("-", "_")
     if not cleaned_exchange:
         invalid_argument(
             "exchange",
@@ -669,7 +747,9 @@ def normalise_pair(symbol: Any, exchange: Any) -> tuple[str, str, list[str]]:
         )
 
     resolved, notice = resolve_exchange(cleaned_symbol, cleaned_exchange)
-    return cleaned_symbol, resolved, [notice] if notice else []
+    if notice:
+        notices.append(notice)
+    return cleaned_symbol, resolved, notices
 
 
 def normalise_source(source: Any) -> str:
@@ -695,8 +775,50 @@ def normalise_source(source: Any) -> str:
     return cleaned
 
 
+def _parse_date(text: str) -> date | None:
+    """Read the date spellings a model uses, or None for anything else.
+
+    Args:
+        text: The stripped argument.
+
+    Returns:
+        The date, or None when the text is none of the accepted spellings or
+        names a day the calendar does not have.
+    """
+    lowered = text.lower()
+    if lowered == "today":
+        return datetime.now(IST).date()
+    if lowered == "yesterday":
+        return datetime.now(IST).date() - timedelta(days=1)
+
+    iso = _ISO_DATETIME.match(text)
+    if iso:
+        text = iso.group(1)
+
+    try:
+        if match := _DAY_MONTH_YEAR.match(text):
+            day, month, year = match.groups()
+            return date(int(year), int(month), int(day))
+        if match := _YEAR_SLASH.match(text):
+            year, month, day = match.groups()
+            return date(int(year), int(month), int(day))
+        if match := _DAY_MONTHNAME_YEAR.match(text):
+            day, name, year = match.groups()
+            if name.upper() not in MONTHS:
+                return None
+            return date(int(year), MONTHS.index(name.upper()) + 1, int(day))
+        return datetime.strptime(text, _DATE_FORMAT).date()
+    except ValueError:
+        return None
+
+
 def normalise_date(field: str, value: Any) -> str:
-    """Parse one ``YYYY-MM-DD`` date argument.
+    """Parse one date argument into ``YYYY-MM-DD``.
+
+    ``YYYY-MM-DD`` is the documented form. Also read, because a model sends them
+    often enough to be worth one turn: an ISO datetime (its date part),
+    ``DD-MM-YYYY``, ``YYYY/MM/DD``, ``DD-MMM-YYYY`` such as ``09-Oct-2026``,
+    and the words ``today`` and ``yesterday``, resolved in IST.
 
     Args:
         field: The argument name, named in the error message.
@@ -712,14 +834,47 @@ def normalise_date(field: str, value: Any) -> str:
         return value.strftime(_DATE_FORMAT)
 
     text = str(value or "").strip()
-    try:
-        return datetime.strptime(text, _DATE_FORMAT).strftime(_DATE_FORMAT)
-    except ValueError:
+    parsed = _parse_date(text)
+    if parsed is None:
         invalid_argument(
             field,
             f"{text!r} is not a date",
             "Use YYYY-MM-DD, for example 2026-01-15.",
         )
+    return parsed.strftime(_DATE_FORMAT)
+
+
+def history_range(
+    interval: str,
+    start_date: Any,
+    end_date: Any,
+    bars: int = DEFAULT_HISTORY_BARS,
+) -> tuple[str, str]:
+    """Resolve a history range whose dates the model may have left out.
+
+    A missing end is today in IST. A missing start is the
+    :func:`lookback_range` covering ``bars`` candles at ``interval``, ending on
+    that end date, so naming only an end date still gives a sensible window.
+
+    Args:
+        interval: The candle interval, already normalised.
+        start_date: First day, or None or an empty string for the lookback.
+        end_date: Last day, or None or an empty string for today in IST.
+        bars: Candles the default start should cover.
+
+    Returns:
+        The two dates as ``YYYY-MM-DD``.
+
+    Raises:
+        RetryAgentRun: If a given date is unparseable or the range is backwards.
+    """
+    end_given = end_date is not None and str(end_date).strip() != ""
+    end = normalise_date("end_date", end_date) if end_given else None
+    if start_date is None or str(start_date).strip() == "":
+        anchor = datetime.strptime(end, _DATE_FORMAT).date() if end else None
+        start_date, default_end = lookback_range(interval, bars, end_date=anchor)
+        end = end or default_end
+    return normalise_range(start_date, end or datetime.now(IST).strftime(_DATE_FORMAT))
 
 
 def normalise_range(start_date: Any, end_date: Any) -> tuple[str, str]:
@@ -746,6 +901,48 @@ def normalise_range(start_date: Any, end_date: Any) -> tuple[str, str]:
     return start, end
 
 
+def _interval_alias(text: str) -> str | None:
+    """Translate a common interval spelling into OpenAlgo's own.
+
+    Args:
+        text: The stripped interval.
+
+    Returns:
+        ``D``, ``W``, ``M``, ``Nm`` or ``Nh`` for ``1d``, ``weekly``,
+        ``monthly``, ``5min``, ``2hours`` and the like, or None when the text is
+        none of them or is already in OpenAlgo's spelling.
+    """
+    if _DAILY_ALIAS.match(text):
+        alias = "D"
+    elif _WEEKLY_ALIAS.match(text):
+        alias = "W"
+    elif _MONTHLY_ALIAS.match(text):
+        alias = "M"
+    elif match := _MINUTE_ALIAS.match(text):
+        alias = f"{int(match.group(1))}m"
+    elif match := _HOUR_ALIAS.match(text):
+        alias = f"{int(match.group(1))}h"
+    else:
+        return None
+    return None if alias == text else alias
+
+
+def daily_interval(accepted: Sequence[str] | None) -> str:
+    """Pick the broker's spelling of the daily interval.
+
+    Args:
+        accepted: The intervals this broker accepts, or None when unknown.
+
+    Returns:
+        The first daily spelling the broker advertises, or ``D``, OpenAlgo's
+        own, when it advertises none of them or the list is unknown.
+    """
+    for spelling in _DAILY_SPELLINGS:
+        if accepted and spelling in accepted:
+            return spelling
+    return "D"
+
+
 def normalise_interval(
     interval: Any, source: str, accepted: list[str] | None
 ) -> tuple[str, str | None]:
@@ -753,9 +950,12 @@ def normalise_interval(
 
     The accepted set comes from ``services.intervals_service`` through
     :class:`BrokerIntervals`, never from a list in this file, because it is per
-    broker. Two deliberate softenings: a value that differs only in case from an
-    accepted one is corrected with a notice (a model asking for ``5M`` means five
-    minutes), and the check is skipped entirely for ``source='db'``, whose
+    broker. Three deliberate softenings: a common spelling such as ``1d``,
+    ``daily``, ``5min`` or ``1hour`` is translated to OpenAlgo's own (``D``,
+    ``5m``, ``1h``) with a notice, as is ``60m`` to ``1h`` where the broker
+    offers only the latter; a value that differs only in case from an accepted
+    one is corrected with a notice (a model asking for ``5M`` means five
+    minutes); and the broker check is skipped entirely for ``source='db'``, whose
     candles come from the local Historify store and whose resolutions are the
     ones the operator downloaded rather than the ones the broker serves.
 
@@ -780,14 +980,32 @@ def normalise_interval(
             "ones this broker accepts.",
         )
 
-    if source != "api":
+    if source == "api" and accepted and cleaned in accepted:
         return cleaned, None
 
-    if not accepted or cleaned in accepted:
+    alias = _interval_alias(cleaned)
+    alias_notice = (
+        f"The interval was read as {alias!r} rather than {cleaned!r}. OpenAlgo writes "
+        "minutes as 'm', hours as 'h', and days, weeks and months as 'D', 'W' and 'M'."
+        if alias
+        else None
+    )
+
+    if source != "api" or not accepted:
         # No list means the intervals lookup failed. This is a read-only tool,
         # so it is skipped rather than failing closed; the history service
-        # validates the interval again anyway.
-        return cleaned, None
+        # validates the interval again anyway. The aliases are OpenAlgo's own
+        # vocabulary, which the local store speaks too, so they still apply.
+        return (alias, alias_notice) if alias else (cleaned, None)
+
+    if alias and alias in accepted:
+        return alias, alias_notice
+
+    if (alias or cleaned) == "60m" and "1h" in accepted and "60m" not in accepted:
+        return "1h", (
+            f"The interval was read as '1h' rather than {cleaned!r}, because this broker "
+            "offers hourly candles as '1h' and not as '60m'."
+        )
 
     matches = [value for value in accepted if value.lower() == cleaned.lower()]
     if len(matches) == 1:
@@ -801,6 +1019,118 @@ def normalise_interval(
         f"{cleaned!r} is not one this broker accepts",
         f"Use one of: {', '.join(accepted)}.",
     )
+
+
+#: Intervals a broker without them can still be answered in, by rolling its
+#: daily candles up. Several brokers serve nothing above ``D``, and refusing a
+#: question about the weekly trend for that reason refuses something the daily
+#: candles already hold.
+ROLLUP_INTERVALS: dict[str, str] = {"W": "weekly", "M": "monthly"}
+
+
+def plan_interval(
+    interval: Any, source: str, accepted: list[str] | None
+) -> tuple[str, str | None, str | None]:
+    """Choose the interval to fetch, rolling daily candles up when the broker must.
+
+    Everything :func:`normalise_interval` accepts is accepted unchanged. The one
+    addition: a weekly or monthly request on a broker that lists neither but
+    does list a daily interval is fetched daily and rolled up by
+    :func:`roll_up_candles`, with a notice saying so, instead of being refused.
+
+    Args:
+        interval: The value the model supplied.
+        source: ``api`` or ``db``.
+        accepted: The intervals this broker accepts, or None when unknown.
+
+    Returns:
+        The interval to fetch, a notice when anything was changed, and the
+        roll-up target (``W`` or ``M``) when the fetched candles must be rolled
+        up, otherwise None.
+
+    Raises:
+        RetryAgentRun: When the interval is neither accepted nor rollable.
+    """
+    cleaned = str(interval or "").strip()
+    target = _interval_alias(cleaned) or cleaned
+    if source == "api" and accepted and target in ROLLUP_INTERVALS and target not in accepted:
+        daily = daily_interval(accepted)
+        if daily in accepted:
+            label = ROLLUP_INTERVALS[target]
+            return (
+                daily,
+                f"This broker serves no {label} candles, so {label} candles were built from "
+                "its daily ones: the open of the first day, the high and low across the "
+                "period, the close of the last day and the volume summed.",
+                target,
+            )
+    fetched, notice = normalise_interval(interval, source, accepted)
+    return fetched, notice, None
+
+
+def roll_up_candles(
+    records: Sequence[Mapping[str, Any]], columns: Mapping[str, str], target: str
+) -> list[dict[str, Any]]:
+    """Roll daily candles up into weekly (ISO week) or calendar-month candles.
+
+    Each period keeps the first day's timestamp and open, the highest high, the
+    lowest low, the last day's close, the summed volume and the last open
+    interest, under the frame's own keys so every later step reads the result
+    exactly as it reads a broker frame. A record whose timestamp cannot be read
+    is dropped rather than filed under the wrong period.
+
+    Args:
+        records: Daily candles, oldest first.
+        columns: The mapping from :func:`candle_columns`.
+        target: ``W`` or ``M``.
+
+    Returns:
+        The rolled-up candles, oldest first.
+    """
+    stamp_key = columns.get("timestamp")
+    if not stamp_key:
+        return [dict(row) for row in records]
+
+    periods: dict[tuple[int, int], list[Mapping[str, Any]]] = {}
+    for row in records:
+        seconds = epoch_seconds(row.get(stamp_key))
+        if seconds is None:
+            continue
+        day = datetime.fromtimestamp(seconds, IST).date()
+        if target == "W":
+            iso = day.isocalendar()
+            key = (iso[0], iso[1])
+        else:
+            key = (day.year, day.month)
+        periods.setdefault(key, []).append(row)
+
+    def numbers(rows: Sequence[Mapping[str, Any]], field: str) -> list[float]:
+        key = columns.get(field)
+        if not key:
+            return []
+        values = (as_number(row.get(key)) for row in rows)
+        return [value for value in values if value is not None]
+
+    rolled: list[dict[str, Any]] = []
+    for key in sorted(periods):
+        rows = periods[key]
+        first, last = rows[0], rows[-1]
+        candle: dict[str, Any] = {stamp_key: first.get(stamp_key)}
+        if "open" in columns:
+            candle[columns["open"]] = first.get(columns["open"])
+        highs, lows = numbers(rows, "high"), numbers(rows, "low")
+        if "high" in columns:
+            candle[columns["high"]] = max(highs) if highs else None
+        if "low" in columns:
+            candle[columns["low"]] = min(lows) if lows else None
+        if "close" in columns:
+            candle[columns["close"]] = last.get(columns["close"])
+        if "volume" in columns:
+            candle[columns["volume"]] = sum(numbers(rows, "volume"))
+        if "oi" in columns:
+            candle[columns["oi"]] = last.get(columns["oi"])
+        rolled.append(candle)
+    return rolled
 
 
 def pair_fields(item: Any, index: int, field: str = "symbols") -> tuple[Any, Any]:
@@ -822,7 +1152,10 @@ def pair_fields(item: Any, index: int, field: str = "symbols") -> tuple[Any, Any
         lowered = {str(key).strip().lower(): value for key, value in item.items()}
         symbol = lowered.get("symbol")
         exchange = lowered.get("exchange")
-        if symbol is None or exchange is None:
+        # An 'NSE:INFY' symbol carries its own exchange, which normalise_pair
+        # reads, so the entry needs no separate exchange field.
+        prefixed = isinstance(symbol, str) and ":" in symbol
+        if symbol is None or (exchange is None and not prefixed):
             invalid_argument(
                 field,
                 f"entry {index + 1} is missing 'symbol' or 'exchange'",
@@ -882,11 +1215,17 @@ def symbol_pairs(
         try:
             raw = json.loads(raw)
         except ValueError:
-            invalid_argument(
-                field,
-                "it is a string that is not valid JSON",
-                'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
-            )
+            # 'NSE:INFY, NSE:SBIN' is the other shape a model sends as text.
+            parts = [part.strip() for part in re.split(r"[,;\n]", raw) if part.strip()]
+            if not parts or not all(":" in part for part in parts):
+                invalid_argument(
+                    field,
+                    "it is a string that is neither valid JSON nor a list of EXCHANGE:SYMBOL "
+                    "entries",
+                    'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}], '
+                    "or a comma separated string such as 'NSE:INFY, NSE:SBIN'.",
+                )
+            raw = parts
     if isinstance(raw, Mapping):
         raw = [raw]
     if not isinstance(raw, (list, tuple)) or not raw:
@@ -1094,7 +1433,7 @@ class MarketToolkit(OpenAlgoToolkit):
         self._note(payload, notices)
         return self._wrapped("get_quote", payload, symbol=symbol, exchange=exchange)
 
-    def get_quotes(self, symbols: list[dict[str, str]]) -> str:
+    def get_quotes(self, symbols: list[str | dict[str, str]] | str) -> str:
         """Fetch the latest quote for several instruments in one call.
 
         Prefer this over repeated ``get_quote`` calls: it is a single broker
@@ -1108,7 +1447,8 @@ class MarketToolkit(OpenAlgoToolkit):
                 entry; the exchange is not inherited from the entry before it.
                 At most 50 entries per call, so split a longer watchlist into
                 batches. A plain ``"NSE:INFY"`` string is accepted in place of
-                an object.
+                an object, and so is one comma separated string of them, such
+                as ``"NSE:INFY, NSE_INDEX:NIFTY"``.
 
         Returns:
             JSON with one result per requested instrument, each carrying either
@@ -1175,9 +1515,9 @@ class MarketToolkit(OpenAlgoToolkit):
         self,
         symbol: str,
         exchange: str,
-        interval: str,
-        start_date: str,
-        end_date: str,
+        interval: str = "D",
+        start_date: str | None = None,
+        end_date: str | None = None,
         source: str = "api",
     ) -> str:
         """Fetch historical candles for one instrument.
@@ -1203,10 +1543,14 @@ class MarketToolkit(OpenAlgoToolkit):
                 seconds, ``1m`` to ``30m`` for minutes, ``1h`` to ``4h`` for
                 hours, and ``D``, ``W``, ``M`` for daily, weekly and monthly.
                 Case matters: ``1m`` is one minute and ``M`` is one month.
+                Defaults to ``D``.
             start_date: First day of the range, as ``YYYY-MM-DD``, for example
-                ``2026-01-15``. Inclusive, and interpreted in IST.
+                ``2026-01-15``. Inclusive, and interpreted in IST. Leave it out
+                for about the last 100 candles at ``interval`` up to
+                ``end_date``.
             end_date: Last day of the range, as ``YYYY-MM-DD``. Inclusive, and
                 interpreted in IST. It must not be before ``start_date``.
+                Defaults to today.
             source: Where the candles come from. ``api`` (the default) asks the
                 broker, which is what you want for anything current. ``db``
                 reads the local Historify store, which only holds what the
@@ -1221,16 +1565,21 @@ class MarketToolkit(OpenAlgoToolkit):
         """
         symbol, exchange, notices = normalise_pair(symbol, exchange)
         source = normalise_source(source)
-        interval, interval_notice = normalise_interval(interval, source, self._intervals.accepted())
+        fetched, interval_notice, rollup = plan_interval(
+            interval, source, self._intervals.accepted()
+        )
         if interval_notice:
             notices.append(interval_notice)
-        start, end = normalise_range(start_date, end_date)
+        # The interval the answer is in: the roll-up target when daily candles
+        # are rolled up, so the default range is sized in weeks or months.
+        interval = rollup or fetched
+        start, end = history_range(interval, start_date, end_date)
 
         response = self.service_call(
             history_service.get_history,
             symbol=symbol,
             exchange=exchange,
-            interval=interval,
+            interval=fetched,
             start_date=start,
             end_date=end,
             source=source,
@@ -1240,8 +1589,10 @@ class MarketToolkit(OpenAlgoToolkit):
         if not isinstance(rows, list):
             rows = []
         records = [row for row in rows if isinstance(row, Mapping)]
-        total = len(records)
         columns = candle_columns(records[0]) if records else {}
+        if rollup:
+            records = roll_up_candles(records, columns, rollup)
+        total = len(records)
         summary = summarise_candles(records, columns)
 
         def build(limit: int) -> dict[str, Any]:

@@ -101,9 +101,19 @@ from agno.exceptions import RetryAgentRun
 from services.agent import prompts
 from services.agent.safety import audit as audit_trail
 from services.agent.safety.risk import Verdict, get_guard
-from services.agent.tools.base import OpenAlgoToolkit
+from services.agent.tools.base import OpenAlgoToolkit, extract_detail
+from services.agent.tools.order_vocab import (
+    canonical_action,
+    canonical_price_type,
+    canonical_product,
+    split_exchange_prefix,
+)
 from utils import real_threading
 from utils.constants import (
+    EXCHANGE_BSE_INDEX,
+    EXCHANGE_GLOBAL_INDEX,
+    EXCHANGE_MCX_INDEX,
+    EXCHANGE_NSE_INDEX,
     PRICE_TYPE_LIMIT,
     PRICE_TYPE_MARKET,
     PRICE_TYPE_SL,
@@ -175,6 +185,62 @@ _FUNDS_KEYS: tuple[str, ...] = (
 #: type does not use is an error rather than a harmless extra field.
 _NEEDS_PRICE: frozenset[str] = frozenset({PRICE_TYPE_LIMIT, PRICE_TYPE_SL})
 _NEEDS_TRIGGER: frozenset[str] = frozenset({PRICE_TYPE_SL, PRICE_TYPE_SLM})
+
+#: Quote-only index codes, each mapped to where its tradable contracts live.
+#: An index itself cannot be bought or sold; its futures and options can.
+_INDEX_TRADING_VENUES: dict[str, str | None] = {
+    EXCHANGE_NSE_INDEX: "NFO",
+    EXCHANGE_BSE_INDEX: "BFO",
+    EXCHANGE_MCX_INDEX: "MCX",
+    EXCHANGE_GLOBAL_INDEX: None,
+}
+
+
+def _refusal_message(detail: str) -> str:
+    """Word a clean service refusal so it agrees with ``retry`` being false.
+
+    Args:
+        detail: The reason the broker or the service gave, possibly empty.
+
+    Returns:
+        A message that relays the reason and tells the model not to resend on
+        its own, since a corrected order is a new order needing new approval.
+    """
+    reason = f"The reason given was: {detail.rstrip('.')}." if detail else "No reason was given."
+    return (
+        f"The broker or the platform refused this request, so nothing was placed or changed. "
+        f"{reason} Do not send it again on your own. Tell the operator the reason in plain "
+        "words. If it names something that can be corrected, such as a price off the tick "
+        "size, a quantity that is not a whole number of lots or a product the segment does not "
+        "allow, say what you would change and send a corrected request only if they ask, "
+        "because it needs their approval again."
+    )
+
+
+def index_refusal(exchange: str) -> str | None:
+    """Explain why an order on a quote-only index code cannot be placed.
+
+    Args:
+        exchange: An upper-cased exchange code.
+
+    Returns:
+        A sentence naming the tradable alternative when the code is a
+        quote-only index, otherwise None.
+    """
+    if exchange not in _INDEX_TRADING_VENUES:
+        return None
+    venue = _INDEX_TRADING_VENUES[exchange]
+    if venue is None:
+        return (
+            f"{exchange} is a quote-only code for a global index, and there is no contract "
+            "for it that this platform can trade."
+        )
+    return (
+        f"{exchange} is a quote-only index code: an index itself cannot be bought or sold. "
+        f"Trade its future or one of its options on {venue} instead, with the exact symbol "
+        "the symbol search or option chain tool returns, and state the new contract to the "
+        "operator before placing it."
+    )
 
 
 #: Set once the ``restx_api`` cycle has been warmed, so the check is a boolean
@@ -258,6 +324,44 @@ class _Plan:
     extra: Mapping[str, Any] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _NothingToClose:
+    """What a square-off dispatch returns when it sent no order.
+
+    The position service read zero, so nothing was sent. That is reported as
+    neither a success nor a failure, because zero is not proof the position is
+    closed: several brokers read every position as flat even when it is not,
+    and a symbol, exchange or product that differs from the position book reads
+    as zero too. Telling the operator a position is closed when it is still
+    open is the dangerous direction to be wrong in.
+
+    Attributes:
+        symbol: OpenAlgo symbol that was looked up.
+        exchange: Exchange code that was looked up.
+        product: Product that was looked up.
+    """
+
+    symbol: str
+    exchange: str
+    product: str
+
+    def message(self) -> str:
+        """The sentence the model reads.
+
+        Returns:
+            What happened, why it does not prove the position is closed, and
+            what to check next.
+        """
+        return (
+            f"The position service reported no open quantity for {self.symbol} on "
+            f"{self.exchange} under {self.product}, so no order was sent. That does not prove "
+            "the position is closed: some brokers report positions as flat when they are not, "
+            "and a symbol, exchange or product that differs from the position book also reads "
+            "as zero. Call get_positions and check this exact symbol, exchange and product "
+            "before telling the operator anything is closed."
+        )
+
+
 class OrdersToolkit(OpenAlgoToolkit):
     """Place, modify, cancel and close real orders and positions.
 
@@ -319,8 +423,8 @@ class OrdersToolkit(OpenAlgoToolkit):
         quantity: int,
         product: str,
         price_type: str = "MARKET",
-        price: float = 0.0,
-        trigger_price: float = 0.0,
+        price: float | None = 0.0,
+        trigger_price: float | None = 0.0,
     ) -> str:
         """Place a real order on the operator's live broker account.
 
@@ -348,19 +452,22 @@ class OrdersToolkit(OpenAlgoToolkit):
             quantity: Whole number of units, not lots. For example ``10`` shares
                 of RELIANCE, or ``75`` for one NIFTY option lot of 75. Look the
                 lot size up rather than assuming it.
-            product: ``CNC`` for delivery in a cash segment, ``NRML`` to carry a
-                derivative overnight, ``MIS`` for intraday in either. CNC on a
-                derivatives exchange is always wrong.
+            product: Required, with no default: ``CNC`` for delivery in a cash
+                segment, ``NRML`` to carry a derivative overnight, ``MIS`` for
+                intraday in either. It decides whether the position is squared
+                off automatically before the close, so take it from the operator
+                and ask if they did not say. CNC on a derivatives exchange is
+                always wrong.
             price_type: ``MARKET`` (default, no price and no trigger), ``LIMIT``
                 (needs price), ``SL`` (stop-loss limit, needs both price and
                 trigger_price) or ``SL-M`` (stop-loss market, needs
                 trigger_price only). Use MARKET unless the operator asked for
                 something else.
             price: Limit price in rupees, for example ``1450.5``. Required for
-                LIMIT and SL, and must be left at 0 for MARKET and SL-M. It must
-                respect the instrument's tick size.
+                LIMIT and SL. Leave it out, or pass 0, for MARKET and SL-M. It
+                must respect the instrument's tick size.
             trigger_price: Trigger price in rupees, for example ``1440.0``.
-                Required for SL and SL-M, and must be left at 0 for MARKET and
+                Required for SL and SL-M. Leave it out, or pass 0, for MARKET and
                 LIMIT.
 
         Returns:
@@ -422,12 +529,12 @@ class OrdersToolkit(OpenAlgoToolkit):
         symbol: str,
         exchange: str,
         action: str,
-        quantity: int,
+        quantity: int | None,
         position_size: int,
         product: str,
         price_type: str = "MARKET",
-        price: float = 0.0,
-        trigger_price: float = 0.0,
+        price: float | None = 0.0,
+        trigger_price: float | None = 0.0,
     ) -> str:
         """Place a real order that moves a position to a target size.
 
@@ -456,19 +563,21 @@ class OrdersToolkit(OpenAlgoToolkit):
                 no position in this symbol and the target is zero; otherwise the
                 direction is derived from the difference.
             quantity: Whole number of units to send when there is no position
-                and no target, for example ``50``. Not lots.
+                and no target, for example ``50``. Not lots. Pass 0 when only
+                ``position_size`` matters.
             position_size: The position to end up holding, in units and signed:
                 ``150`` for long 150, ``-75`` for short 75, ``0`` for flat. To
                 flatten an existing position use the ``close_position`` tool
                 instead, which is built for it.
-            product: ``CNC``, ``NRML`` or ``MIS``. The position is matched
-                within this product, so it must be the product the position is
-                held under.
+            product: Required, with no default: ``CNC``, ``NRML`` or ``MIS``.
+                The position is matched within this product, so it must be the
+                product the position is held under, and MIS is squared off
+                automatically before the close while the others are not.
             price_type: ``MARKET`` (default), ``LIMIT``, ``SL`` or ``SL-M``.
             price: Limit price in rupees, for example ``1450.5``. Required for
-                LIMIT and SL, left at 0 otherwise.
+                LIMIT and SL. Leave it out, or pass 0, otherwise.
             trigger_price: Trigger price in rupees, for example ``1440.0``.
-                Required for SL and SL-M, left at 0 otherwise.
+                Required for SL and SL-M. Leave it out, or pass 0, otherwise.
 
         Returns:
             JSON carrying ``ok``, the broker ``order_ids``, the order as it was
@@ -498,7 +607,8 @@ class OrdersToolkit(OpenAlgoToolkit):
                 symbol=symbol,
                 exchange=exchange,
                 action=action,
-                quantity=quantity,
+                # Unused whenever a target is given, so a null reads as zero.
+                quantity=0 if quantity is None else quantity,
                 product=product,
                 price_type=price_type,
                 price=price,
@@ -546,15 +656,15 @@ class OrdersToolkit(OpenAlgoToolkit):
 
     def modify_order(
         self,
-        order_id: str,
+        order_id: str | int,
         symbol: str,
         exchange: str,
         action: str,
         quantity: int,
         product: str,
         price_type: str,
-        price: float = 0.0,
-        trigger_price: float = 0.0,
+        price: float | None = 0.0,
+        trigger_price: float | None = 0.0,
     ) -> str:
         """Modify a real pending order on the broker.
 
@@ -575,13 +685,17 @@ class OrdersToolkit(OpenAlgoToolkit):
             action: ``BUY`` or ``SELL``. This is the side of the existing order;
                 a modify does not flip it.
             quantity: The order quantity after the change, in whole units.
-            product: ``CNC``, ``NRML`` or ``MIS``, matching the existing order.
+            product: Required: ``CNC``, ``NRML`` or ``MIS``, matching the
+                existing order. Read it from the order book rather than
+                assuming, because MIS is squared off automatically and the
+                others are not.
             price_type: ``MARKET``, ``LIMIT``, ``SL`` or ``SL-M`` after the
                 change. There is no default: state what the order should become.
             price: Limit price in rupees after the change, for example
-                ``1455.0``. Required for LIMIT and SL, left at 0 otherwise.
+                ``1455.0``. Required for LIMIT and SL. Leave it out, or pass 0,
+                otherwise.
             trigger_price: Trigger price in rupees after the change. Required
-                for SL and SL-M, left at 0 otherwise.
+                for SL and SL-M. Leave it out, or pass 0, otherwise.
 
         Returns:
             JSON carrying ``ok``, the ``order_ids`` the broker confirmed, the
@@ -638,7 +752,7 @@ class OrdersToolkit(OpenAlgoToolkit):
             order_id=str(order_id),
         )
 
-    def cancel_order(self, order_id: str) -> str:
+    def cancel_order(self, order_id: str | int) -> str:
         """Cancel one real pending order on the broker.
 
         THIS CANCELS A REAL ORDER and pauses for the operator's explicit
@@ -723,8 +837,10 @@ class OrdersToolkit(OpenAlgoToolkit):
 
         The position held in this symbol and product is read first, and an
         offsetting market order for exactly that quantity is sent: a long is
-        sold, a short is bought back. If the account holds nothing there,
-        nothing is sent and the result says so.
+        sold, a short is bought back. If the position service reads zero
+        there, nothing is sent and the result carries ``status`` of
+        ``nothing_to_close`` with ``ok`` false. That is not proof the position
+        is closed: check ``get_positions`` before saying so.
 
         This closes one named position. To flatten the entire account use
         ``close_all_positions``, which is a different and much larger action.
@@ -746,8 +862,9 @@ class OrdersToolkit(OpenAlgoToolkit):
         args = {"symbol": symbol, "exchange": exchange, "product": product}
 
         def plan() -> _Plan:
-            clean_symbol = self._required_text("symbol", symbol).upper()
-            clean_exchange = self._exchange(exchange)
+            bare_symbol, venue = split_exchange_prefix(symbol, exchange)
+            clean_symbol = self._required_text("symbol", bare_symbol).upper()
+            clean_exchange = self._exchange(venue)
             clean_product = self._product(product)
             verdict = self._guard().check_destructive(
                 "close_position",
@@ -866,14 +983,24 @@ class OrdersToolkit(OpenAlgoToolkit):
             )
             raise
         except Exception as exc:
+            # The detail goes to the error log; the model gets a sentence it can
+            # relay, because a class name and a traceback line are not something
+            # a trader can act on.
             logger.exception("Agent tool %s could not be prepared", tool)
+            message = (
+                "The platform hit an internal error while checking this request, before "
+                "anything was sent to the broker, so nothing was placed or changed. Tell the "
+                "operator it failed on the platform side and that the details are in the "
+                "platform's error log. Do not call the tool again."
+            )
             self.audit_result(
                 tool,
                 ok=False,
                 response={
                     "status": "error",
                     "stage": "validation",
-                    "message": f"{type(exc).__name__}: {exc}",
+                    "message": message,
+                    "exception": f"{type(exc).__name__}: {exc}",
                 },
                 order_ids=[],
                 attempt_id=attempt_id,
@@ -884,11 +1011,7 @@ class OrdersToolkit(OpenAlgoToolkit):
                     "ok": False,
                     "tool": tool,
                     "status": "error",
-                    "message": (
-                        f"{tool} could not be prepared: {type(exc).__name__}: {exc}. Nothing "
-                        "was sent to the broker. Report this to the operator rather than "
-                        "calling the tool again."
-                    ),
+                    "message": message,
                     "retry": False,
                 },
                 **attributes,
@@ -961,12 +1084,18 @@ class OrdersToolkit(OpenAlgoToolkit):
             # before this failed. The claim is deliberately NOT released, so the
             # duplicate window still refuses an identical immediate resend.
             logger.exception("Agent tool %s raised while dispatching", tool)
+            message = (
+                "The platform failed while sending this to the broker. Whether the broker "
+                "received it is not known, so do NOT send it again. Tell the operator to check "
+                "the order book and positions before doing anything else."
+            )
             self.audit_result(
                 tool,
                 ok=False,
                 response={
                     "status": "unknown",
-                    "message": f"{type(exc).__name__}: {exc}",
+                    "message": message,
+                    "exception": f"{type(exc).__name__}: {exc}",
                     "risk": verdict.as_dict(),
                 },
                 order_ids=[],
@@ -979,12 +1108,38 @@ class OrdersToolkit(OpenAlgoToolkit):
                     "ok": False,
                     "tool": tool,
                     "status": "unknown",
-                    "message": (
-                        f"{plan.label} raised {type(exc).__name__}: {exc}. Whether the broker "
-                        "received it is not known, so do NOT send it again. Tell the operator "
-                        "to check the order book."
-                    ),
+                    "message": message,
                     "risk": verdict.as_dict(),
+                    "retry": False,
+                },
+                **attributes,
+            )
+
+        if isinstance(raw, _NothingToClose):
+            # No order was sent, so the claim goes back, and the result is
+            # neither a success nor a failure: see _NothingToClose.
+            guard.release(verdict)
+            message = raw.message()
+            self.audit_result(
+                tool,
+                ok=False,
+                response={"status": "nothing_to_close", "message": message},
+                order_ids=[],
+                attempt_id=attempt_id,
+                risk_verdict=str(verdict.code),
+            )
+            return self._emit(
+                tool,
+                {
+                    "ok": False,
+                    "tool": tool,
+                    "status": "nothing_to_close",
+                    "message": message,
+                    "symbol": raw.symbol,
+                    "exchange": raw.exchange,
+                    "product": raw.product,
+                    "quantity": 0,
+                    "order_ids": [],
                     "retry": False,
                 },
                 **attributes,
@@ -992,14 +1147,19 @@ class OrdersToolkit(OpenAlgoToolkit):
 
         try:
             payload = self.unwrap_service_result(raw, label=plan.label)
-        except RetryAgentRun as exc:
+        except RetryAgentRun:
             # A clean refusal from the service layer: nothing was placed, so the
-            # claim goes back and the session keeps its budget.
+            # claim goes back and the session keeps its budget. The message is
+            # written here rather than taken from the exception, whose wording
+            # for an invalid request invites calling the tool again, which for
+            # an order means a second order and a second approval.
             guard.release(verdict)
+            _ok, failure, _status = self._split_service_result(raw)
+            message = _refusal_message(extract_detail(failure))
             self.audit_result(
                 tool,
                 ok=False,
-                response={"status": "error", "message": str(exc), "risk": verdict.as_dict()},
+                response={"status": "error", "message": message, "risk": verdict.as_dict()},
                 order_ids=[],
                 attempt_id=attempt_id,
                 risk_verdict=str(verdict.code),
@@ -1010,7 +1170,7 @@ class OrdersToolkit(OpenAlgoToolkit):
                     "ok": False,
                     "tool": tool,
                     "status": "error",
-                    "message": str(exc),
+                    "message": message,
                     "risk": verdict.as_dict(),
                     "retry": False,
                 },
@@ -1129,25 +1289,34 @@ class OrdersToolkit(OpenAlgoToolkit):
                 "so it needs one.",
                 "Pass the trigger in rupees, for example trigger_price=1440.0.",
             )
+        # A price the order type ignores is refused rather than silently zeroed.
+        # The operator approved the arguments as written, and a card showing a
+        # price beside MARKET reads as a priced order; sending something else
+        # after that approval would execute an order nobody looked at.
         if kind not in _NEEDS_PRICE and limit_price > 0:
             self.invalid_argument(
                 "price",
-                f"a {kind} order carries no limit price, and sending one is an error rather "
-                "than a harmless extra field.",
-                f"Leave price at 0, or use {PRICE_TYPE_LIMIT} if you meant to name a price.",
+                f"a {kind} order carries no limit price, yet price={limit_price:g} was sent, so "
+                "the order the operator approved does not say which of the two they meant.",
+                f"Drop price (or pass 0) to keep it a {kind} order, or switch price_type to "
+                f"{PRICE_TYPE_LIMIT} to trade at that price. Restate the corrected order to the "
+                "operator, since it needs their approval again.",
             )
         if kind not in _NEEDS_TRIGGER and trigger > 0:
             self.invalid_argument(
                 "trigger_price",
-                f"a {kind} order carries no trigger price.",
-                f"Leave trigger_price at 0, or use {PRICE_TYPE_SL} or {PRICE_TYPE_SLM} if you "
-                "meant a stop order.",
+                f"a {kind} order carries no trigger, yet trigger_price={trigger:g} was sent, so "
+                "the order the operator approved does not say whether they wanted a stop.",
+                f"Drop trigger_price (or pass 0) to keep it a {kind} order, or switch "
+                f"price_type to {PRICE_TYPE_SL} or {PRICE_TYPE_SLM} for a stop order. Restate "
+                "the corrected order to the operator, since it needs their approval again.",
             )
 
+        bare_symbol, venue = split_exchange_prefix(symbol, exchange)
         return {
             "strategy": self.strategy,
-            "symbol": self._required_text("symbol", symbol).upper(),
-            "exchange": self._exchange(exchange),
+            "symbol": self._required_text("symbol", bare_symbol).upper(),
+            "exchange": self._exchange(venue),
             "action": self._action(action),
             "quantity": self._whole_number(
                 "quantity", quantity, minimum=0 if allow_zero_quantity else 1
@@ -1185,6 +1354,9 @@ class OrdersToolkit(OpenAlgoToolkit):
     def _order_id(self, value: Any) -> str:
         """Validate a broker order id.
 
+        A model often sends a numeric id as a JSON number, so an int is taken
+        as its decimal text. A bool is refused, since True is not an id.
+
         Args:
             value: The order id the model supplied.
 
@@ -1194,7 +1366,7 @@ class OrdersToolkit(OpenAlgoToolkit):
         Raises:
             RetryAgentRun: When it is empty.
         """
-        text = "" if value is None else str(value).strip()
+        text = "" if value is None or isinstance(value, bool) else str(value).strip()
         if not text:
             self.invalid_argument(
                 "order_id",
@@ -1213,9 +1385,13 @@ class OrdersToolkit(OpenAlgoToolkit):
             The upper-cased exchange code.
 
         Raises:
-            RetryAgentRun: When it is not an OpenAlgo exchange code.
+            RetryAgentRun: When it is not an OpenAlgo exchange code, or is a
+                quote-only index code that no order can be placed on.
         """
         text = self._required_text("exchange", value).upper()
+        refusal = index_refusal(text)
+        if refusal:
+            self.invalid_argument("exchange", refusal)
         if text not in VALID_EXCHANGES:
             self.invalid_argument(
                 "exchange",
@@ -1225,18 +1401,18 @@ class OrdersToolkit(OpenAlgoToolkit):
         return text
 
     def _action(self, value: Any) -> str:
-        """Validate a BUY or SELL action.
+        """Validate a BUY or SELL action, accepting B and S.
 
         Args:
             value: The action the model supplied.
 
         Returns:
-            The upper-cased action.
+            The canonical action.
 
         Raises:
             RetryAgentRun: When it is neither BUY nor SELL.
         """
-        text = self._required_text("action", value).upper()
+        text = canonical_action(self._required_text("action", value))
         if text not in VALID_ACTIONS:
             self.invalid_argument(
                 "action", f"{text} is not a side.", f"Use one of: {', '.join(VALID_ACTIONS)}."
@@ -1244,18 +1420,18 @@ class OrdersToolkit(OpenAlgoToolkit):
         return text
 
     def _product(self, value: Any) -> str:
-        """Validate a product type.
+        """Validate a product type, accepting the aliases in ``order_vocab``.
 
         Args:
             value: The product the model supplied.
 
         Returns:
-            The upper-cased product type.
+            The canonical product type.
 
         Raises:
             RetryAgentRun: When it is not a product OpenAlgo accepts.
         """
-        text = self._required_text("product", value).upper()
+        text = canonical_product(self._required_text("product", value))
         if text not in VALID_PRODUCT_TYPES:
             self.invalid_argument(
                 "product",
@@ -1266,7 +1442,7 @@ class OrdersToolkit(OpenAlgoToolkit):
         return text
 
     def _price_type(self, value: Any) -> str:
-        """Validate a price type, accepting SLM as a spelling of SL-M.
+        """Validate a price type, accepting the aliases in ``order_vocab``.
 
         Args:
             value: The price type the model supplied.
@@ -1277,9 +1453,7 @@ class OrdersToolkit(OpenAlgoToolkit):
         Raises:
             RetryAgentRun: When it is not a price type OpenAlgo accepts.
         """
-        text = self._required_text("price_type", value).upper()
-        if text == "SLM":
-            text = PRICE_TYPE_SLM
+        text = canonical_price_type(self._required_text("price_type", value))
         if text not in VALID_PRICE_TYPES:
             self.invalid_argument(
                 "price_type",
@@ -1526,9 +1700,9 @@ class OrdersToolkit(OpenAlgoToolkit):
             product: The product the position is held under.
 
         Returns:
-            The raw service result, or a synthetic success when the account
-            holds nothing to close, so an empty position reads as "nothing to
-            do" rather than as a failed order.
+            The raw service result, or a :class:`_NothingToClose` when the
+            position service read zero, which the pipeline reports as neither
+            a success nor a failure.
         """
         from services.place_smart_order_service import (
             place_smart_order as place_smart_order_service,
@@ -1536,19 +1710,7 @@ class OrdersToolkit(OpenAlgoToolkit):
 
         held = self._open_position_quantity(symbol, exchange, product)
         if held == 0:
-            return (
-                True,
-                {
-                    "status": "success",
-                    "message": (
-                        f"No open {product} position in {symbol} on {exchange}, so no order "
-                        "was sent."
-                    ),
-                    "quantity": 0,
-                    "closed": False,
-                },
-                200,
-            )
+            return _NothingToClose(symbol=symbol, exchange=exchange, product=product)
 
         order = {
             "strategy": self.strategy,

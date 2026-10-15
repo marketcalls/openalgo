@@ -15,25 +15,34 @@ interface BrokerStore {
   clearCapabilities: () => void
 }
 
+// The navbar and its account controls both ask at mount, before either has an
+// answer; they share the request in flight instead of sending two.
+let inflight: Promise<void> | null = null
+
 export const useBrokerStore = create<BrokerStore>()((set) => ({
   capabilities: null,
   isLoaded: false,
 
-  fetchCapabilities: async () => {
-    try {
-      const response = await fetch('/api/broker/capabilities', {
-        credentials: 'include',
-      })
+  fetchCapabilities: () => {
+    inflight ??= (async () => {
+      try {
+        const response = await fetch('/api/broker/capabilities', {
+          credentials: 'include',
+        })
 
-      if (response.ok) {
-        const data = await response.json()
-        if (data.status === 'success' && data.data) {
-          set({ capabilities: data.data, isLoaded: true })
+        if (response.ok) {
+          const data = await response.json()
+          if (data.status === 'success' && data.data) {
+            set({ capabilities: data.data, isLoaded: true })
+          }
         }
+      } catch {
+        // Silently fail — capabilities will be null, pages fall back to showing all exchanges
+      } finally {
+        inflight = null
       }
-    } catch {
-      // Silently fail — capabilities will be null, pages fall back to showing all exchanges
-    }
+    })()
+    return inflight
   },
 
   clearCapabilities: () => set({ capabilities: null, isLoaded: false }),

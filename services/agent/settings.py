@@ -112,6 +112,9 @@ KEY_VOICE_TRADING_ENABLED = "voice_trading_enabled"
 KEY_VOICE_CONFIRM_WINDOW_SECONDS = "voice_confirm_window_seconds"
 KEY_VOICE_IDLE_TIMEOUT_SECONDS = "voice_idle_timeout_seconds"
 
+# The external data servers in services/agent/mcp/registry.py, reached over MCP.
+KEY_MCP_ENABLED = "mcp_enabled"
+
 
 @dataclass(frozen=True)
 class _Field:
@@ -204,6 +207,12 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         # the thread and the transcript are already saved, so starting again
         # costs a button press.
         KEY_VOICE_IDLE_TIMEOUT_SECONDS: _Field("int", 180, minimum=30, maximum=3600),
+        # ON by default, unlike the switches above, because it is read-only:
+        # every registered MCP server offers market data only, and the toolkit
+        # cannot touch the account.
+        # A key-value row, so an existing install needs no migration and simply
+        # reads the default until the operator turns it off.
+        KEY_MCP_ENABLED: _Field("bool", True),
     }
 )
 
@@ -1960,3 +1969,18 @@ def voice_enabled(*, fresh: bool = False) -> bool:
     except Exception:
         logger.exception("Could not read the voice switch; treating it as off")
         return False
+
+
+def is_mcp_enabled(*, fresh: bool = True) -> bool:
+    """Whether the agent may read the external MCP data servers.
+
+    Args:
+        fresh: Read past the cache. True by default so switching it off takes
+            effect on the next message rather than after the TTL.
+
+    Returns:
+        True when the switch is on. An unreadable store yields the default,
+        which is on: the toolkit is read-only, so this is not a safety switch
+        that must fail closed.
+    """
+    return bool(_typed(_load_all(fresh=fresh), KEY_MCP_ENABLED))

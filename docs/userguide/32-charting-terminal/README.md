@@ -686,8 +686,23 @@ are looking at: its symbol, interval, visible bars, indicators and your own
 drawings. It can mark the chart up with levels, trend lines, zones and markers,
 and add or remove indicators.
 
-It places no orders. Its markup lives in its own named groups, so clearing what
-it drew can never remove a drawing of yours.
+Its markup lives in its own named groups, so clearing what it drew can never
+remove a drawing of yours.
+
+**Orders.** It places orders only when **Allow the agent to place, modify and
+cancel orders** is on in the Trading section of `/agent/config`, the same
+switch the `/agent` page uses. Then every order it proposes appears in the panel
+as an approval card showing the exact order, and nothing reaches your broker
+until you press Approve; the agent's risk limits still apply after that. If a
+card says some details did not arrive, Approve is disabled: reject it and ask
+again. With the switch off, it tells you trading is switched off and offers
+no Buy or Sell buttons.
+
+**OpenScript.** Ask it to write a study and it shows you the full source, then
+saves it to your OpenScript scripts once you approve. It is saved as source
+only: pick it in the OpenScript editor on this page, where it compiles, plots and
+lists any errors, and save it there once the console is clean before using it as
+a strategy.
 
 It needs a model configured first, at `/agent/config`.
 

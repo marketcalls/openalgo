@@ -59,6 +59,7 @@ boundary".
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -141,6 +142,25 @@ _NO_SINK = (
 
 _TREND_SIDES = ("auto", "support", "resistance", "both")
 _ZONE_KINDS = ("demand", "supply", "both", "range")
+
+#: Words the docstrings themselves use for a canonical value. A channel is both
+#: rails, and the consolidation words are the ones ``draw_zone`` tells the model
+#: to answer with ``range``.
+_TREND_SIDE_ALIASES: dict[str, str] = {"channel": "both"}
+_ZONE_KIND_ALIASES: dict[str, str] = dict.fromkeys(
+    ("consolidation", "sideways", "base", "box", "accumulation"), "range"
+)
+
+#: Singular and plural spellings of each drawing group, and "all" for every one
+#: of the agent's groups (mapped to the empty string, which clears them all).
+_GROUP_ALIASES: dict[str, str] = {
+    "level": cc.GROUP_LEVELS,
+    "zones": cc.GROUP_ZONE,
+    "pattern": cc.GROUP_PATTERNS,
+    "trendlines": cc.GROUP_TRENDLINE,
+    "all": "",
+    "everything": "",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -594,7 +614,7 @@ class ChartToolkit(OpenAlgoToolkit):
         if not view.is_open:
             return wrap_tool_result("draw_trendline", _NO_CHART)
 
-        wanted = self._choice("side", side or "auto", _TREND_SIDES)
+        wanted = self._choice("side", side or "auto", _TREND_SIDES, _TREND_SIDE_ALIASES)
         window = self._window(lookback_bars)
         highs, lows = geom.significant_pivots(window.bars, window.lo, window.hi)
         seconds = geom.bar_seconds(window.bars)
@@ -686,7 +706,7 @@ class ChartToolkit(OpenAlgoToolkit):
         if not view.is_open:
             return wrap_tool_result("draw_zone", _NO_CHART)
 
-        wanted = self._choice("kind", kind or "demand", _ZONE_KINDS)
+        wanted = self._choice("kind", kind or "demand", _ZONE_KINDS, _ZONE_KIND_ALIASES)
         window = self._window(lookback_bars)
         kinds = ("demand", "supply") if wanted == "both" else (wanted,)
 
@@ -809,7 +829,9 @@ class ChartToolkit(OpenAlgoToolkit):
             f"{len(rows)} chart indicator(s). " + " | ".join(parts),
         )
 
-    def add_chart_indicator(self, name: str, settings: dict | None = None) -> str:
+    def add_chart_indicator(
+        self, name: str, settings: dict[str, str | int | float | bool | None] | str | None = None
+    ) -> str:
         """Add an indicator to the chart the operator is looking at.
 
         The id is passed through to the chart, which checks its own registry and
@@ -840,15 +862,16 @@ class ChartToolkit(OpenAlgoToolkit):
         if not view.is_open:
             return wrap_tool_result("add_chart_indicator", _NO_CHART)
 
-        indicator_id = str(name or "").strip().lower()
+        indicator_id = _indicator_id(name)
         if not _INDICATOR_ID.match(indicator_id):
             self.invalid_argument(
                 "name",
                 f"'{name}' is not an indicator id.",
-                "Pass an id from list_chart_indicators, such as alphatrend.",
+                "Pass an id from list_chart_indicators, such as alphatrend. A number such "
+                "as a period goes in settings, not in the name.",
             )
 
-        payload = settings if isinstance(settings, dict) else {}
+        payload = self._settings(settings)
         command = {"op": "indicator", "action": "add", "id": indicator_id, "settings": payload}
         if not self._emit([command]):
             return wrap_tool_result("add_chart_indicator", _NO_SINK)
@@ -879,7 +902,7 @@ class ChartToolkit(OpenAlgoToolkit):
         if not view.is_open:
             return wrap_tool_result("remove_chart_indicator", _NO_CHART)
 
-        indicator_id = str(name or "").strip().lower()
+        indicator_id = _indicator_id(name)
         if not _INDICATOR_ID.match(indicator_id):
             self.invalid_argument(
                 "name",
@@ -903,12 +926,14 @@ class ChartToolkit(OpenAlgoToolkit):
 
         Args:
             group: Which of your groups to remove: ``levels``, ``trendline``,
-                ``zone`` or ``patterns``. Leave it empty to remove all of them.
+                ``zone`` or ``patterns``. Leave it empty, or pass ``all``, to
+                remove all of them.
 
         Returns:
             One line saying what was removed.
         """
         wanted = str(group or "").strip().lower()
+        wanted = _GROUP_ALIASES.get(wanted, wanted)
         if wanted and wanted not in cc.GROUPS:
             self.invalid_argument(
                 "group",
@@ -1110,7 +1135,13 @@ class ChartToolkit(OpenAlgoToolkit):
         )
         return True
 
-    def _choice(self, field: str, value: Any, allowed: tuple[str, ...]) -> str:
+    def _choice(
+        self,
+        field: str,
+        value: Any,
+        allowed: tuple[str, ...],
+        aliases: Mapping[str, str] | None = None,
+    ) -> str:
         """Validate one closed-vocabulary argument.
 
         The only shape of string argument these tools accept beside ``note``, and
@@ -1121,6 +1152,8 @@ class ChartToolkit(OpenAlgoToolkit):
             field: The argument name, exactly as the model sees it.
             value: The value the model supplied.
             allowed: The permitted values.
+            aliases: Fixed synonyms mapped to one of ``allowed``, for words the
+                tool's own docstring already gives that meaning.
 
         Returns:
             The value in lower case.
@@ -1129,6 +1162,7 @@ class ChartToolkit(OpenAlgoToolkit):
             RetryAgentRun: When the value is not in ``allowed``.
         """
         cleaned = str(value or "").strip().lower()
+        cleaned = (aliases or {}).get(cleaned, cleaned)
         if cleaned not in allowed:
             self.invalid_argument(
                 field,
@@ -1136,6 +1170,35 @@ class ChartToolkit(OpenAlgoToolkit):
                 f"Use one of: {', '.join(allowed)}.",
             )
         return cleaned
+
+    def _settings(self, settings: Any) -> dict[str, Any]:
+        """Normalise an indicator's settings, including a JSON object sent as text.
+
+        Args:
+            settings: Whatever the model passed.
+
+        Returns:
+            The settings as a dict, empty when none were given.
+
+        Raises:
+            RetryAgentRun: For a string that is not a JSON object.
+        """
+        if isinstance(settings, Mapping):
+            return dict(settings)
+        if isinstance(settings, str) and settings.strip():
+            try:
+                decoded = json.loads(settings)
+            except ValueError:
+                decoded = None
+            if not isinstance(decoded, Mapping):
+                self.invalid_argument(
+                    "settings",
+                    f"{settings.strip()[:60]!r} is not a set of named inputs",
+                    'Pass an object, for example {"period": 20}, or leave it out for the '
+                    "indicator's own defaults.",
+                )
+            return dict(decoded)
+        return {}
 
     def _note(self, note: Any) -> str:
         """Reduce a model-supplied caption to something safe to put on the chart.
@@ -1226,6 +1289,29 @@ class ChartToolkit(OpenAlgoToolkit):
             The ``<tool_result>`` block to return to the model.
         """
         return wrap_tool_result(tool, self.to_json(payload), **labels)
+
+
+def _indicator_id(name: Any) -> str:
+    """Spell an indicator name as a chart id.
+
+    Chart ids are kebab-case, so ``aroon_oscillator``, ``ut bot`` and
+    ``Parabolic SAR`` become ``aroon-oscillator``, ``ut-bot`` and
+    ``parabolic-sar``.
+
+    A bare number after a space is a setting, not part of a name: ``EMA 20`` is
+    an EMA with a period of 20, so it is left unconverted and refused rather
+    than sent as an id nothing is registered under.
+
+    Args:
+        name: The model's value.
+
+    Returns:
+        The lower-cased id with underscores and spaces turned into hyphens.
+    """
+    text = str(name or "").strip().lower()
+    if any(word.isdigit() for word in text.split()[1:]):
+        return text
+    return re.sub(r"[\s_]+", "-", text)
 
 
 def _rails(

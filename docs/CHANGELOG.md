@@ -8,6 +8,383 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### NSE index freeze limits from 5 October 2026
+
+NSE circular NSE/FAOP/76693 raised the quantity freeze limits for index
+futures and options from 5 October 2026. OpenAlgo splits an order larger than
+the freeze limit into several orders, so until this update an install kept
+splitting at the old, smaller limits: more orders than needed, slower to
+complete, with more room for the price to move between slices.
+
+| Index | Old limit | New limit | New limit in lots |
+| --- | --- | --- | --- |
+| NIFTY | 1,800 | 3,510 | 54 |
+| BANKNIFTY | 600 | 1,440 | 48 |
+| FINNIFTY | 1,800 | 3,240 | 54 |
+| MIDCPNIFTY | 2,800 | 5,760 | 48 |
+| NIFTYNXT50 | 600 | 1,125 | 45 |
+| NIFTYFPI | 8,500 | 53,900 | 49 |
+
+**Existing installs run the migration.** `install/update.sh`, the Windows
+updater and a Docker restart run it for you; a manual upgrade runs
+`cd upgrade && uv run migrate_all.py`, then restarts OpenAlgo.
+`uv run migrate_qty_freeze_oct_2026.py --status` shows what it would change.
+It only changes a limit that still holds a value OpenAlgo shipped or NSE
+published before. A limit an admin set to something else on the Freeze
+Quantities page is left alone and listed, so check those against the table
+above. New installs get the new limits from `data/qtyfreeze.csv`.
+
+- NIFTYFPI gets a freeze limit of its own. It had no row, and because its
+  contract symbols start with NIFTY, its orders were split at NIFTY's limit.
+- The API reference examples show NIFTY's new limit of 3,510.
+
+### /trading: a full-screen terminal with a cleaner toolbar and drawing rail
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- /trading uses the whole screen. The app's navigation bar is gone from this
+  page only; a Dashboard button at the left of the toolbar takes you back, and
+  the Live or Analyze badge, the mode switch, the light and dark toggle and your
+  profile menu sit at the right of the same toolbar at every screen width, with
+  the broker name beside them on wider screens.
+- The toolbar is one slim band: borderless controls with thin dividers between
+  groups, a chevron on every control that opens a list, and a soft tint in the
+  mode's colour on whatever is switched on (violet in Analyze mode). One-Click
+  keeps its name at every width and turns red while it is on. The "Chart 1"
+  button is gone; with several charts open, choosing which one the toolbar
+  drives is in the layout menu, and the chosen chart's frame is highlighted.
+- Every icon in the toolbar, the drawing rail, the right rail, the drawing style
+  bar and the chart's right-click menu is drawn at one fine line weight.
+- The drawing rail shows a small caret on a group of tools when you hover it;
+  click the caret to pick another tool of that group. A dot marks a tool held
+  for repeated use, and the magnet shows a solid dot for strong and a ring for
+  weak.
+- Zooming out with the mouse wheel keeps the latest bar at the right edge and
+  compresses history beside it, instead of opening a widening gap after the last
+  bar. Hold Ctrl (Cmd on a Mac) while scrolling to zoom about the pointer.
+- The drawing rail can fold away: the last button hides it and a small tab at
+  the bottom left of the chart brings it back. The choice is remembered, and
+  tools, drawings and shortcuts keep working while it is folded.
+- New chart colours in Live dark, Live light and Analyze mode: a fainter grid,
+  clearer up and down candles, quieter volume bars, crosshair labels in the
+  mode's colour, and a gradient under the area chart.
+
+### /trading: openalgo-charts 2.6.4
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- The mouse wheel and a trackpad zoom the chart in one smooth motion, however
+  fast the wheel turns, instead of a jolt per notch.
+- A logarithmic price scale fills the chart again. It used to leave an empty
+  band under a long series, because its margins were measured in price rather
+  than on the log scale.
+- The drawing tool icons draw a finer line, and the horizontal ray icon is
+  redrawn for it.
+
+### /trading: Renko and point and figure settings, openalgo-charts 2.6.2
+
+No database migration and no `update.sh` run are needed. Pull and restart
+OpenAlgo; the chart is part of the built frontend.
+
+**What changed for traders**
+
+- A Renko or Point & Figure chart now has a settings button beside the chart
+  type. It opens a short form: the up and down colours, percent presets, the
+  box size and how it is measured (an absolute price, a percent of price, a
+  multiple of the ATR, or a percent of the ATR), the ATR length, the reversal
+  for point and figure, and whether the boxes follow the close only or each
+  bar's high and low.
+- Renko bricks can now be sized from price or from the ATR, and built from
+  the high and low. Point and figure gains the percent-of-ATR box. The same
+  options also appear in Chart settings under Price, and the two always agree.
+- A choice is kept for that instrument and chart type, the way the box size
+  already was, because a box is a price: a 30 point brick chosen on NIFTY would
+  draw nothing on a 100 rupee stock. Reset to defaults in the form goes back
+  to the box sized from the instrument's price.
+- The range buttons under the chart (1D, 5D, 1M and the rest) and Go to no
+  longer say older history cannot load when the only gap before the loaded
+  bars is a weekend, a holiday or the hours before the market opens. A month
+  that was whole used to be reported as cut short on the days a month back
+  fell on a Sunday or a Monday.
+
+**Dependencies.** `openalgo-charts` 2.6.0 to 2.6.2. Nothing changes for a
+custom chart indicator: no built-in id was added or removed, and the
+chart-indicator skill's index and examples pass on 2.6.2.
+
+### Agent: reliable tool calls on /agent and /trading
+
+No database migration and no `update.sh` run are needed. Restart OpenAlgo after
+pulling.
+
+**Questions about several instruments now work the first time.** Asking for
+the history of TCS and INFY, the news on BHEL and RELIANCE, or expiries for
+crude, gold and silver used to fail every tool call and only succeed after the
+model gave up and asked one instrument at a time. The ChatGPT subscription
+models (and any model that reaches LiteLLM through its Responses bridge) send
+the details of several calls at once in a form LiteLLM 1.104.0 dropped; the
+agent now recovers them.
+
+**What changed for traders**
+
+- The `/trading` chart assistant can place orders, with the same approval card
+  as `/agent`, when **Allow the agent to place, modify and cancel orders** is on in
+  `/agent/config`. With it off, nothing changes: the panel offers no order
+  tools.
+- An approval card for an order whose details did not arrive (symbol,
+  quantity and so on) can no longer be approved; reject it and ask again.
+  Cancel-all and close-all, which take no details, are unaffected.
+- The agent accepts far more ways of saying the same thing: dates such as
+  `09-10-2026` or `today`, intervals such as `1d`, `daily` or `5min`, expiries
+  such as `28-OCT-26` or `2026-10-28`, `NSE:INFY` style symbols, `call`/`put`,
+  `INTRADAY`/`DELIVERY` and `SLM`. History and charts default to daily candles
+  over a recent range when no dates are given.
+- Weekly and monthly candles work on brokers that only serve daily ones: the
+  agent builds them from daily candles and says so.
+- NIFTY or SENSEX named on NSE or BSE is moved to its index exchange for option
+  chains, option symbols and option charts, as it already was for quotes.
+- The agent can write an OpenScript study or strategy and a Flow workflow,
+  guided by the `openscript` and `flow-builder` skills in `.claude/skills/`,
+  which it reads live, so edits to those files apply on the next message. An
+  OpenScript it saves is stored as source and compiles when you open it in the
+  `/trading` editor; it will not overwrite a script you have already compiled.
+
+**Now refused or reported differently**
+
+- Closing a position the broker reports as flat now says there was nothing to
+  close and to check the position book, instead of reporting success. Several
+  brokers read every position as flat, so the old success message could be
+  wrong.
+- An order on an index exchange (NSE_INDEX, BSE_INDEX) is refused with the
+  exchange its future or option trades on.
+- A price sent with a MARKET order, or a trigger sent with a LIMIT order, is
+  still refused rather than silently dropped, because the approval card would
+  otherwise show a different order from the one sent.
+
+**Not modelled, or deliberately absent**
+
+- External data over MCP is built but no server is registered. The NSE MCP
+  servers were tried and removed because they repeatedly timed out. The
+  External data section stays hidden on `/agent/config` until a server is
+  added.
+- The order risk check still charges a buy its full value, so a margin order on
+  NFO, BFO, MCX or an intraday equity order can be refused when funds are short
+  of the full notional.
+- Web search requests now run on the web server's own event loop under the
+  default eventlet worker, which removes a way they could stall the server.
+
+## [2.0.2.7] - 2026-10-08
+
+### gthread Web Server Release
+
+247 commits since 2.0.2.6, excluding automated frontend build commits, 169 of
+them through the gthread branch (#2117). Full notes:
+[version-2.0.2.7-released.md](releases/version-2.0.2.7-released.md).
+
+**This release requires a database migration.** Run
+`cd upgrade && uv run migrate_all.py` after pulling.
+
+**Ubuntu servers: run `update.sh` once** to install `openscript`, `litellm`,
+`agno` and `ddgs`, a browser for Telegram /chart, and to set `.env` and `db/`
+back to owner-only.
+
+**Smart orders now refuse when the broker does not answer the position
+check.** `/api/v1/placesmartorder` returns an error and sends nothing in that
+case, where it used to place the full quantity as if you were flat.
+
+### Highlights
+
+- OpenAlgo can run under gunicorn's gthread worker, a real thread per request
+  from a fixed pool of 64, as an opt-in beside eventlet. eventlet stays the
+  default and an install that adds nothing to `.env` is left exactly as it is.
+  Races that only eventlet's lack of preemption made safe are closed for every
+  install.
+- The charting terminal moves to openalgo-charts 2.6.0 and OpenScript 0.8.1,
+  with a bottom bar, a trading-hours axis, a data window, drawings per symbol,
+  a price scale menu, right-click position actions, chart-wide undo and a
+  backtest equity view that shows the whole run.
+- A smart order no longer doubles or reverses a position when the broker does
+  not answer the position check, and updates no longer leave secrets readable
+  by every account on the server.
+- Fixes for Angel One, Kotak, Zerodha, Fyers, Shoonya, Flattrade, Groww and
+  five market data feeds.
+
+### Optional gthread web server
+
+OpenAlgo can now run under gunicorn's gthread worker, which gives every request
+its own thread from a fixed pool of 64, instead of eventlet. **eventlet stays
+the default.** An install that does not add `OPENALGO_WORKER_CLASS = 'gthread'`
+to `.env` keeps its service file, nginx configuration and dependencies exactly
+as they are, and an update does not switch anything. How to switch, check that
+it works and switch back: [docs/gthread/README.md](gthread/README.md).
+
+- **Ubuntu:** after 23:30 IST, `sudo bash install/switch-worker.sh --to gthread`.
+  The script backs up the service file, checks the result and puts the old one
+  back if OpenAlgo does not come up. It refuses to restart during the trading
+  day unless given `--force`.
+- **Docker:** set the line in `.env`, add `stop_grace_period: 45s` to the
+  OpenAlgo service in `docker-compose.yaml` (a gthread stop gives open requests
+  and running strategies up to 30 seconds, and Docker would otherwise cut it off
+  at 10), and recreate the container.
+- `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
+
+**Further fixes from review.** Historify no longer holds up the rest of
+OpenAlgo while it waits to write to its database, cancelling a download paused
+on its last symbol no longer leaves it stuck, and a download that finishes
+while you pause or resume it is still shown as finished. A sandbox funds change
+that fails no longer blocks the sandbox database or saves half of an order
+change, and cancelling a sandbox order says so when its margin could not be
+released. Under gthread, a Definedge order the broker answered with a rate
+limit is not sent a second time, and is not reported as refused before sending,
+because it may have reached the broker. The Action Center explains that a
+delayed split or basket order may still be sending. The market data service is
+started again if its first start fails, and one started while OpenAlgo was
+stopping is shut down with it. Chartink tries again to put back scheduled jobs
+it could not restore after a restart. The switch script leaves your previous
+setup as it was when it cannot back up or write the service file. The guide
+now covers each platform and what to check before running continuously.
+
+**What gthread refuses that eventlet waits for.** A request that would wait too
+long is answered with a sentence instead: a broker rate limit that would hold a
+request more than about 10 seconds (HTTP 429, nothing sent), a second order on
+the same symbol still waiting after 30 seconds, a live and sandbox mode change
+still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
+(live status on the Python Strategies page, remote MCP, agent chats). A Flow workflow whose
+Delay and Wait Until steps add up to more than 10 seconds answers at once (HTTP
+202) and runs in the background, up to 16 waiting on a Delay and 4 on a Wait
+Until at the same time; a refused one is shown in its execution history. The
+full list is in the guide above. None of this happens on eventlet.
+
+**Only under gthread, as eventlet already behaved or as the web page already
+did:**
+
+- Python strategies that were running when the server stopped are started
+  again when it comes back, as after an eventlet restart.
+- The Telegram live and sandbox mode buttons start or stop the sandbox engine
+  and square-off, as the web toggle does.
+- Chartink intraday square-off jobs are put back after a restart, for
+  strategies that are switched on, and scheduled starts, stops and square-offs
+  still run when they reach a thread up to five minutes late.
+- Action Center: approving an order another screen already approved or
+  rejected answers 409 with a sentence, and an order the broker pacer refused
+  before sending goes back to the pending list to be approved again.
+- IIFL: an order write answered with a rate limit is not sent a second time,
+  and a cancel or modify whose failure came back inside an HTTP 200 is reported
+  as a failure.
+- Docker: the container starts the market data service again if it stops
+  (after 1 second, then longer if it keeps stopping, up to 30 seconds), and
+  stops it within 5 seconds of OpenAlgo stopping. The container's first process
+  is now the start script, which passes a stop or an interrupt on to OpenAlgo;
+  other signals no longer reach it.
+
+**Changes on every install, eventlet included:**
+
+- The in-process market data client keeps reconnecting after a drop, every 30
+  seconds at most, instead of giving up for good on the fifth; it logs a short
+  warning every ten failed attempts.
+- Telegram: a bot token Telegram rejects is reported in a sentence instead of
+  an HTTP status, a check that gets no readable answer from Telegram counts as
+  failed instead of storing the token unchecked, and Start while the bot is
+  still starting or stopping is refused instead of starting a second copy.
+- Force master contract download while the login download is still running
+  answers 409 with a sentence instead of starting a second download over it.
+  Historify refuses to retry a download that is still running, or was
+  cancelled a moment ago and has not stopped yet.
+- Action Center: an approval whose send could not be recorded is put back in
+  the pending list and the operator is told it was not sent.
+- Action Center: an approved order that a restart or crash cut off while it was
+  being sent is shown as not confirmed, with a note that it may or may not have
+  reached the broker and to check the broker's order book before placing it
+  again. OpenAlgo never sends it again, and the page offers no way to. An order
+  still being sent is shown as Sending, with no note; only one still unanswered
+  two minutes after its approval, longer than any send takes, is shown as not
+  confirmed. The All Orders tab lists every order, not only the pending ones.
+- Each browser tab keeps one live update connection, shared by every page in
+  it. The Action Center, WhatsApp and Historify pages used to open a second
+  one, and Historify showed every order alert twice while it was open.
+- A sandbox GTT leg whose position has another order in progress fires on the
+  next tick instead of holding up every other tick until that order finishes.
+- The system report shows the web server, the one `.env` asks for, the request
+  threads, where the market data proxy runs and whether it is running. The
+  admin Diagnostics page shows the same details in a Web server card, in plain
+  words, and its uptime in hours and days. Threads free counts the request
+  threads that are idle, and none while requests are waiting.
+- The option chain, Greeks, IV, OI, max pain, volatility surface, straddle,
+  GEX and Strategy Builder tools, the Arbitrage spread order and the portfolio
+  tearsheet download show the server's own sentence when a request is refused
+  because the broker is busy or a limit was reached, instead of a generic
+  error or a status code. Every other failure shows what it showed before.
+- On a stop, the server waits up to 15 seconds for the market data proxy
+  process to exit before it exits itself, instead of leaving it to systemd.
+- Saving broker credentials refuses a value containing a line break (HTTP 400)
+  instead of writing it into `.env` as two lines.
+- Jainam XTS and Wisdom: the order book, trade book, positions and holdings no
+  longer fail on a server whose Python has no Tk.
+- A master contract reload clears the cached option strikes, and an empty
+  strike lookup is no longer cached.
+- Many races that could double a sandbox fill, a settlement or an alert are
+  closed. When requests do not overlap, the outcome is exactly as before.
+- Removed `services/telegram_bot_service_fixed.py` and
+  `services/telegram_bot_service_v2.py`, which nothing imported.
+- Motilal Oswal, Pocketful, Tradejini and Nubra: quote and market depth
+  requests answer as soon as the broker has sent everything they read, instead
+  of always waiting a fixed time. The answers are the same; they come sooner.
+- Pocketful: other requests no longer queue behind the market data feed while
+  it connects. A quote asked for after the feed dropped is answered from a new
+  packet, never from one left behind by an earlier request.
+- OpenScript: Stop reports "closed and stopped" only when the run confirms that
+  its position was closed. A run that crashed, or was stopped before its
+  closing order filled, is still marked stopped, and Stop now says it could not
+  confirm the close and asks you to check your positions. A run started before
+  this update cannot confirm, so its first Stop afterwards says so even when it
+  did close. Before it measures what it holds, Stop now cancels every order of
+  the run still working at the broker and counts the fills that came of them,
+  so an entry that filled a moment before Stop is closed, and a resting limit
+  or stop order cannot fill after the run has gone. If an order will not
+  finish, the run keeps running and says which order to check. Two Stops at
+  the same moment no longer lose each other's confirmation.
+- `install/update.sh` updates an instance made by `install-multi.sh` when run
+  from inside it, and restarts that instance's service. It used to treat such
+  an instance as a development checkout and never stopped or started its
+  service. A server that also has a single install at `/var/python/openalgo`
+  keeps updating that one, as before. Run from another OpenAlgo checkout, such
+  as a development clone on the same server, it updates that checkout and
+  leaves every instance and its service alone, as before.
+- Restarting OpenAlgo no longer writes a false error with a traceback from the
+  market data client. While OpenAlgo is stopping, the client does not try to
+  reconnect. A market data service that is not accepting connections is
+  reported as a one-line warning instead of a traceback, and after 12 attempts
+  in a row, about a minute, as one error saying that live prices and
+  tick-driven stops are not updating until it is back.
+- Upstox: when the Upstox login expires overnight, the market data feed no
+  longer fills the log retrying a link Upstox has already refused. It writes
+  one warning saying to log in to Upstox again, retries quietly, and says so
+  when the feed is back after the next login.
+- Historify gives new watchlist symbols, downloads and schedule runs their IDs
+  from counters kept in its database, so two requests at the same moment can
+  no longer take the same ID. The counters are created for an existing
+  database by the database upgrade (`upgrade/migrate_historify_sequences.py`,
+  run by `migrate_all.py`) and checked again every time OpenAlgo starts. That
+  check also moves a counter past IDs an older version used, so going back to
+  an older release and returning no longer leaves Historify unable to add
+  symbols or store data for new ones. `--status` reports what it would change
+  without changing it.
+
+**Going back to an older release.** A service switched to the launcher starts
+through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
+`sudo bash install/switch-worker.sh --restore` before checking out an older
+revision; it puts the saved service file back and sets `.env` back to eventlet.
+Coming back afterwards needs nothing extra for Historify: its ID counters are
+checked again on the first start.
+
+**Still not modelled.** The sandbox margin reconcile does not count margin held
+by open and trigger-pending orders (unchanged from before).
+
 ### Charting terminal on openalgo-charts 2.6.0 and OpenScript 0.8.1
 
 `/trading` moves from openalgo-charts 2.5.1 to 2.6.0, and OpenScript from 0.5.0
@@ -263,177 +640,6 @@ format gains the other two in its next patch.
   Master Contract polling stops at completion, permits one status request at a
   time, and aborts that request when the page closes.
 
-### Optional gthread web server
-
-OpenAlgo can now run under gunicorn's gthread worker, which gives every request
-its own thread from a fixed pool of 64, instead of eventlet. **eventlet stays
-the default.** An install that does not add `OPENALGO_WORKER_CLASS = 'gthread'`
-to `.env` keeps its service file, nginx configuration and dependencies exactly
-as they are, and an update does not switch anything. How to switch, check that
-it works and switch back: [docs/gthread/README.md](gthread/README.md).
-
-- **Ubuntu:** after 23:30 IST, `sudo bash install/switch-worker.sh --to gthread`.
-  The script backs up the service file, checks the result and puts the old one
-  back if OpenAlgo does not come up. It refuses to restart during the trading
-  day unless given `--force`.
-- **Docker:** set the line in `.env`, add `stop_grace_period: 45s` to the
-  OpenAlgo service in `docker-compose.yaml` (a gthread stop gives open requests
-  and running strategies up to 30 seconds, and Docker would otherwise cut it off
-  at 10), and recreate the container.
-- `OPENALGO_WORKER_CLASS` is the only new setting. The thread count is fixed.
-
-**Further fixes from review.** Historify no longer holds up the rest of
-OpenAlgo while it waits to write to its database, cancelling a download paused
-on its last symbol no longer leaves it stuck, and a download that finishes
-while you pause or resume it is still shown as finished. A sandbox funds change
-that fails no longer blocks the sandbox database or saves half of an order
-change, and cancelling a sandbox order says so when its margin could not be
-released. Under gthread, a Definedge order the broker answered with a rate
-limit is not sent a second time, and is not reported as refused before sending,
-because it may have reached the broker. The Action Center explains that a
-delayed split or basket order may still be sending. The market data service is
-started again if its first start fails, and one started while OpenAlgo was
-stopping is shut down with it. Chartink tries again to put back scheduled jobs
-it could not restore after a restart. The switch script leaves your previous
-setup as it was when it cannot back up or write the service file. The guide
-now covers each platform and what to check before running continuously.
-
-**What gthread refuses that eventlet waits for.** A request that would wait too
-long is answered with a sentence instead: a broker rate limit that would hold a
-request more than about 10 seconds (HTTP 429, nothing sent), a second order on
-the same symbol still waiting after 30 seconds, a live and sandbox mode change
-still waiting after 30 seconds (HTTP 409), and caps on long-lived streams
-(live status on the Python Strategies page, remote MCP, agent chats). A Flow workflow whose
-Delay and Wait Until steps add up to more than 10 seconds answers at once (HTTP
-202) and runs in the background, up to 16 waiting on a Delay and 4 on a Wait
-Until at the same time; a refused one is shown in its execution history. The
-full list is in the guide above. None of this happens on eventlet.
-
-**Only under gthread, as eventlet already behaved or as the web page already
-did:**
-
-- Python strategies that were running when the server stopped are started
-  again when it comes back, as after an eventlet restart.
-- The Telegram live and sandbox mode buttons start or stop the sandbox engine
-  and square-off, as the web toggle does.
-- Chartink intraday square-off jobs are put back after a restart, for
-  strategies that are switched on, and scheduled starts, stops and square-offs
-  still run when they reach a thread up to five minutes late.
-- Action Center: approving an order another screen already approved or
-  rejected answers 409 with a sentence, and an order the broker pacer refused
-  before sending goes back to the pending list to be approved again.
-- IIFL: an order write answered with a rate limit is not sent a second time,
-  and a cancel or modify whose failure came back inside an HTTP 200 is reported
-  as a failure.
-- Docker: the container starts the market data service again if it stops
-  (after 1 second, then longer if it keeps stopping, up to 30 seconds), and
-  stops it within 5 seconds of OpenAlgo stopping. The container's first process
-  is now the start script, which passes a stop or an interrupt on to OpenAlgo;
-  other signals no longer reach it.
-
-**Changes on every install, eventlet included:**
-
-- The in-process market data client keeps reconnecting after a drop, every 30
-  seconds at most, instead of giving up for good on the fifth; it logs a short
-  warning every ten failed attempts.
-- Telegram: a bot token Telegram rejects is reported in a sentence instead of
-  an HTTP status, a check that gets no readable answer from Telegram counts as
-  failed instead of storing the token unchecked, and Start while the bot is
-  still starting or stopping is refused instead of starting a second copy.
-- Force master contract download while the login download is still running
-  answers 409 with a sentence instead of starting a second download over it.
-  Historify refuses to retry a download that is still running, or was
-  cancelled a moment ago and has not stopped yet.
-- Action Center: an approval whose send could not be recorded is put back in
-  the pending list and the operator is told it was not sent.
-- Action Center: an approved order that a restart or crash cut off while it was
-  being sent is shown as not confirmed, with a note that it may or may not have
-  reached the broker and to check the broker's order book before placing it
-  again. OpenAlgo never sends it again, and the page offers no way to. An order
-  still being sent is shown as Sending, with no note; only one still unanswered
-  two minutes after its approval, longer than any send takes, is shown as not
-  confirmed. The All Orders tab lists every order, not only the pending ones.
-- Each browser tab keeps one live update connection, shared by every page in
-  it. The Action Center, WhatsApp and Historify pages used to open a second
-  one, and Historify showed every order alert twice while it was open.
-- A sandbox GTT leg whose position has another order in progress fires on the
-  next tick instead of holding up every other tick until that order finishes.
-- The system report shows the web server, the one `.env` asks for, the request
-  threads, where the market data proxy runs and whether it is running. The
-  admin Diagnostics page shows the same details in a Web server card, in plain
-  words, and its uptime in hours and days. Threads free counts the request
-  threads that are idle, and none while requests are waiting.
-- The option chain, Greeks, IV, OI, max pain, volatility surface, straddle,
-  GEX and Strategy Builder tools, the Arbitrage spread order and the portfolio
-  tearsheet download show the server's own sentence when a request is refused
-  because the broker is busy or a limit was reached, instead of a generic
-  error or a status code. Every other failure shows what it showed before.
-- On a stop, the server waits up to 15 seconds for the market data proxy
-  process to exit before it exits itself, instead of leaving it to systemd.
-- Saving broker credentials refuses a value containing a line break (HTTP 400)
-  instead of writing it into `.env` as two lines.
-- Jainam XTS and Wisdom: the order book, trade book, positions and holdings no
-  longer fail on a server whose Python has no Tk.
-- A master contract reload clears the cached option strikes, and an empty
-  strike lookup is no longer cached.
-- Many races that could double a sandbox fill, a settlement or an alert are
-  closed. When requests do not overlap, the outcome is exactly as before.
-- Removed `services/telegram_bot_service_fixed.py` and
-  `services/telegram_bot_service_v2.py`, which nothing imported.
-- Motilal Oswal, Pocketful, Tradejini and Nubra: quote and market depth
-  requests answer as soon as the broker has sent everything they read, instead
-  of always waiting a fixed time. The answers are the same; they come sooner.
-- Pocketful: other requests no longer queue behind the market data feed while
-  it connects. A quote asked for after the feed dropped is answered from a new
-  packet, never from one left behind by an earlier request.
-- OpenScript: Stop reports "closed and stopped" only when the run confirms that
-  its position was closed. A run that crashed, or was stopped before its
-  closing order filled, is still marked stopped, and Stop now says it could not
-  confirm the close and asks you to check your positions. A run started before
-  this update cannot confirm, so its first Stop afterwards says so even when it
-  did close. Before it measures what it holds, Stop now cancels every order of
-  the run still working at the broker and counts the fills that came of them,
-  so an entry that filled a moment before Stop is closed, and a resting limit
-  or stop order cannot fill after the run has gone. If an order will not
-  finish, the run keeps running and says which order to check. Two Stops at
-  the same moment no longer lose each other's confirmation.
-- `install/update.sh` updates an instance made by `install-multi.sh` when run
-  from inside it, and restarts that instance's service. It used to treat such
-  an instance as a development checkout and never stopped or started its
-  service. A server that also has a single install at `/var/python/openalgo`
-  keeps updating that one, as before. Run from another OpenAlgo checkout, such
-  as a development clone on the same server, it updates that checkout and
-  leaves every instance and its service alone, as before.
-- Restarting OpenAlgo no longer writes a false error with a traceback from the
-  market data client. While OpenAlgo is stopping, the client does not try to
-  reconnect. A market data service that is not accepting connections is
-  reported as a one-line warning instead of a traceback, and after 12 attempts
-  in a row, about a minute, as one error saying that live prices and
-  tick-driven stops are not updating until it is back.
-- Upstox: when the Upstox login expires overnight, the market data feed no
-  longer fills the log retrying a link Upstox has already refused. It writes
-  one warning saying to log in to Upstox again, retries quietly, and says so
-  when the feed is back after the next login.
-- Historify gives new watchlist symbols, downloads and schedule runs their IDs
-  from counters kept in its database, so two requests at the same moment can
-  no longer take the same ID. The counters are created for an existing
-  database by the database upgrade (`upgrade/migrate_historify_sequences.py`,
-  run by `migrate_all.py`) and checked again every time OpenAlgo starts. That
-  check also moves a counter past IDs an older version used, so going back to
-  an older release and returning no longer leaves Historify unable to add
-  symbols or store data for new ones. `--status` reports what it would change
-  without changing it.
-
-**Going back to an older release.** A service switched to the launcher starts
-through `install/openalgo-gunicorn.sh`, which older releases do not contain. Run
-`sudo bash install/switch-worker.sh --restore` before checking out an older
-revision; it puts the saved service file back and sets `.env` back to eventlet.
-Coming back afterwards needs nothing extra for Historify: its ID counters are
-checked again on the first start.
-
-**Still not modelled.** The sandbox margin reconcile does not count margin held
-by open and trigger-pending orders (unchanged from before).
-
 ### Agent: newer models and four new providers
 
 The Agent's provider and model lists at `/agent/config` come from LiteLLM, which
@@ -563,6 +769,32 @@ added keep working as they are.
   use Debian, Raspberry Pi OS or the Docker install. Docker installs were not
   affected.
 
+### Brokers
+
+- **Angel One:** an empty or unreadable order response is recovered from the
+  order book by its order tag instead of being reported as a rejection, and is
+  never resent; history requests use IST windows (#2176).
+- **Kotak:** order tags for the September 2026 API (#2145), then a unique tag
+  per order, since a fixed one rejected every order after the first (#2178,
+  #2177).
+- **Zerodha:** in-flight statuses such as `OPEN PENDING` and `TRIGGER PENDING`
+  read as open instead of inheriting the previous order's final status (#2185);
+  blank master contract names are filled from the trading symbol (#2123).
+- **Fyers:** TBT 50-level depth indexed by level (#2122), the TBT socket's
+  credentials and the published index names (#2139, #2140), index and
+  government bond rows typed as EQ (#2124), and the existing symbols kept when
+  a download fails (#2108).
+- **Shoonya:** NSE stocks appear in symbol search again (#2164), and invalid
+  history candles are repaired so intraday charts load (#2154).
+- **Flattrade:** basket margin reported after hedging (#2156).
+- **Groww:** position prices reported in the rupees Groww sent (#2173).
+- **Feeds:** Firstock, Pocketful and RMoney subscriptions batched and a
+  Pocketful watchdog (#2176), a data-stall watchdog for 5 Paisa XTS (#2155),
+  and HDFC Securities publishing every subscribed mode (#2124).
+- **Dhan sandbox:** well-formed candles so the chart loads, and an empty
+  history instead of a crash (#2114, #2057).
+- The navbar no longer overflows between the xl and 2xl breakpoints (#2119).
+
 ### Dependencies
 
 Security updates for every open advisory. Nothing to do beyond the usual
@@ -587,9 +819,35 @@ update; no behaviour change is expected.
   exhaustion from crafted input), `postcss-selector-parser` 7.1.6, and `katex`
   0.18. KaTeX is a dependency of the chat UI library that OpenAlgo never loads,
   so no page changes.
+- Frontend code editor: `@uiw/react-codemirror` and `@uiw/codemirror-themes`
+  4.25.4 to 4.25.12, with the CodeMirror 6 core they sit on (`view` 6.43,
+  `state` 6.7, `language` 6.13). These draw the strategy editor and log viewer
+  at `/python`, and the JSON views in Playground, Analyzer, Logs, TradingView
+  and GoCharting. Nothing changes on screen.
 - **Not fixed:** `braces`, used only by the frontend test tools, has an open
   advisory (GHSA-vfj7-8cjw-p6xm) with no patched release yet. It never reaches
   a browser or the server.
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; the gthread web server
+  (#2117) and its audit, race fixes, refusals and guide; the charting terminal
+  on openalgo-charts 2.6.0 and OpenScript 0.8.1 (#2162) and its bottom bar,
+  drawings, data window, price scale, right-click actions, undo and backtest
+  equity; the smart order position read fix; OpenScript Stop confirmation;
+  install fixes (#2115, #2144, #2165, #2166); WhatsApp session persistence
+  (#2167); agent fixes (#2081) and LiteLLM 1.104.0; dependency security
+  updates.
+- **@Kalaiviswa** - Angel One, Firstock, Pocketful and RMoney (#2176); Zerodha
+  (#2185, #2123); Kotak order tags (#2145) and the 5 Paisa XTS watchdog
+  (#2155); Shoonya (#2164, #2154); Flattrade basket margin (#2156); Fyers and
+  HDFC Securities (#2139, #2140, #2124); the Historify gthread audit (#2142);
+  Dhan sandbox candles (#2114).
+- **@vibecoding-skills (Harsh Dattani)** - Groww position prices (#2173);
+  Fyers symbols kept on a failed download (#2108).
+- **@arsalanansari17** - a unique Kotak order tag per order (#2178).
+- **@Azhagesan-dev (Azhagesan)** - Fyers TBT 50-level depth (#2122).
+- **@samadarsh (Adarsh)** - the navbar overflow fix (#2119).
 
 ## [2.0.2.6] - 2026-09-23
 
