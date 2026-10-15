@@ -142,6 +142,12 @@ import {
   ToolbarDivider,
 } from './toolbarStyles'
 
+// OI Profile earns a toolbar control of its own rather than living only behind
+// Indicators: it is a whole view of the option chain, toggled far more often
+// than any single study, and every terminal that offers one puts it here.
+const OI_PROFILE_ID = 'oi-profile-live'
+const OI_PROFILE_FILE = 'oi_profile_live.js'
+
 // The forms a chart opens on request: none is needed to paint it. Mounted only
 // while open, so their code is fetched on the first opening rather than with
 // every chart.
@@ -1361,41 +1367,37 @@ export function ChartPane({
             line on the price - the same place Sensibull puts it. Hidden unless
             the indicator is actually installed. */}
           {oiProfileInstalled && (
-            <div className="flex shrink-0 items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                className={cn(
-                  'h-8 shrink-0 gap-1',
-                  oiProfile && 'border-primary text-primary',
-                  oiProfile && 'rounded-r-none border-r-0'
-                )}
-                title={oiProfile ? 'Hide the OI Profile' : 'Show open interest per strike'}
-                onClick={() => void toggleOiProfile()}
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Tip
+                tip={{
+                  title: oiProfile ? 'Hide the OI Profile' : 'OI Profile',
+                  sub: 'Open interest and its change per strike, on the price',
+                }}
               >
-                <span
-                  aria-hidden
-                  className={cn(
-                    'flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border text-[9px] leading-none',
-                    oiProfile
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-current'
-                  )}
+                <button
+                  type="button"
+                  className={cn(TB_BTN, oiProfile && TB_ON)}
+                  aria-label="OI Profile"
+                  aria-pressed={Boolean(oiProfile)}
+                  onClick={() => void toggleOiProfile()}
                 >
-                  {oiProfile ? '✓' : ''}
-                </span>
-                <span className="hidden sm:inline">OI Profile</span>
-              </Button>
+                  <ChromeIcon id="chart-column" className="rotate-90" />
+                  <span className={TB_LABEL_2XL}>OI Profile</span>
+                </button>
+              </Tip>
               {oiProfile && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-8 shrink-0 rounded-l-none border-primary p-0 text-primary"
-                  title="OI Profile settings"
-                  onClick={() => terminalRef.current?.openIndicatorSettings(oiProfile.id)}
+                <Tip
+                  tip={{ title: 'OI Profile settings', sub: 'Mode, expiries, strikes and colours' }}
                 >
-                  <Settings className="h-3.5 w-3.5" />
-                </Button>
+                  <button
+                    type="button"
+                    className={cn(TB_BTN, TB_ICON)}
+                    aria-label="OI Profile settings"
+                    onClick={() => terminalRef.current?.openIndicatorSettings(oiProfile.id)}
+                  >
+                    <ChromeIcon id="settings" />
+                  </button>
+                </Tip>
               )}
             </div>
           )}
