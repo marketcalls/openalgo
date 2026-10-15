@@ -58,18 +58,24 @@ function harness({ settings, fetchImpl, plotWidth = 800, priceToY = (p) => 400 -
   const frame = (hoverId = null) => {
     const texts = []
     const rects = []
+    const outlines = []
+    const placed = []
     const noop = () => {}
     const canvas = new Proxy(
       {
         measureText: (t) => ({ width: t.length * 6 }),
-        fillText: (t) => texts.push(t),
+        fillText: (t, x, y) => {
+          texts.push(t)
+          placed.push({ t, x, y })
+        },
         fillRect: (x, y, w, h) => rects.push({ x, y, w, h }),
+        strokeRect: (x, y, w, h) => outlines.push({ x, y, w, h }),
       },
       { get: (t, k) => (k in t ? t[k] : noop), set: () => true }
     )
     if (hoverId) primitive.hitTest(plotWidth - 20, 300, rc(null))
     primitive.draw(canvas, rc(hoverId))
-    return { texts, rects }
+    return { texts, rects, outlines, placed }
   }
   const tick = (symbol, oi) => ticks.get(symbol)?.({ symbol, data: { oi, oi_updated_at: Date.now() } })
   return { teardown, frame, tick, ticks }
@@ -247,5 +253,47 @@ test('a fresh instance after the settings dialog paints at once and asks nothing
     assert.equal(log.filter((c) => c.url.includes('profile-data')).length, asked, 'no request for an answer seconds old')
   } finally {
     second.teardown()
+  }
+})
+
+test("yesterday's outline stays inside the open interest column", async () => {
+  // 23350's calls have unwound: 5,000 now against 9,000 yesterday, more than
+  // any bar on screen today. Scaled to today alone, its outline ran 252px
+  // into a 140px column, over the change column beside it.
+  const unwound = CHAIN.map((r) =>
+    r.strike === 23350
+      ? { ...r, ce_oi_change: -4000, ce_legs: [{ ...r.ce_legs[0], base: 9000 }] }
+      : r
+  )
+  const h = harness({
+    settings: { mode: 'both', outline: true },
+    fetchImpl: async (url, opts) => {
+      if (String(url).includes('/search/api/expiries')) return ok({ expiries: ['22-SEP-26'] })
+      if (String(url).includes('csrf')) return ok({ csrf_token: 't' })
+      return ok({ ...success, oi_chain: unwound })
+    },
+  })
+  try {
+    await waitFor(() => h.frame().outlines.length > 0, 'the outlines')
+    const { outlines } = h.frame()
+    for (const o of outlines) {
+      assert.ok(o.x >= 660 - 0.01 && o.x + o.w <= 800.01, `outline ${o.x}..${o.x + o.w} leaves the 660..800 column`)
+    }
+    // The widest outline, 9,000, now spans the column exactly.
+    assert.equal(Math.round(Math.max(...outlines.map((o) => o.w))), 140)
+  } finally {
+    h.teardown()
+  }
+})
+
+test('the status line sits below the first row of the chart legend', async () => {
+  const h = harness({ settings: { mode: 'both', outline: false }, fetchImpl: routine() })
+  try {
+    await waitFor(() => h.frame().texts.some((t) => t.startsWith('OI Profile: Updated')), 'the status line')
+    const status = h.frame().placed.find((p) => p.t.startsWith('OI Profile: Updated'))
+    // The legend's first row (symbol, OHLC) runs to about 22px.
+    assert.ok(status.y >= 24, `status drawn at y=${status.y}`)
+  } finally {
+    h.teardown()
   }
 })

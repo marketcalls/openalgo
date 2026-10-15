@@ -185,6 +185,10 @@ function modeOf(settings) {
 // the change bars' right edge cannot read as the start of the OI bars.
 const COLUMN_GAP_PX = 14
 
+// Where the status line sits: below the first row of the chart's legend, which
+// carries the symbol and its OHLC values across most of the pane's width.
+const STATUS_TOP_PX = 30
+
 /**
  * How wide each bar column is, and the gap between them. One column is the
  * Max Bar Width setting. Both draws two columns of that width, unless the pair
@@ -528,9 +532,19 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
           // the same bar.
           let maxVal = 0
           let minVal = 0
+          // The dashed outline is yesterday's open interest on the same scale,
+          // so it counts toward the width too. Scaled to today's alone, a
+          // strike that has unwound since drew its outline past the column:
+          // into the change column in Both (seen on CRUDEOIL 9000), into the
+          // candles otherwise.
+          const outlined = kind === 'oi' && settings.outline !== false && state.hasChange
           for (const r of rows) {
             maxVal = Math.max(maxVal, r[ce], r[pe])
             minVal = Math.min(minVal, r[ce], r[pe])
+            if (outlined) {
+              if (r.ceKnown) maxVal = Math.max(maxVal, r.cePrev)
+              if (r.peKnown) maxVal = Math.max(maxVal, r.pePrev)
+            }
           }
           const scale = width / (maxVal - minVal || 1)
           return { kind, ce, pe, right, width, scale, originX: right - Math.abs(minVal) * scale, minVal }
@@ -627,7 +641,10 @@ export default function ({ registerIndicator, nulls, subscribeQuotes }) {
         // line its left edge.
         const barColumn = columnWidths(rc, settings, state.valueMode).total
         const x = Math.max(4, rc.plotWidth - barColumn - w - pad * 2 - 10)
-        const y = 6
+        // The second row, under the chart's own legend: on the first, a Both
+        // view pushed the line far enough left to print over the symbol's
+        // OHLC values (seen on NIFTY futures in a 1440px window).
+        const y = STATUS_TOP_PX
         canvasCtx.globalAlpha = 0.85
         canvasCtx.fillStyle = TOOLTIP_BG
         canvasCtx.beginPath()

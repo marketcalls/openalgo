@@ -44,6 +44,9 @@ loaded at runtime, so pulling and reloading the chart is enough.
   ("PCR 1.34 (ATM ±25)") and the max pain, which can be read even when its
   strike is off screen. Sensibull's PCR covers ATM +-10 by default; over the
   same strikes the two agreed exactly on NIFTY, BANKNIFTY and RELIANCE.
+- **Yesterday's dashed outline stays inside its column**, also for a strike
+  that has unwound since, and the status line sits under the chart's legend
+  rather than over the symbol's OHLC values.
 - **Max Pain with expiries combined** is the nearest expiry's, labelled with
   it. It used to be taken over the summed open interest, which no contract
   settles at.
