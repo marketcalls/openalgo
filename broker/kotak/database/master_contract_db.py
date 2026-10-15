@@ -521,6 +521,10 @@ def get_kotak_master_filepaths():
     return {}
 
 
+# Scale of every price in the cde_fo file; see process_kotak_cds_csv.
+CDS_PRICE_DIVISOR = 10_000_000
+
+
 def process_kotak_cds_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
@@ -543,11 +547,19 @@ def process_kotak_cds_csv(path):
     # Format the datetime object to the desired format '15-APR-24'
     tokensymbols["expiry"] = tokensymbols["expiry"].dt.strftime("%d-%b-%y").str.upper()
 
-    tokensymbols["strike"] = df["dStrikePrice"] / 100
+    # cde_fo prices are in units of 10^-7 rupees (lPrecision 4 x lMultiplier
+    # 1000), not paise like the other segments: USDINR26DEC101.75PE carries
+    # dStrikePrice 1017500000 and USDINR's 0.0025 tick is dTickSize 25000.
+    # Dividing by 100 stored strike 10175000 and built symbols from it.
+    # Futures carry the placeholder -1; keep it at -0.01 like the other
+    # Kotak segments rather than scaling it to -1e-07.
+    tokensymbols["strike"] = (df["dStrikePrice"] / CDS_PRICE_DIVISOR).where(
+        df["dStrikePrice"] > 0, df["dStrikePrice"] / 100
+    )
     tokensymbols["strike"] = tokensymbols["strike"].apply(lambda x: int(x) if x.is_integer() else x)
 
     tokensymbols["lotsize"] = df["lLotSize"]
-    tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
+    tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / CDS_PRICE_DIVISOR
     tokensymbols["brsymbol"] = df["pTrdSymbol"]
     tokensymbols["brexchange"] = df["pExchSeg"]
     tokensymbols["exchange"] = "CDS"
