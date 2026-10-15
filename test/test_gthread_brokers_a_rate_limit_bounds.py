@@ -333,7 +333,7 @@ def test_definedge_sent_order_throttle_is_not_a_pre_send_refusal(gthread, monkey
         recorder.stop()
 
 
-def test_definedge_legacy_order_throttle_still_retries(not_gthread, monkeypatch):
+def test_definedge_legacy_order_throttle_still_retries(not_gthread, monkeypatch, module_sleep):
     from broker.definedge.api import rate_limiter as definedge
 
     throttled = SimpleNamespace(status_code=429, headers={"Retry-After": "0.05"})
@@ -347,7 +347,7 @@ def test_definedge_legacy_order_throttle_still_retries(not_gthread, monkeypatch)
             return next(responses)
 
     monkeypatch.setattr(definedge, "_last_call_time", {})
-    monkeypatch.setattr(definedge.time, "sleep", lambda _seconds: None)
+    module_sleep(definedge, lambda _seconds: None)
     result = definedge.rate_limited_request(
         Client(), "POST", "https://example.invalid/placeorder", wait_kind="order"
     )

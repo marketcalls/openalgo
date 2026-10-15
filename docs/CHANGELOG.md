@@ -8,6 +8,36 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### NSE index freeze limits from 5 October 2026
+
+NSE circular NSE/FAOP/76693 raised the quantity freeze limits for index
+futures and options from 5 October 2026. OpenAlgo splits an order larger than
+the freeze limit into several orders, so until this update an install kept
+splitting at the old, smaller limits: more orders than needed, slower to
+complete, with more room for the price to move between slices.
+
+| Index | Old limit | New limit | New limit in lots |
+| --- | --- | --- | --- |
+| NIFTY | 1,800 | 3,510 | 54 |
+| BANKNIFTY | 600 | 1,440 | 48 |
+| FINNIFTY | 1,800 | 3,240 | 54 |
+| MIDCPNIFTY | 2,800 | 5,760 | 48 |
+| NIFTYNXT50 | 600 | 1,125 | 45 |
+| NIFTYFPI | 8,500 | 53,900 | 49 |
+
+**Existing installs run the migration.** `install/update.sh`, the Windows
+updater and a Docker restart run it for you; a manual upgrade runs
+`cd upgrade && uv run migrate_all.py`, then restarts OpenAlgo.
+`uv run migrate_qty_freeze_oct_2026.py --status` shows what it would change.
+It only changes a limit that still holds a value OpenAlgo shipped or NSE
+published before. A limit an admin set to something else on the Freeze
+Quantities page is left alone and listed, so check those against the table
+above. New installs get the new limits from `data/qtyfreeze.csv`.
+
+- NIFTYFPI gets a freeze limit of its own. It had no row, and because its
+  contract symbols start with NIFTY, its orders were split at NIFTY's limit.
+- The API reference examples show NIFTY's new limit of 3,510.
+
 ### /trading: a full-screen terminal with a cleaner toolbar and drawing rail
 
 No database migration and no `update.sh` run are needed. Pull and restart
