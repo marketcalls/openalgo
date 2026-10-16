@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@/test/test-utils'
-import { PageLoader } from './page-loader'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen } from '@/test/test-utils'
+import { ANNOUNCE_DELAY_MS, PageLoader } from './page-loader'
 
 describe('PageLoader', () => {
   it('renders the loading spinner', () => {
@@ -30,19 +30,45 @@ describe('PageLoader', () => {
   })
 
   describe('accessibility', () => {
-    it('has accessible loading indicator with status role', () => {
-      render(<PageLoader />)
-
-      // Check for text content and status role for screen readers
-      const statusElement = screen.getByRole('status')
-      expect(statusElement).toBeInTheDocument()
-      expect(statusElement).toHaveTextContent('Loading...')
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
     })
 
-    it('marks spinner icon as decorative with aria-hidden', () => {
+    it('announces the loading message as a status once the region is in place', () => {
+      render(<PageLoader />)
+
+      // The region exists before it has anything to say: a screen reader that
+      // only announces changes would stay silent if it appeared already full.
+      const status = screen.getByRole('status')
+      expect(status).toBeEmptyDOMElement()
+
+      act(() => {
+        vi.advanceTimersByTime(ANNOUNCE_DELAY_MS)
+      })
+      expect(status).toHaveTextContent('Loading...')
+    })
+
+    it('says nothing for a load that finishes before the delay', () => {
+      const view = render(<PageLoader />)
+      act(() => {
+        vi.advanceTimersByTime(ANNOUNCE_DELAY_MS - 1)
+      })
+      expect(screen.getByRole('status')).toBeEmptyDOMElement()
+      // Unmounting clears the timer rather than setting state on a gone component.
+      view.unmount()
+      act(() => {
+        vi.advanceTimersByTime(ANNOUNCE_DELAY_MS)
+      })
+    })
+
+    it('keeps the visible text and spinner out of the accessibility tree', () => {
       const { container } = render(<PageLoader />)
-      const spinner = container.querySelector('.animate-spin')
-      expect(spinner).toHaveAttribute('aria-hidden', 'true')
+
+      expect(screen.getByText('Loading...')).toHaveAttribute('aria-hidden', 'true')
+      expect(container.querySelector('.animate-spin')).toHaveAttribute('aria-hidden', 'true')
     })
   })
 })
