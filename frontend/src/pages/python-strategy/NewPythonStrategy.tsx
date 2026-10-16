@@ -1,5 +1,5 @@
 import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -95,9 +95,14 @@ export default function NewPythonStrategy() {
   // The dropdown offers only what the broker trades, so start on the broker's
   // own default: CRYPTO on a crypto broker, where NSE would pause the strategy
   // on every NSE holiday. Once the trader picks one, their choice stands.
+  //
+  // A layout effect, so the move lands in the same commit as the list. With a
+  // plain effect there was one commit where the dropdown, having lost NSE as an
+  // option, already read CRYPTO while the form was still on NSE with no Run
+  // 24/7 switch; a test caught that moment in CI.
   const exchangeChosen = useRef(false)
   // biome-ignore lint/correctness/useExhaustiveDependencies: applied once, when the list arrives
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isLoading || exchangeChosen.current) return
     if (defaultExchange !== exchange) applyExchange(defaultExchange)
   }, [isLoading, defaultExchange])

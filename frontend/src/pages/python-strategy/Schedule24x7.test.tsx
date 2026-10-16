@@ -70,13 +70,38 @@ beforeEach(() => {
 afterEach(() => window.history.pushState(null, '', '/'))
 
 describe('a crypto strategy on /python can run 24/7', () => {
+  it('never shows CRYPTO in the dropdown while the form is still on another exchange', async () => {
+    // The race behind a CI failure: the broker list (CRYPTO only) arrived, the
+    // dropdown fell back to its only option and read CRYPTO, while the form
+    // was still on NSE for one commit and had no Run 24/7 switch. A test (or a
+    // trader) looking at that moment saw a crypto dropdown with stock fields.
+    const mismatches: string[] = []
+    const view = renderAt('/python/new', '/python/new', <NewPythonStrategy />)
+    const check = () => {
+      const select = view.container.querySelector<HTMLSelectElement>('#exchange')
+      if (select?.value === 'CRYPTO' && !view.container.querySelector('#run_24x7')) {
+        mismatches.push('dropdown on CRYPTO without the 24/7 switch')
+      }
+    }
+    const observer = new MutationObserver(check)
+    observer.observe(view.container, { subtree: true, childList: true, attributes: true })
+    try {
+      await screen.findByRole('switch', { name: 'Run 24/7' })
+    } finally {
+      observer.disconnect()
+    }
+    expect(mismatches).toEqual([])
+  })
+
   it('starts a new strategy on the broker exchange, running 24/7 with no stop time', async () => {
     const user = userEvent.setup()
     renderAt('/python/new', '/python/new', <NewPythonStrategy />)
 
-    // A crypto broker offers CRYPTO alone, and the form moves onto it.
-    await waitFor(() => expect(screen.getByLabelText('Exchange')).toHaveValue('CRYPTO'))
-    expect(screen.getByRole('switch', { name: 'Run 24/7' })).toBeChecked()
+    // A crypto broker offers CRYPTO alone, and the form moves onto it. Waited
+    // on the switch, which only the form's own state renders, not on the
+    // dropdown's value.
+    expect(await screen.findByRole('switch', { name: 'Run 24/7' })).toBeChecked()
+    expect(screen.getByLabelText('Exchange')).toHaveValue('CRYPTO')
     expect(screen.queryByLabelText('Stop Time (IST)')).toBeNull()
 
     await user.type(screen.getByLabelText('Strategy Name'), 'Crypto bot')
