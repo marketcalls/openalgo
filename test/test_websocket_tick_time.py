@@ -10,8 +10,9 @@ exchange time, could not tell when a trade happened:
   form gives an int64, not as a number.
 - Zerodha filled `ltt` from the server's clock whenever a packet carried no
   exchange time (every Quote packet), so it looked like an exchange time and
-  was not one. The Full-mode exchange time was passed on in epoch seconds while
-  every other time field is milliseconds.
+  was not one. Full packets carry two times, the last trade at bytes 44-48 and
+  the exchange time at 60-64, in epoch seconds while every other time field is
+  milliseconds; the trade time was read as a price change.
 
 `ltt` is now the broker's trade time or None, never a local time, and
 `timestamp` stays the time the tick was published. Upstox packets are built
@@ -148,7 +149,8 @@ QUOTE_FIELDS = (
     2_430_000,  # low
     2_445_000,  # close
 )
-EXCHANGE_TS_S = TRADE_MS // 1000
+TRADE_TS_S = TRADE_MS // 1000
+EXCHANGE_TS_S = TRADE_TS_S + 1  # the exchange stamps the packet after the trade
 
 
 def quote_packet():
@@ -156,10 +158,11 @@ def quote_packet():
     return struct.pack(">11i", *QUOTE_FIELDS)
 
 
-def full_packet(exchange_ts_s=EXCHANGE_TS_S):
-    """A 184-byte Kite Full packet with the exchange time, in seconds, at bytes 60-64."""
+def full_packet(last_trade_s=TRADE_TS_S, exchange_ts_s=EXCHANGE_TS_S):
+    """A 184-byte Kite Full packet: last trade time at bytes 44-48, OI and its day
+    high and low at 48-60, exchange time at 60-64, all times in epoch seconds."""
     head = quote_packet()
-    middle = struct.pack(">IIIII", EXCHANGE_TS_S, 0, 0, 0, exchange_ts_s)
+    middle = struct.pack(">IIIII", last_trade_s, 0, 0, 0, exchange_ts_s)
     depth = b"".join(struct.pack(">IIHxx", 10, 2_455_000, 1) for _ in range(10))
     packet = head + middle + depth
     assert len(packet) == 184
@@ -181,20 +184,34 @@ def zerodha():
     return ZerodhaWebSocketAdapter.__new__(ZerodhaWebSocketAdapter)
 
 
-def test_zerodha_full_packet_exchange_time_is_in_milliseconds(kite):
+def test_zerodha_full_packet_reads_its_two_times_separately_in_milliseconds(kite):
     tick = kite._parse_packet(full_packet())
-    assert tick["exchange_timestamp"] == EXCHANGE_TS_S * 1000, "passed on in epoch seconds"
+    assert tick["last_trade_time"] == TRADE_TS_S * 1000, "bytes 44-48 are the last trade time"
+    assert tick["exchange_timestamp"] == EXCHANGE_TS_S * 1000, "bytes 60-64 are the exchange time"
 
 
 def test_zerodha_full_packet_without_an_exchange_time_leaves_it_out(kite):
     assert "exchange_timestamp" not in kite._parse_packet(full_packet(exchange_ts_s=0))
 
 
+def test_zerodha_full_packet_without_a_trade_time_leaves_it_out(kite):
+    assert "last_trade_time" not in kite._parse_packet(full_packet(last_trade_s=0))
+
+
+def test_zerodha_full_packet_trade_time_is_not_read_as_a_price_change(kite):
+    assert "price_change" not in kite._parse_packet(full_packet())
+
+
 @pytest.mark.parametrize("mode", ["quote", "full"])
-def test_zerodha_full_tick_ltt_is_the_exchange_time(kite, zerodha, mode):
+def test_zerodha_full_tick_ltt_is_the_last_trade_time_not_the_exchange_time(kite, zerodha, mode):
     tick = kite._parse_packet(full_packet())
     out = zerodha._transform_regular_tick(tick, "NIFTY", "NFO", mode)
-    assert out["ltt"] == EXCHANGE_TS_S * 1000
+    assert out["ltt"] == TRADE_TS_S * 1000
+
+
+def test_zerodha_full_tick_without_a_trade_time_has_no_ltt(kite, zerodha):
+    tick = kite._parse_packet(full_packet(last_trade_s=0))
+    assert zerodha._transform_regular_tick(tick, "NIFTY", "NFO", "full")["ltt"] is None
 
 
 @pytest.mark.parametrize("mode", ["ltp", "quote", "unknown"])
@@ -219,8 +236,9 @@ def test_zerodha_index_tick_ltt_is_not_the_servers_clock(zerodha, mode):
     assert out["ltt"] is None
 
 
-def test_zerodha_index_tick_ltt_is_the_exchange_time_when_sent(zerodha):
+def test_zerodha_index_tick_exchange_time_is_not_published_as_ltt(zerodha):
+    """An index is not traded, so its packet's exchange time is not a trade time."""
     tick = {"last_price": 24550.0, "timestamp": 1, "exchange_timestamp": TRADE_MS}
     out = zerodha._transform_index_tick(tick, "NIFTY", "NSE_INDEX", "quote")
-    assert out["ltt"] == TRADE_MS
+    assert out["ltt"] is None
     assert out["exchange_timestamp"] == TRADE_MS

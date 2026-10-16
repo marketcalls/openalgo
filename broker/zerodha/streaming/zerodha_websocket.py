@@ -772,7 +772,12 @@ class ZerodhaWebSocket:
 
             if len(packet) >= 184:
                 try:
-                    tick["price_change"] = struct.unpack(">i", packet[44:48])[0] / 100.0
+                    # Kite's Full layout puts the last trade time at bytes 44-48 and
+                    # the exchange time at 60-64, both in epoch seconds; every other
+                    # time field OpenAlgo publishes is epoch milliseconds.
+                    last_trade_ts = struct.unpack(">I", packet[44:48])[0]
+                    if last_trade_ts:
+                        tick["last_trade_time"] = last_trade_ts * 1000
 
                     depth_offset = 64
                     buy_depth = []
@@ -798,8 +803,6 @@ class ZerodhaWebSocket:
 
                     if len(packet) >= 184:
                         try:
-                            # Kite sends the exchange time in epoch seconds; every other
-                            # time field OpenAlgo publishes is epoch milliseconds.
                             exchange_ts = struct.unpack(">I", packet[60:64])[0]
                             if exchange_ts:
                                 tick["exchange_timestamp"] = exchange_ts * 1000
