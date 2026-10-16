@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 3, pan / zoom / crosshair / paging</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 3</strong>
+    <span id="info"></span>
+    <span style="margin-left:auto;opacity:.6">drag to pan · wheel to zoom · move for crosshair · dbl-click to fit · pan left to page history</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars } from '../dist/openalgo-charts.mjs';
+
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 64, crosshairMode: 'magnet' });
+    const series = chart.addSeries('candlestick');
+
+    let oldest = 1_705_286_700;       // first loaded timestamp
+    const INTERVAL = 60;
+    series.setData(generateBars(oldest, 500, INTERVAL));
+
+    // Lazy history paging: when the user pans near the left edge, prepend a
+    // deterministic older block and re-enable the trigger.
+    chart.setHistoryLoader(() => {
+      const older = [];
+      const start = oldest - 300 * INTERVAL;
+      const block = generateBars(start, 300, INTERVAL);
+      for (const b of block) if (b.time < oldest) older.push(b);
+      oldest = start;
+      series.prependData(older);
+      chart.historyLoadComplete();
+      document.getElementById('info').textContent = `paged history · oldest now ${new Date(oldest * 1000).toISOString()}`;
+    });
+
+    document.getElementById('info').textContent = '500 candles · interact below';
+    window.__chart = chart;
+  </script>
+</body>
+</html>

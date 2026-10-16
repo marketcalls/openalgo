@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vue 3 | OpenAlgo Charts</title>
+  <!--
+    No build step: an import map gives the modules the same bare specifiers a
+    bundled Vue project uses. Build the library first (npm run build) and serve
+    the repository root, for example with `node tests/e2e/serve.cjs`, then open
+    /examples/vue/index.html. Vue comes from node_modules (a devDependency of
+    this repository, never of the package). Its development build is used for
+    its warnings; a project ships the production build its bundler picks.
+  -->
+  <script type="importmap">
+    {
+      "imports": {
+        "vue": "../../node_modules/vue/dist/vue.esm-browser.js",
+        "openalgo-charts": "../../dist/openalgo-charts.mjs",
+        "openalgo-charts/indicators": "../../dist/openalgo-charts.indicators.mjs",
+        "openalgo-charts/widget": "../../dist/openalgo-charts.widget.mjs"
+      }
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #0d0e12; --panel: #141821; --line: #262d3d; --text: #d1d4dc; --muted: #8b91a7;
+      --control: #1b2130; --control-line: #3a4458; --accent: #4f8cff; --thumb: #3a4458;
+    }
+    :root[data-theme="light"] {
+      --bg: #ffffff; --panel: #f6f8fb; --line: #dfe4ec; --text: #1f2633; --muted: #5b6472;
+      --control: #ffffff; --control-line: #c5cdd9; --accent: #2f6fe0; --thumb: #c5cdd9;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px system-ui, sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    header label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+    select, button { background: var(--control); border: 1px solid var(--control-line); border-radius: 5px; color: var(--text); font: inherit; min-height: 30px; padding: 4px 9px; }
+    select { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 12px) 12px, calc(100% - 8px) 12px; background-size: 4px 4px; background-repeat: no-repeat; }
+    button { cursor: pointer; }
+    button:hover, select:hover { border-color: var(--accent); }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .seg { display: inline-flex; }
+    .seg button { border-radius: 0; }
+    .seg button:first-child { border-radius: 5px 0 0 5px; }
+    .seg button:last-child { border-radius: 0 5px 5px 0; border-left: 0; }
+    .seg button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+    .check input { appearance: none; width: 15px; height: 15px; margin: 0; border: 1px solid var(--control-line); border-radius: 3px; background: var(--control); display: grid; place-content: center; }
+    .check input:checked { background: var(--accent); border-color: var(--accent); }
+    .check input:checked::after { content: ''; width: 8px; height: 4px; border: solid #ffffff; border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
+    /* The chart needs a resolved height: a flex child that grows, and a chart element that fills it. */
+    .stage { position: relative; flex: 1; min-height: 320px; min-width: 0; }
+    .oac-vue-chart { position: absolute; inset: 0; }
+    .empty { margin: 0; padding: 24px; color: var(--muted); }
+    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 6px 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
+    * { scrollbar-width: thin; scrollbar-color: var(--thumb) var(--panel); }
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: var(--panel); }
+    ::-webkit-scrollbar-thumb { background: var(--thumb); border-radius: 4px; }
+    @media (max-width: 600px) { header { gap: 6px; padding: 6px 8px; } footer { padding: 6px 8px; font-size: 12px; } }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

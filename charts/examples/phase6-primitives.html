@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 6, markers, events, EMA, price lines</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+    #log { margin-left: auto; opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 6</strong>
+    <span>buy/sell markers · E/D badges · EMA overlay · SL/TP price lines · click a marker</span>
+    <span id="log"></span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars, emaSeries } from '../dist/openalgo-charts.mjs';
+
+    const bars = generateBars(1_705_286_700, 300, 60);
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 64 });
+    const price = chart.addSeries('candlestick');
+    price.setData(bars);
+
+    // EMA(21) overlay as a line series sharing the same axis.
+    const ema = chart.addSeries('line', { style: { color: '#f0a020', lineWidth: 1.5 } });
+    ema.setData(emaSeries(bars, 21));
+
+    // Buy/sell signal markers.
+    const markers = price.markers ? price.markers() : price.createMarkers();
+    const sigs = [];
+    for (let i = 20; i < bars.length; i += 40) {
+      const up = bars[i].close >= bars[i - 1].close;
+      sigs.push({
+        time: bars[i].time,
+        position: up ? 'belowBar' : 'aboveBar',
+        shape: up ? 'arrowUp' : 'arrowDown',
+        size: 'medium', color: up ? '#26a69a' : '#ef5350',
+        text: up ? 'BUY' : 'SELL', id: 'sig-' + i,
+      });
+    }
+    markers.setMarkers(sigs);
+
+    // Earnings / dividend event badges.
+    const events = chart.addEventMarkers();
+    events.setEvents([
+      { time: bars[80].time, type: 'earnings', label: 'E', id: 'earn-q' },
+      { time: bars[180].time, type: 'dividend', label: 'D', id: 'div-1' },
+    ]);
+
+    // SL / TP price lines (drag handling arrives in Phase 9).
+    const lastClose = bars[bars.length - 1].close;
+    chart.addPriceLine({ price: lastClose * 1.03, color: '#26a69a', lineWidth: 1, dashed: true, label: 'TP', id: 'tp', cursor: 'ns-resize' });
+    chart.addPriceLine({ price: lastClose * 0.97, color: '#ef5350', lineWidth: 1, dashed: true, label: 'SL', id: 'sl', cursor: 'ns-resize' });
+
+    chart.subscribeClick((id) => { document.getElementById('log').textContent = 'clicked: ' + id; });
+    window.__chart = chart;
+  </script>
+</body>
+</html>

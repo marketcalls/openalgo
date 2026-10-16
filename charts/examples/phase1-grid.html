@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 1, panes, grid, HiDPI, resize</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    button { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046;
+      border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 1</strong>
+    <span id="info"></span>
+    <button id="add">Add pane</button>
+    <span style="margin-left:auto;opacity:.6">resize the window to test reflow</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, version } from '../dist/openalgo-charts.mjs';
+
+    const el = document.getElementById('chart');
+    const chart = createChart(el);
+    const info = document.getElementById('info');
+    info.textContent = `v${version()} · devicePixelRatio ${window.devicePixelRatio}`;
+
+    document.getElementById('add').addEventListener('click', () => chart.addPane());
+
+    // expose for quick console poking
+    window.__chart = chart;
+  </script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <style>html,body{margin:0;height:100%;background:#101216}#chart{position:absolute;inset:0}</style>
+</head>
+<body>
+  <div id="chart"></div>
+  <script type="module">
+    import * as lib from '/dist/openalgo-charts.mjs';
+    import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+    import { DrawingController } from '/dist/openalgo-charts.draw.mjs';
+    const query = new URLSearchParams(location.search);
+    const bars = Array.from({ length: 180 }, (_, index) => {
+      const close = 23800 + Math.sin(index / 9) * 28;
+      return { time: 1700000000 + index * 300, open: close - 3,
+        high: close + 7, low: close - 6, close, volume: 650 + index * 65 };
+    });
+    const host = document.getElementById('chart');
+    const theme = query.get('theme') === 'light' ? 'light' : 'dark';
+    let widget, chart, draw;
+    window.__opened = [];
+    window.open = (...args) => { window.__opened.push(args); return null; };
+    window.__orders = [];
+    window.__clicks = [];
+    if (query.has('widget')) {
+      widget = createWidget(host, {
+        symbol: 'NIFTY SIM', exchange: 'NSE', interval: '5m',
+        intervals: ['5m', '15m'], theme, persist: query.has('persist'),
+        navigation: { defaultVisibleBars: 80 }, animZoom: false,
+        rail: { tools: ['trend-line', 'horizontal-line'] },
+        onOrder: order => window.__orders.push(order),
+      });
+      chart = widget.chart;
+      draw = widget.draw;
+      widget.series.setData(bars);
+    } else {
+      chart = lib.createChart(host, { theme: theme === 'light' ? lib.lightTheme : lib.darkTheme,
+        navigation: { defaultVisibleBars: 80 }, animZoom: false, timeNavigator: false });
+      chart.addSeries('candlestick').setData(bars);
+      chart.setDataContext({ symbol: 'NIFTY SIM', exchange: 'NSE', interval: '5m' });
+      draw = new DrawingController(chart);
+    }
+    chart.on('click', event => window.__clicks.push(event));
+    window.__probe = { chart, widget, draw, bars, lib };
+    window.__frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await window.__frame();
+    window.__ready = true;
+  </script>
+</body>
+</html>

@@ -1,0 +1,465 @@
+---
+title: Workspaces and Templates
+description: Persist portable chart layouts and study templates with revision-checked storage and explicit host activation.
+---
+
+# Workspaces and indicator templates
+
+The optional `openalgo-charts/workspace` entry provides validated configuration
+documents, a catalog repository and an IndexedDB adapter. It creates no chart,
+grid interface or market-data subscription. Your host prepares data, activates
+layouts and applies templates to the intended chart. For a ready-made host, the
+widget tier's [chart grid](/docs/chart-grid) writes and applies these payloads,
+and a widget given a store carries a
+[Layouts menu and indicator templates](#layouts-and-templates-in-the-widget) of its own.
+
+## Layouts and templates in the widget
+
+Since 2.5.10 a widget takes the repository as `workspaces` and offers everything below
+itself. The widget tier imports the workspace tier as types only: the workspace bundle
+loads with the store the host passes, never on its own.
+
+```ts
+import { WorkspaceRepository, createIndexedDbWorkspaceStorage } from 'openalgo-charts/workspace';
+import { createWidget } from 'openalgo-charts/widget';
+
+const workspaces = new WorkspaceRepository(createIndexedDbWorkspaceStorage(indexedDB), 'account-7');
+const widget = createWidget('#chart', { feed, symbol: 'INFY', exchange: 'NSE', interval: '5m', workspaces });
+```
+
+- **The Layouts button** in the top bar names the layout on the chart and marks one with
+  unsaved changes, a failed autosave or a change from another window. On a phone layout
+  the More sheet has a Layouts row. `widget.openLayouts()` opens the menu, and
+  `widget.layouts` is the [layouts controller](#hold-a-layout-in-a-widget-or-a-grid)
+  behind it.
+- **The menu** saves, saves under a new name (prefilled with the symbol and interval the
+  first time), renames and deletes the layout on the chart, deleting only after asking. It
+  lists up to ten recent layouts, most recent first, then the others by name; a row opens
+  its layout, and the arrow keys walk the rows. The Autosave switch in its footer turns the
+  catalog preference on and off and says what autosave is doing: saving, saved, could not
+  save, or waiting.
+- **Nothing unsaved is dropped unasked.** Opening another layout first compares the chart
+  with its layout now, and when the held layout has changes that would be lost the menu
+  asks: save and open, open without saving, or cancel.
+- **Another window.** When another tab or another control saved or deleted the layout on
+  the chart, the menu says so (it reads the list again as it opens) and saves nothing over
+  it until the user chooses: Reload list, Save as a copy, or Overwrite.
+- **A reload continues.** A widget built with a store reopens the layout that was active
+  when the page last closed, which replaces the chart the host started with (and, with
+  `persist` on as well, the state `persist` brought back), and records nothing to do it.
+- **Autosave and the page.** A change still inside autosave's quiet period is written when
+  the page is hidden, and tried once more as it goes. A host that destroys the widget
+  first calls `await widget.layouts?.flush()`, or that last change is dropped.
+- **A layout is what is on the chart, not where it was scrolled.** The widget saves the
+  instrument, interval, chart type, theme, studies, panes, scales, drawings and alerts, and
+  leaves out the viewport, the bar spacing and pinned price ranges, so a pan never reads as
+  an unsaved change and an opened layout fits the bars it loads. It leaves out each alert's
+  bookkeeping too (the last bar judged, the last touch and trigger), so a bar closing under
+  an alert is no change either; an alert's state stays, and a spent alert is saved spent.
+- **A replay suspends it.** While a replay runs, autosave waits (and writes the change
+  once the replay ends), and no layout opens under it.
+
+The menu's words are message keys under `schema.ui.layouts.` and the templates list's under
+`schema.ui.templates.`, each with its English text as the fallback, for a host's
+`translate`.
+
+Two widgets on one page each take a repository of their own namespace
+(`new WorkspaceRepository(storage, 'left')`); given one, both reopen and hold the same
+layout, and each sees the other's saves as another window's.
+
+`layouts: false` keeps the store for templates but shows no menu. In a
+[chart grid](/docs/chart-grid) no chart saves a layout of its own; pass one
+`createLayoutsController(store, gridTarget)` as `layouts` and every chart's menu drives
+it. `widgetLayoutTarget(widget)` is the widget's own target, for a host that drives a
+controller from its own controls, and `openLayoutsMenu(widget.context, controller, anchor?)`
+opens the widget's menu over any controller, under a host's own button or centred without
+one. The menu loads on first use, so the call resolves with its handle once it is open,
+and rejects when it cannot load or the widget was destroyed by then; its rules join the
+widget's stylesheet when it opens.
+
+**Indicator templates.** With a store that has `planIndicatorTemplateState`
+(`WorkspaceRepository` has it), the indicator picker's Templates button, bottom left,
+lists the saved templates. Replace puts a template's studies in place of the user's
+(studies the host keeps stay), and Append adds them in panes of their own. Save studies
+as template names the studies on the chart, with their panes and scales when the store
+has `captureIndicatorTemplate`. A delete asks first, and a replay holds every apply back.
+`applyIndicatorTemplate(ctx, store, template, mode)` and
+`saveIndicatorTemplate(ctx, store, name)` do the same from host code, with
+`widget.context` as `ctx`.
+
+Undo: a template lands through `restoreState`, which rebuilds every study, so it starts a
+new undo timeline as opening a layout does. The apply is the one step on it: Ctrl+Z puts
+the studies and panes back as they were, keeping the drawings, alerts and view the chart
+has then, and Ctrl+Y applies it again. Steps taken before the apply are dropped, because
+the studies they name were rebuilt. A template the chart refuses before restoring changes
+nothing and leaves the timeline as it was; one that fails part way through its restore is
+put back as the chart was, and the error says why.
+
+## Save a chart as a workspace
+
+This function captures an existing chart whose primary series is a candlestick
+series. The caller supplies its current instrument identity and an opaque
+storage namespace. Keep the returned repository for subsequent saves and close
+its storage adapter when the host is disposed.
+
+```ts
+import type { Chart } from 'openalgo-charts';
+import {
+  WorkspaceRepository, createIndexedDbWorkspaceStorage, parseWorkspacePayload,
+} from 'openalgo-charts/workspace';
+
+export async function saveWorkspace(
+  chart: Chart,
+  namespace: string,
+  instrument: { symbol: string; exchange: string; interval: string },
+) {
+  const storage = createIndexedDbWorkspaceStorage(window.indexedDB);
+  const repository = new WorkspaceRepository(storage, namespace);
+  const payload = parseWorkspacePayload({
+    layout: {
+      rows: 1, columns: 1,
+      slots: [{ paneId: 'main', row: 0, column: 0, rowSpan: 1, columnSpan: 1 }],
+    },
+    panes: [{
+      id: 'main', ...instrument, chartType: 'candlestick',
+      chart: chart.getState(), settings: {}, volume: false,
+      magnet: 'off', stay: false, comparisons: [], comparisonMode: 'price',
+    }],
+    activePaneId: 'main',
+    sync: { crosshair: true, viewport: true, symbol: false, interval: false },
+  });
+  try {
+    const saved = await repository.createWorkspace('My workspace', payload);
+    return { repository, storage, saved };
+  } catch (error) {
+    await storage.close();
+    throw error;
+  }
+}
+```
+
+Capture actual host preferences when extending this example to volume,
+comparisons, drawing controls and multiple charts. `saveWorkspace(id, payload)`
+updates an existing document. Creating, importing or saving a document does not
+change the active chart layout.
+
+## What a document owns
+
+A `WorkspacePayload` contains a grid, independent chart entries, `activePaneId`
+and its link settings: four synchronization preferences, with optional chart type,
+drawings and missing-bar flags and named link groups (see
+[Saving links in a workspace](/docs/chart-linking#saving-links-in-a-workspace)).
+Here, a workspace pane means one chart; that chart can contain its own price and
+study panes.
+
+Slots use zero-based rows and columns with positive spans. Optional `rowWeights`
+and `columnWeights` preserve unequal tracks; each list matches its track count
+and contains positive finite values. A preset name does not override saved
+geometry. A complete `WorkspaceDocument` adds `kind`, `version`, ID, name and
+creation/update timestamps. Document timestamps are milliseconds; chart bar
+and drawing times remain UTC seconds.
+
+Configuration includes chart snapshots, studies, drawings, alerts, viewport,
+host preferences and comparison definitions. A chart's optional `variant` names the
+provider series it showed (extended hours, raw prices, a currency or a unit; see
+[Data Variants](/docs/data-variants)). The parser stores the default as no field at
+all and refuses a variant it cannot name, since it would reopen as another series, and
+`createChartGrid` saves and reopens each cell's variant. Primary and comparison history
+are loaded separately. Credentials, account balances, orders, positions and
+whether live order entry is on do not belong in portable workspaces.
+
+`parseWorkspacePayload`, `parseWorkspaceDocument`, `parseIndicatorTemplate`,
+`parseIndicatorTemplatePayload` and
+`parseIndicatorStates` validate and detach input. Unsupported versions and
+malformed documents reject before application. Document parsers accept JSON
+text. A chart snapshot is version 1, or version 2 when it records `primaryPane`, the
+slot of a price pane moved below its studies; a version 1 snapshot that claims a slot,
+or a slot that names no saved pane, is refused rather than laid onto a study pane. Only a
+chart built with `movablePrimaryPane` restores a moved one; any other chart refuses it. Unknown custom study IDs are preserved so an import does not silently
+discard another installation's configuration; the applying host checks that
+those studies are available.
+
+## Activate a saved layout
+
+`repository.openWorkspace(id, { signal, expectedRevision })` records the active
+ID and recent list and returns the document. It does not construct or restore
+charts. A host activation should:
+
+1. Capture the selected workspace and catalog revision, then validate its chart
+   types, intervals, studies and comparison support.
+2. Prepare replacement charts and history while keeping the current workspace
+   recoverable. Suppress trading and automatic saves during the transition.
+3. Confirm the operation still owns its target, then call `openWorkspace` with
+   the captured revision and abort signal.
+4. Install the prepared layout and explicitly apply focus and synchronization.
+   Retain a recovery path if installation fails after the catalog write.
+
+Abort superseded preparations. Cancellation is effective until the storage
+transaction commits; it cannot undo an already committed write. A catalog
+revision change rejects with `WorkspaceConflictError`. Reload rather than
+silently overwriting a newer layout. For a widget or a chart grid, the
+[layouts controller](#hold-a-layout-in-a-widget-or-a-grid) does these steps.
+
+Create primary series and load the correct source before restoring each chart's
+configuration. `chart.restoreState` does not recreate host-owned source series or fetch data.
+Load required tiers first, preserve full study identities for alert anchors,
+and check its restore report. See [chart state](/docs/state),
+[alerts](/docs/alerts) and [chart linking](/docs/chart-linking).
+
+## Reusable indicator templates
+
+Capture the whole template to retain pane weights, scale settings and effective
+plot assignments. A template is the user's own copy of the user's own studies, so
+it carries no [study policy](/docs/indicators#study-policies) and leaves out the
+studies the host keeps from the user (not `removable` or not `listed`) and any study
+reading their output; applying one in `replace` mode keeps those host studies, on
+their own panes, and the template's panes take the free slots around them. Workspace
+documents keep policies with the rest of each chart's state. `createTemplate(name, input)` and `saveTemplate(id, input)` accept
+this payload or a legacy `IndicatorState[]`. Repeated descriptors remain separate
+studies, and an empty template is valid.
+
+The native planner checks descriptors and layout relationships before returning
+a detached chart-state patch. It neither applies the patch nor reloads data:
+
+```ts
+import type { Chart } from 'openalgo-charts';
+import {
+  captureIndicatorTemplate, planIndicatorTemplateState,
+  type IndicatorTemplateInput, type IndicatorTemplateMode,
+} from 'openalgo-charts/workspace';
+
+export const captureStudies = (chart: Chart) => captureIndicatorTemplate(chart);
+
+export function studyPlan(chart: Chart, incoming: IndicatorTemplateInput, mode: IndicatorTemplateMode) {
+  return planIndicatorTemplateState(chart, incoming, mode, {
+    scalePolicy: 'copy',
+    rangePolicy: 'auto',
+  });
+}
+```
+
+Pass the plan's `restoreOptions` to `chart.restoreState(state, plan.restoreOptions)`
+when applying its `indicators` and `panes`, and its `primaryPane` when it has one. This retains the runtime number
+formatter on existing destination scales; copied scales use their incoming
+study formats. Formatter functions never enter the saved template.
+
+Default `scalePolicy: 'copy'` gives copied non-primary main-pane scales independent
+IDs. Plots sharing one source scale stay together, while repeated copies remain
+independent. Choose `'share'` to reuse main-pane IDs deliberately; existing
+destination settings win. A plot attached to the source's primary scale follows
+the destination's actual primary scale, including one moved to the left.
+
+Default `rangePolicy: 'auto'` clears copied manual views and ratio locks and
+recomputes indicator-owned default bands against the destination data. Explicit
+host fixed bands remain. Choose `'preserve'` to retain saved manual views and ratio
+references. These options do not overwrite the destination's primary or existing
+shared scale view.
+
+A template is written price pane first. Its pane 0 is the price pane and the study panes
+follow in chart order, whatever slot the price pane held on the chart it was captured from,
+so a chart that keeps its price pane below its studies captures the same portable document
+as one that keeps it on top. The plan is in the destination's own slots and keeps its price
+pane where it is: the template's study panes take the slots around it in order. When the
+destination's price pane is not in slot 0 the plan lists the panes and carries
+`primaryPane`; restore it in a version 2 state
+(`{ version: 2, indicators, panes, primaryPane, drawings, alerts }`), or the restore puts
+the price pane back on top and lays its settings on a study pane. The drawings you keep are
+in the same slots, and if the restore then prunes a study pane it emptied above the price
+pane, the drawings shift with the panes.
+
+Append retains current identities and creates new positive pane groups. Replace
+reuses study-only slots while reserving panes containing host series. Pane weights
+retain their ratio to the main pane. Fresh incoming identities are assigned, and
+declared study dependencies and range owners are remapped together. Existing alerts
+remain tied to their original studies.
+
+`IndicatorTemplatePayload` contains `indicators` and optional `layout` metadata;
+each `IndicatorTemplatePlotBinding` records an instance, exact plot key, pane and
+scale. `parseIndicatorTemplatePayload` validates and detaches either input form.
+The existing `planIndicatorTemplate` array API and documents without layout retain
+legacy behavior; its optional sixth argument names the destination's price-pane slot,
+where incoming overlays go. Saving an array over a layout-bearing template removes its layout.
+
+Apply to the chart captured when the template controls opened, and check ownership
+again after asynchronous work. If using `restoreState`, include the current
+drawings and alert document because omitting them clears those slots. Check the
+restore report and study count, and restore the previous configuration if
+application fails while the operation still owns the chart. A nested newer restore
+invalidates that recovery, even on the same chart object. Template application does
+not require reloading market data. See the [interactive template example](/examples#copy-study-layouts-with-templates).
+
+## Revisions, conflicts and change notices
+
+Since 2.5.10 every change takes `WorkspaceOperationOptions`: `signal`, and
+`expectedRevision`, the catalog revision the change was prepared from.
+`createWorkspace`, `saveWorkspace`, `openWorkspace`, `rename`, `duplicate`, `remove`,
+`setAutosave`, `createTemplate`, `saveTemplate` and `importDocument` all take it as
+their last argument. When the stored catalog has moved past that revision the change is
+refused with `WorkspaceConflictError`, after the read and before any write, so a layout
+another tab saved in the meantime is never overwritten unseen. A malformed revision is
+refused before storage is touched. Without `expectedRevision` a change is applied to the
+catalog as stored when it runs, as before.
+
+```ts
+const catalog = await repository.load();
+// The user edits the chart; another tab may save the same layout meanwhile.
+try {
+  await repository.saveWorkspace(id, payload, { expectedRevision: catalog.revision });
+} catch (error) {
+  if (error instanceof WorkspaceConflictError) {
+    // Reload the list, then save as a copy or overwrite: the user chooses.
+  } else throw error;
+}
+```
+
+`repository.subscribe(listener)` is called with a detached copy of the catalog after each
+change the repository commits, before that change's promise resolves, in commit order. A
+refused, invalid or failed change calls nothing, and a listener that throws is reported
+without undoing the commit. It returns the unsubscribe. A control learns the revision its
+next change is checked against here, so two controls on one page (a layouts menu and a
+template picker) can share one repository without refusing each other's changes.
+
+`WorkspaceStore` is the contract such a control holds: `load`, `subscribe` and every change
+above except `importDocument`, plus two optional members the widget's indicator picker
+reads (since 2.5.10): `captureIndicatorTemplate(chart)` and
+`planIndicatorTemplateState(chart, input, mode, options?)`, the workspace tier's functions
+of the same names, reached through the store so the widget tier never loads this tier on
+its own. `WorkspaceRepository` implements all of it; a host that keeps layouts on its own
+server can implement it directly, with the same revision and notice guarantees, and
+assign the two functions from this tier to offer templates.
+`createMemoryWorkspaceStorage(seed?)` is revision-checked storage in memory, for tests,
+previews and hosts without IndexedDB: the same atomic comparison as the IndexedDB
+adapter, detached copies in and out, and nothing that outlives the page.
+
+## Hold a layout in a widget or a grid
+
+`createLayoutsController(store, target, options?)` in the widget tier (since 2.5.10) holds
+one saved layout for one widget or one chart grid. It builds no interface: a menu drives
+it and renders its state. It imports the workspace tier as types only, so a widget host
+loads that tier only when it passes a store. The target adapter captures and applies
+workspace payloads:
+
+```ts
+import { WorkspaceRepository, createIndexedDbWorkspaceStorage } from 'openalgo-charts/workspace';
+import { createChartGrid, createLayoutsController } from 'openalgo-charts/widget';
+
+const grid = createChartGrid('#desk', { feed, symbol: 'INFY', exchange: 'NSE', interval: '5m' });
+const store = new WorkspaceRepository(createIndexedDbWorkspaceStorage(indexedDB), 'account-7');
+const layouts = createLayoutsController(store, {
+  capture: () => grid.getWorkspace(),
+  apply: payload => grid.applyWorkspace(payload),
+});
+layouts.subscribe(state => renderLayoutsMenu(state));
+
+const catalog = await layouts.reload();
+if (catalog.activeWorkspaceId) await layouts.open(catalog.activeWorkspaceId); // after a page load
+await layouts.saveAs('Opening range');       // new layout, now held, active and recent
+await layouts.setAutosave(true);             // the catalog preference
+grid.on('layout', () => layouts.changed());  // and any other change the host hears of
+const report = await layouts.open(otherId);  // { applied, reason? }
+```
+
+One widget is a one-chart payload, and the widget tier ships its target (since 2.5.10):
+`widgetLayoutTarget(widget)` captures the widget's state in the one-chart form
+`migrateWidgetWorkspace` writes, without the view or the alerts' bookkeeping, and applies a one-chart layout
+through `restoreState` (bringing back the rail's magnet and stay), which clears the
+widget's undo history as loading any layout does. It refuses, before anything changes, a
+layout of several charts, one with comparisons, and one naming an interval, a chart type
+or a study this page cannot show. A widget given `workspaces` builds its controller over
+it:
+
+```ts
+import { createLayoutsController, widgetLayoutTarget } from 'openalgo-charts/widget';
+
+const layouts = createLayoutsController(store, widgetLayoutTarget(widget));
+```
+
+A target may also say it is `suspended()` (since 2.5.10), as the widget's is while a
+replay runs: autosave then waits, `open` is refused, `state().suspended` is true, and the
+target's `subscribe` listener announces when it turns back. A save the user asks for still
+goes through.
+
+- **State.** `state()` returns `catalog` (the newest catalog seen, to read and not
+  change), `layoutId` (the held layout), `revision` (what the next write into it is
+  checked against), `dirty`, `busy`, `conflict`, `autosave` (`off`, `pending`, `saving`,
+  `saved`, `failed`) and `error`. `subscribe(listener)` hears each change of it.
+  `reload()` resolves with a copy of the catalog, free to sort or trim.
+- **Operations** run one at a time in call order, each against the revision the last one
+  left: `reload`, `open`, `save`, `saveAs`, `overwrite`, `rename`, `duplicate`, `remove`,
+  `setAutosave`. `open` first autosaves a change still waiting into the layout being left,
+  then applies the new one and records it as active and recent; reopening the layout that
+  is already active and first in the recent list, as after a page load, writes nothing.
+  When that autosave fails (the store refuses it, or another tab saved that layout), `open`
+  rejects and changes nothing, so the change stays on the chart and the menu can say why;
+  opening again goes ahead without it. A refused apply resolves with the target's report
+  and changes nothing, and when the store refuses the record the previous layout goes back
+  on the target.
+- **Dirty and autosave.** Changes come from the target's optional `subscribe` or from
+  `changed()`, which only schedules a comparison: call it on any event that might change
+  the desk (the grid's `layout` and `links`, a cell's `symbol` or `interval`, a drawing
+  added), since a call that changed nothing writes nothing. When changes have been quiet
+  for `autosaveDelay` ms (default 1000; a value that is not a finite number takes the
+  default) the controller compares the target with its layout, and with autosave on
+  writes it once. Change events raised while it applies a layout are not counted. A
+  failed autosave stops until a write goes through again (a save, or any other operation
+  that writes) or the list is reloaded, so a failing store is not written on every pan;
+  then the unsaved change is written without waiting for another. `flush()` does the
+  comparison and write at once; `destroy()` drops a pending one.
+- **Conflicts.** A write refused because the catalog moved reads it again, and goes ahead
+  at the newer revision when what it acts on is unchanged there: the charts of the held
+  layout for a save or an autosave, the named layout for `open`, `rename`, `duplicate` and
+  `remove`. Another tab renaming the held layout, saving another one, opening one or
+  switching autosave is therefore not a conflict. Another tab (or another control on the
+  page) saving or deleting the held layout is: the write is refused, `conflict` and
+  `dirty` are set, and `save()` and autosave stay refused. `reload()` shows the newer list
+  and keeps the conflict unless it finds the layout as this controller left it. The way
+  out is the user's: `saveAs(name)` keeps both, `overwrite()` writes this chart over the
+  other version, and `open(id)` takes the other version.
+
+## Drawing style templates
+
+The look of a drawing tool can be saved too (since 2.5.9): as the tool's default, which new
+drawings of that tool start with, and under a name, to apply later. `DrawingTemplateRepository`
+keeps both in one revision-checked catalog per namespace, with the same storage rules as
+workspaces. The widget takes it as `drawingTemplates` and offers the controls itself.
+
+```ts
+import { DrawingTemplateRepository, createIndexedDbDrawingTemplateStorage } from 'openalgo-charts/workspace';
+
+const templates = new DrawingTemplateRepository(createIndexedDbDrawingTemplateStorage(indexedDB), 'account-7');
+await templates.saveTemplate('Swing low support', 'trend-line', { 'style.color': '#f0a020', 'style.lineWidth': 2 });
+await templates.setDefault('rectangle', { 'style.fill': true, 'style.fillOpacity': 0.1 });
+```
+
+A template's values are keyed by the paths of the tool's settings schema (`style.color`,
+`text.fontSize`, `props.showPrices`), so the draw tier applies them with
+`applyDrawingSettings` and drops a path the tool no longer has. The text a drawing says,
+its anchors and its lock are not part of a look and are refused. Saving under a name the
+tool already has replaces that template. A change prepared from an older revision, or one
+that loses a race with another tab, is refused with `DrawingTemplateConflictError`, and a
+corrupt catalog is never overwritten. `createMemoryDrawingTemplateStorage` keeps a catalog
+in memory for tests and previews.
+
+## Storage and replay boundaries
+
+Repository mutations are serialized, read the latest catalog and increment its
+revision once. Success means the storage write resolved. The IndexedDB adapter
+performs an atomic revision comparison and write across tabs. A custom server
+adapter must provide the same guarantee and authorize its namespace server-side.
+A localStorage read/write pair is not an atomic replacement.
+
+`exportDocument(kind, id)` returns JSON; `importDocument(input)` creates a fresh
+identity. `setAutosave(boolean)` stores a preference, not a timer. Hosts debounce
+saves, suppress them during restoration and replay, and keep completion notices
+bound to the originating account and chart. For a widget or a grid the layouts
+controller debounces and ignores its own restores, and a target that reports
+`suspended()` holds autosave; the widget's own target does during a replay, and a
+grid's target decides for its charts. Use a new repository on account
+change and call `storage.close()` on disposal. Storage failures reject; there is
+no silent fallback to a different store.
+
+Documents allow up to 16 charts, 256 studies per chart, and a 5 MiB JSON limit.
+These validation limits are not performance targets. Keep secrets out of custom
+settings and drawing text, and treat imported strings as text. For all schema
+limits, migration and the `WorkspaceStorage` interface, see the
+[repository reference](https://github.com/marketcalls/openalgo-charts/blob/master/docs/workspaces.md).

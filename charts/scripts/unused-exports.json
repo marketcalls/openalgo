@@ -1,0 +1,4 @@
+{
+  "comment": "Exports under src/ that nothing uses, neither src nor a test (scripts/check-unused-exports.mjs), as the tree had them when the gate arrived. Measured at 11838bf3. This list only shrinks: an unused export not listed here fails npm run check:unused-exports, and so does a listed one that is used again or gone, until it is taken off. Never add to it; delete the export instead.",
+  "allowed": []
+}

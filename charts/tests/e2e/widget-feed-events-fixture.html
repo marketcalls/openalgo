@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Feed search and event details</title><style>
+html, body { margin: 0; height: 100%; background: #131722; }
+#host { position: absolute; inset: 0; }
+</style></head>
+<body><div id="host"></div><script type="module">
+import { OpenAlgoDataFeed } from '/dist/openalgo-charts.mjs';
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+
+// The spec answers /api/v1/history and /api/v1/search itself. The key is a
+// placeholder: the spec checks it reaches the request body unchanged.
+const feed = new OpenAlgoDataFeed({ baseUrl: location.origin, apiKey: 'placeholder-key' });
+const actions = [];
+const widget = createWidget('#host', {
+  feed, symbol: 'RELIANCE', exchange: 'NSE', interval: '1d', persist: false,
+  now: () => Date.UTC(2026, 8, 30, 10),
+  eventDetails: {
+    actions: event => event.type === 'earnings' ? [{ label: 'Add to watchlist', run: shown => actions.push(shown.id) }] : [],
+  },
+});
+window.__feedEvents = { widget, actions };
+</script></body></html>

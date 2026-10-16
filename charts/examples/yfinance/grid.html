@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>OpenAlgo Charts - yfinance chart grid</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="grid-page">
+  <!--
+    The grid view. Every chart is a widget from openalgo-charts/widget inside
+    the tier's chart grid. The grid's own bar picks the layout, maximizes,
+    links, captures and keeps the saved desks; its bar under the charts sets
+    the active chart's range, date, zone and scale. This bar only carries the
+    page: the way back, the layout file and the status line.
+  -->
+  <header class="shellbar gridbar" role="toolbar" aria-label="Grid view">
+    <a class="brand" href="index.html" title="Back to the single chart view">
+      <span class="brand-dot"></span><span class="gridbar__name">OpenAlgo <em>yfinance</em></span>
+    </a>
+    <div class="divider"></div>
+    <div class="group">
+      <button id="grid-import" class="tbtn" type="button" title="Open a saved layout file">Import</button>
+      <button id="grid-export" class="tbtn" type="button" title="Save this grid as a layout file">Export</button>
+      <input id="grid-file" type="file" accept="application/json,.json" hidden />
+      <a class="tbtn" href="index.html">Single chart view</a>
+    </div>
+    <span id="grid-status" class="gridbar__status" role="status" aria-live="polite"><span id="grid-glyph" aria-hidden="true"></span><span id="grid-status-text"></span></span>
+  </header>
+  <main id="grid" class="grid-stage" aria-label="Charts"></main>
+  <script type="module">
+    import { initGridView } from './src/grid.js';
+    initGridView();
+  </script>
+</body>
+</html>

@@ -1,0 +1,296 @@
+---
+title: Instrument Metadata
+description: Share validated precision, quantity, interval and session rules across a chart host.
+---
+
+# Instrument metadata
+
+The optional base `Instrument` API connects price precision, quantity steps,
+supported intervals, source identity, trading sessions and OI capability. It
+validates and detaches host-supplied metadata without changing existing defaults
+or starting a feed. Providers remain responsible for current market rules.
+
+```ts
+import { Instrument } from 'openalgo-charts';
+import { orderConstraintsForInstrument, validateQuantity } from 'openalgo-charts/trade';
+
+const instrument = new Instrument({
+  symbol: 'CONTRACT', exchange: 'NFO', timezone: 'Asia/Kolkata',
+  priceTick: 0.05, pricePrecision: 2, quantityStep: 75,
+  intervals: ['1m', '5m', '1h', 'D'], hasOpenInterest: true,
+  calendar: {
+    sessions: ['0915-1530:23456'],
+    exceptions: { '2026-01-26': [], '2026-01-27': ['1000-1300'] },
+  },
+});
+instrument.applyTo(chart, '5m');
+const session = instrument.sessionAt(tick.time);
+const quantityCheck = validateQuantity(150, orderConstraintsForInstrument(instrument));
+```
+
+The chart must already have a primary series. Clear old bars before applying a
+different source or interval; unsupported intervals reject before chart mutation.
+`applyTo` updates the timezone, price tick, primary price-scale formatting, data
+context and the [calendar for times past the last bar](#times-past-the-last-bar). Oscillators and volume keep their own units. Reapply after replacing the
+primary series or restoring its formatting. Hosts own stale-request cancellation.
+
+`InstrumentMetadata.pricePrecision` accepts 0 through 12 and must represent the
+declared tick. Display formatting leaves stored OHLC values unchanged.
+`quantityStep` is in the adapter's order units, with no implicit lot multiplication.
+Quantity validation is advisory; the broker remains authoritative.
+
+`InstrumentCalendar.sessions` uses `HHMM-HHMM[:days]`, Sunday 1 to Saturday 7.
+Multiple windows represent breaks. An end at or before the start crosses midnight;
+`0000-0000` represents continuous crypto trading. Exceptions replace windows by
+local opening date, and an empty list closes that date. Overnight sessions belong
+to their opening date even when they continue into the following holiday.
+
+`sessionAt` returns an `InstrumentSession` with UTC-second `open` and `close`,
+or null outside the session. The close is exclusive. IANA offsets resolve each
+boundary, including 23/25-hour days. A nonexistent daylight-saving boundary or
+overlapping active windows throws; provide an explicit date exception rather than
+guessing. Feed adapters can use the resolved open as their candle-builder anchor.
+
+`sessionFrom` returns the session active at an instant, or else the next one to
+open, looking about a year ahead, and null when nothing opens in that time. An
+overnight session still running is returned on its opening date.
+
+`supportsInterval` matches exact provider tokens. Register custom interval codes
+before constructing the profile. OI support remains true, false or unknown,
+independently of zero or missing observations.
+
+The [standalone instrument example](/demos/instruments/) uses
+synthetic cash, futures and crypto profiles, a shortened session and an OI pane.
+It sends no orders. See the repository's
+[full integration guide](https://github.com/marketcalls/openalgo-charts/blob/master/docs/instruments.md)
+for streaming-builder lifetime and source-transition details.
+
+## Times past the last bar
+
+`applyTo` also hands the instrument to `chart.setSessionCalendar`, so the
+empty space right of the last candle is laid out in the instrument's sessions. On a
+five-minute chart whose last candle is Friday's 15:25, the next bar time is Monday's
+09:15: a trend line or a box drawn there ends on Monday's session, and a saved anchor
+at Monday 09:30 is drawn four bars past the last candle. Closed dates are skipped,
+shortened days end early and breaks are stepped over. Daily bars step through
+trading dates.
+
+Each session window keeps the offset the feed's bars keep from its opening, read
+from the recent bars in windows that open at the same time of day. Hourly bars
+stamped on the clock at a venue open 09:00 to 11:30 and 12:30 to 15:00 continue at
+09:00 in the morning and 12:00 before the afternoon opening, while a feed that
+starts again at each opening continues at 12:30. A window no recent bar sat in, such
+as a special session, takes the last bar's offset.
+
+A later instrument replaces these hours, and a data context moved to another symbol
+or exchange drops them, so a symbol the host holds no instrument for is not laid out
+in the last one's sessions.
+
+A host that knows a venue's hours but has no tick or quantity rules can apply a
+`SessionCalendar` instead:
+
+```ts
+import { SessionCalendar } from 'openalgo-charts';
+
+new SessionCalendar({
+  timezone: 'Asia/Kolkata',
+  sessions: ['0915-1530:23456'],
+  exceptions: { '2026-01-26': [] },
+}).applyTo(chart);
+```
+
+It is validated, detached and frozen like an instrument's calendar, throws
+`Invalid session calendar: ...`, and reads with the same `sessionAt` and
+`sessionFrom`. `applyTo` repaints, so drawings already past the last candle move
+to the times they now mean.
+
+A host that builds its own hours, from a venue list it keeps or any object with
+`sessionFrom`, sets them on the chart directly, and the chart repaints the same way;
+`null` clears them:
+
+```ts
+chart.setSessionCalendar(myVenueHours);   // drawings past the last bar move now
+chart.setSessionCalendar(null);           // back to the median spacing
+```
+
+`chart.dataLayer.setSessionCalendar(calendar)` sets the same without asking for a
+frame, for a host that loads bars or moves the view right after, either of which
+repaints; on an idle chart a drawing past the last bar would stay where it was painted
+until then. Hours a host set itself stay until it replaces them. Without a calendar, or when the recent bars do not sit in its sessions (regular
+hours against extended-hours data), the space past the last bar runs at the median
+of the recent bar intervals, never at a night- or weekend-sized last gap. The
+reference host does this with each venue's regular hours.
+
+## Market phases and status
+
+A calendar can also say which part of the trading day an instant falls in. Two
+optional fields describe the hours around each session, and a third describes extended
+hours of their own:
+
+```ts
+import { Instrument } from 'openalgo-charts';
+
+const instrument = new Instrument({
+  symbol: 'CASH', exchange: 'NSE', timezone: 'Asia/Kolkata',
+  priceTick: 0.05, pricePrecision: 2, quantityStep: 1, intervals: ['1m', '5m'],
+  calendar: {
+    sessions: ['0915-1530:23456'],
+    preMarketMinutes: 15,    // pre-open, 09:00 to 09:15
+    postMarketMinutes: 30,   // closing session, 15:30 to 16:00
+    exceptions: { '2026-01-26': [] },
+  },
+});
+instrument.phaseAt(tick.time);                 // 'pre', 'regular', 'post', 'extended', 'closed' or 'holiday'
+instrument.marketStatusAt(Date.now() / 1000);  // the status for now
+```
+
+- `preMarketMinutes` and `postMarketMinutes` are whole minutes, 0 to 1439, counted back
+  from each trading date's first regular opening and on from its last regular close. They
+  follow the exceptions: a shortened day moves the post-close earlier, a special session
+  gets its own pre-open, and a closed date has neither.
+- `extendedHours` takes windows written like `sessions`, for hours that trade apart from
+  any one session, such as an overnight session: `['2000-0400:12345']`. They open on their
+  own days, except on a date the exceptions close.
+- Where windows overlap, the regular session wins, then the pre-open, the post-close and
+  the extended hours. A lunch break stays `closed`.
+- `holiday` is a local date that an exception closes although the weekly sessions would
+  open it, from midnight to midnight in the calendar's zone. An exception closing a
+  weekend date reads `closed`.
+- Every boundary is resolved in the calendar's IANA zone, so New York's 04:00 pre-open is
+  09:00 UTC in winter and 08:00 UTC in summer. See [timezones](/docs/timezones#market-phases-follow-the-calendars-zone).
+- A bad value throws `Invalid instrument: ...` or `Invalid session calendar: ...`. The new
+  fields are checked after every older one, so an input with an older fault still reports
+  that fault. A calendar without them keeps its old shape and behaviour.
+
+`phaseSpans(from, to)` lays the phases out as consecutive `SessionPhaseSpan` objects,
+`{ phase, start, end }` in UTC seconds with an exclusive end, clipped to a range of at
+most 400 days. `SessionCalendar` has the same `phaseAt`, `phaseSpans` and
+`marketStatusAt`.
+
+`marketStatusAt(t)` answers a `MarketStatus`, the whole of what a status readout needs:
+
+| Field | Meaning |
+| --- | --- |
+| `phase` | The phase at `t`. |
+| `changesAt` | When the phase next changes, in UTC seconds. Null when it holds for 14 days, as for a round-the-clock market or a long closure. A readout sets its timer for this instant. |
+| `nextPhase` | The phase from `changesAt`, or null with it. |
+| `opensAt`, `closesAt` | The regular session in force, or else the next one to open, within 14 days. |
+
+A window whose boundary falls in a daylight-saving gap cannot be resolved, so `sessionAt`
+throws on that date. `phaseAt` lays out the dates either side of the instant and throws
+from the day before to two days after it, and a status, which looks two weeks ahead,
+throws from about fifteen days before to four after: a readout on a timer catches it.
+
+The free function takes anything with `phaseSpans`, including the calendar a chart holds,
+and returns null when there is none, so a host derives the status only when it supplies
+none of its own:
+
+```ts
+import { marketStatusAt, calendarMarketPhase, PriceLevels } from 'openalgo-charts';
+
+const status = marketStatusAt(chart.dataLayer.sessionCalendar, Date.now() / 1000);
+
+// The four extended-hours price levels, classified by the calendar.
+chart.addPrimitive(new PriceLevels({
+  marketPhase: calendarMarketPhase(instrument),
+  levels: { preMarketOpen: { line: true, label: true } },
+}));
+```
+
+`calendarMarketPhase` reads extended hours of their own, closed hours and holidays as
+unknown, since those levels describe the hours either side of one session.
+
+## Session shading
+
+`attachSessionShading(chart, options?)` puts a faint wash behind the pre-open,
+post-close and extended-hours bars of the price pane. Nothing is shaded until a host
+calls it.
+
+```ts
+import { attachSessionShading } from 'openalgo-charts';
+
+const shading = attachSessionShading(chart);                  // reads the chart's own calendar
+shading.setOptions({ postColor: 'rgba(245,158,11,0.12)' });  // null leaves a phase unshaded
+shading.destroy();
+```
+
+- Without a `calendar` option it reads the chart's calendar every frame, so it follows
+  `Instrument.applyTo` and clears when the chart drops the hours.
+- It shades bars, not clock time. On the gapless axis a regular-hours feed has no bars in
+  those hours and shows nothing; an extended-hours feed shows each run of pre-open and
+  post-close bars as one column, edge to edge on bar midpoints. Daily and longer bars are
+  skipped, and so is a view wider than 90 days, where the columns would be noise.
+- The defaults are faint tints of the theme: the line colour for the pre-open, amber for
+  the post-close and the axis text colour for extended hours, a touch fainter on a light
+  background. `preColor`, `postColor` and `extendedColor` replace them, and `visible: false`
+  hides the wash.
+- The shade sits behind the series, never takes a click, never widens the price range,
+  follows the price pane when it moves, and fills the pane maximized over it. A chart
+  carries one: attaching again merges the new options into it.
+- `SessionShade` is the primitive itself, for a host that adds it with `chart.addPrimitive`.
+
+## Price-dependent ticks
+
+An instrument whose tick changes with price declares `tickBands`, supplied by the host
+from its venue's rules. The library ships no schedule of its own.
+
+```ts
+import { Instrument } from 'openalgo-charts';
+import { orderConstraintsForInstrument, validatePrice } from 'openalgo-charts/trade';
+
+const banded = new Instrument({
+  symbol: 'BANDED', exchange: 'DEMO', timezone: 'Asia/Kolkata',
+  // Synthetic rules: 0.02 below 20 and 0.05 from 20.
+  tickBands: [{ tick: 0.02 }, { from: 20, tick: 0.05 }],
+  priceTick: 0.01, pricePrecision: 2, quantityStep: 1, intervals: ['1m', 'D'],
+  calendar: { sessions: ['0915-1530:23456'] },
+});
+// Typed TickSchedule | null: null for a constant-tick instrument.
+const ticks = banded.tickSchedule;
+if (ticks !== null) {
+  ticks.round(19.97);   // 19.98
+  ticks.round(20.03);   // 20.05
+  ticks.tickAt(20);     // 0.05
+}
+validatePrice(20.03, orderConstraintsForInstrument(banded)).price; // 20.05
+```
+
+The rules, each enforced when the instrument or `TickSchedule` is built:
+
+- The first band has no `from`. It covers every lower price, including zero and negative
+  prices. A floor such as "no negative prices" is a price limit, not a tick rule.
+- Every later band starts at its `from`, inclusive, and runs to the next band's `from`.
+  Bounds are strictly ascending, and an exact boundary takes the tick of the band that
+  starts there.
+- Valid prices are whole multiples of the band's tick, counted from zero. Every `from`
+  must be a multiple of the ticks on both sides of it, so the boundary is itself a valid
+  price and rounding never jumps over it.
+- Ticks are positive with at most 12 decimals; a schedule has 1 to 64 bands. Anything
+  else throws `Invalid tick schedule: ...` naming the offending band.
+
+`round(price)` returns the nearest valid price as an exact decimal, with a price written
+halfway between two valid prices rounding up, and NaN for a non-finite price.
+`step(price, n)` moves `n` whole ticks, changing tick as it crosses a boundary: up from a
+boundary uses the band that starts there, down from it the band below.
+
+`priceTick` stays the minimum move. With bands it must equal the schedule's `minMove`,
+the finest grid every band lies on: the smallest tick when ticks nest, and finer when
+they do not, because 20.05 is no multiple of 0.02. `applyTo` gives the price scale that
+`minMove`, so the axis prints every band and its own snap never moves a valid price.
+`pricePrecision` must represent it. A constant-tick instrument is unchanged: its
+metadata has no `tickBands`, `orderConstraintsForInstrument` returns the same three
+fields, and `instrument.tickSchedule` is null, so `priceTick` stays its one snapping
+rule everywhere. To validate orders, see
+[price-dependent ticks](/docs/trading#price-dependent-ticks).
+
+`applyTo` also hands the schedule to the chart, which `chart.tickSchedule()` reads back:
+a dragged [price alert](/docs/alerts#tick-snapping-and-keyboard-removal) and
+`chart.snapPrice` on the price pane then round in the band a price falls in. A host that
+keeps its own instrument metadata, as the yfinance reference host does, calls
+`chart.setTickSchedule(schedule)` itself; `null` returns to the constant tick. The chart
+passes it on to [`chart.trading`](/docs/trading-api#price-ticks-while-dragging), so dragged order and
+bracket lines snap in their band. It never builds the trading layer itself, which would
+take the host's drag subscription; a layer built later starts from the schedule.
+Applying a constant-tick instrument clears it, so after a symbol switch no drag snaps to
+the previous instrument's bands. Call `chart.setTickSchedule` after `applyTo` to
+override it, and pass the schedule as a `DomLadder`'s `tickSchedule` for a depth ladder.

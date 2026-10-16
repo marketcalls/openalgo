@@ -1,0 +1,223 @@
+---
+title: Chart State
+description: Serialise and restore a chart - viewport, panes, price scales, indicators, drawings.
+---
+
+import { Callout } from 'nextra/components'
+
+# Chart State
+
+`chart.getState()` returns a JSON-safe snapshot of everything the chart owns;
+`chart.restoreState(state)` puts it back. Saved layouts, chart templates, an objects panel,
+and drawing persistence all ride on this one pair.
+
+```ts
+localStorage.setItem('layout', JSON.stringify(chart.getState()));
+
+// later, after your data has loaded
+const raw = localStorage.getItem('layout');
+if (raw !== null) {
+  const report = chart.restoreState(JSON.parse(raw));
+  if (!report.applied) showRestoreError(report.reason);
+}
+```
+
+## What is captured - and what is not
+
+The rule: **the chart serialises what the chart owns.**
+
+| Captured | Restored | Notes |
+|---|---|---|
+| Visible logical range, bar spacing | Yes | Applied only when the chart has data - see below. |
+| Navigation options | Yes | Optional `navigation` block: `mousePan`, `defaultVisibleBars` and `defaultBarSpacing`. Positive spacing selects CSS pixels per bar. The saved viewport takes precedence over the default view. |
+| Grid (visibility, colours, styles, width, spacing) | Yes | |
+| Canvas options (crosshair, scale text and lines, plot margins) | Yes | The Appearance tab's block. See [Theming and chart options](/docs/themes#canvas-options). |
+| Status-line switches | Yes | Applied to every pane legend. |
+| Primary-only auto-fit and collapsed study legends | Yes | Optional `priceOnlyAutoScale` and `indicatorLegendCollapsed` booleans. Omitted fields preserve current preferences in partial restores. |
+| Trading colours | Yes | Held on the chart, so reading them never instantiates the trade layer. |
+| Event-type visibility | Yes | Which of earnings / dividends / splits / news the strip draws. |
+| Crosshair mode | Yes | |
+| [Timezone](/docs/timezones) | Yes | A saved zone the runtime no longer recognises is skipped, not thrown: one stale name must not cost the whole layout. |
+| Pane weights | Yes | Panes are created as needed. Every `paneIndex` in a state is a slot counted from the top. |
+| Price pane position | Yes | `primaryPane`, the slot of a price pane moved below its studies, in a version 2 state. It is written only when the price pane is not on top: every other layout is still written as version 1, exactly as before, so an older reader opens it. A layout without it, every layout saved before the price pane could move, restores with the price pane on top. Restoring a moved layout needs a chart built with `movablePrimaryPane`; any other chart refuses it, as it refuses a `primaryPane` in a version 1 state. |
+| Collapsed panes | Yes | `collapsed: true` on a folded pane. A pane saved without it restores open; the price pane always does, in any slot, and so does a pane a restore that lists panes or rebuilds studies does not list. |
+| Price scales (margins, precision, mode, inversion, auto-scale, manual and fixed ranges, ratio locks) | Yes | Right, left and named hidden scales in every pane. Runtime formatter functions are not serialized. |
+| Indicator instances (descriptor id, instance id, settings, pane, visibility, policy) | Yes | Saved `instanceId` values are preserved so study alerts can resolve their source. Legacy snapshots without IDs receive new ones. Older layouts default to visible. A study's [policy](/docs/indicators#study-policies) is saved as `policy` with only its restrictions, so an unrestricted study saves what it always did; a malformed one refuses the restore. |
+| Study order and the price source's place | Yes | Studies restore in their saved order, which is also their paint order. `sourceAbove`, the instance id of the study the price source paints directly above, is written only when the source was moved over a study (see [Draw order](/docs/objects#draw-order)); without it the source paints behind the studies, as every older layout did. It is read with `indicators`. |
+| Drawings | Round-tripped | An opaque slot the drawing tier owns; the base engine only carries it. |
+| Trader alerts | Yes | Validated `AlertsDocument`, including source bindings and lifecycle state. An `AlertController` restores visuals and evaluation without replaying historical notifications. |
+| Legend button size | **No** | Persist the host preference separately and reapply `chart.setLegendIconSize(size)` when rebuilding. |
+| Series descriptors (type, style, pane, price scale) | **No** | Reported back to you - see below. |
+| Series **data** | **No** | The host supplies the bars; they are not embedded in the saved layout. |
+| Host-registered Objects providers | **No** | Register them again for a replacement chart and persist their state through the host. |
+
+The settings blocks are restored before the panes, deliberately: the chart-wide plot
+margins land first so a pane's own saved `marginTop` / `marginBottom` is the more specific
+answer and wins. A layout saved by a host that built its dialog from the
+[settings schema](/docs/themes#the-settings-schema) therefore brings the dialog's settings
+back with it, with no second store.
+
+Navigation settings are restored before the saved viewport. A saved
+`navigation.defaultVisibleBars` therefore remains the default for future resets without
+replacing the exact range the user saved. Older snapshots may omit `navigation`; the
+chart keeps its current navigation options. The count controls the initial/reset view of
+loaded data, not the amount of history your feed requests or retains.
+
+<Callout type="warning">
+**Your host recreates its source series and loads their data.** Use your saved source
+manifest for price, volume and comparison series. `restoreState` recreates indicator
+outputs internally; do not create those a second time from the report.
+</Callout>
+
+```ts
+// On a replacement chart, recreate the sources your host owns first.
+chart.setDataContext({ symbol: mySymbol, exchange: myExchange, interval: myInterval });
+const price = chart.addSeries('candlestick');
+price.setData(await loadBars(mySymbol, myInterval));
+
+const report = chart.restoreState(saved);
+if (!report.applied) showRestoreError(report.reason);
+```
+
+`report.series` describes all recorded series, including indicator-owned outputs.
+Do not blindly recreate every entry as a price source. Keep a host source manifest
+for primary, volume and comparison data; `restoreState` recreates registered
+indicator outputs itself. Reattach host controllers to a replacement chart.
+
+### RestoreReport
+
+| Field | Type | Description |
+|---|---|---|
+| `applied` | `boolean` | False when the payload was not a usable state object. |
+| `series` | `SeriesState[]` | All recorded descriptors, including indicator outputs. Use your host source manifest to identify source series. |
+| `indicators` | `number` | Indicator instances recreated. |
+| `reason` | `string?` | Why the payload was rejected. |
+
+`restoreState` retains panes containing live studies even when those studies
+render only levels or primitives. Unavailable studies do not leave empty panes.
+If a `state:restore:start` listener installs a newer state synchronously, the
+older restore returns `applied: false` instead of overwriting it.
+
+`chart.restoreState(state, options?)` accepts `ChartRestoreOptions`. Use
+`preserveScaleFormats` when rebuilding studies must retain the destination's
+runtime formatter callback or default formatter on specific existing scales:
+
+```ts
+chart.restoreState(saved, {
+  preserveScaleFormats: [{ paneIndex: 0, scaleId: 'right' }],
+});
+```
+
+Selectors are validated before mutation and must refer to existing scales.
+Saved numeric scale settings still apply. The option only suppresses automatic
+formatter installation while study series are recreated; later explicit host
+formatting and study settings changes retain their usual behavior. No function
+is serialized. Without options, normal descriptor formatting applies.
+
+### Saved axes
+
+`PaneState.priceScale` describes the right scale. Optional `PaneState.scales`
+stores the left scale and named hidden scales by their native `PriceScaleId`.
+Each `PriceScaleState` includes the existing scale settings plus optional
+`minPrecision`, `fixedRange` and `ratioLock`. The lock stores the bar spacing and
+pane height associated with its saved manual range so its proportion survives
+reopening at another size. These fields are additive; older layouts remain readable.
+
+`parsePaneState(value)` validates and copies one pane snapshot, including its
+optional boolean `collapsed` flag. Invalid fields throw before chart restoration
+changes any panes. The optional second argument,
+`true`, accepts legacy partial primary-scale settings with default values;
+secondary scales always require complete settings. Workspace documents use the
+same validator. Formatter callbacks and source data remain host-owned.
+
+When a widget restores onto a different symbol or interval, `stripView` removes
+the viewport, manual ranges and ratio locks from every scale. It retains scale
+formatting and declared fixed ranges while re-enabling automatic fitting.
+
+## Ordering
+
+Logical ranges index bars, so a viewport restored onto an empty chart means nothing.
+The reliable sequence is:
+
+1. Register the indicator descriptors the saved layout needs.
+2. Set the chart's data context, recreate host-owned source series, and load their bars.
+3. Call `restoreState(saved)` and check `report.applied`.
+
+If settings were restored before data loaded, restore again afterward or apply
+the saved viewport with `setVisibleLogicalRange` when it is present.
+
+Calling `restoreState` twice is safe: indicators are **replaced**, not appended, so restore
+is idempotent.
+
+## Versioning and forward compatibility
+
+Every snapshot carries a `version`, at most `CHART_STATE_VERSION` (2). A chart whose price
+pane is on top still writes version 1, so compare a saved version with `>` rather than
+demanding it equal the constant. A state from a *newer* version
+is rejected rather than half-applied - `applied: false` with a `reason` - so an older build
+reading a newer layout degrades visibly instead of silently dropping settings.
+
+An indicator whose tier is not loaded is **skipped, not thrown**: restoring a layout that
+uses `openalgo-charts/indicators` in an app that has not imported the tier leaves that
+indicator out and restores the rest.
+
+Saved alerts and indicator identities are validated before restoration begins.
+An invalid alert document or a duplicate indicator instance ID rejects the
+snapshot before changing the chart. During controller restore, a registered
+provider that reports a missing study, plot or drawing causes that alert to be
+dropped with an `alert:removed` reason. If the required provider itself is absent,
+the record is retained but unavailable. Neither path binds to another object by name.
+
+## Alerts and named workspaces
+
+`ChartState.alerts` is the controller's committed alert document. A threshold
+drag changes only its visual preview until release; cancellation leaves the
+saved state untouched. Restore preserves triggered and disabled state and
+does not deliver notifications for historical matches. See [Alerts](/docs/alerts)
+for controller ownership, source availability and host delivery.
+
+For a named layout spanning multiple charts, source requests and link settings,
+use the optional [workspace tier](/docs/workspaces). `ChartState` is one chart's
+snapshot; it does not contain feed credentials or the bars themselves. Exporting
+loaded observations as CSV is a separate [chart data export](/docs/chart-data-export).
+
+## The drawings slot
+
+`ChartState.drawings` is an opaque passthrough. The base engine stores and returns it
+untouched; the drawing tier reads and writes it. That means an app which already persists
+chart state keeps drawings for free once the tier is loaded, with no new storage plumbing.
+
+```ts
+chart.setDrawingState(payload);   // what the drawing tier does
+chart.drawingState();             // read it back
+```
+
+The slot holds one document, the drawings on screen, whatever instrument the chart shows.
+A host that loads several symbols into one chart keeps a document per symbol with the draw
+tier's [`InstrumentDrawings`](/docs/drawing-tools#drawings-per-instrument), which the
+widget uses by default (since 2.5.9): the state then carries the drawings of the instrument in
+its data context.
+
+## Coordinate helpers
+
+State restore and drawing anchors both need to convert between time and screen x. Because
+the time axis is **gapless** - weekends, holidays, and session breaks collapse - many x
+positions have no bar behind them, so the whole-index helpers are not enough.
+
+| Method | Description |
+|---|---|
+| `chart.timeToCoordinate(time)` | UTC seconds to container-relative x (media px). |
+| `chart.coordinateToTime(x)` | x to UTC seconds, interpolated between bars and **extrapolated past the right edge**. |
+| `chart.priceToCoordinate(price, paneIndex?)` | Price to y. |
+| `chart.coordinateToPrice(y, paneIndex?)` | y to price. |
+
+`coordinateToTime` is what makes a two-axis drag work: `chart.subscribeDrag` passes the
+time under the cursor as a third argument alongside the price, so a trendline endpoint or a
+forward projection has a usable time even where no bar exists.
+
+```ts
+chart.subscribeDrag(
+  (id, price, time) => moveAnchor(id, { time, price }),
+  (id, price, time) => commitAnchor(id, { time, price }),
+);
+```

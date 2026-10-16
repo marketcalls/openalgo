@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenAlgo Charts account summary</title>
+<style>
+html,body{margin:0;height:100%;background:#0d0e12;color:#cbd5e1;font:13px system-ui}
+body{display:flex;flex-direction:column}
+header{padding:10px 14px;border-bottom:1px solid #273244}
+#host{flex:1;min-height:0}
+</style></head>
+<body>
+<header>Account summary: a simulated analyzer broker with two sandbox accounts and one live account that the sandbox view never lists.</header>
+<div id="host"></div>
+<script type="module">
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+import { AccountManager, FakeBroker, OrderEngine } from '/dist/openalgo-charts.trade.mjs';
+
+const params = new URLSearchParams(location.search);
+const START = 1735689600;
+const bars = Array.from({ length: 120 }, (_, i) => {
+  const close = 100 + Math.sin(i / 7) * 4 + i * 0.05;
+  return { time: START + i * 60, open: close - 0.4, high: close + 0.9, low: close - 1.1, close, volume: 200 + (i % 9) * 40 };
+});
+let now = START + 120 * 60;
+const broker = params.get('accounts') === 'none' ? new FakeBroker() : new FakeBroker({
+  now: () => now,
+  accounts: [
+    { id: 'SBX-EQ', name: 'Sandbox equity', mode: 'analyzer', currency: 'INR', balance: 500000 },
+    { id: 'SBX-FO', name: 'Sandbox derivatives', mode: 'analyzer', currency: 'INR', balance: 1500000, leverage: 5, maxLeverage: 5 },
+    { id: 'LIVE-1', name: 'Live trading', mode: 'live', currency: 'INR', balance: 9000000 },
+  ],
+});
+const accounts = new AccountManager({ feed: broker, mode: 'analyzer' });
+const widget = createWidget(document.querySelector('#host'), {
+  symbol: 'ACCT', exchange: 'SIM', interval: '1m', intervals: ['1m'], persist: false, timeNavigator: false,
+  theme: params.get('theme') === 'light' ? 'light' : 'dark', locale: 'en-IN', account: accounts,
+});
+widget.series.setData(bars);
+widget.chart.fitContent();
+broker.setMark('ACCT', bars[bars.length - 1].close);
+const engine = new OrderEngine({
+  feed: broker, mode: 'analyzer', armed: true, constraints: { tickSize: 0.05 },
+  selectedAccount: () => accounts.selectedAccount(),
+});
+broker.onOrderUpdate((order, info) => engine.onBrokerOrder({ id: order.id, clientToken: info.clientToken, status: order.status }));
+await accounts.refresh();
+window.__account = { widget, broker, accounts, engine, tick: seconds => { now += seconds; } };
+</script>
+</body>
+</html>

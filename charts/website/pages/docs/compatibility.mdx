@@ -1,0 +1,117 @@
+---
+title: Compatibility and Maintenance
+description: Public API stability, host responsibilities, upgrade checks and release evidence.
+---
+
+# Compatibility and maintenance
+
+Use documented package entries and exported types. Source internals, demo globals
+and widget DOM/CSS structure are implementation details. Existing public defaults
+are preserved within a major version; additions are opt-in. A deprecated API needs
+a documented replacement and migration example before removal in a later major.
+Correctness and security fixes can change incorrect behavior in patch releases,
+with affected inputs explained in release notes.
+
+## Deprecated APIs
+
+A deprecated declaration carries a `@deprecated` tag naming the release that
+removes it, always the next major, and its replacement. Your editor strikes the
+name through, and the API reference marks it. The library's lint fails any tag
+that names no removal release, so none can stay open-ended.
+
+| Deprecated | Removed in | Use instead |
+| --- | --- | --- |
+| `mapOrder` | 3.0.0 | `decodeOrder`, which returns why a row could not be read, or `OpenAlgoTradeFeed.getOrderBook()` |
+| `TradeFeed` | 3.0.0 | `OrderFeed` from `openalgo-charts/trade`, which the order engine writes through; nothing in the library ever called a `TradeFeed` |
+| `PlaceOrder` | 3.0.0 | `PlaceRequest` from `openalgo-charts/trade`, the order `OrderFeed.place` takes |
+| `level.dashed` received by a custom `IndicatorHost.addIndicatorLevel` | 3.0.0 | `level.lineStyle`, which is always resolved |
+| `depth_level` key in a depth subscribe frame | 3.0.0 | `depth`, which is sent beside it |
+| Widget message key "Enter a valid expiry date and time in UTC" | 3.0.0 | Nothing: the widget no longer shows it |
+| Widget message keys `Dark` and `Light` | 3.0.0 | Nothing: the theme button shows a sun or a moon, named by `Switch to the light theme` or `Switch to the dark theme` |
+| Widget message keys `Armed`, `Keep tool armed`, `On: the tool stays armed after each drawing`, `Tools stay armed after each drawing`, `{group}: chevron for the rest. Double-click keeps it armed` and `{name} stays armed until Escape` | 3.0.0 | The same keys with "active" for "armed", which the widget shows since 2.5.10 |
+| Widget message keys `{count} chart shortcut struck through: the same chord arms a drawing tool here and takes precedence.` and `{count} chart shortcuts struck through: the same chord arms a drawing tool here and takes precedence.` | 3.0.0 | The same keys ending "another shortcut uses the same chord here and takes precedence.", which the widget shows since 2.5.10 |
+| Widget message keys `Enter an expiry date and time in UTC`, `Expires {time} UTC` and `Last fired {time} UTC` | 3.0.0 | The same keys without " UTC", which the alert editor and list show since 2.4.6, on the chart's own clock |
+| Widget message key `Symbol search results` | 3.0.0 | Nothing: the widget no longer shows it |
+| Widget message keys `That side is already in use` and `other side taken` | 3.0.0 | Nothing: the widget no longer shows them |
+| Widget message keys `Unlock drawing` and `Show drawing` | 3.0.0 | "Lock drawing" and "Hide drawing": the rail keeps one name and its pressed state says locked or hidden |
+| Widget message keys `Dark theme` and `Light theme` | 3.0.0 | "Switch to the dark theme" and "Switch to the light theme", the words the top bar uses |
+| Widget message key `Stay: {mode}` | 3.0.0 | `Keep tool active: {mode}` |
+| Widget message key `Edit on chart` | 3.0.0 | "Edit text", as the right-click menu says |
+| Widget message key `History is stale for {symbol} {interval}. Reload to retry.` | 3.0.0 | `History is stale for {symbol} {interval}`, beside the Retry button |
+| Widget message keys `Magnet weak: snaps when O/H/L/C is within a few pixels`, `Magnet strong: every anchor lands on the nearest O/H/L/C`, `Click for weak: snaps when O/H/L/C is within a few pixels` and `Click for strong: every anchor lands on the nearest O/H/L/C` | 3.0.0 | The same keys with "a bar or study value" for "O/H/L/C", since the magnet snaps to study values too |
+| Widget message keys `Ratio` and `Remove level` | 3.0.0 | `Level {level} ratio` and `Remove level {level}`, which name the row |
+| Widget message keys `From (UTC seconds)`, `To (UTC seconds)` and `Enter finite UTC seconds or leave the bound blank` | 3.0.0 | `From`, `To` and `Enter a date and a time on the chart clock`: the chart data dialog asks for its bounds as a date and a time on the chart's clock |
+| `shiftKey`, `ctrlKey` and `metaKey` on a `click` event | 3.0.0 | `modifiers.shift`, `modifiers.ctrl` and `modifiers.meta`, the same state |
+| `chart.renderer` | 3.0.0 | `chart.rendererKind`, the same value |
+| `chart.movePriceAxis(pane, from, to)` | 3.0.0 | `chart.setPriceAxisPlacement(pane, scaleId, side)`, which keeps the scale's id |
+| `movable` in `chart.priceAxisState(...)` | 3.0.0 | Nothing: placement needs no such check |
+| The `priceAxisMoved` event, which only `movePriceAxis` emits | 3.0.0 | `priceAxisPlacementChanged`, which `setPriceAxisPlacement` emits |
+| `chart.on`, `once` and `off` given a name outside `ChartEventMap` | 3.0.0 | A `ChartEventMap` name, which types the listener; declare an event of your own by merging it into `ChartEventMap` |
+| `chart.emit(name, payload)` | 3.0.0 | `chart.setDataContext` for an instrument, `group.setSymbol`, `setInterval` and `setChartType` for a link group, and your own emitter for events of your own |
+| `TimeScaleOp`, `InvalidateMask.addTimeScaleOp` and `InvalidateMask.timeScaleOps` | 3.0.0 | Nothing to queue: since 2.5.8 the frame reads no queued operation; change the time scale with `chart.timeScale`, `chart.fitContent` or `chart.setVisibleLogicalRange` |
+| `InvalidateMask.merge` | 3.0.0 | Nothing: the chart raises one mask per frame, and a host raises levels on the mask `chart.invalidate` hands it |
+| `chart.trading.updatePositionPnl(id, unrealizedPnl, pnlText?, pnlPercent?)`, the number first | 3.0.0 | `updatePositionPnl(id, pnlText?, pnlPercent?)`, the same call without the number, which the pill never showed |
+| `SeriesStyle.hollow` | 3.0.0 | The `hollow-candle` series type, which draws up candles as outlines and down candles filled; the field itself never had an effect |
+| `VolumeProfileOptions` | 3.0.0 | Nothing takes this type: pass `computeVolumeProfile(bars, tickSize, valueAreaPercent)` its arguments as before, or use `computeVolumeProfileSessions` with `VolumeProfileFamilyOptions` for an options object |
+
+```ts
+// before
+chart.on('click', (e) => { if (e.shiftKey || e.ctrlKey) addToSelection(e.id); });
+// after
+chart.on('click', (e) => { if (e.modifiers.shift || e.modifiers.ctrl) addToSelection(e.id); });
+```
+
+Some older forms are kept on purpose and are not deprecated: the `dashed`
+shorthand on a price line or a study level, `magnet: true | false` on a drawing
+controller, the IST helpers such as `formatIstTime` and `utcSecondsToIstParts`
+(IST is the default zone; the `Zoned` functions are the general form), a study
+`levels` hook written against the settings-only form, the `topic` field on an
+inbound market-data frame, and the readers that upgrade older saved documents.
+
+Kept on purpose as well: the `draw:*` events beside `drawing:select` and
+`drawing:change`. They are two granularities of one model, not an old and a new form:
+`draw:*` fires once per drawing and carries it, `drawing:*` once per change with the ids.
+The event names that predate the `namespace:action` rule keep their spelling too.
+
+Planned for 3.0.0, not deprecated yet: one name for the switches that show or hide part of
+the chart, now `xVisible` in the style bags that mirror a series property and `showX` on
+the profile primitives and pane options. Until then a new option follows its neighbours.
+
+Not decided yet: what the tiers' structural hosts (`DrawingChartHost`, `AlertChartHost`
+and the rest) require in place of `emit` once `chart.emit` goes in 3.0.0. They keep it
+through 2.x.
+
+## Documents, hosts and releases
+
+Saved chart, drawing, alert and workspace documents carry independent versions.
+Use the matching public validation/restore APIs, inspect partial failures and retain
+the last good document when a migration fails. Do not put credentials, orders,
+positions or armed state into portable layouts.
+
+The host owns authenticated transport, instrument/calendar metadata, provider
+timestamps, storage namespaces and execution authority. Chart alerts evaluate data
+while running; background scheduling and notification delivery belong to the host.
+Replay and replay selection must lock every host order-entry route. Client quantity
+and capability checks do not replace broker enforcement.
+
+Browser regression projects exercise Chromium, Firefox and WebKit. Release evidence
+must name actual browser/device/workload details; automated WebKit checks do not
+prove every Safari/device combination. The ESM package has no runtime dependencies.
+Its build toolchain requires Node.js 20 or later. Chart construction requires the
+browser canvas/DOM environment.
+
+Pin the package used by a production portal. Test source changes, reconnects,
+saved layouts, multiple panes, drawings, studies, replay and enabled trading routes
+in the real host before rollout. Preserve the prior application deployment for
+rollback; a published package version is immutable. Older hosts may not understand
+newer saved document formats.
+
+Synthetic adapter tests, browser fixtures, endurance workloads and connected-feed
+checks are separate evidence. None alone certifies a broker integration. Community
+maintenance does not provide a response SLA, continuous exchange coverage or
+indefinite support for older minor versions. The security policy governs security
+reporting and supported fix branches.
+
+See the repository's [complete compatibility policy](https://github.com/marketcalls/openalgo-charts/blob/master/COMPATIBILITY.md),
+[contributing and release gates](https://github.com/marketcalls/openalgo-charts/blob/master/CONTRIBUTING.md),
+and [private security reporting](https://github.com/marketcalls/openalgo-charts/security/advisories/new).

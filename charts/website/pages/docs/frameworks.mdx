@@ -1,0 +1,1209 @@
+---
+title: Framework Integration
+description: One guide for plain JavaScript and the CDN build, React, Next.js, Vue 3, Angular and Svelte, each covering mount and cleanup, reactivity, resize and theme, live data, the widget, cached views and server rendering.
+---
+
+import { Callout } from 'nextra/components'
+
+# Framework integration
+
+OpenAlgo Charts has no framework dependency and no plugin to install. Every framework
+uses it the same way: create the chart once its container element is in the document,
+feed it through method calls, and destroy it when the component goes away. What differs
+is where each framework lets you do that, and what its reactivity does to an object it
+is handed.
+
+Every framework below has the same eight parts, in the same order, so the sections can
+be read side by side: install and import; mount and clean up; keep the chart out of
+reactivity (in Angular, change detection); resize and theme; live data; the widget with
+its symbol bound to framework state; cached and reused views; server rendering.
+
+## At a glance [#at-a-glance]
+
+| Framework | Create in | Destroy in | Hold the chart in | Keep it out of reactivity |
+| --- | --- | --- | --- | --- |
+| [Plain JavaScript](#plain-javascript) | a module script, or `connectedCallback` | where the element is removed, or `disconnectedCallback` | a variable | nothing to do |
+| [React](#react) | `useEffect` | the effect's cleanup | `useRef` | never `useState`; Strict Mode builds it twice in development |
+| [Next.js](#nextjs) | `useEffect` in a `'use client'` component | the effect's cleanup | `useRef` | as React; objects never cross from a Server Component |
+| [Vue 3](#vue-3) | `onMounted` | `onBeforeUnmount` | `shallowRef` or a plain `let` | never `ref()` or `reactive()`; `markRaw` before a store |
+| [Angular](#angular) | `ngAfterViewInit`, or `afterNextRender` | `ngOnDestroy` | a private field | create it inside `NgZone.runOutsideAngular` |
+| [Svelte 5](#svelte) | `onMount` | the function `onMount` returns | a plain `let`, or `$state.raw` | `$state.raw` for bars and plain objects |
+| [Svelte 4](#svelte) | `onMount` | the function `onMount` returns | a plain `let` | nothing to do (no proxies) |
+
+## What every framework shares [#shared]
+
+These are facts about the library, so every section below relies on them rather than
+repeating them.
+
+<Callout type="info">
+Create the chart in the browser, once, after its element exists. Feed it by calling
+methods on it. Destroy it on the way out. Never build a new chart to show new data.
+</Callout>
+
+- **Importing is safe anywhere; creating is not.** Evaluating `openalgo-charts` or any of
+  its tiers touches no DOM, so a top-level import works in a module that a server also
+  evaluates. CI holds this: `npm run skills:coverage` imports every built tier in Node.
+  Only `createChart` and `createWidget` need the browser and a real element.
+- **It is ESM, and `require()` gets the same modules.** There is no CommonJS build: a
+  second copy of the code would carry a second set of registries, and an indicator
+  registered through one copy would be unknown to a chart made by the other. Each export
+  points `require()` at the ESM file itself, so on Node 20.19 or later, 22.12 or later, and
+  every later release line, `require('openalgo-charts')` returns the module `import`
+  returns. An older Node throws `ERR_REQUIRE_ESM`; use `await import('openalgo-charts')`
+  there. TypeScript compiling to CommonJS accepts the `require` from 5.8 with
+  `module: "nodenext"`, and a test runner working in CommonJS mode has to load the package
+  as ESM.
+- **`createChart(container, options)` takes over the element.** It reads the element's
+  size, sets `position: relative` (only when it is statically positioned), `display: flex`,
+  `background` and `touch-action: none`, adds ARIA attributes, and appends its canvases.
+  Give the element a real height in CSS: a sized parent, a flex item that grows, or
+  `position: absolute; inset: 0` inside a positioned parent.
+- **Size follows the container.** The chart observes its container with a
+  `ResizeObserver` from the moment it is created, repaints in the same callback, and
+  follows device pixel ratio changes too. Write no window resize listener and pass no
+  width or height. A container that goes to zero size (hidden, or detached from the
+  document) keeps the chart's data and visible range, and the chart lays out again when
+  it has a size; a chart created hidden fits its data on its first measurable layout.
+  `chart.applySize(width, height)` is only for a runtime without `ResizeObserver`.
+- **It paints on its own schedule.** A change asks for one animation frame, and changes
+  in the same tick share it. Nothing in the framework has to re-render for the chart to
+  repaint, and a re-render around it does nothing for it.
+- **Theme is a call.** `chart.setTheme(darkTheme)` (or `lightTheme`, or a `ChartTheme`
+  of your own) repaints in place, as does `chart.applyOptions({ theme })`. The default is
+  `lightTheme`, so pass `theme` to `createChart` in a dark interface.
+- **`chart.destroy()` releases everything the chart took.** It stops its frames,
+  disconnects its observers, removes its listeners from the container, the document
+  (keyboard) and the window (pixel ratio), removes its canvases, emits `destroy`, and
+  drops every `chart.on` subscription. A second call does nothing, and `chart.isDestroyed`
+  tells async work that it arrived too late. Inline styles and ARIA attributes stay on the
+  element, so creating another chart in the same element is safe.
+- **Destroy the widget, not its chart.** `widget.destroy()` removes the widget's chrome,
+  drops its `widget.on` subscriptions and destroys `widget.chart`. Neither call closes a
+  feed you created: call `close()` on an `OpenAlgoLiveDataFeed` yourself.
+- **A new symbol is a call on the same chart.** A new chart would drop the view, the
+  studies and the drawings. Clear the old bars with `series.setData([])`, move
+  `chart.setDataContext({ symbol, exchange, interval })` so studies and alerts scope to the
+  new source, load, then `series.setData(bars)` and `chart.resetScale()`. Drop any answer
+  that arrives after a newer request, or a slow answer for the old symbol lands under the
+  new name. Each section shows its framework's way of dropping it.
+- **Live ticks go to `series.update(bar)`** from the feed's `subscribeBars` callback, never
+  through framework state. Keep the unsubscribe function it returns and call it before the
+  chart goes.
+- **The widget stays in sync with two calls and one event.**
+  `widget.setSymbol(symbol, exchange?)` and `widget.setInterval(code)` do nothing when the
+  value is already current, so forwarding a value the widget itself just reported cannot
+  loop. The widget reports
+  its own changes through `widget.on('symbol' | 'interval' | 'theme', ...)`. `setSymbol`
+  upper-cases the symbol. `setTheme` reports `theme` on every call, so compare with
+  `widget.theme()` first.
+- **Some tiers register on import.** `import 'openalgo-charts/indicators'` once, anywhere
+  in the client bundle, if the widget's indicator picker should list the built-in studies.
+
+## Plain JavaScript [#plain-javascript]
+
+### Install and import [#plain-install]
+
+```bash
+npm install openalgo-charts
+```
+
+```js
+import { createChart, darkTheme, lightTheme } from 'openalgo-charts';
+```
+
+With no bundler, import the same modules from a CDN. A tier such as the widget loads from
+the same folder and imports the base module by a relative path, so both share one engine:
+
+```html
+<script type="module">
+  const CDN = 'https://cdn.jsdelivr.net/npm/openalgo-charts@2.6.0/dist';
+  const { createChart, darkTheme } = await import(`${CDN}/openalgo-charts.mjs`);
+  const { createWidget } = await import(`${CDN}/openalgo-charts.widget.mjs`);
+</script>
+```
+
+A page that cannot load modules can use the script-tag build: one classic script per tier.
+`dist/openalgo-charts.standalone.js` defines an `OpenAlgoCharts` global, and each tier's
+file (`openalgo-charts.widget.standalone.js`, say) adds itself to it under the tier's name
+and shares its engine, so the widget is `OpenAlgoCharts.widget.createWidget`.
+[Use from a CDN](/docs/cdn#the-no-modules-build) has both forms, the load order and why to
+pin the version.
+
+### Mount and clean up [#plain-lifecycle]
+
+A module script runs after the document is parsed, so its element already exists:
+
+```js
+import { createChart, darkTheme, generateBars } from 'openalgo-charts';
+
+const chart = createChart(document.getElementById('chart'), { theme: darkTheme });
+const series = chart.addSeries('candlestick');
+series.setData(generateBars(1_700_000_000, 300, 300));
+
+// When the element leaves the page (a closed panel, a route change in your own router):
+chart.destroy();
+```
+
+A custom element gives a plain page the same lifecycle a framework has:
+
+```js
+class PriceChart extends HTMLElement {
+  #chart = null;
+
+  connectedCallback() {
+    this.#chart = createChart(this, { theme: darkTheme });
+    this.#chart.addSeries('candlestick');
+  }
+
+  disconnectedCallback() {
+    this.#chart?.destroy();
+    this.#chart = null;
+  }
+
+  get chart() { return this.#chart; }
+}
+customElements.define('price-chart', PriceChart);
+```
+
+Style it with a height (`price-chart { height: 480px; }`). Moving the element runs both
+callbacks, so a move builds a new chart; leave it in place to keep the one it has.
+
+### Keep it out of reactivity [#plain-reactivity]
+
+There is nothing to keep out: a variable holds the chart itself. The one trap is a state
+container of your own. A store built on `Proxy` (or any library that wraps objects to
+observe them) hands back a wrapper, and the chart must not be called through one, for the
+reasons in [the Vue section](#vue-reactivity). Keep strings in the store (the symbol, the
+interval, the theme name) and keep the chart, the widget, series handles, feeds and bar
+arrays in plain variables.
+
+### Resize and theme [#plain-resize-theme]
+
+CSS sizes the element and the chart follows it. A theme toggle is one call:
+
+```js
+let dark = true;
+document.getElementById('theme').addEventListener('click', () => {
+  dark = !dark;
+  chart.setTheme(dark ? darkTheme : lightTheme);
+});
+```
+
+### Live data [#plain-live-data]
+
+A ticket counter drops an answer that a newer request has overtaken:
+
+```js
+import { OpenAlgoLiveDataFeed, intervalToSeconds } from 'openalgo-charts';
+
+const feed = new OpenAlgoLiveDataFeed({ baseUrl: 'http://127.0.0.1:5000', wsUrl: 'ws://127.0.0.1:8765', apiKey });
+let ticket = 0;
+let stop = null;
+
+async function show(symbol, exchange, interval) {
+  const mine = ++ticket;
+  stop?.();
+  stop = null;
+  const request = { symbol, exchange, interval };
+  series.setData([]);
+  chart.setDataContext(request);
+  const to = Math.floor(Date.now() / 1000);
+  const bars = await feed.getBars({ ...request, from: to - 300 * intervalToSeconds(interval), to });
+  // A newer show() or a dispose() won while this was in flight.
+  if (mine !== ticket || chart.isDestroyed) return;
+  series.setData(bars);
+  chart.resetScale();
+  stop = feed.subscribeBars(request, (bar) => series.update(bar), { seedFrom: bars[bars.length - 1] });
+}
+
+function dispose() {
+  stop?.();
+  feed.close();
+  chart.destroy();
+}
+```
+
+`new OpenAlgoLiveDataFeed(...)` opens its WebSocket in the constructor. A key in page
+JavaScript is readable by anyone who loads the page; see [Live Data](/docs/live-data).
+
+### The widget and a bound symbol [#plain-widget]
+
+A `<select>` on the page and the widget's own symbol box stay in step:
+
+```js
+import { createWidget } from 'openalgo-charts/widget';
+import 'openalgo-charts/indicators';
+
+const picker = document.getElementById('symbol');
+const widget = createWidget(document.getElementById('terminal'), {
+  feed, symbol: picker.value, exchange: 'NSE', interval: '5m', theme: 'dark',
+});
+
+// Page to widget: a no-op when the widget already shows it.
+picker.addEventListener('change', () => widget.setSymbol(picker.value));
+// Widget to page: its own symbol box changed it.
+widget.on('symbol', ({ symbol }) => { picker.value = symbol; });
+
+// Teardown: the widget destroys its chart; the feed is yours to close.
+widget.destroy();
+feed.close();
+```
+
+### Cached and reused views [#plain-cached-views]
+
+Nothing is cached for you. To keep a chart across a view switch, hide its element (the
+`hidden` attribute or `display: none`) instead of removing it. The chart keeps its data,
+studies, drawings and view, and lays out again when shown. A live subscription keeps
+streaming into it while it is hidden; stop and restart it yourself if it should not.
+
+### Server rendering [#plain-server-rendering]
+
+A page that runs only in the browser has none. Code that also runs in Node (a test, a
+server that renders the page's HTML) can import the library, since evaluating it touches
+no DOM; keep `createChart` and `createWidget` for the browser.
+
+## React [#react]
+
+### Install and import [#react-install]
+
+```bash
+npm install openalgo-charts
+```
+
+```tsx
+import { createChart, darkTheme, lightTheme, type Chart, type SeriesApi } from 'openalgo-charts';
+```
+
+Types ship with the package. There is no provider, context or hook to install.
+
+### Mount and clean up [#react-lifecycle]
+
+```tsx
+import { useEffect, useRef } from 'react';
+import { createChart, darkTheme, type Bar, type Chart, type SeriesApi } from 'openalgo-charts';
+
+export function PriceChart({ bars }: { bars: Bar[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<Chart | null>(null);
+  const seriesRef = useRef<SeriesApi | null>(null);
+
+  // Create once. The cleanup runs on unmount, and in development between
+  // Strict Mode's two mounts.
+  useEffect(() => {
+    const chart = createChart(containerRef.current!, { theme: darkTheme });
+    chartRef.current = chart;
+    seriesRef.current = chart.addSeries('candlestick');
+    return () => {
+      chart.destroy();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []);
+
+  // New data is a call on the same series, never a new chart.
+  useEffect(() => {
+    seriesRef.current?.setData(bars);
+  }, [bars]);
+
+  return <div ref={containerRef} style={{ height: 480 }} />;
+}
+```
+
+Effects run after the element is attached. The component body and `useMemo` run during
+render, before there is an element and on the server as well, which is why the chart is
+never created there. Keep `bars` stable in the parent (state or a memo) so the data effect
+runs only when the data changes.
+
+### Keep it out of reactivity [#react-reactivity]
+
+React does not wrap objects, so the risk is re-rendering and rebuilding, not a proxy.
+
+- **A ref, not state.** Nothing renders from the chart. Storing it with `useState`
+  re-renders the component for nothing and invites creating it during render.
+- **Only identity-bearing dependencies on the creating effect**, which is usually none. An
+  inline options object or arrow function in that list is new on every render, and
+  destroys and rebuilds the chart each time.
+- **Strict Mode** mounts, cleans up and mounts every effect again once in development.
+  With create and destroy in one effect, that builds a chart, destroys it and builds a
+  second one. That is intended, and production builds do it once. Async work started in
+  an effect checks a flag its cleanup sets, as the next part shows.
+- **Tick-rate data never goes through state.** The feed callback calls
+  `series.update(bar)` directly. Only low-rate facts (the loaded symbol, an error) belong
+  in state.
+
+### Resize and theme [#react-resize-theme]
+
+Nothing to write for resize: size the container with CSS. The theme follows a prop:
+
+```tsx
+useEffect(() => {
+  chartRef.current?.setTheme(theme === 'light' ? lightTheme : darkTheme);
+}, [theme]);
+```
+
+Declared after the creating effect, it also applies the first theme on mount, because
+effects run in order.
+
+### Live data [#react-live-data]
+
+The effect's cleanup is React's form of the ticket: it runs before the next run starts,
+and the flag it sets drops the older answer.
+
+```tsx
+useEffect(() => {
+  const chart = chartRef.current, series = seriesRef.current;
+  if (!chart || !series) return;
+  let cancelled = false;
+  let stop: (() => void) | undefined;
+  const request = { symbol, exchange, interval };
+  series.setData([]);
+  chart.setDataContext(request);
+  const to = Math.floor(Date.now() / 1000);
+  feed.getBars({ ...request, from: to - 300 * intervalToSeconds(interval), to })
+    .then((bars) => {
+      // A newer symbol, or an unmount, cleaned this run up while it loaded.
+      if (cancelled) return;
+      series.setData(bars);
+      chart.resetScale();
+      stop = feed.subscribeBars?.(request, (bar) => series.update(bar), { seedFrom: bars[bars.length - 1] });
+    })
+    .catch((error) => { if (!cancelled) setStatus(String(error)); });
+  return () => {
+    cancelled = true;
+    stop?.();
+  };
+}, [feed, symbol, exchange, interval]);
+```
+
+`setStatus` is an ordinary `useState` setter. `feed` must keep its identity across
+renders: create it once outside the component, or in its own effect whose cleanup calls
+`feed.close()`. `new OpenAlgoLiveDataFeed(...)` opens its WebSocket in the constructor, so
+never construct it during render.
+
+### The widget and a bound symbol [#react-widget]
+
+A controlled prop and a change callback are React's two-way binding:
+
+```tsx
+import { useEffect, useRef } from 'react';
+import type { DataFeed } from 'openalgo-charts';
+import { createWidget, type Widget } from 'openalgo-charts/widget';
+
+export function Terminal({ feed, symbol, onSymbolChange }: {
+  feed: DataFeed; symbol: string; onSymbolChange: (symbol: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const widgetRef = useRef<Widget | null>(null);
+  // The latest callback, read when the widget reports, without rebuilding the widget.
+  const onSymbolRef = useRef(onSymbolChange);
+  useEffect(() => { onSymbolRef.current = onSymbolChange; }, [onSymbolChange]);
+
+  useEffect(() => {
+    const widget = createWidget(containerRef.current!, { feed, symbol, exchange: 'NSE', interval: '5m', theme: 'dark' });
+    widgetRef.current = widget;
+    // The widget's own symbol box reports here; destroy() drops the subscription.
+    widget.on('symbol', (e) => onSymbolRef.current(e.symbol));
+    return () => {
+      widget.destroy();
+      widgetRef.current = null;
+    };
+    // Built once per feed: a later symbol goes through setSymbol below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feed]);
+
+  // Parent to widget: a no-op when the widget made the change itself.
+  useEffect(() => { widgetRef.current?.setSymbol(symbol); }, [symbol]);
+
+  return <div ref={containerRef} style={{ height: 600 }} />;
+}
+```
+
+The parent holds `const [symbol, setSymbol] = useState('NIFTY')` and renders
+`<Terminal feed={feed} symbol={symbol} onSymbolChange={setSymbol} />`. The interval and the
+theme take the same pair (`setInterval` and the `interval` event; `setTheme` after checking
+`widget.theme()`, and the `theme` event). To keep the widget tier out of the main bundle,
+load it with `await import('openalgo-charts/widget')` inside the effect and check a
+cancelled flag after the await, as [the Vue composable](#vue-lifecycle) does.
+
+### Cached and reused views [#react-cached-views]
+
+React has no keep-alive that keeps effects running. Conditional rendering
+(`{open && <PriceChart />}`) unmounts the component, and its cleanup destroys the chart. A
+hidden `<Activity>` boundary (React 19.2) keeps the DOM but cleans up effects, so the
+chart is destroyed and built again when shown. To keep one chart, with its studies,
+drawings and view, across a tab switch, keep it mounted and hide it with CSS. When a route
+renders the same component for a new parameter, React keeps it mounted (unless it gets a
+new `key`), and the prop-driven effects above move the chart to the new symbol.
+
+### Server rendering [#react-server-rendering]
+
+Effects do not run during server rendering, so the components above render an empty
+container on the server and build the chart in the browser. Importing the library at the
+top of the module is safe. Give the container its height in CSS so the page does not move
+when the chart arrives. [Next.js](#nextjs) covers the framework specifics.
+
+## Next.js [#nextjs]
+
+### Install and import [#nextjs-install]
+
+```bash
+npm install openalgo-charts
+```
+
+In the App Router, a component that uses effects and refs is a Client Component, so the
+chart's file starts with `'use client'`. Next.js still runs that file on the server to
+prerender its HTML, and a top-level import of the library is safe there. The Pages Router
+needs no directive.
+
+```tsx
+'use client';
+import { createChart, darkTheme, lightTheme, type Chart } from 'openalgo-charts';
+```
+
+### Mount and clean up [#nextjs-lifecycle]
+
+The [React component](#react-lifecycle), with `'use client'` as its first line, works
+unchanged: `useEffect` runs only in the browser. A Server Component page renders it like
+any other component:
+
+```tsx
+// app/chart/page.tsx, a Server Component
+import { PriceChartPanel } from './price-chart-panel';
+
+export default function Page() {
+  return <PriceChartPanel symbol="NIFTY" exchange="NSE_INDEX" interval="5m" />;
+}
+```
+
+Client-side navigation away from the page unmounts it, and the effect cleanup destroys the
+chart. Strict Mode is on by default in the App Router, so development builds the chart
+twice, as in React.
+
+### Keep it out of reactivity [#nextjs-reactivity]
+
+Everything in the [React part](#react-reactivity) applies. There is one more boundary:
+props passed from a Server Component to a Client Component must be serializable. A feed
+(it has methods) and a chart cannot cross it; plain bar objects and strings can. Pass the
+symbol, the interval and a theme name, and create the feed and the chart inside the client
+component.
+
+### Resize and theme [#nextjs-resize-theme]
+
+Resize needs nothing. A theme held in React state or context follows the
+[React theme effect](#react-resize-theme). A theme that lives only in the browser (a class
+on the `html` element, a saved preference) is unknown while the server renders, so read it
+inside the effect and pass it to `createChart`; do not branch the rendered markup on it,
+which would differ between server and client.
+
+```tsx
+useEffect(() => {
+  const dark = document.documentElement.classList.contains('dark');
+  const chart = createChart(containerRef.current!, { theme: dark ? darkTheme : lightTheme });
+  chartRef.current = chart;
+  return () => chart.destroy();
+}, []);
+```
+
+### Live data [#nextjs-live-data]
+
+Environment variables prefixed `NEXT_PUBLIC_` are inlined into the browser bundle, so an
+OpenAlgo API key never goes in one. Load history through a Route Handler that holds the key
+on the server, and give the chart a `DataFeed` that calls it:
+
+```ts
+// app/api/bars/route.ts: server only, the key never reaches the browser
+import { OpenAlgoDataFeed } from 'openalgo-charts';
+
+const history = new OpenAlgoDataFeed({ baseUrl: process.env.OPENALGO_URL!, apiKey: process.env.OPENALGO_API_KEY! });
+
+export async function GET(request: Request) {
+  const q = new URL(request.url).searchParams;
+  const bars = await history.getBars({
+    symbol: q.get('symbol')!, exchange: q.get('exchange')!, interval: q.get('interval')!,
+    from: Number(q.get('from')), to: Number(q.get('to')),
+  });
+  return Response.json(bars);
+}
+```
+
+```ts
+// lib/bars-feed.ts: used by the client component
+import type { DataFeed } from 'openalgo-charts';
+
+export const barsFeed: DataFeed = {
+  async getBars({ symbol, exchange, interval, from, to, signal }) {
+    const query = new URLSearchParams({ symbol, exchange, interval, from: String(from), to: String(to) });
+    const response = await fetch(`/api/bars?${query}`, { signal });
+    if (!response.ok) throw new Error(`history request failed with ${response.status}`);
+    return response.json();
+  },
+};
+```
+
+`OpenAlgoDataFeed` needs only `fetch`, so it runs in a Route Handler. The
+[React live-data effect](#react-live-data) takes `barsFeed` as its feed. A live stream
+authenticates from the browser, so a page that uses `OpenAlgoLiveDataFeed` directly
+carries its key; serve such a page only to its owner.
+
+### The widget and a bound symbol [#nextjs-widget]
+
+The [React `Terminal`](#react-widget) works as it is in a `'use client'` file. To keep
+the widget tier out of the page's first chunk and out of server rendering, load it with
+`next/dynamic`. In the App Router, `ssr: false` is allowed only inside a Client Component,
+so the dynamic import lives in a small client wrapper that also owns the bound state:
+
+```tsx
+// app/terminal/terminal-panel.tsx
+'use client';
+import dynamic from 'next/dynamic';
+import { useState } from 'react';
+import { barsFeed } from '../../lib/bars-feed';
+
+const Terminal = dynamic(() => import('./terminal').then((m) => m.Terminal), {
+  ssr: false,
+  // Holds the height until the chunk arrives, so nothing below it moves.
+  loading: () => <div style={{ height: 600 }} />,
+});
+
+export function TerminalPanel() {
+  const [symbol, setSymbol] = useState('NIFTY');
+  return <Terminal feed={barsFeed} symbol={symbol} onSymbolChange={setSymbol} />;
+}
+```
+
+The page, a Server Component, renders `<TerminalPanel />`.
+
+### Cached and reused views [#nextjs-cached-views]
+
+A layout stays mounted while the user navigates between the pages under it. A chart in
+`app/(markets)/layout.tsx` therefore keeps its studies, drawings and view across those
+pages, while a chart in a `page.tsx` is destroyed on navigation and built again on return.
+Put a chart that should outlive navigation in the layout, and pass it the symbol from the
+URL or from shared state. The [React notes](#react-cached-views) on `<Activity>` and CSS
+hiding apply as well.
+
+### Server rendering [#nextjs-server-rendering]
+
+- A `'use client'` component is still rendered on the server to produce HTML; its effects
+  are not run. The chart is built during hydration, into the container the server rendered,
+  so give that container its height in CSS.
+- `next/dynamic` with `ssr: false` skips the server render of the component entirely. In
+  the App Router it must be called from a Client Component; the Pages Router allows it
+  anywhere.
+- Importing the library in a module that runs on the server is safe. Never call
+  `createChart` or `createWidget` outside an effect.
+
+## Vue 3 [#vue-3]
+
+The Vue integration is covered by tests. [`examples/vue`](https://github.com/marketcalls/openalgo-charts/tree/master/examples/vue)
+runs the code below with no build step, `tests/e2e/vue-integration.spec.ts` drives it in
+Chromium, Firefox and WebKit, and `tests/vue-reactivity.test.ts` holds the reactivity rules
+with Vue's own reactivity. To run it: `npm run build`, then `node tests/e2e/serve.cjs`, then
+open `http://127.0.0.1:4173/examples/vue/index.html`.
+
+### Install and import [#vue-install]
+
+```bash
+npm install openalgo-charts
+```
+
+There is no plugin and no `app.use()`. Import where the chart is created:
+
+```ts
+import { createChart, darkTheme, lightTheme, type Chart, type SeriesApi } from 'openalgo-charts';
+```
+
+### Mount and clean up [#vue-lifecycle]
+
+A composable owns one chart, or one widget, for the life of the component that calls it:
+
+```ts
+// composables/useOpenAlgoChart.ts
+import { onBeforeUnmount, onMounted, shallowRef, type Ref } from 'vue';
+import { createChart, type Chart, type ChartOptions, type SeriesApi } from 'openalgo-charts';
+import type { Widget, WidgetOptions } from 'openalgo-charts/widget';
+
+type Setup = { chart?: ChartOptions; widget?: WidgetOptions };
+
+export function useOpenAlgoChart(container: Readonly<Ref<HTMLElement | null>>, setup: () => Setup = () => ({})) {
+  // shallowRef: `.value` is the chart itself, never a proxy of it.
+  const chart = shallowRef<Chart | null>(null);
+  const widget = shallowRef<Widget | null>(null);
+  const series = shallowRef<SeriesApi | null>(null);
+  let disposed = false;
+
+  onMounted(async () => {
+    const el = container.value, options = setup();
+    if (el === null) return;
+    if (options.widget) {
+      // Loaded on first use: a page with only bare charts never downloads it.
+      const { createWidget } = await import('openalgo-charts/widget');
+      if (disposed) return; // unmounted while the tier loaded
+      const w = createWidget(el, options.widget);
+      widget.value = w; chart.value = w.chart; series.value = w.series;
+    } else {
+      const c = createChart(el, options.chart);
+      chart.value = c; series.value = c.addSeries('candlestick');
+    }
+  });
+
+  // Before unmount, while the container is still in the document.
+  onBeforeUnmount(() => {
+    disposed = true;
+    if (widget.value !== null) widget.value.destroy(); // destroys its chart too
+    else chart.value?.destroy();
+    widget.value = null; chart.value = null; series.value = null;
+  });
+
+  return { chart, widget, series };
+}
+```
+
+The browser test unmounts a chart and a widget and finds the page's listeners, observers
+and timers back at their baseline, with no frames requested. With the Options API, create
+the chart in `mounted()` on `this` (never declared in `data()`), and destroy it in
+`beforeUnmount()`.
+
+### Keep it out of reactivity [#vue-reactivity]
+
+`ref(x)` and `reactive(x)` return a deep `Proxy` of `x`, and everything read through it
+comes back wrapped. `tests/vue-reactivity.test.ts` holds what that breaks for a chart.
+Replay and picks register the object the call went through, so replay started through a
+`ref()`-held widget leaves its right-click order entries enabled. Methods run with `this`
+bound to the proxy, so a series added through it is unknown to the chart itself
+(`chart.seriesType(series)` answers `null`). Bars from a `ref([])` are stored as proxies
+and read through a trap on every frame.
+
+| Holding | Use | Not |
+| --- | --- | --- |
+| The chart, the widget, a series | `shallowRef`, or a plain `let` | `ref(chart)`, `reactive({ chart })` |
+| Inside reactive state (a store, `data()`) | `markRaw(chart)` before it goes in | the chart as it is |
+| Bars | a plain array, `shallowRef(bars)`, or `toRaw(bars)` | `series.setData(barsRef.value)` from a `ref([])` |
+| A feed or a controller | a plain `const`, or `markRaw(feed)` | a reactive property |
+| The container, the symbol, the theme name | an ordinary `ref` (Vue never proxies an element or a string) | |
+
+### Resize and theme [#vue-resize-theme]
+
+Nothing to write for resize: give the container a height and let CSS do the rest. A
+`v-show` that hides the chart is the zero-size case from [the shared facts](#shared). The
+theme is a watcher on a prop:
+
+```ts
+watch(() => props.theme, (theme) => {
+  const w = widget.value;
+  if (w !== null) { if (w.theme() !== theme) w.setTheme(theme); }
+  else chart.value?.setTheme(theme === 'light' ? lightTheme : darkTheme);
+});
+```
+
+### Live data [#vue-live-data]
+
+A component built on the composable takes `symbol`, `exchange`, `interval` and a `feed` as
+props. A prop change is a call on the chart that already exists, and a ticket drops an older
+answer that arrives last; the browser test holds two requests and answers the older one
+last to prove it.
+
+```ts
+let generation = 0;
+let stop: (() => void) | undefined;
+async function load(): Promise<void> {
+  const c = chart.value, s = series.value, w = widget.value;
+  if (c === null || s === null) return;
+  // The widget loads through its own feed (see the next part).
+  if (w !== null) { w.setSymbol(props.symbol, props.exchange); w.setInterval(props.interval); return; }
+  const ticket = ++generation;
+  stop?.(); stop = undefined;
+  const { symbol, exchange, interval } = props;
+  s.setData([]);
+  c.setDataContext({ symbol, exchange, interval });
+  const to = Math.floor(Date.now() / 1000);
+  try {
+    const bars = await props.feed.getBars({ symbol, exchange, interval, from: to - 300 * intervalToSeconds(interval), to });
+    if (ticket !== generation || c.isDestroyed) return; // a newer change, or an unmount, won
+    s.setData(bars);
+    c.resetScale();
+    stop = props.feed.subscribeBars?.({ symbol, exchange, interval }, (bar) => s.update(bar), { seedFrom: bars[bars.length - 1] });
+  } catch (error) {
+    if (ticket === generation && !c.isDestroyed) emit('loaded', { symbol, interval, bars: 0, error: String(error) });
+  }
+}
+watch([series, () => props.symbol, () => props.exchange, () => props.interval], load);
+onBeforeUnmount(() => stop?.());
+```
+
+The parent creates the feed once with `markRaw(new OpenAlgoLiveDataFeed(...))`, so it stays
+itself even if it lands in reactive state, and calls `feed.close()` when it is done with it.
+
+### The widget and a bound symbol [#vue-widget]
+
+With the `widget` prop set, `load()` above forwards the props to the widget. The widget's
+own controls report back as `update:` events, which is what `v-model` binds:
+
+```ts
+watch(chart, (c) => {
+  const w = widget.value;
+  if (c === null || w === null) return;
+  // widget.destroy() drops these subscriptions.
+  w.on('symbol', ({ symbol }) => emit('update:symbol', symbol));
+  w.on('interval', ({ interval }) => emit('update:interval', interval));
+  w.on('theme', ({ theme }) => emit('update:theme', theme));
+});
+```
+
+```vue
+<OpenAlgoChart widget v-model:symbol="symbol" v-model:interval="interval" v-model:theme="theme"
+  :feed="feed" exchange="NSE_INDEX" />
+```
+
+`symbol`, `interval` and `theme` in the parent are ordinary refs: they are strings. The
+whole component is `examples/vue/openalgo-chart.js`, and the browser test clicks the
+widget's interval pill and watches the page's select follow it.
+
+### Cached and reused views [#vue-cached-views]
+
+Inside `<KeepAlive>` a component that is switched away is deactivated, not unmounted, so
+its chart is kept:
+
+```vue
+<KeepAlive>
+  <OpenAlgoChart v-if="view === 'chart'" key="chart" :symbol="symbol" :feed="feed" />
+  <OpenAlgoChart v-else key="widget" widget v-model:symbol="symbol" :feed="feed" />
+</KeepAlive>
+```
+
+- The chart comes back at its real size with the same visible range, showing the symbol,
+  interval and theme set while it was parked; the browser test checks each of these.
+- A live subscription keeps streaming while parked: stop it in `onDeactivated` and start it
+  in `onActivated` if it should not. Removing the `<KeepAlive>` itself destroys every chart.
+- Vue Router reuses the component when only a param changes (`/chart/NIFTY` to
+  `/chart/BANKNIFTY`), without its lifecycle hooks. Pass the param in as the `symbol` prop
+  and the watcher above moves the same chart.
+
+### Server rendering [#vue-server-rendering]
+
+`onMounted` never runs on the server, so a component using the composable renders an empty
+container there and builds the chart during hydration. Importing the library at the top of
+a component is safe. In Nuxt:
+
+- Wrap the component in `<ClientOnly>`, or name it `OpenAlgoChart.client.vue`, to skip its
+  server render when the chart is the whole page or the empty container would shift the
+  layout.
+- Give the server-rendered container its height in CSS.
+- Import tiers with side effects (`openalgo-charts/indicators`, `openalgo-charts/draw`) at
+  the top of a client-only module, or with `await import(...)` inside `onMounted`.
+
+## Angular [#angular]
+
+### Install and import [#angular-install]
+
+```bash
+npm install openalgo-charts
+```
+
+There is no NgModule and no provider: a component imports the functions it calls. The
+package is ES modules with type declarations, so the Angular CLI needs no configuration
+for it.
+
+```ts
+import { createChart, darkTheme, lightTheme, type Chart, type SeriesApi } from 'openalgo-charts';
+```
+
+### Mount and clean up [#angular-lifecycle]
+
+```ts
+import { AfterViewInit, Component, ElementRef, NgZone, OnDestroy, ViewChild, inject } from '@angular/core';
+import { createChart, darkTheme, type Chart, type SeriesApi } from 'openalgo-charts';
+
+@Component({
+  selector: 'app-price-chart',
+  standalone: true,
+  template: '<div #host class="chart"></div>',
+  styles: ['.chart { height: 480px; }'],
+})
+export class PriceChartComponent implements AfterViewInit, OnDestroy {
+  @ViewChild('host', { static: true }) private host!: ElementRef<HTMLDivElement>;
+  private readonly zone = inject(NgZone);
+  private chart: Chart | null = null;
+  private series: SeriesApi | null = null;
+
+  ngAfterViewInit(): void {
+    // Outside the zone: see the next part.
+    this.zone.runOutsideAngular(() => {
+      this.chart = createChart(this.host.nativeElement, { theme: darkTheme });
+      this.series = this.chart.addSeries('candlestick');
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.chart?.destroy();
+    this.chart = null;
+    this.series = null;
+  }
+}
+```
+
+`ngAfterViewInit` is the first hook in which the template's element exists. `@if` or
+`*ngIf` removing the component runs `ngOnDestroy`. A signal query
+(`viewChild.required<ElementRef<HTMLDivElement>>('host')`) works the same way as
+`@ViewChild`.
+
+### Keep it out of change detection [#angular-reactivity]
+
+Angular does not wrap objects in proxies, so the chart lives in a plain field. The cost is
+zone.js: it patches `addEventListener`, `requestAnimationFrame` and timers, and runs change
+detection after every callback registered inside the Angular zone. The chart listens for
+pointer moves and the wheel on its container, keys on the document and resize on the
+window, and asks for an animation frame whenever it paints. Created inside the zone, every
+pointer move over the chart and every painted frame would check the component tree.
+`runOutsideAngular` registers all of it outside the zone.
+
+- Work that should update the view comes back in with `zone.run(...)`: an `@Output`
+  emitted from a widget event, or a status field set after a load. The next parts show
+  both.
+- A feed's socket belongs outside too. `new OpenAlgoLiveDataFeed(...)` opens its WebSocket
+  in the constructor, so construct it inside `runOutsideAngular`, or every tick runs change
+  detection.
+- In a zoneless application, `runOutsideAngular` and `run` just call the function, so the
+  same code runs unchanged.
+
+### Resize and theme [#angular-resize-theme]
+
+Nothing to write for resize: the component's `styles` (or a flex parent) size the host
+element, and the chart follows it. Do not add a `window:resize` host listener. The theme is
+an input; `ngOnChanges` runs before `ngAfterViewInit`, so create the chart with the input's
+value too:
+
+```ts
+@Input() theme: 'dark' | 'light' = 'dark';
+
+ngOnChanges(changes: SimpleChanges): void {
+  if (!changes['theme'] || this.chart === null) return;
+  const theme = this.theme === 'light' ? lightTheme : darkTheme;
+  this.zone.runOutsideAngular(() => this.chart!.setTheme(theme));
+}
+```
+
+### Live data [#angular-live-data]
+
+A root service owns the feed for the application, created outside the zone and closed when
+the application is destroyed:
+
+```ts
+// market-feed.ts
+import { Injectable, NgZone, OnDestroy, inject } from '@angular/core';
+import { OpenAlgoLiveDataFeed } from 'openalgo-charts';
+
+@Injectable({ providedIn: 'root' })
+export class MarketFeed implements OnDestroy {
+  // FEED_CONFIG: your baseUrl, wsUrl and apiKey.
+  readonly feed = inject(NgZone).runOutsideAngular(() => new OpenAlgoLiveDataFeed(FEED_CONFIG));
+  ngOnDestroy(): void { this.feed.close(); }
+}
+```
+
+The component loads on every input change, with a ticket:
+
+```ts
+@Input() symbol = 'NIFTY';
+@Input() exchange = 'NSE';
+@Input() interval = '5m';
+status = '';
+private readonly feed = inject(MarketFeed).feed;
+private generation = 0;
+private stop?: () => void;
+
+// Also call this.load() at the end of ngAfterViewInit, and this.stop?.() in ngOnDestroy.
+ngOnChanges(changes: SimpleChanges): void {
+  if (this.chart && (changes['symbol'] || changes['exchange'] || changes['interval'])) this.load();
+}
+
+private load(): void {
+  const chart = this.chart!, series = this.series!, ticket = ++this.generation;
+  this.stop?.(); this.stop = undefined;
+  const request = { symbol: this.symbol, exchange: this.exchange, interval: this.interval };
+  this.zone.runOutsideAngular(async () => {
+    series.setData([]);
+    chart.setDataContext(request);
+    const to = Math.floor(Date.now() / 1000);
+    try {
+      const bars = await this.feed.getBars({ ...request, from: to - 300 * intervalToSeconds(request.interval), to });
+      if (ticket !== this.generation || chart.isDestroyed) return; // overtaken, or destroyed
+      series.setData(bars);
+      chart.resetScale();
+      this.stop = this.feed.subscribeBars(request, (bar) => series.update(bar), { seedFrom: bars[bars.length - 1] });
+    } catch (error) {
+      // Back into the zone, so the template shows it.
+      if (ticket === this.generation) this.zone.run(() => { this.status = String(error); });
+    }
+  });
+}
+```
+
+An RxJS stream takes the same shape: subscribe outside the zone and unsubscribe in
+`ngOnDestroy`.
+
+### The widget and a bound symbol [#angular-widget]
+
+An `@Input()` and an `@Output()` named `symbolChange` give the component Angular's two-way
+binding, `[(symbol)]`:
+
+```ts
+import { AfterViewInit, Component, ElementRef, EventEmitter, Input, NgZone, OnChanges, OnDestroy,
+  Output, SimpleChanges, ViewChild, inject } from '@angular/core';
+import { createWidget, type Widget } from 'openalgo-charts/widget';
+import { MarketFeed } from './market-feed';
+
+@Component({ selector: 'app-terminal', standalone: true, template: '<div #host class="terminal"></div>',
+  styles: ['.terminal { height: 600px; }'] })
+export class TerminalComponent implements AfterViewInit, OnChanges, OnDestroy {
+  @ViewChild('host', { static: true }) private host!: ElementRef<HTMLDivElement>;
+  @Input() symbol = 'NIFTY';
+  @Output() readonly symbolChange = new EventEmitter<string>();
+  private readonly zone = inject(NgZone);
+  private readonly feed = inject(MarketFeed).feed;
+  private widget: Widget | null = null;
+
+  ngAfterViewInit(): void {
+    this.zone.runOutsideAngular(() => {
+      const widget = createWidget(this.host.nativeElement, {
+        feed: this.feed, symbol: this.symbol, exchange: 'NSE', interval: '5m', theme: 'dark',
+      });
+      // The widget's own symbol box, back into Angular for the binding.
+      widget.on('symbol', ({ symbol }) => this.zone.run(() => this.symbolChange.emit(symbol)));
+      this.widget = widget;
+    });
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // A no-op when the widget made the change itself.
+    if (changes['symbol'] && this.widget) this.zone.runOutsideAngular(() => this.widget!.setSymbol(this.symbol));
+  }
+
+  ngOnDestroy(): void {
+    this.widget?.destroy(); // destroys its chart too
+    this.widget = null;
+  }
+}
+```
+
+The parent writes `<app-terminal [(symbol)]="symbol"></app-terminal>`. A `model()` input
+(Angular 17.2 and later) is the signal form of the same pair.
+
+### Cached and reused views [#angular-cached-views]
+
+- The router reuses the component when only the route's params change
+  (`/chart/NIFTY` to `/chart/BANKNIFTY`). Read the symbol from `ActivatedRoute.paramMap`,
+  or bind it to the `symbol` input with `withComponentInputBinding()`, and the load above
+  moves the same chart.
+- A custom `RouteReuseStrategy` that stores a route detaches its component instead of
+  destroying it: `ngOnDestroy` does not run, and the chart comes back with its data,
+  studies and view. A live subscription keeps streaming while it is detached; the router
+  outlet's `detach` and `attach` events are the place to stop and restart it.
+- `@if` and `*ngIf` destroy the component. To keep a chart across a tab switch, keep it
+  rendered and hide it with CSS.
+
+### Server rendering [#angular-server-rendering]
+
+With server rendering, lifecycle hooks, `ngAfterViewInit` included, also run on the server,
+where there is no layout and no canvas. Create the chart only in the browser:
+
+```ts
+constructor() {
+  // Runs once, in the browser only, after the first render. create() holds
+  // what ngAfterViewInit did above.
+  afterNextRender(() => this.zone.runOutsideAngular(() => this.create()));
+}
+```
+
+`afterNextRender` is available from Angular 17. Before that, return early from
+`ngAfterViewInit` when `isPlatformBrowser(inject(PLATFORM_ID))` is false. Guard the feed
+service the same way, or the server opens a socket when a component injects it. Importing
+the library on the server is safe.
+
+## Svelte [#svelte]
+
+The code is Svelte 5. Each part notes where Svelte 4 differs.
+
+### Install and import [#svelte-install]
+
+```bash
+npm install openalgo-charts
+```
+
+There is no action or plugin to register; import in the component's script:
+
+```ts
+import { createChart, darkTheme, lightTheme, type Chart, type SeriesApi } from 'openalgo-charts';
+```
+
+### Mount and clean up [#svelte-lifecycle]
+
+```svelte
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { createChart, darkTheme, type Bar, type Chart, type SeriesApi } from 'openalgo-charts';
+
+  let { bars }: { bars: Bar[] } = $props();
+
+  let container: HTMLDivElement;
+  // $state.raw: the effects re-run once these are set, and each value is
+  // stored as it is, never as a proxy.
+  let chart = $state.raw<Chart | null>(null);
+  let series = $state.raw<SeriesApi | null>(null);
+
+  onMount(() => {
+    const c = createChart(container, { theme: darkTheme });
+    chart = c;
+    series = c.addSeries('candlestick');
+    // Called when the component is destroyed.
+    return () => c.destroy();
+  });
+
+  // New data is a call on the same series, never a new chart.
+  $effect(() => { series?.setData(bars); });
+</script>
+
+<div bind:this={container} class="chart"></div>
+
+<style>
+  .chart { height: 480px; }
+</style>
+```
+
+Svelte calls the function `onMount` returns only when the callback is synchronous; an
+`async` callback returns a promise, and its cleanup is never called. In Svelte 4 the same
+component uses `export let bars`, plain `let chart, series`, and
+`$: series?.setData(bars)` in place of `$effect`.
+
+### Keep it out of reactivity [#svelte-reactivity]
+
+Svelte 5's `$state` turns plain objects and arrays into deep proxies and leaves class
+instances as they are. The chart and the widget are class instances, so they are not
+proxied even in `$state`, but what you hand them can be:
+
+- **Bars.** `let bars = $state([])` gives the chart proxies that it stores and reads
+  through a trap on every frame, and an `$effect` that passes them to `setData` tracks
+  every element the chart reads. Hold bars in `$state.raw` (reassign to change them) or a
+  plain variable, and use `$state.snapshot(bars)`, which copies, when they must come from
+  deep state.
+- **Feeds and options written as object literals** are plain objects: keep them in plain
+  variables or `$state.raw`.
+- **The chart and the widget:** a plain `let` when nothing reacts to them, `$state.raw`
+  when an `$effect` has to run again once they exist.
+
+Svelte 4 has no proxies. Reactivity comes from assignment, and a plain `let` holds anything
+as it is.
+
+### Resize and theme [#svelte-resize-theme]
+
+Nothing to write for resize: the class gives the element its height and the chart follows
+it. With `theme` added to the component's `$props()`, the theme is one effect:
+
+```ts
+$effect(() => { chart?.setTheme(theme === 'light' ? lightTheme : darkTheme); });
+```
+
+In Svelte 4: `$: chart?.setTheme(theme === 'light' ? lightTheme : darkTheme);`.
+
+### Live data [#svelte-live-data]
+
+An `$effect` with a cleanup is Svelte's form of the ticket: it runs again when `symbol`,
+`exchange` or `interval` changes, and cleans up the previous run first.
+
+```ts
+$effect(() => {
+  const c = chart, s = series;
+  if (!c || !s) return;
+  const request = { symbol, exchange, interval };
+  let cancelled = false;
+  let stop: (() => void) | undefined;
+  s.setData([]);
+  c.setDataContext(request);
+  const to = Math.floor(Date.now() / 1000);
+  feed.getBars({ ...request, from: to - 300 * intervalToSeconds(interval), to })
+    .then((bars) => {
+      // After the await: untracked, and dropped when a newer run started.
+      if (cancelled) return;
+      s.setData(bars);
+      c.resetScale();
+      stop = feed.subscribeBars?.(request, (bar) => s.update(bar), { seedFrom: bars[bars.length - 1] });
+    })
+    .catch((error) => { if (!cancelled) status = String(error); });
+  return () => {
+    cancelled = true;
+    stop?.();
+  };
+});
+```
+
+`status` is a `$state` string the template shows. Svelte 4 has no effect cleanup: keep a
+ticket as in [plain JavaScript](#plain-live-data), call the loader from
+`$: chart && load(symbol, exchange, interval)`, and stop the subscription in the function
+`onMount` returns.
+
+### The widget and a bound symbol [#svelte-widget]
+
+`$bindable` makes a prop bindable with `bind:symbol`:
+
+```svelte
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import type { DataFeed } from 'openalgo-charts';
+  import { createWidget, type Widget } from 'openalgo-charts/widget';
+
+  let { feed, symbol = $bindable('NIFTY') }: { feed: DataFeed; symbol?: string } = $props();
+
+  let container: HTMLDivElement;
+  let widget = $state.raw<Widget | null>(null);
+
+  onMount(() => {
+    const w = createWidget(container, { feed, symbol, exchange: 'NSE', interval: '5m', theme: 'dark' });
+    // The widget's own symbol box writes back through the binding.
+    w.on('symbol', (e) => { symbol = e.symbol; });
+    widget = w;
+    return () => w.destroy(); // destroys its chart too
+  });
+
+  // Parent to widget: a no-op when the widget made the change itself.
+  $effect(() => { widget?.setSymbol(symbol); });
+</script>
+
+<div bind:this={container} class="terminal"></div>
+```
+
+The parent writes `<Terminal {feed} bind:symbol />`. In Svelte 4 the prop is
+`export let symbol = 'NIFTY'`, the `w.on('symbol', ...)` assignment is the same, and
+`$: widget?.setSymbol(symbol)` replaces the effect.
+
+### Cached and reused views [#svelte-cached-views]
+
+Svelte has no keep-alive: `{#if}` destroys the component and its chart. To keep a chart
+across a tab switch, keep it rendered and hide it with CSS. In SvelteKit:
+
+- Navigating between two URLs of the same route (`/chart/NIFTY` to `/chart/BANKNIFTY`)
+  reuses the page component. `onMount` does not run again, so take the symbol from the
+  page's `data` or params as a prop, and the effect above moves the same chart.
+- A `+layout.svelte` stays mounted while the user navigates between the pages under it,
+  so a chart there keeps its studies, drawings and view across those pages.
+
+### Server rendering [#svelte-server-rendering]
+
+`onMount` and `$effect` do not run during server rendering, so the component renders an
+empty container on the server and builds the chart in the browser. Importing the library
+at the top of the component is safe. In SvelteKit:
+
+- `export const ssr = false` in a page's `+page.ts` (or a layout's `+layout.ts`) renders
+  it in the browser only.
+- `browser` from `$app/environment` guards any other code that must not run on the server.
+- Give the container its height in CSS so the page does not move when the chart appears.
+- `onDestroy` also runs during server rendering, where no chart exists. Destroy through the
+  function `onMount` returns, which the server never calls, or null-check first.
+
+## Related pages
+
+- [The Widget Tier](/docs/widget): everything `createWidget` builds, its options and events.
+- [Live Data](/docs/live-data): `OpenAlgoLiveDataFeed`, reconnects and resync.
+- [Use from a CDN](/docs/cdn): the module and classic-script builds, and version pinning.
+- [Data Loading](/docs/data-loading): the shared loading controller, paging and recovery.
+- [Theming & Chart Options](/docs/themes): `ChartTheme` and runtime theme changes.
+- [Getting Started](/docs/getting-started): install, a first chart, and live updates.

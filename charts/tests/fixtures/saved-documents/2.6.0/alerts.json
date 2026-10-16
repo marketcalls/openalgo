@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "alerts": [
+    {
+      "id": "alert-breakout",
+      "source": {
+        "kind": "price",
+        "price": 2855.85
+      },
+      "condition": "crossingUp",
+      "policy": "onBarClose",
+      "repeat": "once",
+      "state": "armed",
+      "title": "Breakout",
+      "cooldownSeconds": 0,
+      "scope": {},
+      "message": "Above the week high",
+      "expiresAt": 1789626720,
+      "lastClosedTime": 1789033800
+    },
+    {
+      "id": "alert-range",
+      "source": {
+        "kind": "price",
+        "price": 2779.65,
+        "upperPrice": 2864.35
+      },
+      "condition": "leavingRange",
+      "policy": "onTouch",
+      "repeat": "everyTime",
+      "state": "armed",
+      "title": "Chart alert",
+      "cooldownSeconds": 300,
+      "scope": {},
+      "lastClosedTime": 1789033800
+    },
+    {
+      "id": "alert-rsi",
+      "source": {
+        "kind": "indicator",
+        "instanceId": "rsi-4",
+        "plotKey": "rsi",
+        "value": 70
+      },
+      "condition": "crossingDown",
+      "policy": "onBarClose",
+      "repeat": "once",
+      "state": "armed",
+      "title": "RSI turns down",
+      "cooldownSeconds": 0,
+      "scope": {},
+      "lastClosedTime": 1789033800
+    },
+    {
+      "id": "alert-trend",
+      "source": {
+        "kind": "drawing",
+        "drawingId": "trend-1"
+      },
+      "condition": "crossing",
+      "policy": "onBarClose",
+      "repeat": "once",
+      "state": "armed",
+      "title": "Trend line",
+      "cooldownSeconds": 0,
+      "scope": {},
+      "lastClosedTime": 1789033800
+    },
+    {
+      "id": "alert-paused",
+      "source": {
+        "kind": "price",
+        "price": 2680.9
+      },
+      "condition": "lessThan",
+      "policy": "onBarClose",
+      "repeat": "once",
+      "state": "disabled",
+      "title": "Chart alert",
+      "cooldownSeconds": 0,
+      "scope": {},
+      "lastClosedTime": 1789033800,
+      "payload": {
+        "route": "desk"
+      }
+    }
+  ]
+}

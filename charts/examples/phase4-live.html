@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 4, live ticks, candle builder, volume pane</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    button { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 4</strong>
+    <span id="info"></span>
+    <button id="toggle">Pause</button>
+    <span style="margin-left:auto;opacity:.6">live ticks to candle builder to update · last-price line · volume pane</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars, CandleBuilder } from '../dist/openalgo-charts.mjs';
+
+    const INTERVAL = 60;
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 64, crosshairMode: 'magnet' });
+    const price = chart.addSeries('candlestick');
+    const volume = chart.addSeries('histogram', { paneIndex: 1, style: { color: '#33415e' } });
+
+    // Seed with deterministic history.
+    let t0 = 1_705_286_700;
+    const history = generateBars(t0, 300, INTERVAL);
+    price.setData(history);
+    volume.setData(history.map((b) => ({ time: b.time, open: 0, high: b.volume, low: 0, close: b.volume })));
+
+    // Live tick simulator, then candle builder, then series.update.
+    const builder = new CandleBuilder({ intervalSec: INTERVAL, volumeMode: 'ltq-sum' });
+    const last = history[history.length - 1];
+    builder.seed(last);
+    let t = last.time + 1;
+    let p = last.close;
+    let running = true;
+
+    function tick() {
+      if (!running) return;
+      // deterministic-ish wander
+      p = Math.max(1, p + (Math.sin(t / 7) + Math.cos(t / 13)) * 0.4);
+      const u = builder.onTick({ time: t, price: p, ltq: 50 + Math.round(Math.abs(Math.sin(t)) * 200) });
+      if (u) {
+        price.update(u.bar);
+        volume.update({ time: u.bar.time, open: 0, high: u.bar.volume, low: 0, close: u.bar.volume ?? 0 });
+        document.getElementById('info').textContent = `LTP ${p.toFixed(2)} · bar ${new Date(u.bar.time * 1000).toISOString().slice(11, 19)}`;
+      }
+      t += 3; // 3 simulated seconds per tick
+    }
+    setInterval(tick, 80);
+
+    document.getElementById('toggle').addEventListener('click', (e) => {
+      running = !running;
+      e.target.textContent = running ? 'Pause' : 'Resume';
+    });
+    window.__chart = chart;
+  </script>
+</body>
+</html>

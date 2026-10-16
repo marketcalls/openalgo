@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Market Profile (TPO) demo</title>
+  <style>
+    :root {
+      --bg: #0a0c11; --panel: #0f121a; --elev: #151925; --elev-2: #1b2030;
+      --bd: #232a3a; --bd-soft: #1a1f2c; --tx: #d7dce8; --mut: #8b93a7; --faint: #5b6376;
+      --acc: #22c1a4; --acc-2: #2dd4bf; --h: 30px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg); color: var(--tx); overflow: hidden;
+      font: 13px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px;
+      background: var(--panel); border-bottom: 1px solid var(--bd-soft); }
+    .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+    .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 8px var(--acc); }
+    .brand em { color: var(--acc-2); font-style: normal; font-weight: 700; font-size: 11px;
+      letter-spacing: .8px; border: 1px solid var(--bd); background: var(--elev); padding: 1px 6px; border-radius: 5px; }
+    .divider { width: 1px; height: 20px; background: var(--bd-soft); }
+    .lbl { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+    select, button, input { height: var(--h); background: var(--elev); color: var(--tx);
+      border: 1px solid var(--bd); border-radius: 7px; padding: 0 9px; font: inherit; cursor: pointer; outline: none; }
+    select:hover, button:hover { border-color: var(--acc); background: var(--elev-2); }
+    select:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+    input[type=range] { width: 132px; padding: 0; cursor: ew-resize; accent-color: var(--acc); }
+    .chk { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; height: var(--h);
+      border: 1px solid var(--bd-soft); border-radius: 7px; background: var(--elev);
+      color: var(--mut); font-size: 12px; cursor: pointer; user-select: none; }
+    .chk input { accent-color: var(--acc); width: 14px; height: 14px; cursor: pointer; }
+    .spacer { flex: 1 1 auto; }
+    .stat { display: inline-flex; flex-direction: column; line-height: 1.25; padding: 0 10px;
+      border-left: 1px solid var(--bd-soft); }
+    .stat span { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+    .stat b { font-size: 13px; font-variant-numeric: tabular-nums; }
+    .hint { padding: 6px 12px; color: var(--faint); font-size: 12px; font-style: italic;
+      background: var(--panel); border-bottom: 1px solid var(--bd-soft); }
+    .stage { position: relative; flex: 1 1 auto; min-height: 0; }
+    #chart { position: absolute; inset: 0; cursor: crosshair; }
+    #tip { position: absolute; z-index: 30; pointer-events: none; min-width: 150px;
+      padding: 9px 11px; border-radius: 9px; background: var(--panel);
+      border: 1px solid var(--bd); box-shadow: 0 10px 30px rgba(0,0,0,.5); font-size: 12px; }
+    #tip[hidden] { display: none; }
+    #tip .t { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+    #tip .r { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+    #tip .r i { color: var(--mut); font-style: normal; }
+    .tag { display: inline-block; margin-top: 5px; padding: 1px 6px; border-radius: 4px;
+      font-size: 10px; background: var(--elev-2); color: var(--acc-2); }
+    #profile-menu { position: fixed; z-index: 50; min-width: 205px; padding: 7px;
+      background: var(--panel); border: 1px solid var(--bd); border-radius: 9px;
+      box-shadow: 0 10px 30px #0008; }
+    #profile-menu[hidden] { display: none; }
+    #profile-menu-title { padding: 3px 7px 8px; color: var(--mut); font-size: 12px; }
+    #profile-menu button { display: block; width: 100%; text-align: left; }
+    #profile-menu button:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <div class="brand"><span class="brand-dot"></span> OpenAlgo <em>market profile</em></div>
+    <div class="divider"></div>
+
+    <span class="lbl">Row</span>
+    <input type="range" id="rowsize" min="1" max="40" step="1" value="20" title="Price aggregation, in ticks" />
+    <span id="rowlabel" style="min-width:110px;font-variant-numeric:tabular-nums"></span>
+
+    <div class="divider"></div>
+    <select id="theme" title="Chart theme" aria-label="Chart theme">
+      <option value="dark" selected>Dark</option>
+      <option value="blue">Blue</option>
+      <option value="graphite">Graphite</option>
+      <option value="emerald">Emerald</option>
+      <option value="ivory">Ivory</option>
+    </select>
+    <select id="block" title="how blocks render">
+      <option value="compact" selected>Compact letters</option>
+      <option value="auto">Auto letters or bricks</option>
+      <option value="letters">Standard letters</option>
+      <option value="blocks+letters">Always letters</option>
+      <option value="blocks">Bricks only</option>
+    </select>
+    <select id="color" title="block colouring">
+      <option value="period" selected>Colour by period</option>
+      <option value="valueArea">Colour by value area</option>
+      <option value="count">Heat by TPO count</option>
+      <option value="volume">Heat by volume</option>
+    </select>
+    <select id="period" title="TPO period size">
+      <option value="30" selected>30-min periods</option>
+      <option value="15">15-min periods</option>
+      <option value="60">60-min periods</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="split" /> <span>Split all days</span></label>
+    <label class="chk"><input type="checkbox" id="vol" checked /> <span>Volume</span></label>
+    <label class="chk"><input type="checkbox" id="candles" /> <span>Candles</span></label>
+    <label class="chk"><input type="checkbox" id="extras" /> <span>Day type</span></label>
+    <label class="chk"><input type="checkbox" id="markers" checked /> <span>Open / LTP</span></label>
+    <button id="regen">Regenerate</button>
+
+    <span class="spacer"></span>
+    <div class="stat"><span>POC</span><b id="s-poc">-</b></div>
+    <div class="stat"><span>Value area</span><b id="s-va">-</b></div>
+    <div class="stat"><span>Rows</span><b id="s-rows">-</b></div>
+  </div>
+  <div class="bar">
+    <label for="density" class="lbl">Row height</label>
+    <input type="range" id="density" min="2" max="18" step="0.25" value="5.5" />
+    <span id="densitylabel" style="min-width:165px;font-variant-numeric:tabular-nums"></span>
+    <button id="compressed">Compressed (5 px)</button>
+    <button id="comfortable">Comfortable (12 px)</button>
+    <button id="fit">Fit sessions</button>
+    <span class="spacer"></span><span style="color:var(--mut)">6 synthetic NIFTY-style sessions · Canvas 2D</span>
+  </div>
+  <div class="hint">
+    Compare <b>Compact letters</b> with <b>Auto letters</b> at the same row height.
+    Row height changes only the zoom; Row changes price aggregation. Compact letters retain
+    pixel glyphs down to 5 physical pixels per row. Hover for exact letters, count and volume.
+    Right-click a day's profile to split or unsplit only that day.
+    <b style="color:var(--open-color)">o</b> = day open; <b style="color:var(--ltp-color)">#</b> = latest price on the newest day.
+  </div>
+
+  <main class="stage">
+    <div id="chart" tabindex="0" aria-label="Market Profile chart"></div>
+    <div id="tip" hidden></div>
+  </main>
+  <div id="profile-menu" role="menu" aria-labelledby="profile-menu-title" hidden>
+    <div id="profile-menu-title"></div>
+    <button id="profile-split" type="button" role="menuitem">Split this day</button>
+  </div>
+
+  <script type="module">
+    import { createChart, darkTheme, lightTheme } from '/dist/openalgo-charts.mjs';
+    import { computeMarketProfile, MarketProfile, DEFAULT_MARKET_PROFILE_PRIMITIVE_OPTIONS } from '/dist/openalgo-charts.profile.mjs';
+    import { createProfileThemes } from './themes.js';
+
+    const themes = createProfileThemes(darkTheme, lightTheme, DEFAULT_MARKET_PROFILE_PRIMITIVE_OPTIONS);
+
+    // A 0.1-tick index around 24000: the Nifty-shaped case the row multiplier
+    // exists for: 2-point rows means rowTicks = 2 / 0.1 = 20.
+    const TICK = 0.1;
+    const START = 24000;
+    const BAR_SEC = 300;              // 5-minute bars
+    const SESSION_BARS = 75;          // 09:15 -> 15:30
+    const el = (id) => document.getElementById(id);
+
+    let chart, price, mp, result, bars = [];
+    let seed = 42;
+    let densityLocked = true;
+    let menuSession = -1, menuResult = null;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+
+    /** One synthetic session: a mean-reverting walk that builds a real body. */
+    function genSession(day) {
+      // 09:15 IST on a fixed date (IST is UTC+5:30, so 03:45 UTC).
+      const open = Math.floor(Date.UTC(2026, 7, 28 + [0, 3, 4, 5, 6, 7][day], 3, 45, 0) / 1000);
+      const centre = START + [180, 110, 55, -40, 20, 70][day];
+      let p = centre;
+      let drift = 0;
+      const out = [];
+      for (let i = 0; i < SESSION_BARS; i++) {
+        drift += (random() - 0.5) * 1.4;
+        drift = Math.max(-3, Math.min(3, drift));
+        // Pull back toward the open so the profile builds a body, not a ramp.
+        drift -= (p - centre) * 0.012;
+        const o = p;
+        const c = o + drift + (random() - 0.5) * 7;
+        const h = Math.max(o, c) + random() * 6;
+        const l = Math.min(o, c) - random() * 6;
+        p = c;
+        out.push({
+          time: open + i * BAR_SEC,
+          open: o, high: h, low: l, close: c,
+          volume: Math.round(2000 + random() ** 2 * 26000),
+        });
+      }
+      return out;
+    }
+
+    function recompute() {
+      closeProfileMenu();
+      const rt = Number(el('rowsize').value);
+      const res = computeMarketProfile(bars, {
+        tickSize: TICK,
+        rowTicks: rt,
+        session: 'day',
+        blockMinutes: Number(el('period').value),
+        valueAreaPercent: 0.7,
+        initialBalancePeriods: 2,
+        tailEdges: 3,
+      });
+      result = res;
+      mp.setData(res);
+      syncSplitControl();
+
+      el('rowlabel').textContent = `${(TICK * rt).toFixed(1)} pt · ${rt}×${TICK}`;
+      const s = res.sessions.at(-1);
+      if (s) {
+        el('s-poc').textContent = s.poc.toFixed(1);
+        el('s-va').textContent = `${s.val.toFixed(1)} to ${s.vah.toFixed(1)}`;
+        el('s-rows').textContent = String(s.levels.length);
+      }
+      if (densityLocked) requestAnimationFrame(applyDensity);
+    }
+
+    function applyDensity() {
+      if (!result) return;
+      closeProfileMenu();
+      densityLocked = true;
+      const scale = price.priceScale();
+      const row = TICK * Number(el('rowsize').value);
+      const target = Number(el('density').value);
+      const extent = mp.autoscaleInfo();
+      const centre = (extent.min + extent.max) / 2;
+      const span = scale.height * row / target;
+      scale.setPriceRange({ min: centre - span / 2, max: centre + span / 2 });
+      chart.setPriceAxisAutoFit(0, 'right', false);
+      el('densitylabel').textContent = `${target.toFixed(2)} CSS px / ${(target * devicePixelRatio).toFixed(2)} screen px`;
+    }
+
+    function applyStyle() {
+      closeProfileMenu();
+      mp.setOptions({
+        blockDisplay: el('block').value,
+        colorMode: el('color').value,
+        showVolumeProfile: el('vol').checked,
+        showVolumeValues: el('vol').checked,
+        showDayType: el('extras').checked,
+        showOpenType: el('extras').checked,
+        showPoorHighLow: el('extras').checked,
+        showSessionOpen: el('markers').checked,
+        showLastPrice: el('markers').checked,
+      });
+      price.applyOptions({ visible: el('candles').checked });
+    }
+
+    function applyTheme() {
+      closeProfileMenu();
+      const theme = themes[el('theme').value];
+      document.body.dataset.theme = el('theme').value;
+      document.body.style.colorScheme = theme.scheme;
+      for (const [key, value] of Object.entries(theme.chrome)) document.body.style.setProperty(`--${key}`, value);
+      document.body.style.setProperty('--open-color', theme.profile.sessionOpenColor);
+      document.body.style.setProperty('--ltp-color', theme.profile.lastPriceColor);
+      chart.setTheme(theme.chart);
+      mp.setOptions(theme.profile);
+    }
+
+    function syncSplitControl() {
+      const count = result?.sessions.filter((_, index) => mp.isSessionSplit(index)).length ?? 0;
+      el('split').checked = count > 0 && count === result.sessions.length;
+      el('split').indeterminate = count > 0 && count < result.sessions.length;
+    }
+
+    function closeProfileMenu(restoreFocus = false) {
+      el('profile-menu').hidden = true;
+      menuSession = -1;
+      menuResult = null;
+      if (restoreFocus) el('chart').focus({ preventScroll: true });
+    }
+
+    function build() {
+      chart = createChart(el('chart'), { theme: darkTheme, priceAxisWidth: 74 });
+      price = chart.addSeries('candlestick');
+      mp = new MarketProfile(null, {
+        blockDisplay: 'compact', letterWidth: 8, profileSpacing: 12,
+        opacity: 1, countColor: '#d7dce8', volumeColor: '#348343', volumeProfileWidth: 58,
+        showValueAreaLabels: false, fillValueArea: false,
+        showPocLabel: false, showSessionLabel: false,
+        showSessionOpen: true, showLastPrice: true,
+        showSinglePrints: false,
+      });
+      chart.addPrimitive(mp, 0);
+
+      chart.on('crosshair:move', (e) => {
+        const tip = el('tip');
+        if (!el('profile-menu').hidden) { tip.hidden = true; return; }
+        if (!e.point) { tip.hidden = true; return; }
+        const h = mp.hoverAt(e.point.x, e.point.y);
+        if (!h) { tip.hidden = true; return; }
+        const row = (k, v) => `<div class="r"><i>${k}</i><b>${v}</b></div>`;
+        const tags = [
+          h.isPoc ? 'POC' : '',
+          h.inValueArea ? 'In value area' : '',
+          h.isSinglePrint ? 'Single print' : '',
+        ].filter(Boolean).map((t) => `<span class="tag">${t}</span>`).join(' ');
+        tip.innerHTML =
+          `<div class="t">${h.price.toFixed(1)}</div>` +
+          row('Letters', h.level.letters || '-') +
+          row('TPO count', h.level.count) +
+          row('Volume', Math.round(h.level.volume).toLocaleString()) +
+          row('Day open', h.session.open.toFixed(1)) +
+          (h.sessionIndex === result.sessions.length - 1 ? row('Latest price', h.session.close.toFixed(1)) : '') +
+          tags;
+        tip.hidden = false;
+        const r = el('chart').getBoundingClientRect();
+        tip.style.left = Math.min(e.point.x + 16, r.width - 190) + 'px';
+        tip.style.top = Math.min(e.point.y + 12, r.height - 130) + 'px';
+      });
+
+      chart.on('contextmenu', (e) => {
+        closeProfileMenu();
+        if (e.paneIndex !== 0 || e.target.kind !== 'primitive' || !e.target.id?.startsWith('mp:')) return;
+        const hit = mp.hoverAt(e.point.x, e.point.y);
+        if (!hit) return;
+        e.preventDefault();
+        el('tip').hidden = true;
+        menuSession = hit.sessionIndex;
+        menuResult = result;
+        el('profile-menu-title').textContent = new Intl.DateTimeFormat('en-IN', {
+          day: 'numeric', month: 'short', year: 'numeric', timeZone: result.options.timezone,
+        }).format(new Date(hit.session.startTime * 1000));
+        el('profile-split').textContent = mp.isSessionSplit(menuSession) ? 'Unsplit this day' : 'Split this day';
+        const menu = el('profile-menu');
+        menu.hidden = false;
+        const chartRect = el('chart').getBoundingClientRect();
+        menu.style.left = Math.max(4, Math.min(chartRect.left + e.point.x, innerWidth - menu.offsetWidth - 4)) + 'px';
+        menu.style.top = Math.max(4, Math.min(chartRect.top + e.point.y, innerHeight - menu.offsetHeight - 4)) + 'px';
+        el('profile-split').focus({ preventScroll: true });
+      });
+    }
+
+    function regenerate() {
+      bars = Array.from({ length: 6 }, (_, day) => genSession(day)).flat();
+      price.setData(bars);
+      recompute();
+      chart.timeScale.fitContent(bars.length);
+    }
+
+    const initialTheme = new URLSearchParams(location.search).get('theme');
+    if (Object.hasOwn(themes, initialTheme)) el('theme').value = initialTheme;
+    build();
+    regenerate();
+    applyTheme();
+    applyStyle();
+
+    // Row size and period change the model; everything else is a pure restyle.
+    el('rowsize').addEventListener('input', recompute);
+    el('period').addEventListener('change', recompute);
+    el('regen').addEventListener('click', regenerate);
+    el('theme').addEventListener('change', applyTheme);
+    for (const id of ['block', 'color', 'vol', 'extras', 'candles', 'markers']) {
+      el(id).addEventListener('change', applyStyle);
+    }
+    el('split').addEventListener('change', () => {
+      closeProfileMenu();
+      mp.setOptions({ split: el('split').checked });
+      syncSplitControl();
+    });
+    el('profile-split').addEventListener('click', () => {
+      if (menuResult === result && menuSession >= 0) {
+        mp.setSessionSplit(menuSession, !mp.isSessionSplit(menuSession));
+        syncSplitControl();
+      }
+      closeProfileMenu(true);
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!el('profile-menu').contains(e.target)) closeProfileMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !el('profile-menu').hidden) { e.preventDefault(); closeProfileMenu(true); }
+    });
+    el('chart').addEventListener('wheel', () => closeProfileMenu(), { passive: true });
+    window.addEventListener('resize', () => closeProfileMenu());
+    el('density').addEventListener('input', applyDensity);
+    for (const [id, height] of [['compressed', 5], ['comfortable', 12]]) {
+      el(id).addEventListener('click', () => { el('density').value = height; applyDensity(); });
+    }
+    el('fit').addEventListener('click', () => {
+      densityLocked = false;
+      chart.setPriceAxisAutoFit(0, 'right', true);
+      chart.timeScale.fitContent(bars.length);
+      el('densitylabel').textContent = 'Fitted to all sessions';
+    });
+    new ResizeObserver(() => { if (densityLocked) requestAnimationFrame(applyDensity); }).observe(el('chart'));
+
+    window.__chart = () => chart;
+    window.__mp = () => mp;
+    window.__profileResult = () => result;
+  </script>
+</body>
+</html>

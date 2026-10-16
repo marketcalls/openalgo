@@ -1,0 +1,152 @@
+{
+  "name": "openalgo-charts",
+  "version": "2.6.4",
+  "description": "From-scratch, dependency-free canvas charting engine for OpenAlgo: professional-grade interactive rendering, advanced on-chart trading, and a one-call widget tier that adds the toolbar, drawing rail, dialogs and shortcuts.",
+  "license": "Apache-2.0",
+  "author": "marketcalls",
+  "homepage": "https://github.com/marketcalls/openalgo-charts#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marketcalls/openalgo-charts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/marketcalls/openalgo-charts/issues"
+  },
+  "keywords": [
+    "charts",
+    "charting",
+    "candlestick",
+    "trading",
+    "finance",
+    "canvas",
+    "openalgo",
+    "technical-analysis",
+    "indicators",
+    "drawing-tools",
+    "footprint",
+    "renko",
+    "heikin-ashi",
+    "widget",
+    "trading-terminal"
+  ],
+  "type": "module",
+  "module": "dist/openalgo-charts.mjs",
+  "unpkg": "dist/openalgo-charts.standalone.js",
+  "jsdelivr": "dist/openalgo-charts.standalone.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/openalgo-charts.mjs",
+      "default": "./dist/openalgo-charts.mjs"
+    },
+    "./trade": {
+      "types": "./dist/trade/index.d.ts",
+      "import": "./dist/openalgo-charts.trade.mjs",
+      "default": "./dist/openalgo-charts.trade.mjs"
+    },
+    "./transform": {
+      "types": "./dist/transform/index.d.ts",
+      "import": "./dist/openalgo-charts.transform.mjs",
+      "default": "./dist/openalgo-charts.transform.mjs"
+    },
+    "./profile": {
+      "types": "./dist/profile/index.d.ts",
+      "import": "./dist/openalgo-charts.profile.mjs",
+      "default": "./dist/openalgo-charts.profile.mjs"
+    },
+    "./indicators": {
+      "types": "./dist/indicators/index.d.ts",
+      "import": "./dist/openalgo-charts.indicators.mjs",
+      "default": "./dist/openalgo-charts.indicators.mjs"
+    },
+    "./draw": {
+      "types": "./dist/draw/index.d.ts",
+      "import": "./dist/openalgo-charts.draw.mjs",
+      "default": "./dist/openalgo-charts.draw.mjs"
+    },
+    "./webgl": {
+      "types": "./dist/webgl/index.d.ts",
+      "import": "./dist/openalgo-charts.webgl.mjs",
+      "default": "./dist/openalgo-charts.webgl.mjs"
+    },
+    "./workspace": {
+      "types": "./dist/workspace/index.d.ts",
+      "import": "./dist/openalgo-charts.workspace.mjs",
+      "default": "./dist/openalgo-charts.workspace.mjs"
+    },
+    "./widget": {
+      "types": "./dist/widget/index.d.ts",
+      "import": "./dist/openalgo-charts.widget.mjs",
+      "default": "./dist/openalgo-charts.widget.mjs"
+    }
+  },
+  "files": [
+    "dist/**",
+    "!dist/openalgo-charts.all.mjs",
+    "!dist/openalgo-charts.all.mjs.map",
+    "NOTICE"
+  ],
+  "sideEffects": [
+    "**/transform/**",
+    "**/indicators/**",
+    "**/draw/**",
+    "**/webgl/**",
+    "**/widget/**",
+    "./dist/openalgo-charts.transform.mjs",
+    "./dist/openalgo-charts.indicators.mjs",
+    "./dist/openalgo-charts.draw.mjs",
+    "./dist/openalgo-charts.webgl.mjs",
+    "./dist/openalgo-charts.widget.mjs"
+  ],
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "rimraf dist && rollup -c",
+    "build:watch": "rollup -c --watch",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:script-engine": "node scripts/check-script-engine.mjs",
+    "e2e": "playwright test",
+    "baseline": "node scripts/build-baseline.mjs",
+    "lint": "eslint .",
+    "size": "size-limit",
+    "bench": "node scripts/bench-indicators.mjs",
+    "bench:render": "node scripts/render-bench.mjs",
+    "bench:release": "node scripts/bench-release.mjs",
+    "soak": "node --expose-gc scripts/soak.mjs",
+    "endurance:browser": "node scripts/browser-endurance.mjs",
+    "test:endurance": "node --test scripts/browser-endurance.test.mjs",
+    "skills:coverage": "node scripts/check-skills-coverage.mjs",
+    "docs": "typedoc",
+    "test:demo": "vitest run --config examples/yfinance/vitest.config.ts",
+    "verify": "npm run lint && npm run typecheck && npm run check:cycles && npm run check:unused-exports && npm run test && npm run test:endurance && npm run build && npm run test:demo && npm run check:dts && npm run check:exports && npm run check:compat && npm run size && npm run shake",
+    "prepublishOnly": "npm run verify",
+    "check:dts": "node scripts/check-dts.mjs",
+    "check:exports": "node scripts/check-exports.mjs",
+    "check:compat": "node scripts/check-compat.mjs",
+    "check:cycles": "node scripts/check-cycles.mjs",
+    "check:unused-exports": "node scripts/check-unused-exports.mjs",
+    "shake": "node scripts/check-shake.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@rollup/plugin-terser": "^1.0.0",
+    "@rollup/plugin-typescript": "12.1.2",
+    "@size-limit/file": "11.1.6",
+    "eslint": "^9.39.5",
+    "rimraf": "6.0.1",
+    "rollup": "^4.62.5",
+    "rollup-plugin-dts": "6.1.1",
+    "size-limit": "11.1.6",
+    "tslib": "2.8.1",
+    "typedoc": "0.27.6",
+    "typescript": "5.7.3",
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^4.1.11",
+    "vue": "^3.5.43"
+  }
+}

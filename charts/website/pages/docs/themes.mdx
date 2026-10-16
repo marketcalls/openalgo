@@ -1,0 +1,271 @@
+---
+title: Theming & Chart Options
+description: Built-in dark and light themes, custom palettes, the canvas option block, and the settings schema a host builds its dialog from.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Theming and chart options
+
+A **theme** is the palette: one object that restyles the whole chart. **Canvas options** are
+narrower overrides on top of it, the ones a settings dialog exposes, and they are the
+subject of the second half of this page.
+
+## Themes
+
+Pass a palette at creation - `lightTheme` (default), `darkTheme`, or your own:
+
+```ts
+import { createChart, lightTheme } from 'openalgo-charts';
+const chart = createChart(el, { theme: lightTheme });
+```
+
+The theme drives the chrome (background, grid, axes, crosshair), series defaults (up/down,
+line, area gradient, last-price tag), and the trading layer (buy / sell / profit / loss).
+Per-series `style` always overrides the theme.
+
+### Profile demo palettes
+
+The [profile showcase](/docs/market-profile-examples#five-themes) provides **Dark**,
+**Blue**, **Graphite**, **Emerald** and **Ivory**, with full-resolution screenshots
+and an interactive demo for each palette. They are demo presets in
+`examples/market-profile/themes.js`, rather than new package exports.
+
+Apply the chart palette with `chart.setTheme(...)` and the matching profile
+colours with `profile.setOptions(...)`. A chart theme alone does not restyle the
+`MarketProfile` primitive. The demo also updates its control and tooltip colours,
+including dark text for Ivory. Switching palettes preserves profile data,
+per-day split choices and marker visibility.
+
+### Light theme
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el, { theme: lib.lightTheme });
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 140, 3600));
+chart.timeScale.fitContent(140);
+return chart;`} />
+
+### Custom palette
+
+A theme is a plain object - spread a built-in and override what you need:
+
+```ts
+import { createChart, darkTheme } from 'openalgo-charts';
+const chart = createChart(el, {
+  theme: { ...darkTheme, background: '#0b0f17', upColor: '#00b386', downColor: '#ff5d6c', grid: '#161b27' },
+});
+```
+
+The live chart below spreads whichever built-in it opened with, so it matches this page in
+either theme, and swaps in the custom palette with `setTheme`:
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const dark = chart.theme() === lib.darkTheme;
+chart.setTheme({
+  ...chart.theme(),
+  background: dark ? '#0b0f17' : '#fbfaf7',
+  grid: dark ? '#161b27' : '#efebe3',
+  upColor: '#00b386',
+  downColor: '#ff5d6c',
+});
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 140, 3600));
+chart.timeScale.fitContent(140);
+return chart;`} />
+
+Optional cosmetic fields: `axisFontSize` (px, default `11`), `gridStyle`
+(`'solid'` | `'dashed'` | `'dotted'`), and `background: 'transparent'` to skip the pane
+fill so the page shows through. Crosshair styling: `crosshairStyle`
+(`'solid'` | `'dashed'` | `'dotted'`), `crosshairWidth`, `crosshairLabelBackground`, and
+`crosshairLabelVisible` (`false` hides the price/time value tags).
+
+### Dark / light at runtime
+
+Swap the palette live with `chart.setTheme(theme)`: no recreate, no flicker. Click the
+chart below to toggle:
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 140, 3600));
+chart.fitContent();
+
+// Start from the built-in the chart opened with, then swap on every click.
+let dark = chart.theme() === lib.darkTheme;
+el.onclick = () => { dark = !dark; chart.setTheme(dark ? lib.darkTheme : lib.lightTheme); };
+return chart;`} />
+
+`applyOptions` swaps several options at once (theme, grid visibility, formatters, the
+[timezone](/docs/timezones), and crosshair mode) at runtime:
+
+```ts
+chart.applyOptions({ theme: lightTheme, grid: { vertLines: false } });
+chart.applyOptions({ crosshairMode: 'magnet' });
+chart.applyOptions({ timezone: 'America/New_York' });   // or chart.setTimezone(...)
+```
+
+## Canvas options
+
+`CanvasOptions` is the narrower layer: grid, crosshair, axis text and lines, and the plot
+margins. It is what the Appearance tab of a settings dialog writes.
+
+```ts
+chart.setCanvasOptions({
+  grid: { horzLines: false, vertColor: '#1b2029', vertStyle: 'dotted', lineWidth: 1 },
+  crosshair: { color: '#8a94a6', style: 'dashed', width: 1 },
+  scales: { textColor: '#9aa4b2', fontSize: 12, lineColor: '#2a3140' },
+  margins: { top: 12, bottom: 6 },        // percent of pane height
+});
+
+chart.canvasOptions();   // what has been set; theme fallbacks are not folded in
+```
+
+<Callout type="info">
+**Option overrides theme; theme is the default.** Set a field and it wins, leave it unset
+and it falls through to the palette. The options are deliberately *not* seeded with the
+theme's colours at construction: that would freeze the palette and make a later `setTheme`
+a silent no-op for everything the dialog had touched.
+</Callout>
+
+| Block | Fields |
+|---|---|
+| `grid` | `vertLines` / `horzLines` (visibility), `vertColor` / `horzColor`, `vertStyle` / `horzStyle` (`'solid' \| 'dashed' \| 'dotted'`), `lineWidth`, `spacing` |
+| `crosshair` | `color`, `style`, `width` |
+| `scales` | `textColor`, `fontSize` (clamped to 10..14), `lineColor` |
+| `margins` | `top`, `bottom`, in **percent** of pane height, each capped at 49 |
+
+The two axes of the grid stroke separately, so each carries its own colour and dash, and an
+axis switched off produces no line positions at all. `chart.setGridOptions(patch)` is the
+same thing for the grid block alone, and `chart.gridOptions()` reads it back with the
+visibility pair always present.
+
+Margins are a conversion, not a second state: the price scale already owns `marginTop` and
+`marginBottom` as fractions, and this writes them across every scale on the chart. A theme
+that set `axisFontSize: 16` deliberately keeps it; only the *option* is clamped, because a
+theme is code and the range belongs to the dialog.
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 160, 3600));
+chart.fitContent();
+
+chart.setCanvasOptions({
+  grid: { vertStyle: 'dotted', vertColor: '#3a4657', horzStyle: 'solid', horzColor: '#1e2530', spacing: 48 },
+  crosshair: { color: '#f0b90b', style: 'solid' },
+  scales: { fontSize: 13, textColor: '#c8d1dc' },
+  margins: { top: 20, bottom: 5 },
+});
+return chart;`} caption="Dotted vertical grid, solid horizontal grid in a different colour, a solid amber crosshair, and 20 percent of headroom above the highs." />
+
+### Price and readout options
+
+Two more blocks belong to the same dialog but live where their drawing does:
+
+- **Price** is the primary series' own `style`: body, border and wick colours, the border
+  and wick switches, `colorByPreviousClose`, and a `precision` override. See
+  [Series and styling](/docs/series-and-styling#price-options).
+- **Readout** is the pane legend's row: logo, title, market status, chart values, bar
+  change, volume, last day change, and a background plate. See
+  [Scales and panes](/docs/scales-and-panes#status-line-options).
+
+## The settings schema
+
+The engine ships no dialog, in the same way it ships no toolbar and no transport bar. What
+it ships is a **description** of one, so you render it with the widget code you already
+have:
+
+```ts
+import { chartSettingsSchema, readChartSettings, applyChartSettings } from 'openalgo-charts';
+
+const tabs = chartSettingsSchema(chart);   // Price, Readout, Axes, Appearance, Trading
+const values = readChartSettings(chart);   // current value of every control, keyed the same way
+
+// one changed control is a one-key patch
+applyChartSettings(chart, { 'canvas.grid.vertColor': '#223047' });
+```
+
+Each tab is `{ id, label, inputs }`. Most inputs are the same `IndicatorInput` shape the
+[indicator settings form](/docs/indicators) is built from (`'number' | 'boolean' | 'color' |
+'text' | 'select' | 'source' | 'interval' | 'time'`, with a `group` naming the sub-heading), plus one widget this
+schema adds: **`colorPair`**, a bullish and a bearish colour with an optional switch on one
+row. A host that can render one form can render the other with almost no new widget code.
+
+```ts
+for (const tab of chartSettingsSchema(chart)) {
+  for (const input of tab.inputs) {
+    // A colorPair's own key names the ROW; its values live on up.key / down.key
+    // / enabled?.key, which are ordinary flat keys like any other.
+    if (input.type === 'colorPair') { pairRow(input, values); continue; }
+    // input.key is a dotted path: 'symbol.upColor', 'canvas.grid.vertColor'
+    field(input, values[input.key], (v) => applyChartSettings(chart, { [input.key]: v }));
+  }
+}
+```
+
+Three properties are worth relying on:
+
+- **The schema and the accessors are one structure.** Each control carries its own read and
+  write beside its input descriptor, so a control cannot drift from the option it drives and
+  there is no second table to keep in step.
+- **Nothing inert ships.** Every control maps to an option that actually changes what is
+  drawn or stored. Controls this engine has no backing for are absent rather than
+  disabled, and the Price tab is generated from the primary series *type*, so a candle
+  gets borders and wicks while a line gets a dash.
+- **Unknown keys are ignored.** That is what lets a settings snapshot written by a newer
+  build restore into an older one.
+
+There is no Alerts tab and no Events tab: Alerts is on the roadmap and arrives with the
+feature, and Events has no data source in the engine, so a tab for it would be an empty
+panel with a heading.
+
+`chart.getState()` carries the canvas, status-line, trading-colour and event blocks, so a
+saved layout brings the dialog's settings back with it. See
+[Chart State](/docs/state).
+
+<Callout type="info">
+The full worked example, including a form renderer that handles every control kind, the
+paired-colour row, restore-defaults, and Cancel, is on
+[Settings & Menus](/docs/settings-and-menus).
+</Callout>
+
+## Building the context menu
+
+`contextmenu` is the other half of a host-built settings UI: it tells you *what* was
+right-clicked, which is the part a canvas cannot work out for you.
+
+```ts
+chart.on('contextmenu', (e) => {
+  e.preventDefault();               // suppress the browser's own menu
+  showMenu(e.point, itemsFor(e.target, e.paneIndex, e.price, e.time));
+});
+```
+
+| Field | Description |
+|---|---|
+| `paneIndex` | Which pane was clicked. |
+| `point` | Cursor position in container media px, for placing the menu. |
+| `price` / `time` / `index` | Price under the pointer, UTC seconds, and logical bar index. Null off the plot. |
+| `target` | What was hit: `kind` plus the hit-test `id`, an `instanceId` for an indicator, a `seriesType` for a series, and `side` / `scaleId` for a price scale. |
+| `preventDefault()` | Call it to show your own menu. |
+
+`target.kind` is one of `'drawing'`, `'indicator'`, `'legend'`, `'primitive'`, `'series'`,
+`'price-scale'`, `'time-scale'`, `'empty'`, so a right-click on an indicator can open that
+instance's settings while a right-click on a price ladder raises a menu for that axis:
+
+```ts
+chart.on('contextmenu', (e) => {
+  e.preventDefault();
+  const t = e.target;
+  if (t.kind === 'indicator') return openIndicatorSettings(t.instanceId);
+  // A price-scale hit says which strip was hit and which of the pane's scales it
+  // draws, which is what the priceAxis* calls take.
+  if (t.kind === 'price-scale') return openAxisMenu(e.point, e.paneIndex, t.scaleId ?? t.side);
+  openChartSettings('price');
+});
+```
+
+<Callout type="info">
+With **no** `contextmenu` listener the chart keeps its save-image fallback: it composites
+the clicked pane's layers so the browser's own "Save image as" produces the visible chart
+rather than a blank overlay. Subscribing takes that over; unsubscribing the last listener
+restores it.
+</Callout>
+
+Building the price-axis menu itself, from `chart.priceAxisState()` and the matching writers,
+is covered on [Settings & Menus](/docs/settings-and-menus#the-price-axis-menu).

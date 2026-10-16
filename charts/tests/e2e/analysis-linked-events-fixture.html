@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Linked chart analysis</title>
+  <style>
+    body{margin:0;background:#0d1118;color:#dce5f2;font:14px system-ui}
+    header{padding:16px 24px}h1{font-size:20px;margin:0 0 6px}p{margin:0;color:#95a2b6}
+    main{display:grid;grid-template-columns:1fr 1fr;height:580px;gap:12px;margin:0 16px}
+    .chart{min-width:0;height:100%}
+  </style>
+</head>
+<body>
+  <header><h1>Linked analysis</h1><p>Synthetic bars. Volume profiles are candle-based estimates. Timeline events are sample data.</p></header>
+  <main><div class="chart" id="first"></div><div class="chart" id="second"></div></main>
+  <script type="module">
+    import { createLinkGroup, readChartSettings, applyChartSettings } from '/dist/openalgo-charts.mjs';
+    import { DrawingLinkGroup } from '/dist/openalgo-charts.draw.mjs';
+    import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+    const bars = Array.from({length:100}, (_, i) => {
+      const close = 100 + i * 0.07 + Math.sin(i / 7) * 3;
+      return {time:1700000000+i*60, open:close+(i%2 ? 0.6 : -0.6), high:close+1, low:close-1, close, volume:100+i*11};
+    });
+    const widgets = ['first','second'].map((id,index) => {
+      const widget = createWidget(document.getElementById(id), {
+        symbol:'SAMPLE', exchange:'DEMO', interval:index ? '5m' : '1m', topbar:false, rail:false, statusline:false,
+        persist:false, timeNavigator:false, animZoom:false, animAutoscale:false, branding:false,
+      });
+      const source = index ? Array.from({length:20},(_,i) => {
+        const group=bars.slice(i*5,i*5+5);
+        return {time:group[0].time,open:group[0].open,close:group[4].close,
+          high:Math.max(...group.map(bar=>bar.high)),low:Math.min(...group.map(bar=>bar.low)),
+          volume:group.reduce((sum,bar)=>sum+bar.volume,0)};
+      }) : bars;
+      widget.series.setData(source);
+      widget.chart.timeScale.fitContent(source.length);
+      return widget;
+    });
+    const drawings = new DrawingLinkGroup({enabled:true});
+    const views = createLinkGroup({crosshair:false, viewport:false, appearance:true});
+    for (const widget of widgets) {
+      drawings.add(widget.chart, widget.draw);
+      views.add(widget.chart, {appearance:{read:()=>readChartSettings(widget.chart), apply:patch=>applyChartSettings(widget.chart,patch)}});
+    }
+    const [first,second] = widgets;
+    first.chart.setEventMarkerOptions({clustering:true});
+    first.chart.setEventGroups([{id:'company',label:'Company'},{id:'results',label:'Results',parentId:'company'}]);
+    first.chart.setEvents([
+      {id:'earnings',time:bars[65].time,type:'earnings',label:'E',group:'results',title:'Sample results',details:'Example results details.'},
+      {id:'call',time:bars[65].time+1,type:'news',label:'N',group:'company',title:'Sample call',details:'<script>Untrusted text</'+'script>'},
+    ]);
+    window.analysis252 = {first,second,drawings,views,bars,readChartSettings,applyChartSettings};
+  </script>
+</body>
+</html>

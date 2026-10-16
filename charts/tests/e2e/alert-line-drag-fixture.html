@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alert line drag fixture</title>
+<style>
+html,body{margin:0;height:100%;background:#0d0e12;color:#cbd5e1;font:13px system-ui}
+header{height:42px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid #273244}
+#chart{position:absolute;inset:43px 0 0}
+</style></head>
+<body><header>Alert line drag fixture</header><div id="chart"></div>
+<script type="module">
+import { createChart, registerIndicator, AlertController, ReplayController } from '/dist/openalgo-charts.mjs';
+
+registerIndicator({
+  id: 'drag-study', name: 'Drag study', placement: 'pane', inputs: [],
+  plots: [{ key: 'value', type: 'line', title: 'Value', style: { color: '#a78bfa' } }],
+  calc: bars => ({ value: bars.map((bar, index) => 20 + index % 10 * 5) }),
+});
+registerIndicator({
+  id: 'drag-independent-study', name: 'Independent study', placement: 'onchart', inputs: [],
+  plots: [{ key: 'value', type: 'line', title: 'Value', priceScaleId: 'overlay:independent', style: { color: '#a78bfa' } }],
+  calc: bars => ({ value: bars.map((bar, index) => 900000 + index % 10 * 50000) }),
+});
+const chart = createChart(document.getElementById('chart'), { timeNavigator: false, priceAxisWidth: 72 });
+chart.setDataContext({ symbol: 'DRAG FIXTURE', exchange: 'SIM', interval: '1m' });
+const series = chart.addSeries('candlestick');
+const bars = Array.from({ length: 60 }, (_, index) => ({
+  time: 1735689600 + index * 60, open: 99, high: 102, low: 98, close: 100, volume: 1000,
+}));
+series.setData(bars);
+const study = chart.addIndicator('drag-study');
+chart.setVisibleLogicalRange({ from: -2, to: 64 });
+chart.panes()[0].priceScale.setFixedRange({ min: 80, max: 140 });
+chart.panes()[study.paneIndex].priceScale.setFixedRange({ min: 0, max: 100 });
+const alerts = new AlertController(chart);
+alerts.add({ id: 'price', title: 'Price threshold', source: { kind: 'price', price: 105 } });
+alerts.add({ id: 'range', title: 'Range threshold', source: { kind: 'price', price: 90, upperPrice: 120 }, condition: 'enteringRange' });
+alerts.add({ id: 'study', title: 'Study threshold', source: { kind: 'indicator', instanceId: study.id, plotKey: 'value', value: 30 } });
+const events = [];
+for (const type of ['drag', 'drag:end', 'drag:cancel', 'alert:updated', 'alerts:changed']) {
+  chart.on(type, event => events.push({ type, id: event.alert?.id ?? event.id, price: event.price }));
+}
+let replay;
+window.__alertDrag = {
+  chart, series, alerts, bars, study, events, pointerId: 0,
+  setupIndependentStudy() {
+    for (const alert of alerts.list()) alerts.remove(alert.id);
+    chart.removeIndicator(study.id);
+    series.priceScale().setFixedRange(null);
+    chart.setAutoScale(true);
+    window.__alertDrag.study = chart.addIndicator('drag-independent-study');
+  },
+  startReplay() { replay = new ReplayController(chart, { startIndex: 40 }); },
+  stopReplay() { replay?.stop(); replay = undefined; },
+};
+document.getElementById('chart').addEventListener('pointerdown', event => { window.__alertDrag.pointerId = event.pointerId; });
+window.addEventListener('pagehide', () => { replay?.stop(); alerts.destroy(); chart.destroy(); }, { once: true });
+</script></body></html>

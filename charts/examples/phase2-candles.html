@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 2, static candles + axes</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 2</strong>
+    <span id="info"></span>
+    <span style="margin-left:auto;opacity:.6">static candlesticks · price + time axes · IST labels</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars, version } from '../dist/openalgo-charts.mjs';
+
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 64 });
+    const series = chart.addSeries('candlestick');
+
+    // Deterministic synthetic 1-minute history starting at a fixed instant.
+    const bars = generateBars(1_705_286_700, 400, 60); // 2024-01-15 09:15 IST-ish
+    series.setData(bars);
+
+    document.getElementById('info').textContent =
+      `v${version()} · ${bars.length} candles · dpr ${window.devicePixelRatio}`;
+    window.__chart = chart;
+  </script>
+</body>
+</html>

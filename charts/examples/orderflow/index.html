@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Order flow · OpenAlgo Charts</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101216; --panel:#15181e; --border:#272c35; --text:#d9dee7; --muted:#8993a2; --buy:#159d87; --sell:#cc374b; }
+    :root[data-theme="light"] { color-scheme:light; --bg:#f6f7f9; --panel:#fff; --border:#dce1e8; --text:#27313f; --muted:#677385; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; height:100%; }
+    body { background:var(--bg); color:var(--text); font:12px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; display:flex; flex-direction:column; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:17px 24px 14px; border-bottom:1px solid var(--border); }
+    h1 { font-size:17px; font-weight:600; letter-spacing:-.3px; margin:0; }
+    .subtitle { color:var(--muted); font-size:11px; margin-top:3px; }
+    .readouts { display:flex; gap:28px; font-variant-numeric:tabular-nums; }
+    .readout { display:flex; flex-direction:column; gap:2px; }
+    .readout span { font-size:10px; color:var(--muted); }
+    .readout b { font-size:16px; font-weight:500; }
+    .toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:12px 24px; }
+    select,button,input[type="number"] { background:var(--panel); color:var(--text); font:inherit; border:1px solid var(--border); border-radius:5px; padding:6px 9px; cursor:pointer; }
+    select:hover,button:hover { border-color:var(--muted); }
+    select:focus-visible,button:focus-visible,input:focus-visible { outline:2px solid var(--buy); outline-offset:3px; }
+    #lot-size { width:70px; }
+    #lot-size:disabled { opacity:.5; cursor:default; }
+    #lot-size[aria-invalid="true"] { outline:1px solid var(--sell); }
+    .control { display:flex; align-items:center; gap:6px; color:var(--muted); }
+    .check { display:flex; align-items:center; gap:5px; color:var(--muted); cursor:pointer; }
+    input { accent-color:var(--buy); }
+    .spacer { flex:1; }
+    #table-options,.chooser { position:relative; }
+    #table-options summary,.chooser summary { color:var(--muted); cursor:pointer; padding:5px 0; }
+    #table-options fieldset,.chooser fieldset { position:fixed; left:12px; z-index:40;
+      width:240px; max-width:calc(100vw - 24px); min-width:0; margin:0; padding:13px; border:1px solid var(--border); border-radius:6px;
+      background:var(--panel); box-shadow:0 8px 28px #0003; }
+    #table-options legend,.chooser legend { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); }
+    #table-options fieldset .check,.chooser fieldset .check { padding:5px 0; color:var(--text); }
+    #table-options .note,.chooser .note { color:var(--muted); font-size:11px; margin:8px 0; }
+    #table-close,#flow-close { width:100%; margin-top:5px; }
+    #flow-options fieldset { width:290px; }
+    #min-trade { width:62px; }
+    #alert { color:var(--text); }
+    #play { min-width:74px; color:var(--buy); }
+    main { position:relative; flex:1; min-height:320px; }
+    #chart { position:absolute; inset:0; background:var(--bg); }
+    footer { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:10px 24px; color:var(--muted); font-size:11px; border-top:1px solid var(--border); }
+    .key { display:inline-flex; align-items:center; gap:6px; }
+    .swatch { width:8px; height:8px; border-radius:1px; background:var(--buy); }
+    .swatch.sell { background:var(--sell); }
+    .swatch.poc { background:transparent; border:1px solid var(--muted); width:14px; }
+    .up { color:var(--buy); } .down { color:var(--sell); }
+    #tip { position:absolute; z-index:30; pointer-events:none; min-width:185px; padding:10px 12px; border:1px solid var(--border); border-radius:6px; background:var(--panel); box-shadow:0 6px 24px #0003; font-variant-numeric:tabular-nums; }
+    #tip[hidden] { display:none; }
+    #tip .title { color:var(--muted); margin-bottom:5px; }
+    #tip .row { display:flex; justify-content:space-between; gap:20px; }
+    #tip .row span { color:var(--muted); }
+    @media(max-width:650px) { header { padding:12px; gap:10px; } .toolbar { padding:10px 12px; gap:8px; } .readouts { gap:12px; } .readout b { font-size:13px; } .readout:first-child { display:none; } footer { padding:8px 12px; gap:10px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>NIFTY order flow <span class="subtitle">/ OpenAlgo</span></h1><div class="subtitle"><span id="instrument-note">NIFTY simulation · 1-minute bars · 2-point rows</span></div></div>
+    <div class="readouts">
+      <div class="readout"><span>LAST PRICE</span><b id="s-last">-</b></div>
+      <div class="readout"><span id="volume-label">BAR VOLUME · QTY</span><b id="s-vol">-</b></div>
+      <div class="readout"><span id="delta-label">BAR DELTA · QTY</span><b id="s-delta">-</b></div>
+      <div class="readout"><span id="cvd-label">SESSION CVD · QTY</span><b id="s-cvd">-</b></div>
+    </div>
+  </header>
+  <nav class="toolbar" aria-label="Footprint controls">
+    <label class="control">Style <select id="style"><option value="profile">Profile</option><option value="ladder">Cluster ladder</option><option value="heatmap">Heatmap</option></select></label>
+    <label class="control">Values <select id="mode"><option value="bidask">Bid × Ask</option><option value="imbalance">Bid × Ask imbalance</option><option value="delta">Delta</option><option value="deltaPct">Delta %</option><option value="volume">Volume</option><option value="volumeDelta">Volume × Delta</option></select></label>
+    <label class="control">Text <select id="text"><option value="contrast">Auto contrast</option><option value="side">Bid-ask side</option><option value="delta">Row delta</option><option value="dominant">Dominant side</option><option value="imbalance">Diagonal imbalance</option><option value="volume">Volume strength</option></select></label>
+    <label class="control">Quantity <select id="units"><option value="raw">Raw</option><option value="lots">Lots</option></select></label>
+    <label class="control">Lot size <input id="lot-size" type="number" min="1" step="1" value="65" title="Quantity per simulated lot" /></label>
+    <label class="control">Side <select id="classify" title="Where each print's aggressor side comes from"><option value="feed">Feed</option><option value="tickRule">Tick rule</option></select></label>
+    <label class="control">Min trade <input id="min-trade" type="number" min="0" step="1" value="0" title="Count only prints of at least this many lots; 0 counts every print" /> lots</label>
+    <label class="control">Row <select id="group"><option value="2">2 points</option><option value="4">4 points</option><option value="8">8 points</option></select></label>
+    <label class="check"><input type="checkbox" id="poc" checked /> POC</label>
+    <label class="check"><input type="checkbox" id="valuearea" checked /> Value area</label>
+    <label class="check"><input type="checkbox" id="stats" checked /> Cards</label>
+    <label class="check"><input type="checkbox" id="table" /> Table</label>
+    <details id="table-options">
+      <summary>Table rows (<span id="table-count">7</span>)</summary>
+      <fieldset>
+        <legend>Choose table metrics</legend>
+        <label class="check"><input type="checkbox" name="table-row" value="delta" checked /> Delta</label>
+        <label class="check"><input type="checkbox" name="table-row" value="minDelta" checked /> Min delta</label>
+        <label class="check"><input type="checkbox" name="table-row" value="maxDelta" checked /> Max delta</label>
+        <label class="check"><input type="checkbox" name="table-row" value="cvd" checked /> Cumulative delta</label>
+        <label class="check"><input type="checkbox" name="table-row" value="askVolume" checked /> Ask volume</label>
+        <label class="check"><input type="checkbox" name="table-row" value="bidVolume" checked /> Bid volume</label>
+        <label class="check"><input type="checkbox" name="table-row" value="volume" checked /> Volume</label>
+        <label class="check"><input type="checkbox" name="table-row" value="cumVolume" /> Cumulative volume</label>
+        <label class="check"><input type="checkbox" name="table-row" value="cvdRatio" /> Cum. delta / volume</label>
+        <label class="check"><input type="checkbox" name="table-row" value="session" /> Session letter</label>
+        <p class="note">Rows stay selected when the table is hidden.</p>
+        <button id="table-close" type="button">Done</button>
+      </fieldset>
+    </details>
+    <details id="flow-options" class="chooser">
+      <summary>Order flow (<span id="flow-count">0</span>)</summary>
+      <fieldset>
+        <legend>Choose order flow layers</legend>
+        <label class="check"><input type="checkbox" name="flow" value="zones" /> Imbalance, node and absorption zones</label>
+        <label class="check"><input type="checkbox" name="flow" value="auctions" /> Unfinished auctions</label>
+        <label class="check"><input type="checkbox" name="flow" value="nodes" /> Multiple nodes</label>
+        <label class="check"><input type="checkbox" name="flow" value="bigOrders" /> Big limit orders</label>
+        <label class="check"><input type="checkbox" name="flow" value="absorption" /> Absorption</label>
+        <label class="check"><input type="checkbox" name="flow" value="flips" /> Aggressive delta flips</label>
+        <label class="check"><input type="checkbox" name="flow" value="deltaLabels" /> Delta under bars and divergence</label>
+        <label class="check"><input type="checkbox" name="flow" value="profile" /> Visible-range profile</label>
+        <label class="check"><input type="checkbox" name="flow" value="lastPrice" /> Last price row</label>
+        <p class="note">A zone alert appears below the chart the first time price trades into an active zone.</p>
+        <button id="flow-close" type="button">Done</button>
+      </fieldset>
+    </details>
+    <span class="spacer"></span>
+    <select id="theme" aria-label="Theme"><option value="midnight">Midnight</option><option value="graphite">Graphite</option><option value="classic">Classic neon</option><option value="ocean">Ocean</option><option value="ember">Ember</option><option value="forest">Forest</option><option value="ivory">Ivory</option></select>
+    <button id="reset">Reset</button><button id="play">Pause</button>
+  </nav>
+  <main><div id="chart" aria-label="Footprint chart"></div><div id="tip" hidden></div></main>
+  <footer>
+    <span class="key"><i class="swatch sell"></i> Bid / sell</span>
+    <span class="key"><i class="swatch"></i> Ask / buy</span>
+    <span class="key"><i class="swatch poc"></i> Point of control</span>
+    <span>Value area: 70%</span><span class="spacer"></span>
+    <span id="alert" role="status"></span><span id="status">Synthetic replay</span><span>Scroll to zoom · Drag to pan · Hover to inspect</span>
+  </footer>
+  <script type="module">
+    import { createChart, darkTheme, lightTheme } from '/dist/openalgo-charts.mjs';
+    import { FootprintAggregator, Footprint, TRADING_HOURS, compactVol, createTradeClassifier } from '/dist/openalgo-charts.profile.mjs';
+
+    const TICK = 1, SECONDS = 60, WINDOW = 7, SIMULATED_LOT = 65;
+    const START = Date.UTC(2026, 8, 9, 3, 45) / 1000;
+    const el = id => document.getElementById(id);
+    const quantity = value => compactVol(value / volumeDivisor());
+    const signed = value => (value >= 0 ? '+' : '') + quantity(value);
+    const params = new URLSearchParams(location.search);
+    const palettes = {
+      midnight: { bg:'#101216', panel:'#15181e', border:'#272c35', text:'#d9dee7', muted:'#8993a2', buy:'#159d87', sell:'#cc374b', poc:'#ccd5e1', va:'#637184', cell:'#edf3fa', grid:'#15191f' },
+      graphite: { bg:'#1a1b1e', panel:'#232428', border:'#34363b', text:'#e1e2e5', muted:'#9b9da6', buy:'#4cad99', sell:'#d06575', poc:'#ddd8cc', va:'#797c87', cell:'#f5f5f6', grid:'#202226' },
+      classic: { bg:'#050605', panel:'#111411', border:'#293329', text:'#e5eae5', muted:'#929e92', buy:'#32e600', sell:'#ff2424', poc:'#fff4bf', va:'#818d73', cell:'#ffffff', grid:'#0c100c' },
+      ocean: { bg:'#081825', panel:'#102232', border:'#233b4e', text:'#daebf8', muted:'#86a3b8', buy:'#12b8c6', sell:'#ec6384', poc:'#f8d898', va:'#588299', cell:'#f1f8ff', grid:'#102131' },
+      ember: { bg:'#160f0c', panel:'#21170f', border:'#3a2a1d', text:'#f4e6d8', muted:'#a8927d', buy:'#f0a020', sell:'#d8433a', poc:'#fff1c2', va:'#8d6e63', cell:'#fff8ee', grid:'#1d140e' },
+      forest: { bg:'#0d1611', panel:'#132019', border:'#24382b', text:'#dcefe1', muted:'#88a593', buy:'#3fae6a', sell:'#d0456f', poc:'#e7f2b8', va:'#5f8a6c', cell:'#f1fbf3', grid:'#122019' },
+      ivory: { light:true, bg:'#f6f4ee', panel:'#fffcf6', border:'#dedacf', text:'#283139', muted:'#747569', buy:'#147e71', sell:'#bf4e59', poc:'#525d65', va:'#969b8e', cell:'#172b2b', grid:'#eeece5' },
+    };
+    const themeQuery = params.get('theme');
+    el('theme').value = Object.hasOwn(palettes,themeQuery) ? themeQuery : 'midnight';
+    el('style').value = ['profile','ladder','heatmap'].includes(params.get('style')) ? params.get('style') : 'profile';
+    el('text').value = ['contrast','side','delta','dominant','imbalance','volume'].includes(params.get('text')) ? params.get('text') : 'contrast';
+    el('units').value = params.get('units') === 'lots' ? 'lots' : 'raw';
+    const queryLot = Number(params.get('lot'));
+    let lotSize = Number.isSafeInteger(queryLot) && queryLot > 0 ? queryLot : SIMULATED_LOT;
+    el('lot-size').value = lotSize;
+    const volumeDivisor = () => el('units').value === 'lots' ? lotSize : 1;
+    el('table').checked = params.get('table') === '1';
+    el('classify').value = params.get('side') === 'tickRule' ? 'tickRule' : 'feed';
+    const flowInputs = [...document.querySelectorAll('input[name="flow"]')];
+    // ?flow=zones,auctions,... turns layers on from a link.
+    const flowQuery = new Set((params.get('flow') ?? '').split(','));
+    for (const input of flowInputs) input.checked = flowQuery.has(input.value);
+    const flowOn = name => flowInputs.some(input => input.value === name && input.checked);
+    const minTradeLots = () => Math.max(0, Number(el('min-trade').value) || 0);
+    const tableInputs = [...document.querySelectorAll('input[name="table-row"]')];
+    const selectedTableRows = () => tableInputs.filter(input => input.checked).map(input => input.value);
+    const activeTableRows = () => el('table').checked ? selectedTableRows() : [];
+    let running = params.get('paused') !== '1';
+    let seed, cursor, tape, bars, candles, agg, cvdOffset, timer;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+
+    // An explicitly synthetic, repeatable classified tape. Every execution is
+    // on a one-point simulation grid around NIFTY 23,800, grouped into two-point
+    // rows by default. Each simulated execution represents 1 to 16 lots of 65
+    // quantity units, independent of the user's display divisor. These are
+    // simulation settings, not an exchange feed or current contract specifications.
+    function nextTick() {
+      const bar = Math.floor(cursor / SECONDS), step = cursor % SECONDS;
+      const centers = [0, 4, 8, 3, -1, 2, 6];
+      const low = 23790 + centers[bar % centers.length];
+      const depth = 18 + (bar % 4) * 2;
+      const opening = 4 + bar % 4, closing = 4 + (bar * 3 + 5) % (depth - 4);
+      const level = step < 18 ? opening + (depth - opening) * step / 17
+        : step < 40 ? depth * (39 - step) / 21 : closing * (step - 40) / 19;
+      const buy = random() < (bar % 3 === 0 ? 0.35 : 0.61);
+      const tick = { time: START + cursor, price: (low + Math.round(level)) * TICK,
+        qty: (1 + Math.floor(random() * 16)) * SIMULATED_LOT, side: buy ? 'ask' : 'bid' };
+      cursor++;
+      return tick;
+    }
+
+    const chart = createChart(el('chart'), { theme: darkTheme, priceAxisWidth: 74, priceFormatter:value => value.toFixed(2),
+      timeScale: { maxBarSpacing: 260 }, priceScale: { minMove: TICK, marginTop: 0.1, marginBottom: 0.27 } });
+    const clear = 'rgba(0,0,0,0)';
+    // Actual OHLC data supplies chart autoscaling. Footprint draws its own slim
+    // candle beside the ladder, so the supporting price series is transparent.
+    const price = chart.addSeries('candlestick', { style: {
+      upColor:clear, downColor:clear, wickUpColor:clear, wickDownColor:clear, borderUpColor:clear, borderDownColor:clear,
+    } });
+    const footprint = new Footprint({ tickSize:TICK, cellStyle:el('style').value, statsPosition:'bar', textColorMode:el('text').value,
+      pocStyle:'outline', showValueArea:true, valueAreaPercent:0.7, widthFactor:0.84,
+      font:11, radius:1, statsRowHeight:19, statsRows:['volume','delta','deltaPct'], tableRows:activeTableRows(), tableLabelWidth:150, volumeDivisor:volumeDivisor(),
+      buyColor:'#159d87', sellColor:'#cc374b', stackedImbalances:0, sessionWindow:TRADING_HOURS.india, tpoMinutes:30 });
+    chart.addPrimitive(footprint);
+
+    function fitColumns() {
+      if (!bars?.length) return;
+      const minSpacing = 125; // leaves room for complete labels and raw quantities in cards
+      if (!activeTableRows().length) {
+        const visible = Math.max(1,Math.min(bars.length,Math.floor(chart.timeScale.width / minSpacing - 0.45)));
+        chart.timeScale.setVisibleLogicalRange({ from:bars.length - visible - 0.7, to:bars.length - 0.25 });
+        return;
+      }
+      // Leave the fixed metric labels clear. Narrow screens show fewer recent
+      // columns at a readable width; drag the chart to inspect earlier bars.
+      const available = Math.max(70,chart.timeScale.width - 150);
+      const visible = Math.max(1,Math.min(bars.length,Math.floor(available / minSpacing - 0.5)));
+      const spacing = Math.max(minSpacing,available / (visible + 0.5));
+      const to = bars.length - 0.25;
+      chart.timeScale.setVisibleLogicalRange({ from:to - chart.timeScale.width / spacing,to });
+    }
+    function applyTableLayout(fit = true) {
+      const tableRows = activeTableRows();
+      const cardsHeight = el('stats').checked ? 3 * 19 : 0;
+      const tableHeight = tableRows.length * 19;
+      // Reserve room for the footer table and the existing per-candle cards.
+      document.querySelector('main').style.minHeight = (tableRows.length ? tableHeight + cardsHeight + 320 : 320) + 'px';
+      const plotHeight = Math.max(1,el('chart').clientHeight - 22);
+      const marginBottom = tableRows.length ? Math.min(0.65,(tableHeight + cardsHeight + 35) / plotHeight) : 0.27;
+      chart.setPriceScaleOptions({ marginBottom });
+      footprint.setOptions({ tableRows });
+      // Keep the corner mark clear of the optional table's metric labels.
+      const position = tableRows.length ? 'top-left' : 'bottom-left';
+      if (chart.brandingOptions().position !== position) chart.setBranding({ position });
+      el('table-count').textContent = selectedTableRows().length;
+      if (fit) fitColumns();
+    }
+    function applyTick(tick) {
+      const update = agg.onTick(tick);
+      if (update.isNew) {
+        bars.push(update.bar);
+        if (bars.length > WINDOW) cvdOffset += bars.shift().delta;
+      } else bars[bars.length - 1] = update.bar;
+      return update.isNew;
+    }
+    function paint(fit = false) {
+      candles = bars.map(bar => ({ time:bar.time, open:bar.open, high:bar.high, low:bar.low, close:bar.close,
+        volume:bar.cells.reduce((sum, cell) => sum + cell.bidVol + cell.askVol, 0) }));
+      price.setData(candles);
+      footprint.setOptions({ cvdOffset });
+      footprint.setBars(bars.slice());
+      if (fit) fitColumns();
+      updateReadouts();
+      checkAlerts();
+    }
+    function updateReadouts() {
+      const stats = footprint.stats().at(-1), last = candles.at(-1);
+      if (!stats || !last) return;
+      el('s-last').textContent = last.close.toFixed(2);
+      el('s-vol').textContent = quantity(stats.volume);
+      for (const [id, value] of [['s-delta',stats.delta],['s-cvd',stats.cvd]]) {
+        el(id).textContent = signed(value); el(id).className = value >= 0 ? 'up' : 'down';
+      }
+    }
+    // The order flow layers map onto footprint options; a cleared box sets its signal back to off.
+    function applyFlow() {
+      footprint.setOptions({
+        showZones:flowOn('zones'), stackedImbalances:flowOn('zones') ? 3 : 0, showUnfinishedAuctions:flowOn('auctions'),
+        multipleNodeBars:flowOn('nodes') ? 2 : 0, bigOrderMultiple:flowOn('bigOrders') ? 3 : 0, absorptionMultiple:flowOn('absorption') ? 2 : 0,
+        flipBars:flowOn('flips') ? 2 : 0, showDeltaLabels:flowOn('deltaLabels'), markDivergence:flowOn('deltaLabels'),
+        showVisibleProfile:flowOn('profile'), lastPriceColor:flowOn('lastPrice') ? '#40e0d0' : undefined,
+      });
+      el('flow-count').textContent = flowInputs.filter(input => input.checked).length;
+      checkAlerts();
+    }
+    // A host-side zone alert: the first time the last price trades into an active zone that has not ended.
+    const alerted = new Set();
+    function checkAlerts() {
+      const last = candles?.at(-1);
+      if (!last || !footprint.options().showZones) { el('alert').textContent = ''; return; }
+      for (const zone of footprint.signals().zones) {
+        const id = zone.kind + ':' + zone.time + ':' + zone.low;
+        if (zone.activeTime === null || zone.endTime !== null || alerted.has(id) || last.close < zone.low || last.close > zone.high) continue;
+        alerted.add(id);
+        el('alert').textContent = 'Zone alert: price ' + last.close.toFixed(2) + ' entered ' + zone.kind + ' ' + zone.low.toFixed(2) + ' to ' + zone.high.toFixed(2);
+      }
+    }
+    // Feed sides as recorded, or every print re-read by the tick rule from its price alone.
+    function classified() {
+      if (el('classify').value !== 'tickRule') return tape;
+      const side = createTradeClassifier('tickRule');
+      return tape.map(tick => ({ ...tick, side:side(tick) }));
+    }
+    function rebuild() {
+      agg = new FootprintAggregator({ mode:'interval', seconds:SECONDS }, TICK, Number(el('group').value), { minTradeSize:minTradeLots() * SIMULATED_LOT });
+      bars = []; cvdOffset = 0;
+      for (const tick of classified()) applyTick(tick);
+      footprint.setOptions({ tickSize:TICK * Number(el('group').value) });
+      el('instrument-note').textContent = 'NIFTY simulation · 1-minute bars · ' + el('group').value + '-point rows';
+      paint(true);
+    }
+    function advance(count) {
+      let newBar = false;
+      if (el('classify').value === 'tickRule') {
+        // The tick rule reads each print against the one before, so the tape is re-read from the start.
+        for (let i = 0; i < count; i++) tape.push(nextTick());
+        rebuild();
+        return;
+      }
+      for (let i = 0; i < count; i++) { const tick = nextTick(); tape.push(tick); newBar = applyTick(tick) || newBar; }
+      paint(newBar);
+    }
+    function reset() {
+      seed = 20260909; cursor = 0; tape = [];
+      for (let i = 0; i < WINDOW * SECONDS; i++) tape.push(nextTick());
+      rebuild();
+    }
+    function applyUnits() {
+      el('lot-size').disabled = el('units').value !== 'lots';
+      footprint.setOptions({ volumeDivisor:volumeDivisor() });
+      const unit = el('units').value === 'lots' ? 'LOTS' : 'QTY';
+      el('volume-label').textContent = 'BAR VOLUME · ' + unit;
+      el('delta-label').textContent = 'BAR DELTA · ' + unit;
+      el('cvd-label').textContent = 'SESSION CVD · ' + unit;
+      updateReadouts();
+      el('tip').hidden = true;
+    }
+    function applyTheme() {
+      const theme = palettes[el('theme').value];
+      const root = document.documentElement;
+      root.dataset.theme = theme.light ? 'light' : 'dark';
+      for (const [key,value] of Object.entries({ bg:theme.bg, panel:theme.panel, border:theme.border,
+        text:theme.text, muted:theme.muted, buy:theme.buy, sell:theme.sell })) root.style.setProperty('--' + key,value);
+      chart.setTheme({ ...(theme.light ? lightTheme : darkTheme), background:theme.bg,
+        grid:theme.grid, axisLine:theme.border, axisText:theme.muted, buy:theme.buy, sell:theme.sell,
+        upColor:theme.buy, downColor:theme.sell, wickUpColor:theme.buy, wickDownColor:theme.sell,
+        lastPriceUp:theme.buy, lastPriceDown:theme.sell, lastPriceText:theme.bg });
+      footprint.setOptions({ buyColor:theme.buy, sellColor:theme.sell, pocColor:theme.poc,
+        valueAreaColor:theme.va, textColor:theme.cell,
+        buyTextColor:theme.light ? '#075344' : '#8aefcd', sellTextColor:theme.light ? '#8d142c' : '#ffb2bd' });
+      el('tip').hidden = true;
+    }
+    function loop() {
+      clearInterval(timer);
+      el('play').textContent = running ? 'Pause' : 'Resume';
+      el('status').textContent = running ? 'Synthetic replay · running' : 'Synthetic replay · paused';
+      if (running) timer = setInterval(() => advance(2), 250);
+    }
+    chart.on('crosshair:move', event => {
+      const tip = el('tip');
+      const hit = event.point ? footprint.hoverAt(event.point.x, event.point.y) : null;
+      if (!hit) { tip.hidden = true; return; }
+      const preciseQuantity = value => (value / volumeDivisor()).toLocaleString('en-US',{ maximumFractionDigits:4 });
+      const preciseSigned = value => (value >= 0 ? '+' : '') + preciseQuantity(value);
+      const row = (label, value) => `<div class="row"><span>${label}</span><b>${value}</b></div>`;
+      tip.innerHTML = `<div class="title">${new Date(hit.time * 1000).toISOString().slice(11,16)} UTC · ${el('units').value === 'lots' ? 'lots (' + lotSize + ' qty/lot)' : 'raw quantity'}</div>`
+        + (hit.cell ? row('Price',hit.cell.price.toFixed(2)) + row('Bid × Ask',preciseQuantity(hit.cell.bidVol) + ' × ' + preciseQuantity(hit.cell.askVol)) : '')
+        + row('Volume',preciseQuantity(hit.stats.volume)) + row('Ask volume',preciseQuantity(hit.stats.askVolume))
+        + row('Bid volume',preciseQuantity(hit.stats.bidVolume)) + row('Delta',preciseSigned(hit.stats.delta))
+        + row('Min delta',hit.stats.minDelta === null ? '-' : preciseSigned(hit.stats.minDelta))
+        + row('Max delta',hit.stats.maxDelta === null ? '-' : preciseSigned(hit.stats.maxDelta))
+        + row('Delta %',hit.stats.deltaPct.toFixed(1) + '%') + row('Session CVD',preciseSigned(hit.stats.cvd))
+        + row('Cum. volume',preciseQuantity(hit.stats.cumVolume)) + row('Session letter',hit.stats.session)
+        + row('Trades',hit.stats.trades ?? '-');
+      tip.hidden = false;
+      const rect = el('chart').getBoundingClientRect();
+      tip.style.left = Math.max(4,Math.min(event.point.x + 16,rect.width - tip.offsetWidth - 8)) + 'px';
+      tip.style.top = Math.max(4,Math.min(event.point.y + 16,rect.height - tip.offsetHeight - 8)) + 'px';
+    });
+    el('style').addEventListener('change', () => footprint.setOptions({ cellStyle:el('style').value }));
+    el('mode').addEventListener('change', () => footprint.setOptions({ displayMode:el('mode').value }));
+    el('text').addEventListener('change', () => footprint.setOptions({ textColorMode:el('text').value }));
+    el('units').addEventListener('change', applyUnits);
+    el('lot-size').addEventListener('change', () => {
+      const value = Number(el('lot-size').value);
+      const valid = Number.isSafeInteger(value) && value > 0;
+      el('lot-size').setAttribute('aria-invalid',String(!valid));
+      el('lot-size').setCustomValidity(valid ? '' : 'Enter a positive whole-number lot size.');
+      if (!valid) { el('lot-size').reportValidity(); return; }
+      lotSize = value;
+      applyUnits();
+    });
+    el('group').addEventListener('change', rebuild);
+    el('classify').addEventListener('change', rebuild);
+    el('min-trade').addEventListener('change', () => {
+      const value = Number(el('min-trade').value);
+      const valid = Number.isFinite(value) && value >= 0;
+      el('min-trade').setCustomValidity(valid ? '' : 'Enter zero or a positive number of lots.');
+      if (!valid) { el('min-trade').reportValidity(); return; }
+      rebuild();
+    });
+    for (const input of flowInputs) input.addEventListener('change', applyFlow);
+    el('flow-options').addEventListener('toggle', () => {
+      const bounds = el('flow-options').getBoundingClientRect();
+      const chooser = el('flow-options').querySelector('fieldset');
+      chooser.style.left = Math.max(12,Math.min(bounds.left,innerWidth - 302)) + 'px';
+      chooser.style.top = (bounds.bottom + 6) + 'px';
+    });
+    el('flow-close').addEventListener('click', () => { el('flow-options').open = false; });
+    el('poc').addEventListener('change', () => footprint.setOptions({ showPoc:el('poc').checked }));
+    el('valuearea').addEventListener('change', () => footprint.setOptions({ showValueArea:el('valuearea').checked }));
+    el('stats').addEventListener('change', () => {
+      footprint.setOptions({ statsRows:el('stats').checked ? ['volume','delta','deltaPct'] : [] });
+      applyTableLayout(false);
+    });
+    el('table').addEventListener('change', () => applyTableLayout());
+    for (const input of tableInputs) input.addEventListener('change', () => applyTableLayout(false));
+    el('table-options').addEventListener('toggle', () => {
+      const bounds = el('table-options').getBoundingClientRect();
+      const chooser = el('table-options').querySelector('fieldset');
+      chooser.style.left = Math.max(12,Math.min(bounds.left,innerWidth - 252)) + 'px';
+      chooser.style.top = (bounds.bottom + 6) + 'px';
+    });
+    el('table-close').addEventListener('click', () => { el('table-options').open = false; });
+    document.addEventListener('pointerdown', event => {
+      if (!el('table-options').contains(event.target)) el('table-options').open = false;
+      if (!el('flow-options').contains(event.target)) el('flow-options').open = false;
+    });
+    let previousChartWidth = el('chart').clientWidth;
+    const resizeObserver = new ResizeObserver(() => {
+      const width = el('chart').clientWidth;
+      applyTableLayout(width !== previousChartWidth);
+      previousChartWidth = width;
+    });
+    resizeObserver.observe(el('chart'));
+    el('theme').addEventListener('change', applyTheme);
+    el('play').addEventListener('click', () => { running = !running; loop(); });
+    el('reset').addEventListener('click', () => { reset(); loop(); });
+    window.addEventListener('pagehide', () => { clearInterval(timer); resizeObserver.disconnect(); });
+    reset(); applyTheme(); applyUnits(); applyTableLayout(false); applyFlow(); loop();
+    // Read-only inspection and deterministic replay hooks for browser examples.
+    window.__chart = () => chart;
+    window.__footprint = () => footprint;
+    window.__orderflowData = () => ({ bars, candles, tape, cvdOffset });
+    window.__advanceTicks = advance;
+  </script>
+</body>
+</html>

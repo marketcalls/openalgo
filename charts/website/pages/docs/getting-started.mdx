@@ -1,0 +1,130 @@
+---
+title: Getting Started
+description: Install OpenAlgo Charts and render your first interactive chart in a few lines.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Getting started
+
+**OpenAlgo Charts** is a dependency-free, canvas-based financial charting engine. The full
+package (every tier) is **426.67 kB Brotli**, the base engine alone is **137.65 kB**, and it
+has **zero runtime dependencies** - what
+you import is what ships. Measurements are from the 2.6.4 build.
+
+Nothing to install for a first look: the library runs straight from a CDN with no
+build step, which is covered in [Use from a CDN](/docs/cdn). Everything below is the
+npm route, for an app you are building.
+
+## Install
+
+```bash
+npm install openalgo-charts
+```
+
+No peer dependencies, no CSS to import, no web component registration. It runs in any modern
+browser (ES2020+).
+
+## Your first chart
+
+`createChart` takes a container element; `addSeries` adds a drawable; `setData` feeds it
+bars. Time is **UTC seconds**.
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+
+const series = chart.addSeries('candlestick');
+series.setData(lib.generateBars(1700000000, 120, 3600));
+
+chart.timeScale.fitContent(120);
+return chart;`} />
+
+In a real app you would pass your own bars instead of `generateBars` (a seeded synthetic
+walk used here so the demo is reproducible):
+
+```ts
+import { createChart } from 'openalgo-charts';
+
+const container = document.getElementById('chart');
+if (!container) throw new Error('Chart container not found');
+const chart = createChart(container);
+const series = chart.addSeries('candlestick');
+series.setData([
+  { time: 1705286700, open: 100, high: 101, low: 99.5, close: 100.6, volume: 1200 },
+  { time: 1705286760, open: 100.6, high: 101.4, low: 100.2, close: 101.1, volume: 900 },
+  // ...
+]);
+```
+
+<Callout type="info">
+Internal time is always **UTC seconds**. Feed adapters convert broker formats (IST date
+strings, epoch milliseconds) at the edge - see [Live Data](/docs/live-data). How those
+seconds are *labelled* is a separate setting: the chart's `timezone` defaults to
+`Asia/Kolkata` and takes any IANA name, at construction or at runtime - see
+[Timezones](/docs/timezones).
+</Callout>
+
+Give the container a non-zero height before creating the chart. Call
+`chart.destroy()` when the view unmounts. For production history/live ownership,
+paging and reconnect repair, see [Data Loading](/docs/data-loading).
+
+## Live updates
+
+Push new ticks into the last bar (or append a new one) with `series.update()`. A
+`CandleBuilder` turns a raw tick stream into interval OHLC for you:
+
+```ts
+import { CandleBuilder } from 'openalgo-charts';
+
+const builder = new CandleBuilder({ intervalSec: 60, volumeMode: 'ltq-sum' });
+builder.seed(lastHistoricalBar);
+
+// Your feed adapter calls this callback for each trade tick.
+function onTradeTick({ price, ltq, timeSec }: { price: number; ltq?: number; timeSec: number }) {
+  const u = builder.onTick({ time: timeSec, price, ltq });
+  if (u) series.update(u.bar); // mutates the last candle, or appends a new one
+}
+```
+
+Use `ltq-sum` only for actual trade quantities. Cumulative day volume needs
+`day-delta`, and session bucketing must use the instrument calendar.
+
+## Loadable tiers
+
+Pay only for what you use: nine tiers, each with a separate entry point.
+
+| Import | Contents |
+|---|---|
+| `openalgo-charts` | base engine, standard chart types, markers, grouped timeline events, appearance linking, indicator registry, feeds and instrument metadata |
+| `openalgo-charts/trade` | order / position / bracket lines, DOM ladder, order engine |
+| `openalgo-charts/transform` | Renko, Range, Point &amp; Figure, Kagi, Line Break, Heikin Ashi |
+| `openalgo-charts/profile` | Volume Profile, Market Profile (TPO), Footprint, order flow |
+| `openalgo-charts/indicators` | 112 built-in indicators (SMA/EMA/MACD/Bollinger/RSI/ADX/VWAP/Supertrend/HalfTrend/CPR/...) + the Tier-2 contract |
+| `openalgo-charts/draw` | 87 drawing tools, including Anchored VWAP and fixed-range Volume Profile, a headless controller and opt-in drawing linking |
+| `openalgo-charts/webgl` | the WebGL2 series backend behind `renderer: 'auto'`, composited into the pane's canvas |
+| `openalgo-charts/widget` | the chart with its chrome in one `createWidget` call: top bar, drawing rail, status line, dialogs, right-click menu, shortcuts, persistence. The only tier that supplies application controls |
+| `openalgo-charts/workspace` | validated named workspace and indicator-template documents, asynchronous catalog storage and an IndexedDB adapter; no DOM or registration side effects |
+
+```ts
+import { createChart } from 'openalgo-charts';
+import { OrderEngine } from 'openalgo-charts/trade';
+import { runTransform, RenkoTransform } from 'openalgo-charts/transform';
+```
+
+## Next steps
+
+- [Core Concepts](/docs/core-concepts) - the data model, time/price scales, and panes.
+- [The Widget Tier](/docs/widget) - the chart with its chrome in one `createWidget` call.
+- [Workspaces](/docs/workspaces) - named layouts, templates, revisions and asynchronous storage.
+- [Render Backends & SVG Export](/docs/rendering) - `renderer: 'auto'`, the WebGL2 tier and `exportSVG`.
+- [Chart Types](/docs/chart-types) - a live gallery of every built-in style.
+- [On-Chart Trading](/docs/trading) - order lines, drag-to-modify, OCO, and the DOM ladder.
+- [Live Data (OpenAlgo)](/docs/live-data) - REST history + WebSocket realtime.
+- [Performance & Operations](/docs/performance-and-operations) - run a chart through a long session with bounded history and cleanup.
+- [Chart Linking](/docs/chart-linking) - independent cursor, viewport, symbol, interval, appearance and drawing synchronization.
+- [Drawing Tools](/docs/drawing-tools) - interactive Anchored VWAP and fixed-range Volume Profile alongside lines, shapes and annotations.
+- [Events](/docs/events) - host-supplied timeline groups, zoom-dependent clusters and details.
+
+- [Trader Alerts](/docs/alerts) - engine evaluation, drag edits, restoration and host delivery.
+- [Open Interest](/docs/open-interest) - absent versus zero, aggregation and study panes.
+- [Chart Data & CSV Export](/docs/chart-data-export) - export the loaded or revealed data.

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: examples gallery</title>
+  <style>
+    html, body { margin: 0; background: #0d0e12; color: #c7ccd8; font: 14px/1.5 system-ui, sans-serif; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 22px; } a { color: #4f8cff; text-decoration: none; }
+    .card { display: block; border: 1px solid #2a3046; border-radius: 8px; padding: 12px 14px; margin: 10px 0; background: #14171f; }
+    .card:hover { border-color: #4f8cff; }
+    .card b { color: #e6e9f0; } .card span { opacity: .7; }
+    .note { opacity: .6; font-size: 12px; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>OpenAlgo Charts: examples</h1>
+    <p class="note">Build first: <code>npm run build</code>. Then open any example (a static file server helps with ES module imports).</p>
+
+    <a class="card" href="phase1-grid.html"><b>1 · Panes &amp; grid</b>: <span>HiDPI canvas layout, render loop, resize</span></a>
+    <a class="card" href="phase2-candles.html"><b>2 · Static candles</b>: <span>DataLayer, scales, candle renderer, IST axes</span></a>
+    <a class="card" href="phase3-interactive.html"><b>3 · Interaction</b>: <span>pan, wheel-zoom, crosshair/magnet, history paging</span></a>
+    <a class="card" href="phase4-live.html"><b>4 · Live data</b>: <span>candle builder, live update, last-price line, volume pane</span></a>
+    <a class="card" href="phase5-types.html"><b>5 · Chart types</b>: <span>all standard styles via the chart-type registry</span></a>
+    <a class="card" href="phase6-primitives.html"><b>6 · Markers, events, EMA</b>: <span>buy/sell signals, E/D badges, indicator, price lines</span></a>
+    <a class="card" href="phase7-transforms.html"><b>7 · Transforms</b>: <span>Heikin Ashi, Renko, Range, Line Break, P&amp;F, Kagi</span></a>
+    <a class="card" href="phase8-trade.html"><b>8 · Trade layer (read-only)</b>: <span>order lines, position P&amp;L, SL/TP bracket</span></a>
+    <a class="card" href="phase9-chart-trading.html"><b>9 · Chart trading</b>: <span>one-click, drag-to-modify, OCO, analyzer mode</span></a>
+    <a class="card" href="phase10-dom.html"><b>10 · Depth ladder</b>: <span>5 to 200 levels, virtualized, click-to-place</span></a>
+    <a class="card" href="phase11-profiles.html"><b>11 · Profiles &amp; order flow</b>: <span>Volume Profile, TPO letters, order-flow themes, statistics table and lots</span></a>
+    <a class="card" href="extras-themes.html"><b>+ · Themes, gradients, axis-drag</b>: <span>light/dark themes, gradient area/baseline, drag axes to rescale</span></a>
+    <a class="card" href="vue/index.html"><b>+ · Vue 3</b>: <span>a composable and a component: props to data, resize, theme, the widget, KeepAlive and v-if teardown (Vue comes from <code>node_modules</code>)</span></a>
+    <a class="card" href="yfinance/README.md"><b>+ · yfinance historical</b>: <span>real OHLCV via a custom DataFeed (needs <code>examples/yfinance/server.py</code>)</span></a>
+
+    <p class="note">Most examples are dependency-free and use only the built <code>dist/</code> bundles. The yfinance demo additionally needs Python + <code>server.py</code> (see its README).</p>
+  </div>
+</body>
+</html>

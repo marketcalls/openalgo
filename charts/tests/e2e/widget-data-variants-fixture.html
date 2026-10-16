@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Widget data variants fixture</title>
+<style>html,body{margin:0;height:100%;background:#0d0e12}#chart{position:absolute;inset:0}</style></head>
+<body><div id="chart"></div>
+<script type="module">
+import { VERSION } from '/dist/openalgo-charts.mjs';
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+// A synthetic provider with two sessions for intraday bars and one for daily
+// ones. Extended hours are its own series: the same regular bars with
+// pre-market bars before them and post-market bars after, at their own prices.
+const T = 1700000040;
+const requests = [];
+const bar = (n, close) => ({ time: T + n * 60, open: close - 1, high: close + 2, low: close - 2, close, volume: 100 + n });
+const regular = () => Array.from({ length: 40 }, (_, n) => bar(n + 10, 100 + Math.sin(n / 4) * 5));
+const extended = () => [
+  ...Array.from({ length: 10 }, (_, n) => bar(n, 80 + n)),
+  ...regular(),
+  ...Array.from({ length: 10 }, (_, n) => bar(n + 50, 120 - n)),
+];
+const feed = {
+  dataVariants: query => ({ sessions: query.interval === '1d' ? ['regular'] : ['regular', 'extended'] }),
+  getBars: async request => {
+    requests.push({ interval: request.interval, variant: request.variant ?? null });
+    return request.variant?.session === 'extended' ? extended() : regular();
+  },
+};
+const widget = createWidget(document.getElementById('chart'), {
+  feed, symbol: 'AAPL', exchange: 'US', interval: '1m', now: () => (T + 80 * 60) * 1000,
+  lookbackBars: 80, navigation: { defaultVisibleBars: 70 }, rail: false,
+});
+window.fixture = { version: VERSION, widget, requests };
+</script></body></html>

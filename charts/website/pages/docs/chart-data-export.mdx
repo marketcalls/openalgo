@@ -1,0 +1,236 @@
+---
+title: Chart Data Export
+description: Export loaded OHLCV, open interest, study values and comparisons as replay-aware CSV.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+
+# Chart data export
+
+`exportChartDataCsv(chart, options?)` is a base export that returns a CSV string
+from the chart's installed data. It does not fetch history or start a download.
+Your application selects the chart, chooses the filename and delivers the file.
+
+## Create a CSV download
+
+Call this function from the selected chart's download action, after its source
+has finished loading. It uses the chart passed to the function rather than
+looking up whichever chart becomes focused later.
+
+```ts
+import { exportChartDataCsv, type Chart } from 'openalgo-charts';
+
+export function downloadChartData(chart: Chart, filename = 'chart-data.csv') {
+  const csv = exportChartDataCsv(chart);
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+```
+
+An application can also send the returned string to its own storage or download
+service. Browser download initiation does not confirm that a file was saved.
+
+## Rows and columns
+
+By default, rows cover **all loaded primary bars**, independently of the viewport. The fixed
+columns are `time,open,high,low,close,volume,oi`. Time is UTC seconds, and numbers
+retain input precision rather than axis display rounding. Missing or nonfinite
+values are empty cells; genuine zero values remain `0`. Output uses CRLF row
+endings and escapes quoted header fields.
+
+| Additional columns | Behavior |
+| --- | --- |
+| `indicator:<instanceId>:<plotKey>` | Every configured study's declared plots, including hidden studies. Repeated study instances stay separate. Warmup and missing values are blank. |
+| `comparison:<ordinal>:<symbol>:close` | Comparison closes aligned to each primary timestamp, in the comparison's own price units. |
+
+By default, study values belong to the input row, before visual plot offsets. A study output
+that is not a declared plot, such as a candle-color classification, is not added
+as a CSV column. Comparison values are not converted into displayed percentage
+or indexed-axis values. Transformed charts export their installed transformed
+OHLC bars.
+
+Use `{ indicators: false }` to omit study columns. Comparisons created through
+`addComparison` or `comparisonController` are discovered automatically. For an
+explicitly owned controller, pass its list through the `comparisons` option:
+
+```ts
+import { exportChartDataCsv, type Chart, type ComparisonController } from 'openalgo-charts';
+
+export function exportComparisons(chart: Chart, comparisons: ComparisonController) {
+  return exportChartDataCsv(chart, { indicators: false, comparisons: comparisons.list() });
+}
+```
+
+Pass `{ comparisons: [] }` to omit comparisons. A chart without primary rows
+still returns its header. Drawings, orders, positions, account state and
+credentials are not exported.
+
+## Select rows and studies
+
+Pass study **instance IDs** to select columns in a specific order, and UTC-second
+bounds to select rows. Hidden studies remain eligible. The exporter calculates
+over the full loaded history first, so a recent range retains warmed-up values.
+
+```ts
+const csv = exportChartDataCsv(chart, {
+  indicators: [fastStudy.id, slowStudy.id],
+  range: { from: 1700000060.25, to: 1700000600.5 },
+});
+```
+
+Both range limits are inclusive and either may be omitted. Fractional and
+negative timestamps retain their exact numeric values. Equal limits select an
+exact timestamp if present; an empty intersection returns headers only.
+`ChartDataCsvRange` is the exported type for these bounds.
+
+Use `indicators: []` or `false` for no studies. Omit the option, or pass `true`,
+to include all studies in chart order. The selector uses `IndicatorApi.id`,
+not the descriptor ID or displayed name, so repeated studies stay distinct.
+Duplicate, unknown or removed IDs throw. Invalid range values and reversed
+bounds also throw; accessor-backed range fields are rejected without invoking
+their getters. The host should show these errors through its normal error UI.
+
+<RunnableExample height={410} code={`el.style.position = 'relative';
+const controls = document.createElement('div');
+controls.style.cssText = 'position:absolute;left:8px;top:8px;right:64px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;z-index:2';
+controls.addEventListener('pointerdown', event => event.stopPropagation());
+el.appendChild(controls);
+const surface = document.createElement('div');
+surface.style.cssText = 'position:absolute;inset:76px 0 94px';
+el.appendChild(surface);
+const summary = document.createElement('div');
+summary.setAttribute('role', 'status');
+summary.style.cssText = 'position:absolute;left:8px;right:8px;bottom:72px;font:12px sans-serif';
+el.appendChild(summary);
+const preview = document.createElement('pre');
+preview.setAttribute('aria-label', 'Selected CSV preview');
+preview.style.cssText = 'position:absolute;left:8px;right:8px;bottom:8px;height:58px;box-sizing:border-box;margin:0;padding:6px;overflow:auto;border:1px solid light-dark(#e4e4e4,#64748b);border-radius:4px;background:light-dark(#f5f5f5,#101827);color:light-dark(#151515,#e2e8f0);font:11px/1.4 monospace;scrollbar-color:light-dark(#d4d4d4,#64748b) light-dark(#f5f5f5,#101827);scrollbar-width:thin';
+el.appendChild(preview);
+const chart = lib.createChart(surface, { branding: false });
+const bars = lib.generateBars(1700000000, 120, 60);
+chart.addSeries('candlestick').setData(bars);
+const fast = chart.addIndicator('sma', { length: 9, color: '#f59e0b' });
+const slow = chart.addIndicator('sma', { length: 21, color: '#38bdf8' });
+fast.series('ma').applyOptions({ barOffset: 3 });
+let recent = false, fastOnly = false, display = false, labels = false;
+const makeButton = (label, toggle) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.style.cssText = 'min-width:0;padding:5px 8px;border:1px solid light-dark(#e4e4e4,#64748b);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);font:12px sans-serif;cursor:pointer';
+  button.textContent = label;
+  button.onpointerdown = () => button.focus({ preventScroll: true });
+  button.onmousedown = event => { event.preventDefault(); button.focus({ preventScroll: true }); };
+  button.onclick = () => { toggle(); refresh(); };
+  controls.appendChild(button);
+  return button;
+};
+const rangeButton = makeButton('All rows', () => { recent = !recent; });
+const studyButton = makeButton('All studies', () => { fastOnly = !fastOnly; });
+const alignmentButton = makeButton('Source rows', () => { display = !display; });
+const labelButton = makeButton('Raw times', () => { labels = !labels; });
+function refresh() {
+  const csv = lib.exportChartDataCsv(chart, {
+    indicators: fastOnly ? [fast.id] : [fast.id, slow.id],
+    range: recent ? { from: bars[bars.length - 20].time } : undefined,
+    alignment: display ? 'display' : 'source',
+    formatters: labels ? { time: seconds => new Date(seconds * 1000).toISOString() } : undefined,
+  });
+  const rows = csv.trimEnd().split(String.fromCharCode(13, 10));
+  rangeButton.textContent = recent ? 'Last 20 rows' : 'All rows';
+  rangeButton.setAttribute('aria-pressed', String(recent));
+  studyButton.textContent = fastOnly ? 'Fast study only' : 'All studies';
+  studyButton.setAttribute('aria-pressed', String(fastOnly));
+  alignmentButton.textContent = display ? 'Displayed rows' : 'Source rows';
+  alignmentButton.setAttribute('aria-pressed', String(display));
+  labelButton.textContent = labels ? 'UTC labels' : 'Raw times';
+  labelButton.setAttribute('aria-pressed', String(labels));
+  summary.textContent = (rows.length - 1) + ' rows, ' + (fastOnly ? '1 study' : '2 studies');
+  preview.textContent = rows.slice(0, 3).join(String.fromCharCode(10));
+}
+refresh();
+chart.fitContent();
+return chart;`} />
+
+The orange study in this example is offset three bars forward. Switch to
+displayed rows to export those positions, and turn on UTC labels to add readable
+timestamps while retaining raw time values.
+
+## Displayed plot positions
+
+Set `alignment: 'display'` to follow current study plot offsets, including direct
+`applyOptions({ barOffset })` changes. It uses the shared chart axis, so extra
+timestamps from other series do not move values to the wrong bar. Primary prices
+and comparison closes stay on installed primary positions. Candle plots expand
+into four independently available OHLC columns.
+
+Display CSV starts with `time,logical_index,time_origin`. A time origin is
+`axis`, `interpolated`, `projected` or `unknown`. Fractional offsets are retained;
+large offsets create only the occupied rows. An unrepresentable position or a
+colliding timestamp throws rather than overwriting another observation.
+
+Outside the loaded axis, times use its nearest observed spacing. These are
+spacing estimates, not market-session guarantees or future observations.
+A single loaded timestamp cannot establish spacing, so outside times stay blank.
+Supply `projectTime(logicalIndex, context)` to return a finite UTC timestamp or
+`null` for such positions. Its frozen `ChartDataProjectionContext` contains only
+installed axis times and the revealed replay boundary.
+
+Time bounds apply after shifting. Unknown-time rows remain only when no bound is
+set. Offset-only future rows have no primary or comparison prices.
+
+## Formatted exports
+
+`formatters.time` adds a `time_label` beside raw numeric time.
+`formatters.value(value, column)` formats finite primary, study and comparison
+cells. `formatters.header(column)` changes header labels. `ChartDataColumn`
+metadata retains each canonical key and source identity; duplicate displayed
+headers are disambiguated. Missing observations stay blank without calling the
+value formatter.
+
+```ts
+const csv = exportChartDataCsv(chart, {
+  formatters: {
+    time: seconds => new Date(seconds * 1000).toISOString(),
+    value: (value, column) => column.kind === 'indicator'
+      ? value.toFixed(4) : String(value),
+  },
+});
+```
+
+Callbacks must return strings. CSV escaping preserves commas, quotes and line
+breaks; potentially executable spreadsheet text receives an apostrophe prefix.
+Raw negative numbers remain numeric when no formatter is supplied. An exception
+aborts the export. Data is captured before presentation callbacks, so mutations
+inside a formatter cannot replace another exported cell.
+
+## Replay and host ownership
+
+Replay installs only its revealed prefix, so CSV reads only those rows. Partial
+bars contain only the observations revealed so far. Do not substitute the full
+history retained by a replay controller or feed cache when exporting a chart.
+
+Capture the chart and instrument when opening a download menu. Before exporting,
+reject a stale target or a source still loading or in an error state. The export
+function has no knowledge of the host's loading controls or current account.
+Report exceptions through the host's normal error UI.
+
+The packaged widget and reference demo provide these choices in their CSV
+download dialogs. They retain the offered study instances and visible bounds,
+and validate the captured chart again before starting the download. Their From
+and To bounds are a date and a time on the chart's clock, in the chart's
+timezone, which the dialog names (since 2.6.0); a To written to the minute takes
+in every bar that opens inside that minute. The dialog turns them into the UTC
+seconds `range` takes.
+
+CSV is a numeric snapshot, not a restorable chart layout. Use
+[chart state](/docs/state) or [workspaces](/docs/workspaces) for configuration,
+and [PNG or SVG export](/docs/rendering) for a visual capture.

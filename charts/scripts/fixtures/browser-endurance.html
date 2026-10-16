@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chart browser endurance fixture</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #10141a; color: #cad1dc; font: 13px sans-serif; }
+    header { height: 48px; padding: 15px; border-bottom: 1px solid #303742; }
+    #charts { display: grid; height: calc(100% - 48px); gap: 1px; background: #303742; }
+    .chart { min-width: 0; min-height: 0; background: #10141a; }
+  </style>
+</head>
+<body>
+  <header>Deterministic synthetic workload. Canvas2D. No feed or order connection.</header>
+  <main id="charts"></main>
+  <script type="module">
+    import { createChart, version } from '/dist/openalgo-charts.mjs';
+    import '/dist/openalgo-charts.indicators.mjs';
+
+    const hosts = document.querySelector('#charts');
+    const indicators = ['ema', 'bollinger', 'rsi', 'macd', 'volume'];
+    let entries = [];
+    let timer = null;
+    let frame = null;
+    let observer = null;
+    let ticks = 0;
+    let lastFrame = null;
+    let measuring = false;
+    let pointerPending = false;
+    let pointerDone = 0;
+    let tickInterval = 100;
+    let longTasks = 0;
+    let longTaskMs = 0;
+
+    // Fixed-size histograms keep instrumentation memory independent of run length.
+    function histogram() {
+      const buckets = new Uint32Array(5001);
+      let count = 0;
+      let maximum = 0;
+      let slow = 0;
+      return {
+        add(ms) { buckets[Math.min(5000, Math.ceil(ms))]++; count++; maximum = Math.max(maximum, ms); if (ms > 50) slow++; },
+        read() {
+          const percentile = fraction => {
+            if (!count) return null;
+            let seen = 0;
+            for (let i = 0; i < buckets.length; i++) { seen += buckets[i]; if (seen >= Math.ceil(count * fraction)) return i; }
+            return maximum;
+          };
+          return { count, p95: percentile(0.95), p99: percentile(0.99), max: maximum, slowFrameRatio: count ? slow / count : null };
+        },
+      };
+    }
+    let frameTimes = histogram();
+    let pointerTimes = histogram();
+
+    function data(count, offset) {
+      return Array.from({ length: count }, (_, i) => {
+        const open = 1000 + offset + Math.sin(i / 31) * 18 + Math.sin(i / 5) * 2;
+        const close = open + Math.sin(i * 1.9) * 3;
+        return { time: 1735689600 + i * 60, open, close, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, volume: 1000 + (i * 7919) % 9000 };
+      });
+    }
+
+    const settle = async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); };
+
+    function create(count, bars) {
+      hosts.style.gridTemplateColumns = `repeat(${count}, minmax(0, 1fr))`;
+      for (let i = 0; i < count; i++) {
+        const host = document.createElement('div');
+        host.className = 'chart';
+        hosts.append(host);
+        const chart = createChart(host, { shortcuts: false, renderer: 'canvas2d' });
+        chart.applySize(host.clientWidth, host.clientHeight);
+        const series = chart.addSeries('candlestick', { style: { upColor: '#22c99a', downColor: '#ff5577' } });
+        const history = data(bars, i * 100);
+        series.setData(history);
+        for (const id of indicators) chart.addIndicator(id);
+        chart.setVisibleLogicalRange({ from: bars - 150, to: bars + 4 });
+        entries.push({ host, chart, series, last: history.at(-1) });
+      }
+    }
+
+    function destroy() {
+      for (const { chart, host } of entries) { chart.destroy(); host.remove(); }
+      entries = [];
+    }
+
+    function update() {
+      ticks++;
+      for (let i = 0; i < entries.length; i++) {
+        const { series, last } = entries[i];
+        const close = last.open + Math.sin(ticks / 7 + i) * 8;
+        series.update({ ...last, close, high: Math.max(last.high, close + 1), low: Math.min(last.low, close - 1), volume: 5000 + ticks % 5000 });
+      }
+    }
+
+    function measureFrames(now) {
+      if (measuring && lastFrame !== null) frameTimes.add(now - lastFrame);
+      lastFrame = now;
+      frame = requestAnimationFrame(measureFrames);
+    }
+
+    hosts.addEventListener('pointermove', () => {
+      if (!pointerPending) return;
+      pointerPending = false;
+      const start = performance.now();
+      requestAnimationFrame(() => requestAnimationFrame(() => { pointerTimes.add(performance.now() - start); pointerDone++; }));
+    }, { capture: true });
+
+    function paintProbe() {
+      return entries.map(({ host, chart }) => {
+        // The first canvas is the price pane's base canvas, and the price-axis
+        // strip is painted on it too. Its last-price tag moves with every tick
+        // and wears the candle colours, so a hash or a candle count taken over
+        // the whole canvas could pass on the axis alone over a frozen plot.
+        // Both read the plot only: the time scale's width, from the left edge
+        // (these charts have no left scale).
+        const canvas = host.querySelector('canvas');
+        const context = canvas.getContext('2d');
+        const scale = canvas.width / canvas.getBoundingClientRect().width;
+        const width = Math.max(1, Math.min(canvas.width, Math.floor(chart.timeScale.width * scale)));
+        const height = canvas.height;
+        const pixels = context.getImageData(0, 0, width, height).data;
+        let candlePixels = 0;
+        let hash = 2166136261;
+        for (let i = 0; i < pixels.length; i += 4) {
+          const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+          if (pixels[i + 3] > 200 && ((Math.abs(r - 34) < 4 && Math.abs(g - 201) < 4 && Math.abs(b - 154) < 4) || (Math.abs(r - 255) < 4 && Math.abs(g - 85) < 4 && Math.abs(b - 119) < 4))) candlePixels++;
+          hash = Math.imul(hash ^ r, 16777619);
+          hash = Math.imul(hash ^ g, 16777619);
+          hash = Math.imul(hash ^ b, 16777619);
+        }
+        return { candlePixels, hash: hash >>> 0, width, height };
+      });
+    }
+
+    window.endurance = {
+      version: version(), indicators, settle, create, destroy, paintProbe,
+      async cycle(bars) { create(1, bars); await settle(); const pixels = paintProbe()[0].candlePixels; destroy(); await settle(); return pixels; },
+      start(tickHz) { tickInterval = 1000 / tickHz; timer = setInterval(update, tickInterval); frame = requestAnimationFrame(measureFrames); },
+      pauseUpdates() {
+        const paused = { running: timer !== null, started: performance.now(), ticks };
+        clearInterval(timer); timer = null;
+        return paused;
+      },
+      resumeUpdates(paused) {
+        if (paused.running) timer = setInterval(update, tickInterval);
+        return { elapsedMs: performance.now() - paused.started, ticksDuringCollection: ticks - paused.ticks };
+      },
+      reset() {
+        ticks = 0; frameTimes = histogram(); pointerTimes = histogram(); lastFrame = null; longTasks = 0; longTaskMs = 0; measuring = true;
+        if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+          observer = new PerformanceObserver(list => { for (const task of list.getEntries()) { longTasks++; longTaskMs += task.duration; } });
+          observer.observe({ type: 'longtask', buffered: false });
+        }
+      },
+      stop() { clearInterval(timer); timer = null; cancelAnimationFrame(frame); observer?.disconnect(); measuring = false; },
+      pointerArm() { pointerPending = true; return pointerDone; },
+      pointerDone: () => pointerDone,
+      inspect() {
+        const frames = frameTimes.read();
+        return { ticks, bars: entries.map(entry => entry.series.getData().length), timing: { ...frames, frames: frames.count, longTasks, longTaskMs }, interaction: pointerTimes.read() };
+      },
+    };
+  </script>
+</body>
+</html>

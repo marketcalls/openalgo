@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>
+html, body { margin: 0; height: 100%; background: #131722; }
+#host { position: absolute; inset: 0; }
+</style></head>
+<body><div id="host"></div><script type="module">
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+import { WatchlistRepository, createMemoryWatchlistStorage } from '/dist/openalgo-charts.workspace.mjs';
+import '/dist/openalgo-charts.indicators.mjs';
+
+// Every value is a function of the symbol and a tick counter, so a run can
+// reason about what it sees without a network.
+const seed = symbol => Array.from(symbol).reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 9973, 7);
+const bars = (symbol, seconds) => Array.from({ length: 160 }, (_, i) => {
+  const close = 50 + seed(symbol) % 400 + Math.sin(i / 9) * 3;
+  return { time: 1700000000 + i * seconds, open: close - 0.3, high: close + 1, low: close - 1, close, volume: 1000 + i };
+});
+const feed = {
+  getBars: async request => bars(request.symbol, request.interval === '1d' ? 86400 : 300),
+  subscribeBars: () => () => {},
+};
+
+// A streaming quote source that records exactly which rows hold a stream.
+const quotes = {
+  ticks: 0, status: 'live', subscribes: 0, unsubscribes: 0, snapshots: 0,
+  streams: new Map(),
+  price(key) {
+    const base = 20 + seed(key.symbol + key.exchange) % 500;
+    const drift = Math.sin((this.ticks + seed(key.symbol)) / 3) * 0.04 * base;
+    return { symbol: key.symbol, exchange: key.exchange, last: Math.round((base + drift) * 100) / 100, previousClose: base, time: 1758800000 + this.ticks };
+  },
+  subscribed() { return [...this.streams.keys()].map(key => JSON.parse(key)).map(([symbol, exchange]) => `${symbol}@${exchange}`).sort(); },
+  setStatus(status) { this.status = status; for (const handlers of this.streams.values()) handlers.onStatus?.(status); },
+};
+const quoteFeed = {
+  getQuotes: async ({ instruments }) => { quotes.snapshots++; return instruments.map(key => quotes.price(key)); },
+  subscribeQuotes(instruments, handlers) {
+    quotes.subscribes++;
+    const key = JSON.stringify([instruments[0].symbol, instruments[0].exchange]);
+    quotes.streams.set(key, handlers);
+    handlers.onStatus?.(quotes.status);
+    return () => { quotes.unsubscribes++; quotes.streams.delete(key); };
+  },
+};
+setInterval(() => {
+  quotes.ticks++;
+  if (quotes.status !== 'live') return;
+  for (const [key, handlers] of quotes.streams) {
+    const [symbol, exchange] = JSON.parse(key);
+    handlers.onQuote(quotes.price({ symbol, exchange }));
+  }
+}, 300);
+
+// News with pages, a repeat across the page boundary, markup and a script link.
+const news = { calls: [] };
+const story = (symbol, i, extra = {}) => ({ id: `${symbol}-${i}`, headline: `${symbol} story ${i}`, source: i % 2 ? 'Desk One' : 'Desk Two',
+  time: 1758790000 - i * 3600, summary: `Summary ${i} for ${symbol}.\nSecond line.`, url: `https://example.com/${symbol}/${i}`, ...extra });
+const newsFeed = {
+  async getNews(request) {
+    news.calls.push({ symbol: request.symbol, exchange: request.exchange, cursor: request.cursor ?? null });
+    const page = request.cursor === undefined ? 0 : Number(request.cursor);
+    const items = Array.from({ length: request.limit }, (_, i) => story(request.symbol, page * request.limit + i));
+    if (page === 0) {
+      items[1] = story(request.symbol, 1, { headline: '<img src=x onerror="window.__xss=1">Rates <b>cut</b>', url: 'javascript:window.__xss=1' });
+    }
+    // The provider shifted: the first item of the next page repeats the last of this one.
+    if (page === 1) items[0] = story(request.symbol, request.limit - 1);
+    return { items, nextCursor: page < 1 ? String(page + 1) : null };
+  },
+};
+
+const symbols = ['NOVA', ...Array.from({ length: 38 }, (_, i) => `S${String(i + 1).padStart(2, '0')}`)];
+let n = 0;
+const store = new WatchlistRepository(createMemoryWatchlistStorage(), 'e2e', { id: () => `list-${++n}`, now: () => 1758800000000 });
+const large = await store.createList('Large caps', [...symbols.map(symbol => ({ symbol, exchange: 'DEMO' })), { symbol: 'NOVA', exchange: 'ALT' }]);
+await store.createList('Banks', ['BANKA', 'BANKB', 'BANKC'].map(symbol => ({ symbol, exchange: 'DEMO' })));
+await store.setActiveList(large.id);
+
+const widget = createWidget('#host', {
+  feed, symbol: 'NOVA', exchange: 'DEMO', interval: '5m', intervals: ['5m', '1d'], theme: 'dark', persist: false, rail: false,
+  watchlist: { store, quotes: quoteFeed },
+  news: { feed: newsFeed, pageSize: 6 },
+});
+window.__market = { widget, store, quotes, news };
+</script></body></html>

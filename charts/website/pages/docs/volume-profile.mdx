@@ -1,0 +1,152 @@
+---
+title: Volume Profile
+description: Volume-at-price profiles - visible-range and session variants, buy/sell delta, and the on-chart renderer.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Volume Profile
+
+A volume profile shows **how much volume traded at each price** rather than over time - a
+horizontal histogram that reveals high-volume nodes (acceptance) and low-volume gaps
+(rejection). Like Market Profile it comes in two pieces: **`computeVolumeProfileSessions`**
+(analytics, `profile` tier) and the **`VolumeProfile`** primitive that draws it.
+
+```ts
+import { computeVolumeProfileSessions, VolumeProfile } from 'openalgo-charts/profile';
+
+const result = computeVolumeProfileSessions(bars, { tickSize: 0.05, session: 'composite' });
+chart.addPrimitive(new VolumeProfile(result));
+```
+
+## Variants
+
+- **Visible-range** - pass the currently visible slice of bars with `session: 'composite'`.
+  One profile spanning the view.
+- **Session** - `session: 'day' | 'week' | 'month'` builds one profile per period, each
+  drawn under its own bars with its own POC and value area. Periods are grouped on the
+  calendar of the `timezone` option, which defaults to `Asia/Kolkata`; pass
+  `chart.timezone()` so the buckets match the axis. See [Timezones](/docs/timezones).
+
+Every session reports a **POC** (highest-volume price), a **Value Area** (the band holding
+`valueAreaPercent` of volume), and - optionally - a **buy/sell split**.
+
+## Total volume
+
+The default `total` mode draws one bar per price, anchored at the session's right edge:
+
+<RunnableExample height={380} tiers={['profile']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 1800);
+chart.addSeries('candlestick').setData(bars);
+
+const vp = lib.computeVolumeProfileSessions(bars, { tickSize: 1, session: 'composite' });
+chart.addPrimitive(new lib.VolumeProfile(vp));
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Visible-range volume profile: POC (gold), value area highlighted, rows outside it dimmed." />
+
+## Buy vs sell, and delta
+
+`displayMode: 'buySell'` splits each row into buy and sell; `'delta'` draws the net,
+colored by sign. Both use the direction-based split (below).
+
+<RunnableExample height={380} tiers={['profile']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 1800);
+chart.addSeries('candlestick').setData(bars);
+
+const vp = lib.computeVolumeProfileSessions(bars, { tickSize: 1, session: 'composite' });
+chart.addPrimitive(new lib.VolumeProfile(vp, { displayMode: 'buySell', width: 100 }));
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="buySell mode: buy (teal) and sell (red) split per price." />
+
+<RunnableExample height={380} tiers={['profile']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 1800);
+chart.addSeries('candlestick').setData(bars);
+
+const vp = lib.computeVolumeProfileSessions(bars, { tickSize: 1, session: 'composite' });
+chart.addPrimitive(new lib.VolumeProfile(vp, { displayMode: 'delta' }));
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="delta mode: net buy-minus-sell per price, colored by sign." />
+
+<Callout type="warning">
+The buy/sell split is an **honest approximation from OHLCV**: a bar's whole volume is counted
+as buying when it closed up (`close >= open`) and selling when it closed down. It is not true
+bid/ask delta - for that you need classified trades, see the
+[Footprint](/docs/profiles-and-orderflow). Set `deltaFromBarDirection: false` to keep volume
+un-split.
+</Callout>
+
+## Session profiles
+
+<RunnableExample height={400} tiers={['profile']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 1800);
+chart.addSeries('candlestick').setData(bars);
+
+const vp = lib.computeVolumeProfileSessions(bars, { tickSize: 1, session: 'day' });
+chart.addPrimitive(new lib.VolumeProfile(vp, { side: 'right', width: 70 }));
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="A separate volume profile per calendar day, on the default Asia/Kolkata, each with its own POC and value area." />
+
+## `computeVolumeProfileSessions` options
+
+```ts
+computeVolumeProfileSessions(bars, options): VolumeProfileFamilyResult
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `tickSize` | `0.05` | price bucket size |
+| `session` | `'composite'` | `'composite'` / `'day'` / `'week'` / `'month'` |
+| `valueAreaPercent` | `0.7` | fraction of volume in the value area (0..1) |
+| `deltaFromBarDirection` | `true` | split volume into buy/sell by bar direction |
+| `timezone` | `'Asia/Kolkata'` | IANA zone the day / week / month buckets resolve on. See [Timezones](/docs/timezones) |
+
+## `VolumeProfile` primitive options
+
+Constructor `new VolumeProfile(result, options)` or live `profile.setOptions({ ... })`.
+
+| Option | Default | Description |
+|---|---|---|
+| `displayMode` | `total` | `total` / `buySell` / `delta` |
+| `side` | `right` | anchor bars at the session's `left` or `right` edge |
+| `width` | `90` | maximum bar length, px |
+| `barColor` | slate | bar color in `total` mode |
+| `buyColor` / `sellColor` | teal / red | `buySell` and `delta` colors |
+| `opacity` | `0.85` | bar opacity |
+| `showPoc` / `pocColor` / `showPocLabel` | `true` / gold / `true` | Point of Control line + label |
+| `showValueArea` / `vahColor` / `valColor` / `showValueAreaLabels` | `true` | VAH & VAL lines + labels |
+| `highlightValueArea` / `valueAreaFillColor` / `valueAreaFillOpacity` | `true` | shade the value-area band |
+| `valueAreaOpacityDim` | `0.4` | opacity multiplier for rows outside the value area |
+| `labelSide` | `right` | which edge the POC/VA labels sit on |
+| `zOrder` | `bottom` | draw behind (`bottom`) or over (`top`) the series |
+
+## Data model
+
+```ts
+interface VolumeProfileFamilyResult {
+  sessions: VolumeProfileSessionResult[];
+  options: VolumeProfileFamilyOptions;
+}
+
+interface VolumeProfileSessionResult {
+  startTime: number; endTime: number;      // UTC seconds
+  levels: { price: number; volume: number; buyVolume: number; sellVolume: number; delta: number }[]; // high -> low
+  poc: number; vah: number; val: number;
+  totalVolume: number; buyVolume: number; sellVolume: number; delta: number;
+}
+```
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Nothing renders | No price series (time axis has no bars) | Add a series before the profile |
+| Bars cover the candles | Profile anchored over the price action | Lower `width`, set `side: 'left'`, or `zOrder: 'top'` with lower `opacity` |
+| buySell / delta look empty | `deltaFromBarDirection: false` | Enable it (default) so volume is split |
+| One profile for many days | `session: 'composite'` | Use `session: 'day'` (or `week` / `month`) |
+| Value area looks off | `valueAreaPercent` passed as a percent | Use a fraction (0.7), not 70 |
+| Value area differs from the drawing tool's | The fixed range volume profile drawing takes `valueArea` as a percent (70) | Divide by 100 when copying a value between the two |

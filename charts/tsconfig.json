@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "useDefineForClassFields": true,
+    "sourceMap": true,
+    "paths": {
+      "openalgo-charts": ["./src/index.ts"],
+      "openalgo-charts/trade": ["./src/trade/index.ts"],
+      "openalgo-charts/transform": ["./src/transform/index.ts"],
+      "openalgo-charts/profile": ["./src/profile/index.ts"],
+      "openalgo-charts/indicators": ["./src/indicators/index.ts"],
+      "openalgo-charts/draw": ["./src/draw/index.ts"],
+      "openalgo-charts/webgl": ["./src/webgl/index.ts"],
+      "openalgo-charts/widget": ["./src/widget/index.ts"],
+      "openalgo-charts/workspace": ["./src/workspace/index.ts"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}

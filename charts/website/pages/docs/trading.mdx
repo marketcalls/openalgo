@@ -1,0 +1,689 @@
+---
+title: On-Chart Trading
+description: Order, position and bracket lines with live P&L, drag-to-modify, OCO, validation, and a depth-of-market ladder.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# On-chart trading
+
+The **trade tier** (`openalgo-charts/trade`) adds a full trade-management layer: working
+order lines, a position marker with live P&amp;L, OCO brackets, an order state machine with
+validation, and a depth-of-market ladder. The `OrderEngine` write path talks to any broker
+through a small `OrderFeed` interface (`place` / `modify` / `cancel`) - the OpenAlgo adapter
+(`OpenAlgoTradeFeed`) implements it.
+
+Try the [simulated live depth ladder](/docs/depth-of-market) to explore bid/ask
+quantities, configurable price grouping and different book depths.
+
+Account selection and figures, order preview, durations and leverage, and a provider's
+own close, partial close, reverse and brackets are covered in
+[Accounts and advanced orders](/docs/trading-accounts). Each is declared by the provider
+and refused when it is not.
+
+[Trader alerts](/docs/alerts) use the base-tier `AlertController`. Their draggable
+thresholds and `alert:triggered` notifications do not place or modify broker orders.
+Keep alert delivery separate from the trading write path.
+
+<Callout type="info">
+Two trade interfaces exist and are easy to confuse. The trade tier's `OrderFeed`
+(`place` / `modify` / `cancel`, from `openalgo-charts/trade`) is the broker write
+path used by `OrderEngine`, and is what `OpenAlgoTradeFeed` implements. The base
+export `TradeFeed` (`placeOrder` / `modifyOrder` / `cancelOrder` +
+`subscribeOrders` / `subscribePositions`) is a higher-level shape - implement
+`OrderFeed` for the engine.
+</Callout>
+
+## Order & target lines
+
+Order, stop, and target levels are drawn as labelled price lines you can drag. The visual
+layer is just price lines; here are entry / stop / target levels on a live chart:
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 140, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+const last = bars[bars.length - 1].close;
+// Broker-style segmented pill groups on the line - [badge][qty][label][x] -
+// draggable, with the x segment routing as a cancel/exit click.
+const entry = chart.addPriceLine({ price: last, color: '#3b82f6', lineWidth: 2, id: 'entry',
+  extentFromRight: 0.30, badge: 'BUY', qty: 10, leftLabel: 'LIMIT', closeButton: true, cursor: 'ns-resize' });
+const stop = chart.addPriceLine({ price: last * 0.98, color: '#ef5350', lineWidth: 1, dashed: true, id: 'sl',
+  extentFromRight: 0.30, badge: 'SL', qty: 10, closeButton: true, cursor: 'ns-resize' });
+const target = chart.addPriceLine({ price: last * 1.03, color: '#26a69a', lineWidth: 1, dashed: true, id: 'tp',
+  extentFromRight: 0.30, badge: 'TP', qty: 10, closeButton: true, cursor: 'ns-resize' });
+
+const lines = new Map([['entry', entry], ['sl', stop], ['tp', target]]);
+let original = null;
+chart.on('drag:start', ({ id }) => {
+  const line = lines.get(id);
+  original = line ? { id, price: line.price } : null;
+});
+chart.on('drag:cancel', ({ id }) => {
+  if (original?.id === id) lines.get(id)?.setPrice(original.price);
+  original = null;
+});
+chart.subscribeDrag((id, price) => lines.get(id)?.setPrice(price), () => { original = null; });
+chart.subscribeClick(id => {
+  if (!id?.endsWith('::close')) return;
+  const key = id.slice(0, -7);
+  const line = lines.get(key);
+  if (line) chart.removePrimitive(line);
+  lines.delete(key);
+});
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Entry, stop-loss and target as segmented, draggable pill groups - solid badge, boxed qty, and an integrated x to cancel/exit." />
+
+## Inline Buy/Sell buttons
+
+`BuySellButtons` is a trade panel drawn **inside** the plot: a
+`SELL` button, a quantity chip, and a `BUY` button, docked to a corner and fixed
+while the chart pans/zooms. It draws on the overlay canvas (so it lands in
+screenshots) and routes clicks through `chart.subscribeClick`.
+
+```ts
+import { BuySellButtons } from 'openalgo-charts';
+
+const panel = new BuySellButtons({ id: 'trade', position: 'top-left', qty: 1 });
+chart.addPrimitive(panel);
+
+panel.setMark(ltp);      // one price on both buttons (no bid/ask)
+// panel.setPrices(bid, ask);  // or a spread
+panel.setQty(lots);      // centre chip
+
+chart.subscribeClick((id) => {
+  if (id === 'trade:buy')  eng.placeMarket(symbol, 'BUY', qty);
+  if (id === 'trade:sell') eng.placeMarket(symbol, 'SELL', qty);
+  if (id === 'trade:qty')  focusQtyInput();   // your qty control
+});
+```
+
+Options: `position` (`top-left` default, any corner or `center`), `margin`,
+`qty`, `buyColor` / `sellColor` (default to the theme), `buyLabel` / `sellLabel`,
+`showPrices`, and `scale`. Update at runtime with `setPrices` / `setMark`,
+`setQty`, and `setColors`.
+
+`scale` (default 1, clamped 0.6-1.5) resizes the whole panel: box, gaps, corner
+radius, type, and the hit rects with them. The panel is otherwise a fixed
+190×42, which crowds the pane's legend rows in a dense layout:
+
+```ts
+new BuySellButtons({ id: 'trade', scale: 0.75 })
+```
+
+<Callout type="info">
+Docking the panel below a legend is a `margin` job, and keeping indicator legend
+rows below *it* is [`legendOffset`](/docs/types#chartoptions). The two together
+are what stops a trading pane's top-left corner turning into a pile-up.
+</Callout>
+
+## Where the safety checks live
+
+Two layers can refuse an order, and the distinction matters more than it looks.
+
+`OrderEngine` is the logic layer: the arm/confirm gate, the client state machine,
+intent-versus-broker state, and OCO bookkeeping. It is the right place for anything
+that needs to remember what the user is doing.
+
+**The feed enforces the checks that must not be bypassable.** Quantity validation and
+duplicate-intent refusal live in `OpenAlgoTradeFeed` as well, because a host can call
+`feed.place()` directly and never construct an engine, and most do. A guarantee reachable
+only through a wrapper is not a guarantee.
+
+At the feed, with no configuration at all:
+
+- a non-finite, zero, negative or fractional quantity is refused;
+- a repeated `clientToken` is refused before anything is sent, so a double-clicked button
+  places once even when both clicks land before the first response.
+
+Supply `constraints(symbol, exchange)` on the feed config and the exchange freeze limit and
+lot grid apply too, **including on MARKET orders**, which is the case that matters because a
+market order cannot be taken back.
+
+<Callout type="warning">
+These are advisory. A user with devtools can call the broker directly, so client validation
+is a UX affordance, not a risk control. The broker's RMS is authoritative and must enforce
+the same rules independently.
+</Callout>
+
+### Ambiguous outcomes
+
+A failure **after** the request leaves keeps the idempotency claim and marks it ambiguous,
+rather than releasing it. A failed write tells you the response did not arrive; it tells you
+nothing about whether the order did.
+
+The costs are not symmetric. Holding a claim too long costs one deliberate click after a
+banner. Releasing it too early costs a doubled live position, discovered later, quite
+possibly on a leveraged intraday product. So a claim is released only when the request
+provably never left, which the feed signals by throwing a pre-flight error.
+
+```ts
+feed.tokenState('my-token')   // 'unknown' | 'inflight' | 'sent' | 'ambiguous'
+feed.releaseToken('my-token') // only after you have established what really happened
+```
+
+`getOrderBook()` returns `{ orders, quarantined }`. A row that cannot be decoded is
+surfaced rather than rendered as live state: an unknown broker status stays `'unknown'`
+instead of becoming `working`, and a missing action is quarantined instead of becoming BUY.
+
+## The order engine
+
+`OrderEngine` is the logic layer - it validates, routes, and tracks orders, with an
+arm/confirm gate and analyzer (sandbox) mode:
+
+```ts
+import { OrderEngine } from 'openalgo-charts/trade';
+
+const eng = new OrderEngine({
+  feed,
+  constraints: { tickSize: 0.05, priceBand, freezeQty },
+  armed: false,
+  gate: (req) => confirm(`Place ${req.side} ${req.qty}?`),
+  mode: 'analyzer',
+});
+
+await eng.placeMarket('RELIANCE', 'BUY', 10);   // one-click market order
+```
+
+The engine enforces tick-size snapping, price-band / freeze-quantity validation,
+client-token idempotency, **OCO** (one fill cancels the peer), and a reconnect-to-stale
+transition.
+
+## Drag-to-modify
+
+Wire chart drags to the engine. Modify on **release**, not on every pixel, so you do not spam
+the broker:
+
+```ts
+const draftPrices = new Map<string, number>();
+chart.on('drag:cancel', payload => {
+  const { id } = payload as { id: string };
+  if (!draftPrices.delete(id)) return;
+  restoreOrderPreview(id);
+});
+chart.subscribeDrag(
+  (id, price) => {
+    const line = orderLines.get(id);
+    if (!line) return;
+    draftPrices.set(id, price);
+    line.setPrice(price);
+  },
+  (id) => {
+    const price = draftPrices.get(id);
+    draftPrices.delete(id);
+    if (price === undefined) return;
+    eng.requestModify(clientId(id), price);
+    void eng.commitModify(clientId(id));
+  },
+);
+```
+
+`orderLines`, `clientId` and `restoreOrderPreview` belong to the host. The preview
+above shows the raw pointer price; with a tick schedule in the engine's constraints,
+preview `ticks.round(price)` with that same schedule instead, which is the price
+`requestModify` will send. The last
+restores the broker-confirmed level after cancellation. `requestModify` can
+send immediately and rate-limits subsequent requests; it is not a visual-preview
+API. `commitModify` flushes any queued patch. Call them only when the host has
+accepted the edit. The [drag lifecycle](/docs/events#primitive-drag-lifecycle)
+explains why cancellation must be handled before a legacy end callback.
+
+## Interaction feedback (hover, drag, ghost)
+
+The chart renders the interaction states itself (no app code needed):
+
+- **Cursor hints.** Hovering a draggable line shows `ns-resize`; the cancel
+  button and DOM-ladder rows show `pointer`. A `hover` event
+  (`chart.on('hover', ({ id }) => ...)`) fires on primitive enter/leave for
+  app-side affordances (tooltips, panels).
+- **Hover.** A draggable order line thickens and its pill brightens; the cancel
+  `×` fills solid.
+- **Dragging.** The grabbed line gets a soft emphasis halo, and a **drag
+  ghost** (a dimmed line at the pre-drag price) marks where the order was, so
+  the trader always sees what a release will change.
+- **Pills.** Order lines carry a broker-style segmented group,
+  `[badge][qty][label][close]`: a solid colored badge (`BUY`, `SL`, `TP`), boxed
+  qty and info segments, and an integrated cancel box. Pending (un-acked)
+  orders draw dimmed; partial fills show progress (`3/10`). Badge text
+  auto-contrasts with its fill, so custom colors stay legible on any theme.
+
+`chart.trading` (the data-driven layer) wires the ghost automatically. If you
+drive `PriceLine`s yourself via `chart.subscribeDrag`, set it explicitly:
+
+```ts
+chart.on('drag:cancel', payload => {
+  const { id } = payload as { id: string };
+  const line = lines.get(id);
+  const original = dragFrom.get(id);
+  if (!line || original === undefined) return;
+  line.setPrice(original);
+  line.setDragGhost(null);
+  dragFrom.delete(id);
+});
+chart.subscribeDrag(
+  (id, price) => {
+    const line = lines.get(id);
+    if (!line) return;
+    if (dragFrom.get(id) === undefined) {
+      dragFrom.set(id, line.price);
+      line.setDragGhost(line.price);   // show the pre-drag reference
+    }
+    line.setPrice(price);
+  },
+  (id, price) => {
+    const line = lines.get(id);
+    if (!line || !dragFrom.has(id)) return;
+    line.setDragGhost(null);  // clear on release
+    dragFrom.delete(id);
+    commitToBroker(id, price);
+  },
+);
+```
+
+## Depth-of-market ladder
+
+`DomLadder` is an `IPrimitive` that renders a virtualized price ladder with a size
+heatmap, degrading gracefully when only top-of-book is available. Add it with
+`chart.addPrimitive` and push a fresh book snapshot with `setDepth` on each tick.
+
+```ts
+import { DomLadder } from 'openalgo-charts/trade';
+
+const ladder = new DomLadder({ tickSize: 0.05, groupBy: 1, maxRows: 60 });
+chart.addPrimitive(ladder);      // draws as a right-side depth strip
+ladder.setDepth(marketDepth);    // call again on every book update
+
+// A row hit-tests as `ladder-<side>:<price>` (e.g. 'ladder-bid:100.05').
+// Route clicks with subscribeClick to place an order at that price:
+chart.subscribeClick((id) => {
+  if (!id.startsWith('ladder-')) return;
+  const [side, price] = id.slice('ladder-'.length).split(':');
+  // `placeOrder` is the general form; `placeMarket(symbol, side, qty)` is the shorthand.
+  eng.placeOrder({
+    symbol: sym,
+    side: side === 'bid' ? 'BUY' : 'SELL',
+    type: 'LIMIT',
+    qty,
+    price: Number(price),
+    product: 'MIS',
+    clientToken: `dom-${price}-${qty}`,   // idempotency: a retry never double-sends
+  });
+});
+```
+
+### Ladder helpers
+
+The three pure functions and the options constant are exported for custom
+rendering, aggregation, or testing without instantiating `DomLadder`.
+
+```ts
+import {
+  ladderCapability, buildRows, visibleRows,
+  DEFAULT_DOM_LADDER_OPTIONS,
+} from 'openalgo-charts/trade';
+import type { LadderTier, LadderRow, DomLadderOptions } from 'openalgo-charts/trade';
+
+// Detect what the live payload supports.
+const tier: LadderTier = ladderCapability(depth); // -> 'none' | 'compact' | 'deep'
+
+// Merge bids + asks into price rows sorted high -> low price.
+// groupBy > 1 buckets every N ticks into one row for deep books.
+const rows: LadderRow[] = buildRows(depth, 0.05, /* groupBy */ 1);
+
+// Keep only the rows visible inside the plot, capped to maxRows nearest centre.
+const subset = visibleRows(rows, priceToY, plotHeight, rowHeight, maxRows);
+```
+
+`DEFAULT_DOM_LADDER_OPTIONS` is `{ tickSize: 0.05, width: 96, groupBy: 1, maxRows: 60, rowHeight: 14 }`.
+
+### A ladder across a tick boundary
+
+For an instrument whose tick changes with price, pass its schedule as `tickSchedule`
+(or to `buildRows` in place of the tick size). Each row is then a price its own band
+allows, so a click always offers a tradable price, and `groupBy` counts ticks of the
+band a row is in. A group stops at a boundary rather than label a row with a price
+the next band forbids. With a schedule, `groupBy` counts whole ticks, a fraction rounding
+down (2.5 groups by 2), so every row stays a tradable price. Without a schedule, rows
+step by `tickSize * groupBy` exactly as before, a fractional `groupBy` included.
+
+```ts
+import { TickSchedule } from 'openalgo-charts';
+import { DomLadder, buildRows } from 'openalgo-charts/trade';
+
+// Synthetic rules for illustration: 0.01 below 100 and 0.05 from 100.
+const ticks = new TickSchedule([{ tick: 0.01 }, { from: 100, tick: 0.05 }]);
+const ladder = new DomLadder({ tickSize: ticks.minMove, tickSchedule: ticks });
+
+buildRows(depth, ticks);     // row prices ... 99.97, 99.98, 99.99, 100, 100.05, 100.1 ...
+buildRows(depth, ticks, 5);  // row prices ... 99.9, 99.95, 100, 100.25, 100.5 ...
+```
+
+## P&L and risk math
+
+Five pure functions over `Position` data, called on every LTP tick.
+
+```ts
+import {
+  unrealizedPnl, unrealizedPnlPercent, breakeven,
+  riskReward, bracketValid,
+} from 'openalgo-charts/trade';
+import type { Position } from 'openalgo-charts/trade';
+
+const pos: Position = { symbol: 'RELIANCE', netQty: 10, avgPrice: 2900 };
+
+unrealizedPnl(pos, 2950)        // -> 500    (ltp - avgPrice) * netQty
+unrealizedPnlPercent(pos, 2950) // -> 1.72   signed % of entry notional
+breakeven(pos, 0.5)             // -> 2900.5  avgPrice + dir * chargesPerUnit
+                                //            chargesPerUnit defaults to 0
+
+riskReward(2900, 2850, 3000)    // -> 2      reward / risk
+riskReward(2900, 2900, 3000)    // -> null   risk is zero
+
+bracketValid('BUY', 2900, 2850, 3000)  // -> true   SL < entry < TP
+bracketValid('BUY', 2900, 2950, 3000)  // -> false  SL is above entry
+```
+
+Signatures:
+
+```ts
+function unrealizedPnl(position: Position, ltp: number): number
+function unrealizedPnlPercent(position: Position, ltp: number): number
+function breakeven(position: Position, chargesPerUnit?: number): number
+function riskReward(entry: number, stop: number, target: number): number | null
+function bracketValid(side: 'BUY' | 'SELL', entry: number, stop: number, target: number): boolean
+```
+
+## Order status guard
+
+`isWorking` returns `true` for `pending | working | partial` and `false` for
+terminal states. It is the canonical filter for "still live in the book".
+
+```ts
+import { isWorking } from 'openalgo-charts/trade';
+
+const active = orders.filter(isWorking);
+```
+
+## Order state machine
+
+The client-side state machine tracks each order's lifecycle without optimistic
+guesses. It is pure and stateless: pass the current `ClientOrderState` and an
+`OrderEvent`, receive the next state. `transition` returns the same state if
+the event is not valid for the current state, so spurious events are ignored.
+
+```ts
+import { transition, canTransition, isTerminal } from 'openalgo-charts/trade';
+import type { ClientOrderState, OrderEvent } from 'openalgo-charts/trade';
+
+let state: ClientOrderState = 'pending_place';
+
+canTransition(state, 'ack')        // -> true
+state = transition(state, 'ack')  // -> 'working'
+
+state = transition(state, 'submitCancel') // -> 'cancel_pending'
+state = transition(state, 'cancelled')    // -> 'cancelled'
+isTerminal(state)                          // -> true
+```
+
+State flow:
+
+```
+pending_place  --ack----------> working
+               --reject-------> rejected
+
+working        --partialFill--> partial
+               --fill---------> filled
+               --submitModify-> modify_pending --ack/reject--> working
+               --submitCancel-> cancel_pending --cancelled---> cancelled
+                                               --reject------> working
+
+any non-terminal --reconnectAbsent--> stale
+```
+
+Terminal states (`filled`, `cancelled`, `rejected`, `stale`) accept no further events.
+
+## Validation
+
+`validateOrder` runs entirely client-side before the order reaches the broker.
+It snaps the price to the nearest tick, checks the price band, and enforces the
+exchange freeze-quantity limit.
+
+```ts
+import { validateOrder, withinPriceBand } from 'openalgo-charts/trade';
+import type { OrderConstraints, PriceBand, ValidationResult } from 'openalgo-charts/trade';
+
+const band: PriceBand = { lower: 2700, upper: 3100 };
+const c: OrderConstraints = { tickSize: 0.05, priceBand: band, freezeQty: 1800 };
+
+withinPriceBand(2950, band) // -> true
+withinPriceBand(3200, band) // -> false
+
+const r: ValidationResult = validateOrder(2950.03, 100, c);
+// r.ok    -> true
+// r.price -> 2950.05  (snapped to nearest tick)
+
+validateOrder(3200, 100, c)
+// { ok: false, reason: 'price 3200 outside band 2700-3100' }
+
+validateOrder(2950, 2000, c)
+// { ok: false, reason: 'quantity 2000 exceeds freeze limit 1800' }
+```
+
+`ValidationResult` always has `.ok`. When `false` it also has `.reason`;
+when `true` it also has `.price` (the tick-snapped value).
+
+### Price-dependent ticks
+
+Some instruments change tick with price. Pass the schedule as `tickSchedule` and it
+decides every snap; `tickSize` is then read only by older code, so give it the
+schedule's `minMove`. Without `tickSchedule`, or with it null, snapping is exactly the
+constant `tickSize` path above.
+
+```ts
+import { TickSchedule } from 'openalgo-charts';
+import { validatePrice, type OrderConstraints } from 'openalgo-charts/trade';
+
+// Synthetic rules for illustration. Real schedules come from your venue's metadata.
+const ticks = new TickSchedule([{ tick: 0.01 }, { from: 10, tick: 0.05 }, { from: 100, tick: 0.1 }]);
+const c: OrderConstraints = { tickSize: ticks.minMove, tickSchedule: ticks, priceBand: { lower: 9.97, upper: 10.04 } };
+
+validatePrice(9.994, c)  // { ok: true, price: 9.99 }   the 0.01 band
+validatePrice(9.996, c)  // { ok: true, price: 10 }     rounds onto the boundary
+validatePrice(10.02, c)  // { ok: true, price: 10 }
+validatePrice(10.03, c)  // { ok: false, code: 'PRICE_OUT_OF_BAND', reason: 'price 10.05 outside band 9.97 to 10.04' }
+```
+
+The snapped price is an exact decimal and the nearer valid price, however many ticks the
+price is from zero, and a price written exactly halfway between two valid prices rounds
+up. Price limits are checked after snapping, as with a constant tick,
+so a price inside the limits as typed can still be refused. Zero and negative prices use
+the first band; a floor belongs in `priceBand`. `OrderEngine` applies the schedule to
+typed prices and triggers in `placeOrder` and to dragged levels in `requestModify`,
+including the trigger a stop-limit carries across a boundary. A band list passed in
+place of a `TickSchedule` throws, because an unvalidated list would round nothing.
+[Instrument metadata](/docs/instruments#price-dependent-ticks) has the band rules, and
+`orderConstraintsForInstrument` fills `tickSchedule` from an instrument's `tickBands`.
+
+## TradeController and TradeHost
+
+`TradeController` reconciles order and position snapshots into on-chart
+primitives. Call `reconcile` on every book update or reconnect; it is
+idempotent and correctly handles new, changed, and vanished orders.
+
+```ts
+import { TradeController } from 'openalgo-charts/trade';
+import type { TradeHost } from 'openalgo-charts/trade';
+
+// chart must implement addPrimitive / removePrimitive.
+const controller = new TradeController(chart);
+
+controller.reconcile(orders, positions); // call after every snapshot
+controller.onLtp('RELIANCE', 2950);      // call on every LTP tick
+
+// Introspection helpers for tests:
+controller.orderLineCount() // -> number of active WorkingOrderLine primitives
+controller.positionCount()  // -> number of active PositionMarker primitives
+controller.bracketCount()   // -> number of active BracketGroup primitives
+```
+
+`TradeHost` is a two-method interface; any object with `addPrimitive` and
+`removePrimitive` qualifies. `IPrimitive` is exported from the base package:
+
+```ts
+// import type { IPrimitive } from 'openalgo-charts';
+interface TradeHost {
+  addPrimitive(p: IPrimitive): void;
+  removePrimitive(p: IPrimitive): void;
+}
+```
+
+## Low-level visual primitives
+
+`WorkingOrderLine`, `PositionMarker`, and `BracketGroup` are the canvas
+primitives `TradeController` manages internally. Use them directly only when
+building a custom controller or a headless rendering pipeline.
+
+### WorkingOrderLine
+
+A horizontal dashed line at the order price, coloured by side (theme `buy` /
+`sell`), with a segmented pill group (`[SIDE][qty][TYPE price ±LTP-distance][close]`)
+and a compact price tag on the axis. The hit-test returns `order:<id>` with an
+`ns-resize` cursor within 4 px of the line (or anywhere on the pill group), and
+`order:<id>::close` with a `pointer` cursor on the close segment.
+
+```ts
+import { WorkingOrderLine } from 'openalgo-charts/trade';
+
+const line = new WorkingOrderLine(order);
+chart.addPrimitive(line);
+
+line.update(updatedOrder); // call after a new book snapshot
+line.setLtp(2950);         // refresh the distance-to-LTP label
+```
+
+### PositionMarker
+
+A solid line at the average entry price with a shaded P&L band to LTP and a
+label showing direction, net quantity, P&L amount, and P&L percent, coloured by
+profit/loss sign. Hit-test returns `position:<symbol>`.
+
+```ts
+import { PositionMarker } from 'openalgo-charts/trade';
+
+const marker = new PositionMarker(position);
+chart.addPrimitive(marker);
+
+marker.update(updatedPosition);
+marker.setLtp(2950);
+```
+
+### BracketGroup
+
+SL and TP dashed lines with shaded risk (red) and reward (green) zones drawn
+behind the candles (`zOrder: 'bottom'`), plus an R:R label near the entry. The
+hit-tests return `bracket-sl:<symbol>` and `bracket-tp:<symbol>` with
+`ns-resize` cursors.
+
+```ts
+import { BracketGroup } from 'openalgo-charts/trade';
+import type { BracketState } from 'openalgo-charts/trade';
+
+const bracket = new BracketGroup({
+  symbol: 'RELIANCE', side: 'BUY',
+  entry: 2900, stop: 2850, target: 3000,
+});
+chart.addPrimitive(bracket);
+
+bracket.update({ ...state, target: 3050 }); // adjust TP
+```
+
+## FakeBroker
+
+`FakeBroker` is a deterministic in-memory broker that implements `OrderFeed`.
+Use it to exercise `OrderEngine` and `TradeController` without a network
+connection. Constructed with `accounts`, it also simulates account ledgers,
+preview, durations and native position commands; see
+[Accounts and advanced orders](/docs/trading-accounts#fakebroker).
+
+```ts
+import { FakeBroker, OrderEngine, TradeController } from 'openalgo-charts/trade';
+
+const broker = new FakeBroker();
+const engine = new OrderEngine({ feed: broker, constraints: { tickSize: 0.05 } });
+const controller = new TradeController(chart);
+
+broker.onBook((orders, positions) => controller.reconcile(orders, positions));
+broker.onLtp((symbol, ltp) => controller.onLtp(symbol, ltp));
+
+// Seed an initial snapshot:
+broker.setBook(
+  [{ id: 'O1', symbol: 'RELIANCE', side: 'BUY', type: 'LIMIT',
+     qty: 10, filledQty: 0, price: 2900, status: 'working' }],
+  [{ symbol: 'RELIANCE', netQty: 10, avgPrice: 2900 }],
+);
+
+broker.emitLtp('RELIANCE', 2950); // drives P&L display
+
+broker.fill('O1');                 // simulate a fill; removes order and notifies
+broker.rejectNextPlace = 'socket reset'; // next place() throws once: a lost answer, settled as ambiguous
+// A refusal instead: failNext('place', 'reject', reason) on a broker built with accounts.
+
+// Static helper -- generate a synthetic depth book around an LTP:
+const depth = FakeBroker.makeDepth(2950, 5, 0.05); // 5 levels, 0.05 tick
+broker.emitDepth('RELIANCE', depth);
+```
+
+## Live order and position feed
+
+`OpenAlgoTradeFeed`, `decodeOrder`, and `mapPosition` are exported from the base
+package (`openalgo-charts`), not from the trade tier. `OpenAlgoTradeConfig` is
+documented in [Types](/docs/types).
+
+```ts
+import { OpenAlgoTradeFeed } from 'openalgo-charts';
+import { OrderEngine } from 'openalgo-charts/trade';
+
+const feed = new OpenAlgoTradeFeed({
+  baseUrl: 'http://127.0.0.1:5000',
+  apiKey: 'your-api-key',
+  strategy: 'my-strategy',  // groups orders in OpenAlgo; default 'openalgo-charts'
+  defaultProduct: 'MIS',    // 'CNC' | 'NRML' | 'MIS'
+});
+
+const engine = new OrderEngine({ feed, constraints: { tickSize: 0.05 } });
+
+// Fetch and reconcile the current book on connect or reconnect:
+const [orders, positions] = await Promise.all([
+  feed.getOrders(),
+  feed.getPositions(),
+]);
+controller.reconcile(orders, positions);
+```
+
+`decodeOrder` and `mapPosition` convert raw OpenAlgo REST rows from your own
+fetch calls. `decodeOrder` returns `{ ok: true, order }` or `{ ok: false, issue }`,
+so a row with no honest order form is reported rather than drawn; `getOrders`
+decodes the same way, and `getOrderBook()` returns the rows it could not read as
+`quarantined`:
+
+```ts
+const decoded  = decodeOrder(rawRow);   // coerces string fields, maps order_status
+if (decoded.ok) use(decoded.order); else report(decoded.issue);
+const position = mapPosition(rawRow);   // maps quantity (signed net) + average_price
+```
+
+`mapOrder`, the older mapper that returned a placeholder for an unreadable row,
+is deprecated and is removed in 3.0.0. See
+[Compatibility](/docs/compatibility#deprecated-apis).
+
+`OpenAlgoTradeFeed` caches each order's full context on `place()` and
+`getOrders()` so that a later `modify()` can supply the complete payload that
+OpenAlgo's modify endpoint requires.
+
+<Callout type="warning">
+The trade path is broker-live. Test against OpenAlgo **analyzer mode** first, and verify the
+exact endpoints/fields against your running OpenAlgo build before trading real money. See
+[Live Data](/docs/live-data).
+</Callout>

@@ -1,0 +1,19 @@
+// The tests compile without the two flags tsconfig.json holds src to,
+// noUncheckedIndexedAccess and exactOptionalPropertyTypes. A test reads back by
+// index the bars, rows and calls it built itself, on almost every line, and a
+// read that misses already fails the test when it runs. When src took the flags
+// (2.6.0), the tests had 8,884 errors under them: asserting each read would add
+// that many `!` that catch nothing and bury what a test checks. The shipped
+// code is src, and tsconfig.json checks it with both flags; the src files a
+// test imports are checked here again, only the looser way. CONTRIBUTING.md
+// says the same, and tests/typecheck-config.test.ts keeps this file to exactly
+// those two flags.
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["."],
+  "exclude": ["e2e"]
+}

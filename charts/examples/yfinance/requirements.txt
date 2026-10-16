@@ -1,0 +1,3 @@
+# The one dependency, and only for live data: `python server.py --fixture`
+# serves synthetic bars on the standard library alone.
+yfinance>=0.2.40

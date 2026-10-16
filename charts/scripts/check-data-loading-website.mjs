@@ -1,0 +1,50 @@
+/** Validate the managed-loading example through the built website and public widget. */
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { chromium, expect } from '@playwright/test';
+
+const base = (process.argv[2] ?? 'http://127.0.0.1:4174/openalgo-charts').replace(/\/$/, '');
+await mkdir('artifacts', { recursive: true });
+const browser = await chromium.launch();
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const response = await page.goto(`${base}/docs/data-loading/`);
+  assert.equal(response.status(), 200);
+  const demo = page.locator('.oac-example').filter({ has: page.getByRole('button', { name: 'Fail refresh', exact: true }) });
+  const widget = demo.locator('.oac-widget');
+  await expect(widget.locator('canvas').first()).toBeVisible();
+  await expect(widget.locator('.oac-data-status')).toBeHidden();
+  await expect(widget.locator('.oac-statusline')).toContainText('121 bars');
+  await demo.getByRole('button', { name: 'Load older', exact: true }).click();
+  await expect(widget.locator('.oac-statusline')).toContainText('181 bars');
+  await demo.getByRole('button', { name: 'Fail refresh', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toContainText('History is stale');
+  await page.screenshot({ path: 'artifacts/data-loading-stale.png' });
+  await widget.getByRole('button', { name: 'Retry chart data', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toBeHidden();
+  await demo.getByRole('button', { name: 'Reconnect', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toContainText('Refreshing');
+  await expect(widget.locator('.oac-data-status')).toBeHidden();
+  await demo.getByRole('button', { name: 'Empty / restore', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toContainText('No bars for EMPTY SIM');
+  await demo.getByRole('button', { name: 'Empty / restore', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toBeHidden();
+  await expect(widget.locator('.oac-statusline')).toContainText('121 bars');
+  await page.screenshot({ path: 'artifacts/data-loading-ready.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await demo.scrollIntoViewIfNeeded();
+  await expect(demo.getByRole('button', { name: 'Fail refresh', exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  await demo.getByRole('button', { name: 'Fail refresh', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toContainText('History is stale');
+  await widget.getByRole('button', { name: 'Retry chart data', exact: true }).click();
+  await expect(widget.locator('.oac-data-status')).toBeHidden();
+  const chartBounds = await widget.boundingBox();
+  const captionBounds = await demo.locator('.oac-example__caption').boundingBox();
+  assert.ok(chartBounds.y + chartBounds.height <= captionBounds.y + 1, 'Mobile chart must not overlap the example caption');
+  await page.screenshot({ path: 'artifacts/data-loading-mobile.png' });
+  assert.deepEqual(errors, []);
+  console.log('Managed loading website: paging, failed refresh, retry, reconnect, empty/restore and mobile checks passed.');
+} finally { await browser.close(); }

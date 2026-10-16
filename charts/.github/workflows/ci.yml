@@ -1,0 +1,254 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# Least privilege by default. A job that needs more asks for it explicitly, so a
+# compromised step cannot quietly write to the repository or publish anything.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: typecheck · unit · build · size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - name: Verify skill reference coverage
+        run: npm run skills:coverage
+      - name: Indicator performance
+        # The suite proves the numbers an indicator produces, never the cost of
+        # producing them, so an algorithmic regression ships silently otherwise.
+        # The budgets are a tenfold guard, not a tight bound: a failure here
+        # means something structural changed, not that a runner was slow. The
+        # tick path is an exact count: a burst of ticks between two frames
+        # recomputes each indicator once, and anything else fails the step.
+        run: npm run bench
+      - name: Render bench budgets match the docs
+        # docs/performance-notes.md quotes the bench's budget table; a budget
+        # tightened in one place and not the other fails here.
+        run: node scripts/check-render-bench-docs.mjs
+      - name: Release benchmarks match the website page
+        # website/pages/benchmarks.mdx quotes benchmarks/releases.json, the
+        # benchmark each release publishes (npm run bench:release).
+        run: node scripts/check-benchmark-page.mjs
+      - name: Verify NOTICE ships in the package
+        run: npm pack --dry-run 2>&1 | grep -q "NOTICE" || (echo "NOTICE missing from the npm package (add it to package.json files)" && exit 1)
+      - name: No third-party product names in source
+        # The codebase is deliberately free of other vendors' product names, in
+        # comments as well as identifiers. A port of a well-known formula
+        # describes the formula, not where it was read.
+        #
+        # Two patterns, because case matters. The case-insensitive one is safe
+        # for whole words. The case-sensitive one catches camelCase identifiers
+        # like `withPineAlpha` and `pineEmaSeeded`, which a word-boundary match
+        # misses entirely, while still ignoring "Choppiness" (whose embedded
+        # "pine" has no word boundary in front of it).
+        run: |
+          hit=0
+          grep -rniE 't[r]adingview|p[i]ne ?script' src tests && hit=1
+          grep -rnE 'Pine|\bpine|\bPINE' src tests && hit=1
+          if [ "$hit" = "1" ]; then
+            echo "Third-party product name found above. Describe the behaviour instead."
+            exit 1
+          fi
+      - name: Share the verified library build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: verified-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  docs:
+    name: docs site build
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: verified-dist
+          path: dist/
+      - name: Verify homepage market data handling
+        run: node --test scripts/check-btc-usd-feed.test.mjs
+      - name: Generate current API reference
+        run: npx typedoc --out website/public/api
+      - name: Build the docs site (prebuild syncs the bundles)
+        working-directory: website
+        run: |
+          npm ci
+          npm run build
+      - name: Verify depth, profiles and orderflow in a browser
+        run: |
+          npx playwright install --with-deps chromium
+          node website/scripts/serve-preview.mjs 4174 &
+          website_preview_pid=$!
+          trap 'kill "$website_preview_pid"' EXIT
+          curl --retry 10 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:4174/openalgo-charts/docs/depth-of-market/ > /dev/null
+          node scripts/check-depth-demo.mjs
+          node scripts/check-profile-website.mjs
+          node scripts/check-navigation-website.mjs
+          node scripts/check-data-loading-website.mjs
+          node scripts/check-objects-website.mjs
+          node scripts/check-drawing-demo.mjs
+          # Example data drawn from the random walk, responsive pages and the
+          # API reference at phone width: the API page overflowed at 390 px
+          # while this check was run by hand only.
+          node scripts/check-site-design.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-analysis-website.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-alert-drag-website.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-table-website.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-alert-lifecycle-website.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: failure()
+        with:
+          name: website-check-artifacts
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  e2e:
+    name: playwright smoke (real browser)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # The render-parity baseline is built from a release tag, so the
+          # history and its tags have to be here.
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: verified-dist
+          path: dist/
+      - name: Build the render-parity baseline from the latest release
+        # render-parity.spec.ts compares this build's pixels with a release's
+        # and skips itself when dist-baseline/ is absent, which on a fresh
+        # runner was every time. The baseline is the newest release tag this
+        # commit descends from. A change that is meant to move pixels sets
+        # PARITY_BASELINE_REF to the commit that paints them and says so in
+        # its message; everything else has to match the release exactly. The
+        # ref has to stay reachable from master after the merge (a squashed
+        # branch's commits do not). The release PR that ships the change still
+        # compares against the previous tag, so it keeps the ref, pointed at
+        # its own last code commit; once its tag is pushed the ref is emptied,
+        # because the tag then paints the same pixels.
+        env:
+          PARITY_BASELINE_REF: ''
+        run: |
+          ref="${PARITY_BASELINE_REF:-$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)}"
+          echo "render-parity baseline: $ref"
+          node scripts/build-baseline.mjs "$ref"
+          test -f dist-baseline/openalgo-charts.mjs
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run e2e
+      - name: Verify compact panels in every browser
+        run: node scripts/check-compact-panels.mjs artifacts/compact-panels
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+            artifacts/compact-panels/
+          retention-days: 7
+
+  bench:
+    name: render bench (chromium)
+    needs: test
+    runs-on: ubuntu-latest
+    # The 200k-bar rows take minutes while a tick's cost grows with the whole
+    # history; a regression that multiplies that should fail on its budget,
+    # and a hung browser should not hold a runner for six hours.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: verified-dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - name: Frame budgets at 10k, 50k and 200k bars, canvas2d and WebGL
+        # Its own job, so no other test shares the runner while frames are
+        # timed. Chromium only: the budgets were measured there.
+        run: npm run bench:render -- --reporter=line
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        # Every sample of every row, pass or fail: the record the budgets are
+        # tightened from. An empty directory means the bench never ran, which
+        # is a failure of its own.
+        if: always()
+        with:
+          name: render-bench
+          path: artifacts/render-bench/
+          if-no-files-found: error
+          retention-days: 30
+
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      # The published package has no runtime dependencies, so this must stay at
+      # zero. It is a gate, not a report: anything that lands here reaches every
+      # consumer. Development advisories are reviewed separately and are allowed
+      # to be non-zero, because a vulnerable test runner does not ship.
+      - name: runtime dependency audit (must be clean)
+        run: npm audit --omit=dev --audit-level=low
+
+      - name: development advisory report (informational)
+        run: npm audit || true
+
+      # An SBOM of what is actually published, not of the build tree.
+      - name: generate SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cyclonedx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom
+          path: sbom.cyclonedx.json
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: github/codeql-action/init@6d786de4d6f3531a740e445b53a42b622bbbace8  # v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@6d786de4d6f3531a740e445b53a42b622bbbace8  # v3

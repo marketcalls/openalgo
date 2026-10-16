@@ -1,0 +1,89 @@
+name: Release
+
+# Manual only. A tag push must not publish by itself: a tag is cheap to create
+# by accident, and publishing to npm is not reversible.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish, e.g. v2.1.2. Must already exist and be pushed.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: verify and publish to npm
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      # Required for npm trusted publishing (OIDC) and for signed provenance.
+      # This is what lets the job publish WITHOUT any long-lived npm token.
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          # Provenance records the commit that produced the artifact, so the
+          # checkout has to be the real one rather than a shallow synthetic.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # Trusted publishing needs a recent npm. The runner's bundled version
+      # lags, so pin one known to support it rather than hoping.
+      - name: use an npm that supports trusted publishing
+        run: npm install -g npm@^11.5.1
+
+      - run: npm ci
+
+      # Publish only what passes the same gates as CI. A release is the worst
+      # possible moment to discover a red suite.
+      - run: npm run verify
+      - name: runtime dependency audit (must be clean)
+        run: npm audit --omit=dev --audit-level=low
+
+      # Check the source and built runtime too, so the npm version and the
+      # version reported by an installed chart cannot disagree.
+      - name: tag matches package, source and runtime versions
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { version } from './dist/openalgo-charts.mjs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const source = readFileSync('src/version.ts', 'utf8').match(/export const VERSION = ['"]([^'"]+)['"]/);
+          assert.equal(process.env.RELEASE_TAG, `v${pkg.version}`, 'Tag must match package.json');
+          assert.equal(source?.[1], pkg.version, 'Source version must match package.json');
+          assert.equal(version(), pkg.version, 'Built runtime must match package.json');
+          NODE
+
+      - name: generate SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cyclonedx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom-${{ inputs.tag }}
+          path: sbom.cyclonedx.json
+
+      # No NPM_TOKEN, deliberately. The registry checks this workflow's OIDC
+      # identity against the trusted publisher on the package, so there is no
+      # long-lived credential to leak or rotate, and no second factor to answer
+      # (an account secured with a security key cannot type a one-time password
+      # into a CI run at all). Configured on npmjs.com under the package's
+      # trusted publisher: this repository, this workflow filename, and the
+      # `release` environment the job below declares. "Allow npm publish" has to
+      # be on there, or only `npm stage publish` is permitted and the direct
+      # publish here is refused.
+      - name: publish with provenance
+        # verify above already ran prepublishOnly's complete gate. Publish that
+        # checked build without rebuilding it inside the publish command.
+        run: npm publish --provenance --access public --ignore-scripts

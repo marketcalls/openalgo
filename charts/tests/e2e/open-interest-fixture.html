@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:#0d0e12}#chart{position:absolute;inset:0}</style></head>
+<body>
+<div id="chart"></div>
+<script type="module">
+  import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+  import '/dist/openalgo-charts.indicators.mjs';
+  const widget = createWidget(document.getElementById('chart'), {
+    symbol: 'OI FIXTURE', exchange: 'SIM', interval: '1m', persist: false, locale: 'en-US',
+  });
+  const bars = Array.from({ length: 33 }, (_, i) => {
+    const close = [100, 102, 99, 103][i % 4];
+    return { time: 1735689600 + i * 60, open: close - 1, high: close + 2, low: close - 2,
+      close, volume: 100 + i, oi: [100000, 110000, 120000, 110000][i % 4] };
+  });
+  bars[16].oi = 0;
+  delete bars[20].oi;
+  delete bars[32].oi;
+  widget.chart.setDataContext({ symbol: 'OI FIXTURE', exchange: 'SIM', interval: '1m', hasOpenInterest: true });
+  widget.series.setData(bars);
+  widget.chart.addIndicator('open-interest');
+  widget.chart.addIndicator('open-interest-change');
+  widget.chart.addIndicator('open-interest-buildup', {
+    longBuildupColor: '#00ee00', shortBuildupColor: '#ee0000',
+    shortCoveringColor: '#0000ee', longUnwindingColor: '#eeee00',
+  });
+  widget.chart.setVisibleLogicalRange({ from: -1, to: 35 });
+  window.__oiDemo = { widget, bars };
+  window.addEventListener('pagehide', () => widget.destroy(), { once: true });
+</script>
+</body>
+</html>

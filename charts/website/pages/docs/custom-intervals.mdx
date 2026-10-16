@@ -1,0 +1,292 @@
+---
+title: Custom Intervals
+description: An interval code resolves to a bucketing rule, not to a number of seconds, because a month, a 500-tick bar and a 5-minute bar are not the same kind of thing.
+---
+
+import { Callout } from 'nextra/components'
+
+# Custom intervals
+
+A host registers its own interval codes, and the engine asks the registry how a code
+buckets. The entry is a **bucketing rule, not a duration**, because three of the four kinds
+have no duration to state:
+
+| Mode | Shape | A bar closes |
+|---|---|---|
+| `interval` | `{ mode: 'interval', seconds, anchorSec? }` | after a fixed number of seconds, aligned to `anchorSec` (default: the epoch). |
+| `calendar` | `{ mode: 'calendar', unit, count?, timezone? }` | at the end of a month, quarter or year, at **local midnight** in that zone. |
+| `ticks` | `{ mode: 'ticks', count }` | after `count` trades. |
+| `volume` | `{ mode: 'volume', perBar }` | after `perBar` traded quantity. |
+
+A month is not 30 days, a year is not 365, and a New York month is not a Mumbai month. The
+last three modes are exactly the ones
+[`TickBarAggregator`](/docs/timeframes-and-tick-charts) already had, so this is that
+vocabulary widened by one case rather than a second system.
+
+```ts
+import { registerInterval, resolveInterval, bucketStartOf } from 'openalgo-charts';
+
+const off = registerInterval({ code: '1MO', bucketing: { mode: 'calendar', unit: 'month' } });
+registerInterval({ code: '1Q', bucketing: { mode: 'calendar', unit: 'quarter' } });
+registerInterval({ code: 'T500', bucketing: { mode: 'ticks', count: 500 } });
+registerInterval({ code: 'V10K', bucketing: { mode: 'volume', perBar: 10_000 } });
+
+resolveInterval('1Q');   // { code: '1Q', bucketing: { mode: 'calendar', unit: 'quarter' } }
+off();                   // the disposer takes the code away again
+```
+
+Registering nothing leaves every built-in code resolving exactly as it did before the
+registry existed.
+
+## An unknown code is an error, not a minute
+
+`resolveInterval` throws `UnknownIntervalError` (which carries the offending `code`) when
+nothing recognises the token. `intervalToSeconds` throws for the same reason, and separately
+for a calendar or count-driven code that has no fixed length to return.
+
+This is loud on purpose. The old behaviour was a silent fall back to 60 seconds, so a typo
+drew **minute bars under a label claiming something else** and nothing anywhere said so. A
+chart that refuses to open is a bug report; a chart showing the wrong timeframe is a wrong
+trade. `OpenAlgoLiveDataFeed.subscribeBars` therefore resolves the code up front and fails
+at subscribe time, rather than mis-bucketing every tick for the life of the subscription.
+
+Use the non-throwing probes wherever the input is a user's:
+
+```ts
+import { tryResolveInterval, isKnownInterval, UnknownIntervalError } from 'openalgo-charts';
+
+if (!isKnownInterval(typed)) showPickerError(typed);
+
+const found = tryResolveInterval(typed);   // the descriptor, or null
+
+try {
+  await loadTimeframe(typed);
+} catch (e) {
+  if (e instanceof UnknownIntervalError) showPickerError(e.code);
+  else throw e;
+}
+```
+
+## Built-in tokens
+
+The original grammar is unchanged: an optional count followed by a unit, so the bare
+OpenAlgo tokens `D` and `W` work alongside `1d` and `1w`.
+
+| Unit | Seconds | Examples |
+|---|---|---|
+| `s` | 1 | `5s`, `30s` |
+| `m` | 60 | `1m`, `15m` |
+| `h` | 3600 | `1h`, `4h` |
+| `d` | 86400 | `D`, `1d` |
+| `w` | 604800 | `W`, `1w` |
+
+<Callout type="warning">
+**The grammar is case-insensitive, so a bare `M` is a minute, not a month.** If your broker's
+monthly code is `M`, register it as a calendar interval before you use it: a registered code
+**shadows** a built-in token of the same name.
+
+```ts
+registerInterval({ code: 'M', bucketing: { mode: 'calendar', unit: 'month' } });
+```
+
+The same applies to any host whose `W` means "calendar week in the exchange's zone" rather
+than "604800 seconds counted from the epoch".
+</Callout>
+
+## Calendar bars
+
+A calendar bucket is computed as an absolute month index floored to the step, then converted
+back to an instant at local midnight on the first of the period. Counting months from year
+zero rather than from the epoch is what makes quarters land on January, April, July and
+October in every year.
+
+```ts
+import { bucketStartOf, nextBucketStart } from 'openalgo-charts';
+
+const monthly = { mode: 'calendar', unit: 'month' } as const;
+
+bucketStartOf(monthly, someFebruaryInstant);              // 1 Feb, 00:00 IST
+nextBucketStart(monthly, someFebruaryInstant);            // 1 Mar, 00:00 IST
+bucketStartOf(monthly, someFebruaryInstant, 'America/New_York');  // 1 Feb, 00:00 New York
+```
+
+The gap between the two is the bar's real length, and it varies the way the calendar does:
+
+| Period | Length |
+|---|---|
+| February 2024 | 29 days |
+| March 2024 in `America/New_York` | 31 days **minus an hour**, across the spring forward |
+| `{ unit: 'quarter' }` | Jan/Apr/Jul/Oct, whatever that quarter's days add up to |
+| `{ unit: 'month', count: 6 }` | a half-year |
+
+Which zone a month starts in is resolved in this order:
+
+1. `timezone` on the entry, which pins the code to one exchange's calendar;
+2. the `zone` passed to `bucketStartOf` / `nextBucketStart` (the aggregator passes the
+   chart's or the feed's configured zone);
+3. `Asia/Kolkata`, the library default.
+
+<Callout type="info">
+Use IANA zone names, never fixed offsets. A fixed offset is silently wrong for half the year
+anywhere that observes DST. See [Timezones](/docs/timezones).
+</Callout>
+
+## Registry API
+
+| Function | Description |
+|---|---|
+| `registerInterval(descriptor)` | Register a code. Returns a disposer, so a host that adds codes for one instrument can take them away. Validates the rule (`seconds > 0`, `count >= 1`, `perBar > 0`). |
+| `unregisterInterval(code)` | Remove one. `false` when nothing was registered under it. |
+| `registeredIntervals()` | Every registered descriptor, in registration order. Built-in tokens are not listed. |
+| `resolveInterval(code)` | The descriptor, or `UnknownIntervalError`. |
+| `tryResolveInterval(code)` | The descriptor, or `null`. |
+| `isKnownInterval(code)` | Boolean probe, for validating a picker's input. |
+| `bucketStartOf(rule, timeSec, zone?)` | When the bar containing `timeSec` opened. Count-driven bars open at the tick that started them. |
+| `nextBucketStart(rule, timeSec, zone?)` | When the next bar opens, or `null` for count-driven bars. |
+| `isTimeBucketed(rule)` | True for `interval` and `calendar`: the bars that close on a clock rather than on trade flow. |
+
+Codes are keyed case-insensitively, because the built-in tokens always were (`D` and `d` are
+one interval) and a host's codes should not behave differently from the shipped ones.
+
+## Reading a code back
+
+An indicator that resets on a session, or a host that decides how to label an axis, needs to
+know *what kind* of bar it is looking at. Matching on the code's spelling is how that goes
+wrong: a study written against `'1m'`, `'5m'` and `'15m'` silently misbehaves on `'3m'`, and
+a host's own registered code was never in the list at all.
+
+These five read the answer off the **bucketing rule**, so they answer for any registered
+code, not only for the built-in grammar:
+
+```ts
+import { intervalParts, isIntradayInterval, isDailyInterval } from 'openalgo-charts';
+
+intervalParts('2h');      // { multiplier: 2, unit: 'h' }
+intervalParts('120m');    // { multiplier: 2, unit: 'h' }   the same bar, the same answer
+intervalParts('90s');     // { multiplier: 90, unit: 's' }
+intervalParts('1440m');   // { multiplier: 1, unit: 'D' }
+intervalParts('zz');      // null, and so is a bare 'M' until you register one
+
+// Registered codes answer too, which the built-in grammar could never do:
+intervalParts('1Q');      // { multiplier: 3, unit: 'M' }
+intervalParts('T500');    // { multiplier: 500, unit: 'tick' }
+intervalParts('V10K');    // { multiplier: 10000, unit: 'other' }
+
+isIntradayInterval('5m'); // true    anchor the VWAP to the session open
+isDailyInterval('D');     // true
+```
+
+| Function | Returns | Answers |
+|---|---|---|
+| `intervalParts(code)` | `IntervalParts \| null` | A count and a unit (`'s' \| 'm' \| 'h' \| 'D' \| 'W' \| 'M' \| 'tick' \| 'other'`), or `null` when nothing resolves the code. |
+| `isIntradayInterval(code)` | `boolean` | Fixed length shorter than a day: the bars that want a session reset. |
+| `isDailyInterval(code)` | `boolean` | Exactly one day, however it is spelled: `D`, `24h` and `1440m` all qualify. |
+| `isSecondsInterval(code)` | `boolean` | Not a whole number of minutes, so the labels need second precision. |
+| `isTickInterval(code)` | `boolean` | Closes after N trades. |
+
+Four decisions worth knowing before you branch on any of them:
+
+- **The answer is canonical, not literal.** `'120m'` and `'2h'` are the same bar and both
+  read as 2 hours. The coarsest unit that divides the length wins, which is also why a
+  90-second bar reads as 90 s rather than as one and a half minutes.
+- **`M` is months**, keeping the token grammar's rule that lower-case `m` is minutes. A
+  quarter reads as 3 M and a year as 12 M. `'other'` is the bucket with neither a clock
+  length nor a trade count, which today means volume bars.
+- **The length predicates ask about a magnitude, not a unit.** A registrable `25h` code
+  decomposes into hours while covering more than a day, so `isIntradayInterval('25h')` is
+  false even though its unit is `'h'`.
+- **A calendar or count-driven code is not "long", it has no clock length at all.**
+  `isIntradayInterval` is false for `W`, `1Q` and `T500` alike. Ask `isTickInterval` or
+  `intervalParts` when the distinction matters; volume bars answer false to
+  `isTickInterval`, because they close on quantity rather than on trade count.
+
+## Using a registered code
+
+### Live, from a tick stream
+
+`TickBarAggregator` applies any of the four rules, and takes the zone a calendar rule should
+resolve in when the rule did not pin its own:
+
+```ts
+import { TickBarAggregator, resolveInterval } from 'openalgo-charts';
+
+const { bucketing } = resolveInterval('1MO');
+const agg = new TickBarAggregator(bucketing, { timezone: 'Asia/Kolkata' });
+
+ws.onTrade((t) => {
+  const u = agg.onTick({ time: t.timeSec, price: t.price, qty: t.qty });
+  if (u.isNew) bars.push(u.bar); else bars[bars.length - 1] = u.bar;
+  series.update(u.bar);
+});
+```
+
+`OpenAlgoLiveDataFeed` does this for you: fixed intervals go through `CandleBuilder`, and
+calendar, tick and volume codes go through the aggregator with the feed's configured
+`timezone`.
+
+### Folding history into calendar bars
+
+Most brokers will not serve monthly candles, so build them from daily ones with the same
+rule the live aggregator uses. That guarantees the historical bars and the forming one share
+a boundary:
+
+```ts
+import { resolveInterval, bucketStartOf } from 'openalgo-charts';
+
+function fold(daily, code, zone) {
+  const { bucketing } = resolveInterval(code);
+  const out = [];
+  for (const b of daily) {
+    const start = bucketStartOf(bucketing, b.time, zone);
+    const last = out[out.length - 1];
+    if (last === undefined || last.time !== start) {
+      out.push({ time: start, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume ?? 0 });
+      continue;
+    }
+    last.high = Math.max(last.high, b.high);
+    last.low = Math.min(last.low, b.low);
+    last.close = b.close;
+    last.volume = (last.volume ?? 0) + (b.volume ?? 0);
+  }
+  return out;
+}
+
+series.setData(fold(dailyBars, '1MO', 'Asia/Kolkata'));
+```
+
+This is what the yfinance demo does for its `1MO` and `1Q` pills.
+
+<Callout type="warning">
+Tick-count and volume bars need **real trade ticks**. A daily OHLCV history cannot be
+re-bucketed into them, and neither can a 1-minute one: the trades were never counted. See
+[Timeframes & Tick Charts](/docs/timeframes-and-tick-charts).
+</Callout>
+
+## Caching a custom code
+
+The [bar cache](/docs/bar-cache) asks the same interval registry when it needs
+to know whether the trailing bar has closed. A registered fixed or calendar
+code is therefore cacheable without a second duration parser. Tick-count and
+volume codes have no clock-derived close, so the cache safely passes them
+through uncached.
+
+Supply `barCloses` only for a non-registered code whose close time your feed can
+state exactly:
+
+```ts
+const feed = withBarCache(source, {
+  barCloses: (code, start) => {
+    if (code === 'settlement') return start + 86400;
+    return null;  // unknown or trade-flow-driven bars are not cached
+  },
+});
+```
+
+## Related
+
+- [Timeframes & Tick Charts](/docs/timeframes-and-tick-charts) for the aggregators these
+  rules drive.
+- [Timezones](/docs/timezones) for how a zone reaches the axis, the crosshair and the
+  session logic.
+- [Custom Data Feeds](/docs/data-feeds) for where an interval code comes from in the first
+  place.

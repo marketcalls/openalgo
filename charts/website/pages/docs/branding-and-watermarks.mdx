@@ -1,0 +1,107 @@
+import BrandingWatermarkDemo from '../../components/BrandingWatermarkDemo'
+
+# Branding and watermarks
+
+The corner logo identifies the chart provider. The large background watermark identifies
+the instrument or displays your own text. They have separate settings: **the OpenAlgo
+corner logo is on by default; the background watermark is off by default**.
+
+These options are available starting in 2.1.9.
+
+<BrandingWatermarkDemo />
+
+## Corner logo
+
+Every `createChart` displays the OpenAlgo glyph at the bottom-left of the visible plot.
+`createWidget` inherits the same behavior. The glyph uses bundled vector artwork, so it
+needs no image download and stays sharp in PNG and SVG exports. Its size adapts to narrow
+charts and its color follows the chart background. Adding or maximizing indicator panes
+keeps the logo at the visible bottom of the chart.
+
+A completed click or tap opens the logo link. Dragging from the mark does not open it.
+Anything else under the pointer comes first: a note pinned to the screen over the corner,
+a drawing crossing it or an order line takes the press, the drag, the hover and the double
+click, and the logo answers only where nothing else does.
+The host can provide an accessible link alongside the chart for keyboard and screen-reader
+users. The packaged widget and reference host include that access.
+
+```ts
+import { createChart } from 'openalgo-charts'
+
+const chart = createChart(container)
+
+// Hosts can replace or hide the chart-owned mark.
+chart.setBranding({
+  src: '/broker-logo.svg',
+  label: 'Broker chart',
+  href: 'https://example.com/charts',
+})
+chart.setBranding(false)
+chart.setBranding(true)
+```
+
+The equivalent constructor option is `branding: false` or `branding: { ... }`.
+`chart.brandingOptions()` returns the current options or `false`. Host branding is not
+saved in user chart layouts, so a restored layout cannot replace the broker's logo or link.
+The synchronous `branding:changed` event carries a `BrandingChangedEvent` snapshot.
+Custom host links should subscribe to it and unsubscribe during teardown so their
+accessible destination follows live branding changes.
+
+If your host previously added its own `LogoWatermark`, either remove that manual default
+mark or set `branding: false` to retain your existing implementation. Manually attached
+`LogoWatermark` primitives keep their existing host-managed click behavior.
+
+## Optional background watermark
+
+```ts
+const chart = createChart(container, { watermark: false })
+chart.setDataContext({ symbol: 'NIFTY', exchange: 'NSE', interval: '5m' })
+
+// Enable automatic symbol and interval text.
+chart.setWatermarkOptions({ visible: true })
+
+// Custom text replaces automatic text. An empty string restores automatic text.
+chart.setWatermarkOptions({ text: 'Research', opacity: 0.08, fontSize: 64 })
+chart.setWatermarkOptions({ text: '' })
+
+// Hiding preserves the configured text and style.
+chart.setWatermarkOptions({ visible: false })
+```
+
+`ChartWatermarkOptions` accepts `visible`, `text`, `fontSize`, `opacity`, `color` and the
+existing `TextWatermarkOptions`. `watermark: true` enables automatic text. Without a
+symbol, interval or custom text there is nothing to display. Widget hosts
+already update the data context when the symbol or interval changes; bare-chart hosts
+should call `setDataContext` as they change instruments.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `visible` | `false` | Show or hide the background text |
+| `text` | `''` | Empty uses the current symbol and interval; otherwise display this text |
+| `fontSize` | `64` | Maximum text size in CSS pixels; shrinks to fit narrow plots |
+| `opacity` | `0.08` | Text opacity from 0 to 1 |
+| `color` | Theme-compatible neutral | Optional text color |
+
+The text draws behind the series, stays inside the plot and does not intercept taps,
+drawing placement or chart navigation. It is included in chart exports. The separate
+Replay mark still describes replay mode independently of this preference.
+
+## Settings and persistence
+
+Open **Chart settings > Appearance** to configure the watermark. The same schema powers
+the packaged widget, reference demo and OpenAlgo `/trading`, with these flat keys:
+
+```ts
+import { applyChartSettings, readChartSettings } from 'openalgo-charts'
+
+applyChartSettings(chart, { 'watermark.visible': true })
+const values = readChartSettings(chart)
+const saved = chart.getState()
+```
+
+The setting is opt-in on new charts and old layouts. Chart state saves watermark
+preferences; it does not save a symbol taken from the previous dataset as custom text.
+Restoring a layout and changing instruments therefore keeps automatic text current.
+
+For additional independent text or image overlays, use the lower-level
+[`TextWatermark` and `LogoWatermark` primitives](/docs/primitives-and-plugins).

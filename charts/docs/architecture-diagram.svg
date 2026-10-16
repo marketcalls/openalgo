@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1520" viewBox="0 0 1280 1520" role="img" aria-labelledby="architecture-title architecture-description">
+<title id="architecture-title">OpenAlgo Charts 2.6.4 architecture</title>
+<desc id="architecture-description">A host application supplies UI, market-data adapters and instrument metadata, selects charts and activates workspaces. The base engine contains shared data loading, a DataLayer and time scale, independent price scales, custom study and primitive contracts, Canvas 2D rendering, alerts, grouped timeline events, replay groups and appearance linking. The host applies loading snapshots through series APIs. Each pane has a base and an overlay canvas. Open interest is optional: aggregation retains the last reading, never a sum, and missing is not zero. Alert gestures preview without saving and commit once; events go to the host for delivery. Shared replay uses observation availability. Eight optional ESM tiers add built-in indicators, drawing tools with anchored volume analysis and synchronization, profiles, transforms, trading tools, workspace documents and storage, WebGL2 series rendering and the widget UI with a Data/Objects dock, rich symbol lookup and reusable colour controls. The base object model supports stable study ordering and movement, and lower panes collapse to a strip; study outputs can target the price pane or a named plot. The drawing controller owns named groups and per-drawing policies. The widget adds a chart grid of up to sixteen charts, a bottom bar, saved layouts, go-to-date navigation, and watchlist, news and account panels over optional quote, news and account contracts. The price pane can move below its studies on a chart that opts in, drawings can be pinned to the viewport, and the trade tier adds account state, position commands and price tick schedules. Study and profile calculations stay on the CPU; axes, text and primitives stay on Canvas 2D. Broker execution and external notifications remain host responsibilities. Nine entry points, zero runtime dependencies. Decimal Brotli sizes measured on 2.6.4: base 137.65 kB, indicators 43.02 kB, draw 58.44 kB, profile 20.83 kB, transform 6.23 kB, trade 16.88 kB, workspace 11.73 kB, webgl 6.97 kB, widget 124.94 kB, all tiers 426.67 kB.</desc>
+<defs>
+  <marker id="flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke="#5cd3c5" stroke-width="1.6"/></marker>
+</defs>
+<style>
+  text { font-family: 'Segoe UI', Inter, Arial, sans-serif; fill: #e9f0f7; }
+  .kicker { font-size: 16px; font-weight: 650; letter-spacing: 2px; fill: #79d9cf; }
+  .heading { font-size: 49px; font-weight: 700; letter-spacing: -1.5px; }
+  .subtitle { font-size: 23px; fill: #a8b9c9; }
+  .label { font-size: 16px; font-weight: 650; letter-spacing: 1.6px; fill: #90a7bb; }
+  .host-label { font-size: 16px; font-weight: 650; letter-spacing: 1.6px; fill: #f0ca87; }
+  .host-title { font-size: 23px; font-weight: 600; }
+  .host-body { font-size: 18.5px; fill: #bbc9d6; }
+  .api { font-size: 20px; font-weight: 600; fill: #b8e9e3; }
+  .panel-title { font-size: 24px; font-weight: 650; }
+  .body { font-size: 19px; fill: #c4d1dc; }
+  .note { font-size: 17px; fill: #8fb7bb; }
+  .tier-title { font-size: 23px; font-weight: 650; fill: #c9c5ff; }
+  .tier-size { font-size: 17px; fill: #ada8d5; }
+  .tier-body { font-size: 18px; fill: #c4ccd9; }
+  .footer { font-size: 19px; fill: #93a9bd; }
+</style>
+<rect width="1280" height="1520" fill="#080e17"/>
+
+<text x="48" y="52" class="kicker" >SYSTEM ARCHITECTURE</text>
+<text x="48" y="111" class="heading" >OpenAlgo Charts</text>
+<text x="48" y="150" class="subtitle" >A composable engine for your trading platform.</text>
+<rect x="1092" y="42" width="140" height="48" rx="24" fill="#152333" stroke="#2d465c" />
+<text x="1162" y="74" class="panel-title" text-anchor="middle">2.6.4</text>
+<text x="1232" y="124" class="body" text-anchor="end">9 ESM entry points</text>
+<text x="1232" y="152" class="body" text-anchor="end">0 runtime dependencies</text>
+<g id="host" data-panel="true">
+<rect x="48" y="184" width="1184" height="142" rx="12" fill="#191c22" stroke="#534633" />
+<text x="72" y="216" class="host-label" >HOST APPLICATION</text>
+<text x="72" y="253" class="host-title" >Your UI or the optional widget</text>
+<text x="72" y="282" class="host-body" >Adapters, instruments, chart selection + workspace activation</text>
+<path d="M689 211v88" stroke="#514737"/>
+<text x="716" y="253" class="host-title" >Host retains execution authority</text>
+<text x="716" y="282" class="host-body" >Broker orders, credentials + notification delivery</text>
+</g>
+<path d="M616 326v40" stroke="#5cd3c5" stroke-width="2" fill="none" marker-end="url(#flow-arrow)"/>
+<path d="M664 366v-40" stroke="#5cd3c5" stroke-width="2" fill="none" marker-end="url(#flow-arrow)"/>
+<text x="588" y="352" class="note" text-anchor="end">commands + data</text>
+<text x="694" y="352" class="note" >typed events</text>
+<text x="640" y="392" class="api" text-anchor="middle">PUBLIC API  /  createChart  /  series APIs  /  event subscriptions</text>
+<g id="base-engine">
+<rect x="48" y="414" width="1184" height="578" rx="16" fill="#0b1722" stroke="#31545c" />
+<text x="72" y="452" class="kicker" >BASE ENGINE</text>
+<text x="72" y="479" class="body" >openalgo-charts</text>
+<text x="1208" y="457" class="panel-title" text-anchor="end">137.65 kB Brotli</text>
+<g id="data-pipeline" data-panel="true">
+<rect x="72" y="500" width="352" height="244" rx="12" fill="#101e2b" stroke="#263b4c" />
+<path d="M92 501h312" stroke="#5cd3c5" stroke-width="2"/>
+<text x="92" y="538" class="panel-title" >Data + instruments</text>
+<text x="92" y="570" class="body" >History + live ticks</text>
+<text x="92" y="598" class="body" >Scheduling, paging + stream repair</text>
+<text x="92" y="626" class="body" >Closed-bar cache; refresh live tail</text>
+<text x="92" y="654" class="body" >OHLCV + optional open interest</text>
+<text x="92" y="682" class="body" >Instrument rules + IANA sessions</text>
+<text x="92" y="707" class="note" >OI: last reading, never summed</text>
+<text x="92" y="730" class="note" >Missing OI stays absent</text>
+</g>
+<g id="chart-model" data-panel="true">
+<rect x="464" y="500" width="352" height="244" rx="12" fill="#101e2b" stroke="#263b4c" />
+<path d="M484 501h312" stroke="#5cd3c5" stroke-width="2"/>
+<text x="484" y="538" class="panel-title" >Shared chart model</text>
+<text x="484" y="570" class="body" >DataLayer + one shared time scale</text>
+<text x="484" y="598" class="body" >Series, panes + independent axes</text>
+<text x="484" y="626" class="body" >Studies + primitive contracts</text>
+<text x="484" y="654" class="body" >Study calculation on the CPU</text>
+<text x="484" y="682" class="body" >Comparisons, fills + markers</text>
+<text x="484" y="730" class="note" >UTC time; shared logical index</text>
+</g>
+<g id="rendering" data-panel="true">
+<rect x="856" y="500" width="352" height="244" rx="12" fill="#101e2b" stroke="#263b4c" />
+<path d="M876 501h312" stroke="#5cd3c5" stroke-width="2"/>
+<text x="876" y="538" class="panel-title" >Rendering + export</text>
+<text x="876" y="570" class="body" >Invalidation + frame coalescing</text>
+<text x="876" y="598" class="body" >Base + overlay canvas per pane</text>
+<text x="876" y="626" class="body" >Canvas 2D + series backend port</text>
+<text x="876" y="654" class="body" >Optional WebGL2 for series only</text>
+<text x="876" y="682" class="body" >PNG + vector SVG export</text>
+<text x="876" y="730" class="note" >Axes, text + primitives stay 2D</text>
+</g>
+<path d="M428 620h30" stroke="#5cd3c5" stroke-width="2" fill="none" marker-end="url(#flow-arrow)"/>
+<path d="M820 620h30" stroke="#5cd3c5" stroke-width="2" fill="none" marker-end="url(#flow-arrow)"/>
+<g id="alerts" data-panel="true">
+<rect x="72" y="764" width="352" height="180" rx="12" fill="#0e1d28" stroke="#263b4c" />
+<text x="92" y="799" class="panel-title" >Alerts</text>
+<text x="92" y="832" class="body" >Price, study + drawing conditions</text>
+<text x="92" y="860" class="body" >Bar-close default; restored state</text>
+<text x="92" y="888" class="body" >Drag preview, one saved commit</text>
+<text x="92" y="916" class="body" >Events to host for delivery</text>
+</g>
+<g id="replay-linking" data-panel="true">
+<rect x="464" y="764" width="352" height="180" rx="12" fill="#0e1d28" stroke="#263b4c" />
+<text x="484" y="799" class="panel-title" >Replay + chart linking</text>
+<text x="484" y="832" class="body" >Observation-aware replay</text>
+<text x="484" y="860" class="body" >Shared clock; focused / group modes</text>
+<text x="484" y="888" class="body" >Crosshair, viewport + appearance</text>
+<text x="484" y="916" class="body" >Symbol / interval changes via host</text>
+</g>
+<g id="interaction-state" data-panel="true">
+<rect x="856" y="764" width="352" height="180" rx="12" fill="#0e1d28" stroke="#263b4c" />
+<text x="876" y="799" class="panel-title" >Interaction + state</text>
+<text x="876" y="832" class="body" >Grouped timeline + gesture events</text>
+<text x="876" y="860" class="body" >Object inventory + chart snapshots</text>
+<text x="876" y="888" class="body" >Trading intents + capability checks</text>
+<text x="876" y="916" class="body" >Replay-aware chart data / CSV</text>
+</g>
+<text x="640" y="974" class="body" text-anchor="middle">The host connects loading snapshots to series APIs and drives the chart controls.</text>
+</g>
+<text x="48" y="1035" class="label" >8 OPTIONAL TIERS</text>
+<text x="1232" y="1035" class="footer" text-anchor="end">Import the capabilities your application needs.</text>
+<g id="tier-indicators" data-panel="true">
+<rect x="48" y="1058" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="68" y="1095" class="tier-title" >/indicators</text>
+<text x="306" y="1095" class="tier-size" text-anchor="end">43.02 kB</text>
+<path d="M68 1111h238" stroke="#34364e"/>
+<text x="68" y="1144" class="tier-body" >112 built-in studies</text>
+<text x="68" y="1172" class="tier-body" >TA helpers + external data</text>
+<text x="68" y="1200" class="tier-body" >3 open-interest studies</text>
+</g>
+<g id="tier-draw" data-panel="true">
+<rect x="350" y="1058" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="370" y="1095" class="tier-title" >/draw</text>
+<text x="608" y="1095" class="tier-size" text-anchor="end">58.44 kB</text>
+<path d="M370 1111h238" stroke="#34364e"/>
+<text x="370" y="1144" class="tier-body" >87 drawing tools</text>
+<text x="370" y="1172" class="tier-body" >AVWAP + range volume profile</text>
+<text x="370" y="1200" class="tier-body" >Linked drawings + undo</text>
+</g>
+<g id="tier-profile" data-panel="true">
+<rect x="652" y="1058" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="672" y="1095" class="tier-title" >/profile</text>
+<text x="910" y="1095" class="tier-size" text-anchor="end">20.83 kB</text>
+<path d="M672 1111h238" stroke="#34364e"/>
+<text x="672" y="1144" class="tier-body" >Volume + market profiles</text>
+<text x="672" y="1172" class="tier-body" >TPO, footprint + order flow</text>
+<text x="672" y="1200" class="tier-body" >Calculations on the CPU</text>
+</g>
+<g id="tier-transform" data-panel="true">
+<rect x="954" y="1058" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="974" y="1095" class="tier-title" >/transform</text>
+<text x="1212" y="1095" class="tier-size" text-anchor="end">6.23 kB</text>
+<path d="M974 1111h238" stroke="#34364e"/>
+<text x="974" y="1144" class="tier-body" >6 price transforms</text>
+<text x="974" y="1172" class="tier-body" >Renko, Range, Heikin Ashi</text>
+<text x="974" y="1200" class="tier-body" >Kagi, Line Break, P&amp;F</text>
+</g>
+<g id="tier-trade" data-panel="true">
+<rect x="48" y="1238" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="68" y="1275" class="tier-title" >/trade</text>
+<text x="306" y="1275" class="tier-size" text-anchor="end">16.88 kB</text>
+<path d="M68 1291h238" stroke="#34364e"/>
+<text x="68" y="1324" class="tier-body" >Orders, positions + brackets</text>
+<text x="68" y="1352" class="tier-body" >Accounts, ladder + order gates</text>
+<text x="68" y="1380" class="tier-body" >Injected execution adapter</text>
+</g>
+<g id="tier-workspace" data-panel="true">
+<rect x="350" y="1238" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="370" y="1275" class="tier-title" >/workspace</text>
+<text x="608" y="1275" class="tier-size" text-anchor="end">11.73 kB</text>
+<path d="M370 1291h238" stroke="#34364e"/>
+<text x="370" y="1324" class="tier-body" >Layouts, templates + watchlists</text>
+<text x="370" y="1352" class="tier-body" >Revisioned catalogs</text>
+<text x="370" y="1380" class="tier-body" >Async storage adapters</text>
+</g>
+<g id="tier-webgl" data-panel="true">
+<rect x="652" y="1238" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="672" y="1275" class="tier-title" >/webgl</text>
+<text x="910" y="1275" class="tier-size" text-anchor="end">6.97 kB</text>
+<path d="M672 1291h238" stroke="#34364e"/>
+<text x="672" y="1324" class="tier-body" >GPU series rendering</text>
+<text x="672" y="1352" class="tier-body" >Canvas 2D fallback</text>
+<text x="672" y="1380" class="tier-body" >2D axes, text + primitives</text>
+</g>
+<g id="tier-widget" data-panel="true">
+<rect x="954" y="1238" width="278" height="164" rx="12" fill="#121724" stroke="#34364e" />
+<text x="974" y="1275" class="tier-title" >/widget</text>
+<text x="1212" y="1275" class="tier-size" text-anchor="end">124.94 kB</text>
+<path d="M974 1291h238" stroke="#34364e"/>
+<text x="974" y="1324" class="tier-body" >Packaged chart interface</text>
+<text x="974" y="1352" class="tier-body" >Toolbar, grid, watchlist + news</text>
+<text x="974" y="1380" class="tier-body" >Uses the public chart API</text>
+</g>
+<text x="48" y="1438" class="footer" >Base + optional capabilities. One shared contract.</text>
+<text x="1232" y="1438" class="host-title" text-anchor="end">426.67 kB Brotli / all tiers</text>
+<path d="M48 1460h1184" stroke="#273849"/>
+<text x="48" y="1492" class="footer" >Capability map, not an import graph.</text>
+<text x="1232" y="1492" class="footer" text-anchor="end">Default timezone: Asia/Kolkata</text>
+</svg>

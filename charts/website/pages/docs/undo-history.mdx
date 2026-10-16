@@ -1,0 +1,195 @@
+---
+title: Undo and Redo
+description: One undo timeline for studies, their settings, the chart type, price scales, panes and drawings, walked by Ctrl+Z, Ctrl+Y and every undo control.
+---
+
+# Undo and redo
+
+`ChartHistory` keeps one timeline for everything a user changes on a chart:
+
+- a study added or removed, with its settings, visibility, pane, stacking row and price scale;
+- a study's settings, visibility and scale assignment;
+- the chart type and the primary series' scale;
+- price scale settings: mode, invert, margins, auto-fit, pinned ratio and axis placement;
+- panes: moved, folded, resized, added or removed, and brought back with the studies and
+  drawings they held;
+- drawings, through the drawing controller's own steps;
+- the chart settings the settings dialog writes.
+
+They interleave in the order they were made. Ctrl+Z and Ctrl+Y (and Ctrl+Shift+Z), the rail's
+Undo and Redo, and the mobile sheets all walk the same timeline. The widget builds one for its
+chart; a host of its own builds one with `new ChartHistory(chart, { draw })` from
+`openalgo-charts/widget`.
+
+Try it in the [live example](/examples#one-undo-for-the-whole-chart): add a study, fold its pane,
+switch the chart type or draw a line, then walk the steps back and forth.
+
+## How a step is taken back
+
+The chart announces each change it makes, whether a legend button, a dialog, a menu or a
+host's own call made it, and the history compares the chart before and after the turn the
+change happened in. One user action is one turn, so a study removed with the pane it emptied
+is one step. Undo makes the chart look the way it did in exactly the fields that step changed:
+it never restores a whole saved state, which would rebuild every study, replay managed data
+requests and reset the drawing history. A change the host made since to a neighbouring field,
+another study's colour or another pane's height, is still there afterwards.
+
+A pane height or a scale option set in code is a step too: the chart announces
+`setPaneWeight`, `setPriceAxisOptions`, `setPriceScaleOptions` and the other setters that had
+no event of their own with `layout:change`. A step made of several stretches, a group or a
+transaction with an `ignore` inside it, is walked stretch by stretch, each read against the
+chart the one before it leaves, so none of them loses its part of the stacking order.
+
+The chart-wide price scale defaults, the mode, invert and margins a pane added later starts
+from (`chart.priceScaleDefaults()`), are a field of each step of their own, apart from every
+pane's axes. A chart-wide change, from the settings dialog or `setPriceScaleOptions`, is
+taken back with them, so a pane added after the undo starts from the old defaults. A change
+to one axis from its own menu leaves them alone, on a chart with a single pane too, and is
+replayed on that axis alone: undo and redo never write the defaults for it, and never
+announce it to linked charts as an appearance change.
+
+Drawings stay the drawing controller's to undo. The history holds each drawing step by the
+number the controller reported it under (`historySteps()` and the `step` field of
+`drawing:change`) and asks the controller to take it back, so read-only drawings, linked
+charts and a host's forced edits keep every rule the controller applies to them. A step the
+controller holds under one the history does not (a controller that recorded a host's edit)
+is taken back from the drawings either side of it instead, so a press never takes another
+drawing with it.
+
+A study input anchor (a price input with `anchor: true`) is a settings patch like any other.
+The history takes the steps its drawing controller would record for it
+(`delegateInputAnchorSteps`) and records the patch as the drag or `moveInputAnchor` ends, so
+each move is one step, undone once and in order with the drawings, and a settings dialog's
+**Pick point on chart** is part of that dialog's step. The drawing controller holds none of
+them while the history is attached. A host with no chart-wide history walks the drawing
+controller's own undo, which holds a point written through the settings, the Pick point, as
+a step of its own: the first undo takes the pick back, the next the drag before it, and
+neither ever removes a drawing made before them.
+
+A study brought back is re-created under the instance id it had, so the studies reading it and
+the alerts naming it find it again. The history tells studies apart by the chart's own object
+for each, not by id or kind. If a study the host placed under that id since holds it, of the
+same kind or another, the study comes back under a fresh id with the settings the step gives
+it: every later step and every study reading it follows it there, and the host's study keeps
+the id, its pane and its settings, and no step ever takes it for the one it names.
+
+A pane is a step of its own when it comes or goes with no study bringing or taking it: a
+pane left with only drawings and removed with `removePane` comes back with them, and an
+empty one comes back empty, each with its height, fold and axes. With nothing plotted to
+fit to, its scales get back the range they had at the last recorded change, which is what
+places its drawings. A pane holding a series a host plotted is the host's: history neither
+removes it nor makes it again, since that would take away or leave behind plotted data. So is
+a pane the host made for a primitive of its own (`addPrimitive` at a new index) or for a
+drawing it placed there: it is no `pane-add` step, an undo never removes it, and its removal
+is no step either, since no undo could give the host its primitive back.
+
+## What history never does
+
+- **It never writes bars.** Undoing a chart type, a study or a pane leaves the price data as it
+  is, including a bar that arrived after the step was made.
+- **It never fires an alert.** A study brought back computes from the bars on the chart and
+  reseeds its alerts silently, the way any study added to a loaded chart does; trader alerts
+  are not history at all.
+- **It never places an order.** Order entry is not a step, and nothing in the history reaches
+  an order route.
+- **It never reaches another instrument's drawings** (since 2.5.9). When the drawing controller
+  loads a whole other document, another symbol's drawings or a restored layout, every drawing
+  step recorded before is dropped, with the drawings a removed pane took with it: an undo on
+  one symbol never brings back a line of another. The steps' studies, panes and settings stay.
+- **It never overrides a study's policy.** A press leaves a study the way its
+  [policy](/docs/indicators#study-policies) keeps it: on the chart while `removable: false`, with its settings
+  and scales while `configurable: false`, in its pane while `movable: false`. The rest of the
+  step still applies. A study that may not move is never moved by a call of its own, but other
+  studies still pass it, as the chart lets them: a user's reorder that moves a free study past
+  a pinned one is a step and is taken back, and a study removed from above a pinned one comes
+  back above it. Two pinned studies never trade places. A step left with nothing to do, such
+  as removing a study the host has protected since, is dropped and the press goes on to the
+  one before, the way the drawing history treats a read-only drawing, so `canUndo`, `canRedo`
+  and the peeks always say what a press would do, and `subscribe` hears when a policy changes
+  that. Adding a protected study, and a forced write or remove on one, are the host's and
+  never steps.
+- **It never removes or weakens a policy the host set later.** A study an undo or a redo
+  brings back takes the policy its host holds now, the one the study last had on the chart,
+  never an older one the step captured: a restriction the host added after the step was made
+  is still there on the study that comes back. A study that left the chart by the host's own
+  hand, inside `ignore`, through a forced remove, or left out of a chart the host rebuilt and
+  attached, is the host's to bring back: the part of any step that would re-add it is dropped,
+  and a step with nothing else to do goes with it.
+
+## Grouping and live edits
+
+A dialog that previews its edits live records one step per session, and a Cancel that puts
+every value back leaves none. The widget's chart settings and study settings dialogs do this;
+a host builds the same with `group`:
+
+```ts
+const end = history.group('Chart settings');
+// every change recorded here, observed or transacted, is one step
+end();
+```
+
+A group that ends as no step takes nothing away: the redo branch is there again after a
+Cancel. A whole divider drag or drawing drag is one step without asking, and a study added
+while a drawing is dragged is a step of its own. A chart setting (the grid, the status line)
+and a scale's auto-fit or pinned ratio are read only when a change is made inside
+`transact`, and are recorded that way alone; the widget's context menu runs every row in one.
+
+## The host's own changes
+
+A change the host makes for itself goes through `ignore`, and is never a step: nothing it
+does to the chart or its drawings is recorded, no undo or redo takes it back, and the redo
+branch is kept. Its drawing edits run through the controller's `untracked`, so every step
+already recorded takes them in the way it takes a forced edit. A study it removes is never
+brought back by a press, and a command it pushes with `push` is not recorded. Inside a
+`transact` or a `group`, the step is recorded on either side of the `ignore` and leaves it
+alone.
+
+A listener that reacts while a step is being undone or redone is treated the same way: what
+it changes, a drawing included, is its host's reaction and not a step. Loading a layout
+starts a new timeline: `widget.restoreState` and `chart.restoreState` clear it.
+
+An appearance change a [linked chart](/docs/chart-linking) applies from another chart is the
+other chart's step. Apply it through `ignore`, as the chart grid and the reference host do;
+undoing or redoing it on the chart that made it announces the result on `style:change`
+again, so the linked charts follow.
+
+A host that rebuilds its chart, for a chart-type switch or a new symbol, attaches the new
+chart and drawing controller with `attach(chart, draw)`. Studies are matched by id and panes
+by slot, which is what a chart restored from the old one's state keeps, so the steps carry
+over; a drawing step the old controller held is then taken back from the drawings either side
+of it, and a study the new chart does not hold was left out by the host and is never brought
+back. A change the history cannot make itself goes in as a command:
+
+```ts
+history.push({
+  label: 'Chart type',
+  undo: () => rebuildAs('candlestick'),
+  redo: () => rebuildAs('line'),
+});
+```
+
+## When a step cannot be taken back
+
+If a step fails (a study whose descriptor is no longer registered, a command that throws), the
+history puts back whatever that press had already changed, drops the step with every step
+behind it, and keeps the redo branch, so it never describes a chart that is not on screen.
+`onError` reports it; the widget shows a toast.
+
+## API
+
+| Member | What it does |
+| --- | --- |
+| `new ChartHistory(chart, options?)` | `options.draw` joins a drawing controller's steps; `limit` keeps that many steps (100); `series` names the series whose type and scale are history; `setChartType` switches the type through the host; `onError` hears a failed step. |
+| `undo()` / `redo()` | Take back the latest step, or apply again the one an undo took back. False when there was none, or it failed. A new action clears the redo branch. |
+| `canUndo()` / `canRedo()` | Whether a press would do anything. |
+| `peekUndo()` / `peekRedo()` | `{ label?, changes }` for the step a press would take, or null. |
+| `transact(fn, label?)` | Record everything `fn` changes as one step. Nested calls join the outer one. |
+| `group(label?)` | Merge everything recorded until the returned function runs. |
+| `ignore(fn)` | Run a host change that is not a step, drawings included; the redo branch is kept, and a study it removes is never brought back. |
+| `push(command)` | Record a host's own reversible step. Inside `ignore` it records nothing. |
+| `attach(chart, draw?)` | Follow a rebuilt chart, keeping the timeline. |
+| `clear()`, `subscribe(listener)`, `destroy()` | Forget every step; hear every change to what a press would do; stop. |
+
+The widget exposes its timeline as `widget.history` and `ctx.history`. `historyPress(ctx, 'undo')`
+and `historyReady(ctx, 'undo')` are what its own controls call; they fall back to the drawing
+controller for a custom context built without a history.

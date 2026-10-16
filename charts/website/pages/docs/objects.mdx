@@ -1,0 +1,253 @@
+---
+title: Objects
+description: Manage chart sources, indicators, drawings, and registered profiles through one shared inventory.
+---
+
+import ObjectsDemo from '../../components/ObjectsDemo'
+
+# Objects
+
+The Objects panel lists the primary price source, each indicator instance, drawings,
+and profiles that the host explicitly registers. Search by name, type, or pane.
+Selection follows the drawing canvas, and each row offers the operations its object
+supports. The primary price source is protected from removal.
+
+<ObjectsDemo />
+
+## Open the widget panel
+
+The widget's text-labelled **Objects** control opens the panel. A custom toolbar can
+call `widget.openObjects()`. Both use `widget.objects`, the shared inventory.
+
+```ts
+import { createWidget } from 'openalgo-charts/widget';
+import 'openalgo-charts/indicators';
+
+const widget = createWidget(container, { symbol: 'EXAMPLE', interval: '1m' });
+widget.series.setData(bars);
+widget.chart.addIndicator('rsi');
+widget.openObjects();
+```
+
+Rows show pane numbers starting at 1, visibility, drawing lock state, selection, and
+external-indicator data status. Search and row-action focus survive inventory updates.
+Unsupported actions are absent. A supported action that fails reports through the
+existing widget toast. The panel fits the actual chart container, including narrow
+and short hosts; its list scrolls while the search field and footer remain available.
+
+Drawing hide, lock and removal use the drawing controller, so its undo history stays
+authoritative. **Focus** brings a drawing's anchors into view, including anchors beyond
+the newest bar, and sets that pane's price range to manual. Reset view returns to autoscale.
+Indicator removal releases its data lifecycle and prunes an empty indicator pane.
+
+## Use the inventory without widget chrome
+
+`ChartObjects` is in the base bundle and creates no DOM. The optional drawing source is
+structural; pass a `DrawingController` from the draw tier when drawings are present.
+The inventory observes the existing chart and drawing state.
+
+```ts
+import { ChartObjects } from 'openalgo-charts';
+import { DrawingController } from 'openalgo-charts/draw';
+
+const draw = new DrawingController(chart);
+const objects = new ChartObjects(chart, {
+  drawings: draw,
+  onSettings: object => openExistingEditor(object.kind, object.sourceId),
+});
+const off = objects.subscribe(rows => renderObjectList(rows));
+
+// The subscription immediately supplies the current immutable inventory.
+const drawing = objects.list().find(row => row.kind === 'drawing');
+if (drawing?.capabilities.visibility) objects.setVisible(drawing.id, false);
+
+// Release the inventory before its host is replaced.
+off();
+objects.destroy();
+draw.destroy();
+```
+
+`objects.destroy()` releases observations and provider subscriptions. It leaves the
+chart and its objects intact. The caller still owns drawing-controller and chart
+teardown. `widget.destroy()` handles its own inventory automatically.
+
+| Method | Contract |
+| --- | --- |
+| `list()` / `get(id)` | Immutable rows, or one row; an unknown ID returns `undefined`. |
+| `subscribe(listener)` | Current rows immediately, then inventory changes. Returns an unsubscribe function. |
+| `select(id, additive?)` | Select an object; pass `null` to clear selection. Additive selection applies to drawings. |
+| `setVisible(id, on)` / `setLocked(id, on)` | Delegate the supported operation to its owner. |
+| `remove(id)` / `openSettings(id)` / `focus(id)` | Delegate a supported action. Return `false` for missing, unsupported, or failed operations. |
+| `register(provider)` | Add an explicit host-owned object. Returns idempotent registration cleanup. |
+| `stack(paneIndex)` | The pane's rows in draw order, back to front. See [Draw order](#draw-order). |
+| `canPlace(id, targetId, where)` / `place(id, targetId, where)` | Whether a row can move directly `'above'` or `'below'` another row of its pane's stack, and the move itself. `false` for one the bands cannot paint. |
+| `refresh()` | Re-read host state when its provider has no change subscription. |
+| `destroy()` | Stop observing; safe to call again. |
+
+Each `ChartObjectSnapshot` has `id`, `sourceId`, `kind`, `name`, `paneIndex`, `visible`,
+`selected`, optional `locked` and `dataStatus`, plus boolean capabilities for `select`,
+`visibility`, `lock`, `remove`, `settings`, `focus`, `reorder`, `move` and `place`. A
+row that is part of its pane's stack also has `band` (`'below'`, `'series'` or
+`'above'`), and a drawing placed in the series band has `stackAbove`, the id of the row
+it paints directly above. A drawing whose interval range leaves out the chart's
+interval keeps its row with `hiddenOnInterval: true` and offers no `focus`; its
+`visible` stays the user's switch (see the drawing tools page). Use the snapshot's `id` for
+inventory actions; `sourceId` identifies the existing indicator, drawing, or provider.
+The primary row is `source:primary`; indicator and drawing IDs have their kind prefix.
+Host registrations use `custom:<provider.id>` and cannot replace a built-in row.
+
+The inventory honours [drawing policies](/docs/drawing-tools#drawing-policies). A drawing
+with `policy.listed: false` has no row and is left out of its group's row. One with
+`policy.editable: false` offers no `visibility`, `lock` or `remove`, and neither does a
+group holding it. One with `policy.selectable: false` offers no `select`. A group that
+holds an unlisted drawing removes only its listed members, as one undo step, and
+`ungroup` leaves it as it is.
+
+It honours [study policies](/docs/indicators#study-policies) the same way. A study with
+`policy.listed: false` has no row. One that is not `removable` offers no `remove`, one
+that is not `configurable` no `settings`, and one that is not `movable` no `reorder`,
+`move` or `place`; `visibility` stays. The calls behind those rows refuse the user too,
+so a custom list cannot reach around the policy, and the host passes `{ force: true }`
+to `chart.removeIndicator`, `chart.moveIndicator`, `setSettings` and the rest.
+
+## Register a profile with supported actions
+
+Primitives are not automatically manageable objects. A profile host declares the
+operations it actually owns. This example registers visibility and removal; it does
+not offer settings, selection, lock, or focus.
+
+```ts
+const objects = widget.objects;
+const chart = widget.chart;
+chart.addPrimitive(profile);
+let exists = true;
+let visible = true;
+
+const unregister = objects.register({
+  id: 'session-profile',
+  get: () => exists
+    ? { kind: 'profile', name: 'Session profile', paneIndex: 0, visible }
+    : null,
+  setVisible(on) {
+    if (on === visible) return;
+    visible = on;
+    if (on) chart.addPrimitive(profile);
+    else chart.removePrimitive(profile);
+  },
+  remove() {
+    chart.removePrimitive(profile);
+    exists = false;
+  },
+});
+```
+
+Provider callbacks are synchronous. Missing callbacks produce disabled capabilities,
+and throwing callbacks make the operation return `false`. If another part of the host
+changes the profile, call `objects.refresh()` or implement the provider's
+`subscribe(listener)` callback, returning its unsubscribe function. `get()` returns
+`null` while the object does not exist. Duplicate provider IDs are rejected.
+
+Registration cleanup removes the inventory entry and its observation subscription.
+It does not remove the primitive. At host teardown, remove or destroy the host-owned
+profile as appropriate and call `unregister()`.
+
+## Reuse the panel in a custom host
+
+```ts
+import { mountObjectsPanel } from 'openalgo-charts/widget';
+
+const panel = mountObjectsPanel(widget.context, openButton, {
+  objects,
+  onClose: () => updateToolbarState(false),
+});
+panel.close();
+```
+
+The explicit `objects` option overrides optional `WidgetContext.objects`. One of them
+must exist. The panel returns `PanelHandle` with `el`, `close()` and `isOpen()`; closing
+releases only its subscription. A host assembling its own widget context supplies the
+usual overlay stack and theme furniture. Include `OBJECTS_PANEL_CSS` alongside
+`WIDGET_CSS` and `DIALOG_CSS` when supplying styles yourself; `createWidget` includes it.
+
+## Persistence and lifecycle
+
+### Ordering, study panes, and drawing groups
+
+The default widget places Objects in its information dock. Rows are organized by
+pane, each pane in [draw order](#draw-order), back to front. Drag a row onto the
+upper half of another to put it under that row in paint order, or onto the lower
+half to put it over it, or use **Earlier** and **Later**. A drop the bands cannot
+paint is refused before it lands. Reordering changes the rendered order as well as
+the list. A drawing's row says **Behind the series**, or **Above** and the row it sits
+on, when it is not in front. Use a study's pane selector to move it to an existing
+pane or a new one. On touch or keyboard, Select/Deselect controls let you select
+several drawings for a group.
+
+```ts
+widget.chart.reorderIndicator(study.id, -1);
+widget.chart.moveIndicator(study.id, targetPaneIndex);
+const group = widget.draw.createGroup('Morning levels', [support.id, resistance.id]);
+if (group) widget.draw.renameGroup(group.id, 'Session levels');
+```
+
+Moving a study retains its instance ID, plots, attached visuals, and alert
+references. Empty study panes are removed after their contents move. Named drawing
+groups round-trip in `DrawingsDocument.groups`; documents without groups still
+load. Group changes participate in drawing undo/redo.
+
+### Draw order
+
+A pane paints in bands, back to front: drawings behind the series, then the series
+band, then the overlay band (price lines, markers, study levels), then drawings in
+front. The series band holds the price source and each study, in the order
+`chart.seriesStack(paneIndex)` lists them, and a drawing can sit directly above any
+of them (see [Draw order](/docs/drawing-tools#draw-order) for drawings).
+`objects.stack(paneIndex)` lists those rows as one sequence:
+
+```ts
+const rows = objects.stack(0).map(row => row.id);
+// ['drawing:d3', 'source:primary', 'indicator:ema-1', 'drawing:d1', 'indicator:rsi-2', 'drawing:d2']
+//   behind the series        the series band, with d1 placed on the EMA          in front
+```
+
+`place(id, targetId, where)` moves one row directly above or below another row of
+the same pane:
+
+- **A drawing goes anywhere in its pane.** Next to a drawing it joins the slot that
+  drawing paints in; above an entry it is placed on that entry; below an entry it
+  goes on top of the slot under it.
+- **A source or study moves between whole slots**, taking the drawings placed on it
+  along: under another entry, over the top of another entry's slot, to the back of
+  the band (over the top drawing behind the series) or to its front (under the
+  lowest drawing in front).
+- **What the bands cannot paint is refused**: an entry between another entry and a
+  drawing placed on it, an entry behind or in front of the series band, and a move to
+  another pane. `canPlace` reports the same answer without moving anything, and a
+  move that changes nothing is `false` too.
+
+A study that is not `movable` offers no `place`. The source can be moved over a
+study: it stays the pane's instrument (the crosshair readout, the last-price line and a
+rebased axis still describe it), and the chart state saves the study it sits on as
+`sourceAbove`. The drawings' slots are saved in the drawing document.
+
+For custom inventories, `ChartObjects.reorder(id, direction)` and
+`move(id, paneIndex)` respect optional `reorder` and `move` capabilities. `reorder`
+keeps its own order among one kind (a study among the studies of its pane, a drawing
+within its slot); `place` is the order across kinds.
+`createGroup(name, ids)`, `renameGroup(id, name)`, and `ungroup(id)` use inventory
+IDs. Group rows have `kind: 'group'`; child rows may carry `groupId`. A provider can
+offer `reorder` or `move` callbacks, or omit both to retain its existing behavior.
+
+`createObjectsPanelContent(context, options?)` returns `element`, `initialFocus`,
+and `destroy()` for embedding in an existing panel. It does not create a heading
+or close button. `mountObjectsPanel` remains available for a standalone popup.
+
+Indicator visibility round-trips in chart and widget layouts. Older layouts without
+the optional `visible` field restore indicators as visible. Drawing visibility and
+lock state remain part of the drawing document. A restored indicator can receive a
+new instance ID, so consumers should use the latest inventory snapshot.
+
+Provider definitions, callbacks, profile visibility, and profile data belong to the
+host and are not serialized by the chart layout. Re-register them when replacing a
+chart and persist their state separately when needed. The Objects workflow does not
+invoke broker order actions or claim arbitrary trading primitives as removable rows.

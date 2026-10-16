@@ -1,0 +1,419 @@
+---
+title: Market Replay
+description: Walk a historical session forward bar by bar, with every indicator redrawn as it stood at that moment.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Market replay
+
+Replay walks a loaded session forward one bar at a time, so a trader can practise on
+history without seeing what happens next. `ReplayController` owns the playhead and the
+transitions. It ships no DOM: you render the transport bar, the scrub slider and the clock
+yourself from `replay.state()` and the `replay:*` events, the same way
+[`DrawingController`](/docs/drawing-tools) leaves the toolbar to you.
+
+```ts
+import { createChart, ReplayController } from 'openalgo-charts';
+
+const chart = createChart(el);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+
+// Constructing the controller enters replay and shows bar 200 immediately.
+const replay = new ReplayController(chart, { series, bars, startIndex: 200 });
+
+replay.play({ speed: 2 });   // two bars per barMs
+replay.pause();
+replay.step();               // one bar forward
+replay.stepBack();
+replay.seek(240);
+replay.stop();               // leave replay, put the chart back
+```
+
+## Replay by availability time
+
+An opening timestamp does not make a candle's final high, low, close or volume
+available. Pass `timing` when aligning replay across different histories or
+intervals:
+
+```ts
+const replay = new ReplayController(chart, {
+  timing: {
+    barEndTime: bar => bar.time + 300,
+    subBarEndTime: bar => bar.time + 60,
+  },
+  subBars: oneMinuteBars,
+  startTime: selectedUtcSeconds,
+});
+replay.seekTime(nextUtcSeconds);
+```
+
+This example assumes fixed five-minute and one-minute buckets. Supply end times
+from your feed/calendar for session exceptions or variable-duration buckets;
+replay does not infer closure from the next recorded opening. `ReplayTiming`
+uses `ReplayBarEndTime`, a `(bar, index) => utcSeconds` callback. End times must be
+finite, ordered, at or after the opening and no later than the next opening.
+Explicitly close-stamped data can return `bar.time`.
+
+Before the first available observation, the chart is empty and `state()` returns
+`index: -1` and `bar: null`. Finer bars build a partial candle only while they
+cover a contiguous prefix. A missing or straddling finer bar leaves the last
+known prefix until the full candle becomes available. At its declared end, the
+original candle replaces the aggregate exactly. Until then the partial candle is
+held inside the one it closes on, as a live candle grows: it carries that
+candle's open from the first observation, its high and low stay within that
+candle's range, and its volume never exceeds that candle's. A feed whose first
+minute opened away from the official open, or whose minutes ran past the day's
+high, never makes the open jump or the high fall back at the close. OI retains the last available
+reading and is never summed or copied early from the final candle. Comparisons
+and independent followers withhold forming closes.
+
+A feed keeps far less fine history than coarse, about a week of 1-minute bars
+against years of 5-minute ones, so older candles have nothing to form from. Pass
+`simulate: { steps: 5 }` and such a candle still forms over five steps, along a
+path from its open to the nearer extreme, the other extreme and its close. It
+keeps its real open, never passes its real high or low, and closes on the real
+candle; real finer bars win wherever they exist. The order of the extremes is an
+assumption (a bar's prices say where it went, not when), so `state().simulated`
+is true on those steps and the host should say so: a stop tested inside a
+simulated candle was not tested against traded prices.
+
+`seek(index)` still selects a complete primary candle. Step/play move through
+available observations. `time()` reports the UTC playhead; `timePoints()` returns
+a copy of the observation times. `autoStart: false` prepares a validated snapshot
+without changing the chart, for a host coordinating several participants. Invalid
+timing fails before mutation. Existing index-based replay keeps its defaults.
+The host must fence live chart writes and trading before selection or loading
+begins. `AlertController` suspends evaluation and threshold dragging when it
+receives `replay:start`; call `alerts.setPaused(true)` for the earlier selection
+and loading phases too. See [Alerts](/docs/alerts).
+
+### Requested snapshots during replay
+
+Studies created with `createRequestedIndicator` request explicit availability and
+confirmation through the host's snapshot provider. Availability-aware replay
+supplies the current `asOf` cutoff, including playhead moves between two source
+observations. The chart clamps any requested cutoff to that clock and notifies
+the study even when the visible source-bar count stays unchanged.
+
+The provider must return the values **as known at that cutoff**, or reject when
+it cannot. Availability timestamps do not reconstruct older value versions from
+today's final OHLC. A provider with only final historical bars should not claim
+point-in-time snapshot support.
+
+Legacy index-based replay has no explicit knowledge cutoff. The managed snapshot
+study reports `unsupported` there and clears its requested output; existing raw
+bar requests keep their behavior. Configure `timing` for strict requested-data
+replay. Provider replacement, source identity changes and backward replay cancel
+obsolete generations. Forward movement coalesces pending refreshes, so the study
+follows the latest requested cutoff without queuing every playhead update.
+
+See [Managed requested snapshots](/docs/indicators#managed-requested-snapshots)
+for the provider and lifecycle contract, and the
+[deferred-provider example](/examples#requested-snapshots-from-a-deferred-provider)
+for explicit update and confirmation controls.
+
+### External point studies during replay
+
+Raw-point studies created with `createTier2Indicator` are unsupported during
+native replay unless their descriptor sets `supportsReplay: true`. An opt-in
+loader receives `Tier2Context.asOf` and must return values as known at that finite
+cutoff, using point timestamps that represent availability. Raw `requestBars`
+remains unchanged; the loader must obtain historical versions from its own source.
+
+The wrapper stops live subscriptions during replay, filters points beyond the
+cutoff and replaces the full response on forward movement. Entering, leaving or
+seeking backward clears the old dataset and cancels obsolete work. Legacy replay
+without a finite availability clock remains unsupported, including for opted-in
+studies. Hosts without native request-state metadata keep their existing behavior.
+
+See [External point revisions and replay](/docs/indicators#native-revisions-and-replay-for-external-points)
+and the [runnable example](/examples#external-points-with-live-revisions).
+
+## One clock across charts
+
+The yfinance reference host demonstrates this with a scope button in both the
+bar picker and the replay transport. Choose its captured chart or all charts.
+Playback starts at the selected candle's close, and the slider advances through
+available observations. Both scopes' controls span the workspace and remain visible
+when either chart enters fullscreen. Each chart retains its own volume and
+readout; a later history stays empty until its first observation.
+
+The host captures request identities and timezones, cancels each history request
+on exit, and keeps trading and alerts paused throughout selection, loading and
+playback. Scope changes preserve UTC time. Missing finer history visibly falls
+back to completed candles. Closing or changing an active chart ends the session
+and restores survivors; an inactive chart can change without ending focused replay.
+
+`ReplayGroup` coordinates explicit availability times across a set of charts.
+Different histories and intervals advance by UTC time. A chart with no available
+observation remains empty; a coarse candle waits for its final data or forms from
+known finer observations.
+
+```ts
+import { ReplayGroup } from 'openalgo-charts';
+
+const replay = new ReplayGroup([
+  { id: 'left', chart: leftChart, options: {
+    timing: { barEndTime: bar => bar.time + 60 },
+  } },
+  { id: 'right', chart: rightChart, options: {
+    timing: { barEndTime: bar => bar.time + 300 },
+  } },
+], {
+  scope: 'all',
+  startTime: selectedUtcSeconds,
+  onChange: state => renderTransport(state),
+});
+
+replay.play({ speed: 2 });
+replay.setScope('focused', 'right');
+replay.setScope('all');
+replay.destroy();
+```
+
+These callbacks assume fixed one-minute and five-minute buckets. Use your feed's
+calendar-aware end times for session exceptions or variable-duration buckets.
+The default scope is `focused`, on the first member unless `focusedId` is supplied.
+Moving toolbar focus alone does not redirect a captured replay. Explicit scope
+changes preserve the playhead time and restore charts leaving replay. A chart
+entering replay captures its current data, preserving bars received while inactive.
+
+The group owns one timer. `barMs` defaults to 1000 and speed to 1; `now` and
+`scheduler` can be injected. `state()` reports the UTC time, index/total in the
+union of active observations, scope, focused member, playing/speed, active/destroyed
+flags and each member's ReplayState. Use `seek(index)` for the group scrubber,
+`seekTime(utcSeconds)` for an absolute jump, and `step()`, `stepBack()`, `play()` or
+`pause()` for transport. Empty histories have a null time and index -1.
+
+`stop()` restores data and viewports, retaining the initial time for re-entry.
+`destroy()` also releases snapshots, ownership and listeners. Call it during host
+teardown. Chart destruction is observed automatically: an active participant
+ending tears down the group and restores survivors; an inactive participant is
+removed. Membership stays reserved until destruction, preventing two groups from
+owning the same chart.
+
+Preparation failures and invalid control arguments leave the running session
+intact. Runtime projection/callback failures stop playback, attempt restoration
+on every surviving chart, release ownership and rethrow. Group `onChange` and
+member `onFrame` callbacks run after the full frame reaches all active members;
+use those callbacks for transport decisions. Stop/destroy may interrupt a chart
+frame, while other recursive transport changes there are rejected.
+
+The group ships no UI or feed transport. Hosts load history first, pause live
+writes on active charts, and keep trading and alert evaluation guarded throughout
+selection, loading and replay. Recapture participants when their source identity
+changes. Existing standalone replay remains available with its original defaults.
+
+## Indicators come along for free
+
+Replay does not fake a moment in time. It feeds the chart a **prefix** of the bar array
+through the ordinary `series.setData` path, and every indicator on the chart recomputes
+from that shortened history. An EMA, a Supertrend flip, a VWAP anchor, a pivot level, a
+legend reading: each is exactly what it was at that bar, because it is computed from
+exactly the bars that existed then.
+
+That also means `chart.dataLayer.length` shrinks to the replayed count, so nothing holds
+the shared time axis open at bars in the future. Pure calculations need no
+separate replay implementation. External studies must still respect observation
+availability; use the [managed external-data contract](/docs/indicators#tier-2-indicators-with-their-own-data)
+and avoid reading future values from a host history cache.
+
+<Callout type="info">
+The right edge of the view anchors to the newest bar plus `rightOffset`, so the chart
+scrolls itself as replay advances. Zoom (`barSpacing`) is left alone, which is why a user
+can pan and zoom mid-replay and keep their view.
+</Callout>
+
+## Live demo
+
+Step, play, and exit. The buttons are plain DOM, driven entirely by `state()` and the
+`replay:*` events. The EMA(20) is a real indicator instance, recomputed on every frame.
+
+<RunnableExample height={430} tiers={['indicators']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 400, 3600);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+chart.addIndicator('ema', { length: 20 });
+chart.timeScale.setBarSpacing(6);
+
+// The engine ships no transport bar. This is one, in the host's own DOM.
+el.style.position = 'relative';
+const strip = document.createElement('div');
+strip.style.cssText = 'position:absolute;left:10px;top:8px;z-index:5;display:flex;gap:6px;align-items:center;font:12px ui-monospace,monospace;color:light-dark(#151515,#cbd5e1)';
+el.appendChild(strip);
+const button = (label) => {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'font:12px ui-monospace,monospace;padding:3px 9px;border-radius:5px;border:1px solid light-dark(#e4e4e4,#3b4453);background:light-dark(#fff,#1b2029);color:light-dark(#151515,#cbd5e1);cursor:pointer';
+  strip.appendChild(b);
+  return b;
+};
+const back = button('Back');
+const toggle = button('Play');
+const fwd = button('Step');
+const exit = button('Exit');
+const clock = document.createElement('span');
+strip.appendChild(clock);
+
+const replay = new lib.ReplayController(chart, { series, bars, startIndex: 240, barMs: 140 });
+
+const stamp = (t) => new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+const render = (s) => {
+  toggle.textContent = s.playing ? 'Pause' : 'Play';
+  clock.textContent = stamp(s.bar.time) + '   bar ' + (s.index + 1) + ' / ' + s.total;
+};
+chart.on('replay:frame', render);
+chart.on('replay:play', render);
+chart.on('replay:pause', render);
+chart.on('replay:stop', () => { toggle.textContent = 'Play'; clock.textContent = 'live'; });
+render(replay.state());
+
+back.onclick = () => replay.stepBack();
+fwd.onclick = () => replay.step();
+toggle.onclick = () => (replay.state().playing ? replay.pause() : replay.play());
+exit.onclick = () => replay.stop();
+
+// The demo frame tears the chart down on navigation; stop the timer with it.
+const destroy = chart.destroy.bind(chart);
+chart.destroy = () => { replay.stop(); destroy(); };
+return chart;`} caption="Play runs at 140 ms per bar. Exit restores the full history and the viewport you had." />
+
+## Options
+
+```ts
+new ReplayController(chart, options);
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `series` | `SeriesApi \| SeriesApi[]` | `chart.primarySeries()` | The series replay drives. The first owns the timeline. Optional when the chart can name its own primary series. |
+| `bars` | `Bar[]` | the driven series' current data | The full session. Never mutated: each frame gets its own slice. |
+| `startIndex` | `number` | `0` | Bar to open at, 0-based. Clamped to the session. |
+| `barMs` | `number` | `1000` | Wall-clock milliseconds per bar at speed 1. |
+| `speed` | `number` | `1` | Initial multiplier over `barMs`. |
+| `onFrame` | `(state) => void` | none | Called on every playhead move, after the chart has been updated. |
+| `now` | `() => number` | `performance.now` | Playback clock. Inject one in tests. |
+| `scheduler` | `(cb, ms) => cancel` | `setInterval` | Playback timer. Inject one to drive replay from `requestAnimationFrame`, or by hand. |
+
+<Callout type="warning">
+**Constructing the controller enters replay.** It snapshots the chart's data and viewport
+and immediately shows `startIndex`. That is the gesture a replay button makes, and taking
+the snapshot before anything has moved is what lets `stop()` put the user back exactly
+where they were.
+</Callout>
+
+## Transport
+
+| Method | Effect |
+|---|---|
+| `seek(index)` | Jump the playhead. Out-of-range values clamp to the session. |
+| `step(n = 1)` | Move forward. Stops dead at the last bar. |
+| `stepBack(n = 1)` | Move back. Stops dead at the first bar. |
+| `play({ speed })` | Start or re-speed playback. On the last bar it reports `replay:end` rather than arming a timer that could never advance. |
+| `pause()` | Halt playback, leaving the playhead and the chart where they are. |
+| `stop()` | Leave replay. Safe to call twice. |
+| `state()` | Everything a transport bar needs, in one object. |
+
+Every transition, `seek` and `step` and each played frame alike, funnels through the same
+private apply step, so arriving at a bar leaves the chart in the same state however the
+user got there.
+
+### ReplayState
+
+```ts
+interface ReplayState {
+  index: number;    // 0-based index of the newest bar on the chart
+  total: number;    // bars in the replay set; a scrub bar's max is total - 1
+  playing: boolean;
+  speed: number;
+  bar: Bar | null;  // the bar at index: the replay clock's "now"
+}
+```
+
+## Events
+
+Every payload is a `ReplayState`, so one handler can drive the whole transport bar.
+
+| Event | Fires |
+|---|---|
+| `replay:start` | The first time the controller puts a bar on the chart. |
+| `replay:frame` | Every playhead move: seek, step, stepBack, and each played bar. |
+| `replay:play` | Playback armed or re-speeded. |
+| `replay:pause` | Playback halted; the playhead did not move. |
+| `replay:end` | The playhead reached the last bar. Preceded by `replay:pause` when it was playing. |
+| `replay:stop` | Replay left; data and viewport restored. |
+
+```ts
+chart.on('replay:frame', (s) => {
+  scrub.value = String(s.index);
+  clockEl.textContent = new Date(s.bar.time * 1000).toLocaleString();
+});
+chart.on('replay:end', () => playButton.disabled = true);
+```
+
+## Driving more than one series
+
+The [DataLayer](/docs/core-concepts) merges every series onto one time axis, so a series
+left at full length would drag future timestamps back onto the chart even though the price
+series had been cut. Pass the list, and replay truncates the followers **by time**, not by
+count, which is what a volume series that is shorter or starts later needs.
+
+```ts
+const replay = new ReplayController(chart, { series: [price, volume, comparison] });
+```
+
+Indicators added with `chart.addIndicator` are not in that list and must not be: they
+recompute from the primary series, which replay is already cutting.
+
+## Playback timing
+
+Bars owed on each tick are derived from the clock, not from the tick count, so a coarse or
+throttled timer still plays at the requested speed. A backgrounded tab throttles its timers
+to roughly one call a second, so a single tick is capped at **10 bars**: coming back to the
+tab resumes the session instead of fast-forwarding minutes of it in one frame.
+
+Playback is fully injectable, which is what makes replay testable without a clock:
+
+```ts
+let fire = () => {};
+let t = 0;
+const replay = new ReplayController(chart, {
+  series, bars,
+  now: () => t,
+  scheduler: (cb) => { fire = cb; return () => { fire = () => {}; }; },
+});
+
+replay.play();
+t += 3000; fire();          // three bars at the default 1000 ms
+expect(replay.state().index).toBe(3);
+```
+
+## Leaving replay
+
+`stop()` gives every driven series its pre-replay data back and restores `barSpacing` and
+`rightOffset`. Those two numbers, together with the base index that comes back with the
+data, reproduce the visible logical range exactly, even if the user panned and zoomed
+during replay.
+
+It is safe to call twice, and a later `seek`, `step` or `play` re-enters replay from
+`startIndex`, so a transport bar can toggle replay on and off without rebuilding the
+controller.
+
+A chart destroyed while replay owns it ends the session on its own: the controller
+stops its timer, writes nothing more to the chart and restores nothing, so a later
+`stop()` does nothing. `Chart` reports its end through the `destroy` event; a custom
+`ReplayChartHost` gets the same by providing `on('destroy', callback)`. Before 2.6.0 a
+playing controller kept ticking into the destroyed chart until the host called `stop()`.
+
+<Callout type="info">
+**Fence live writes while replay owns the series.** With a
+[`DataLoadingController`](/docs/data-loading), call `data.setPaused(true)` before
+entering replay. Its live store continues collecting updates while the display
+stays frozen. Stop replay before `data.setPaused(false)` publishes the live
+snapshot. A direct feed binding must instead suspend chart writes, retain live
+observations, and refresh missed history before resuming. Keep trading and alert
+delivery guarded through selection, loading and teardown as well as playback.
+</Callout>

@@ -1,0 +1,67 @@
+---
+title: Chart Types
+description: Every built-in chart style, with a live, interactive gallery.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Chart types
+
+Select a style by name - `addSeries(type, options)`. All of these ship in the **base** tier:
+
+```ts
+chart.addSeries('candlestick'); // hollow-candle, volume-candle, bar, high-low,
+                                 // line, line-markers, step, area, hlc-area,
+                                 // baseline, column, histogram
+```
+
+## Candlesticks
+
+The default OHLC style. Up/down colors come from the theme or per-series `style`.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 140, 3600));
+chart.timeScale.fitContent(140);
+return chart;`} />
+
+## Line & area
+
+`line` reads `close`; `area` fills below it with a real vertical gradient.
+
+<RunnableExample height={300} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 140, 3600);
+chart.addSeries('area', {
+  style: { color: '#2f6df6', areaTopColor: 'rgba(47,109,246,0.45)', areaBottomColor: 'rgba(47,109,246,0)' }
+}).setData(bars);
+chart.timeScale.fitContent(140);
+return chart;`} />
+
+## Baseline
+
+Colors the series above/below a reference value - handy for P&L or change-from-open.
+
+<RunnableExample height={300} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 140, 3600);
+chart.addSeries('baseline', { style: { baseValue: bars[0].close } }).setData(bars);
+chart.timeScale.fitContent(140);
+return chart;`} />
+
+## Bars & columns
+
+OHLC bars, and a column/histogram style for volume.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 3600);
+chart.addSeries('bar').setData(bars);
+chart.addSeries('histogram', { paneIndex: 1 }).setData(
+  bars.map(b => ({ time: b.time, value: b.volume, close: b.volume }))
+);
+chart.timeScale.fitContent(120);
+return chart;`} />
+
+<Callout type="info">
+Movement-driven styles - **Heikin Ashi, Renko, Range, Line Break, Point &amp; Figure, Kagi** -
+come from the [transform tier](/docs/transforms). The chart can apply them itself, live, to
+the bars a series is fed: `chart.setSeriesTransform(series, { type: 'renko' })`.
+</Callout>

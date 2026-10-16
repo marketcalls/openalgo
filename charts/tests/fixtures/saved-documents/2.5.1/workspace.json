@@ -1,0 +1,834 @@
+{
+  "kind": "workspace",
+  "version": 1,
+  "id": "ws-1",
+  "name": "Morning desk",
+  "createdAt": 1789021920000,
+  "updatedAt": 1789021920000,
+  "layout": {
+    "rows": 1,
+    "columns": 2,
+    "slots": [
+      {
+        "paneId": "p0",
+        "row": 0,
+        "column": 0,
+        "rowSpan": 1,
+        "columnSpan": 1
+      },
+      {
+        "paneId": "p1",
+        "row": 0,
+        "column": 1,
+        "rowSpan": 1,
+        "columnSpan": 1
+      }
+    ],
+    "columnWeights": [
+      0.6,
+      0.4
+    ]
+  },
+  "panes": [
+    {
+      "id": "p0",
+      "symbol": "RELIANCE",
+      "exchange": "NSE",
+      "interval": "5m",
+      "chartType": "candlestick",
+      "chart": {
+        "version": 1,
+        "timezone": "Asia/Kolkata",
+        "navigation": {
+          "mousePan": "both",
+          "defaultVisibleBars": 0
+        },
+        "canvas": {
+          "grid": {
+            "vertLines": false
+          }
+        },
+        "statusLine": {},
+        "watermark": {
+          "visible": false,
+          "text": "",
+          "color": "#9aa4b2",
+          "opacity": 0.08,
+          "fontSize": 64
+        },
+        "trading": {},
+        "events": {},
+        "axisChrome": {
+          "sessionClock": false,
+          "barCountdown": false
+        },
+        "viewport": {
+          "from": 180,
+          "to": 299
+        },
+        "barSpacing": 7.5966386554621845,
+        "grid": {
+          "vertLines": false,
+          "horzLines": true
+        },
+        "crosshairMode": "magnet",
+        "crosshairSnapToBar": false,
+        "indicators": [
+          {
+            "indicatorId": "ema",
+            "settings": {
+              "length": 20,
+              "source": "close",
+              "color": "#f5a623",
+              "ma:opacity": 100,
+              "ma:width": 1.5,
+              "ma:lineStyle": "solid",
+              "ma:type": "line"
+            },
+            "paneIndex": 0,
+            "visible": true,
+            "instanceId": "ema-1"
+          },
+          {
+            "indicatorId": "ema",
+            "settings": {
+              "length": 50,
+              "source": "close",
+              "color": "#26a69a",
+              "ma:opacity": 100,
+              "ma:width": 1.5,
+              "ma:lineStyle": "solid",
+              "ma:type": "line"
+            },
+            "paneIndex": 0,
+            "visible": false,
+            "instanceId": "ema-2"
+          },
+          {
+            "indicatorId": "bollinger",
+            "settings": {
+              "length": 20,
+              "stdDev": 2,
+              "source": "close",
+              "basisColor": "#f5a623",
+              "bandColor": "#4f8cff",
+              "upper:opacity": 100,
+              "upper:width": 1,
+              "upper:lineStyle": "solid",
+              "upper:type": "line",
+              "basis:opacity": 100,
+              "basis:width": 1.5,
+              "basis:lineStyle": "solid",
+              "basis:type": "line",
+              "lower:opacity": 100,
+              "lower:width": 1,
+              "lower:lineStyle": "solid",
+              "lower:type": "line"
+            },
+            "paneIndex": 0,
+            "visible": true,
+            "instanceId": "bollinger-3"
+          },
+          {
+            "indicatorId": "rsi",
+            "settings": {
+              "length": 14,
+              "source": "close",
+              "color": "#e0b020",
+              "overbought": 70,
+              "oversold": 30,
+              "bandColor": "#7e57c2",
+              "rsi:opacity": 100,
+              "rsi:width": 1.5,
+              "rsi:lineStyle": "solid",
+              "rsi:type": "line"
+            },
+            "paneIndex": 1,
+            "visible": true,
+            "instanceId": "rsi-4"
+          },
+          {
+            "indicatorId": "macd",
+            "settings": {
+              "fastPeriod": 12,
+              "slowPeriod": 26,
+              "signalPeriod": 9,
+              "source": "close",
+              "macdColor": "#2962ff",
+              "histUpColor": "#26a69a",
+              "histUpFadeColor": "#a7d8d2",
+              "histDownColor": "#ef5350",
+              "histDownFadeColor": "#f5b0ae",
+              "signalColor": "#ff6d00",
+              "histogram:color": "#3a4666",
+              "histogram:opacity": 100,
+              "histogram:width": 1.5,
+              "histogram:lineStyle": "solid",
+              "histogram:type": "histogram",
+              "macd:opacity": 100,
+              "macd:width": 1.5,
+              "macd:lineStyle": "solid",
+              "macd:type": "line",
+              "signal:opacity": 100,
+              "signal:width": 1.5,
+              "signal:lineStyle": "solid",
+              "signal:type": "line"
+            },
+            "paneIndex": 2,
+            "visible": true,
+            "instanceId": "macd-5"
+          }
+        ],
+        "alerts": {
+          "version": 1,
+          "alerts": [
+            {
+              "id": "alert-breakout",
+              "source": {
+                "kind": "price",
+                "price": 2855.85
+              },
+              "condition": "crossingUp",
+              "policy": "onBarClose",
+              "repeat": "once",
+              "state": "armed",
+              "title": "Breakout",
+              "cooldownSeconds": 0,
+              "scope": {},
+              "message": "Above the week high",
+              "expiresAt": 1789626720,
+              "lastClosedTime": 1789033800
+            },
+            {
+              "id": "alert-range",
+              "source": {
+                "kind": "price",
+                "price": 2779.65,
+                "upperPrice": 2864.35
+              },
+              "condition": "leavingRange",
+              "policy": "onTouch",
+              "repeat": "everyTime",
+              "state": "armed",
+              "title": "Chart alert",
+              "cooldownSeconds": 300,
+              "scope": {},
+              "lastClosedTime": 1789033800
+            },
+            {
+              "id": "alert-rsi",
+              "source": {
+                "kind": "indicator",
+                "instanceId": "rsi-4",
+                "plotKey": "rsi",
+                "value": 70
+              },
+              "condition": "crossingDown",
+              "policy": "onBarClose",
+              "repeat": "once",
+              "state": "armed",
+              "title": "RSI turns down",
+              "cooldownSeconds": 0,
+              "scope": {},
+              "lastClosedTime": 1789033800
+            },
+            {
+              "id": "alert-trend",
+              "source": {
+                "kind": "drawing",
+                "drawingId": "trend-1"
+              },
+              "condition": "crossing",
+              "policy": "onBarClose",
+              "repeat": "once",
+              "state": "armed",
+              "title": "Trend line",
+              "cooldownSeconds": 0,
+              "scope": {},
+              "lastClosedTime": 1789033800
+            },
+            {
+              "id": "alert-paused",
+              "source": {
+                "kind": "price",
+                "price": 2680.9
+              },
+              "condition": "lessThan",
+              "policy": "onBarClose",
+              "repeat": "once",
+              "state": "disabled",
+              "title": "Chart alert",
+              "cooldownSeconds": 0,
+              "scope": {},
+              "lastClosedTime": 1789033800,
+              "payload": {
+                "route": "desk"
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "version": 2,
+          "drawings": [
+            {
+              "tool": "trend-line",
+              "points": [
+                {
+                  "time": 1788771300,
+                  "price": 2860.2
+                },
+                {
+                  "time": 1788853800,
+                  "price": 2992.65
+                }
+              ],
+              "style": {
+                "extendLeft": false,
+                "extendRight": true,
+                "color": "#2962ff",
+                "lineWidth": 2
+              },
+              "paneIndex": 0,
+              "id": "trend-1",
+              "zIndex": 0,
+              "createdAt": 1789021920000
+            },
+            {
+              "tool": "horizontal-line",
+              "points": [
+                {
+                  "time": 1788770700,
+                  "price": 2860.2
+                }
+              ],
+              "style": {
+                "showLabels": true,
+                "color": "#089981",
+                "lineStyle": "dashed"
+              },
+              "paneIndex": 0,
+              "text": {
+                "value": "Support"
+              },
+              "id": "support-1",
+              "zIndex": 0,
+              "createdAt": 1789021920000
+            },
+            {
+              "tool": "fib-retracement",
+              "points": [
+                {
+                  "time": 1788771300,
+                  "price": 2860.2
+                },
+                {
+                  "time": 1788853800,
+                  "price": 2992.65
+                }
+              ],
+              "style": {
+                "showLabels": true,
+                "levels": [
+                  {
+                    "ratio": 0,
+                    "color": "#787b86"
+                  },
+                  {
+                    "ratio": 0.236,
+                    "color": "#f23645"
+                  },
+                  {
+                    "ratio": 0.382,
+                    "color": "#ff9800"
+                  },
+                  {
+                    "ratio": 0.5,
+                    "color": "#4caf50"
+                  },
+                  {
+                    "ratio": 0.618,
+                    "color": "#089981"
+                  },
+                  {
+                    "ratio": 0.786,
+                    "color": "#00bcd4"
+                  },
+                  {
+                    "ratio": 1,
+                    "color": "#787b86"
+                  }
+                ],
+                "fill": true,
+                "fillOpacity": 0.06
+              },
+              "paneIndex": 0,
+              "id": "fib-1",
+              "zIndex": 0,
+              "createdAt": 1789021920000
+            },
+            {
+              "tool": "rectangle",
+              "points": [
+                {
+                  "time": 1788940500,
+                  "price": 2922.6
+                },
+                {
+                  "time": 1789016400,
+                  "price": 2894.7
+                }
+              ],
+              "style": {
+                "fill": true,
+                "color": "#ff9800",
+                "fillOpacity": 0.1
+              },
+              "paneIndex": 0,
+              "locked": true,
+              "id": "box-1",
+              "zIndex": 0,
+              "createdAt": 1789021920000
+            },
+            {
+              "tool": "text",
+              "points": [
+                {
+                  "time": 1789028400,
+                  "price": 2858.6
+                }
+              ],
+              "style": {
+                "color": "#e0e3eb"
+              },
+              "text": {
+                "value": "Results day",
+                "fontSize": 13,
+                "bold": true
+              },
+              "paneIndex": 0,
+              "id": "note-1",
+              "zIndex": 0,
+              "createdAt": 1789021920000
+            }
+          ]
+        },
+        "panes": [
+          {
+            "weight": 1,
+            "priceScale": {
+              "marginTop": 0.1,
+              "marginBottom": 0.1,
+              "minMove": 0.05,
+              "mode": "logarithmic",
+              "inverted": false,
+              "autoScale": true
+            }
+          },
+          {
+            "weight": 0.6,
+            "priceScale": {
+              "marginTop": 0.1,
+              "marginBottom": 0.1,
+              "minMove": 0,
+              "mode": "logarithmic",
+              "inverted": false,
+              "autoScale": false,
+              "range": {
+                "min": 0,
+                "max": 100
+              }
+            }
+          },
+          {
+            "weight": 0.32,
+            "priceScale": {
+              "marginTop": 0.1,
+              "marginBottom": 0.1,
+              "minMove": 0,
+              "mode": "logarithmic",
+              "inverted": false,
+              "autoScale": true
+            }
+          }
+        ],
+        "series": [
+          {
+            "type": "candlestick",
+            "style": {},
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "color": "#f5a623",
+              "title": "EMA",
+              "visible": true,
+              "lineStyle": "solid"
+            },
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "color": "#26a69a",
+              "title": "EMA",
+              "visible": false,
+              "lineStyle": "solid"
+            },
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1,
+              "title": "BB Upper",
+              "visible": true,
+              "color": "#4f8cff",
+              "lineStyle": "solid"
+            },
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "title": "BB Basis",
+              "visible": true,
+              "color": "#f5a623",
+              "lineStyle": "solid"
+            },
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1,
+              "title": "BB Lower",
+              "visible": true,
+              "color": "#4f8cff",
+              "lineStyle": "solid"
+            },
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "title": "RSI",
+              "visible": true,
+              "color": "#e0b020",
+              "lineStyle": "solid"
+            },
+            "paneIndex": 1,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "histogram",
+            "style": {
+              "base": 0,
+              "color": "#3a4666",
+              "title": "Histogram",
+              "visible": true,
+              "lineWidth": 1.5,
+              "lineStyle": "solid"
+            },
+            "paneIndex": 2,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "title": "MACD",
+              "visible": true,
+              "color": "#2962ff",
+              "lineStyle": "solid"
+            },
+            "paneIndex": 2,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "title": "Signal",
+              "visible": true,
+              "color": "#ff6d00",
+              "lineStyle": "solid"
+            },
+            "paneIndex": 2,
+            "priceScaleId": "right"
+          }
+        ]
+      },
+      "settings": {
+        "symbol.bodyVisible": true,
+        "symbol.upColor": "#089981",
+        "symbol.downColor": "#e0473e",
+        "symbol.borderVisible": true,
+        "symbol.borderUpColor": "#089981",
+        "symbol.borderDownColor": "#e0473e",
+        "symbol.wickVisible": true,
+        "symbol.wickUpColor": "#089981",
+        "symbol.wickDownColor": "#e0473e",
+        "symbol.colorByPreviousClose": false,
+        "symbol.precision": "default",
+        "symbol.priceLineVisible": true,
+        "symbol.lastValueVisible": true,
+        "statusLine.logo": true,
+        "statusLine.title": true,
+        "statusLine.titleMode": "symbol",
+        "statusLine.marketStatus": true,
+        "statusLine.chartValues": true,
+        "statusLine.barChange": true,
+        "statusLine.volume": true,
+        "statusLine.openInterest": false,
+        "statusLine.lastDayChange": true,
+        "statusLine.lastValueLabel": true,
+        "statusLine.background": false,
+        "statusLine.backgroundColor": "#ffffff",
+        "statusLine.backgroundOpacity": 0.8,
+        "navigation.mousePan": "both",
+        "navigation.defaultVisibleBars": 0,
+        "scales.mode": "logarithmic",
+        "scales.autoScale": true,
+        "scales.inverted": false,
+        "time.timezone": "Asia/Kolkata",
+        "axisChrome.sessionClock": false,
+        "axisChrome.barCountdown": false,
+        "watermark.visible": false,
+        "watermark.text": "",
+        "watermark.color": "#9aa4b2",
+        "watermark.opacity": 0.08,
+        "watermark.fontSize": 64,
+        "canvas.grid.vertLines": false,
+        "canvas.grid.vertColor": "#eef1f6",
+        "canvas.grid.vertStyle": "solid",
+        "canvas.grid.horzLines": true,
+        "canvas.grid.horzColor": "#eef1f6",
+        "canvas.grid.horzStyle": "solid",
+        "canvas.grid.lineWidth": 1,
+        "canvas.grid.spacing": 60,
+        "canvas.crosshairMode": "magnet",
+        "canvas.crosshairSnapToBar": false,
+        "canvas.crosshair.color": "#9aa3b2",
+        "canvas.crosshair.style": "dashed",
+        "canvas.crosshair.width": 1,
+        "canvas.scales.textColor": "#5b6472",
+        "canvas.scales.fontSize": 11,
+        "canvas.scales.lineColor": "#d4dae3",
+        "canvas.margins.top": 10,
+        "canvas.margins.bottom": 10,
+        "trading.longColor": "#2f6df6",
+        "trading.shortColor": "#ef5350",
+        "trading.orderColor": "#3b82f6",
+        "trading.tpColor": "#26a69a",
+        "trading.slColor": "#ef5350",
+        "trading.buyColor": "#26a69a",
+        "trading.sellColor": "#ef5350"
+      },
+      "volume": true,
+      "magnet": "weak",
+      "stay": false,
+      "comparisons": [
+        {
+          "id": "cmp-nifty",
+          "symbol": "NIFTY",
+          "exchange": "NSE_INDEX",
+          "visible": true,
+          "color": "#f5a623"
+        }
+      ],
+      "comparisonMode": "percent"
+    },
+    {
+      "id": "p1",
+      "symbol": "INFY",
+      "exchange": "NSE",
+      "interval": "15m",
+      "chartType": "candlestick",
+      "chart": {
+        "version": 1,
+        "timezone": "Asia/Kolkata",
+        "navigation": {
+          "mousePan": "both",
+          "defaultVisibleBars": 0
+        },
+        "canvas": {},
+        "statusLine": {},
+        "watermark": {
+          "visible": false,
+          "text": "",
+          "color": "#9aa4b2",
+          "opacity": 0.08,
+          "fontSize": 64
+        },
+        "trading": {},
+        "events": {},
+        "axisChrome": {
+          "sessionClock": false,
+          "barCountdown": false
+        },
+        "viewport": {
+          "from": -20,
+          "to": 99
+        },
+        "barSpacing": 7.5966386554621845,
+        "grid": {
+          "vertLines": true,
+          "horzLines": true
+        },
+        "crosshairMode": "normal",
+        "crosshairSnapToBar": false,
+        "indicators": [
+          {
+            "indicatorId": "ema",
+            "settings": {
+              "length": 34,
+              "source": "close",
+              "color": "#f5a623",
+              "ma:opacity": 100,
+              "ma:width": 1.5,
+              "ma:lineStyle": "solid",
+              "ma:type": "line"
+            },
+            "paneIndex": 0,
+            "visible": true,
+            "instanceId": "ema-6"
+          }
+        ],
+        "drawings": {
+          "version": 2,
+          "drawings": []
+        },
+        "panes": [
+          {
+            "weight": 1,
+            "priceScale": {
+              "marginTop": 0.1,
+              "marginBottom": 0.1,
+              "minMove": 0,
+              "mode": "linear",
+              "inverted": false,
+              "autoScale": true
+            }
+          }
+        ],
+        "series": [
+          {
+            "type": "candlestick",
+            "style": {},
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          },
+          {
+            "type": "line",
+            "style": {
+              "lineWidth": 1.5,
+              "color": "#f5a623",
+              "title": "EMA",
+              "visible": true,
+              "lineStyle": "solid"
+            },
+            "paneIndex": 0,
+            "priceScaleId": "right"
+          }
+        ]
+      },
+      "settings": {
+        "symbol.bodyVisible": true,
+        "symbol.upColor": "#089981",
+        "symbol.downColor": "#e0473e",
+        "symbol.borderVisible": true,
+        "symbol.borderUpColor": "#089981",
+        "symbol.borderDownColor": "#e0473e",
+        "symbol.wickVisible": true,
+        "symbol.wickUpColor": "#089981",
+        "symbol.wickDownColor": "#e0473e",
+        "symbol.colorByPreviousClose": false,
+        "symbol.precision": "default",
+        "symbol.priceLineVisible": true,
+        "symbol.lastValueVisible": true,
+        "statusLine.logo": true,
+        "statusLine.title": true,
+        "statusLine.titleMode": "symbol",
+        "statusLine.marketStatus": true,
+        "statusLine.chartValues": true,
+        "statusLine.barChange": true,
+        "statusLine.volume": true,
+        "statusLine.openInterest": false,
+        "statusLine.lastDayChange": true,
+        "statusLine.lastValueLabel": true,
+        "statusLine.background": false,
+        "statusLine.backgroundColor": "#ffffff",
+        "statusLine.backgroundOpacity": 0.8,
+        "navigation.mousePan": "both",
+        "navigation.defaultVisibleBars": 0,
+        "scales.mode": "linear",
+        "scales.autoScale": true,
+        "scales.inverted": false,
+        "time.timezone": "Asia/Kolkata",
+        "axisChrome.sessionClock": false,
+        "axisChrome.barCountdown": false,
+        "watermark.visible": false,
+        "watermark.text": "",
+        "watermark.color": "#9aa4b2",
+        "watermark.opacity": 0.08,
+        "watermark.fontSize": 64,
+        "canvas.grid.vertLines": true,
+        "canvas.grid.vertColor": "#eef1f6",
+        "canvas.grid.vertStyle": "solid",
+        "canvas.grid.horzLines": true,
+        "canvas.grid.horzColor": "#eef1f6",
+        "canvas.grid.horzStyle": "solid",
+        "canvas.grid.lineWidth": 1,
+        "canvas.grid.spacing": 60,
+        "canvas.crosshairMode": "normal",
+        "canvas.crosshairSnapToBar": false,
+        "canvas.crosshair.color": "#9aa3b2",
+        "canvas.crosshair.style": "dashed",
+        "canvas.crosshair.width": 1,
+        "canvas.scales.textColor": "#5b6472",
+        "canvas.scales.fontSize": 11,
+        "canvas.scales.lineColor": "#d4dae3",
+        "canvas.margins.top": 10,
+        "canvas.margins.bottom": 10,
+        "trading.longColor": "#2f6df6",
+        "trading.shortColor": "#ef5350",
+        "trading.orderColor": "#3b82f6",
+        "trading.tpColor": "#26a69a",
+        "trading.slColor": "#ef5350",
+        "trading.buyColor": "#26a69a",
+        "trading.sellColor": "#ef5350"
+      },
+      "volume": true,
+      "magnet": "weak",
+      "stay": false,
+      "comparisons": [
+        {
+          "id": "cmp-nifty",
+          "symbol": "NIFTY",
+          "exchange": "NSE_INDEX",
+          "visible": true,
+          "color": "#f5a623"
+        }
+      ],
+      "comparisonMode": "percent"
+    }
+  ],
+  "activePaneId": "p0",
+  "sync": {
+    "crosshair": true,
+    "viewport": false,
+    "symbol": false,
+    "interval": true
+  }
+}

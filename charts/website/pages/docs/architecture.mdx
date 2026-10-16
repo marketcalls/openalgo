@@ -1,0 +1,175 @@
+---
+title: Architecture
+description: The host boundary, the base engine's data-to-model-to-render pipeline, and eight optional bundle tiers.
+---
+
+# Architecture
+
+import ArchitectureDiagram from '../../components/ArchitectureDiagram'
+
+OpenAlgo Charts 2.6.0 is a browser charting engine with no runtime dependencies.
+The diagram separates the host boundary, the base engine and eight optional
+tiers. You can build your own interface or use the widget as a packaged host.
+
+<ArchitectureDiagram />
+
+## Host and engine responsibilities
+
+The host owns the selected chart, data adapters, authentication, workspace
+activation, order authority and notification delivery. It captures the chart
+target for asynchronous actions and checks that ownership before applying a
+result. Choosing the widget supplies interface controls through the same public
+API; applications still supply their connections and authority.
+
+Inside the base engine, incoming data flows through the shared model to the
+render loop. Each pane has a base canvas for chart content and an overlay canvas
+for transient interaction. Alerts, `ReplayGroup`, `LinkGroup`, interaction,
+chart state and CSV export are shared base capabilities. Optional tiers add
+studies, drawings, profiles, transforms, trading tools, workspace documents,
+WebGL rendering and widget controls.
+
+## Current capabilities
+
+| Area | Current architecture |
+|---|---|
+| Analysis drawings | Anchored VWAP and fixed-range Volume Profile use time anchors and the owning pane's OHLCV bars. Missing volume remains unavailable; fixed-range profiles estimate volume across candle price ranges. |
+| Drawing and appearance links | Opt-in appearance adapters copy supported visual settings in base. The draw tier owns same-symbol, same-exchange replication, drag previews, local undo and persisted drawing lineage. |
+| Timeline events | Base primitives own group visibility and zoom-dependent clustering. The widget owns the details popup, which renders rich blocks as elements and text only with vetted links, runs host action callbacks, and guards asynchronous lookups; event feeds remain host-supplied. |
+| Open interest | `Bar.oi` is a position level: aggregation takes the latest defined reading, while volume is summed. Missing OI remains absent and zero remains a real reading. Instrument capability is separate host metadata. |
+| Alerts | Price and study thresholds preview during a drag and commit once on release. Versioned alert documents validate before replacement and seed restored evaluation without replaying historical triggers; the host delivers notifications. |
+| Shared replay | `ReplayGroup` advances participating charts by one UTC availability clock. Coarse bars wait for their close or form from available finer observations, without revealing the final candle early. |
+| Comparisons | Each source has an independent scale and baseline. Shared percent or indexed presentation preserves the source's original prices and units. |
+| Instruments | Validated metadata defines rules for price precision, sessions, quantity steps and order constraints. Hosts retain ownership of instrument lookup and credentials. |
+| Workspaces | The optional tier provides validated portable documents, templates and revisioned catalogs with atomic storage writes. Hosts prepare charts and data, guard asynchronous ownership and activate the saved layout. |
+| Widget language | A typed translation callback with English fallback for controls and accessible labels. User content and instrument identifiers remain literal. |
+| Trading capabilities | Checks declared operation, order-type and mode support before writes and rechecks after asynchronous confirmation. |
+| Navigation | Version 2.1.8 normalizes wheel units, routes gestures by axis and eases automatic price projections. The widget adds touch controls that follow container width and pointer type. |
+| Data loading | Version 2.1.6 shares request scheduling, cache snapshots, history paging, stream repair and loading states across widget and custom hosts. |
+| Object management | Version 2.1.7 shares inventory and supported object actions across widgets and custom terminals. The Objects panel adapts to the chart's container size. |
+| Widget | Version 2.0 added `createWidget`: a packaged host with a toolbar, drawing rail, dialogs, shortcuts and persistence. |
+| Rendering | Version 2.0 introduced the series backend interface, an optional WebGL2 series backend with Canvas 2D fallback, and vector SVG export. |
+| Drawings | Version 2.0 added the versioned drawing model: paint order, separate text, per-level styling, multiple selection, and migrated state/clipboard documents. |
+| Market profiles | Version 2.1 adds compact TPO glyphs, per-session split/unsplit overrides, open markers and a latest-close marker on the newest supplied session. |
+| Depth integration | Version 2.0.1 corrected the requested depth subscription field. The current ladder supports tick grouping, demonstrated in the new [depth guide](/docs/depth-of-market). |
+
+The map follows the data path and shows shared engine services beside it.
+The base and optional tier boxes describe what an application imports;
+the responsibility sections below explain how those pieces work together.
+
+## Engine and tier details
+
+**Public API.** `createChart`, `addSeries`, `registerIndicator`, event subscriptions
+and `takeScreenshot`. See [Core Concepts](/docs/core-concepts).
+
+**Rendering.** An invalidation-aware render loop drives one base canvas and one
+overlay canvas per pane, plus crosshair, axes, grid and [themes](/docs/themes).
+Cursor-only work stays on the overlay canvas, and live updates are coalesced to
+animation frames. The series pass on each pane goes through a render backend
+port: the shipped Canvas2D backend is the default, the `openalgo-charts/webgl`
+tier puts a WebGL2 backend behind the same port, and `exportSVG` runs the same
+paint into a serialising context. See
+[Render Backends & SVG Export](/docs/rendering). A live tick that replaces the
+forming bar repaints the price pane and the panes of the studies computed from it,
+and a study recompute repaints only the panes its output lands on; an appended bar,
+which moves the shared time scale, repaints every pane, and the corner clock and bar
+countdown keep the panes that show them repainting while they are on. Kinetic scroll
+and the eased wheel zoom are stepped inside the same frame. A zoomed-out chart draws
+one stick per device-pixel column (the level of detail, on by default). Every study
+still does work over its full history on a tick frame, so
+[Performance & Operations](/docs/performance-and-operations) covers the
+retained-history and canvas-memory budgets for sustained sessions.
+
+**Drawables.** [Chart types](/docs/chart-types), [indicators](/docs/indicators),
+[drawing tools](/docs/drawing-tools) and [primitives](/docs/primitives-and-plugins).
+Chart types, indicators and drawing tools use registries. Primitives extend the
+chart through attachment, rendering, lifecycle and hit-test contracts.
+
+**Shared model.** One [DataLayer](/docs/data-loading) merges every series onto a
+gapless logical index, a single time scale is shared across panes, and each pane
+owns its [price scales](/docs/scales-and-panes). Independent comparison scales
+retain each instrument's real prices. Optional `oi` observations preserve the
+difference between absent data and a reported zero; the host supplies OI
+capability separately. [Transforms](/docs/transforms)
+turn bars into Renko, Range, Point and Figure, Kagi, Line Break or Heikin Ashi.
+
+**Session.** [Replay](/docs/market-replay), [comparison](/docs/symbol-comparison),
+[chart linking](/docs/chart-linking), [keyboard shortcuts](/docs/keyboard-shortcuts)
+and chart state are base services. `ReplayGroup` shares observation availability
+by UTC time; `LinkGroup` synchronizes the host's chosen chart properties. The host
+pauses live writes, alert evaluation and trading while replay owns the data.
+The [drawing controller](/docs/drawing-clipboard) and `DrawingLinkGroup` belong to the
+draw tier. Linked drawings require matching symbol and exchange and retain UTC time
+anchors across intervals. Appearance links use host settings adapters in base.
+The optional
+[workspace tier](/docs/workspaces) adds validated layout documents, indicator
+templates and revisioned asynchronous persistence without adding interface
+controls or activating a host's replacement charts.
+
+**Alerts.** The base `AlertController` evaluates committed price, study, bar and
+drawing sources. A dragged threshold changes only its visual preview until a
+valid release; cancellation discards the preview. Durable restore validates the
+document and seeds evaluation from current data. Hosts store the documents and
+handle delivery events. See [Trader alerts](/docs/alerts) and the
+[dragging example](/examples#alert-threshold-dragging).
+
+**Trade tier.** Order engine with a state machine and OCO, a depth-of-market
+ladder with configurable tick grouping, and drag-to-modify. Grouping combines
+display rows; it does not change valid order prices. The host authorizes writes
+and supplies the execution adapter. See
+[Order Engine & Ladder](/docs/trading) and the [depth demo](/docs/depth-of-market).
+
+**Feeds and data.** A headless [shared loading controller](/docs/data-loading),
+per-feed request scheduling, validated closed-bar cache snapshots, [REST history](/docs/live-data),
+[live WebSocket data](/docs/live-data), the trading API, a candle builder that folds
+ticks into OHLC, and full IANA [timezone](/docs/timezones) handling.
+
+## Where calculations and rendering run
+
+The browser receives data from host-provided adapters. The DataLayer, indicators,
+transforms and profile calculations run in JavaScript on the CPU. The optional
+WebGL2 backend uses the user's GPU to draw supported series, then composites them
+into the pane's base canvas. It does not move indicator or profile calculations
+to the GPU. Axes, text, drawings and profile primitives continue to use Canvas 2D.
+
+The homepage's BTC/USD adapter and the simulated depth feed are website examples;
+applications supply their own data connections. They are not bundled market-data
+services. See [Custom Data Feeds](/docs/data-feeds).
+
+## Bundle tiers
+
+The base engine is what you always pay for. Eight optional tiers have separate
+entry points exposing their APIs. Some tiers also register built-in indicators,
+chart types, drawing tools or rendering backends when imported. Unused optional
+tiers stay outside the base bundle.
+
+| Tier | Brotli | Contents |
+|---|--:|---|
+| `openalgo-charts` | 137.65 kB | Data/model/render engine, 13 chart types, panes and scales, grouped events, primitives, registries, alerts, replay, appearance linking, comparisons, interaction, chart state, CSV/SVG export, bar cache, trading overlay, feeds |
+| `openalgo-charts/indicators` | 43.02 kB | 112 built-ins, shared TA helpers, and the Tier-2 external-data contract |
+| `openalgo-charts/draw` | 58.44 kB | 87 drawing tools, Anchored VWAP, fixed-range Volume Profile, headless controller, drawing linking, clipboard, settings schema |
+| `openalgo-charts/profile` | 20.83 kB | Volume Profile, Market Profile (TPO), Footprint, order flow |
+| `openalgo-charts/transform` | 6.23 kB | Heikin Ashi, Renko, Range, Line Break, Point and Figure, Kagi, symbol arithmetic |
+| `openalgo-charts/trade` | 16.88 kB | Order, position and bracket tools, DOM ladder |
+| `openalgo-charts/workspace` | 11.73 kB | Validated workspace and template documents, revisioned named catalogs, asynchronous storage and IndexedDB adapter |
+| `openalgo-charts/webgl` | 6.97 kB | WebGL2 series backend, composited into the pane's canvas, 2D fallback for the session on context loss |
+| `openalgo-charts/widget` | 124.94 kB (+ 21.00 kB on first use) | Packaged interface controls through `createWidget`: top bar, Data and Objects dock, rich symbol search, drawing rail, mobile controls, status line, bottom bar, dialogs, event details, right-click menu, keymap and shortcuts editor, saved layouts, the chart grid and persistence |
+
+**426.67 kB Brotli** for every tier at once; a widget terminal with built-in
+indicators (base + draw + indicators + widget) is 364.04 kB. Figures are decimal
+kB from the 2.6.4 build, measured by `size-limit`. CI enforces the budgets and
+fails a build when a bundle exceeds its limit.
+
+The widget is an optional tier and a packaged host that drives the engine through
+the same public API as your own interface. The base engine creates its canvas and
+container elements; the widget adds the toolbar, dialogs and other interface
+controls. See [The Widget Tier](/docs/widget).
+
+## Custom indicators
+
+The 112 built-ins are not special-cased. Each one is a descriptor: inputs, plots and
+a `calc` function, optionally with `markers`, `draws`, `levels`, `background`,
+`barColors`, `fills`, `alerts` and a `table`. Anything you register through
+`registerIndicator` uses exactly the same contract and gets the same treatment,
+including generated settings, legend entries and state persistence.
+
+No fork, and no build step. See [Indicators](/docs/indicators) for the contract.

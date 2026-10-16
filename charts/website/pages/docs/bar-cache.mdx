@@ -1,0 +1,276 @@
+---
+title: Bar Cache
+description: "Warm loads for any DataFeed, with the one rule that makes a chart cache safe: never serve the forming bar."
+---
+
+import { Callout } from 'nextra/components'
+
+# Bar cache
+
+`withBarCache(feed, options)` wraps **any** [`DataFeed`](/docs/data-feeds) in a warm-load
+cache, so a custom adapter gets the same behaviour as the bundled `OpenAlgoDataFeed`. It is
+a `DataFeed` in and a `DataFeed` out: nothing downstream of it changes.
+
+```ts
+import { withBarCache, OpenAlgoDataFeed } from 'openalgo-charts';
+
+const feed = withBarCache(new OpenAlgoDataFeed(config), { ttlMs: 60_000 });
+
+const bars = await feed.getBars({ symbol: 'RELIANCE', exchange: 'NSE', interval: '5m', from, to });
+```
+
+A symbol switch, timeframe flip or [linked grid](/docs/chart-linking) can reuse
+closed history when age and coverage permit. The shared controller paints a warm
+snapshot first, then refreshes current history; explicit widget reloads fetch fresh data.
+
+## Never serve the forming bar
+
+A **forming bar** is the one that has not closed yet. On a 5-minute chart at 10:07, the bar
+covering 10:05 to 10:10 is still being built: its close moves with every tick and is not
+final until 10:10. Closed bars, by contrast, are immutable, and yesterday's daily candle
+will never change again.
+
+**A cache that serves a stale forming bar is worse than no cache at all:**
+
+```text
+10:07  Open INFY.  Fetch, last bar close 1120.  Cached.
+10:08  Switch to RELIANCE to check something.
+10:09  Switch back to INFY.  Cache hit, last bar close 1120.
+```
+
+INFY actually traded to 1135 while the user was away. That one wrong number then reaches the
+last-price line, the price-axis tag, the header LTP, and every indicator computed off that
+close: RSI, VWAP, a moving average, a Supertrend flip. With no cache the user waits 600 ms
+and sees 1135, which is slower and correct. This library draws Buy and Sell buttons on the
+chart, so a fast wrong price is a worse failure here than a slow right one.
+
+The trailing forming bar is **dropped on store**, and coverage ends at the last
+closed bar. `getCachedBars(req)` may supply only part of a requested window. Treat
+that snapshot as refreshing until authoritative history arrives; a live stream
+alone does not repair missing closed candles. A host with no live subscription has
+nothing to supply the bar a hit leaves out: when a hit ends before a bar the page has
+already shown (the forming candle, or the day's candle after the close), ask again with
+`noCache: true`, as the reference host does, or the chart steps back to an older close.
+
+<Callout type="warning">
+Anything you build that computes off `bars[bars.length - 1]` inherits this rule. Keep the
+completed history and re-fetch only the tail.
+</Callout>
+
+## The key deliberately excludes the range
+
+An entry is keyed `symbol | exchange | interval`, then the request's
+[data variant](/docs/data-variants) when it names one: extended hours or raw prices are
+another series, so they are another entry. The default variant adds nothing, so the key
+of a request without one is the key it always was. The requested `from` and `to` are
+**not** part of the key:
+
+- one entry per series holds the set that was fetched, and a **narrower** request is served
+  by slicing it;
+- a request the entry cannot cover refetches and replaces it.
+
+Keying on the range would miss on every pan and on every "same chart, one bar later"
+reload, which is exactly the traffic a warm cache exists to remove.
+
+## When a hit is allowed
+
+Three tests, all of which must pass. Age is one; the other two are the ends of the entry's
+coverage, and they fail for different reasons:
+
+| Gate | Test | Why |
+|---|---|---|
+| Age | `now - storedAt` is within `ttlMs` | An absolute bound, so nothing is served indefinitely. |
+| Coverage start | `req.from` is not older than the entry's `from` | Older bars than the entry holds is a real gap at the left edge. Painting a chart that silently starts late is worse than a refetch. |
+| Coverage end | `req.to` is within the entry's `to`, **or** the bar after the last closed one is still forming | Nothing new can have closed, so a fetch would return the same bars. |
+
+The last gate uses the next close returned by the interval registry or your
+`barCloses` callback. Fixed intervals follow their bar grid; calendar intervals
+use the configured IANA timezone. It does not assume every month or session has
+a fixed duration. The cache can reuse closed history while the next bar is
+forming, but that result does not contain a current live tail.
+
+<Callout type="warning">
+**Out of hours, cap your `to` at the newest bar you have.** The cache cannot know a venue is
+shut, and it only allows a hit past its coverage while the next bar is still forming. Ask
+for `to: nowSec` at 21:00 on a closed market and every load is a cold one, forever. A host
+that already has a session table should clamp instead:
+
+```ts
+const to = marketOpen ? nowSec : lastBarTime;
+```
+
+In the yfinance demo that single change turns a reload from "fetched 320 ms" into
+"warm 1 ms".
+</Callout>
+
+## What it actually buys you
+
+Measured against the yfinance demo's own history endpoint, a year of daily bars:
+
+| Symbol | Cold fetch | Payload |
+|---|---:|---:|
+| AAPL | 619 ms | 37 KB |
+| RELIANCE.NS | 162 ms | 37 KB |
+
+A warm hit is a slice of an array already in memory, so the round trip disappears entirely.
+Where that matters:
+
+- **Flipping symbol or timeframe and back** is the most common thing anyone does on a
+  terminal, and today it re-downloads history it had seconds ago.
+- **A grid stops being expensive.** Four panes are four cold fetches on load. Warm, they
+  are four instant paints, which matters more once the panes are
+  [linked](/docs/chart-linking) and change symbol together.
+- **Fewer calls against a rate-limited broker.** A user sweeping through five symbols
+  currently pays full price for every revisit.
+- **Reloads can be warm too**, if you hand it a persistent `storage`. The engine will not
+  pick one for you.
+
+Be honest about the ceiling: on a 162 ms endpoint one chart feels quicker, not
+transformed. The gain compounds in the grid, under rate limits, and on a slow link.
+
+## Bounds
+
+Capped on two axes at once, LRU-evicted on both:
+
+| Option | Default | Bounds |
+|---|---|---|
+| `max` | 24 | Entries. |
+| `maxBars` | 250,000 | Total cached bars across all entries. |
+
+Entries alone do not bound memory: one intraday series can be 100,000 bars. Bar count is the
+honest proxy for bytes that can be measured without serialising, and byte counting would
+mean stringifying every entry on every write, which costs more than the cache saves. A
+single series larger than the whole `maxBars` budget is simply **not cached**, since it would
+evict everything else and then itself on the next write.
+
+These limits apply to warm-load data in the cache. They do not trim bars that a
+chart already holds. Set a separate retained-history policy for a long-running
+live chart, as described in [Performance & Operations](/docs/performance-and-operations).
+
+## Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `ttlMs` | `number` | `300_000` | Absolute age bound. |
+| `max` | `number` | `24` | Maximum entries. |
+| `maxBars` | `number` | `250_000` | Maximum total cached bars. |
+| `storage` | `BarCacheStore` | in-memory `Map` | Backing store. Sync or async. |
+| `now` | `() => number` | `Date.now` | Injectable clock, for tests and for a host with a server clock. |
+| `barCloses` | `(interval, barStartSec) => number \| null` | interval registry | Returns a bar-close time. Return `null` when close time is unknowable, which disables caching for that interval. |
+| `timezone` | `string` | engine default | IANA zone used by the default resolver for calendar intervals. Match the feed's candle calendar. |
+
+The default close-time resolver asks the interval registry. It handles fixed and
+calendar intervals, including registered interval codes. Tick, volume, range,
+Renko, and unknown intervals have no clock-derived close time, so the resolver
+returns `null` and the cache passes them through rather than guessing.
+
+<Callout type="info">
+Register a [custom interval](/docs/custom-intervals) such as `1Q` and the
+default resolver follows that registered bucketing rule. Supply `barCloses` only
+when your feed has a non-registered interval whose close time you can state
+exactly:
+
+```ts
+import { barCloseSec, withBarCache } from 'openalgo-charts';
+
+const feed = withBarCache(source, {
+  barCloses: (code, start) => {
+    if (code === 'settlement') return start + 86400;
+    return barCloseSec(code, start, 'Asia/Kolkata');
+  },
+});
+```
+
+Return `null` for tick, Renko, range, and other bars whose close depends on
+trade flow. They are then passed straight through, uncached.
+</Callout>
+
+## Opting out and invalidating
+
+```ts
+await feed.getBars({ ...req, noCache: true });  // always fetch, and refresh the entry
+await feed.invalidate(req);                     // drop one series (symbol/exchange/interval/variant)
+await feed.invalidate();                        // same as clear()
+await feed.clear();                             // drop everything this cache knows of
+feed.stats();                                   // { entries, bars, hits, misses, evictions }
+```
+
+Requests with no `from` or no `to` pass straight through in both directions: an open-ended
+range cannot be reasoned about, because there is no way to say what the entry then covers.
+
+## Validated warm snapshots (2.1.6)
+
+`await feed.getCachedBars(req)` reads retained closed history without starting a
+network request. A controller can show those bars with a refreshing state while
+loading authoritative data. This is separate from the strict coverage checks in
+`getBars(req)` and can return a partial window.
+
+`CachedBars.version` is optional for valid legacy entries; new writes use
+`BAR_CACHE_VERSION` (currently 1). Unknown versions, invalid candles, timestamps,
+coverage and oversized entries are rejected. Durable read/write/delete failures
+fall back to a bounded in-memory mirror rather than failing chart history.
+Failed deletes are suppressed for the current cache instance; another process
+may still read a durable entry that its store could not delete.
+
+Requests carry optional `signal` and `timeoutMs`. Cancellation prevents an
+obsolete request from publishing cache results. The wrapper forwards optional
+`getBarsPage` only when the underlying feed provides it, and retains every live
+subscription argument.
+
+## Persisting across reloads
+
+The default store is an in-memory `Map`, and the engine will not reach for `localStorage` or
+IndexedDB itself: choosing a persistence layer is the host's business, one of them is
+synchronous and small and the other is asynchronous. Inject your own instead. Every store
+method may return a promise, and `CachedBars` is plain JSON, so it round-trips through
+`JSON.stringify` unchanged:
+
+```ts
+import { withBarCache, type BarCacheStore, type CachedBars } from 'openalgo-charts';
+
+const store: BarCacheStore = {
+  get(key) {
+    const raw = localStorage.getItem('oac:' + key);
+    return raw === null ? undefined : (JSON.parse(raw) as CachedBars);
+  },
+  set(key, value) { localStorage.setItem('oac:' + key, JSON.stringify(value)); },
+  delete(key) { localStorage.removeItem('oac:' + key); },
+};
+
+const feed = withBarCache(source, { storage: store, maxBars: 20_000 });
+```
+
+<Callout type="warning">
+Recency and size are tracked **in memory**, so with a persistent store `clear()` drops only
+what this session has touched. Keys written by an earlier session are dropped when they are
+next read and found expired. A store that outlives the process is responsible for its own
+overall quota, which for `localStorage` means keeping `maxBars` small.
+</Callout>
+
+## What the wrapper forwards
+
+- `subscribeBars` and `subscribeDepth` are advertised **only when the wrapped feed has
+  them**, because the codebase feature-detects `subscribeBars` to tell a history-only feed
+  from a live one, and a stub that always exists would defeat that.
+- Every subscription argument is forwarded, including the optional third argument.
+  `OpenAlgoLiveDataFeed.subscribeBars` takes a third options argument (`seedFrom`,
+  `cumDayVolumeSoFar`), and a wrapper that dropped it would silently stop a live bar
+  continuing the last history bar's bucket.
+- Live subscriptions are never cached. Only `getBars` is.
+- `feed.source` is the wrapped feed, for anything this wrapper does not forward.
+- Bars are cloned on the way in and on the way out, because live builders mutate bar objects
+  in place. What you get back is yours to mutate.
+- A rejected fetch propagates untouched and leaves the previous entry alone: nothing is
+  written unless bars arrive.
+
+<Callout type="info">
+The cache wrapper does not itself coalesce in-flight calls. In 2.1.6, use
+`sharedHistoryRequests(feed)` or `DataLoadingController` to share identical pending
+requests for that feed instance, with independent consumer cancellation and deadlines.
+</Callout>
+
+## Related
+
+- [Custom Data Feeds](/docs/data-feeds) for the `DataFeed` interface this wraps.
+- [Data Loading](/docs/data-loading) for paging, gap recovery and the live update path.
+- [Live Data](/docs/live-data) for the OpenAlgo REST and WebSocket adapters.

@@ -1,0 +1,239 @@
+---
+title: Interactions & Accessibility
+description: Mouse, touch, and keyboard interaction, plus screenshots, grid toggles, and a11y.
+---
+
+import { Callout } from 'nextra/components'
+
+# Interactions & accessibility
+
+Every live demo on this site is fully interactive. The points below apply to all of them.
+
+## Mouse
+
+- **Vertical wheel**: zoom the time axis proportionally around the cursor, eased over
+  a few frames (`animZoom: false` for the single-frame step). Each wheel event moves one
+  target and the frames chase it by the real frame time, so a fast wheel or a trackpad
+  zooms in one smooth motion rather than a jolt per notch. `zoomAnchor: 'right'`
+  holds the latest bar still for ordinary wheel input.
+- **Horizontal or Shift-wheel**: pan time. A dominant horizontal delta pans directly;
+  Shift maps a vertical-only wheel delta onto the horizontal axis.
+- **Wheel over a price axis**: scale the left or right price range under the pointer,
+  anchored at that pointer price. This puts that one scale in manual mode.
+- **Drag the plot**: press and hold to show a grabbing hand, then move in any direction.
+  Mouse and pen pan time and price by default and stop immediately on release. Set
+  `navigation.mousePan: 'horizontal'` to limit movement to time.
+- **Drag the price axis**: rescale price; **drag the time axis** left to expand bar spacing,
+  or right to compress it.
+- **Double-click**: by default, restore the default view and autoscale; `doubleClick: 'maximize'`
+  toggles the pane under the pointer to the whole stack instead, and `'none'` only emits the
+  `dblclick` event, which carries `paneIndex` and a `handled` flag a listener can set. While a drawing tool is
+  armed it finishes the shape instead, so a variable-anchor tool (`path`, `polyline`)
+  can be ended without the view jumping.
+- **Hover a draggable order line**: the cursor switches to `ns-resize`, the line
+  thickens and its pill brightens; the cancel `×` and DOM-ladder rows show a
+  `pointer` cursor. Dragging shows a dimmed ghost at the pre-drag price (see
+  [On-chart trading](/docs/trading#interaction-feedback-hover-drag-ghost)).
+
+Choosing horizontal-only mouse and pen panning leaves the price scale's autoscale setting in place. The
+price range can still adjust to the bars now in view. Touch continues to pan both axes.
+Saved horizontal preferences are preserved when upgrading. To enable two-axis panning,
+choose **Axes > Mouse drag > Time and price** or set `mousePan: 'both'`.
+
+While autofit is enabled, mouse and pen drags ignore vertical drift of up to 3 CSS
+pixels from the press. A larger vertical movement selects manual price panning.
+This keeps a nearly horizontal drag from accidentally freezing the price range.
+Already-manual axes retain fine adjustments, and touch behavior is unchanged.
+
+```ts
+const chart = createChart(el, {
+  navigation: { mousePan: 'both', defaultVisibleBars: 120 },
+});
+chart.setNavigationOptions({ mousePan: 'horizontal' }); // optional time-only panning
+chart.navigationOptions();  // Readonly<ChartNavigationOptions>
+```
+
+Wheel deltas can arrive in pixels, lines or pages. The chart converts lines to 16 CSS px
+and pages to the current chart dimension, then maps the resulting distance proportionally.
+A 100 px vertical movement retains the established 1.1 zoom step, while fine trackpad input
+produces a correspondingly smaller change. Browser pinch gestures reported as Ctrl-wheel or
+Meta-wheel zoom at the pointer even when `zoomAnchor: 'right'` is configured.
+
+`animAutoscale` smooths an autoscaled price range while navigation reveals new highs or lows.
+It defaults to the value of `animZoom`, so `animZoom: false` makes both transitions immediate
+unless `animAutoscale: true` is set explicitly. A manually panned or scaled price axis and a
+fixed range remain authoritative. `resetScale()` restores autoscale. Programmatic viewport
+replacement, primary data replacement, reset and destruction cancel pending navigation motion,
+so an older animation cannot overwrite the newer state.
+
+`defaultVisibleBars` controls the initial view and reset view: `0` (the default) fits all
+loaded bars, and a positive value targets the newest N loaded bars plus four empty bar
+slots on the right, within the available data and bar-spacing limits. Updating this count
+applies that default view immediately. It does not change how much history your feed loads
+or discard any bars. `chart.fitContent()` always fits all loaded bars.
+
+For consistent candle density across desktop and mobile, use
+`navigation: { defaultBarSpacing: 8 }`. This uses 8 CSS pixels per bar, showing more
+bars on a wider chart. The preference is saved and applied on initial load and reset;
+resizing preserves the current zoom. A positive spacing overrides the bar count.
+Set spacing to `0` to disable it, or edit `defaultVisibleBars` to return to count mode.
+Both modes obey the configured spacing limits and retain all loaded history.
+
+## Time navigator (hover-revealed zoom controls)
+
+Move the pointer near the bottom of the chart and a small control strip fades in just above
+the time axis: zoom out and in, reset the view, then step left or right one bar at a time.
+It stays invisible otherwise, so a clean chart stays clean.
+
+The buttons run the *same* commands as the keyboard shortcuts, so the two can never drift
+apart, and each tooltip shows the combo currently bound to that command. Rebind `zoomIn` and
+the tooltip follows. The reset button runs `resetScale`, with a **Reset view** tooltip and
+the default `Home` hint. It restores the configured default view and price autoscale.
+
+```ts
+createChart(el);                              // on by default
+createChart(el, { timeNavigator: false });    // drop it entirely
+createChart(el, {                             // or restyle
+  timeNavigator: { size: 30, revealHeight: 90, fadeSeconds: 0.2, showTooltip: false },
+});
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `buttons` | `['zoomOut','zoomIn',null,'resetScale',null,'panLeftBar','panRightBar']` | order; `null` inserts a group gap |
+| `size` / `gap` / `groupGap` | `26` / `4` / `16` | button box and spacing, px |
+| `bottomMargin` | `10` | gap above the time axis, px |
+| `revealHeight` | `64` | height of the band that reveals the controls, px |
+| `fadeSeconds` | `0.12` | fade duration; `0` disables the animation |
+| `labels` / `hints` | built-in | tooltip text and keyboard hint per action |
+| `showTooltip` | `true` | show the tooltip above the hovered button |
+
+The controls live on the bottom pane and follow it when panes are added or removed. While
+hidden they hit-test to nothing, so they never steal a click from the chart underneath.
+
+<Callout>
+`TimeNavigator` is an ordinary primitive. To place your own (a second strip, a different
+button set), import it, add it to a pane, and feed it pointer positions with `setPointer`.
+</Callout>
+
+## Picking a price or a bar
+
+A settings field that names a price or a time is a host control, but the *value* is often
+easier to point at than to type, and only the engine knows what is under the cursor. So the
+host arms a pick, the next click on the plot answers with a number, and the pick disarms
+itself:
+
+```ts
+const cancel = chart.beginPick('price', (price) => {
+  input.value = price.toFixed(2);
+});
+
+cancel();                                        // give up without an answer
+chart.beginPick('time', (t) => setAnchor(t));    // a bar time instead
+
+// Select a value in a study pane's own units.
+chart.beginPick('price', setThreshold, { paneIndex: 1, priceScaleId: 'left' });
+```
+
+`beginPick(kind, cb)` returns a callable `PickHandle`. Call it to cancel, or use
+`handle.active()` to check whether this invocation still owns the capture. The
+function is also exported standalone as `beginPick(host, kind, cb)`, so it works
+against anything structurally matching `PickHost` rather than only against `Chart`. The
+chart emits [`pick:start` and `pick:end`](/docs/events#what-the-engine-emits) around it, so
+you can swap the cursor or show a hint while a pick is live; `pick:end` carries `null` when
+the pick was cancelled, and fires before the callback when it was not.
+
+- **A `'time'` pick snaps to the bar you clicked.** The raw click time is interpolated
+  between bars on the gapless axis, so it matches no bar and anything anchored to it would
+  never line up. Clicking past the last bar keeps the projected time, which is what a pick in
+  the empty right-hand space means.
+- **A click the chart could not resolve leaves the pick armed** rather than answering with a
+  bogus number: no pane under the pointer, or no bars loaded.
+- **Panning is left alone.** A pick deliberately does not arm placement mode, so you can
+  scroll back to the bar you mean and then click it, and a drag emits no click at all, so
+  panning cannot answer a pick by accident. It also means arming a pick never cancels an
+  active drawing tool. Finish drawing placement before arming a chart pick;
+  starting placement during a pick cancels it.
+- **One pick per chart.** Arming a second cancels the first, so a single click can never
+  answer two callers. Arming a fresh pick from inside the callback works.
+
+A `'point'` pick answers with both at once, a `PickPoint` of the bar time and the
+price under one click, for a setting that pairs the two:
+
+```ts
+chart.beginPick('point', ({ time, price }) => {
+  study.setSettings({ from: time, price });       // one patch, both halves
+}, { paneIndex: 0, priceScaleId: 'right' });
+```
+
+It answers only when both halves resolve, and `pick:start` and `pick:end` carry
+`kind: 'point'`.
+
+The optional third argument, `PickOptions`, selects a pane and, for price and point
+picks, an existing price scale. A scale without `paneIndex` targets the primary pane.
+Other panes, axes and primitive controls cannot answer the pick. Hidden overlay
+scales are supported. Invalid targets throw before replacing an existing pick.
+Data replacement, context changes, restoration and destruction cancel pending
+selections. A host must also cancel when its editing dialog or study is removed.
+
+## Touch
+
+Touch works out of the box (`touch-action: none` on the container):
+
+- single-finger drag pans both axes, regardless of `navigation.mousePan`,
+- **two-finger pinch** zooms,
+- two-finger drag pans both axes.
+
+Trackpad pinch events that the browser exposes as Ctrl-wheel or Meta-wheel use the same
+proportional wheel path. This describes browser events rather than promising identical
+gesture hardware or operating-system behavior.
+
+## Keyboard & accessibility
+
+The container is focusable (`role="application"`, `tabindex=0`, an `aria-label` you can
+override) with a polite `aria-live` summary (bar count + latest price) that updates on data
+changes. When focused:
+
+| Key | Action |
+|---|---|
+| Left / Right arrow | pan time |
+| Up / Down arrow | pan price |
+| + / − | zoom |
+| Home / 0 | reset (`chart.resetScale()`) |
+
+```ts
+const chart = createChart(el, { ariaLabel: 'RELIANCE 5-minute candlestick chart' });
+```
+
+## Screenshots & grid
+
+```ts
+const canvas = chart.takeScreenshot();           // composites all panes and overlays into one canvas
+chart.downloadScreenshot('reliance-5m.png');     // same composite, downloaded as a PNG
+const svg = chart.exportSVG();                   // the same frame as a standalone SVG string
+chart.setGridOptions({ vertLines: false });      // toggle grid lines at runtime
+```
+
+<Callout type="info">
+`exportSVG(options?)` writes the chart as a vector document: axis labels and tags stay
+text, lines stay lines, and the file scales without blur. It carries no crosshair, hover or
+drag state. `width` and `height` export at a size other than the live one (the live
+layout is put back before the call returns), and `background: false` leaves the document
+transparent for an embedded figure. Saving it is the host's job: wrap the string in a
+`Blob` of type `image/svg+xml` and hand it to an anchor.
+</Callout>
+
+<Callout type="info">
+`takeScreenshot()` composites every pane and overlay layer into a single image, so the
+result matches exactly what the user sees, useful for share/export buttons.
+`downloadScreenshot(filename?)` wraps it in a PNG download (also bound to the
+screenshot keyboard shortcut).
+</Callout>
+
+<Callout type="info">
+The browser's right-click **"Save image as…"** works too: the chart composites
+the clicked pane into the layer the browser captures just before the native
+menu opens (the chart renders as stacked canvases, so this used to save a
+blank overlay). Note it saves the **clicked pane only**. For the full
+multi-pane chart use `takeScreenshot()` / `downloadScreenshot()`.
+</Callout>

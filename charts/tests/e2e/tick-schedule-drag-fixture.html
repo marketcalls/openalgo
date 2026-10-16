@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tick schedule fixture</title>
+<style>
+html,body{margin:0;height:100%;background:#0d0e12;color:#cbd5e1;font:13px system-ui}
+header{height:42px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid #273244}
+#chart{position:absolute;inset:43px 0 0}
+</style></head>
+<body><header>Tick schedule fixture: 0.01 below 100, 0.05 from 100</header><div id="chart"></div>
+<script type="module">
+import { createChart, darkTheme, Instrument, TickSchedule } from '/dist/openalgo-charts.mjs';
+
+// Synthetic rules, not any venue's.
+const ticks = new TickSchedule([{ tick: 0.01 }, { from: 100, tick: 0.05 }]);
+const chart = createChart(document.getElementById('chart'), { theme: darkTheme, timeNavigator: false, priceAxisWidth: 72 });
+// Record what the trading layer attaches, so a test can read a dragged
+// line's preview price before the release commits it.
+const attached = [];
+const addPrimitive = chart.addPrimitive.bind(chart);
+chart.addPrimitive = (primitive, ...rest) => { attached.push(primitive); return addPrimitive(primitive, ...rest); };
+chart.setPriceScaleOptions({ minMove: ticks.minMove });
+const series = chart.addSeries('candlestick');
+series.setData(Array.from({ length: 80 }, (_, index) => {
+  const open = ticks.round(100 + Math.sin(index / 6) * 1.2), close = ticks.round(100 + Math.sin((index + 1) / 6) * 1.2);
+  return { time: 1735689600 + index * 60, open, close,
+    high: ticks.round(Math.max(open, close) + 0.2), low: ticks.round(Math.min(open, close) - 0.2), volume: 1000 };
+}));
+chart.setVisibleLogicalRange({ from: -2, to: 84 });
+chart.panes()[0].priceScale.setFixedRange({ min: 98, max: 102 });
+// The same rules as instrument metadata, for the route a host takes through
+// applyTo. Applied before the trading layer exists, which is then built below.
+const banded = { symbol: 'BANDED', exchange: 'DEMO', timezone: 'Asia/Kolkata', priceTick: ticks.minMove,
+  pricePrecision: 2, quantityStep: 1, tickBands: ticks.bands, intervals: ['1m'], calendar: { sessions: ['0915-1530:23456'] } };
+if (new URLSearchParams(location.search).get('via') === 'instrument') new Instrument(banded).applyTo(chart, '1m');
+else chart.trading.setTickSchedule(ticks);
+chart.trading.setPositions([{ id: 'pos', side: 'long', entryPrice: 100.2, size: 10 }]);
+chart.trading.setOrders([
+  { id: 'limit', type: 'limit', side: 'buy', price: 99.5, size: 10 },
+  { id: 'tp', type: 'limit', side: 'sell', price: 101.5, size: 10, parentId: 'pos', bracketRole: 'tp' },
+]);
+const events = [];
+chart.on('trading:order_modify', event => events.push({ type: 'order', ...event }));
+chart.on('trading:bracket_modify', event => events.push({ type: 'bracket', ...event }));
+chart.on('drag', event => events.push({ type: 'drag', id: event.id, price: event.price }));
+window.__ticks = {
+  chart, ticks, events, banded, Instrument,
+  preview: id => attached.find(primitive => primitive.options?.().id === id)?.options().price,
+};
+window.addEventListener('pagehide', () => chart.destroy(), { once: true });
+</script></body></html>

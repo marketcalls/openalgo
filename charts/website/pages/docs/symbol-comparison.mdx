@@ -1,0 +1,213 @@
+---
+title: Symbol Comparison
+description: Put a second instrument on the same pane and read the two together, rebased so equal moves land on equal pixels.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { STOCK_BARS_SOURCE } from '../../components/synthetic-market'
+import { Callout } from 'nextra/components'
+
+# Multi-symbol comparison
+
+`addComparison` puts a second instrument on the primary one's pane: a stock against its
+index, NIFTY against BANKNIFTY, a pair against its hedge. It is headless like the
+[replay](/docs/market-replay) and [drawing](/docs/drawing-tools) controllers, so the symbol
+chips and the legend rows are yours to draw from `list()`.
+
+```ts
+import { createChart, addComparison } from 'openalgo-charts';
+
+const chart = createChart(el);
+chart.addSeries('candlestick').setData(niftyBars);
+
+const bn = addComparison(chart, { symbol: 'BANKNIFTY', bars: bankniftyBars, color: '#f0b90b' });
+
+bn.alignment();          // { bars, matched, gaps, dropped }
+bn.setBars(refreshed);   // a longer history, a refetch
+bn.remove();             // off the chart, pane restored
+```
+
+## What makes the two comparable
+
+A 46,000 instrument next to a 22,000 one is the whole problem. Three things solve it, and
+none of them touch your data:
+
+1. **Each comparison has an independent scale.** The first uses a free legacy overlay or
+   left axis. Further sources use named hidden scales, so different price units cannot
+   change another instrument's baseline. Occupied volume and left scales keep their data.
+2. **The pane rebases.** While any comparison is on it, the pane switches to
+   [`percentage`](/docs/scales-and-panes#percent-and-indexed-to-100) (the default) or
+   `indexed-to-100`. Each scale gets its own baseline price. The default uses its own first
+   visible close; the optional common-start policy uses one timestamp across all sources.
+3. **The overlay mirrors the primary's band of percent.** Once a frame, the overlay's range
+   is set to the primary's range times `baseline_overlay / baseline_primary`. Without that
+   step each scale would autoscale to its own data and a 1% mover would look exactly like a
+   10% mover, both filling the pane. That is the lie the feature would otherwise ship.
+
+The bars themselves are stored as the instrument's **real prices**, so the crosshair, the
+legend and any live update still speak in the instrument's own numbers. Comparability comes
+from the scale, not from rewriting the data.
+
+<Callout type="info">
+A rebase is affine over a price range, so it **relabels** a pane rather than reshaping it.
+One series on a percentage scale looks exactly as it does on a linear one. Two instruments
+become comparable because each sits on its own scale with its own baseline, which is the
+overlay mechanism above, not a second transform.
+</Callout>
+
+## Live demo
+
+A synthetic second instrument, an order of magnitude away in price and missing a few
+sessions of its own. The axis reads percent; the counters underneath are what
+`alignment()` reports.
+
+<RunnableExample height={420} code={`${STOCK_BARS_SOURCE}
+const chart = lib.createChart(el);
+const spot = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(spot);
+
+// A second instrument on the same session: its own price level, its own
+// simulated path, and closed for every 41st bar so the alignment gaps are visible.
+const path = stockBars(1700000000, spot.length, 3600, 46000, 28);
+const other = spot.map((b, i) => ({ ...path[i], time: b.time })).filter((b, i) => i % 41 !== 0);
+
+const bn = lib.addComparison(chart, { symbol: 'BANKNIFTY', bars: other, color: '#f0b90b' });
+chart.fitContent();
+
+el.style.position = 'relative';
+const out = document.createElement('div');
+out.style.cssText = 'position:absolute;left:10px;bottom:34px;z-index:5;font:12px ui-monospace,monospace;color:light-dark(#a16207,#f0b90b)';
+const a = bn.alignment();
+out.textContent = 'BANKNIFTY  ' + a.matched + ' matched, ' + a.gaps + ' gaps, ' + a.dropped + ' dropped';
+el.appendChild(out);
+return chart;`} caption="Pan the chart: both lines re-base to the first bar on screen, so the axis always reads change from the left edge." />
+
+## Alignment
+
+The x-axis is a gapless logical index over the times the DataLayer holds, so two
+instruments do not share a bar index and cannot be laid side by side by position. They are
+matched on the exact timestamp, and the two directions of mismatch get opposite answers:
+
+| Mismatch | Answer | Why |
+|---|---|---|
+| A comparison print with **no primary bar** | **Dropped**, counted in `dropped` | The DataLayer merges every series' times into one index space, so a time only the comparison has would mint a new logical index: a column the primary has no candle for, inserted mid-chart, shifting every bar after it. A different holiday calendar, a 24/7 instrument next to an NSE one, or a stray print all do this for real. |
+| A primary bar with **no comparison print** | **Whitespace**, counted in `gaps` | A NaN bar the line renderer breaks across, so the holiday reads as a gap. Carrying the last value forward draws a flat segment through a session that never traded, and in percentage mode anchors the far side of the gap to a print that does not exist. Omitting the bar is worse still: the renderer would join the two sides with one straight line. |
+
+Alignment requires exact UTC-second timestamps. Equal interval labels alone do
+not guarantee a match when feeds use different session anchors or timestamp
+conventions. Normalize those conventions at the adapter boundary; comparison
+does not shift a print into a nearby candle. Repeated timestamps collapse to
+the last item, the same rule the DataLayer applies when it merges.
+
+`alignToPrimary(primary, comparison)` is exported if you want to run the projection
+yourself, for a coverage report or a data-quality check.
+
+## The handle
+
+`addComparison` returns one instrument's handle.
+
+| Member | Description |
+|---|---|
+| `symbol` | The label you passed, carried for your own UI. |
+| `series` | The `SeriesApi` it draws through, for style patches and markers. |
+| `paneIndex` | The pane it is on. |
+| `priceScale()` | Its assigned independent scale, which may use a free left axis or a hidden overlay. |
+| `alignment()` | How the last projection went: `bars`, `matched`, `gaps`, `dropped`. |
+| `barAt(time)` | Eligible aligned bar in its own prices, or null for a gap, unavailable common baseline, forming replay candle or removed handle. Use this for host readouts. |
+| `setBars(bars)` | Replace the instrument's bars and re-align. |
+| `remove()` | Take it off the chart. Safe to call twice. |
+| `list()` | Every comparison on this chart, in the order they were added. |
+
+<Callout type="warning">
+Set data on `handle.series` directly and you skip alignment; remove that series directly
+and you leave the pane rebased with nothing on it. Use `setBars` and `remove`.
+</Callout>
+
+## Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `symbol` | `string` | required | Instrument label, carried on the handle. |
+| `bars` | `SeriesDataItem[]` | required | The instrument's own bars, in its own prices. |
+| `color` | `string` | theme line colour | Shorthand for `style.color`; `style.color` wins if both are given. |
+| `style` | `SeriesStyle` | none | Merged onto the chart type's defaults. |
+| `type` | `SeriesType` | `'line'` | Any registered renderer. A candlestick comparison keeps its OHLC, since the aligned bar passes through whole. |
+| `paneIndex` | `number` | `0` | Pane to draw on. |
+
+## The controller
+
+One controller per chart, created on first use. Reach it for chart-wide operations. A
+later `comparisonController(chart, options)` returns the same controller and applies the
+`mode` and `baseline` it passes (since 2.6.0; before, a call after the controller existed
+ignored them):
+
+```ts
+import { comparisonController } from 'openalgo-charts';
+
+const cc = comparisonController(chart);
+cc.setMode('indexed-to-100');   // or 'percentage', or 'none'
+cc.setBaseline('common');      // or the default 'first-visible'
+cc.baselineTime();             // shared timestamp, or null when unavailable
+cc.list();                       // every comparison
+cc.realign();                    // re-project onto the primary's current bars
+cc.clear();                      // remove them all, panes restored
+cc.destroy();                    // clear, and forget the chart
+```
+
+`mode: 'none'` leaves the pane's own scale mode alone and gives you the raw overlay: two
+instruments each filling the pane, comparable in shape only. Use it when the pane is
+already log and you want it kept that way.
+
+### One common starting timestamp
+
+The default `baseline: 'first-visible'` preserves existing integrations: each source
+uses its own first visible close. For performance comparisons across different calendars,
+choose `comparisonController(chart, { baseline: 'common' })`, before or after adding
+sources, or call `cc.setBaseline('common')` on the controller you hold.
+
+Common mode selects the first visible timestamp with a positive finite close on the
+primary and every visible comparison. Hidden sources do not constrain the start. Pan,
+hide a source or replace its history and the controller recomputes that timestamp.
+`cc.baselineTime(paneIndex?)` reports it, or null when it is unavailable, the mode is
+`'none'`, the user has overridden the primary scale mode, or independent baselines are
+selected. With no common start, comparison series draw gaps. Prices are never carried
+forward to manufacture an overlap.
+
+Each instrument retains its raw prices. Equal relative moves have equal coordinates,
+including an inverted primary scale. An automatic range expands to fit the visible
+relative moves; a manually set primary range stays under the user's control. The
+yfinance reference host uses common mode and shows "No common starting bar" when
+histories cannot be compared in the visible window.
+
+### Re-alignment is automatic
+
+The controller observes primary data changes, history identity and boundary timestamps
+as well as the shared time axis. Live bars, history prepends and replacement with a
+different set of the same length re-align automatically on `Chart`. A custom structural
+host without data events or primary history identity can call `realign()` explicitly.
+
+Replay truncates comparisons to the displayed primary history and withholds a forming
+candle's completed comparison close. This also applies to a source added during replay.
+Use `handle.barAt(time)` for readouts instead of the original history cache, which may
+contain future values. Stopping replay restores full comparison history.
+
+## Two accommodations worth knowing
+
+**The volume histogram usually owns the legacy hidden overlay.** Sharing that
+`priceScaleId: ''` would mix price and volume units. The first comparison uses the left
+axis when it is free, otherwise a named hidden scale. Additional comparisons always
+receive independent scales. Put multiple instruments on the same pane without sharing
+their price baselines.
+
+**Your scale-mode choice survives.** The saved mode is only restored when the last
+comparison leaves if it is still the one the controller applied. A user who switches the
+pane to logarithmic mid-comparison keeps that choice instead of having it silently undone.
+
+Chart destruction releases comparison subscriptions and history automatically.
+`cc.destroy()` on a live chart removes its comparisons and restores the pane's mode;
+it is safe to call again during host cleanup.
+
+Persist comparison source requests and styling in your host's
+[workspace](/docs/workspaces), then recreate handles with `addComparison` after
+loading the primary source. A [chart state](/docs/state) snapshot does not own
+comparison feeds or replace their controller lifecycle.

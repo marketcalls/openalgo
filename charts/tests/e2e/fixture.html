@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><style>html,body{margin:0;height:100%;background:#0d0e12}#c{position:absolute;inset:0}</style></head>
+<body>
+  <div id="c"></div>
+  <script type="module">
+    import { createChart, OpenAlgoDataFeed, supertrendSeries, rsiSeries } from '/dist/openalgo-charts.mjs';
+
+    // deterministic synthetic OHLCV (no network)
+    const bars = [];
+    let p = 100;
+    for (let i = 0; i < 300; i++) {
+      const o = p; p += Math.sin(i / 9) * 1.5 + ((i % 7) - 3) * 0.3;
+      bars.push({ time: 1_700_000_000 + i * 300, open: o, high: Math.max(o, p) + 1, low: Math.min(o, p) - 1, close: p, volume: 100 + i });
+    }
+
+    // ?renderer=canvas2d|webgl2|auto goes straight through to createChart. The
+    // GPU backend lives in its own tier, and 'webgl2' throws until it is imported.
+    const renderer = new URLSearchParams(location.search).get('renderer');
+    if (renderer === 'webgl2' || renderer === 'auto') await import('/dist/openalgo-charts.webgl.mjs');
+
+    const chart = createChart(document.getElementById('c'), { priceAxisWidth: 64, ...(renderer === null ? {} : { renderer }) });
+    const price = chart.addSeries('candlestick'); price.setData(bars);
+    chart.addSeries('histogram', { paneIndex: 1 }).setData(bars.map((b) => ({ time: b.time, open: 0, high: b.volume, low: 0, close: b.volume })));
+    const { up, down } = supertrendSeries(bars, 10, 3);
+    chart.addSeries('line', { style: { color: '#26a69a' } }).setData(up);
+    chart.addSeries('line', { style: { color: '#ef5350' } }).setData(down);
+    chart.addSeries('line', { paneIndex: 2, style: { color: '#e0b020' } }).setData(rsiSeries(bars, 14));
+
+    window.__api = { chart, price, bars };
+    window.__baseTypes = ['candlestick', 'hollow-candle', 'bar', 'high-low', 'volume-candle', 'line', 'line-markers', 'step', 'area', 'hlc-area', 'baseline'];
+    window.__addType = (t) => { try { chart.addSeries(t).setData(bars); return true; } catch (e) { return String(e.message || e); } };
+    // fetch-bind guard: a stored window.fetch called as this._fetch must not throw "Illegal invocation".
+    window.__fetchCall = async () => {
+      try { await new OpenAlgoDataFeed({ baseUrl: '' }).getBars({ symbol: 'X', exchange: 'NSE', interval: 'D', from: 1, to: 2 }); return 'ok'; }
+      catch (e) { return String(e.message || e); }
+    };
+    window.__ready = true;
+  </script>
+</body>
+</html>

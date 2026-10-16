@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: instrument rules</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #0d0e12; color: #c7ccd8; font: 13px/1.5 system-ui, sans-serif; scrollbar-color: #454c5c #0d0e12; scrollbar-width: thin; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: #0d0e12; } ::-webkit-scrollbar-thumb { background: #454c5c; border-radius: 4px; }
+    main { display: flex; flex-direction: column; height: 100vh; min-height: 680px; }
+    header, .controls, .readouts { flex: none; padding: 10px 16px; border-bottom: 1px solid #292d37; }
+    h1 { margin: 0; font-size: 17px; } p { margin: 4px 0; } header p { color: #959dae; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: end; }
+    label { display: grid; gap: 4px; }
+    input, select, button { color: inherit; background: #191c24; border: 1px solid #3a4050; border-radius: 4px; padding: 6px 9px; font: inherit; max-width: 100%; }
+    input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid #67a5ff; outline-offset: 2px; }
+    button { cursor: pointer; } button:hover { background: #2b3343; } select { color-scheme: dark; }
+    #quantity { width: 115px; } #observation { width: 218px; }
+    #error { color: #ff9b9b; min-height: 20px; } #chart { flex: 1 1 0; min-height: 380px; overflow: hidden; }
+    @media (max-width: 600px) { header, .controls, .readouts { padding: 8px 12px; } .controls { gap: 8px 12px; } #chart { min-height: 400px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><h1>Instrument rules</h1><p>Synthetic cash, futures and crypto profiles. Quantity checks are local; this example sends no orders.</p></header>
+  <div class="controls">
+    <label>Instrument<select id="profile"><option value="cash">Cash session</option><option value="futures">Futures session</option><option value="crypto">Crypto continuous</option></select></label>
+    <label>Interval<select id="interval"></select></label>
+    <label>Observation in UTC<input id="observation" value="2026-01-27T04:45:00Z" /></label>
+    <button id="apply-time">Apply time</button>
+    <label>Quantity<input id="quantity" type="number" value="1" /></label>
+  </div>
+  <div class="readouts" aria-live="polite">
+    <p id="instrument-summary"></p><p id="session-status"></p><p id="oi-status"></p><p id="quantity-status"></p><p id="error" role="status"></p>
+  </div>
+  <div id="chart"></div>
+</main>
+<script type="module">
+  import { createChart, darkTheme, Instrument, CandleBuilder, resolveInterval } from '../dist/openalgo-charts.mjs';
+  import { orderConstraintsForInstrument, validateQuantity } from '../dist/openalgo-charts.trade.mjs';
+  import '../dist/openalgo-charts.indicators.mjs';
+
+  const el = id => document.getElementById(id);
+  const sessionCalendar = { sessions: ['0915-1530:23456'], exceptions: { '2026-01-26': [], '2026-01-27': ['1000-1300'] } };
+  const cash = { symbol: 'CASH', exchange: 'NSE', timezone: 'Asia/Kolkata', priceTick: 0.05, pricePrecision: 2,
+    quantityStep: 1, intervals: ['1m', '1h'], calendar: sessionCalendar, hasOpenInterest: false };
+  const profiles = {
+    cash: new Instrument(cash),
+    futures: new Instrument({ ...cash, symbol: 'FUTURE', exchange: 'NFO', quantityStep: 75, hasOpenInterest: true }),
+    crypto: new Instrument({ symbol: 'COIN', exchange: 'CRYPTO', timezone: 'UTC', priceTick: 0.00000001,
+      pricePrecision: 8, quantityStep: 0.001, intervals: ['1m', '5m', '1h'], calendar: { sessions: ['0000-0000'] }, hasOpenInterest: true }),
+  };
+  const chart = createChart(el('chart'), { theme: darkTheme, priceAxisWidth: 105 });
+  const series = chart.addSeries('candlestick');
+  chart.addIndicator('open-interest');
+  let instrument = profiles.cash, interval = '1m';
+
+  function quantityStatus() {
+    const result = validateQuantity(Number(el('quantity').value), orderConstraintsForInstrument(instrument));
+    el('quantity-status').textContent = result.ok ? 'Valid quantity on this instrument grid.' : result.reason;
+  }
+  function render(next = instrument, nextInterval = interval) {
+    try {
+      if (!next.supportsInterval(nextInterval)) throw new Error(`unsupported interval ${nextInterval}`);
+      if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(el('observation').value)) throw new Error('Enter an ISO timestamp with Z or a UTC offset');
+      const observation = Date.parse(el('observation').value) / 1000;
+      if (!Number.isFinite(observation)) throw new Error('Enter an ISO timestamp with Z or a UTC offset');
+      const session = next.sessionAt(observation), rule = resolveInterval(nextInterval).bucketing;
+      const bars = new Map();
+      if (session) {
+        const builder = new CandleBuilder({ intervalSec: rule.seconds, sessionAnchorSec: session.open });
+        const tickCount = Math.min(2160, Math.ceil((session.close - session.open) / 10));
+        for (let index = 0; index < tickCount; index++) {
+          const minute = index / 6;
+          const price = next === profiles.crypto ? 0.1234 + Math.sin(minute / 8) * 0.0004 + minute * 0.000001
+            : 100 + Math.sin(minute / 8) * 2 + minute * 0.01;
+          const update = builder.onTick({ time: session.open + index * 10, price, ltq: next === profiles.crypto ? 0.1 : 5,
+            ...(next.metadata.hasOpenInterest ? { oi: 1000 + index * 3 } : {}) });
+          if (update) bars.set(update.bar.time, { ...update.bar });
+        }
+      }
+      series.setData([]); next.applyTo(chart, nextInterval); series.setData([...bars.values()]);
+      instrument = next; interval = nextInterval; chart.fitContent();
+      el('interval').replaceChildren(...instrument.metadata.intervals.map(code => {
+        const option = document.createElement('option'); option.value = code; option.textContent = code; return option;
+      }));
+      el('interval').value = interval;
+      const m = instrument.metadata;
+      el('instrument-summary').textContent = `${m.exchange}:${m.symbol}, ${m.timezone}, price tick ${m.priceTick}, quantity step ${m.quantityStep}`;
+      el('session-status').textContent = session ? `Session ${session.date}: ${new Date(session.open * 1000).toISOString()} to ${new Date(session.close * 1000).toISOString()}` : 'Closed at this observation time.';
+      el('oi-status').textContent = m.hasOpenInterest ? 'Supported OI: synthetic readings in the separate indicator pane.' : 'OI unsupported for this cash profile; the indicator remains empty.';
+      el('error').textContent = ''; quantityStatus(); return true;
+    } catch (error) {
+      el('error').textContent = error.message; el('interval').value = interval;
+      el('profile').value = Object.keys(profiles).find(key => profiles[key] === instrument);
+      return false;
+    }
+  }
+  el('profile').addEventListener('change', () => {
+    const next = profiles[el('profile').value];
+    if (render(next, next.supportsInterval(interval) ? interval : next.metadata.intervals[0])) {
+      el('quantity').step = String(next.metadata.quantityStep); el('quantity').value = String(next.metadata.quantityStep); quantityStatus();
+    }
+  });
+  el('interval').addEventListener('change', () => render(instrument, el('interval').value));
+  el('apply-time').addEventListener('click', () => render());
+  el('quantity').addEventListener('input', quantityStatus);
+  window.addEventListener('pagehide', () => chart.destroy(), { once: true });
+  window.__instrumentExample = { chart, setInterval: code => render(instrument, code) };
+  render();
+</script>
+</body>
+</html>

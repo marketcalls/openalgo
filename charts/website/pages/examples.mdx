@@ -1,0 +1,2462 @@
+---
+title: Examples
+description: Live, in-page chart demos powered by the real OpenAlgo Charts library.
+---
+
+import RunnableExample from '../components/RunnableExample'
+import TypedInputsDemo from '../components/TypedInputsDemo'
+import ConditionalInputsDemo from '../components/ConditionalInputsDemo'
+import { STOCK_BARS_SOURCE } from '../components/synthetic-market'
+import { SANDBOX_BROKER_EXAMPLE } from '../components/account-examples'
+import { ProfileDemo, ProfileThemeGallery } from '../components/ProfileShowcase'
+import DepthLadderDemo from '../components/DepthLadderDemo'
+import DrawingToolsDemo from '../components/DrawingToolsDemo'
+import DataLoadingDemo from '../components/DataLoadingDemo'
+import ObjectsDemo from '../components/ObjectsDemo'
+import BrandingWatermarkDemo from '../components/BrandingWatermarkDemo'
+import IndicatorSignalsDemo from '../components/IndicatorSignalsDemo'
+import AlertDragDemo from '../components/AlertDragDemo'
+import AlertLifecycleDemo from '../components/AlertLifecycleDemo'
+import TableSizingDemo from '../components/TableSizingDemo'
+import LinkedAnalysisDemo from '../components/LinkedAnalysisDemo'
+import TimelineEventsDemo from '../components/TimelineEventsDemo'
+import { RangeSwitcherCard, LegendCard, SeriesCompareCard, IndicatorsCard, ChartTypeCard, ThemeCard, DataTooltipCard, EventMarkersCard, PriceScaleCard, CustomTypesCard, ScalesFormatCard, ScalesConfigCard, DataCard, CustomPluginsCard, PositionsCard, TradeMarkersCard } from '../components/gallery'
+
+<div className="oac-examples">
+
+# Live examples
+
+Start with a price chart. Add indicators and drawings, then explore alerts,
+market depth, and custom integrations. Every example runs the real library in
+your browser, and the code shown is the code that runs. Market data is simulated.
+Footprint, order flow and market profile charts have a page of their own:
+[Order flow and market profile examples](/order-flow).
+
+<div className="oac-example-path" aria-label="Explore examples">
+
+[Start here](#start-with-candlesticks) / [Indicators](#add-indicators) /
+[Drawings](#drawing-tools) / [Chart controls](#the-terminal-in-one-call) /
+[Alerts](#alert-threshold-dragging) / [Advanced analysis](#compact-market-profiles) /
+[Order flow](/order-flow)
+
+</div>
+
+## Start with candlesticks
+
+A price chart is the starting point. Drag to pan, scroll to zoom, and move the
+crosshair over a candle to inspect it. Open the code below to create your own.
+
+<RunnableExample height={440} caption="Simulated stock prices with mixed up and down candles, pullbacks, and changing volatility. No live feed is connected." code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.fitContent();
+return chart;`} />
+
+## Change the look
+
+### Consistent candle density
+
+This chart keeps 8 CSS pixels per bar as the container changes width. A narrow screen
+shows fewer candles, while a wider screen shows more. Reset restores that preference.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el, {
+  navigation: { defaultBarSpacing: 8, mousePan: 'horizontal' },
+});
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 300, 3600));
+return chart;`} />
+
+Switch chart styles, choose a theme, and change the visible range.
+These controls update the chart in place.
+
+<div className="oac-cardgrid">
+<ChartTypeCard />
+<ThemeCard />
+<RangeSwitcherCard />
+<LegendCard />
+</div>
+
+## Add indicators
+
+### Price fitting and compact study readouts
+
+The distant comparison line stays attached while primary-price fitting keeps
+candles readable. Toggle the fitting control to include its range. Collapse the
+study readouts with their count control; the average keeps calculating and drawing.
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el, {
+  priceOnlyAutoScale: true,
+  legendOffset: { top: 42, left: 8 },
+});
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('sma', { length: 20 });
+chart.addSeries('line', { style: { color: '#f5a623', lineWidth: 1 } })
+  .setData(bars.map(bar => ({ time: bar.time, value: bar.close * 3 })));
+chart.fitContent();
+const button = document.createElement('button');
+button.type = 'button';
+button.textContent = 'Fit primary prices: on';
+button.setAttribute('aria-pressed', 'true');
+Object.assign(button.style, {
+  position: 'absolute', top: '8px', left: '8px', zIndex: '2',
+  padding: '4px 8px', border: '1px solid #777', borderRadius: '4px',
+  background: 'Canvas', color: 'CanvasText', fontSize: '12px', cursor: 'pointer',
+});
+button.addEventListener('pointerdown', event => event.stopPropagation());
+button.addEventListener('click', () => {
+  const on = !chart.priceOnlyAutoScale();
+  chart.setPriceOnlyAutoScale(on);
+  button.textContent = 'Fit primary prices: ' + (on ? 'on' : 'off');
+  button.setAttribute('aria-pressed', String(on));
+});
+el.appendChild(button);
+return chart;`} />
+
+See a moving average on the price chart, then add RSI in its own pane.
+Each example uses the same synthetic candles to make the difference easy to see.
+
+<div className="oac-gallery">
+
+<div>
+### Candlesticks + EMA
+<RunnableExample hideCode height={280} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addSeries('line', { style: { color: '#f5a623', lineWidth: 2 } }).setData(lib.emaSeries(bars, 21));
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+</div>
+
+<div>
+### RSI in its own pane
+<RunnableExample hideCode height={300} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addSeries('line', { paneIndex: 1, style: { color: '#e0b020' } }).setData(lib.rsiSeries(bars, 14));
+chart.addPriceLine({ price: 70, color: '#ef5350', lineWidth: 1, dashed: true, id: 'r70' }, 1);
+chart.addPriceLine({ price: 30, color: '#26a69a', lineWidth: 1, dashed: true, id: 'r30' }, 1);
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+</div>
+
+<div>
+### Supertrend overlay
+<RunnableExample hideCode height={280} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+const st = lib.supertrendSeries(bars, 10, 3);
+chart.addSeries('line', { style: { color: '#26a69a', lineWidth: 2 } }).setData(st.up);
+chart.addSeries('line', { style: { color: '#ef5350', lineWidth: 2 } }).setData(st.down);
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+</div>
+
+</div>
+
+## Price pane below the studies
+
+Read the studies first and the price last. A chart built with `movablePrimaryPane` treats the
+price pane as an identity rather than a slot: moving it takes the candles, the moving average
+drawn on them, the price line and the study count along, while RSI and MACD keep their own
+panes and scales. The time navigator stays at the foot of the chart, on whichever pane is at
+the bottom. The saved layout keeps the arrangement. The option is off by default, so a host
+that still passes pane `0` for the price keeps its price pane on top. See
+[Moving the price pane](/docs/scales-and-panes#moving-the-price-pane-below-its-studies).
+
+<RunnableExample height={520} tiers={['indicators']} caption="Simulated prices. The buttons move only the price pane; every study stays on its own pane." code={`el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px 64px 8px 8px';
+el.appendChild(controls);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:0;width:100%';
+el.appendChild(host);
+const chart = lib.createChart(host, { movablePrimaryPane: true });
+const bars = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('ema', { length: 21 });
+chart.addIndicator('rsi');
+chart.addIndicator('macd');
+chart.addPriceLine({ price: bars[bars.length - 1].close, color: '#4f8cff', lineWidth: 1, id: 'level', leftLabel: 'Level' });
+chart.timeScale.fitContent(bars.length);
+const slot = document.createElement('span');
+slot.style.cssText = 'color:light-dark(#686868,#94a3b8);font:12px system-ui, sans-serif;margin-left:6px';
+const show = () => { slot.textContent = 'Price pane: slot ' + chart.primaryPaneIndex() + ' of ' + chart.panes().length; };
+for (const [label, run] of [
+  ['Price on top', () => chart.setPrimaryPaneIndex(0)],
+  ['Up', () => chart.movePane(chart.primaryPaneIndex(), -1)],
+  ['Down', () => chart.movePane(chart.primaryPaneIndex(), 1)],
+  ['Price at the bottom', () => chart.setPrimaryPaneIndex(chart.panes().length - 1)],
+]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  button.onpointerdown = (event) => event.stopPropagation();
+  button.onclick = () => { run(); show(); };
+  controls.appendChild(button);
+}
+controls.appendChild(slot);
+chart.setPrimaryPaneIndex(chart.panes().length - 1);
+show();
+return chart;`} />
+
+## Typed study inputs
+
+Open the study inputs to edit a session and notes, select a watch instrument,
+or pick a threshold and start bar directly from the chart. The threshold line
+follows the selected time window. Cancel restores the settings from before
+the dialog opened.
+
+<TypedInputsDemo />
+
+The descriptor uses native scalar settings:
+
+```ts
+inputs: [
+  { key: 'instrument', type: 'symbol', label: 'Instrument', default: 'SAMPLE-A', exchangeKey: 'venue' },
+  { key: 'session', type: 'session', label: 'Session', default: '0900-1700:23456' },
+  { key: 'note', type: 'multiline', label: 'Notes', default: '' },
+  { key: 'level', type: 'price', label: 'Threshold', default: 104, pick: true },
+  { key: 'start', type: 'timestamp', label: 'Start at', default: 1790068800, pick: true },
+]
+```
+
+## Anchored study input
+
+The growth path starts at one point: a bar time and a price that belong together. The
+price input names its time (`timeKey`), so **Pick point** sets both from one click, and
+`anchor: true` puts the orange ring on the chart. Drag the ring to move both at once, then
+use **Undo** and **Redo**: a drag and a pick are one step each, because the pick goes
+through `draw.moveInputAnchor`. Escape during a drag cancels it. See
+[a time and a price that belong together](/docs/indicators#a-time-and-a-price-that-belong-together).
+
+<RunnableExample height={400} tiers={['draw']} caption="Drag the ring, or press Pick point and click a bar. Each drag and each pick is one undo step." code={`const bar = document.createElement('div');
+bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px;font-size:12px';
+el.appendChild(bar);
+const host = document.createElement('div');
+host.style.cssText = 'height:330px';
+el.appendChild(host);
+
+lib.registerIndicator({
+  id: 'example-anchored-growth', name: 'Anchored growth', placement: 'onchart',
+  inputs: [
+    { key: 'from', type: 'timestamp', label: 'Anchor time', default: 0, pick: true },
+    { key: 'price', type: 'price', label: 'Anchor price', default: 0, pick: true, timeKey: 'from', anchor: true },
+    { key: 'rate', type: 'number', label: 'Growth per bar (%)', default: 0.15 },
+  ],
+  plots: [{ key: 'path', title: 'Growth path', type: 'line', style: { color: '#f59e0b', lineWidth: 2 } }],
+  calc(bars, s) {
+    const start = bars.findIndex(b => b.time >= s.from);
+    return { path: bars.map((_, i) => (start < 0 || i < start ? null : s.price * (1 + s.rate / 100) ** (i - start))) };
+  },
+});
+
+const chart = lib.createChart(host);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.setVisibleLogicalRange({ from: 40, to: 165 });
+// The drawing controller draws the anchor and holds its undo steps.
+const draw = new lib.DrawingController(chart);
+const study = chart.addIndicator('example-anchored-growth', { from: bars[90].time, price: bars[90].close });
+
+const readout = document.createElement('span');
+const show = () => {
+  const s = study.settings();
+  readout.textContent = 'Anchor: ' + new Date(s.from * 1000).toISOString().slice(0, 16).replace('T', ' ')
+    + ' UTC at ' + s.price.toFixed(2);
+};
+const button = (label, run) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid light-dark(#e4e4e4,#2a3046);background:light-dark(#fff,#1c2030);color:light-dark(#151515,#c7ccd8);cursor:pointer';
+  b.onclick = run;
+  bar.appendChild(b);
+};
+// One click answers with the bar time and the price together, and moving the
+// anchor through the drawing controller makes the pick an undo step like a drag.
+button('Pick point', () => chart.beginPick('point', p => draw.moveInputAnchor(study.id, 'price', p)));
+button('Undo', () => draw.undo());
+button('Redo', () => draw.redo());
+bar.appendChild(readout);
+chart.on('objects:change', show);
+show();
+return chart;`} />
+## Conditional study inputs
+
+Open the study inputs and change the mode, the smoothing and the signal switch.
+The band width appears only in Bands mode and keeps its value while it is
+hidden, the smoothing length is editable only with a smoothing chosen, and the
+signal's length and colour share its row and follow its switch. From 2.5.6, see
+[conditional inputs](/docs/indicators#conditional-inputs-and-inline-rows).
+
+<ConditionalInputsDemo />
+
+The descriptor declares the rules as data beside each input:
+
+```ts
+inputs: [
+  { key: 'length', type: 'number', label: 'Length', default: 20, inline: 'len' },
+  { key: 'source', type: 'source', label: 'Source', default: 'close', inline: 'len' },
+  { key: 'mode', type: 'select', label: 'Mode', default: 'line', options: MODES },
+  { key: 'width', type: 'number', label: 'Band width', default: 1.5, visibleWhen: { key: 'mode', is: 'bands' } },
+  { key: 'smoothing', type: 'select', label: 'Smoothing', default: 'none', options: SMOOTHING },
+  { key: 'smoothLength', type: 'number', label: 'Smoothing length', default: 5,
+    activeWhen: { key: 'smoothing', isNot: 'none' } },
+  { key: 'showSignal', type: 'boolean', label: 'Signal', default: false, inline: 'signal' },
+  { key: 'signalLength', type: 'number', label: 'Length', default: 9, inline: 'signal',
+    activeWhen: { key: 'showSignal', is: true } },
+  { key: 'signalColor', type: 'color', label: 'Colour', default: '#d97706', inline: 'signal',
+    activeWhen: { key: 'showSignal', is: true } },
+]
+```
+
+## Compare markets
+
+Put two instruments on one chart and compare how they move. Prices and returns
+use their own scales. These instruments are simulated.
+
+<div className="oac-gallery">
+
+<div>
+### Symbol comparison
+<RunnableExample hideCode height={280} code={`${STOCK_BARS_SOURCE}
+const chart = lib.createChart(el);
+const spot = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(spot);
+
+// A second instrument, two orders of magnitude away in price.
+const other = stockBars(1700000000, 200, 3600, 46000, 37, 0.002);
+lib.addComparison(chart, { symbol: 'BANKNIFTY', bars: other, color: '#f0b90b' });
+chart.fitContent();
+return chart;`} />
+</div>
+
+<SeriesCompareCard />
+
+</div>
+
+## Multiple price axes
+
+Three simulated series use independent ranges: blue near 100, green near 1,200,
+and amber near 5. Start with two columns on the right and one on the left. Move
+the green column, change its order, or narrow the chart. Drag or scroll over a
+column to adjust only its scale. See the [axis placement API](/docs/scales-and-panes#multiple-axes-on-the-same-side).
+
+<RunnableExample height={470} caption="Placement changes keep each series on its original scale, with its own range and formatting." code={`${STOCK_BARS_SOURCE}
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px 64px 8px 8px';
+controls.addEventListener('pointerdown', event => event.stopPropagation());
+el.appendChild(controls);
+const status = document.createElement('div');
+status.style.cssText = 'padding:0 8px 8px;font:12px sans-serif';
+status.setAttribute('role', 'status');
+el.appendChild(status);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:0;width:100%;align-self:center';
+el.appendChild(host);
+const chart = lib.createChart(host, { priceAxisWidth: 64 });
+const palette = chart.theme();
+status.style.color = palette.axisText;
+// Three simulated instruments an order of magnitude apart in price.
+const closes = (price, seed) => stockBars(1700000000, 96, 60, price, seed)
+  .map(bar => ({ time: bar.time, value: bar.close }));
+chart.addSeries('line', {
+  priceScaleId: 'right', style: { color: '#4385ef', lineWidth: 2 },
+  priceFormat: { type: 'price', precision: 1 },
+}).setData(closes(100, 3));
+chart.addSeries('line', {
+  priceScaleId: 'overlay:large', style: { color: '#26a69a', lineWidth: 2 },
+  priceFormat: { type: 'price', precision: 0 },
+}).setData(closes(1200, 5));
+chart.addSeries('line', {
+  priceScaleId: 'overlay:small', style: { color: '#d99126', lineWidth: 2 },
+  priceFormat: { type: 'price', precision: 2 },
+}).setData(closes(5, 9));
+chart.setPriceAxisPlacement(0, 'overlay:large', 'right');
+chart.setPriceAxisPlacement(0, 'overlay:small', 'left');
+chart.fitContent();
+const names = { right: 'Blue', 'overlay:large': 'Green', 'overlay:small': 'Amber' };
+let compact = false;
+const buttons = new Map();
+function render() {
+  const slots = chart.priceAxisLayout();
+  const selected = chart.priceAxisPlacement(0, 'overlay:large');
+  const side = slots.filter(slot => slot.side === selected.side);
+  const rank = side.findIndex(slot => slot.scaleId === 'overlay:large');
+  for (const [label, button] of buttons) {
+    button.disabled = label === 'Green inward' ? rank === 0
+      : label === 'Green outward' ? rank === side.length - 1 : false;
+    button.style.opacity = button.disabled ? '0.45' : '1';
+    button.style.cursor = button.disabled ? 'default' : 'pointer';
+    if (label === 'Compact width') {
+      button.textContent = compact ? 'Full width' : 'Compact width';
+      button.setAttribute('aria-pressed', String(compact));
+    }
+  }
+  status.textContent = ['left', 'right'].map(side => {
+    const labels = slots.filter(slot => slot.side === side).map(slot => names[slot.scaleId]);
+    return side + ' from plot: ' + labels.join(', ');
+  }).join(' | ');
+}
+for (const [label, action] of [
+  ['Switch green side', () => {
+    const { side } = chart.priceAxisPlacement(0, 'overlay:large');
+    chart.setPriceAxisPlacement(0, 'overlay:large', side === 'right' ? 'left' : 'right');
+  }],
+  ['Green inward', () => {
+    const { side } = chart.priceAxisPlacement(0, 'overlay:large');
+    chart.setPriceAxisPlacement(0, 'overlay:large', side, 0);
+  }],
+  ['Green outward', () => {
+    const { side } = chart.priceAxisPlacement(0, 'overlay:large');
+    chart.setPriceAxisPlacement(0, 'overlay:large', side,
+      chart.priceAxisLayout().filter(slot => slot.side === side).length - 1);
+  }],
+  ['Compact width', () => {
+    compact = !compact;
+    host.style.width = compact ? 'min(100%, 420px)' : '100%';
+    chart.applySize(host.clientWidth, host.clientHeight);
+  }],
+]) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 9px;border:1px solid ' + palette.axisLine
+    + ';border-radius:4px;background:' + palette.background + ';color:' + palette.axisText + ';font:12px sans-serif';
+  button.onclick = () => { action(); render(); };
+  buttons.set(label, button);
+  controls.appendChild(button);
+}
+render();
+return chart;`} />
+
+## Drawing tools
+
+Choose a tool, draw on the chart, then select it to move or delete it. Try undo
+and redo with the visible controls. See the [drawing tools guide](/docs/drawing-tools)
+for the full tool catalogue and integration API. Open the
+[full-size drawing gallery](/demos/drawings/index.html) to inspect editable samples
+of all 87 tools, including volume studies, pitchforks, harmonic patterns and advanced geometry.
+
+<DrawingToolsDemo />
+
+## Notes pinned to the screen
+
+A note, a box or a table can stay put while the chart moves under it. Drag the chart: the
+yellow note and the orange box hold their place, and the blue box follows the bars. Select
+the blue box and press **Pin selected** to fix it where it is, or **Unpin selected** to let a
+pinned drawing follow the bars again. See [Pinned to the screen](/docs/drawing-tools#pinned-to-the-screen).
+
+<RunnableExample height={380} tiers={['draw']} caption="Drag to pan and scroll to zoom. Pinned drawings keep their place on screen; drag them, or their handles, to edit them." code={`const bar = document.createElement('div');
+bar.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+el.appendChild(bar);
+const host = document.createElement('div');
+host.style.cssText = 'height:320px';
+el.appendChild(host);
+
+const chart = lib.createChart(host);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.setVisibleLogicalRange({ from: 80, to: 200 });
+
+const draw = new lib.DrawingController(chart);
+// Pinned: fractions of the pane's plot, not a time and a price.
+draw.add({ tool: 'text', paneIndex: 0, style: {}, points: [], space: 'viewport',
+  viewportPoints: [{ x: 0.02, y: 0.04 }],
+  text: { value: 'Plan: fade the open\\nStop above the high', color: '#f5c542', fontSize: 13,
+    background: true, backgroundColor: '#1c2030', backgroundOpacity: 0.9 } });
+draw.add({ tool: 'rectangle', paneIndex: 0, points: [], space: 'viewport',
+  viewportPoints: [{ x: 0.62, y: 0.1 }, { x: 0.9, y: 0.32 }],
+  style: { color: '#f5a623', lineWidth: 2 }, text: { value: 'Watch zone', color: '#f5a623' } });
+// On time and price, for comparison: a box around the bars it covers.
+const span = bars.slice(130, 161);
+draw.add({ tool: 'rectangle', paneIndex: 0, style: { color: '#4f8cff', lineWidth: 2 }, points: [
+  { time: bars[130].time, price: Math.max(...span.map(b => b.high)) },
+  { time: bars[160].time, price: Math.min(...span.map(b => b.low)) },
+] });
+
+const button = (label, space) => {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid light-dark(#e4e4e4,#2a3046);background:light-dark(#fff,#1c2030);color:light-dark(#151515,#c7ccd8);cursor:pointer';
+  // One conversion for the whole selection; it keeps each drawing where it is on screen.
+  b.onclick = () => draw.updateMany(draw.selection().map(id => ({ id, patch: { space } })));
+  bar.appendChild(b);
+};
+button('Pin selected', 'viewport');
+button('Unpin selected', 'data');
+return chart;`} />
+
+## Drawings per symbol
+
+Since 2.5.9 a line drawn on one symbol belongs to that
+symbol. The orange line is INFY's: switch to TCS and it is not there, draw one of your own
+with **Trend line**, then switch back and each symbol shows only its own. **Delete all**
+deletes the drawings of the symbol on screen and nothing else. See
+[Drawings per instrument](/docs/drawing-tools#drawings-per-instrument).
+
+<RunnableExample height={400} tiers={['draw']} caption="Simulated prices for two symbols. The drawings of each symbol are kept in memory for this page." code={`${STOCK_BARS_SOURCE}
+const bar = document.createElement('div');
+bar.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+el.appendChild(bar);
+const host = document.createElement('div');
+host.style.cssText = 'height:340px';
+el.appendChild(host);
+
+const chart = lib.createChart(host);
+const series = chart.addSeries('candlestick');
+const draw = new lib.DrawingController(chart);
+// One drawing document per symbol, swapped as the data context names another.
+new lib.InstrumentDrawings(chart, draw);
+const markets = {
+  INFY: stockBars(1700000000, 160, 86400, 1500, 7),
+  TCS: stockBars(1700000000, 160, 86400, 3500, 11),
+};
+const show = symbol => {
+  series.setData([]);   // the old bars go before the context names the new symbol
+  chart.setDataContext({ symbol, exchange: 'NSE', interval: '1d' });
+  series.setData(markets[symbol]);
+  chart.resetScale();
+};
+show('INFY');
+const b = markets.INFY;
+draw.add({ tool: 'trend-line', paneIndex: 0, style: { color: '#f5a623', lineWidth: 2 },
+  points: [{ time: b[40].time, price: b[40].low }, { time: b[120].time, price: b[120].high }] });
+
+const button = (label, onclick) => {
+  const btn = document.createElement('button');
+  btn.textContent = label;
+  btn.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid #2a3046;background:#1c2030;color:#c7ccd8;cursor:pointer';
+  btn.onclick = onclick;
+  bar.appendChild(btn);
+};
+button('INFY', () => show('INFY'));
+button('TCS', () => show('TCS'));
+button('Trend line', () => draw.setTool('trend-line'));
+button('Delete all', () => draw.clear());
+return chart;`} />
+
+## Draw order across studies
+
+A drawing can sit behind the series, over the candles and under a study, over a study, or
+in front of everything, and the candles can move over a study. The line under the buttons
+lists the pane back to front, the order it paints in. See
+[Draw order](/docs/objects#draw-order).
+
+<RunnableExample height={400} tiers={['indicators', 'draw']} caption="Simulated prices. Each button moves one object; the list reads the pane from back to front." code={`const bar = document.createElement('div');
+bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px';
+el.appendChild(bar);
+const order = document.createElement('div');
+order.style.cssText = 'color:light-dark(#686868,#94a3b8);font:12px system-ui, sans-serif;margin-bottom:6px';
+el.appendChild(order);
+const host = document.createElement('div');
+host.style.cssText = 'height:300px';
+el.appendChild(host);
+
+const chart = lib.createChart(host);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.setVisibleLogicalRange({ from: 110, to: 200 });
+const ema = chart.addIndicator('ema', { length: 9, color: '#f5c542' });
+const draw = new lib.DrawingController(chart);
+const span = bars.slice(140, 181);
+const box = draw.add({ tool: 'rectangle', paneIndex: 0,
+  style: { color: '#4f8cff', fill: true, fillOpacity: 0.85, lineWidth: 2 }, points: [
+    { time: bars[140].time, price: Math.max(...span.map(b => b.high)) },
+    { time: bars[180].time, price: Math.min(...span.map(b => b.low)) },
+  ] });
+// One list for the whole pane: the same inventory an Objects panel reads.
+const objects = new lib.ChartObjects(chart, { drawings: draw });
+const label = row => row.band === 'above' ? row.name + ' (in front)'
+  : row.band === 'below' ? row.name + ' (behind the series)' : row.name;
+const show = () => { order.textContent = 'Back to front: ' + objects.stack(0).map(label).join(', '); };
+objects.subscribe(show);
+
+const moves = [
+  ['Box in front', () => draw.bringAboveSeries(box.id)],
+  ['Box over the average', () => draw.placeInStack(box.id, { entry: 'indicator:' + ema.id }, 'above')],
+  ['Box over the candles', () => draw.placeInStack(box.id, { entry: 'source:primary' }, 'above')],
+  ['Box behind the series', () => draw.sendBehindSeries(box.id)],
+  ['Candles over the average', () => chart.moveInSeriesStack('source:primary', 'indicator:' + ema.id, 'above')],
+  ['Candles under the average', () => chart.moveInSeriesStack('source:primary', 'indicator:' + ema.id, 'below')],
+];
+for (const [label, run] of moves) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid light-dark(#e4e4e4,#2a3046);background:light-dark(#fff,#1c2030);color:light-dark(#151515,#c7ccd8);cursor:pointer';
+  b.onpointerdown = (event) => event.stopPropagation();
+  b.onclick = run;
+  bar.appendChild(b);
+}
+return { destroy() { objects.destroy(); draw.destroy(); chart.destroy(); } };`} />
+
+## The terminal in one call
+
+Add a toolbar, drawing tools, settings, and the Data and Objects panels with
+`createWidget`. This example uses a simulated feed so symbol and timeframe
+changes reload the chart. Search **NOVA** to try stock and futures results,
+or **BTC** for a crypto result.
+
+<RunnableExample height={580} tiers={['widget']} caption="Simulated instruments and prices. Focus the chart and type an unassigned letter to search, or type 15 for a 15-minute chart. Open Data, Objects, Indicators, and Chart settings to try the controls." code={`${STOCK_BARS_SOURCE}
+const instruments = [
+  { symbol: 'NOVA', exchange: 'DEMO', name: 'Nova Industries', assetClass: 'Stock' },
+  { symbol: 'NOVA FUT', exchange: 'DEMO', name: 'Nova futures', assetClass: 'Futures',
+    contractGroup: { label: 'Contracts', contracts: [
+      { symbol: 'NOVA26SEP', exchange: 'DEMO', name: 'September 2026' },
+      { symbol: 'NOVA26OCT', exchange: 'DEMO', name: 'October 2026' },
+    ] } },
+  { symbol: 'BTCUSD', exchange: 'DEMO', name: 'Bitcoin', assetClass: 'Crypto' },
+];
+const widget = lib.createWidget(el, {
+  symbol: 'NOVA', exchange: 'DEMO', interval: '5m', persist: false,
+  intervals: ['5m', '15m', '1h', '1d'],
+  symbolSearch: query => instruments.filter(hit =>
+    (hit.symbol + ' ' + hit.name).toLowerCase().includes(query.toLowerCase())),
+  feed: {
+    getBars: async request => {
+      const seconds = { '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[request.interval] || 300;
+      const seed = Array.from(request.symbol).reduce((n, c) => n + c.charCodeAt(0), 23);
+      return stockBars(1700000000, 180, seconds, request.symbol === 'BTCUSD' ? 64000 : 100, seed);
+    },
+    subscribeBars: () => () => {},
+  },
+});
+widget.chart.addIndicator('ema', { length: 20 });
+return widget;`} />
+
+Every option and event is on [The Widget Tier](/docs/widget).
+
+## One undo for the whole chart
+
+A study, a pane fold, a chart type and a drawing are steps on one timeline. Add RSI, fold its
+pane, switch to a line, draw a trend line from the rail, then take each step back and apply it
+again with the buttons, or with Ctrl+Z and Ctrl+Y over the chart. The line beside the buttons
+says what Undo would take back. See [Undo and Redo](/docs/undo-history).
+
+<RunnableExample height={520} tiers={['widget']} caption="Simulated prices. Undo never touches the bars: a study brought back computes from the prices on the chart and fires none of its alerts." code={`${STOCK_BARS_SOURCE}
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px';
+el.appendChild(controls);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:0;width:100%;position:relative';
+el.appendChild(host);
+const widget = lib.createWidget(host, {
+  symbol: 'NOVA', exchange: 'DEMO', interval: '1h', persist: false, mobile: 'never',
+  feed: { getBars: async () => stockBars(1700000000, 200, 3600, 100, 41), subscribeBars: () => () => {} },
+});
+const note = document.createElement('span');
+note.style.cssText = 'color:light-dark(#686868,#94a3b8);font:12px system-ui, sans-serif;margin-left:6px';
+const button = (label, run) => {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  b.onpointerdown = (event) => event.stopPropagation();
+  b.onclick = run;
+  controls.appendChild(b);
+  return b;
+};
+button('Add RSI', () => widget.chart.addIndicator('rsi'));
+button('Fold the last pane', () => {
+  const last = widget.chart.panes().length - 1;
+  if (last > 0) widget.chart.setPaneCollapsed(last, !widget.chart.paneCollapsed(last));
+});
+button('Line or candles', () => widget.setChartType(widget.chartType() === 'line' ? 'candlestick' : 'line'));
+const undo = button('Undo', () => widget.history.undo());
+const redo = button('Redo', () => widget.history.redo());
+controls.appendChild(note);
+const show = () => {
+  const next = widget.history.peekUndo();
+  note.textContent = next ? 'Undo takes back: ' + next.changes.join(', ') : 'Nothing to undo';
+  undo.disabled = !widget.history.canUndo();
+  redo.disabled = !widget.history.canRedo();
+};
+widget.history.subscribe(show);
+show();
+return widget;`} />
+
+## Regular and extended hours
+
+Extended hours are the provider's own pre and post market bars, a different series from
+regular hours, so the chart asks for them by name and never makes them from the regular
+bars. The simulated provider below declares both sessions and no price adjustment, so
+**Raw prices** shows the unsupported state instead of relabelling the regular series.
+See [Data Variants](/docs/data-variants).
+
+<RunnableExample height={500} tiers={['widget']} caption="Simulated prices on New York time. Extended hours add the 04:00 to 09:30 and 16:00 to 20:00 bars around the same regular session." code={`${STOCK_BARS_SOURCE}
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px';
+el.appendChild(controls);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:0;width:100%;position:relative';
+el.appendChild(host);
+// One provider series per session. Regular hours are the same bars as the
+// middle of the extended day: the provider serves both, the chart derives neither.
+const monday = 1767571200; // Monday 5 January 2026, 00:00 UTC; New York is UTC-5 in January
+const day = 86400, preOpen = 9 * 3600, open = 14.5 * 3600, close = 21 * 3600, postClose = 25 * 3600;
+const extended = [];
+for (let d = 0; d < 3; d++) {
+  extended.push(...stockBars(monday + d * day + preOpen, (postClose - preOpen) / 300, 300, 100 + d * 1.5, 17 + d));
+}
+const regular = extended.filter(bar => {
+  const t = (bar.time - monday) % day;
+  return t >= open && t < close;
+});
+const feed = {
+  dataVariants: () => ({ sessions: ['regular', 'extended'] }),
+  getBars: async request => (request.variant && request.variant.session === 'extended' ? extended : regular),
+  subscribeBars: () => () => {},
+};
+const widget = lib.createWidget(host, {
+  symbol: 'NOVA', exchange: 'DEMO', interval: '5m', intervals: ['5m'], timezone: 'America/New_York',
+  persist: false, rail: false, feed, navigation: { defaultVisibleBars: 400 },
+});
+const note = document.createElement('span');
+note.style.cssText = 'color:light-dark(#686868,#94a3b8);font:12px system-ui, sans-serif;margin-left:6px';
+const show = state => {
+  if (state.status === 'unsupported') note.textContent = 'Not served by this provider: nothing was fetched';
+  else if (state.status === 'ready') note.textContent = state.bars.length + ' bars';
+};
+widget.dataController.subscribe(show);
+for (const [label, variant] of [
+  ['Regular hours', undefined],
+  ['Extended hours', { session: 'extended' }],
+  ['Raw prices', { adjustment: 'raw' }],
+]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  button.onpointerdown = event => event.stopPropagation();
+  button.onclick = () => widget.setDataVariant(variant);
+  controls.appendChild(button);
+}
+controls.appendChild(note);
+return widget;`} />
+
+## Watchlists and news
+
+Named lists with live quote rows, and the news for the chart's symbol, in the same
+panel as Data and Objects. Only the rows on screen hold a quote stream. Sort by a
+column, open a row to chart it, or switch to **News** and open an item. See
+[Watchlists & News](/docs/watchlists-and-news).
+
+<RunnableExample height={560} tiers={['widget']} caption="Simulated quotes, bars and headlines. One simulated exchange prices both the chart and the rows, and the rows take their prices only from the quote source, never from a candle." code={`${STOCK_BARS_SOURCE}
+const names = ['NOVA', 'ORBIT', 'PULSE', 'QUILL', 'RIDGE', 'SOLAR', 'TIDAL', 'UMBRA'];
+// A simulated exchange owns every price. The bar feed and the quote source each
+// read it; a quote is never taken from a candle.
+const seed = symbol => Array.from(symbol).reduce((n, c) => n + c.charCodeAt(0), 0);
+// Each 700 ms step draws a seeded random move; the price is the day's drift
+// plus the sum of the last thirty moves, so it wanders like a traded price and
+// every reader of the same moment sees the same number.
+const noise = n => {
+  let h = Math.imul((n ^ 0x9e3779b9) >>> 0, 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296 - 0.5;
+};
+const exchange = {
+  previousClose: symbol => 40 + seed(symbol) % 160,
+  last(symbol, now = Date.now()) {
+    const step = Math.floor(now / 700);
+    let walk = 0;
+    for (let k = 0; k < 30; k++) walk += noise(seed(symbol) * 100003 + step - k);
+    const move = (seed(symbol) % 7 - 3) / 100 + walk * 0.004;
+    return Math.round(exchange.previousClose(symbol) * (1 + move) * 100) / 100;
+  },
+};
+const round = value => Math.round(value * 100) / 100;
+const seconds = interval => interval === '1d' ? 86400 : 300;
+// Simulated history, scaled to end at the exchange's price now.
+const bars = (symbol, interval) => {
+  const series = stockBars(1700000000, 180, seconds(interval), exchange.previousClose(symbol), seed(symbol));
+  const scale = exchange.last(symbol) / series[series.length - 1].close;
+  return series.map(bar => ({ ...bar, open: round(bar.open * scale), high: round(bar.high * scale),
+    low: round(bar.low * scale), close: round(bar.close * scale) }));
+};
+// One clock drives the quote source and the forming bar, so a row and the chart
+// read the same step of the exchange at the same moment.
+const ticks = new Set();
+let clock = 0;
+const onTick = fn => {
+  ticks.add(fn);
+  if (!clock) clock = setInterval(() => { const now = Date.now(); ticks.forEach(f => f(now)); }, 700);
+  return () => { ticks.delete(fn); if (!ticks.size) { clearInterval(clock); clock = 0; } };
+};
+const quote = (item, now) => ({ ...item, last: exchange.last(item.symbol, now), previousClose: exchange.previousClose(item.symbol) });
+const quotes = {
+  getQuotes: async ({ instruments }) => instruments.map(item => quote(item)),
+  subscribeQuotes(instruments, { onQuote, onStatus }) {
+    const [item] = instruments;
+    if (onStatus) onStatus('live');
+    return onTick(now => onQuote(quote(item, now)));
+  },
+};
+const news = {
+  getNews: async ({ symbol, cursor, limit }) => {
+    const page = Number(cursor || 0);
+    const items = Array.from({ length: limit }, (_, k) => {
+      const i = page * limit + k;
+      return { id: symbol + '-' + i, headline: symbol + ' update ' + (i + 1) + ': simulated headline',
+        source: 'Simulated desk', time: 1700000000 - i * 5400, summary: 'Simulated text for this example. It is not market news.' };
+    });
+    return { items, nextCursor: page < 2 ? String(page + 1) : null };
+  },
+};
+let next = 0;
+const store = new lib.WatchlistRepository(lib.createMemoryWatchlistStorage(), 'example', { id: () => 'list-' + (++next) });
+store.createList('Simulated', names.map(symbol => ({ symbol, exchange: 'DEMO' }))).then(list => store.setActiveList(list.id));
+const widget = lib.createWidget(el, {
+  symbol: 'NOVA', exchange: 'DEMO', interval: '5m', persist: false, intervals: ['5m', '1d'],
+  feed: {
+    getBars: async request => bars(request.symbol, request.interval),
+    // The forming bar follows the same exchange the rows quote.
+    subscribeBars(request, onBar) {
+      const history = bars(request.symbol, request.interval);
+      const forming = { ...history[history.length - 1] };
+      return onTick(now => {
+        const price = exchange.last(request.symbol, now);
+        forming.close = price;
+        forming.high = Math.max(forming.high, price);
+        forming.low = Math.min(forming.low, price);
+        onBar({ ...forming });
+      });
+    },
+  },
+  watchlist: { store, quotes },
+  news: { feed: news, pageSize: 8 },
+});
+// Open the list beside the chart. At 640 px and below the panel is a full sheet
+// over the chart, so leave it for the reader to open from the Watchlist button.
+if (el.clientWidth > 640) widget.openWatchlist();
+return widget;`} />
+
+## Objects and compact dialogs
+
+Find drawings, indicators and registered profiles in one panel. Hide, lock, edit or
+remove supported objects, or focus a drawing beyond the latest candle. Change the
+host width to try compact dialogs. See the [Objects guide](/docs/objects).
+
+<ObjectsDemo />
+
+## Branding and optional watermarks
+
+The corner logo stays visible by default. The background symbol or custom text
+watermark is opt-in. Try the controls, both themes and phone width, then open
+Appearance in Chart settings. See [Branding and Watermarks](/docs/branding-and-watermarks).
+
+<BrandingWatermarkDemo />
+
+## Interactive
+
+Explore tooltip readings, event markers, price scales, and custom chart types.
+Switch tabs to see what each option changes.
+
+<div className="oac-cardgrid">
+<DataTooltipCard />
+<EventMarkersCard />
+<IndicatorsCard />
+<PriceScaleCard />
+<CustomTypesCard />
+<ScalesFormatCard />
+<ScalesConfigCard />
+<DataCard />
+<CustomPluginsCard />
+</div>
+
+## Alert threshold dragging
+
+Drag a price threshold, either bound of a range, or the study threshold in its own
+pane. The dashed line previews the edit while saved values stay unchanged. Release
+to commit once, or press Escape to cancel. A range bound stops at the other bound.
+The lower pane uses study units, independently of the instrument price.
+
+<AlertDragDemo />
+
+Touch cancellation, a second pointer starting a pinch, a context change, host pause
+or replay entry also discard an unfinished drag. Armed lines carry an **Alert** badge.
+Drawing-owned alert levels follow their drawing and cannot be dragged separately.
+See [Trader alerts](/docs/widget#trader-alerts) for host ownership and persistence.
+
+## Finished alert lines
+
+Choose whether triggered and expired alerts keep their lines. The records stay
+saved in either mode, and restoring them never fires a once-only alert again.
+See [Trader alerts](/docs/alerts#finished-alert-lines).
+
+<AlertLifecycleDemo />
+
+## Trading
+
+Data-driven positions, orders, TP/SL brackets, and fill markers via
+[`chart.trading`](/docs/trading-api). Drag the order lines; the line control requests cancel or close.
+
+<div className="oac-cardgrid">
+<PositionsCard />
+<TradeMarkersCard />
+</div>
+
+## Price-dependent ticks
+
+Drag the buy order across the dotted line at 100. Below it the price moves in 0.01
+steps; from 100 up it moves in 0.05 steps, and the release reports the snapped price.
+The rules here are synthetic: a host supplies its venue's schedule. See
+[Instrument metadata](/docs/instruments#price-dependent-ticks) for the band rules and
+[validation](/docs/trading#price-dependent-ticks) for typed prices and price limits.
+
+<RunnableExample height={420} code={`${STOCK_BARS_SOURCE}
+const chart = lib.createChart(el);
+// Synthetic rules, not any venue's: 0.01 below 100 and 0.05 from 100.
+const ticks = new lib.TickSchedule([{ tick: 0.01 }, { from: 100, tick: 0.05 }]);
+chart.setPriceScaleOptions({ minMove: ticks.minMove });
+// Simulated prices that trade through 100, each on its band's tick.
+const bars = stockBars(1700000000, 90, 300, 99.8, 75, 0.0022, 1500).map(bar => ({ ...bar,
+  open: ticks.round(bar.open), high: ticks.round(bar.high), low: ticks.round(bar.low), close: ticks.round(bar.close) }));
+chart.addSeries('candlestick').setData(bars);
+chart.addPriceLine({ price: 100, color: '#8892a6', lineStyle: 'dotted', id: 'boundary',
+  leftLabel: 'tick 0.05 from here, 0.01 below' }, 0);
+// The chart hands it to its trading layer, and rounds dragged alerts with it too.
+chart.setTickSchedule(ticks);
+const order = { id: 'entry', type: 'limit', side: 'buy', price: 99.62, size: 10 };
+chart.trading.setOrders([order]);
+chart.trading.on('trading:order_modify', (event) => {
+  chart.trading.upsertOrder({ ...order, price: event.newPrice });
+});
+chart.fitContent();
+return chart;`} />
+## Sandbox accounts and native position commands
+
+A simulated provider with two sandbox accounts and one live account. The status line
+shows the selected account's equity and margin; its menu lists only the sandbox
+accounts. Buy, then close part of the position, reverse it or close it: each is the
+provider's own command, never an opposite order. Drop the connection to see the
+figures kept and marked stale. See [Accounts and advanced orders](/docs/trading-accounts).
+
+<RunnableExample height={520} tiers={['widget', 'trade']} caption="Simulated sandbox broker in analyzer mode. Use the account menu in the status line to switch accounts." code={SANDBOX_BROKER_EXAMPLE} />
+
+## Open interest and instrument rules
+
+Open Interest draws a separate line pane; Open Interest Change draws a separate
+histogram. These synthetic readings deliberately contain gaps. Missing data stays
+absent, and aggregation takes the latest defined level instead of summing it.
+See the [Open Interest guide](/docs/open-interest) for feed capability and studies.
+The [instrument rules example](/demos/instruments/) lets you switch
+cash, futures and crypto metadata, inspect shortened sessions and check quantity
+steps without sending orders. See [Instrument metadata](/docs/instruments).
+
+<RunnableExample height={440} tiers={['indicators']} code={`const chart = lib.createChart(el);
+let oi = 5000, seed = 91;
+const bars = lib.generateBars(1700000000, 120, 300).map((bar, index) => {
+  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+  oi = Math.max(0, oi + Math.round((seed / 4294967296 - 0.46) * 130));
+  return { ...bar, ...(index % 30 < 3 ? {} : { oi }) };
+});
+chart.setDataContext({ symbol: 'SYNTHETIC', exchange: 'DEMO', interval: '5m', hasOpenInterest: true });
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('open-interest');
+chart.addIndicator('open-interest-change');
+chart.fitContent();
+return chart;`} />
+
+## Compact market profiles
+
+Inspect small TPO letters and volume values, right-click to split
+or unsplit one day, and compare Dark, Blue, Graphite, Emerald and Ivory themes.
+Lowercase `o` marks each day's open; `#` appears only on the newest session.
+The six sessions are synthetic data. The full guide is [Profile Demo & Themes](/docs/market-profile-examples).
+Use the [full-size profiles selector](/demos/phase11-profiles.html) to switch between
+Volume Profile, TPO letters and the current order-flow demo with its themes,
+text colors, lot display and optional statistics table.
+
+<ProfileDemo />
+
+<ProfileThemeGallery />
+
+For footprints, imbalances, zone alerts, the statistics table and compact market and
+volume profiles, each with a short guide to reading it, see
+[Order flow and market profile](/order-flow).
+
+## Depth of market
+
+Watch a simulated live order book, pause updates, and group multiple ticks into
+one price row. The [depth-of-market guide](/docs/depth-of-market) explains feed
+integration and price aggregation. All data and interactions here are simulated.
+
+<DepthLadderDemo />
+
+## Sample events with rich details
+
+Click an earnings, dividend, or news marker to open its summary and named values.
+Group filters control which events are shown, and nearby markers can share a
+cluster. The event content in this example is fictional.
+
+<TimelineEventsDemo />
+
+<a id="linked-analysis-and-timeline-events"></a>
+
+## Linked analysis
+
+Place an anchored VWAP or a fixed-range volume profile and share it with a linked
+chart. Appearance and drawing synchronization are separate opt-in controls.
+Volume profiles here estimate volume from candles.
+
+<LinkedAnalysisDemo />
+
+
+## Custom indicators
+
+### Indicator source and marker anchors
+
+This host supplies the code shown by the legend's source button. Switch between
+price and plot anchoring to compare signal placement, and enlarge the controls to
+see the legend row adapt. Gapped plots share the instrument's scale; a transparent
+helper stays out of the readings. See the [indicator guide](/docs/indicators#source-access-and-legend-controls).
+
+<IndicatorSignalsDemo />
+
+### A descriptor with several outputs
+
+The 112 built-ins are not special-cased. Each is a descriptor - inputs, plots and a
+`calc` - and anything you register with `registerIndicator` uses the same contract,
+so it gets generated settings, a legend entry and state persistence for free.
+
+This one computes a trend regime, then uses four descriptor hooks on the result:
+`colorBy` for the line, `barColors` to repaint the candles, `background` to shade the
+pane, and `markers` to flag each flip. No fork, no build step.
+
+<RunnableExample height={340} tiers={['indicators']} code={`lib.registerIndicator({
+  id: 'demo-regime',
+  name: 'Trend Regime',
+  category: 'Custom',
+  placement: 'onchart',
+  inputs: [
+    { key: 'length', type: 'number', label: 'Length', default: 20, min: 2, max: 200, step: 1 },
+    { key: 'up', type: 'color', label: 'Bull', default: '#26a69a' },
+    { key: 'down', type: 'color', label: 'Bear', default: '#ef5350' },
+  ],
+  plots: [{
+    key: 'basis', type: 'line', title: 'Basis', style: { lineWidth: 2 },
+    // colorBy is a function, not the name of a column. It runs per bar and
+    // returns a colour, or undefined to fall back to the plot's own.
+    colorBy: ({ index, values, settings }) => {
+      const t = values.trend[index];
+      return t == null ? undefined : t > 0 ? settings.up : settings.down;
+    },
+  }],
+  calc(bars, s) {
+    const close = lib.sourceValues(bars, 'close');
+    const basis = lib.nulls(lib.sma(close, Math.max(2, s.length | 0)));
+    const trend = basis.map((b, i) => (b == null ? null : close[i] >= b ? 1 : -1));
+    return { basis, trend };
+  },
+  // Repaint the price candles by regime.
+  barColors({ values, settings }) {
+    return values.trend.map((t) => (t == null ? null : t > 0 ? settings.up : settings.down));
+  },
+  // Shade the whole pane behind them.
+  background({ values, settings }) {
+    return values.trend.map((t) =>
+      t == null ? null : lib.withAlpha(t > 0 ? settings.up : settings.down, 0.07));
+  },
+  // Flag every flip, anchored to the candle rather than to the indicator line.
+  markers({ bars, values, settings }) {
+    const out = [];
+    for (let i = 1; i < bars.length; i++) {
+      const a = values.trend[i - 1], b = values.trend[i];
+      if (a == null || b == null || a === b) continue;
+      out.push({
+        time: bars[i].time,
+        position: 'atPrice',
+        price: b > 0 ? bars[i].low : bars[i].high,
+        shape: b > 0 ? 'arrowUp' : 'arrowDown',
+        color: b > 0 ? settings.up : settings.down,
+        text: b > 0 ? 'BULL' : 'BEAR',
+      });
+    }
+    return out;
+  },
+});
+
+const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-regime');
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+A descriptor can also supply `draws` for free-standing lines, boxes and labels,
+`levels` for data-derived horizontals, `fills` between plots, `table` for an on-chart
+grid, and `alerts` the chart evaluates for you. See
+[Indicators](/docs/indicators) for the full contract.
+
+### Signals from a study pane onto the candles
+
+The momentum histogram lives in its own pane, but its Buy and Sell plates and the
+blue range box are drawn on the candles: those outputs name the price pane with
+`overlay: true`. The dots and the "Now" label stay with the histogram. Move or hide
+the study and every layer follows. See
+[drawing and marker targets](/docs/indicators#drawing-and-marker-targets).
+
+<RunnableExample height={420} code={`lib.registerIndicator({
+  id: 'demo-routed-signals', name: 'Routed signals', category: 'Custom',
+  placement: 'pane',
+  inputs: [{ key: 'length', type: 'number', label: 'Length', default: 10, min: 2, max: 50, step: 1 }],
+  plots: [{ key: 'momentum', type: 'histogram', title: 'Momentum', style: { color: '#64748b' } }],
+  calc(bars, s) {
+    const n = Math.max(2, s.length | 0);
+    return { momentum: bars.map((b, i) => (i < n ? null : b.close - bars[i - n].close)) };
+  },
+  markers({ bars, values }) {
+    const out = [];
+    for (let i = 1; i < bars.length; i++) {
+      const a = values.momentum[i - 1], b = values.momentum[i];
+      if (a == null || b == null || Math.sign(a) === Math.sign(b)) continue;
+      const up = b > 0, color = up ? '#26a69a' : '#ef5350';
+      // On the candles, measured against the bar that fired.
+      out.push({ time: bars[i].time, position: up ? 'belowBar' : 'aboveBar', overlay: true,
+        shape: up ? 'labelUp' : 'labelDown', size: 'small', color, text: up ? 'Buy' : 'Sell' });
+      // No target: a dot on the histogram in the study's own pane.
+      out.push({ time: bars[i].time, position: 'atPrice', price: b, shape: 'circle', size: 'tiny', color });
+    }
+    return out;
+  },
+  draws({ bars, values }) {
+    const last = bars.length - 1;
+    if (last < 30) return [];
+    const recent = bars.slice(last - 30);
+    return [
+      { kind: 'box', overlay: true, color: '#4f8cff', fillColor: '#4f8cff', opacity: 0.08,
+        from: { time: recent[0].time, price: Math.max(...recent.map((b) => b.high)) },
+        to: { time: bars[last].time, price: Math.min(...recent.map((b) => b.low)) },
+        text: '30-bar range', verticalAlign: 'top', id: 'range', tooltip: 'Range the latest signals ran in' },
+      { kind: 'label', plot: 'momentum', align: 'left', color: '#64748b', text: 'Now',
+        at: { time: bars[last].time, price: values.momentum[last] ?? 0 } },
+    ];
+  },
+});
+
+const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-routed-signals');
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+### Shading the candles from a study pane
+
+The momentum histogram sits in its own pane, and the regime it measures shades the
+candles: that shading column names the price pane with `overlay: true`, so the up and
+down stretches read against the bars themselves, behind them. A second column names no
+target and marks the strongest readings behind the histogram, exactly as a plain
+`background` would. See [background targets](/docs/indicators#background-targets-256) (2.5.6).
+
+<RunnableExample height={420} code={`lib.registerIndicator({
+  id: 'demo-routed-shading', name: 'Routed shading', category: 'Custom',
+  placement: 'pane',
+  inputs: [{ key: 'length', type: 'number', label: 'Length', default: 10, min: 2, max: 50, step: 1 }],
+  plots: [{ key: 'momentum', type: 'histogram', title: 'Momentum', style: { color: '#64748b' } }],
+  calc(bars, s) {
+    const n = Math.max(2, s.length | 0);
+    return { momentum: bars.map((b, i) => (i < n ? null : b.close - bars[i - n].close)) };
+  },
+  background({ values }) {
+    const m = values.momentum;
+    const peak = Math.max(...m.map((v) => Math.abs(v ?? 0)));
+    return [
+      // Behind the candles: which way momentum points, bar by bar.
+      { overlay: true, colors: m.map((v) => (v == null || v === 0 ? null
+        : v > 0 ? 'rgba(38,166,154,0.14)' : 'rgba(239,83,80,0.14)')) },
+      // No target: the study's own pane, where the reading is strongest.
+      { colors: m.map((v) => (v != null && Math.abs(v) > peak * 0.6 ? 'rgba(79,140,255,0.18)' : null)) },
+    ];
+  },
+});
+
+const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-routed-shading');
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+### Curved study annotations
+
+The orange curve interpolates the same time and price anchors as the gray
+straight path. Smoothing happens after scale mapping and can overshoot between
+anchors. It follows chart navigation and stays inside the plot when exported.
+
+<RunnableExample height={340} code={`${STOCK_BARS_SOURCE}
+lib.registerIndicator({
+  id: 'demo-curved-study', name: 'Curved annotation', placement: 'onchart',
+  inputs: [],
+  plots: [{ key: 'carrier', type: 'line', title: 'Anchors' }],
+  calc: bars => ({ carrier: bars.map(() => null) }),
+  draws: ({ bars }) => {
+    if (bars.length < 29) return [];
+    const points = [4, 12, 20, 28].map(index => ({
+      time: bars[index].time, price: bars[index].close,
+    }));
+    return [
+      { kind: 'polyline', points, color: '#64748b', lineWidth: 1 },
+      { kind: 'polyline', points, curve: 'smooth', color: '#f59e0b', lineWidth: 3 },
+    ];
+  },
+});
+const chart = lib.createChart(el, { branding: false, timeNavigator: false });
+// Simulated prices whose closes at the four anchors turn down, up and down.
+const bars = stockBars(1700000000, 36, 60, 100, 90, 0.012);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-curved-study');
+chart.setVisibleLogicalRange({ from: -2, to: 38 });
+return chart;`} />
+
+### Study annotation typography
+
+Label and box captions can choose a font, emphasis and multiline row alignment.
+Marker text has its own color and font while the glyph keeps its original size.
+The button changes both captions and marker text through the study's settings.
+
+<RunnableExample height={390} code={`const controls = document.createElement('div');
+controls.style.cssText = 'position:absolute;left:10px;top:10px;right:64px;z-index:5';
+controls.addEventListener('pointerdown', event => event.stopPropagation());
+el.style.position = 'relative';
+el.appendChild(controls);
+const surface = document.createElement('div');
+surface.style.cssText = 'position:absolute;inset:48px 0 0';
+el.appendChild(surface);
+const chart = lib.createChart(surface, { branding: false });
+const bars = lib.generateBars(1700000000, 80, 60);
+chart.addSeries('line').setData(bars);
+lib.registerIndicator({
+  id: 'demo-annotation-typography', name: 'Annotation type', placement: 'onchart',
+  inputs: [{ key: 'large', type: 'boolean', label: 'Large type', default: false }],
+  plots: [{ key: 'value', title: 'Value', type: 'line', style: { color: 'transparent' } }],
+  calc: source => ({ value: source.map(bar => bar.close) }),
+  draws: ({ settings }) => {
+    const type = { fontSize: settings.large ? 19 : 13, fontFamily: 'ui-monospace, monospace',
+      bold: true, italic: true, textAlign: 'right' };
+    return [
+      { kind: 'label', at: { time: bars[14].time, price: 114 }, text: 'Session\\nreading',
+        color: '#27425e', textColor: '#e0f2fe', align: 'left', verticalAlign: 'top', ...type },
+      { kind: 'box', from: { time: bars[37].time, price: 107 }, to: { time: bars[66].time, price: 97 },
+        color: '#27425e', fillColor: '#27425e', opacity: 0.18, text: 'Price\\nzone',
+        textColor: '#e0f2fe', align: 'right', verticalAlign: 'bottom', ...type },
+    ];
+  },
+  markers: ({ settings }) => [{ time: bars[28].time, position: 'atPrice', price: 91,
+    shape: 'circle', size: 'small', color: '#ef5350', text: 'Signal\\ntext',
+    // Canvas text takes a concrete colour, so pick the shade that reads on the active palette.
+    textColor: chart.theme() === lib.darkTheme ? '#a3e635' : '#4d7c0f',
+    fontSize: settings.large ? 19 : 13, fontFamily: 'ui-monospace, monospace', italic: true }],
+});
+const study = chart.addIndicator('demo-annotation-typography');
+chart.panes()[0].priceScale.setPriceRange({ min: 85, max: 120 });
+chart.panes()[0].priceScale.setAutoScale(false);
+chart.fitContent();
+const button = document.createElement('button');
+button.type = 'button'; button.textContent = 'Larger text';
+button.onpointerdown = () => button.focus({ preventScroll: true });
+button.onmousedown = event => {
+  event.preventDefault();
+  button.focus({ preventScroll: true });
+};
+button.style.cssText = 'padding:5px 9px;border:1px solid light-dark(#e4e4e4,#64748b);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);font:12px sans-serif;cursor:pointer';
+button.onclick = () => {
+  const large = !study.settings().large;
+  study.setSettings({ large });
+  button.textContent = large ? 'Smaller text' : 'Larger text';
+};
+controls.appendChild(button);
+return chart;`} />
+
+### A higher timeframe from the chart's own bars
+
+`securitySeries` folds the bars in view up to a coarser interval, one value per bar, so a
+study can read the day's range on an hourly chart without a second data source. The default
+reading is the bucket as it stood at each bar, so it never repaints. This one shades the
+day's high to low, and pins a `cross` marker to the top edge of the pane on each new day.
+
+<RunnableExample height={340} tiers={['indicators']} code={`lib.registerIndicator({
+  id: 'demo-daily-range',
+  name: 'Daily Range',
+  category: 'Custom',
+  placement: 'onchart',
+  inputs: [],
+  plots: [
+    { key: 'high', type: 'step', title: 'Day high', style: { color: '#26a69a', lineWidth: 1 } },
+    { key: 'low',  type: 'step', title: 'Day low',  style: { color: '#ef5350', lineWidth: 1 } },
+  ],
+  fills: [{ between: ['high', 'low'], colorUp: '#4f8cff', colorDown: '#4f8cff', opacity: 0.08 }],
+  calc(bars, s) {
+    // The chart's zone rides along under the reserved timezone key.
+    const day = lib.securitySeries(bars, '1d', { timezone: s.timezone });
+    // isNew is a column too: markers reads it below.
+    return { high: day.high, low: day.low, isNew: day.isNew.map((v) => (v ? 1 : null)) };
+  },
+  markers({ bars, values }) {
+    const out = [];
+    for (let i = 0; i < bars.length; i++) {
+      if (values.isNew[i] === null) continue;
+      out.push({ time: bars[i].time, position: 'paneTop', shape: 'cross', size: 'small', color: '#8892a6' });
+    }
+    return out;
+  },
+});
+
+const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 240, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-daily-range');
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+### Calculate an hourly average on minute bars
+
+The average is calculated on hourly bars before alignment to five-minute bars.
+The orange line holds the last completed hour's average. The blue line updates
+with the developing hour. Both use the same supplied data and a three-hour window.
+
+<RunnableExample height={340} tiers={['indicators']} code={`lib.registerIndicator({
+  id: 'demo-requested-mean', name: 'Hourly mean', placement: 'onchart', inputs: [],
+  plots: [
+    { key: 'confirmed', type: 'step', title: 'Confirmed hour', style: { color: '#e8a23a', lineWidth: 2 } },
+    { key: 'developing', type: 'line', title: 'Developing hour', style: { color: '#4f8cff', lineWidth: 2 } },
+  ],
+  calc(bars, settings) {
+    const expression = requested => ({ mean: lib.nulls(lib.sma(requested.map(bar => bar.close), 3)) });
+    const options = { timezone: settings.timezone };
+    return {
+      confirmed: lib.securityExpression(bars, '1h', expression, options).mean ?? [],
+      developing: lib.securityExpression(bars, '1h', expression, { ...options, mode: 'developing' }).mean ?? [],
+    };
+  },
+});
+const chart = lib.createChart(el, { timezone: 'Etc/UTC' });
+const bars = lib.generateBars(1700002800, 240, 300);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-requested-mean');
+chart.fitContent();
+return chart;`} />
+
+### A built-in study on a higher timeframe
+
+Two sessions of one-minute bars from the 09:15 open. The grey line is EMA 20 on the chart's
+own bars; the orange steps are EMA 9 with `timeframe: '15m'`, folded from the same bars.
+Each 15-minute value appears once its bucket has closed and holds until the next one does,
+and the buckets start at 09:15.
+
+<RunnableExample height={360} tiers={['indicators']} caption="Simulated one-minute prices over two sessions." code={`${STOCK_BARS_SOURCE}
+const chart = lib.createChart(el);
+const open = 1788752700; // 2026-09-07 09:15 IST
+const first = stockBars(open, 375, 60, 1840, 20260930, 0.0006, 4000);
+const second = stockBars(open + 86400, 375, 60, first[first.length - 1].close, 20261001, 0.0006, 4000);
+chart.addSeries('candlestick').setData([...first, ...second]);
+chart.addIndicator('ema', { length: 20, color: '#8a93a6' });
+chart.addIndicator('ema', { length: 9, timeframe: '15m', color: '#e8a23a', 'ma:type': 'step', 'ma:width': 2 });
+chart.fitContent();
+return chart;`} />
+
+### External values with explicit availability
+
+This example supplies a separate set of simulated observations. Its two-value
+average is calculated before alignment to the minute chart. Orange holds the
+latest eligible result; blue dots appear only when a new result becomes
+available. Confirmation and availability are supplied explicitly, with no fetch
+or clock inference. The same helpers accept observations loaded by your host.
+
+<RunnableExample height={340} tiers={['indicators']} code={`${STOCK_BARS_SOURCE}
+const start = 1700000000;
+const requested = {
+  // Simulated closing observations, every three minutes.
+  bars: stockBars(start, 40, 180, 100, 5, 0.008).map(({ time, close }) => ({ time, open: close, high: close, low: close, close })),
+  availableAt: Array.from({ length: 40 }, (_, i) => start + (i + 1) * 180),
+  confirmed: Array.from({ length: 40 }, () => true),
+};
+lib.registerIndicator({
+  id: 'demo-requested-availability', name: 'External mean', placement: 'pane', inputs: [],
+  plots: [
+    { key: 'carry', type: 'step', title: 'Carried mean', style: { color: '#e8a23a', lineWidth: 2 } },
+    { key: 'missing', type: 'line', title: 'New result', style: { color: '#4f8cff', markers: true, markersOnly: true, markerRadius: 4 } },
+  ],
+  calc(bars) {
+    const expression = input => ({
+      mean: input.map((bar, i) => i === 0 ? null : (bar.close + input[i - 1].close) / 2),
+    });
+    const times = bars.map(bar => bar.time);
+    return {
+      carry: lib.alignRequestedExpression(times, requested, expression).mean,
+      missing: lib.alignRequestedExpression(times, requested, expression, { gaps: 'missing' }).mean,
+    };
+  },
+});
+const chart = lib.createChart(el, { timezone: 'Etc/UTC' });
+chart.addSeries('candlestick').setData(lib.generateBars(start, 120, 60));
+chart.addIndicator('demo-requested-availability');
+chart.fitContent();
+return chart;`} />
+
+## Requested snapshots from a deferred provider
+
+Release the first response to show the requested values. Revise values or replace
+the provider, then release its new response. Confirm latest makes the last
+observation eligible without changing the chart's price bars. Loading and
+confirmation are separate: a successful response can still contain an
+unconfirmed observation. This simulated provider also returns the older value
+version when replay requests a cutoff before the declared revision time.
+
+<RunnableExample height={460} tiers={['indicators']} caption="Requested observations have their own availability and confirmation." code={`${STOCK_BARS_SOURCE}
+const start = 1700000000;
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px';
+const status = document.createElement('div');
+status.style.cssText = 'padding:0 8px 8px;color:light-dark(#686868,#94a3b8);font:12px sans-serif';
+status.setAttribute('role', 'status');
+const host = document.createElement('div');
+host.style.height = '380px';
+el.append(controls, status, host);
+const chart = lib.createChart(host, { timezone: 'Etc/UTC', branding: false });
+chart.setDataContext({ symbol: 'SOURCE', interval: '1m' });
+chart.addSeries('line', { style: { color: '#64748b' } }).setData(
+  stockBars(start, 12, 60, 100, 5, 0.008).map(bar => ({ time: bar.time, value: bar.close })));
+let revision = 0, providerNumber = 1, confirmed = false, study, disposed = false;
+const pending = new Set();
+const render = () => {
+  if (disposed) return;
+  status.textContent = 'Provider ' + providerNumber + '; latest ' + (confirmed ? 'confirmed' : 'unconfirmed')
+    + '; ' + (study?.dataStatus()?.state ?? 'loading') + '; responses waiting: ' + pending.size;
+};
+const snapshot = (request, offset) => {
+  const knownRevision = request.asOf === undefined || request.asOf >= start + 600 ? revision : 0;
+  const rows = [10, 20, 30].map((value, i) => {
+    const close = value + offset + knownRevision;
+    return { time: start + i * 180, open: close, high: close, low: close, close };
+  });
+  const indices = rows.map((bar, i) => i).filter(i => rows[i].time >= request.from && rows[i].time <= request.to);
+  return { bars: indices.map(i => rows[i]), availableAt: indices.map(i => [start + 60, start + 315, start + 600][i]),
+    confirmed: indices.map(i => i < 2 || confirmed && (request.asOf === undefined || request.asOf >= start + 600)) };
+};
+const provider = offset => ({
+  requestBars: async request => snapshot(request, offset).bars,
+  requestSnapshot: request => new Promise((resolve, reject) => {
+    const value = snapshot(request, offset);
+    const finish = error => {
+      pending.delete(release);
+      request.signal?.removeEventListener('abort', abort);
+      if (error) reject(error); else resolve(value);
+      render();
+    };
+    const release = () => finish();
+    const abort = () => finish(new DOMException('Request cancelled', 'AbortError'));
+    if (request.signal?.aborted) { abort(); return; }
+    request.signal?.addEventListener('abort', abort, { once: true });
+    pending.add(release);
+    render();
+  }),
+});
+chart.setBarsProvider(provider(0));
+lib.registerIndicator(lib.createRequestedIndicator({
+  id: 'demo-requested-provider', name: 'Requested close', placement: 'pane', inputs: [],
+  plots: [{ key: 'close', type: 'line', style: { color: '#e8a23a', lineWidth: 3, markers: true, markerRadius: 4 } }],
+  request: ({ bars }) => ({ symbol: 'REQUESTED', interval: '3m',
+    from: start, to: bars[bars.length - 1]?.time ?? start }),
+  expression: bars => ({ close: bars.map(bar => bar.close) }),
+  targetTimes: ({ bars, requestState }) => bars.map((bar, i) =>
+    i === bars.length - 1 ? Math.max(bar.time, requestState?.replay?.asOf ?? bar.time) : bar.time),
+}));
+study = chart.addIndicator('demo-requested-provider');
+chart.setPaneWeight(study.paneIndex, 0.8);
+chart.fitContent();
+const unsubscribe = study.subscribeDataStatus(() => queueMicrotask(render));
+for (const [label, action] of [
+  ['Release response', () => { for (const release of [...pending]) release(); }],
+  ['Revise values', () => { revision += 5; chart.invalidateRequestedData(); }],
+  ['Replace provider', () => { providerNumber++; revision = 0; confirmed = false; chart.setBarsProvider(provider((providerNumber - 1) * 100)); }],
+  ['Confirm latest', () => { confirmed = true; chart.invalidateRequestedData(); }],
+]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  button.onclick = () => { action(); render(); };
+  controls.appendChild(button);
+}
+const destroy = chart.destroy.bind(chart);
+chart.destroy = () => { disposed = true; unsubscribe(); destroy(); };
+render();
+return chart;`} />
+
+## External points with live revisions
+
+Release history to load the blue external series. Update same candle changes its
+forming value without adding a source timestamp. Revise history announces an
+external correction independently of price ticks. Replace provider clears the
+old dataset while the new response is pending. Each action uses a deferred
+simulated loader, so loading and cancellation can be observed directly.
+
+The loader also honors a finite replay cutoff using a declared historical version
+boundary. Its raw bar method stays separate from that point-in-time promise.
+
+<RunnableExample height={460} tiers={['indicators']} caption="A same-time price update can refresh external history without recreating the study." code={`${STOCK_BARS_SOURCE}
+const start = 1700000000;
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px';
+const status = document.createElement('div');
+status.style.cssText = 'padding:0 8px 8px;color:light-dark(#686868,#94a3b8);font:12px sans-serif';
+status.setAttribute('role', 'status');
+const host = document.createElement('div');
+host.style.height = '380px';
+el.append(controls, status, host);
+const chart = lib.createChart(host, { timezone: 'Etc/UTC', branding: false });
+chart.setDataContext({ symbol: 'SOURCE', interval: '1m' });
+const source = chart.addSeries('line', { style: { color: '#64748b' } });
+source.setData(stockBars(start, 12, 60, 100, 9, 0.008).map(bar => ({ time: bar.time, value: bar.close })));
+// The provider's own simulated series, before any offset or revision.
+const external = stockBars(start, 12, 60, 20, 11, 0.03).map(bar => bar.close);
+let tailRevision = 0, historyRevision = 0, providerNumber = 1, study, disposed = false;
+const pending = new Set();
+const render = () => {
+  if (!disposed) status.textContent = 'Provider ' + providerNumber + '; ' + (study?.dataStatus()?.state ?? 'loading')
+    + '; responses waiting: ' + pending.size;
+};
+const makeProvider = offset => ({
+  requestBars: async ({ from, to }) => source.getData().filter(bar => bar.time >= from && bar.time <= to),
+  loadPoints: context => new Promise((resolve, reject) => {
+    const historical = context.asOf !== undefined && context.asOf < start + 600;
+    const points = Array.from({ length: 12 }, (_, i) => ({ time: start + i * 60,
+      values: { value: external[i] + offset + (historical ? 0 : historyRevision)
+        + (i === 11 && !historical ? tailRevision : 0) } }))
+      .filter(point => point.time >= context.from && point.time <= context.to
+        && (context.asOf === undefined || point.time <= context.asOf));
+    const finish = error => {
+      pending.delete(release);
+      context.signal?.removeEventListener('abort', abort);
+      if (error) reject(error); else resolve(points);
+      render();
+    };
+    const release = () => finish();
+    const abort = () => finish(new DOMException('Request cancelled', 'AbortError'));
+    if (context.signal?.aborted) { abort(); return; }
+    context.signal?.addEventListener('abort', abort, { once: true });
+    pending.add(release);
+    render();
+  }),
+});
+let provider = makeProvider(0);
+chart.setBarsProvider(provider);
+lib.registerIndicator(lib.createTier2Indicator({
+  id: 'demo-external-revisions', name: 'External value', placement: 'pane', inputs: [],
+  plots: [{ key: 'value', type: 'line', style: { color: '#4f8cff', lineWidth: 3, markers: true, markerRadius: 4 } }],
+  supportsReplay: true,
+  fetch: context => provider.loadPoints(context),
+}));
+study = chart.addIndicator('demo-external-revisions');
+chart.setPaneWeight(study.paneIndex, 0.8);
+chart.fitContent();
+const unsubscribe = study.subscribeDataStatus(() => queueMicrotask(render));
+for (const [label, action] of [
+  ['Release history', () => { for (const release of [...pending]) release(); }],
+  ['Update same candle', () => {
+    tailRevision += 5;
+    const bar = source.getData().slice(-1)[0];
+    source.update({ time: bar.time, value: bar.close + 0.25 });
+  }],
+  ['Revise history', () => { historyRevision += 10; chart.invalidateRequestedData(); }],
+  ['Replace provider', () => {
+    providerNumber++; tailRevision = 0; historyRevision = 0;
+    provider = makeProvider((providerNumber - 1) * 100);
+    chart.setBarsProvider(provider);
+  }],
+]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  button.onclick = () => { action(); render(); };
+  controls.appendChild(button);
+}
+const destroy = chart.destroy.bind(chart);
+chart.destroy = () => { disposed = true; unsubscribe(); destroy(); };
+render();
+return chart;`} />
+
+## Study outputs as moving-average inputs
+
+The blue SMA reads closes `[1, 3, 5, 7]`; the orange SMA reads the blue plot.
+Both start with length two, so the orange values are `[null, null, 3, 5]`.
+Last close 9 changes the final orange value to 5.5. Reset prices, then choose
+Producer length 3: its settings update alone changes that final value to 4.
+
+Visibility, pane and display order do not change the selected input. Remove
+producer clears the orange output. Add replacement leaves the old reference
+unavailable until Rebind source explicitly selects the new instance. Restore
+reversed save rebuilds the same graph with the consumer first in display order.
+
+<RunnableExample height={530} tiers={['indicators']} caption="The orange average uses the blue study's bar-aligned output, including its warmup gaps." code={`const start = 1700000000;
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px 64px 8px 8px';
+const status = document.createElement('div');
+status.style.cssText = 'padding:0 8px 8px;color:light-dark(#686868,#94a3b8);font:12px/18px monospace;min-height:36px';
+status.setAttribute('role', 'status');
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:180px';
+el.append(controls, status, host);
+const chart = lib.createChart(host, { timezone: 'Etc/UTC', branding: false, animAutoscale: false });
+chart.setDataContext({ symbol: 'DEPENDENT', interval: '1m' });
+const prices = chart.addSeries('line', { style: { color: '#64748b', lineWidth: 1 } });
+const original = () => [1, 3, 5, 7].map((value, index) => ({ time: start + index * 60, value }));
+prices.setData(original());
+const addProducer = () => chart.addIndicator('sma', {
+  length: 2, color: '#4f8cff', 'ma:width': 3, 'ma:type': 'line-markers',
+});
+let producer = addProducer();
+let consumer = chart.addIndicator('sma', {
+  length: 2, color: '#f5a623', 'ma:width': 3, 'ma:type': 'line-markers',
+  source: { kind: 'indicator', instanceId: producer.id, plotKey: 'ma' },
+});
+const buttons = new Map();
+const bound = () => producer && consumer.settings().source.instanceId === producer.id;
+const render = () => {
+  const values = consumer.values().ma;
+  status.textContent = 'Producer: ' + (producer ? 'length ' + producer.settings().length : 'removed')
+    + '; downstream ' + JSON.stringify(values) + '; ' + (consumer.dataStatus()?.state ?? 'ready');
+  for (const [label, button] of buttons) {
+    button.disabled = label === 'Add replacement' ? Boolean(producer)
+      : label === 'Rebind source' ? !producer || Boolean(bound())
+      : label === 'Restore reversed save' ? !bound()
+      : label === 'Swap order' ? !producer || producer.paneIndex !== consumer.paneIndex
+      : ['Producer length 2', 'Producer length 3', 'Toggle producer', 'Move producer', 'Remove producer'].includes(label) ? !producer : false;
+    button.style.opacity = button.disabled ? '0.45' : '1';
+    button.style.cursor = button.disabled ? 'default' : 'pointer';
+  }
+};
+for (const [label, action] of [
+  ['Last close 9', () => prices.update({ time: start + 180, value: 9 })],
+  ['Reset prices', () => prices.setData(original())],
+  ['Producer length 2', () => producer.setSettings({ length: 2 })],
+  ['Producer length 3', () => producer.setSettings({ length: 3 })],
+  ['Toggle producer', () => producer.setVisible(!producer.visible())],
+  ['Move producer', () => chart.moveIndicator(producer.id, producer.paneIndex === 0 ? chart.panes().length : 0)],
+  ['Swap order', () => {
+    const display = chart.indicators();
+    chart.reorderIndicator(producer.id, display.indexOf(producer) < display.indexOf(consumer) ? 1 : -1);
+  }],
+  ['Remove producer', () => { producer.remove(); producer = null; }],
+  ['Add replacement', () => { producer = addProducer(); }],
+  ['Rebind source', () => consumer.setSettings({ source: { kind: 'indicator', instanceId: producer.id, plotKey: 'ma' } })],
+  ['Restore reversed save', () => {
+    const producerId = producer.id, consumerId = consumer.id;
+    const saved = chart.getState();
+    saved.indicators = [saved.indicators.find(item => item.instanceId === consumerId),
+      saved.indicators.find(item => item.instanceId === producerId)];
+    const report = chart.restoreState(saved);
+    if (!report.applied) throw new Error(report.reason);
+    producer = chart.indicators().find(item => item.id === producerId);
+    consumer = chart.indicators().find(item => item.id === consumerId);
+  }],
+]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 9px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);font:12px sans-serif';
+  button.onclick = () => { action(); chart.fitContent(); render(); };
+  buttons.set(label, button);
+  controls.appendChild(button);
+}
+chart.fitContent();
+render();
+return chart;`} />
+
+## Indicator alerts on live updates
+
+Cross threshold changes the current forming bar from false to true. Repeat tick
+keeps its timestamp and value, letting the log distinguish every observed update
+from once per bar. Confirm bar uses provider confirmation; Close by clock clears
+that override and advances only this chart's clock. Append bar starts below the
+threshold and can close the previous matching bar.
+
+Reset history and replay emit nothing. The one-time alert stays spent for this
+study instance. These controls simulate source events; the chart only dispatches
+`indicator:alert`, and the example owns the visible log.
+
+<RunnableExample height={600} caption="Four alert policies share one condition: the blue value is at least 105." code={`const start = 1700000040;
+let clock = start + 11 * 60 + 30, replay = null, disposed = false;
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px';
+const status = document.createElement('div');
+status.style.cssText = 'padding:0 8px 8px;color:light-dark(#686868,#94a3b8);font:12px sans-serif';
+status.setAttribute('role', 'status');
+const host = document.createElement('div');
+host.style.height = '340px';
+const log = document.createElement('pre');
+log.setAttribute('role', 'log');
+log.setAttribute('aria-label', 'Indicator alert events');
+log.style.cssText = 'height:132px;overflow:auto;margin:8px;padding:8px;background:light-dark(#f5f5f5,#101827);color:light-dark(#151515,#cbd5e1);font:12px/18px monospace;scrollbar-color:light-dark(#d4d4d4,#334155) light-dark(#f5f5f5,#101827)';
+el.append(controls, status, host, log);
+const chart = lib.createChart(host, { timezone: 'Etc/UTC', branding: false, axisChrome: { clock: () => clock } });
+chart.setDataContext({ symbol: 'SIGNAL', interval: '1m' });
+const source = chart.addSeries('line', { style: { color: '#64748b', lineWidth: 1 } });
+const initial = () => Array.from({ length: 12 }, (_, i) => ({ time: start + i * 60, value: i === 4 || i === 5 ? 110 : 100 }));
+source.setData(initial(), { confirmation: 'forming' });
+const frequencies = ['everyUpdate', 'oncePerBar', 'onBarClose', 'once'];
+lib.registerIndicator({
+  id: 'demo-indicator-alert-policies', name: 'Live threshold', placement: 'onchart', inputs: [],
+  plots: [{ key: 'value', type: 'line', style: { color: '#4f8cff', lineWidth: 3, markers: true, markerRadius: 4 } }],
+  calc: bars => ({ value: bars.map(bar => bar.close) }),
+  alerts: frequencies.map(frequency => ({
+    id: frequency, title: frequency, frequency,
+    when: ({ values, index }) => values.value[index] >= 105,
+  })),
+});
+chart.addIndicator('demo-indicator-alert-policies');
+source.priceScale().setAutoScale(false);
+source.priceScale().setPriceRange({ min: 95, max: 115 });
+chart.fitContent();
+const events = [], liveButtons = [];
+const render = () => {
+  if (disposed) return;
+  const tail = source.getData().slice(-1)[0];
+  status.textContent = (replay ? 'Replay' : 'Live') + '; bar ' + ((tail.time - start) / 60)
+    + '; value ' + tail.close + '; events ' + events.length;
+  log.textContent = events.length ? events.join(String.fromCharCode(10)) : 'No live alerts yet.';
+  log.scrollTop = log.scrollHeight;
+  for (const button of liveButtons) {
+    button.disabled = Boolean(replay);
+    button.style.opacity = replay ? '0.45' : '1';
+    button.style.cursor = replay ? 'not-allowed' : 'pointer';
+  }
+};
+const unsubscribe = chart.on('indicator:alert', event => {
+  if (event.indicatorId !== 'demo-indicator-alert-policies') return;
+  events.push(event.alertId + ' @ bar ' + ((event.time - start) / 60));
+  render();
+});
+const tail = () => source.getData().slice(-1)[0];
+for (const [label, action] of [
+  ['Below threshold', () => source.update({ time: tail().time, value: 100 }, { confirmation: 'forming' })],
+  ['Cross threshold', () => source.update({ time: tail().time, value: 110 }, { confirmation: 'forming' })],
+  ['Repeat tick', () => source.update(tail())],
+  ['Confirm bar', () => source.update(tail(), { confirmation: 'confirmed' })],
+  ['Close by clock', () => {
+    clock = tail().time + 60;
+    source.update(tail(), { confirmation: 'auto' });
+  }],
+  ['Append bar', () => {
+    const time = tail().time + 60;
+    clock = time + 30;
+    source.update({ time, value: 100 }, { confirmation: 'forming' });
+    chart.fitContent();
+  }],
+  ['Reset history', () => {
+    clock = start + 11 * 60 + 30;
+    source.setData(initial(), { confirmation: 'forming' });
+    chart.fitContent();
+  }],
+  ['Toggle replay', () => {
+    if (replay) { replay.stop(); replay = null; }
+    else replay = new lib.ReplayController(chart, { series: source, startIndex: 5 });
+  }],
+]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  button.onclick = () => { action(); render(); };
+  controls.appendChild(button);
+  if (label !== 'Toggle replay') liveButtons.push(button);
+}
+const destroy = chart.destroy.bind(chart);
+chart.destroy = () => { disposed = true; replay?.stop(); unsubscribe(); destroy(); };
+render();
+return chart;`} />
+
+## Move a whole study between scales
+
+The buttons move both plots, their gradient fill and reference level together.
+The left scale keeps its configured range. The hidden scale retains independent
+price coordinates while releasing its axis column. Descriptor defaults restores
+the assignments declared by the study.
+
+<RunnableExample height={440} caption="Move the study without replacing its plot handles or recalculating its values." code={`const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px';
+el.appendChild(controls);
+const host = document.createElement('div');
+host.style.height = '380px';
+el.appendChild(host);
+lib.registerIndicator({
+  id: 'demo-study-scale-move', name: 'Moving band', placement: 'pane', inputs: [],
+  plots: [
+    { key: 'upper', type: 'line', title: 'Upper', style: { color: '#26a69a' } },
+    { key: 'lower', type: 'line', title: 'Lower', style: { color: '#4f8cff' } },
+  ],
+  calc(bars) {
+    // Where each close sits in its last twenty bars' range, 0 to 100, carried
+    // as a band of fixed width.
+    const position = bars.map((bar, i) => {
+      const recent = bars.slice(Math.max(0, i - 19), i + 1);
+      const high = Math.max(...recent.map(b => b.high)), low = Math.min(...recent.map(b => b.low));
+      return high > low ? (bar.close - low) / (high - low) * 100 : 50;
+    });
+    return { upper: position.map(p => 55 + p * 0.3), lower: position.map(p => 15 + p * 0.3) };
+  },
+  fills: [{ between: ['upper', 'lower'], opacity: 0.35,
+    gradient: { topValue: 80, bottomValue: 20, topColor: '#26a69a', bottomColor: '#4f8cff' } }],
+  levels: () => [{ price: 50, title: 'Middle', color: '#e8a23a' }],
+  range: () => ({ min: 0, max: 100 }),
+});
+const chart = lib.createChart(host);
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 100, 60));
+const study = chart.addIndicator('demo-study-scale-move');
+chart.setPaneWeight(study.paneIndex, 0.7);
+const left = chart.panes()[study.paneIndex].scaleFor('left');
+left.setAutoScale(false);
+left.setPriceRange({ min: -25, max: 125 });
+chart.fitContent();
+for (const [label, id] of [['Right', 'right'], ['Left', 'left'], ['Hidden', 'overlay:band'], ['Descriptor defaults', null]]) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 10px;border:1px solid light-dark(#e4e4e4,#334155);border-radius:4px;background:light-dark(#fff,#172033);color:light-dark(#151515,#e2e8f0);cursor:pointer';
+  button.onclick = () => {
+    study.setPriceScale(id);
+    for (const child of controls.children) {
+      const on = child === button;
+      child.style.background = on ? '#2563eb' : 'light-dark(#fff,#172033)';
+      child.style.color = on ? '#fff' : 'light-dark(#151515,#e2e8f0)';
+    }
+  };
+  controls.appendChild(button);
+}
+return chart;`} />
+
+## Assign scales to individual study plots
+
+One study calculates a small signal, a percent band and a guide on the price
+pane. Their independent scales keep the units readable. Move the band endpoints
+together; attempting to split them is rejected. A whole-study assignment clears
+local plot overrides while the explicit price overlay keeps its own assignment.
+Save a layout, change the assignments, then restore it.
+
+<RunnableExample height={600} caption="Plot assignments change coordinates, not the calculated values. The price guide remains on the price pane." code={`${STOCK_BARS_SOURCE}
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px 64px 8px 8px';
+controls.addEventListener('pointerdown', event => event.stopPropagation());
+el.appendChild(controls);
+const status = document.createElement('div');
+status.setAttribute('role', 'status');
+status.style.cssText = 'padding:0 8px 8px;font:12px/1.5 sans-serif;overflow-wrap:anywhere';
+el.appendChild(status);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:200px;width:100%';
+el.appendChild(host);
+lib.registerIndicator({
+  id: 'demo-plot-scale-assignments', name: 'Signal and percent band', placement: 'pane', inputs: [],
+  plots: [
+    { key: 'signal', type: 'line', title: 'Signal', style: { color: '#e8a23a', lineWidth: 2 },
+      priceFormat: { type: 'price', precision: 2 } },
+    { key: 'upper', type: 'line', title: 'Upper', priceScaleId: 'overlay:band',
+      style: { color: '#26a69a' }, priceFormat: { type: 'percent', precision: 0 } },
+    { key: 'lower', type: 'line', title: 'Lower', priceScaleId: 'overlay:band',
+      style: { color: '#4f8cff' }, priceFormat: { type: 'percent', precision: 0 } },
+    { key: 'price', type: 'line', title: 'Price guide', overlay: true,
+      style: { color: '#b16bdf', lineWidth: 2 }, priceFormat: { type: 'price', precision: 2 } },
+  ],
+  fills: [{ between: ['upper', 'lower'], colorUp: '#26a69a', opacity: 0.18 }],
+  levels: () => [{ price: 0.3, title: 'Signal reference', color: '#e8a23a', dashed: true }],
+  calc: bars => {
+    // The close against its ten-bar mean around the 0.3 reference, and a
+    // percent band from where the close sits in its twenty-bar range.
+    const mean = (i, n) => bars.slice(Math.max(0, i - n + 1), i + 1).reduce((sum, b) => sum + b.close, 0) / Math.min(n, i + 1);
+    const position = bars.map((bar, i) => {
+      const recent = bars.slice(Math.max(0, i - 19), i + 1);
+      const high = Math.max(...recent.map(b => b.high)), low = Math.min(...recent.map(b => b.low));
+      return high > low ? (bar.close - low) / (high - low) : 0.5;
+    });
+    return {
+      signal: bars.map((bar, i) => 0.3 + (bar.close - mean(i, 10)) / bar.close * 25),
+      upper: position.map(p => 55 + p * 15),
+      lower: position.map(p => 35 + p * 15),
+      price: bars.map(bar => bar.close),
+    };
+  },
+});
+const chart = lib.createChart(host, { priceAxisWidth: 58, branding: false });
+const palette = chart.theme();
+status.style.color = palette.axisText;
+chart.addSeries('candlestick').setData(stockBars(1700000000, 64, 60, 100, 9, 0.004, 1000));
+let study = chart.addIndicator('demo-plot-scale-assignments');
+chart.setPaneWeight(study.paneIndex, 1.2);
+chart.setPriceAxisPlacement(study.paneIndex, 'overlay:band', 'left');
+chart.fitContent();
+let saved = null;
+let result = 'Ready';
+function render() {
+  const values = study.values();
+  const last = key => values[key][values[key].length - 1].toFixed(2);
+  const overrides = Object.entries(study.plotPriceScaleIds())
+    .map(([key, id]) => key + '=' + id).join(', ') || 'none';
+  status.textContent = 'Signal: ' + study.plotPriceScaleId('signal')
+    + ' | Band: ' + study.plotPriceScaleId('upper') + ' / ' + study.plotPriceScaleId('lower')
+    + ' | Price: ' + study.plotPriceScaleId('price')
+    + '. Last: ' + ['signal', 'upper', 'lower', 'price'].map(last).join(' / ')
+    + '. Overrides: ' + overrides + '. ' + result;
+}
+for (const [label, action] of [
+  ['Signal left', () => study.setPlotPriceScales({ signal: 'left' })],
+  ['Move band pair', () => {
+    const changed = study.setPlotPriceScales({ upper: 'overlay:band-right', lower: 'overlay:band-right' });
+    chart.setPriceAxisPlacement(study.paneIndex, 'overlay:band-right', 'right');
+    return changed;
+  }],
+  ['Reject split band', () => {
+    const other = study.plotPriceScaleId('lower') === 'left' ? 'right' : 'left';
+    return study.setPlotPriceScales({ upper: other });
+  }],
+  ['Price overlay left', () => study.setPlotPriceScales({ price: 'left' })],
+  ['Clear signal override', () => study.setPlotPriceScales({ signal: null })],
+  ['Whole study left', () => study.setPriceScale('left')],
+  ['Descriptor defaults', () => study.setPriceScale(null)],
+  ['Save layout', () => { saved = chart.getState(); return 'saved'; }],
+  ['Restore layout', () => {
+    if (!saved) return 'save a layout first';
+    const id = study.id;
+    const report = chart.restoreState(saved);
+    if (!report.applied) throw new Error(report.reason);
+    study = chart.indicators().find(item => item.id === id);
+    return 'restored';
+  }],
+]) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.style.cssText = 'padding:5px 9px;border:1px solid ' + palette.axisLine
+    + ';border-radius:4px;background:' + palette.background + ';color:' + palette.axisText
+    + ';font:12px sans-serif;cursor:pointer';
+  button.onclick = () => { result = label + ': ' + action(); render(); };
+  controls.appendChild(button);
+}
+render();
+return chart;`} />
+
+## Copy study layouts with templates
+
+A template captures pane weights and effective scale relationships as well as
+study inputs. The orange metric has a saved manual view from 0 to 100. Copy it
+with an automatic view to fit its current values, preserve that view, or explicitly
+share the original scale. Each action starts from the same two-study layout.
+The price guide stays attached to the primary scale and source bars stay loaded.
+
+<RunnableExample height={600} caption="Templates carry configuration. Applying one keeps the destination chart's source and primary scale." code={`${STOCK_BARS_SOURCE}
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const controls = document.createElement('div');
+controls.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px 64px 8px 8px';
+controls.addEventListener('pointerdown', event => event.stopPropagation());
+el.appendChild(controls);
+const status = document.createElement('div');
+status.setAttribute('role', 'status');
+status.style.cssText = 'padding:0 8px 8px;font:12px/1.5 sans-serif;overflow-wrap:anywhere';
+el.appendChild(status);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:220px;width:100%';
+el.appendChild(host);
+lib.registerIndicator({
+  id: 'demo-template-metric', name: 'Metric and price guide', placement: 'onchart', inputs: [],
+  plots: [
+    { key: 'metric', type: 'line', title: 'Metric', priceScaleId: 'overlay:template-metric',
+      style: { color: '#e8a23a', lineWidth: 3 } },
+    { key: 'price', type: 'line', title: 'Price guide',
+      style: { color: '#b16bdf', lineWidth: 2 } },
+  ],
+  // A fourteen-bar relative strength of the closes, 0 to 100, on its own overlay scale.
+  calc: bars => ({ metric: bars.map((bar, i) => {
+    if (i < 14) return null;
+    let up = 0, down = 0;
+    for (let k = i - 13; k <= i; k++) {
+      const change = bars[k].close - bars[k - 1].close;
+      if (change > 0) up += change; else down -= change;
+    }
+    return up + down === 0 ? 50 : 100 * up / (up + down);
+  }), price: bars.map(bar => bar.close + 2) }),
+});
+lib.registerIndicator({
+  id: 'demo-template-signal', name: 'Signal', placement: 'pane', inputs: [],
+  plots: [{ key: 'signal', type: 'line', title: 'Signal', style: { color: '#26a69a', lineWidth: 2 } }],
+  // The eight-bar change of the close, in percent.
+  calc: bars => ({ signal: bars.map((bar, i) => i < 8 ? null : (bar.close / bars[i - 8].close - 1) * 100) }),
+});
+const chart = lib.createChart(host, { branding: false, priceAxisWidth: 52, animAutoscale: false });
+const palette = chart.theme();
+status.style.color = palette.axisText;
+chart.addSeries('candlestick').setData(stockBars(1700000000, 64, 60, 100, 12, 0.004));
+const metric = chart.addIndicator('demo-template-metric');
+const signal = chart.addIndicator('demo-template-signal');
+chart.setPaneWeight(signal.paneIndex, 0.55);
+chart.setPriceAxisPlacement(0, 'overlay:template-metric', 'left');
+const scale = metric.series('metric').priceScale();
+scale.setOptions({ minMove: 0.25, marginTop: 0.1, marginBottom: 0.1 });
+scale.setPriceRange({ min: 0, max: 100 });
+scale.setAutoScale(false);
+chart.panes()[signal.paneIndex].priceScale.setOptions({ inverted: true });
+chart.fitContent();
+const initial = chart.getState();
+const template = lib.captureIndicatorTemplate(chart);
+function reset() {
+  if (!chart.restoreState(initial).applied) throw new Error('Template example reset failed');
+}
+function apply(scalePolicy, rangePolicy) {
+  reset();
+  const before = chart.getState();
+  const plan = lib.planIndicatorTemplateState(chart, template, 'append', { scalePolicy, rangePolicy });
+  const report = chart.restoreState({ version: 1, indicators: plan.indicators, panes: plan.panes,
+    drawings: before.drawings, alerts: before.alerts }, plan.restoreOptions);
+  if (!report.applied || chart.indicators().length !== 4) throw new Error('Template example application failed');
+  const studies = chart.indicators();
+  const shared = studies[0].series('metric').priceScale() === studies[2].series('metric').priceScale();
+  status.textContent = '4 studies, 3 panes. Metric scale: ' + (shared ? 'shared' : 'independent')
+    + '. Copied view: ' + (studies[2].series('metric').priceScale().autoScale ? 'automatic' : 'saved 0 to 100')
+    + '. Price guide follows the primary scale.';
+}
+const ready = () => { status.textContent = '2 studies, 2 panes. Saved metric view: 0 to 100. Signal pane weight: 0.55.'; };
+for (const [label, action] of [
+  ['Copy, automatic view', () => apply('copy', 'auto')],
+  ['Copy, saved view', () => apply('copy', 'preserve')],
+  ['Share scales', () => apply('share', 'auto')],
+  ['Reset studies', () => { reset(); ready(); }],
+]) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.textContent = label;
+  button.style.cssText = 'padding:5px 9px;border:1px solid ' + palette.axisLine
+    + ';border-radius:4px;background:' + palette.background + ';color:' + palette.axisText
+    + ';font:12px sans-serif;cursor:pointer';
+  button.onclick = action;
+  controls.appendChild(button);
+}
+ready();
+return chart;`} />
+
+## Computed fills and multiple summary grids
+
+A descriptor can color each part of a band and publish several tables. The fill
+callbacks read calculation indices before any plot offset. A per-bar color takes
+precedence over a per-bar gradient, which takes precedence over the whole-band
+gradient. Returning `undefined` uses the next default. Named grids
+keep their identity across updates and disappear when omitted from `tables`.
+
+<RunnableExample height={340} code={`lib.registerIndicator({
+  id: 'demo-visual-outputs', name: 'Range summary', placement: 'onchart', inputs: [],
+  plots: [
+    { key: 'upper', type: 'line', title: 'Upper', style: { color: '#4f8cff' } },
+    { key: 'lower', type: 'line', title: 'Lower', style: { color: '#4f8cff' } },
+  ],
+  calc: bars => ({ upper: bars.map(b => b.high + 3), lower: bars.map(b => b.low - 3) }),
+  fills: [{
+    between: ['upper', 'lower'], opacity: 0.2,
+    gradient: { topColor: '#26a69a', bottomColor: '#4f8cff' },
+    gradientBy: ({ a, b }) => a === null || b === null ? undefined : {
+      topValue: a, bottomValue: b, topColor: '#26a69a', bottomColor: '#4f8cff',
+    },
+    colorBy: ({ index }) => index % 20 < 5 ? '#e8a23a' : undefined,
+  }],
+  tables: ({ bars }) => bars.length ? [
+    { id: 'quote', options: { position: 'bottom-center', cellWidth: 120 },
+      rows: [[{ text: 'Latest close' }], [{ text: bars[bars.length - 1].close.toFixed(2) }]] },
+    { id: 'count', options: { position: 'bottom-right', cellWidth: 120 },
+      rows: [[{ text: 'Observations' }], [{ text: String(bars.length) }]] },
+  ] : [],
+});
+const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('demo-visual-outputs');
+chart.fitContent();
+return chart;`} />
+
+## Formatted and merged table cells
+
+A merged heading can span several columns, while a multiline cell spans rows.
+Each cell controls its font and alignment. The outer frame is independent of the
+cell borders. Hover the heading or range value to read more detail.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 100, 3600));
+// A table is drawn on the canvas, so its colours follow the chart's palette.
+const dark = chart.theme() === lib.darkTheme;
+const table = new lib.ChartTable({
+  position: 'top-right', cellWidth: [100, 90, 90], cellHeight: 32,
+  frameColor: dark ? '#64748b' : '#94a3b8', frameWidth: 1, borderColor: dark ? '#253044' : '#e2e8f0',
+  background: dark ? '#101722' : '#f8fafc', fontSize: 12,
+});
+table.setRows([
+  [{ text: 'Session readings', colSpan: 3, bold: true, align: 'left',
+     tooltip: 'Regular session\\nReadings update with the newest bar' }, { text: '' }, { text: '' }],
+  [{ text: 'Direction\\nsteady', rowSpan: 2, italic: true, verticalAlign: 'top' },
+   { text: 'Open' }, { text: '102.50', fontFamily: 'ui-monospace, monospace', align: 'right' }],
+  [{ text: '' }, { text: 'Range' }, { text: '4.75', fontFamily: 'ui-monospace, monospace', align: 'right',
+     tooltip: 'Session high minus session low' }],
+]);
+chart.addPrimitive(table);
+chart.fitContent();
+return chart;`} />
+
+## Tables that fit their text
+
+Set `cellWidth: 'auto'` to fit each column to its widest reading. Fixed columns
+clip long text inside the cell. Both modes account for the font that fits the
+row. See [Tables](/docs/primitives-and-plugins#tables).
+
+<TableSizingDemo />
+
+## Managed data loading
+
+Load older history, simulate a failed refresh and retry, or hold the display while
+live updates continue. The [data-loading guide](/docs/data-loading) explains the
+shared controller for widgets and custom terminals.
+
+<DataLoadingDemo />
+
+## Render backends and vector export
+
+The series pass goes through a render backend port. `renderer: 'auto'` takes the WebGL2
+backend from `openalgo-charts/webgl` where the device has WebGL2 and the 2D path
+otherwise, decided once at construction; `chart.rendererKind` reports which one is
+painting. Pan and zoom: the candles are batched into one GPU draw call per frame and
+composited into the pane's own canvas, so screenshots, drawings, axes and text are
+unchanged.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el, { renderer: 'auto' });
+const bars = lib.generateBars(1700000000, 600, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(240);
+
+// Decided once, at construction: 'webgl2' where WebGL2 works, else 'canvas2d'.
+el.style.position = 'relative';
+const tag = document.createElement('div');
+tag.style.cssText = 'position:absolute;right:64px;bottom:30px;z-index:5;font:12px ui-monospace,monospace;background:light-dark(rgba(255,255,255,.9),rgba(0,0,0,.55));color:light-dark(#151515,#e6edf3);box-shadow:0 0 0 1px light-dark(#e4e4e4,transparent);padding:4px 8px;border-radius:6px;pointer-events:none';
+function show(note) { tag.textContent = 'rendererKind: ' + chart.rendererKind + (note ? '  ' + note : ''); }
+show(lib.isWebGL2Supported() ? '' : '(no WebGL2 on this device)');
+// A lost context moves the chart to the 2D path for the session and says so once.
+chart.on('renderer:fallback', function (e) { show('(fell back: ' + e.reason + ')'); });
+el.appendChild(tag);
+return chart;`} />
+
+`chart.exportSVG()` writes the same frame as a standalone vector document: axis labels
+and tags stay text, lines stay lines, and nothing transient (crosshair, hover, drag) is in
+it. The right half below is the string the left half returned, inlined as markup and
+re-exported as you pan or zoom the live chart.
+
+<RunnableExample height={360} code={`el.style.display = 'flex';
+el.style.gap = '10px';
+const live = document.createElement('div');
+live.style.cssText = 'flex:1 1 0;min-width:0;height:100%;position:relative';
+const out = document.createElement('div');
+out.style.cssText = 'flex:1 1 0;min-width:0;height:100%;overflow:hidden;border:1px dashed #5b6478;border-radius:6px;line-height:0';
+el.appendChild(live);
+el.appendChild(out);
+
+const chart = lib.createChart(live);
+const bars = lib.generateBars(1700000000, 120, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addPriceLine({ price: bars[bars.length - 1].close, color: '#f5a623', lineWidth: 1, dashed: true, id: 'last' });
+chart.timeScale.fitContent(120);
+
+// One export per frame at most: the string is the whole paint, so exporting
+// on every zoom event during a wheel glide would repeat the work.
+let queued = false;
+function exportNow() {
+  // Sized to the target panel rather than the live chart: the chart lays
+  // itself out for the export and puts the live layout back before returning.
+  // queued stays set until the export is done, so nothing the export itself
+  // does can schedule the next one: an export that re-queued on its own
+  // relayout would run once per frame for as long as the page is open.
+  try { out.innerHTML = chart.exportSVG({ width: out.clientWidth, height: out.clientHeight }); }
+  finally { queued = false; }
+}
+function queueExport() { if (!queued) { queued = true; requestAnimationFrame(exportNow); } }
+chart.on('resize', queueExport);   // the first measured layout, and any later one
+chart.on('zoom', queueExport);
+chart.on('pan', queueExport);
+requestAnimationFrame(function () { requestAnimationFrame(queueExport); });
+return chart;`} />
+
+The options, the fallback rules and the serialising context behind the export are on
+[Render Backends & SVG Export](/docs/rendering).
+
+## Copy-paste snippets
+
+<div className="oac-gallery">
+
+
+
+<div>
+### Area + baseline
+<RunnableExample hideCode height={280} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('area', { style: { areaTopColor: 'rgba(47,109,246,0.5)', areaBottomColor: 'rgba(47,109,246,0)', color: '#2f6df6' } }).setData(bars);
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+</div>
+
+
+
+<div>
+### Linked charts
+<RunnableExample hideCode height={280} code={`el.style.display = 'flex';
+el.style.gap = '8px';
+const box = function () {
+  const d = document.createElement('div');
+  d.style.cssText = 'flex:1 1 0;min-width:0;height:100%';
+  el.appendChild(d);
+  return d;
+};
+const leftEl = box(), rightEl = box();
+
+// Hourly on the left, daily on the right, two sessions missing: the same
+// instant, never the same bar index.
+const left = lib.createChart(leftEl);
+left.addSeries('candlestick').setData(lib.generateBars(1700438400, 720, 3600));
+left.fitContent();
+const right = lib.createChart(rightEl);
+right.addSeries('candlestick').setData(
+  lib.generateBars(1700438400, 30, 86400).filter(function (b, i) { return i !== 11 && i !== 12; }));
+right.fitContent();
+
+const group = lib.createLinkGroup({ crosshair: true, viewport: true });
+group.add(left);
+group.add(right);
+
+const destroy = left.destroy.bind(left);
+left.destroy = function () { group.destroy(); right.destroy(); destroy(); };
+return left;`} />
+</div>
+
+<div>
+### Market replay
+<RunnableExample hideCode height={280} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 320, 3600);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+chart.timeScale.setBarSpacing(7);
+
+const replay = new lib.ReplayController(chart, { series, bars, startIndex: 200, barMs: 220 });
+replay.play();
+chart.on('replay:end', () => { replay.seek(200); replay.play(); });   // loop the demo
+
+const destroy = chart.destroy.bind(chart);
+chart.destroy = () => { replay.stop(); destroy(); };
+return chart;`} />
+</div>
+
+
+
+
+
+<div>
+### Drawing tools (draw tier)
+<RunnableExample hideCode height={300} tiers={['draw']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+const draw = new lib.DrawingController(chart);
+const at = (i) => bars[i].time;
+draw.add({ tool: 'trend-line', paneIndex: 0, points: [
+  { time: at(20), price: bars[20].low }, { time: at(90), price: bars[90].high },
+], style: { color: '#4f8cff', lineWidth: 2 } });
+draw.add({ tool: 'rectangle', paneIndex: 0, points: [
+  { time: at(100), price: bars[100].high }, { time: at(140), price: bars[140].low },
+], style: { color: '#26a69a', fill: true, fillOpacity: 0.14 } });
+draw.add({ tool: 'horizontal-line', paneIndex: 0,
+  points: [{ time: at(0), price: bars[bars.length - 1].close }],
+  style: { color: '#f5a623', lineStyle: 'dashed' } });
+return chart;`} />
+</div>
+
+<div>
+### Fibonacci retracement
+<RunnableExample hideCode height={300} tiers={['draw']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 140, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+// Anchor the leg on the swing low and swing high of the loaded range.
+let lo = 0, hi = 0;
+bars.forEach((b, i) => { if (b.low < bars[lo].low) lo = i; if (b.high > bars[hi].high) hi = i; });
+new lib.DrawingController(chart).add({
+  tool: 'fib-retracement', paneIndex: 0,
+  points: [{ time: bars[lo].time, price: bars[lo].low }, { time: bars[hi].time, price: bars[hi].high }],
+  style: { color: '#ab47bc', showLabels: true, fill: true, extendRight: true },
+});
+return chart;`} />
+</div>
+
+<div>
+### Position tool with R:R
+<RunnableExample hideCode height={300} tiers={['draw']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+const last = bars[bars.length - 1].close;
+// Risk-based sizing: qty = (accountSize x risk%) / stop distance.
+new lib.DrawingController(chart).add({
+  tool: 'long-position', paneIndex: 0,
+  points: [
+    { time: bars[70].time, price: last },
+    // 2% up against 1% down: the same 2:1 the label reports, but both legs stay
+    // inside the price scale's autoscale margin. At 4%/2% the target zone and
+    // its label sat above the visible range and were clipped away.
+    { time: bars[110].time, price: last * 1.02 },
+    { time: bars[110].time, price: last * 0.99 },
+  ],
+  style: { color: '#8892a6', accountSize: 100000, risk: 1, showLabels: true },
+});
+return chart;`} />
+</div>
+
+<div>
+### Draw it yourself
+<RunnableExample hideCode height={320} tiers={['draw']} caption="Click the buttons, then click the chart to place anchors. Drag a shape or its handles; press Delete to remove the selection." code={`// The buttons wrap onto a second row in a narrow column, so the chart takes
+// whatever height they leave rather than a fixed one that overflows the card.
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+const wrap = document.createElement('div');
+wrap.style.cssText = 'display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap';
+el.appendChild(wrap);
+const host = document.createElement('div');
+host.style.cssText = 'flex:1;min-height:0';
+el.appendChild(host);
+
+const chart = lib.createChart(host);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+const draw = new lib.DrawingController(chart, { magnet: true, stayInDrawingMode: false });
+for (const id of ['trend-line', 'ray', 'rectangle', 'fib-retracement', 'measure', 'text']) {
+  const b = document.createElement('button');
+  b.textContent = lib.getDrawingTool(id).name;
+  b.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid light-dark(#e4e4e4,#2a3046);background:light-dark(#fff,#1c2030);color:light-dark(#151515,#c7ccd8);cursor:pointer';
+  b.onclick = () => draw.setTool(id);
+  wrap.appendChild(b);
+}
+const undo = document.createElement('button');
+undo.textContent = 'Undo';
+undo.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid light-dark(#e4e4e4,#2a3046);background:light-dark(#fff,#1c2030);color:light-dark(#151515,#c7ccd8);cursor:pointer';
+undo.onclick = () => draw.undo();
+wrap.appendChild(undo);
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Delete' || e.key === 'Backspace') { const id = draw.selected(); if (id) draw.remove(id); }
+  if (e.key === 'Escape') draw.setTool(null);
+});
+return chart;`} />
+</div>
+
+<div>
+### Renko (transform tier)
+<RunnableExample hideCode height={280} tiers={['transform']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 400, 3600);
+const bricks = lib.runTransform(new lib.RenkoTransform({ boxSize: 2 }), bars);
+chart.addSeries('candlestick').setData(bricks);
+chart.timeScale.fitContent(bricks.length);
+return chart;`} />
+</div>
+
+<div>
+### Renko sized from the ATR, built from high and low (transform tier)
+<RunnableExample hideCode height={280} tiers={['transform']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 400, 3600);
+// Each brick is half of a 14-bar ATR, and a long wick forms bricks the close never reaches.
+const bricks = lib.runTransform(new lib.RenkoTransform({ mode: 'atrPercent', percent: 50, atrPeriod: 14, method: 'hl' }), bars);
+chart.addSeries('candlestick').setData(bricks);
+chart.timeScale.fitContent(bricks.length);
+return chart;`} />
+</div>
+
+<div>
+### Footprint order flow with zones and signals (profile tier)
+<RunnableExample hideCode height={420} tiers={['profile']} code={`const chart = lib.createChart(el, { timeScale: { maxBarSpacing: 220 }, priceScale: { marginTop: 0.08, marginBottom: 0.12 } });
+// Simulated prints, classified by the tick rule, on 1-point rows of a 0.25 tick.
+const side = lib.createTradeClassifier('tickRule');
+const agg = new lib.FootprintAggregator({ mode: 'interval', seconds: 60 }, 0.25, 4);
+const bars = [];
+let price = 6000, seed = 11;
+for (let i = 0; i < 6 * 60; i++) {
+  seed = (seed * 1103515245 + 12345) & 2147483647;
+  price = Math.round((price + (seed / 2147483647 - 0.48) * 1.5) * 4) / 4;
+  const print = { time: 1788960600 + i, price, qty: 1 + (seed % 25) };
+  const update = agg.onTick({ ...print, side: side(print) });
+  if (update.isNew) bars.push(update.bar); else bars[bars.length - 1] = update.bar;
+}
+const clear = 'rgba(0,0,0,0)';
+chart.addSeries('candlestick', { style: { upColor: clear, downColor: clear, wickUpColor: clear, wickDownColor: clear, borderUpColor: clear, borderDownColor: clear } })
+  .setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+const footprint = new lib.Footprint({ displayMode: 'imbalance', pocStyle: 'outline', font: 10,
+  multipleNodeBars: 2, flipBars: 2, showZones: true, showUnfinishedAuctions: true, showDeltaLabels: true, markDivergence: true });
+footprint.setBars(bars);
+chart.addPrimitive(footprint);
+chart.timeScale.setVisibleLogicalRange({ from: -0.6, to: bars.length - 0.4 });
+return chart;`} />
+</div>
+
+<div>
+### Tick chart (250-tick bars)
+<RunnableExample hideCode height={280} code={`const chart = lib.createChart(el);
+const series = chart.addSeries('candlestick');
+const agg = new lib.TickBarAggregator({ mode: 'ticks', count: 250 });
+const bars = [];
+let t = 1700000000, p = 100, seed = 7;
+for (let i = 0; i < 12000; i++) {
+  seed = (seed * 1103515245 + 12345) & 2147483647;
+  p = Math.max(1, p + (seed / 2147483647 - 0.5) * 0.6);
+  t += 1;
+  const u = agg.onTick({ time: t, price: p, qty: 1 });
+  if (u.isNew) bars.push(u.bar); else bars[bars.length - 1] = u.bar;
+}
+series.setData(bars);
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+</div>
+
+<div>
+### Timezone switcher
+<RunnableExample hideCode height={280} code={`const chart = lib.createChart(el, { timezone: 'Asia/Kolkata' });
+const bars = lib.generateBars(1717594200, 180, 900);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+el.style.position = 'relative';
+const wrap = document.createElement('div');
+wrap.style.cssText = 'position:absolute;left:10px;top:8px;z-index:5;display:flex;gap:6px;flex-wrap:wrap';
+// These buttons live inside the chart's own container, so a press on one also
+// reaches the chart, which captures the pointer to drive panning. Once the
+// container holds the capture the click is retargeted to it and never reaches
+// the button. Any HTML control overlaid on a chart has to stop the press here.
+wrap.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+el.appendChild(wrap);
+
+['Asia/Kolkata', 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'UTC'].forEach(function (zone, i) {
+  const b = document.createElement('button');
+  b.textContent = zone;
+  b.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid light-dark(#e4e4e4,#2a3046);background:light-dark(#fff,#1c2030);color:light-dark(#151515,#c7ccd8);cursor:pointer;font-size:11px';
+  b.onclick = function () {
+    chart.setTimezone(zone);
+    Array.prototype.forEach.call(wrap.children, function (c) {
+      c.style.background = c === b ? '#2962ff' : 'light-dark(#fff,#1c2030)';
+      c.style.color = c === b ? '#fff' : 'light-dark(#151515,#c7ccd8)';
+    });
+  };
+  if (i === 0) { b.style.background = '#2962ff'; b.style.color = '#fff'; }
+  wrap.appendChild(b);
+});
+return chart;`} />
+</div>
+
+</div>
+
+Want the full walkthrough? Head to the [documentation](/docs/getting-started).
+
+</div>

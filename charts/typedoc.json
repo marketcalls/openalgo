@@ -1,0 +1,41 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/trade/index.ts",
+    "src/transform/index.ts",
+    "src/profile/index.ts",
+    "src/indicators/index.ts",
+    "src/draw/index.ts",
+    "src/webgl/index.ts",
+    "src/widget/index.ts",
+    "src/workspace/index.ts"
+  ],
+  "out": "website/public/api",
+  "tsconfig": "tsconfig.build.json",
+  "excludeInternal": true,
+  "readme": "docs/api-introduction.md",
+  "name": "OpenAlgo Charts API",
+  "includeVersion": true,
+  "cacheBust": true,
+  "customCss": "website/styles/api.css",
+  "navigationLinks": {
+    "Website": "/openalgo-charts/",
+    "Live demos": "/openalgo-charts/examples/",
+    "Guides": "/openalgo-charts/docs/getting-started/",
+    "Source": "https://github.com/marketcalls/openalgo-charts"
+  },
+  "customFooterHtml": "<div class=\"oac-api-footer\"><strong>Build your next market experience.</strong><a href=\"/openalgo-charts/examples/\">Explore live demos</a><span>API definitions generated from the current source with every website deployment.</span></div>",
+  "intentionallyNotExported": [
+    "CanvasLayer",
+    "CrosshairMode",
+    "SeriesRecord",
+    "KeyLike",
+    "HistoryResponse",
+    "RawPosition",
+    "PaneRenderContext",
+    "RafCanceller",
+    "RafScheduler",
+    "InvalidateMask"
+  ]
+}

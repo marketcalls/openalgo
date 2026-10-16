@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Session shading fixture</title>
+  <style>html,body{margin:0;height:100%}#chart{position:absolute;inset:0}</style>
+</head>
+<body>
+  <div id="chart"></div>
+  <script type="module">
+    import * as lib from '/dist/openalgo-charts.mjs';
+    const query = new URLSearchParams(location.search);
+    const dark = query.get('theme') !== 'light';
+    document.body.style.background = dark ? lib.darkTheme.background : lib.lightTheme.background;
+
+    // New York hours with the extended session a source serves around them:
+    // pre-open from 04:00, the session 09:30 to 16:00, post-close to 20:00.
+    const calendar = new lib.SessionCalendar({
+      timezone: 'America/New_York', sessions: ['0930-1600:23456'],
+      preMarketMinutes: 330, postMarketMinutes: 240,
+    });
+
+    // Two trading days of five-minute bars as an extended-hours feed prints
+    // them: a seeded random walk, quieter and thinner outside the session.
+    let seed = 20260617;
+    const random = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const gauss = () => Math.sqrt(-2 * Math.log(random() || 1e-9)) * Math.cos(2 * Math.PI * random());
+    const bars = [];
+    let close = 213.42;
+    for (let t = Date.UTC(2026, 5, 17, 8) / 1000; t < Date.UTC(2026, 5, 19, 0) / 1000; t += 300) {
+      const phase = calendar.phaseAt(t);
+      if (phase === 'closed') continue;
+      const regular = phase === 'regular';
+      const open = close;
+      close = Math.round(open * (1 + gauss() * (regular ? 0.0016 : 0.0007)) * 100) / 100;
+      const wick = open * (regular ? 0.0009 : 0.0004);
+      bars.push({
+        time: t, open, close,
+        high: Math.round((Math.max(open, close) + random() * wick) * 100) / 100,
+        low: Math.round((Math.min(open, close) - random() * wick) * 100) / 100,
+        volume: Math.round((regular ? 42000 : 3500) * (0.5 + random())),
+      });
+    }
+
+    const chart = lib.createChart(document.getElementById('chart'), {
+      theme: dark ? lib.darkTheme : lib.lightTheme, timezone: 'America/New_York',
+      animZoom: false, timeNavigator: false, branding: false,
+    });
+    chart.addSeries('candlestick').setData(bars);
+    chart.setDataContext({ symbol: 'SIM', exchange: 'DEMO', interval: '5m' });
+    calendar.applyTo(chart);
+    chart.fitContent();
+
+    let shading = null;
+    window.__probe = {
+      chart, lib, calendar, bars,
+      attach: (options) => { shading = lib.attachSessionShading(chart, options); },
+      detach: () => { shading?.destroy(); shading = null; },
+      dropHours: () => chart.setSessionCalendar(null),
+      /** Each run of consecutive bars in one phase, with its first and last index. */
+      runs: () => {
+        const out = [];
+        bars.forEach((bar, i) => {
+          const phase = calendar.phaseAt(bar.time), last = out[out.length - 1];
+          if (last && last.phase === phase) last.to = i;
+          else out.push({ phase, from: i, to: i });
+        });
+        return out;
+      },
+    };
+    window.__frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await window.__frame();
+    window.__ready = true;
+  </script>
+</body>
+</html>

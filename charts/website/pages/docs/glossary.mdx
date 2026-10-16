@@ -1,0 +1,772 @@
+---
+title: Glossary
+description: Key OpenAlgo Charts concepts, cross-linked.
+---
+
+import { Callout } from 'nextra/components'
+
+# Glossary
+
+Alphabetical reference for terms used throughout the OpenAlgo Charts documentation.
+Each entry links to the page where the concept is covered in depth.
+
+---
+
+## Data model
+
+### Bar
+
+The fundamental price unit. A `Bar` has a `time` (UTC seconds integer), `open`, `high`,
+`low`, `close`, and an optional `volume`. Every series type -- candlestick, line, area,
+histogram, and all transform types -- is built on this same shape; line and area series
+simply read the `close` field.
+
+See also: [Core Concepts](/docs/core-concepts), [Data Loading](/docs/data-loading)
+
+---
+
+### Whitespace
+
+A data point with only a `time` field and no OHLC or value. It reserves a logical index
+on the shared time axis, causing the renderer to break the line at that position instead
+of interpolating across the gap.
+
+See also: [Core Concepts](/docs/core-concepts), [Series and Styling](/docs/series-and-styling)
+
+---
+
+### UTC seconds
+
+The library's universal time unit: a plain integer counting seconds since the Unix epoch.
+Feed adapters convert IST strings and epoch-millisecond timestamps to UTC seconds at the
+boundary so application code never handles timezones internally. A chart's
+[timezone](#timezone) decides how those seconds are labelled and bucketed, and never
+changes the seconds.
+
+See also: [Core Concepts](/docs/core-concepts), [Data Feeds](/docs/data-feeds),
+[Timezones](/docs/timezones)
+
+---
+
+### Line point
+
+A single-value data point for line, area, baseline, and step series: `{ time, value }`.
+The `value` maps to the close coordinate. Internally the engine stores it as a `Bar` with
+`open`, `high`, `low`, and `close` all equal to `value`.
+
+See also: [Series and Styling](/docs/series-and-styling)
+
+---
+
+## Time axis
+
+### Gapless time axis
+
+Instead of placing bars at x positions proportional to their timestamps, the engine
+assigns each bar the next sequential integer index and places it at `index * barSpacing`.
+Non-trading periods (weekends, holidays, overnight breaks) have no index, so they produce
+no blank space on screen. All panes share this one logical index space and stay aligned
+bar-for-bar.
+
+See also: [Core Concepts](/docs/core-concepts), [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Logical index
+
+The integer position assigned to each distinct timestamp across all series by the
+`DataLayer`. Index 0 is the oldest bar; `baseIndex` (length - 1) is the newest. The
+`TimeScale` maps logical index to x pixel using `index * barSpacing`, not the wall-clock
+distance between timestamps.
+
+See also: [Core Concepts](/docs/core-concepts)
+
+---
+
+### Bar spacing
+
+The width in CSS pixels allocated to each bar on the time axis. Configurable via
+`TimeScaleOptions.barSpacing` (default 8 px, range 1..80 px). Zooming changes bar
+spacing; panning changes the right offset without affecting spacing.
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Right offset
+
+The number of empty bar-widths kept to the right of the newest bar. A positive right
+offset leaves breathing room at the right edge; a negative value scrolls the chart past
+the newest bar. Configured via `TimeScaleOptions.rightOffset` (default 4).
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Visible range / logical range
+
+The range of logical indices currently visible on screen, expressed as `{ from, to }`
+where both values are fractional. The `TimeScale.visibleRange()` method returns this;
+`pan` and `zoom` events carry both the logical range and the corresponding UTC-second
+timestamps.
+
+See also: [Scales and Panes](/docs/scales-and-panes), [Events](/docs/events)
+
+---
+
+### Time scale
+
+The shared x-axis object (`TimeScale`) that owns bar spacing, right offset, and the
+index-to-pixel mapping. One instance is shared across every pane so they all pan and
+zoom together. Accessible as `chart.timeScale`.
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+## Series
+
+### Series
+
+A named dataset attached to a pane. Created with `chart.addSeries(type, options)` and
+returned as a `SeriesApi` handle with `setData`, `update`, `prependData`, and `getData`
+methods. Every series is registered in the chart-type registry under a `SeriesType`
+string.
+
+See also: [Core Concepts](/docs/core-concepts), [Chart Types](/docs/chart-types),
+[Series and Styling](/docs/series-and-styling)
+
+---
+
+### Chart type registry
+
+A map from `SeriesType` string to a `RendererEntry` descriptor. Each descriptor carries
+a draw function, an extents function (min/max price for autoscale), a default style, and
+an `isPriceSeries` flag. The base bundle registers all time-indexed types
+(`candlestick`, `bar`, `line`, `area`, etc.). Transform-tier types (`point-figure`,
+`kagi`) are registered when `openalgo-charts/transform` is imported. You can add custom
+types with `registerChartType`.
+
+See also: [Chart Types](/docs/chart-types), [Primitives and Plugins](/docs/primitives-and-plugins)
+
+---
+
+### Series style
+
+A `SeriesStyle` object that overrides a series type's default visual properties: colors
+(`upColor`, `downColor`, `color`, `areaTopColor`, etc.), line width, border and wick
+visibility, and baseline value. Passed as `options.style` to `addSeries`. Unspecified
+fields fall back to the chart type's defaults or the active theme.
+
+See also: [Series and Styling](/docs/series-and-styling)
+
+---
+
+## Layout
+
+### Pane
+
+A horizontally-stacked chart area that owns one price scale and a set of series and
+primitives. The price pane is pane 0, unless a chart built with `movablePrimaryPane` lets
+it move below its studies (`primaryPaneIndex()` says where); pane 1, 2, and so on are created
+automatically when you pass `paneIndex: 1` (or higher) to `addSeries`. All panes share the same time
+axis and scroll together. The price pane takes full weight; sub-panes default to 32% of
+the chart height.
+
+See also: [Core Concepts](/docs/core-concepts), [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Price scale
+
+The y-axis object (`PriceScale`) for one pane. Maps price to a y pixel coordinate in
+linear or logarithmic mode. Supports auto-scale (tracks the visible data range) and
+manual scale (fixed after a drag or programmatic call). Accessible as
+`pane.priceScale` on each pane returned by `chart.panes()`.
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Auto scale
+
+The default price-scale mode. On every render the engine calls `autoscale(low, high)` to
+fit the visible bars within the pane, with configurable top and bottom margin fractions
+(default 10% each). Dragging the price axis or calling `priceScale.setPriceRange`
+switches to manual scale; double-clicking the chart restores auto scale on all panes
+(unless a drawing tool is armed, where a double-click finishes the shape).
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Manual scale
+
+Price-scale mode entered when the user drags the price axis or pans price with
+touch or the default `navigation.mousePan: 'both'`. Choosing `'horizontal'` for
+mouse and pen panning preserves auto scale. The visible price range is fixed until auto scale is restored. Programmatically
+toggle with `priceScale.setAutoScale(false)`.
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Log scale
+
+A price-scale mode (`PriceScaleMode = 'logarithmic'`) that applies a `log10` coordinate
+transform before mapping price to y. Equal vertical distances represent equal percentage
+moves rather than equal point moves. Set via `PriceScaleOptions.mode`.
+
+See also: [Scales and Panes](/docs/scales-and-panes)
+
+---
+
+### Rebasing scale (percent, indexed to 100)
+
+The two price-scale modes that quote every price against a baseline instead of as a level:
+`percentage` labels the axis `+3.42%`, `indexed-to-100` labels it `103.42`. They are one
+ladder a hundred points apart. A rebase is affine over a price range, so it relabels a pane
+without reshaping it.
+
+See also: [Scales and Panes](/docs/scales-and-panes#percent-and-indexed-to-100)
+
+---
+
+### Baseline
+
+The price a rebasing scale quotes against. It is data rather than geometry, so the pane's
+autoscale pass supplies it every frame as the close of the first visible bar, which is why
+panning re-bases the axis. `priceScale.setBaseline(value)` overrides it; a null, zero or
+negative baseline makes the scale fall back to linear.
+
+See also: [Scales and Panes](/docs/scales-and-panes#percent-and-indexed-to-100)
+
+---
+
+### Comparison (symbol comparison)
+
+A second instrument drawn on the primary one's pane, aligned to its bars by timestamp and
+put on the pane's hidden overlay scale. The overlay mirrors the primary axis' band of
+percent, so equal moves land on equal pixels and the divergence between the two is the
+thing you see. `addComparison(chart, { symbol, bars })`.
+
+See also: [Symbol Comparison](/docs/symbol-comparison)
+
+---
+
+### Market replay
+
+Walking a loaded session forward bar by bar. `ReplayController` feeds the chart a prefix of
+the bar array through the ordinary `setData` path, so every indicator recomputes to exactly
+what it was at that bar. Headless: the host renders the transport bar from `state()` and
+the `replay:*` events.
+
+See also: [Market Replay](/docs/market-replay)
+
+---
+
+## Data layer
+
+### DataLayer
+
+The chart's internal shared data store (one per chart). Merges all series onto a single
+sorted time axis, assigns each distinct timestamp a unique logical index, and provides
+per-series access by index. Handles deduplication (same time -> replace) and keeps rows
+time-sorted after every insert or prepend.
+
+See also: [Core Concepts](/docs/core-concepts), [Data Loading](/docs/data-loading)
+
+---
+
+### Conflation
+
+The chart's level of detail: an OHLC-preserving step that engages when bars become narrower
+than about one CSS px at high zoom-out. The bars sharing a device-pixel column are drawn as
+one stick: open = first open, close = last close, high = max high, low = min low, volume =
+sum. It never averages prices, and data, indicators and autoscale still see every bar. On by
+default; `ChartOptions.conflate: false` turns it off.
+
+See also: [Core Concepts](/docs/core-concepts)
+
+---
+
+## Primitives
+
+### Primitive
+
+Any drawable object that is not a series renderer. Primitives implement the `IPrimitive`
+interface: a required `draw` method, a required `zOrder` method, and optional
+`autoscaleInfo`, `hitTest`, `attached`, and `detached` hooks. Attach one to a pane with
+`chart.addPrimitive(primitive, paneIndex)`. All built-in overlays (price lines, markers,
+watermarks, profiles, the trade layer) are primitives.
+
+See also: [Primitives and Plugins](/docs/primitives-and-plugins)
+
+---
+
+### Price line
+
+A `PriceLine` primitive that draws a horizontal line across a pane at a fixed price, with
+an optional label and configurable color, line width, and line style. Used for alert
+levels, open positions, stop-loss, and take-profit markers. Added with
+`chart.addPriceLine(options, paneIndex)`.
+
+See also: [Primitives and Plugins](/docs/primitives-and-plugins), [Trading API](/docs/trading-api)
+
+---
+
+### Price level
+
+A reference price a chart is read against: previous close, the session high and low, the
+last price, the four extended-hours opens and closes, and the top-of-book bid and ask. All
+ten are one `PriceLevels` primitive, and each kind is a single options group carrying both
+`line` (drawn across the plot) and `label` (a tag on the price axis), so the two halves
+cannot drift apart. A level with no data in the current context is `null` rather than `0`,
+so nothing draws at zero and `available(kind)` tells a host to grey the control rather than
+hide it.
+
+See also: [Price Levels and Axis Chrome](/docs/price-levels)
+
+---
+
+### Series markers
+
+A `SeriesMarkers` primitive that places small geometric shapes (triangle, circle, square,
+arrow) above or below bars at specified logical times. Created via
+`series.createMarkers()`. Each marker carries a `time`, `position` (`above` or `below`),
+`shape`, optional `color`, `size`, and `text` for tooltips.
+
+See also: [Primitives and Plugins](/docs/primitives-and-plugins)
+
+---
+
+### Event markers
+
+An `EventMarkers` primitive for corporate events such as earnings, dividends, and splits.
+Added with `chart.addEventMarkers(paneIndex)`. Each `ChartEvent` has a `time`, `type`
+label, and optional `color`. Events render as small badge icons below the time axis of
+the target pane and are hit-testable for click callbacks.
+
+See also: [Primitives and Plugins](/docs/primitives-and-plugins)
+
+---
+
+### Watermark (LogoWatermark)
+
+A `LogoWatermark` primitive that draws a semi-transparent brand or product logo in a
+corner (or center) of a pane. Accepts a URL, data URI, or a preloaded `CanvasImageSource`.
+Supports opacity, a `tint` color to recolor the logo's opaque pixels, and a `zOrder` to
+place it behind or above the series. The library includes the OpenAlgo vector
+glyph and shows chart-owned corner branding by default. Hosts can replace or disable it.
+The separate text watermark is opt-in and disabled by default.
+
+See also: [Branding and watermarks](/docs/branding-and-watermarks),
+[Primitives and Plugins](/docs/primitives-and-plugins)
+
+---
+
+## Live data and aggregation
+
+### CandleBuilder
+
+A stateful class that converts a stream of price ticks into OHLC bars aligned to a fixed
+time interval. Handles session-anchored bucket alignment (e.g., 5-minute bars starting at
+09:15 IST), two volume modes (`ltq-sum` for last-traded-quantity streams and `day-delta`
+for cumulative-day-volume streams), and configurable late-tick policy. Returns a
+`CandleUpdate` with an `isNew` flag so the chart can append versus mutate the current bar.
+
+See also: [Live Data](/docs/live-data), [Timeframes and Tick Charts](/docs/timeframes-and-tick-charts)
+
+---
+
+### Tick aggregator (TickBarAggregator)
+
+A class that aggregates classified trade ticks into bars by one of three modes: `interval`
+(clock-based, same logic as `CandleBuilder`), `ticks` (a new bar every N trades), or
+`volume` (a new bar every N units of traded volume). The foundation for non-time-indexed
+bars and for the footprint aggregator. Requires real per-trade tick data; OHLCV history
+alone cannot produce tick or volume bars.
+
+See also: [Timeframes and Tick Charts](/docs/timeframes-and-tick-charts), [Live Data](/docs/live-data)
+
+---
+
+## History loading
+
+### History paging / lazy load
+
+A pattern for loading historical bars incrementally. Register a callback with
+`chart.setHistoryLoader(fn)`: the chart fires the callback (and emits a `lazy-load`
+event) when the user pans near the left edge. Your handler fetches older bars and calls
+`series.prependData(bars)` to merge them, then calls `chart.historyLoadComplete()` to
+re-enable the trigger. The viewport stays fixed while older data is inserted.
+
+See also: [Data Loading](/docs/data-loading)
+
+---
+
+## Transform tier
+
+<Callout type="info">
+The transforms below live in the `openalgo-charts/transform` entry point. Import that
+module before using them -- it also registers the `point-figure` and `kagi` series types
+with the chart-type registry.
+</Callout>
+
+### Renko
+
+A `RenkoTransform` that converts OHLCV bars into fixed-size bricks. A new brick is drawn
+only when price moves at least one brick size in either direction; time is irrelevant.
+The output is plotted as a `candlestick` series.
+
+See also: [Transforms](/docs/transforms)
+
+---
+
+### Range bars
+
+A `RangeBarsTransform` that opens a new bar only when the intra-bar high-low range
+reaches a specified number of ticks, producing equal-range bars regardless of time. The
+output is plotted as a `candlestick` series.
+
+See also: [Transforms](/docs/transforms)
+
+---
+
+### Kagi
+
+A `KagiTransform` that tracks price reversals of a configurable amount. The line thickens
+on new highs (Yang) and thins on new lows (Yin). Rendered by the dedicated `kagi` series
+type registered by the transform tier.
+
+See also: [Transforms](/docs/transforms)
+
+---
+
+### Line break
+
+A `LineBreakTransform` that draws a new candle only when price breaks the high or low of
+the previous N candles (typically 3). Time advances only on a genuine break. The output
+is plotted as a `candlestick` series.
+
+See also: [Transforms](/docs/transforms)
+
+---
+
+### Point and Figure
+
+A `PointFigureTransform` that plots X columns on rising price and O columns on falling
+price by a specified box size, ignoring time entirely. Rendered by the dedicated
+`point-figure` series type registered by the transform tier.
+
+See also: [Transforms](/docs/transforms)
+
+---
+
+### Heikin Ashi
+
+A `HeikinAshiTransform` that smooths OHLC bars by averaging prices across bars:
+open = (prev open + prev close) / 2, close = (O+H+L+C) / 4. The output is plotted as a
+`candlestick` series. Unlike the other transforms, Heikin Ashi preserves the time axis.
+
+See also: [Transforms](/docs/transforms)
+
+---
+
+## Profile tier
+
+<Callout type="info">
+The profiles below live in the `openalgo-charts/profile` entry point. Import that module
+to access the computation functions and primitive classes.
+</Callout>
+
+### Volume Profile
+
+A `VolumeProfile` primitive that computes a horizontal histogram of volume at each price
+level across a session or a selected bar range. Overlays directly on the price pane. A
+family variant (`computeVolumeProfileSessions`) produces one profile per session. Requires
+OHLCV bars.
+
+See also: [Volume Profile](/docs/volume-profile), [Profiles and Orderflow](/docs/profiles-and-orderflow)
+
+---
+
+### Market Profile / TPO
+
+A `MarketProfile` primitive based on Time Price Opportunity (TPO) letters. Each 30-minute
+period (by default) is assigned a letter; price levels that traded in that period receive
+that letter. The resulting distribution shows where the market spent the most time. Uses
+`computeTpo` internally and requires OHLCV bars.
+
+See also: [Market Profile](/docs/market-profile), [Profiles and Orderflow](/docs/profiles-and-orderflow)
+
+---
+
+### Footprint
+
+A `Footprint` primitive that renders bid and ask volume at each price level inside each
+bar, revealing the auction at micro-level. Computed by `computeFootprint` from a stream
+of classified trades (each trade tagged as a buyer- or seller-initiated aggressor). Also
+exposes `diagonalImbalances`, `stackedImbalances`, and `cumulativeDelta` analysis
+functions. Requires classified trade data, not OHLCV alone.
+
+See also: [Profiles and Orderflow](/docs/profiles-and-orderflow)
+
+---
+
+### Order flow
+
+The broader analysis of trade classification within a bar: who was the aggressor on each
+trade, cumulative delta (net buying minus selling pressure), and imbalance detection
+between adjacent bid/ask levels. The profile tier exposes `cumulativeDelta`,
+`diagonalImbalances`, and `stackedImbalances` as standalone functions on footprint data,
+`createTradeClassifier` to classify raw prints, and `footprintSignals` for multiple nodes, big
+limit orders, absorption, delta flips, zones and unfinished auctions.
+
+See also: [Profiles and Orderflow](/docs/profiles-and-orderflow)
+
+---
+
+### Unfinished auction
+
+A bar's high or low that traded on both the bid and the ask. A properly finished extreme
+trades on one side only, so price tends to return to an unfinished one. The footprint draws
+it as a dash-dot line until a later bar trades beyond it (`showUnfinishedAuctions`).
+
+See also: [Profiles and Orderflow](/docs/profiles-and-orderflow)
+
+---
+
+## Trading layer
+
+### Trading layer (chart.trading)
+
+A `TradingController` accessed via `chart.trading`. Accepts positions, orders, and trades
+via its `sync` method and renders them as labelled, draggable price-line pills and
+trade-fill markers. User interactions (drag to modify, click to cancel) emit
+`trading:*` events on the chart event bus. Created lazily on first access.
+
+See also: [Trading API](/docs/trading-api)
+
+---
+
+### Position
+
+A `TradingPosition` pushed to the trading layer: an open directional position with an
+entry price, size, P&L text, and a `side` of `long` or `short`. Rendered as a
+price-line pill in the configured long/short color.
+
+See also: [Trading API](/docs/trading-api)
+
+---
+
+### Order
+
+A `TradingOrder` pushed to the trading layer: a pending limit, stop, or stop-limit order
+at a specific price. Orders with a `bracketRole` of `tp` or `sl` are automatically linked
+to their parent via `parentId` and rendered in take-profit/stop-loss colors. Draggable
+orders emit `order_drag` and `order_drag_end` events.
+
+See also: [Trading API](/docs/trading-api)
+
+---
+
+### Bracket (TP/SL)
+
+A pair of `TradingOrder` objects attached to a parent order via `parentId`, each with a
+`bracketRole` of `tp` (take profit) or `sl` (stop loss). The trading layer renders them
+in distinct colors defined by `TradingColors.tp` and `TradingColors.sl`.
+
+See also: [Trading API](/docs/trading-api)
+
+---
+
+### Trade marker
+
+A `TradingTrade` pushed to the trading layer: a completed fill with a price, size,
+timestamp (epoch milliseconds), and a `side`. Rendered by `TradeMarkersPrimitive` as a
+shape on the price axis at the fill price. Supports three variants: `chevron`, `bubble`,
+and `count`.
+
+See also: [Trading API](/docs/trading-api)
+
+---
+
+## Input and events
+
+### Shortcut manager (ShortcutManager)
+
+Handles keyboard control of the chart. Maintains a keymap of command IDs to key combos,
+supports rebinding, disabling, and custom commands, and fires a `ShortcutTriggerEvent`
+on each activation. Combos use physical key codes for layout independence (e.g., `ArrowLeft`
+rather than the character produced). Scope can be `hover` (active when the pointer is
+over the chart or the chart is focused) or `global` (always active). Accessible as
+`chart.shortcuts`.
+
+See also: [Keyboard Shortcuts](/docs/keyboard-shortcuts)
+
+---
+
+### Event bus (chart.on)
+
+A unified pub/sub interface on the `Chart` object. `chart.on(event, cb)` subscribes to
+named events; `chart.off(event, cb)` unsubscribes; `chart.once(event, cb)`
+auto-unsubscribes after one firing. `ChartEventMap` declares every name with its payload,
+so the listener is typed by the name; `chart.emit(event, payload)` is deprecated (removed in
+3.0.0). Core events include `ready`, `crosshair:move`, `click`, `pan`, `zoom`, `resize` and
+`lazy-load`. The trading layer routes its own `trading:*` events through the same bus.
+
+See also: [Events](/docs/events)
+
+---
+
+### Crosshair
+
+A pair of lines (vertical across all panes, horizontal on the hovered pane) drawn on the
+top canvas layer, updated on every pointer move without touching the base layer. Two
+modes: `normal` (the horizontal line follows the pointer exactly) and `magnet` (the
+horizontal line snaps to the nearest O/H/L/C of the bar under the cursor, restricted to
+the price pane). Subscribe to movement via `chart.subscribeCrosshairMove` or
+`chart.on('crosshair:move')`.
+
+See also: [Crosshair and Legend](/docs/crosshair-and-legend)
+
+---
+
+### Settings schema
+
+The declarative description of a chart settings dialog that `chartSettingsSchema(chart)`
+returns: five tabs (Price, Readout, Axes, Appearance, Trading), each a list of controls in
+the same widget vocabulary the indicator settings form uses, plus a `colorPair` row that
+carries a bullish and a bearish colour together. `readChartSettings` and
+`applyChartSettings` are its round trip, over a flat, JSON-safe map of dotted keys. The
+engine ships no dialog, only the description of one.
+
+See also: [Settings and Menus](/docs/settings-and-menus)
+
+---
+
+### Axis chrome
+
+Two optional readings on the axis strips, both off unless asked for: a **session clock** in
+the corner where the price and time axes meet, formatted in the chart's own zone with its
+UTC offset underneath, and a **bar countdown**, a second row inside the last-price tag
+counting down to the close of the bar being built. Both take an injectable clock rather than
+reaching for the system one, so a delayed or replayed chart can stay honest about what time
+its data thinks it is.
+
+See also: [Price Levels and Axis Chrome](/docs/price-levels#axis-chrome)
+
+---
+
+## Feeds
+
+### DataFeed
+
+The broker-agnostic interface a chart consumer implements (or uses the built-in
+implementations for). Requires a `getBars(req)` method that returns historical bars and
+optionally a `subscribeBars` method for live streaming. The chart and the consumer are
+decoupled: the feed is not held by the chart internally; your code calls `setData` or
+`update` on the series after receiving data from the feed.
+
+See also: [Data Feeds](/docs/data-feeds)
+
+---
+
+### TradeFeed
+
+A broker-agnostic interface for order management: `placeOrder`, `modifyOrder`,
+`cancelOrder`, `subscribeOrders`, and `subscribePositions`. Deprecated, removed in 3.0.0:
+nothing in the library takes or implements it. Implement `OrderFeed` from
+`openalgo-charts/trade` for the order engine, and push the book back with
+`chart.trading.syncState`.
+
+See also: [Trading API](/docs/trading-api), [Data Feeds](/docs/data-feeds)
+
+---
+
+### Live feed (OpenAlgoLiveDataFeed)
+
+A combined historical + live implementation. Fetches history via the OpenAlgo REST API
+and streams live bar updates via the OpenAlgo WebSocket feed, managing the handoff point
+where historical data ends and live ticks begin. Internally delegates to
+`OpenAlgoDataFeed` and `OpenAlgoWsFeed`.
+
+See also: [Live Data](/docs/live-data), [Data Feeds](/docs/data-feeds)
+
+---
+
+### OpenAlgo REST feed (OpenAlgoDataFeed)
+
+A `DataFeed` implementation that fetches historical OHLCV bars from the OpenAlgo REST
+API. Converts IST-formatted row timestamps (`rowTimeToUtcSeconds`) and maps the response
+columns to `Bar` objects. Configured via `OpenAlgoConfig`.
+
+See also: [Data Feeds](/docs/data-feeds)
+
+---
+
+### OpenAlgo WebSocket feed (OpenAlgoWsFeed)
+
+A WebSocket adapter that connects to the OpenAlgo WebSocket server, parses LTP and Quote
+messages, and delivers ticks to a `CandleBuilder`. Manages reconnection, subscribe/
+unsubscribe framing, and socket lifecycle. Configurable socket factory (`SocketFactory`)
+for testability. The `WsMode` controls whether the feed subscribes in LTP mode or Quote
+mode, which determines which `VolumeMode` the builder uses.
+
+See also: [Live Data](/docs/live-data), [Data Feeds](/docs/data-feeds)
+
+---
+
+### OpenAlgo trade feed (OpenAlgoTradeFeed)
+
+An `OrderFeed` implementation that calls the OpenAlgo REST order-management endpoints and
+subscribes to live order and position updates via the API. Maps broker order objects to
+`TradingOrder` and `TradingPosition` records, decoding each order row with `decodeOrder`.
+
+See also: [Trading API](/docs/trading-api), [Data Feeds](/docs/data-feeds)
+
+---
+
+### IST offset
+
+`IST_OFFSET_SECONDS` is a named constant (19800, i.e., +05:30 in seconds) exported from
+the time-utilities module. The feed adapters add it when converting an IST timestamp to
+UTC seconds, and it is also the arithmetic the default zone uses on the per-bar paths,
+which India observing no DST makes safe. Application code using the built-in adapters
+never needs to reference it directly, and a chart in another zone does not use it at all.
+
+See also: [Data Feeds](/docs/data-feeds), [Core Concepts](/docs/core-concepts),
+[Timezones](/docs/timezones)
+
+---
+
+## Time and timezones
+
+### Timezone
+
+The IANA zone a chart labels time in, `ChartOptions.timezone`, defaulting to
+`Asia/Kolkata`. It drives the time-axis labels, the crosshair time tag, and the calendar
+units that session-anchored studies (VWAP, CPR, TWAP, Seasonality) and the profiles reset
+on. `chart.setTimezone(zone)` changes it at runtime and recomputes those studies, which is
+what a terminal switching between an NSE symbol and a US one needs.
+
+It is an IANA name rather than a fixed offset because a zone that observes DST is a
+different offset in July than in January, and a fixed one is silently wrong for half the
+year. It is display and bucketing only: `Bar.time` stays UTC seconds.
+
+See also: [Timezones](/docs/timezones), [UTC seconds](#utc-seconds)
+
+---
+
+### Session window
+
+A `SessionWindow` restricts a profile to a trading session: `startMinute` and `endMinute`,
+minutes from midnight, plus an optional `zone` naming the IANA clock those minutes are
+written on. The window's own zone beats the profile's display zone for both the window test
+and the day/week/month grouping, so a session pinned to its market selects the same real
+instants no matter where it is being read. `TRADING_HOURS` holds the presets, each carrying
+its market's zone: `us-regular` is 09:30 to 16:00 `America/New_York`.
+
+See also: [Market Profile](/docs/market-profile#session-windows),
+[Timezones](/docs/timezones#session-windows-and-trading_hours)

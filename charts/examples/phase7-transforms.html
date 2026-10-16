@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 7, Family-B transforms</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    select { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046; border-radius: 6px; padding: 4px 8px; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 7</strong>
+    <label>Transform
+      <select id="kind"></select>
+    </label>
+    <span style="margin-left:auto;opacity:.6">price-driven series · transform tier lazy-loaded · pan/zoom work</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars } from '../dist/openalgo-charts.mjs';
+    import {
+      runTransform, HeikinAshiTransform, RenkoTransform, RangeBarsTransform,
+      LineBreakTransform, PointFigureTransform, KagiTransform,
+    } from '../dist/openalgo-charts.transform.mjs';
+
+    const bars = generateBars(1_705_286_700, 600, 60);
+    const box = 1.0;
+    const kinds = {
+      'Heikin Ashi':  () => ({ type: 'candlestick', data: runTransform(new HeikinAshiTransform(), bars) }),
+      'Renko':        () => ({ type: 'candlestick', data: runTransform(new RenkoTransform({ boxSize: box }), bars) }),
+      'Range bars':   () => ({ type: 'candlestick', data: runTransform(new RangeBarsTransform({ range: box * 3 }), bars) }),
+      'Line break':   () => ({ type: 'candlestick', data: runTransform(new LineBreakTransform({ lines: 3 }), bars) }),
+      'Point and figure': () => ({ type: 'point-figure', data: runTransform(new PointFigureTransform({ boxSize: box, reversal: 3 }), bars) }),
+      'Kagi':         () => ({ type: 'kagi', data: runTransform(new KagiTransform({ reversal: box * 2 }), bars) }),
+    };
+
+    const sel = document.getElementById('kind');
+    for (const k of Object.keys(kinds)) { const o = document.createElement('option'); o.value = k; o.textContent = k; sel.appendChild(o); }
+
+    let chart;
+    function build(name) {
+      if (chart) chart.destroy();
+      document.getElementById('chart').innerHTML = '';
+      chart = createChart(document.getElementById('chart'), { priceAxisWidth: 64 });
+      const { type, data, style } = kinds[name]();
+      const s = chart.addSeries(type, style ? { style } : {});
+      s.setData(data);
+      window.__chart = chart;
+    }
+    sel.addEventListener('change', () => build(sel.value));
+    build('Heikin Ashi');
+  </script>
+</body>
+</html>

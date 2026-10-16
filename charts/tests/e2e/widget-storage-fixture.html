@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Widget storage fixture</title>
+<style>html,body{margin:0;height:100%;background:#0d0e12}#root{position:absolute;inset:0}</style></head>
+<body><div id="root"></div>
+<script type="module">
+// The widget persisting through its default store, IndexedDB, in a real
+// browser: what it writes, what the next visit opens on, what it asks the
+// feed for while it restores, and the journal that carries the last change
+// across a page that goes away before IndexedDB commits.
+//
+// Query: `ns` names the persist namespace; `symbol` is passed as an option
+// (a first visit); `storage=local` passes the page's localStorage instead;
+// `stall` makes every IndexedDB write hang, as one started while a page
+// unloads can; `phone` sets the compact chrome.
+import { VERSION } from '/dist/openalgo-charts.mjs';
+import '/dist/openalgo-charts.indicators.mjs';
+import { createWidget, createIndexedDbWidgetStorage } from '/dist/openalgo-charts.widget.mjs';
+
+const params = new URLSearchParams(location.search);
+// 2024-06-03 09:15 IST, a Monday session open on NSE.
+const START = 1_717_386_300;
+const STEP = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 };
+const COUNT = 240;
+
+/** Bars of a seeded random walk on weekday sessions, 09:15 to 15:30 IST, at the interval asked for. */
+function walk(seed, interval) {
+  const step = STEP[interval] ?? 300;
+  const perDay = step >= 86400 ? 1 : Math.floor(22500 / step);
+  let s = seed >>> 0;
+  const rand = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 2 ** 32; };
+  // A day moves as far as a session of five-minute bars, not as far as 288 of them.
+  const scale = Math.sqrt(Math.min(step, 22500) / 300);
+  let close = 1480;
+  const out = [];
+  for (let day = 0; out.length < COUNT; day++) {
+    const date = START + day * 86400;
+    const weekday = new Date(date * 1000).getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    for (let k = 0; k < perDay && out.length < COUNT; k++) {
+      const open = close;
+      close = Math.max(1, open * (1 + (rand() - 0.5) * 0.006 * scale));
+      const high = Math.max(open, close) * (1 + rand() * 0.0025 * scale);
+      const low = Math.min(open, close) * (1 - rand() * 0.0025 * scale);
+      out.push({ time: date + k * step, open, high, low, close, volume: Math.round((20000 + rand() * 80000) * scale) });
+    }
+  }
+  return out;
+}
+const seeds = { INFY: 11, TCS: 23, RELIANCE: 37 };
+const bars = (symbol, interval) => walk(seeds[symbol] ?? 5, interval);
+
+const requests = [];
+const feed = {
+  getBars: async request => { requests.push(`${request.symbol} ${request.interval}`); return bars(request.symbol, request.interval); },
+  subscribeBars: () => () => {},
+};
+
+let storage;
+if (params.get('storage') === 'local') storage = localStorage;
+else if (params.has('stall')) {
+  const idb = createIndexedDbWidgetStorage(indexedDB);
+  storage = { entries: prefix => idb.entries(prefix), journal: idb.journal,
+    setItem: () => new Promise(() => {}), removeItem: () => new Promise(() => {}) };
+}
+
+const errors = [];
+window.addEventListener('error', event => errors.push(String(event.message)));
+const widget = createWidget(document.getElementById('root'), {
+  feed, exchange: 'NSE', lookbackBars: COUNT, now: () => (START + 400 * 86400) * 1000,
+  persist: params.get('ns') || 'desk',
+  ...(storage ? { storage } : {}),
+  ...(params.has('symbol') ? { symbol: params.get('symbol') } : {}),
+  ...(params.has('phone') ? { mobile: 'always' } : { mobile: 'never' }),
+});
+const hiddenAtStart = widget.root.style.visibility === 'hidden';
+const requestsAtStart = requests.length;
+let ready = false;
+widget.ready.then(() => { ready = true; });
+
+/** Every record the widget's database holds, opened the way the widget's store opens it. */
+function records() {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open('openalgo-charts-widget', 1);
+    open.onupgradeneeded = () => { if (!open.result.objectStoreNames.contains('entries')) open.result.createObjectStore('entries'); };
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const out = {};
+      const tx = db.transaction('entries', 'readonly');
+      const cursor = tx.objectStore('entries').openCursor();
+      cursor.onsuccess = () => {
+        const at = cursor.result;
+        if (at) { out[at.key] = at.value; at.continue(); }
+      };
+      tx.oncomplete = () => { db.close(); resolve(out); };
+      tx.onabort = () => { db.close(); reject(tx.error); };
+    };
+  });
+}
+
+window.fixture = {
+  version: VERSION, widget, requests, errors, hiddenAtStart, requestsAtStart, records,
+  get ready() { return ready; },
+  loaded: () => widget.series.getData().length,
+  /** The page's own keys under the widget's prefix, as an earlier release would have left them. */
+  localKeys: () => Object.keys(localStorage).filter(key => key.startsWith('oac-widget')).sort(),
+  /**
+   * A support line through the two lowest lows on screen, one in each half
+   * of the view, the way a trader would draw it on this chart.
+   */
+  drawSupport: () => {
+    const data = widget.series.getData();
+    const view = widget.chart.getVisibleLogicalRange();
+    const from = Math.max(0, Math.ceil(view.from)), to = Math.min(data.length, Math.floor(view.to));
+    const half = from + Math.floor((to - from) / 2);
+    const lowest = (lo, hi) => data.slice(lo, hi).reduce((a, b) => (b.low < a.low ? b : a));
+    const a = lowest(from, half), b = lowest(half, to);
+    return widget.draw.add({ tool: 'trend-line', paneIndex: 0, style: { color: '#ff00ff', lineWidth: 3 },
+      points: [{ time: a.time, price: a.low }, { time: b.time, price: b.low }] }).id;
+  },
+  drawings: () => widget.draw.drawings().map(d => d.id),
+};
+</script></body></html>

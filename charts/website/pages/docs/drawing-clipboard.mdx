@@ -1,0 +1,329 @@
+---
+title: Drawing Clipboard
+description: Copy, cut and paste drawings between panes, charts and tabs, with a payload that refuses to be anything else.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Drawing clipboard
+
+`DrawingController` copies, cuts and pastes [drawings](/docs/drawing-tools) through the OS
+clipboard. All three are `async`, because `navigator.clipboard` is:
+
+```ts
+import { DrawingController } from 'openalgo-charts/draw';
+
+const draw = new DrawingController(chart);
+
+await draw.copy();                 // the selection
+await draw.copy(['d3', 'd7']);     // or specific ids
+await draw.cut();                  // copy, then delete, in that order
+const pasted = await draw.paste(); // fresh drawings, offset from the originals
+```
+
+<Callout type="info">
+The engine installs **no** key listener, here as everywhere else: only the host knows
+whether the chart has focus, a dialog is open, or the user is typing in a symbol box. These
+are plain calls your binding makes.
+</Callout>
+
+## Wiring the chords
+
+```ts
+window.addEventListener('keydown', (e) => {
+  // Your call, not the library's: never swallow a copy out of a text field.
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+
+  const key = e.key.toLowerCase();
+  if (key === 'c') { e.preventDefault(); void draw.copy(); }
+  if (key === 'x') { e.preventDefault(); void draw.cut(); }
+  if (key === 'v') { e.preventDefault(); void draw.paste(); }
+});
+```
+
+Show the chords in your right-click menu next to Copy, Cut and Paste; the demo host in
+`examples/yfinance` does exactly this.
+
+## Live demo
+
+A trend line, already placed and selected. **Copy** puts it on the clipboard, **Paste**
+drops a fresh one two bars later and 16 px lower, and because a paste selects what it
+created, pressing Paste again walks a staircase down the chart. The status line is
+`draw.clipboard().lastError()`, which tells you whether the payload reached the OS clipboard
+or only the in-page fallback.
+
+This demo is constructed with `clipboard: null`, the process-local port, so it behaves the
+same in every browser and inside the docs page's sandbox. A real host omits the option and
+gets `navigator.clipboard`.
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700438400, 120, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.fitContent();
+
+// clipboard: null keeps this demo in the shared in-page clipboard, so it does
+// not depend on what a browser does with an OS clipboard permission.
+const draw = new lib.DrawingController(chart, { clipboard: null });
+const a = bars[20], b = bars[45];
+const first = draw.add({
+  tool: 'trend-line',
+  paneIndex: 0,
+  points: [{ time: a.time, price: a.low }, { time: b.time, price: b.high }],
+  style: { color: '#f0b90b', lineWidth: 2 },
+});
+draw.select(first.id);
+
+// Host chrome: the engine ships none of this.
+el.style.position = 'relative';
+const bar = document.createElement('div');
+bar.style.cssText = 'position:absolute;left:10px;top:8px;z-index:5;display:flex;gap:6px;'
+  + 'align-items:center;font:12px ui-monospace,monospace';
+el.appendChild(bar);
+const button = function (label) {
+  const b2 = document.createElement('button');
+  b2.textContent = label;
+  b2.style.cssText = 'font:11px ui-monospace,monospace;padding:3px 9px;border-radius:4px;'
+    + 'border:1px solid light-dark(rgba(0,0,0,.14),rgba(255,255,255,.18));'
+    + 'background:light-dark(rgba(255,255,255,.9),rgba(20,22,28,.85));color:light-dark(#151515,#d6dae2);cursor:pointer';
+  bar.appendChild(b2);
+  return b2;
+};
+const status = document.createElement('span');
+status.style.color = 'light-dark(#686868,#8b93a4)';
+const copyBtn = button('Copy'), cutBtn = button('Cut'), pasteBtn = button('Paste');
+bar.appendChild(status);
+
+const note = function (verb, ok) {
+  const why = draw.clipboard().lastError();   // null once it reached the OS clipboard
+  status.textContent = ok
+    ? verb + ' ok, ' + (why === null ? 'system clipboard' : 'in-page clipboard')
+    : verb + ' refused: ' + why;
+};
+copyBtn.onclick = function () { draw.copy().then(function (ok) { note('copy', ok); }); };
+cutBtn.onclick = function () { draw.cut().then(function (ok) { note('cut', ok); }); };
+pasteBtn.onclick = function () {
+  draw.paste().then(function (made) {
+    status.textContent = made.length === 0 ? 'nothing of ours to paste' : 'pasted ' + made.length;
+  });
+};
+
+const destroy = chart.destroy.bind(chart);
+chart.destroy = function () { draw.destroy(); destroy(); };
+return chart;`} caption="Copy, then Paste twice. Each paste is one undo step and lands two bars along and 16 px down from what it copied." />
+
+## What lands on the clipboard
+
+JSON under one namespaced top-level key, carrying a version:
+
+```json
+{
+  "openalgo-charts/drawings": {
+    "version": 2,
+    "drawings": [
+      {
+        "tool": "trend-line",
+        "points": [
+          { "time": 1700510400, "price": 99.42 },
+          { "time": 1700596800, "price": 104.18 }
+        ],
+        "style": { "color": "#f0b90b", "lineWidth": 2 },
+        "paneIndex": 0
+      }
+    ]
+  }
+}
+```
+
+The namespace is the point. **The OS clipboard is shared with everything else on the
+machine**, so a paste can arrive from a spreadsheet, from another charting product, or from
+a hand-edited copy of our own payload. One property tells our payload from all of it, and
+anything else is simply not ours: `paste()` resolves to an empty array rather than throwing
+at a host whose user last copied a cell reference.
+
+Anchors are `{ time, price }` in data space, the same coordinates a drawing lives in, so a
+paste lands on the same instant and the same price even when the receiving chart is on a
+different interval.
+
+## Everything read back is validated
+
+Field by field, before anything can reach the model:
+
+| Field | Rule |
+|---|---|
+| `tool` | Must be a **registered** drawing tool. An unknown id would throw inside the controller. |
+| `points` | At least one anchor; every `time` and `price` finite. A NaN anchor produces a drawing that can never be drawn or hit-tested again. |
+| `paneIndex` | A non-negative integer, counted with the price pane first (see below). Absent means pane 0, the price pane; a bogus one is a rejection, because a drawing parked on a pane that does not exist is invisible and unfindable. |
+| `locked`, `visible` | Booleans when present. |
+| `style` | Values survive only as a string, a boolean, a finite number, or a short array of finite numbers. `__proto__`, `constructor` and `prototype` are never copied. |
+| `version` | Older versions are accepted (every field this build reads is validated anyway); a **future** version is refused rather than half-understood. |
+
+Two deliberate asymmetries in there:
+
+- **A payload with one corrupt entry is a corrupt payload.** Validation is all-or-nothing,
+  so a partial paste can never half-apply. Pasting nine of ten drawings silently would be
+  worse than pasting none.
+- **An unknown style key is dropped, not rejected.** It is far more likely to be a newer
+  version's style property than an attack, and dropping it still yields a drawing the
+  current renderer can draw.
+
+Anything crossing the process boundary is capped, to keep a hostile or corrupt payload from
+becoming a multi-megabyte model. The caps are far past honest use: the largest built-in tool
+is a freehand path, and a 20,000-sample stroke is more than a pointer can produce.
+
+| Cap | Limit |
+|---|---|
+| Drawings per payload | 512 |
+| Anchors per drawing | 20,000 |
+| Style keys per drawing | 64 |
+| Characters in a style string | 4,096 |
+| Numbers in a style array | 64 |
+
+## Failure is a `false`, never an exception
+
+`navigator.clipboard` rejects when the document is not focused, the page is not secure, or
+the user denied the permission. None of that should cost a user their copy, so every write
+also lands in a **module-level in-memory clipboard shared by every controller in the page**.
+
+| Situation | Result |
+|---|---|
+| System clipboard available | Written to the OS clipboard **and** to memory. |
+| Write refused (permission, focus, insecure context) | Memory only. `copy()` still resolves `true`; `lastError()` says why. |
+| Reading back | The system clipboard wins when it holds our payload, so a copy made in another tab beats a stale in-tab one. Memory answers when the read fails or returns something that is not ours. |
+| `fallbackToMemory: false` | A refused system write is a failed copy, and a failed **cut deletes nothing**. |
+
+<Callout type="warning">
+**A cut deletes only after the write resolves successfully.** A refused write leaves the
+model exactly as it was, rather than destroying a drawing that went nowhere. This is the one
+place the return value matters to correctness, so check it if you are cutting with the
+memory fallback turned off.
+</Callout>
+
+The shared memory clipboard is a singleton on purpose: it is what makes **chart-to-chart
+paste work inside one page even with the OS clipboard denied**, which is the common case in
+an embedded or unfocused iframe.
+
+<Callout type="warning">
+There is one failure mode a rejected promise does not cover: a browser may leave a clipboard
+promise **pending** rather than rejecting it. Chrome does this when the call has no user
+activation, and an embedded page without the `clipboard-write` permission policy can end up
+waiting on a prompt that never appears. `copy()` awaits the port, so it settles when the
+browser does.
+
+Call these from a real user gesture (a click, a keydown), and where the OS clipboard is not
+usable at all (a sandboxed preview, a cross-origin frame) pass `clipboard: null` and stay in
+the process-local clipboard, which always answers immediately.
+</Callout>
+
+```ts
+const cb = draw.clipboard();
+cb.lastError();               // why the OS clipboard was not used, or null when it was
+cb.setPort(navigator.clipboard);   // hand one over after the user grants permission
+cb.setFallbackToMemory(false);     // make a refused write a real failure
+```
+
+`lastError()` is set on a **successful** copy too, when the payload reached memory but not
+the system clipboard: that copy works in this tab and will not appear in another, which is
+exactly what you want to be able to tell the user.
+
+## What a paste actually does
+
+- **Fresh objects with fresh ids**, never a second reference to what was copied, so editing
+  the paste cannot alter its source (or the clipboard).
+- **One undo step** for the whole paste, however many drawings it carried.
+- **Offset two bars along time and 16 px down the price axis**, so the copy is visibly a
+  second object. A paste that lands exactly on top of its original reads as nothing having
+  happened.
+- The vertical nudge goes through `priceToCoordinate` / `coordinateToPrice` **per anchor**,
+  which makes it a rigid *screen* translation: a shape keeps its proportions on a
+  [logarithmic scale](/docs/scales-and-panes) instead of stretching. A host that does not
+  implement those two methods gets the time half of the offset only.
+- **A drawing copied beside the candles pastes beside the candles.** The payload counts
+  panes with the price pane first and the study panes after it in order, whatever slot the
+  price pane held where the drawing was copied. A chart built with
+  [`movablePrimaryPane`](/docs/scales-and-panes#moving-the-price-pane-below-its-studies) can
+  keep its price pane below its studies, and a paste there, or on another chart that keeps it
+  on top, still lands on the price pane. On a chart with the price pane on top, which is every
+  chart without the option, the count is the chart's own slots, as it always was.
+- **A pane the receiving chart does not have is folded onto one it does**, counted the same
+  way, so a drawing from a taller stack lands on the last study pane, never on the price pane.
+  Adding a primitive creates the pane it names, so without this a drawing copied out of an
+  indicator pane would conjure an empty pane in a single-pane chart.
+- The last pasted drawing is **selected**, so a repeated paste walks a staircase rather than
+  stacking in place.
+
+```ts
+const draw = new DrawingController(chart, {
+  pasteOffsetBars: 2,     // default
+  pasteOffsetPixels: 16,  // default; 0 pastes at the same price
+});
+```
+
+Bar spacing is read from the last gap in the data, so the time half of the offset means the
+same thing on a 5-minute chart and on a daily one.
+
+## Events
+
+| Event | Payload | Fires |
+|---|---|---|
+| `draw:copy` | `{ drawings }` | A copy reached the clipboard (system or memory). |
+| `draw:cut` | `{ drawings }` | After the delete, and after one `draw:remove` per drawing. |
+| `draw:paste` | `{ drawings }` | After one `draw:add` per drawing. |
+
+A copy that found nothing to copy, or could not store the payload anywhere, emits nothing.
+
+## Moving drawings over your own transport
+
+The payload format, the parser and the sanitiser are exported, so a host syncing drawings
+over a websocket, or saving them as a template, decodes them with exactly the validation a
+paste gets. `sanitizeDrawing` is the per-entry gate alone, without the migration a paste
+runs after it, so it keeps a style key this build does not declare, where a paste drops it:
+
+```ts
+import {
+  encodeClipboardPayload, decodeClipboardPayload, sanitizeDrawing,
+  DRAWING_CLIPBOARD_KEY, DRAWING_CLIPBOARD_VERSION,
+} from 'openalgo-charts/draw';
+
+socket.send(encodeClipboardPayload(draw.drawings()));
+
+socket.onmessage = (e) => {
+  const incoming = decodeClipboardPayload(e.data);   // null when it is not ours
+  if (incoming !== null) for (const d of incoming) draw.add(d);
+};
+```
+
+`DrawingClipboard` itself takes any `ClipboardPort`, which is the two-method slice of
+`navigator.clipboard` it uses, so the whole layer is testable and re-routable:
+
+```ts
+interface ClipboardPort {
+  writeText(text: string): Promise<void>;
+  readText(): Promise<string>;
+}
+
+// Route through a host transfer of your own, or stay process-local entirely.
+const draw = new DrawingController(chart, { clipboard: myPort });
+const isolated = new DrawingController(chart, { clipboard: null });  // memory only
+```
+
+## API
+
+| Member | Description |
+|---|---|
+| `copy(target?)` | Copy the selection, or an id, or a list of ids. Resolves `false` when there was nothing to copy or nowhere to store it. |
+| `cut(target?)` | Copy, then delete, and only in that order. |
+| `paste()` | Resolves the created drawings, or `[]` when the clipboard holds nothing of ours. |
+| `clipboard()` | The `DrawingClipboard` behind all three, for `lastError()`, `setPort()` and `setFallbackToMemory()`. |
+| `setOptions({ clipboard })` | Swap the port at runtime. It is a port, not a stored option, so it is applied to the live clipboard. |
+
+<Callout type="info">
+Because all three are async, read the model **after** awaiting. `draw.paste()` resolves with
+the created drawings, which is usually all a host needs; `draw.drawings()` read on the line
+after an un-awaited `paste()` has not seen it yet.
+</Callout>
+
+Also exported for tests: `clearMemoryClipboard()` empties the shared in-page store, and
+`systemClipboard()` returns `navigator.clipboard` when the browser exposes both halves of
+it, else `null`.

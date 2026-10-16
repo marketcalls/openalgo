@@ -1,0 +1,210 @@
+---
+title: Data Variants
+description: Regular and extended hours, adjusted and raw prices, and a quote currency or unit, each as its own provider series.
+---
+
+import { Callout } from 'nextra/components'
+
+# Data variants
+
+A provider often serves more than one series for the same instrument: regular
+trading hours or extended hours with the pre and post market, prices adjusted
+for corporate actions or as traded, and sometimes the same instrument quoted in
+another currency or unit. These are **different series**, not different views of
+one. Extended hours add bars the regular series does not have, and an adjusted
+history rewrites every price before a split or a dividend.
+
+So the library treats the choice of series as identity, like the symbol. It is
+part of every request, every cache key, the chart's data context and every saved
+chart, and a change of variant is a change of source.
+
+<Callout type="warning">
+The library never converts, adjusts or filters bars to make a variant. A variant
+is served by a provider that declares it, or it is **unsupported** and the chart
+says so. A series derived locally would look exactly like the provider's own
+and be wrong in ways nobody could see.
+</Callout>
+
+## The variant
+
+```ts
+import type { DataVariant } from 'openalgo-charts';
+
+const variant: DataVariant = {
+  session: 'extended',     // 'regular' | 'extended'
+  adjustment: 'raw',       // 'adjusted' | 'raw'
+  currency: 'USD',         // the provider's own name, compared exactly
+  unit: 'per lot',         // the provider's own name, compared exactly
+};
+```
+
+Every field is optional. An absent field, or no variant at all, is the
+provider's default series. That default is its own identity: `{}` asks for
+exactly what a request without a variant always got, while
+`{ session: 'regular' }` asks for regular hours by name, whatever the provider's
+default happens to be.
+
+`normalizeDataVariant(input)` validates a variant and returns a frozen copy in a
+fixed field order, or `undefined` for the default. It throws a `TypeError` for an
+unknown session or adjustment, a blank or overlong name, or a field this build
+does not know. `dataVariantKey(variant)` gives one string per variant, and `''`
+for the default.
+
+## Declaring what a feed serves
+
+A `DataFeed` lists the variants it can serve for an instrument and interval.
+Without `dataVariants` a feed serves only its default series.
+
+```ts
+import type { DataFeed } from 'openalgo-charts';
+
+const feed: DataFeed = {
+  // Extended hours for intraday bars of US listed stocks, and nothing else.
+  dataVariants: ({ symbol, interval }) => ({
+    sessions: isIntraday(interval) && isUsStock(symbol) ? ['regular', 'extended'] : ['regular'],
+  }),
+  getBars: async request => {
+    const session = request.variant?.session ?? 'regular';
+    return fetchHistory(request.symbol, request.interval, request.from, request.to, session);
+  },
+};
+```
+
+A dimension that is absent or empty in the answer serves only the default, so a
+variant must leave it out. `unsupportedDataVariant(capabilities, variant)`
+returns the first field the provider did not declare (`'session'`,
+`'adjustment'`, `'currency'` or `'unit'`), or `null`.
+
+The OpenAlgo adapters have one series per instrument: `OpenAlgoDataFeed.getBars`
+and `OpenAlgoLiveDataFeed.subscribeBars` refuse any other variant with a
+`DataVariantUnsupportedError` (`dataVariantError` builds the same error for your
+own feed) instead of answering with the default series under another name. The
+synthetic `FakeDataFeed` does the same in `getBars` and `subscribeBars`, so a
+test or a demo that asks it for extended hours is told no rather than handed
+its one series.
+
+## Loading a variant
+
+Put the variant on the request. `BarsRequest.variant` reaches the feed as it is.
+
+```ts
+import { DataLoadingController, withBarCache } from 'openalgo-charts';
+
+const data = new DataLoadingController(withBarCache(feed));
+await data.load({ symbol: 'AAPL', exchange: 'US', interval: '5m', from, to,
+  variant: { session: 'extended' } });
+
+data.subscribe(state => {
+  if (state.status === 'unsupported') showUnavailable(state.unsupported); // 'session', ...
+});
+```
+
+`DataLoadingController.load` asks the feed's declaration before it reads the
+cache or the network. When the variant is not declared it publishes status
+`'unsupported'`, sets `snapshot.unsupported` to the dimension and `error` to a
+`DataVariantUnsupportedError`, and fetches, streams, refreshes and pages
+nothing. When the declaration itself rejects or times out, the status is
+`'error'` and the variant is still not fetched: `loadMore` pages nothing, and
+`refresh` (the widget's Retry) asks the declaration again before anything else.
+A request naming `{}` carries no `variant` field at all, so it keys and
+fetches exactly like one naming nothing.
+
+A new `load` with another variant is a new source: the request in flight is
+aborted, the stream is released and the bars are cleared before the new series
+arrives.
+
+<Callout type="info">
+`DataLoadingStatus` gains the `'unsupported'` case. A host that switches on it
+exhaustively adds one branch; there is nothing to retry, so offer the default
+variant instead.
+</Callout>
+
+## Cache and shared requests
+
+`withBarCache` keys each variant as its own series:
+`symbol|exchange|interval`, then the variant key when there is one. The default
+adds nothing, so the key is byte-identical to the key before variants existed
+and entries already persisted still match. `invalidate({ symbol, exchange,
+interval, variant })` drops one variant and leaves the others warm, and the
+wrapper forwards `dataVariants` from the feed it wraps. `HistoryRequestPool`
+never lets two variants share a request in flight. See [Bar Cache](/docs/bar-cache).
+
+## The chart's data context
+
+`ChartDataContext.variant` tells studies, alerts and your own panels which
+series the chart shows. Set it with `publishDataContext`:
+
+```ts
+import { publishDataContext } from 'openalgo-charts';
+
+publishDataContext(chart, { symbol: 'AAPL', exchange: 'US', interval: '5m',
+  variant: { session: 'extended' } });
+```
+
+`chart.setDataContext` compares the symbol, exchange, interval, open interest
+capability and, since 2.6.0, the variant, so a change of variant alone is a
+change of source: requested bars in flight are aborted, source revisions
+restart and studies read the context again. The helper normalizes the variant
+first. The instrument never
+changes on the way, so event markers, linked drawings and news stay with it.
+`Instrument.applyTo` keeps the variant the context already has.
+
+<Callout type="info">
+A variant-only change emits `data:context` once, like any other change of source.
+Before 2.6.0 the chart did not compare variants, so the helper passed through a
+context with the interval cleared before setting the real one, and a listener saw
+two events; the helper still does that for a target that keeps the old variant.
+</Callout>
+
+## Alerts
+
+An alert belongs to the variant it was set on. `alert.scope.variant` records it
+(an alert on the default series has none), it evaluates only on that series, and
+`availability(id)` asks for it back, the way it asks for the alert's own
+timeframe. A fixed price stays visible, paused, on another session or adjustment
+of the instrument, and is not drawn in another currency or unit, where the same
+number is a different price. See [Alerts](/docs/alerts).
+
+## Requested contexts
+
+A study that asks for another instrument's bars asks in the chart's session and
+adjustment, so a benchmark lines up with extended-hours bars bar for bar. The
+currency and the unit stay behind: they belong to the instrument asked for.
+`inheritedDataVariant(variant)` from `openalgo-charts/indicators` is that rule.
+
+`createRequestedIndicator` and a Tier 2 study's `ctx.requestBars` apply it to
+every request that names no `variant`; a request that names one, `{}` included,
+wins. A change of the chart's variant alone starts both kinds of study again, as
+a change of symbol does. `IndicatorBarsRequest.variant` reaches your bars
+provider.
+
+## Widget, grid and workspaces
+
+```ts
+const widget = createWidget(el, { feed, symbol: 'AAPL', interval: '5m', variant: { session: 'extended' } });
+widget.variant();                          // { session: 'extended' }
+widget.setDataVariant(undefined);          // back to the default series
+widget.on('variant', ({ variant }) => {});
+```
+
+The widget carries the variant into every load, the chart's data context, its
+saved state and its persisted layout, and treats a saved viewport as belonging
+to its variant. A saved state that names no variant belongs to the default
+series, so it restores onto the default series whatever the widget shows at the
+time, and states saved before variants existed keep loading as they always did. The status line names a non-default variant, and a variant the
+feed does not declare shows "Not available from this source" with no retry.
+
+`WorkspacePane.variant` saves each chart's series in a portable workspace, and
+`createChartGrid` saves and reopens it per cell. A document naming a variant this
+build cannot read is refused rather than opened on another series. See
+[The Widget Tier](/docs/widget) and [Workspaces & Templates](/docs/workspaces).
+
+## The reference host
+
+The yfinance reference host offers regular and extended hours from its session
+menu. Its source has extended hours only for intraday bars of US listed stocks,
+so the menu greys the choice elsewhere, and a chart already on extended hours
+that moves to daily bars says they are not available and offers regular hours.
+The session reaches the bar cache, comparisons, replay's finer history, saved
+layouts and named workspaces. In fixture mode the extended series is two hours
+either side of the synthetic session, byte for byte the same on every run.

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 8, read-only trade layer</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 8</strong>
+    <span>order lines · position marker w/ live P&amp;L · SL/TP bracket, reconciled from a simulated broker book (the close box cancels in the sim)</span>
+    <span id="log" style="margin-left:auto;opacity:.7"></span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars } from '../dist/openalgo-charts.mjs';
+    import { TradeController, FakeBroker } from '../dist/openalgo-charts.trade.mjs';
+
+    const bars = generateBars(1_705_286_700, 300, 60);
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 120 });
+    const series = chart.addSeries('candlestick');
+    series.setData(bars);
+
+    const last = bars[bars.length - 1].close;
+    const tc = new TradeController(chart.tradeHost(0));
+    const broker = new FakeBroker();
+    broker.onBook((o, p) => tc.reconcile(o, p));
+    broker.onLtp((s, ltp) => tc.onLtp(s, ltp));
+
+    // Simulated book: a long position with an SL/TP bracket + one resting limit order.
+    let orders = [
+      { id: 'sl1', symbol: 'SIM', side: 'SELL', type: 'SL-M', qty: 10, filledQty: 0, price: 0, triggerPrice: last * 0.97, status: 'working', role: 'sl' },
+      { id: 'tp1', symbol: 'SIM', side: 'SELL', type: 'LIMIT', qty: 10, filledQty: 0, price: last * 1.05, status: 'working', role: 'tp' },
+      { id: 'lim1', symbol: 'SIM', side: 'BUY', type: 'LIMIT', qty: 5, filledQty: 0, price: last * 0.985, status: 'working' },
+    ];
+    let positions = [{ symbol: 'SIM', netQty: 10, avgPrice: last }];
+    broker.setBook(orders, positions);
+
+    // The close segments route as clicks: cancel the order / flatten the position in the sim.
+    chart.subscribeClick((id) => {
+      if (!id.endsWith('::close')) return;
+      const base = id.slice(0, -'::close'.length);
+      if (base.startsWith('order:')) {
+        orders = orders.filter((o) => o.id !== base.slice(6));
+      } else if (base.startsWith('position:')) {
+        positions = [];
+        orders = orders.filter((o) => !o.role); // brackets die with the position
+      }
+      broker.setBook(orders, positions);
+    });
+
+    // Live P&L: drift the LTP around the entry.
+    let ltp = last, t = 0;
+    setInterval(() => {
+      t += 1;
+      ltp = last * (1 + Math.sin(t / 9) * 0.02);
+      broker.emitLtp('SIM', ltp);
+      document.getElementById('log').textContent = `LTP ${ltp.toFixed(2)}`;
+    }, 120);
+
+    window.__chart = chart;
+  </script>
+</body>
+</html>

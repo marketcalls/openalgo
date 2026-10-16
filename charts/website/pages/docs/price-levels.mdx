@@ -1,0 +1,345 @@
+---
+title: Price Levels & Axis Chrome
+description: Previous close, session high and low, extended hours and top of book as one primitive where the line and its axis tag cannot drift apart, plus the corner clock and the bar-close countdown.
+---
+
+import { Callout } from 'nextra/components'
+
+# Price levels & axis chrome
+
+Two things live on and around the price axis besides the ladder itself: **reference levels**
+a trader reads the market against, and **chrome** that says what time it is and how long the
+bar has left.
+
+## The price-level family
+
+Ten kinds, one primitive:
+
+```ts
+import { PriceLevels } from 'openalgo-charts';
+
+const levels = new PriceLevels({ timezone: 'Asia/Kolkata' });
+chart.addPrimitive(levels);   // the price pane, wherever it sits
+```
+
+That is the whole setup. Previous close, session high and session low are on by default,
+because they are the levels an intraday chart is read against.
+
+### A level is a line and a tag, together
+
+The design decision worth knowing before anything else: **each kind is one options group
+carrying both halves.**
+
+```ts
+interface PriceLevelStyle {
+  line: boolean;              // the horizontal line across the plot
+  label: boolean;             // the matching tag on the price axis
+  color?: string;             // both halves. Unset falls through to the theme
+  lineWidth?: number;         // media px, default 1
+  lineStyle?: 'solid' | 'dashed' | 'dotted';
+  text?: string;              // axis tag text, default the formatted price
+  extentFromRight?: number;   // fraction of the plot width, measured from the axis. 1 = full
+}
+```
+
+Reference terminals split these across separate menus, one for lines on the chart and one
+for labels on the scale, and the result is that a level's two halves drift apart: a user
+ends up with an axis tag for a line that is not drawn. Here `line` and `label` are two flags
+on the same group, so they cannot come apart. A host is still free to present them as two
+flyouts over the same ten rows, and the yfinance demo does exactly that, but each flyout is
+reading one half of one object rather than two lists that happen to be the same length.
+
+### The ten kinds
+
+`PRICE_LEVEL_KINDS` is the list, in the order a settings panel should show it.
+
+| Kind | Where the price comes from | Default |
+|---|---|---|
+| `previousClose` | Last traded close of the session **before** the one in view. | line and label on |
+| `sessionHigh` | Highest high of the session in view. | line and label on |
+| `sessionLow` | Lowest low of the session in view. | line and label on |
+| `lastPrice` | The last bar's close. Owned by the series style, see below. | both off |
+| `preMarketOpen` | First pre-market bar's open in the session in view. | both off |
+| `preMarketClose` | Last pre-market bar's close. | both off |
+| `postMarketOpen` | First post-market bar's open. | both off |
+| `postMarketClose` | Last post-market bar's close. | both off |
+| `bid` | The live quote. | both off |
+| `ask` | The live quote. | both off |
+
+The six that are off by default are off because they need data the engine cannot invent:
+four need a host-supplied phase classifier, two need a live quote, and the last price is
+already drawn by something else.
+
+### Null is not zero
+
+A level with no data is `null`, never `0`. Nothing is drawn, rather than a line stretched
+across the middle of the plot at zero, which is what a numeric fallback would produce. The
+consequence a host cares about:
+
+```js
+levels.available('previousClose');   // false on the first session in the data
+levels.available('bid');             // false with no quote fed in
+```
+
+`available(kind)` is the signal to render a control **disabled with its state still
+visible**, not to hide it. "No previous session yet" and "no live quote" are information; an
+absent checkbox is not.
+
+<Callout type="info">
+Every level reads unavailable before the first frame. The values depend on the viewport, so
+they are computed while drawing. If you need them without a chart, call
+`computePriceLevels()` directly.
+</Callout>
+
+### The session comes from the bars
+
+The session in view is the session containing the **right edge of the viewport**, resolved
+through the data layer, so scrolling back through history moves the session high, the
+session low and the previous close with it. The last price does not move: scrolling back
+does not change what the instrument last traded at.
+
+Session boundaries are read from the **gaps between bars**, never from a calendar midnight.
+The overnight break is the only thing in the data that says where a trading day ends, and a
+fixed midnight lands mid-session for half the world's exchanges. The calendar is the
+fallback, used only when the series shows no readable break, which is the right answer for
+daily bars: each daily bar is its own session.
+
+Previous close walks back from the previous session's final bar, so a whitespace tail (a
+halted or untraded closing minute) does not blank the level, and the walk stops at that
+session's own open rather than crossing further back.
+
+<Callout type="warning">
+There is deliberately **no** `autoscaleInfo` on this primitive. A previous close a gap away
+from the session in view would stretch the range and flatten the bars the user is actually
+looking at. A reference level that scrolls off the top is the lesser harm, and it is what
+the last-price line already does.
+</Callout>
+
+### The pure core
+
+The numbers are computable without a canvas, which is what makes them testable and what
+lets a host put them in a readout rather than on a line:
+
+```ts
+import { computePriceLevels } from 'openalgo-charts';
+
+const values = computePriceLevels({
+  bars,                          // readonly Bar[]
+  anchorTime: rightEdgeUtcSecs,  // default: the last bar
+  timezone: 'Asia/Kolkata',      // calendar fallback only
+  marketPhase,                   // optional classifier, see below
+  quote: { bid: 101.2, ask: 101.25 },
+});
+
+// { previousClose: 100.5, sessionHigh: 102, sessionLow: 99.8, lastPrice: 101.2,
+//   preMarketOpen: null, ..., bid: 101.2, ask: 101.25 }
+```
+
+`PriceLevelValues` is `Record<PriceLevelKind, number | null>`. The primitive's own
+`levels.values()` returns the same shape, as of the last frame.
+
+<Callout type="info">
+Session boundaries are cached against the bar array's identity plus a length / first-time /
+last-time stamp, because boundaries cannot move under an intra-bar tick: the last bar's OHLC
+changes, its time does not. The cache is a `WeakMap`, so two charts drawing alternately do
+not thrash a single slot and pay the full cost on every frame of both.
+</Callout>
+
+### The last price is not duplicated
+
+The core already draws the last price, from `SeriesStyle.priceLineVisible` and
+`lastValueVisible`. Those two flags **are** this family's `line` and `label` under older
+names, and two owners would put two lines on one price. So the family ships the translation
+in both directions instead of drawing it:
+
+```ts
+import { lastPriceLevelFromSeriesStyle, seriesStyleForLastPriceLevel } from 'openalgo-charts';
+
+// series style -> a level group, so the row reads like every other row
+const level = lastPriceLevelFromSeriesStyle(chart.primarySeriesInfo()?.style ?? {});
+// { line: true, label: true }
+
+// a level group -> the series patch, so the row writes like every other row
+chart.primarySeries()?.applyOptions(seriesStyleForLastPriceLevel({ line: false, label: true }));
+// { priceLineVisible: false, lastValueVisible: true }
+```
+
+That is why the `lastPrice` kind defaults to `line: false, label: false`: the pane draws it,
+and the primitive stays out of the way unless a host deliberately hands the level over.
+
+### Extended hours need a classifier
+
+An OHLC feed carries no market phase, and guessing one from the clock would be wrong for
+every exchange but the one guessed for. So the four extended-hours levels stay inert until a
+host says which bars are which:
+
+```ts
+levels.setOptions({
+  marketPhase: (bar) => {
+    const mins = minutesIntoTradingDay(bar.time);
+    if (mins < 375) return 'pre';
+    if (mins > 750) return 'post';
+    return 'regular';
+  },
+});
+```
+
+`MarketPhaseFn` returns `'pre' | 'regular' | 'post'`, or `null`/`undefined` for unknown. An
+instrument whose bars are all regular hours leaves the four levels unavailable, which is the
+honest answer rather than four levels pinned to the session's own open and close.
+
+### Bid and ask need a quote
+
+Top of book is quoted even when the chart holds no history at all, so bid and ask come from
+the quote and not from the bars:
+
+```ts
+levels.setQuote({ bid: 101.2, ask: 101.25 });   // null clears it and both go inert
+```
+
+Or pass a callback, read once per frame, which is the shape a WebSocket feed wants:
+
+```ts
+const levels = new PriceLevels({ quote: () => book.top() });
+```
+
+Either side may be absent on its own: a quote with only a bid leaves `ask` null.
+
+### Styling a level
+
+```ts
+levels.setLevel('previousClose', {
+  line: true,
+  label: true,
+  color: '#f0b429',
+  lineWidth: 1,
+  lineStyle: 'dashed',
+  extentFromRight: 0.35,     // a stub off the axis rather than a full-width line
+  text: 'PDC',               // instead of the formatted price
+});
+
+levels.setOptions({ levels: { sessionHigh: { color: '#26a69a' }, sessionLow: { color: '#ef5350' } } });
+```
+
+`setLevel` patches one kind and repaints; `setOptions` patches several kinds plus the shared
+options (`timezone`, `marketPhase`, `quote`) in one repaint. Unset colours fall through to
+the theme: session extremes borrow the up/down pair, bid and ask borrow buy/sell, the last
+price follows the tick direction exactly as the core's own tag does, and the rest take the
+crosshair colour.
+
+Read a level's resolved style back with `levels.level(kind)`, which is what a host renders
+its controls from.
+
+<Callout type="info">
+A primitive lives on a pane, and rebuilding the chart (a chart-type switch, for instance)
+destroys it. Keep the level state in your own object and pass it back through the
+constructor's `levels` option when you rebuild, the way the yfinance demo does.
+</Callout>
+
+## Axis chrome
+
+Two optional readings on the axis strips. Both are **off** unless asked for: neither is
+something a chart should start showing because it upgraded, and a chart that configures
+none of this draws exactly the axes it always drew.
+
+```ts
+const chart = createChart(el, {
+  axisChrome: { sessionClock: true, barCountdown: true },
+});
+
+// or later, merged field by field, so switching one on leaves the other alone
+chart.setAxisChromeOptions({ barCountdown: true });
+chart.axisChromeOptions();          // what is on
+```
+
+### The session clock
+
+A live wall clock in the corner where the price axis meets the time axis: the one rectangle
+on the chart that no series, tick or tag ever occupies.
+
+It is formatted in **the chart's** zone, so a trader on a New York chart reads New York's
+clock and not their laptop's, with the zone's offset from UTC on a second row underneath to
+say which clock that is (`UTC+5:30`, `UTC-4`, or plain `UTC` at zero). The offset is read at
+the instant on the clock, which is what makes it correct on both sides of a DST changeover.
+
+```ts
+chart.setAxisChromeOptions({ sessionClock: { showOffset: false } });   // clock only
+```
+
+The offset row is dropped automatically when the time axis is shorter than about 20 px,
+because half an offset is worse than none. With the axes hidden there is no corner, and the
+clock draws nothing rather than painting into the plot.
+
+### The bar-close countdown
+
+A second row inside the last-price tag, counting down to the close of the bar being built.
+The tag grows from one row to two and widens to the wider of them, so the price stays on the
+price line and the countdown sits under it. Only the pane that shows the chart's price source
+carries it: the countdown is that bar's, and a study pane's tag, which is the study's value,
+stays one row rather than growing into the study's own level tags.
+
+The cadence is **read back from the bars**, not configured: the chart is never told its own
+timeframe, and a chart that switched timeframe mid-session has to follow within a screen of
+bars. The reading is a **median** over the last 64 gaps:
+
+- Not a mean, because an overnight break, a holiday or a feed outage leaves gaps orders of
+  magnitude wider than the timeframe and an average would chase them.
+- Not a minimum either, which is the other tempting reading: a backfilled duplicate or a
+  conflated tick lands two bars a second apart and would halve the answer.
+
+Past a close the countdown **rolls into the next bar's cycle** rather than clamping at zero
+or going negative. A feed that is a second late with the new bar should show a countdown
+that keeps running, not a stalled `00:00:00`. With no readable interval the row reads
+`--:--:--` rather than vanishing, because a row that silently disappeared would look like
+the option had not taken effect. Hours are not capped at 24, so a daily bar counts down from
+`24:00:00` honestly.
+
+### The clock source
+
+Both readings are times of day, so neither can use the animation clock. They take an
+injected clock instead, defaulting to the system one:
+
+```ts
+chart.setAxisChromeOptions({ clock: () => exchangeTimeUtcSeconds() });
+```
+
+Pass the feed's clock to keep a delayed or replayed chart honest about what time its data
+thinks it is. A renderer that reached for `Date.now()` itself could serve neither that case
+nor a test that has to hold time still.
+
+## Axis label priority
+
+The price axis is a narrow strip that several things want to write in at once, and two tags
+on the same pixels read as mush. They are resolved by priority, highest first:
+
+| Priority | Label | Why it ranks there |
+|---|---|---|
+| 100 | Crosshair | The reading under the cursor. The user is pointing at it. |
+| 90 | Last price | Where the market is now. Nothing outranks it but the cursor. |
+| 70 | Price line | A level the user placed: an order, a stop, a target. It is theirs, and it is the one they are watching for a touch. |
+| 50 | Session level | A session high or low. Derived, but not reconstructible by eye. |
+| 40 | Previous close | Same class, and less often the reason the chart is open, so it yields to a live session extreme. |
+| 10 | Tick | The plain ladder. The one label a reader can interpolate from its neighbours, so it is the one to drop. |
+
+The resolve is greedy in priority order, so a high-priority label always survives and takes
+the lower-priority ones overlapping it down with it. Ties break on declaration order rather
+than arbitrarily, so two labels of equal rank resolve the same way on every frame instead of
+trading places and flickering. Suppressing a label frees nothing: the winner still owns its
+whole band.
+
+What this looks like in practice today: **the last-price tag reserves its band before the
+ladder is drawn**, so the tick it would have painted over is dropped instead of the two
+becoming illegible. Turning the countdown on makes the tag taller and can therefore cost one
+more tick, which is the honest trade for the second row. A pane with no last-price tag, or
+one whose tag falls outside the plot, draws every tick exactly as it always has.
+
+The gaps in the table are wide on purpose, so a host level can be slotted between two of
+these without the numbers being rewritten.
+
+## See also
+
+- [Settings & Menus](/docs/settings-and-menus) for the axis menu these levels hang off.
+- [Primitives & Plugins](/docs/primitives-and-plugins) for `PriceLine` and the primitive API.
+- [Timezones](/docs/timezones) for what the session clock reads and what the calendar
+  fallback uses.
+- [Scales & Panes](/docs/scales-and-panes) for the axes themselves.

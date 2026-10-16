@@ -1,0 +1,750 @@
+---
+title: Primitives & Plugins
+description: Markers, event badges, price lines, custom chart types, and the IPrimitive plugin API.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { STOCK_BARS_SOURCE } from '../../components/synthetic-market'
+import { Callout } from 'nextra/components'
+
+# Primitives & plugins
+
+Everything drawn on the chart that is not a series is a **primitive**: markers, event badges,
+price lines, profiles, and the whole trading layer. They all use one small interface, and so
+can you.
+
+## Markers & event badges
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 3600);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+
+const markers = series.createMarkers();
+markers.setMarkers([
+  { time: bars[30].time, position: 'belowBar', shape: 'arrowUp',   size: 'medium', color: '#26a69a', text: 'BUY' },
+  { time: bars[82].time, position: 'aboveBar', shape: 'arrowDown', size: 'medium', color: '#ef5350', text: 'SELL' },
+]);
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+Shapes are `arrowUp`, `arrowDown`, `circle`, `square`, `triangleUp`, `triangleDown`,
+`diamond`, `flag`, `cross`, `xcross`, `text`, and the two label plates `labelUp` / `labelDown`.
+Positions are `aboveBar`, `belowBar`, `inBar`, `atPrice`, and since 2.4.0 `paneTop` and
+`paneBottom`, which pin the glyph to the plot edge in a fixed row whatever the scale does.
+
+A **label plate** is a rounded box with a tail that points at the anchor price, for a signal
+with a name rather than a bare glyph. `labelUp` hangs its body below the anchor (tail
+pointing up), `labelDown` sits above it. Both require `text`, and both read best with
+`position: 'atPrice'` so the tail lands exactly on the level being called out. The text
+colour is derived automatically to contrast with the plate fill.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 120, 3600);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+
+const markers = series.createMarkers();
+markers.setMarkers([
+  { time: bars[30].time, position: 'atPrice', price: bars[30].low,  shape: 'labelUp',   size: 'small', color: '#2962ff', text: 'Buy' },
+  { time: bars[82].time, position: 'atPrice', price: bars[82].high, shape: 'labelDown', size: 'small', color: '#ef5350', text: 'Sell' },
+]);
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Label plates: the tail points at the anchor price, the body clears it." />
+
+Markers that carry text above or below the bar, or on a pane edge, take **lanes**. A label
+is wider than a bar, so on a whipsaw the signals on neighbouring bars would land on each
+other: each one moves outward just past any earlier label on its side that it overlaps,
+and a label that overlaps nothing stays exactly where it was. A label moves at most five
+of its own heights, so where labels outnumber the room, as at a wide zoom, the rest
+overlap on their bars instead of stacking out of the pane. Labels hold their lanes while
+the chart pans. A mark at a price or in the bar keeps its place.
+
+<RunnableExample height={340} code={`${STOCK_BARS_SOURCE}
+const chart = lib.createChart(el);
+const bars = stockBars(1700000000, 160, 300, 1480, 17, 0.003);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+
+// A fast crossover on simulated prices whipsaws, so signals land on neighbouring bars.
+const mean = (i, n) => bars.slice(i - n + 1, i + 1).reduce((sum, bar) => sum + bar.close, 0) / n;
+const signals = [];
+for (let i = 5; i < bars.length; i++) {
+  const now = mean(i, 2) - mean(i, 5), before = mean(i - 1, 2) - mean(i - 1, 5);
+  if (now > 0 && before <= 0) signals.push({ time: bars[i].time, position: 'belowBar', shape: 'labelUp', size: 'small', color: '#2962ff', text: 'Buy' });
+  if (now < 0 && before >= 0) signals.push({ time: bars[i].time, position: 'aboveBar', shape: 'labelDown', size: 'small', color: '#ef5350', text: 'Sell' });
+}
+series.createMarkers().setMarkers(signals);
+// Headroom above and below the bars for labels stacked in outer lanes.
+chart.setPriceScaleOptions({ marginTop: 0.2, marginBottom: 0.2 });
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Simulated prices. Crossover signals on neighbouring bars take lanes instead of covering each other." />
+
+`drawLabel(ctx, up, cx, anchorY, text, color, fontPx)` is exported if you want the same
+plate inside a custom primitive. Coordinates are bitmap px. Multiply media px by `dpr`
+first.
+
+Corporate-action badges (earnings / dividend / split) attach at the chart level:
+
+```ts
+chart.addEventMarkers().setEvents([{ time, type: 'earnings', label: 'E' }]);
+```
+
+### `EventMarkers`
+
+`EventMarkers` renders circular badges near the bottom of the plot. Each element in the array
+passed to `setEvents` has this shape:
+
+```ts
+interface ChartEvent {
+  time:   number;  // UTCSeconds bar time
+  type:   'earnings' | 'dividend' | 'split' | 'news' | string;
+  label:  string;  // text inside the badge (first two characters are shown)
+  color?: string;  // overrides the built-in type color
+  id?:    string;  // returned as externalId by hitTest for click routing
+}
+```
+
+Built-in type colors: `earnings` -> `#f0a020`, `dividend` -> `#26a69a`, `split` -> `#4f8cff`,
+`news` -> `#9aa0b4`. An unknown `type` string falls back to `#9aa0b4`. Providing `color`
+overrides the default for that individual event.
+
+When `id` is set on an event, `hitTest` returns that value as `externalId`, letting a click
+listener identify the specific event without inspecting canvas coordinates:
+
+```ts
+const em = chart.addEventMarkers();
+em.setEvents([
+  { time: bars[20].time, type: 'earnings', label: 'E', id: 'q2-earnings' },
+  { time: bars[50].time, type: 'dividend', label: 'D', id: 'div-jun' },
+]);
+```
+
+### `SeriesMarkers`
+
+`series.createMarkers()` is the standard entry point; it wires the internal series identifier
+automatically. `SeriesMarkers` is also exported for direct import, which is useful for unit
+testing primitives in isolation or for subclassing:
+
+```ts
+import { SeriesMarkers } from 'openalgo-charts';
+```
+
+The key method on any `SeriesMarkers` instance is `setMarkers`, which replaces the full
+marker list and sorts it by time internally:
+
+```ts
+// signature
+setMarkers(markers: readonly SeriesMarker[]): void
+```
+
+Call it again with an updated array whenever signal state changes; it calls `requestUpdate()`
+on the host automatically.
+
+## Price lines
+
+```ts
+chart.addPriceLine({ price: 101.5, color: '#3b82f6', lineWidth: 2, dashed: false, id: 'vwap' });
+```
+
+<Callout type="info">
+For the *reference* levels a chart is read against, previous close, session high and low,
+extended hours, bid and ask, use `PriceLevels` rather than ten hand-managed price lines. It
+computes each level from the session in the viewport, keeps the line and its axis tag as one
+toggleable group, and reports which levels have no data so a host can grey their controls.
+See [Price Levels & Axis Chrome](/docs/price-levels).
+</Callout>
+
+### `PriceLine` direct construction
+
+`chart.addPriceLine(opts)` is a convenience wrapper. For live updates (such as a moving
+stop-loss or a real-time VWAP level), construct `PriceLine` directly, keep a reference, and
+mutate it without going through the chart API:
+
+```ts
+import { PriceLine } from 'openalgo-charts';
+
+const sl = new PriceLine({
+  id: 'stop-loss', price: 19750, color: '#ef5350',
+  lineWidth: 1, dashed: true,
+  badge: 'SL', qty: 100, cursor: 'ns-resize',
+});
+chart.addPrimitive(sl);
+
+// move the line and trigger a repaint
+sl.setPrice(19600);
+
+// update the info segment, e.g. live P&L
+sl.setLeftLabel('-150');
+
+// restyle in place -- e.g. a last-price line following the candle's direction
+sl.setOptions({ color: ltp >= bar.open ? '#26a69a' : '#ef5350' });
+```
+
+`setPrice(price: number)` moves the horizontal line and calls `requestUpdate()` on the host.
+`setLeftLabel(text: string)` updates the info segment of the pill group and repaints.
+`setDragGhost(price | null)` shows/clears a dimmed reference line while dragging.
+`setOptions(patch)` restyles in place (colour, width, dash, labels, badges) and repaints.
+`id` is not patchable: it is the handle the chart routes clicks and drags through, so
+swapping it under a live drag would strand the gesture.
+
+See [PriceLineOptions](/docs/types) for the full option set including `badge`, `qty`,
+`extentFromRight`, `closeButton`, and `label`.
+
+## Responsive legend rows
+
+`PaneLegend` keeps text, hover actions and pointer hit areas inside the plot.
+On narrow charts it shortens the title and omits whole readings, so a clipped
+number cannot look like a different price. Widening the chart restores the
+original fields.
+
+Set an optional `LegendValue.priority` to retain a useful reading before others:
+
+```ts
+legend.setValues([
+  { label: 'O', text: '120.00', field: 'ohlc' },
+  { label: 'C', text: '123.45', field: 'ohlc', priority: 10 },
+]);
+```
+
+Higher values win space; displayed readings keep their original order. Series
+readings default to 1 and status metadata ranks lower. Field switches still
+apply before fitting. Hover controls reserve space inside the row; when only
+some configured `actions` fit, the end of that list stays visible. Wide rows
+retain the same content as before.
+
+## Tables
+
+`ChartTable` is a grid pinned to a corner of a pane. Like the watermark and the pane
+legend it is screen-space: no time anchor, no part in autoscale, and a zoom leaves it
+where it was. Seasonality heatmaps, performance summaries and signal scoreboards are all
+the same shape, so they are all this primitive.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 140, 3600));
+
+const table = new lib.ChartTable({
+  position: 'top-right',
+  cellWidth: 'auto',
+  cellHeight: 20,
+  borderColor: 'rgba(255,255,255,0.08)',
+  background: 'rgba(0,0,0,0.35)',
+});
+table.setRows([
+  [{ text: 'Metric', bold: true }, { text: 'Value', bold: true }],
+  [{ text: 'Trend' }, { text: 'Up', bgColor: '#089981' }],
+  [{ text: 'Momentum' }, { text: 'Weak', bgColor: '#f23745' }],
+  [{ text: 'Bars' }, { text: '140' }],
+]);
+chart.addPrimitive(table);
+chart.timeScale.fitContent(140);
+return chart;`} />
+
+| Method | Description |
+|---|---|
+| `setRows(rows)` | Replace the grid. Rows may be ragged; each is drawn to its own length. |
+| `rows()` | Read the current rows back. |
+| `setOptions(patch)` | Merge option changes and request a repaint. |
+| `options()` | The resolved options. |
+
+Set `cellWidth: 'auto'` to fit each column to its widest cell, including padding
+and the font size actually drawn. Empty columns retain a 28 px minimum.
+With `fontSize: 'auto'`, width measurement uses an 11 px baseline unless the cell
+overrides its font. Text always clips to its own cell.
+
+Cells support `bold`, `italic`, `fontFamily` (a CSS font-family list), `fontSize`,
+horizontal `align`, and `verticalAlign: 'top' | 'middle' | 'bottom'`. Middle is
+the default. A newline in `text` creates another line; automatic widths measure
+the widest line, and automatic font sizing fits the whole text block. Fixed
+fonts also shrink to fit the available row height. The default font remains
+`system-ui, sans-serif`.
+
+Set `colSpan` or `rowSpan` on the top-left cell to merge a rectangle. Both default
+to one and must be positive safe integers. The rectangle must fit within the
+row count and the longest row's column count. Covered ordinary cells are ignored;
+overlapping explicit spans are rejected. `setRows` validates the entire grid before
+replacing it, so invalid spans leave the previous rows intact. A merged cell uses
+its anchor's text and appearance, with one clip over the combined area. Automatic
+widths distribute any extra width needed by merged text across its columns.
+
+`frameColor` adds a separate outer frame, with optional `frameWidth` in media pixels
+(default one). Cell borders continue to use `borderColor` and `borderWidth`.
+
+Add `tooltip` to a cell for plain-text hover details. Explicit newlines are kept,
+long lines wrap, and the tooltip stays inside the plot. A merged cell uses its
+anchor's tooltip; covered cells are ignored. Empty or omitted tooltips leave
+ordinary table rendering unchanged. Malformed nonstring tooltip values reject
+before `setRows` replaces the current table.
+
+The table's optional `id` remains its click ID across all cells. When it is absent,
+only tooltip cells have hit targets, with an opaque generated ID. Supply an `id`
+when handling table clicks. Tooltip state clears after content, layout or ownership
+changes and is omitted from SVG exports.
+
+```js
+table.setRows([
+  [{ text: 'Session', colSpan: 2, tooltip: 'Regular hours\nValues update with the newest bar' }, { text: '' }],
+  [{ text: 'Range' }, { text: '4.75', tooltip: 'Session high minus session low' }],
+]);
+```
+
+Fixed sizing uses `cellWidth` (a number, or an array for per-column widths)
+and `cellHeight`, in media px. Proportional: `widthPercent` and `heightPercent` stretch
+the grid to a share of the plot, preserving the column proportions declared in
+`cellWidth`, with `rowWeights` giving individual rows a larger or smaller share. Font size
+shrinks automatically rather than overflowing a stretched row that came out short.
+
+Set `id` to make the table hit-testable, and it reports through `chart.on('click')` like
+any other primitive.
+
+Indicators get at the same thing through the `table` hook rather than constructing one
+directly. See [indicators](/docs/indicators#tables).
+
+## Logo / brand watermark
+
+Version 2.1.9 adds a chart-owned OpenAlgo corner logo by default.
+Use `branding: false` when managing your own logo primitive. The optional background
+text watermark remains off by default. See [Branding and Watermarks](/docs/branding-and-watermarks)
+for shared settings, automatic symbol text and host customization.
+
+`LogoWatermark` stamps a small image in a corner of the plot. It draws on the canvas (so it
+is captured by `takeScreenshot()`), is source-agnostic (pass a `src` URL/data-URI or a
+preloaded `image`), and an optional `tint` recolors the opaque pixels so a single-color logo
+reads on any theme.
+
+### Chart furniture versus pane furniture
+
+`addPrimitive(p, paneIndex)` attaches to a pane, which is right for a price line or a
+band: it belongs to the thing it measures.
+
+A watermark, a corner clock or a brand mark does not. It belongs to the **chart**, and it
+should stay at the chart's edge as indicator panes come and go. Pass a placement instead of
+an index:
+
+```ts
+chart.addPrimitive(mark, { anchor: 'chart-bottom' })   // or 'chart-top', or 'primary-pane'
+```
+
+The engine re-homes it whenever a pane is added, removed, moved, maximized or collapsed.
+`'chart-bottom'` means the lowest open pane, since a collapsed pane draws only its legend
+row. Maximize is the case worth knowing about: it **hides** the other panes, so a mark
+pinned to the price pane does not merely sit in the wrong place, it disappears with the pane. An
+anchored primitive follows the visible edge.
+
+`'primary-pane'` is for furniture that describes the price, such as a symbol badge: it
+follows the price pane to whatever slot it is moved to (see
+[Moving the price pane](/docs/scales-and-panes#moving-the-price-pane-below-its-studies)), and
+the pane maximized over it while it is hidden. The chart's own background text and study
+count use it. A plain `addPrimitive(p)` with no second argument lands on the price pane
+too, and then moves with that pane like any pane primitive.
+
+Before this existed a host had to do it by hand, removing and re-adding the primitive on
+`chart.panes().length - 1` after anything that might have created a pane, and listening to
+`paneRemoved` and `paneMoved` to catch the rest. If you have that loop, delete it.
+
+<Callout type="info">
+`paneAdded` also exists now, emitted once per pane created and after the relayout, so a
+listener reads settled geometry. Use it if you keep your own chrome positioned; use the
+anchor if the engine can do it for you.
+</Callout>
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el, { branding: false });
+chart.addSeries('candlestick').setData(lib.generateBars(1700000000, 140, 3600));
+
+// colored badge, bottom-right (the default corner)
+chart.addPrimitive(new lib.LogoWatermark({
+  src: '/openalgo-charts/openalgo-logo.svg', height: 34, opacity: 0.9,
+}));
+
+// same logo tinted to a faint gray, top-left
+chart.addPrimitive(new lib.LogoWatermark({
+  src: '/openalgo-charts/openalgo-logo.svg', position: 'top-left',
+  height: 26, opacity: 0.5, tint: '#8b91a7',
+}));
+
+chart.timeScale.fitContent(140);
+return chart;`} caption="LogoWatermark: a colored badge and a tinted monochrome mark." />
+
+| Option | Default | Description |
+|---|---|---|
+| `src` / `image` | - | image URL / data URI, or a preloaded image / bitmap |
+| `position` | `bottom-right` | `top-left` / `top-right` / `bottom-left` / `bottom-right` / `center` |
+| `height` | `28` | logo height in px (width follows the source aspect) |
+| `margin` | `12` | gap from the plot edges in px |
+| `opacity` | `0.7` | 0..1 |
+| `tint` | - | recolor opaque pixels (e.g. a faint theme gray) |
+| `zOrder` | `top` | `bottom` / `normal` / `top` |
+| `label` | - | text revealed to the right of the mark on hover |
+| `labelColor` | theme text | colour of the **mark and label together** |
+| `fontSize` | `12` | label size in media px |
+| `background` | translucent theme bg | rounded plate behind the lockup; `'none'` to omit |
+| `borderColor` | theme axis line | plate border; `'none'` to omit |
+| `radius` | `6` | plate corner radius |
+| `padding` | `{ x: 7, y: 4 }` | plate padding in media px; a number pads both axes |
+| `revealSeconds` | `0.18` | reveal duration |
+| `href` | - | marks it clickable; the host opens `watermark.href()` |
+| `utmMedium` / `utmCampaign` | `oac-link` / `oac-chart` | attribution on the composed link |
+
+Swap or restyle it live with `watermark.setOptions({ ... })`.
+
+### A hover-revealed, clickable brand mark
+
+`label` turns the mark into a lockup: at rest only the mark shows, and hovering unrolls the
+wording to its right. The mark and the label always share one colour (whichever of `tint`
+or `labelColor` you set drives both), so the pair can never render in two unrelated shades.
+
+```ts
+const mark = new LogoWatermark({
+  src: '/openalgo-logo.svg', position: 'bottom-left', height: 26,
+  label: 'OpenAlgo Charts', labelColor: '#e4e8f4',
+  href: 'https://openalgo.in',
+});
+chart.addPrimitive(mark, 0);
+
+// A canvas cannot hold an anchor, so the mark reports the hit and you navigate.
+chart.subscribeClick((id) => {
+  if (id === 'watermark') window.open(mark.href(), '_blank', 'noopener,noreferrer');
+});
+```
+
+<Callout type="info">
+`href()` returns the URL with `utm_medium`, `utm_campaign` and a `utm_source` naming the
+page the chart is embedded in (host and path only, never the query string, which is the
+part most likely to carry something private). Pass an `href` that already has a query
+string to compose your own and skip that entirely.
+
+A mark with neither `label` nor `href` stays out of the hit path completely, so plain
+decoration cannot swallow clicks meant for the chart.
+</Callout>
+
+#### Sizing the resting plate
+
+`height` sizes the mark; `padding` sizes the plate around it. The two together set what the
+corner looks like at rest: a 40px mark with `padding: 2.5` sits in a 45x45 square, and the
+plate widens from there as the label unrolls.
+
+```ts
+new LogoWatermark({ src: '/mark.svg', height: 40, padding: 2.5, label: 'OpenAlgo Charts' });
+```
+
+<Callout type="warning">
+Supply the **symbol on its own**, cropped tight to a square `viewBox`. An app-icon asset
+(a full-bleed background plate with the mark inset and a wordmark beneath it) scales its own
+padding along with the mark, so raising `height` grows the empty space rather than the logo.
+Whatever `tint`/`labelColor` recolors, the whole opaque silhouette becomes one shade, so a
+background baked into the file becomes a solid block.
+</Callout>
+
+### `watermarkRect` placement helper
+
+`watermarkRect` is the pure placement function that `LogoWatermark` uses internally to compute
+the logo's top-left pixel offset. Call it directly inside a custom primitive that needs
+corner-aligned or centered layout at the same snap grid:
+
+```ts
+import { watermarkRect } from 'openalgo-charts';
+
+// inside a primitive's draw():
+const { x, y, w, h } = watermarkRect(
+  'bottom-left', 12, logoW, logoH, rc.plotWidth, rc.plotHeight,
+);
+ctx.drawImage(
+  img,
+  Math.round(x * rc.dpr), Math.round(y * rc.dpr),
+  Math.round(w * rc.dpr), Math.round(h * rc.dpr),
+);
+```
+
+Signature (all values in media/CSS pixels):
+
+```ts
+function watermarkRect(
+  position: WatermarkPosition,
+  margin:   number,
+  w:        number,
+  h:        number,
+  plotW:    number,
+  plotH:    number,
+): { x: number; y: number; w: number; h: number }
+```
+
+The returned `x`/`y` are unscaled media pixels. Multiply by `rc.dpr` before drawing to a
+device-pixel canvas.
+
+## A custom chart type
+
+Register a renderer once and use it like any built-in type:
+
+```ts
+import { registerChartType } from 'openalgo-charts';
+
+registerChartType('my-style', {
+  defaultStyle: { color: '#fff' },
+  isPriceSeries: true,
+  draw: (ctx, items, toY, barSpacing, dpr, style) => { /* paint to the canvas */ },
+  extents: (bar) => ({ min: bar.low, max: bar.high }),
+});
+
+chart.addSeries('my-style').setData(bars);
+```
+
+`items` holds the visible bars, each with its `x` in media px. The array and its
+objects belong to the pane until it draws the series again, when it rewrites them in
+place, so copy what you keep past the call. A custom renderer, even one registered
+under a built-in name, always receives every bar: the level of detail
+(`conflate`) reduces only the built-in renderers.
+
+A renderer that joins each bar to the next (a line, a step, a band) sets
+`connectsBars: true` (since 2.5.9). Its `items` then also hold the series' nearest bar
+beyond each edge of the view, so the segment that crosses the edge is drawn, and a
+sparse line (a level held for a session) still spans the plot with none of its bars in
+view. Those two items carry `edgeX`, the x of the plot edge they lie past: cut the
+segment there rather than stroke it out to a bar that can be millions of pixels away,
+and draw no marker of their own. A neighbour is the series' very next bar, value or
+not, so a gap at the edge (a whitespace item, or a study's NaN) breaks the line there
+as it does anywhere else.
+
+```ts
+registerChartType('my-line', {
+  defaultStyle: { color: '#fff' },
+  isPriceSeries: true,
+  connectsBars: true,
+  draw: (ctx, items, toY, barSpacing, dpr, style) => {
+    ctx.strokeStyle = style.color ?? '#fff';
+    ctx.beginPath();
+    let joined = false; // whether the previous point had a value
+    items.forEach(({ x, bar, edgeX }, i) => {
+      let px = x, py = toY(bar.close);
+      if (edgeX !== undefined && items.length > 1) {
+        // Cut the leg to a neighbour beyond the view a few pixels past the edge.
+        const inner = items[i === 0 ? 1 : items.length - 2];
+        const iy = toY(inner.bar.close);
+        const cut = i === 0 ? Math.max(x, edgeX - 8) : Math.min(x, edgeX + 8);
+        py = iy + (py - iy) * ((cut - inner.x) / (x - inner.x));
+        px = cut;
+      }
+      // A bar with no value breaks the line; so does a cut next to one.
+      if (!Number.isFinite(py)) { joined = false; return; }
+      if (joined) ctx.lineTo(px * dpr, py * dpr);
+      else ctx.moveTo(px * dpr, py * dpr);
+      joined = true;
+    });
+    ctx.stroke();
+  },
+  extents: (bar) => ({ min: bar.close, max: bar.close }),
+});
+```
+
+## A custom primitive
+
+Implement `IPrimitive` and attach it - the same contract markers, profiles, and the trade
+layer are built on:
+
+```ts
+import type { IPrimitive } from 'openalgo-charts';
+
+const watermark: IPrimitive = {
+  zOrder: () => 'bottom' as const,   // a method, not a property
+  draw(ctx, host) {
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.font = '700 48px system-ui';
+    ctx.fillText('OPENALGO', 24, host.plotHeight - 24);
+  },
+  // optional: hitTest(x, y, rc), hitBounds(rc), autoscaleInfo(), attached(host), detached()
+};
+
+chart.addPrimitive(watermark, 0);
+```
+
+<Callout type="info">
+Primitives receive a host with pixel/price/time conversions and the plot rectangle, so they
+can draw anything and participate in hit-testing and autoscale.
+</Callout>
+
+### Reading the bars
+
+`rc.bars()` returns the pane's primary price series when a primitive needs what price
+actually *did*, not just the scales: scoring a projection, shading bars that met a
+condition. It is lazy, so nothing pays for it unless called, and optional, so guard it:
+a synthetic render context (a test fake) may not supply one.
+
+```ts
+draw(ctx, rc) {
+  const bars = rc.bars?.();
+  if (bars === undefined || bars.length === 0) return;
+  const last = bars[bars.length - 1];
+  // ...
+}
+```
+
+The array is the live one the data layer holds. Treat it as read-only.
+
+### Painting between studies
+
+`zOrder()` picks a band: `'bottom'` behind every series, `'normal'` over them with the
+price lines and markers, `'top'` on the overlay canvas. A primitive can also paint inside
+the series band, directly above the price source or one study of its pane, with
+`chart.setPrimitiveStackAbove(primitive, entry)`. The entry is an id from
+`chart.seriesStack(paneIndex)`: `'source:primary'` or `'indicator:<instance id>'`.
+
+```ts
+chart.addPrimitive(shade, 0);
+// Over the candles, under every study drawn after them.
+chart.setPrimitiveStackAbove(shade, 'source:primary');
+// Back to its own band.
+chart.setPrimitiveStackAbove(shade, null);
+```
+
+It paints right after that entry's last series on the pane, and a renderer that batches
+series (the WebGL2 backend) flushes first, so the order holds on every backend. While the
+entry plots no series on that pane the primitive paints in its own `zOrder()` band. A
+placed primitive repaints with the base canvas whatever its `zOrder()`, and the pointer
+ranks it by where it paints: a primitive painted over the series (a `'normal'` or
+`'top'` one in its own band) takes the press wherever it answers, and a study painted
+over it takes the context menu. This is how the draw tier puts a drawing between
+studies; see [Draw order](/docs/drawing-tools#draw-order).
+The call returns false for a primitive that is on no pane.
+
+## Hit boxes
+
+A pointer move asks `hitTest` of every primitive on the pane unless the primitive says
+where it can answer. The optional `hitBounds(rc)` (2.5.8) returns that box, in the same
+plot-relative media px `hitTest` receives (edges inclusive, and a side may be infinite),
+or `null` when nothing of the primitive can be hit. The pane then asks `hitTest` only
+when the pointer is inside the box, so a pane carrying hundreds of annotations pays for
+the few near the pointer.
+
+```ts
+const GRAB = 4; // how far from the segment hitTest still answers, in media px
+
+const segment = {
+  zOrder: () => 'normal' as const,
+  draw(ctx, rc) { /* paint the segment from (t0, p0) to (t1, p1) */ },
+  hitTest(x, y, rc) { /* answer within GRAB px of the segment */ },
+  hitBounds(rc) {
+    const x0 = rc.timeScale.indexToX(rc.dataLayer.timeToIndexFloat(t0));
+    const x1 = rc.timeScale.indexToX(rc.dataLayer.timeToIndexFloat(t1));
+    const y0 = rc.priceScale.priceToY(p0);
+    const y1 = rc.priceScale.priceToY(p1);
+    const pad = GRAB + 0.5; // everything hitTest answers, rounding included
+    return {
+      left: Math.min(x0, x1) - pad, top: Math.min(y0, y1) - pad,
+      right: Math.max(x0, x1) + pad, bottom: Math.max(y0, y1) + pad,
+    };
+  },
+};
+```
+
+A primitive that declares a box promises:
+
+- **The box holds every point `hitTest` can answer.** A point outside it is never
+  asked, so a box that is too tight loses hits. A NaN edge makes the pane ask anyway.
+- **It changes only with what the pane follows**: the time scale and the bars' times,
+  the pane's price scales, size and axes, the pixel ratio, hover and drag, the theme
+  and the session calendar, or the primitive's own state, announced through
+  `host.requestUpdate()`. The pane keeps the box until one of those changes. A box that
+  depends on anything else, bar prices say, must request an update when that changes,
+  or leave the hook out.
+- **It comes from the same geometry `hitTest` uses**, `rc` or what the last `draw`
+  recorded. A box asked for between a change and the frame that paints it is asked for
+  again once that frame is painted.
+- **`hitTest` is free of side effects.** The pane may skip it, outside the box and also
+  after an exact hit (`distance: 0`) among the primitives painted in front, which
+  nothing after it can outrank.
+
+A primitive that declares `hitBounds` is attached with a host object that wraps the
+chart's, so the pane hears its `requestUpdate`; do not compare that host with another
+by identity. The built-in primitives declare no box yet, so they are asked on every move
+as before. The draw tier's layers keep a box per drawing of their own instead: the pane
+asks a layer on every move, and the layer asks only the drawings whose box the pointer
+is in, 4.5 of 500 trend lines per move in `node scripts/bench-pane.mjs`. A host driving
+a `DrawingLayer` itself hands a drawing edited in place over again with `setDrawings`,
+as the controller does, for a hover to see where it now is.
+
+## `bestHit` helper
+
+When a pane contains several independent primitives that each implement `hitTest`, the chart
+collects all their results and calls `bestHit` to pick the winner. The rule is: smallest
+`distance` wins; among equal distances the highest `zOrder` wins (`top` > `normal` > `bottom`).
+
+Use it directly inside a composite primitive that delegates hit-testing to multiple sub-objects:
+
+```ts
+import { bestHit } from 'openalgo-charts';
+import type { PrimitiveHit, PrimitiveRenderContext } from 'openalgo-charts';
+
+const composite = {
+  zOrder: () => 'normal' as const,
+  draw(ctx: CanvasRenderingContext2D, rc: PrimitiveRenderContext) { /* ... */ },
+  hitTest(x: number, y: number, rc: PrimitiveRenderContext): PrimitiveHit | null {
+    return bestHit([
+      lineA.hitTest(x, y, rc),
+      lineB.hitTest(x, y, rc),
+      markerLayer.hitTest(x, y, rc),
+    ]);
+  },
+};
+```
+
+Signature:
+
+```ts
+function bestHit(hits: readonly (PrimitiveHit | null)[]): PrimitiveHit | null
+```
+
+`null` entries in the input array are skipped. Returns `null` if every entry is `null`.
+
+A primitive that answers for others (the draw tier's front layer answers for the
+layers under it) sets `paintedBy` on a hit to the primitive that painted it. Where
+that hit and a series lie under a right-click, the chart compares where each paints
+and gives the context menu to the one on top. A hit without `paintedBy` takes the
+menu over any series, as it always did.
+
+Composite primitives may return an optional `hoverKey` to distinguish regions
+that share an `externalId`. The chart forwards the key in `PrimitiveRenderContext`
+and repaints when it changes; click IDs and public `hover` event IDs remain the
+external ID. Existing primitives can omit it. SVG exports clear transient hover
+IDs and keys.
+
+## `InvalidationLevel`
+
+`InvalidationLevel` is a `const` object (not a TypeScript `enum`) that describes how much of a
+pane needs repainting. The chart uses it inside `InvalidateMask` to coalesce multiple
+invalidation requests per animation frame into the minimum necessary work:
+
+```ts
+const InvalidationLevel = {
+  None:   0,  // nothing to do
+  Cursor: 1,  // repaint only the overlay canvas (crosshair, hover, dragging primitives)
+  Light:  2,  // repaint the base canvas at the current scales
+  Full:   3,  // recompute scales and ticks, then repaint everything
+} as const;
+```
+
+<Callout type="info">
+`host.requestUpdate()` takes no arguments. Calling it signals the chart to schedule the next
+animation frame; the chart decides the repaint scope internally via its `InvalidateMask`.
+`InvalidationLevel` values are exported for advanced use cases such as constructing a custom
+`InvalidateMask`, reading `PaneInvalidation.level` to inspect what a prior frame coalesced, or
+passing constants to internal helpers that accept a level directly.
+</Callout>
+
+A single named import gives you both the value object and the companion type:
+
+```ts
+import { InvalidationLevel } from 'openalgo-charts';
+import type { InvalidationLevel as Level } from 'openalgo-charts';
+
+// compare numeric levels returned by PaneInvalidation.level
+if (paneInval.level >= InvalidationLevel.Full) {
+  console.log('full repaint scheduled');
+}
+
+// type annotation for helpers that receive a level
+function logLevel(level: Level): void {
+  const names: Record<Level, string> = { 0: 'None', 1: 'Cursor', 2: 'Light', 3: 'Full' };
+  console.log(names[level]);
+}
+```
