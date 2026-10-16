@@ -208,11 +208,19 @@ describe('SymbolSearchDialog', () => {
     expect(picked).toHaveLength(0)
   })
 
-  it('assigns EQ to cash equities ending in CE/PE and preserves badges on derivatives', async () => {
+  it('reads CE, PE and FUT from the symbol only where OpenAlgo symbology puts them (#2136)', async () => {
     const TEST_ROWS: SearchRow[] = [
-      { symbol: 'RELIANCECE', exchange: 'NSE', name: 'RELIANCE' },
-      { symbol: 'NIFTYOPTCE', exchange: 'NFO', name: 'NIFTY' },
-      { symbol: 'NIFTYOPTFUT', exchange: 'NFO', name: 'NIFTY' },
+      // Cash: plain names that end in CE by chance.
+      { symbol: 'ACE', exchange: 'NSE', name: 'ACTION CONST EQ', instrumenttype: 'EQ' },
+      { symbol: 'BAJFINANCE', exchange: 'BSE', name: 'BAJAJ FINANCE', instrumenttype: 'EQ' },
+      // F&O, currency and commodity contracts.
+      { symbol: 'NIFTY28MAR2420800CE', exchange: 'NFO', name: 'NIFTY' },
+      { symbol: 'SENSEX24APR24FUT', exchange: 'BFO', name: 'SENSEX' },
+      { symbol: 'USDINR19APR2482PE', exchange: 'CDS', name: 'USDINR' },
+      { symbol: 'CRUDEOILM20MAY24FUT', exchange: 'MCX', name: 'CRUDEOILM' },
+      // Crypto reuses the same forms; the venue's own types must not leak out.
+      { symbol: 'BTCUSDFUT', exchange: 'CRYPTO', name: 'BTCUSD', instrumenttype: 'PERPFUT' },
+      { symbol: 'BTC28FEB2562000CE', exchange: 'CRYPTO', name: 'BTC', instrumenttype: 'TCE' },
     ]
     render(
       <SymbolSearchDialog
@@ -224,8 +232,8 @@ describe('SymbolSearchDialog', () => {
     )
 
     const box = await focusedBox()
-    await userEvent.type(box, 'R')
-    await waitFor(() => expect(screen.getByText('RELIANCECE')).toBeInTheDocument())
+    await userEvent.type(box, 'A')
+    await waitFor(() => expect(screen.getByText('BAJFINANCE')).toBeInTheDocument())
 
     const getBadge = (symbol: string) => {
       const row = Array.from(document.querySelectorAll('button[data-idx]')).find(
@@ -234,9 +242,14 @@ describe('SymbolSearchDialog', () => {
       return row?.querySelector('span:nth-child(3) > span:first-child')?.textContent
     }
 
-    expect(getBadge('RELIANCECE')).toBe('EQ')
-    expect(getBadge('NIFTYOPTCE')).toBe('CE')
-    expect(getBadge('NIFTYOPTFUT')).toBe('FUT')
+    expect(getBadge('ACE')).toBe('EQ')
+    expect(getBadge('BAJFINANCE')).toBe('EQ')
+    expect(getBadge('NIFTY28MAR2420800CE')).toBe('CE')
+    expect(getBadge('SENSEX24APR24FUT')).toBe('FUT')
+    expect(getBadge('USDINR19APR2482PE')).toBe('PE')
+    expect(getBadge('CRUDEOILM20MAY24FUT')).toBe('FUT')
+    expect(getBadge('BTCUSDFUT')).toBe('FUT')
+    expect(getBadge('BTC28FEB2562000CE')).toBe('CE')
   })
 })
 
