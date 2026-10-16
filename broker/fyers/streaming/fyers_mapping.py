@@ -21,6 +21,26 @@ class FyersDataMapper:
         """Initialize the data mapper"""
         pass
 
+    @staticmethod
+    def _price_scale(fyers_data: dict[str, Any]) -> tuple[int, int]:
+        """
+        Return (divisor, precision) that turn an HSM integer price into rupees.
+
+        The official SDK (fyers-apiv3 FyersWebsocket/data_ws.py) decodes every
+        scrip, depth and index price as raw / (10 ** precision * multiplier).
+        precision is per instrument: 2 for equity, F&O and commodity, 4 for
+        currency (USDINR ticks in 0.0025), so a fixed /100 left CDS/BCD prices
+        100x too large (USDINR 9574.25 on the socket vs 95.7425 from REST).
+        The index feed carries neither field, so the defaults keep it at /100.
+        """
+        precision = fyers_data.get("precision", 2)
+        multiplier = fyers_data.get("multiplier", 1)
+        if not multiplier or multiplier <= 0:
+            # The SDK would divide by zero here; never let a bad field zero or
+            # skip the conversion.
+            multiplier = 1
+        return (10**precision) * multiplier, precision
+
     def map_to_openalgo_ltp(self, fyers_data: dict[str, Any]) -> dict[str, Any] | None:
         """
         Map Fyers data to OpenAlgo LTP format
@@ -52,27 +72,8 @@ class FyersDataMapper:
                 f"LTP Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}"
             )
 
-            # Apply multiplier and precision to LTP
-            ltp = fyers_data.get("ltp", 0)
-            multiplier = fyers_data.get("multiplier", 100)  # Default 100
-            precision = fyers_data.get("precision", 2)  # Default 2
-
-            # Apply segment-specific conversion
-            segment_divisor = 1
-            if exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
-                # These exchanges send prices in paisa/paise format. CDS/BCD
-                # were missing here: currency ticks passed through 100x too
-                # large, and the sandbox WS fill path booked USDINR at 9654.75
-                # instead of 96.5475 (caught by live QA on 2026-07-23; the
-                # REST-quote fill path masked it because REST returns rupees).
-                segment_divisor = 100
-
-            # Convert to actual price
-            if multiplier > 0:
-                ltp = ltp / multiplier / segment_divisor
-
-            # Round to precision
-            ltp = round(ltp, precision)
+            divisor, precision = self._price_scale(fyers_data)
+            ltp = round(fyers_data.get("ltp", 0) / divisor, precision)
 
             # Map to OpenAlgo LTP format
             openalgo_data = {
@@ -117,30 +118,12 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
 
-            # Get multiplier and precision from data
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
-
-            # Check if this is an index based on symbol or type
-            is_index = (
-                "-INDEX" in symbol
-                or "-INDEX" in symbol.upper()
-                or "INDEX" in symbol.upper()
-                or fyers_data.get("type") == "if"  # Index feed type in HSM
-            )
-
-            # Apply segment-specific conversion
-            segment_divisor = 1
-            if not is_index and exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
-                # CDS/BCD included: currency feed is paise-scaled like the
-                # others (verified empirically -- see LTP mapping above).
-                segment_divisor = 100
+            divisor, precision = self._price_scale(fyers_data)
 
             def convert_price(value):
-                if not value or multiplier <= 0:
+                if not value:
                     return 0.0
-                # Apply multiplier and segment conversion
-                return round(value / multiplier / segment_divisor, precision)
+                return round(value / divisor, precision)
 
             # Map to OpenAlgo Quote format
             openalgo_data = {
@@ -205,23 +188,11 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
 
-            # Apply multiplier and precision
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
-
-            # Apply segment-specific conversion based on exchange
-            segment_divisor = 1
-            if exchange in ("BSE", "MCX", "NSE", "NFO", "CDS", "BCD"):
-                # All paise-scaled segments, including currency (CDS/BCD --
-                # previously missing, which let 100x-scaled depth prices
-                # through to the sandbox fill path).
-                segment_divisor = 100
+            divisor, precision = self._price_scale(fyers_data)
 
             def convert_price(value):
-                if value and multiplier > 0:
-                    # First apply the multiplier conversion, then segment-specific conversion
-                    price = value / multiplier / segment_divisor
-                    return round(price, precision)
+                if value:
+                    return round(value / divisor, precision)
                 return 0.0
 
             # Build buy and sell arrays (matching other brokers' format)
@@ -371,15 +342,8 @@ class FyersDataMapper:
             if not raw_ltp:
                 return None
 
-            # Apply multiplier and precision conversion for index data
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
-
-            # For indices, apply proper price conversion
-            if multiplier > 0:
-                ltp = round(raw_ltp / multiplier, precision)
-            else:
-                ltp = raw_ltp
+            divisor, precision = self._price_scale(fyers_data)
+            ltp = round(raw_ltp / divisor, precision)
 
             # Create synthetic depth levels around LTP
             # For indices, we'll create small bid-ask spreads around the LTP
