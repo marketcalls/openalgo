@@ -25,6 +25,7 @@ from services.websocket_service import (
     unsubscribe_from_symbols,
 )
 from utils.logging import get_logger
+from utils.response import make_no_store_response
 from utils.session import check_session_validity
 
 # Initialize logger
@@ -180,7 +181,7 @@ def api_get_websocket_apikey():
             {"status": "error", "message": "No API key found. Please generate an API key first."}
         ), 404
 
-    return jsonify({"status": "success", "api_key": api_key}), 200
+    return make_no_store_response((jsonify({"status": "success", "api_key": api_key}), 200))
 
 
 @websocket_bp.route("/api/websocket/config", methods=["GET"])
