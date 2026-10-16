@@ -161,7 +161,7 @@ def write_once(*, prune: bool | None = None) -> int:
 
 def _run_loop() -> None:
     """Write a pass, sleep, repeat, until stop() is called."""
-    logger.info(
+    logger.debug(
         "Strategy checkpoint writer started (every %ss, keeping %s rows per run)",
         CHECKPOINT_INTERVAL_SEC,
         CHECKPOINT_KEEP,

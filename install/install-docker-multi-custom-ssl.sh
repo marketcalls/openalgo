@@ -51,7 +51,7 @@ generate_hex() {
 
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
@@ -69,31 +69,59 @@ sanitize_domain() {
     echo "$1" | tr '.' '-'
 }
 
+# Host ports an instance is already published on, read from the compose file
+# this installer generated ("127.0.0.1:<flask>:5000" / "127.0.0.1:<ws>:8765").
+# The repository ships its own docker-compose.yaml with "${FLASK_PORT:-5000}"
+# mappings; those never match, so a pristine checkout reports nothing.
+compose_ports() {
+    local file="$1" f w
+    [ -f "$file" ] || return 1
+    f=$(grep -oE '127\.0\.0\.1:[0-9]+:5000' "$file" | head -1 | cut -d: -f2)
+    w=$(grep -oE '127\.0\.0\.1:[0-9]+:8765' "$file" | head -1 | cut -d: -f2)
+    [ -n "$f" ] && [ -n "$w" ] && echo "$f $w"
+}
+
+# The same pair from an Nginx vhost this installer generated: its two upstream
+# blocks name the flask port first and the websocket port second.
+vhost_ports() {
+    local file="$1" ports
+    [ -f "$file" ] || return 1
+    ports=$(grep -oE 'server 127\.0\.0\.1:[0-9]+' "$file" | head -2 | cut -d: -f2 | tr '\n' ' ')
+    [ "$(echo "$ports" | wc -w)" -eq 2 ] && echo $ports
+}
+
 get_next_ports() {
-    # Scan existing docker-compose files to find highest used ports
+    # Highest ports used by any installed instance, plus one. Only compose
+    # files this installer generated count (see compose_ports), and only the
+    # ones directly inside an instance directory.
     local max_flask=$((START_FLASK_PORT - 1))
     local max_ws=$((START_WS_PORT - 1))
-    
-    # Check if base directory exists
+    local file ports f_port w_port
+
     if [ -d "$INSTALL_BASE" ]; then
-        # Find all docker-compose.yaml files
         while IFS= read -r file; do
-            # Extract ports using grep/sed (simple parsing)
-            local f_port=$(grep -A 5 "ports:" "$file" | grep ":5000" | cut -d: -f2)
-            local w_port=$(grep -A 5 "ports:" "$file" | grep ":8765" | cut -d: -f2)
-            
-            # Update max if higher
-            if [ ! -z "$f_port" ] && [ "$f_port" -gt "$max_flask" ]; then
-                max_flask=$f_port
-            fi
-            if [ ! -z "$w_port" ] && [ "$w_port" -gt "$max_ws" ]; then
-                max_ws=$w_port
-            fi
-        done < <(find "$INSTALL_BASE" -name "docker-compose.yaml")
+            ports=$(compose_ports "$file") || continue
+            f_port=${ports% *}
+            w_port=${ports#* }
+            [ "$f_port" -gt "$max_flask" ] && max_flask=$f_port
+            [ "$w_port" -gt "$max_ws" ] && max_ws=$w_port
+        done < <(find "$INSTALL_BASE" -mindepth 2 -maxdepth 2 -name docker-compose.yaml)
     fi
 
-    # Return next available pair
     echo "$((max_flask + 1)) $((max_ws + 1))"
+}
+
+# Ports for one instance. An instance that is already deployed keeps the ports
+# it has: allocating "highest + 1" on every update moved it to a fresh pair each
+# time, so the container, its compose file and its Nginx vhost drifted apart
+# whenever a run stopped part way. Order: the compose file, then the Nginx
+# vhost (which survives a compose file the repository overwrote), then new.
+resolve_instance_ports() {
+    local domain="$1" ports
+    ports=$(compose_ports "$INSTALL_BASE/$domain/docker-compose.yaml") && { echo "$ports"; return 0; }
+    ports=$(compose_ports "$(compose_snapshot_path "$domain")") && { echo "$ports"; return 0; }
+    ports=$(vhost_ports "$NGINX_SITES_AVAILABLE/$domain") && { echo "$ports"; return 0; }
+    get_next_ports
 }
 
 # An instance's reachability depends on two generated files agreeing: the port
@@ -103,11 +131,21 @@ get_next_ports() {
 # `docker compose up -d`, so the running container keeps the ports it already
 # had -- and without putting these files back, that reload would point the
 # domain at ports nothing is listening on, taking a working instance offline.
+# The compose snapshot lives outside the instance directory. That directory is
+# the Docker build context (`COPY . .`), and a snapshot inside it changes on
+# every run -- it is the previous run's compose file -- so the layer never
+# stayed cached and a run that changed nothing still rebuilt and recreated the
+# container.
+compose_snapshot_path() {
+    echo "$INSTALL_BASE/.deploy-snapshots/$1.docker-compose.yaml.pre-deploy"
+}
+
 snapshot_instance_config() {
     local instance_dir="$1" domain="$2"
     discard_instance_snapshot "$instance_dir" "$domain"
     if [ -f "$instance_dir/docker-compose.yaml" ]; then
-        cp -p "$instance_dir/docker-compose.yaml" "$instance_dir/docker-compose.yaml.pre-deploy"
+        mkdir -p "$INSTALL_BASE/.deploy-snapshots"
+        cp -p "$instance_dir/docker-compose.yaml" "$(compose_snapshot_path "$domain")"
     fi
     if [ -f "$NGINX_SITES_AVAILABLE/$domain" ]; then
         cp -p "$NGINX_SITES_AVAILABLE/$domain" "$NGINX_SITES_AVAILABLE/$domain.pre-deploy"
@@ -117,8 +155,8 @@ snapshot_instance_config() {
 
 restore_instance_config() {
     local instance_dir="$1" domain="$2"
-    if [ -f "$instance_dir/docker-compose.yaml.pre-deploy" ]; then
-        mv -f "$instance_dir/docker-compose.yaml.pre-deploy" "$instance_dir/docker-compose.yaml"
+    if [ -f "$(compose_snapshot_path "$domain")" ]; then
+        mv -f "$(compose_snapshot_path "$domain")" "$instance_dir/docker-compose.yaml"
     fi
     if [ -f "$NGINX_SITES_AVAILABLE/$domain.pre-deploy" ]; then
         mv -f "$NGINX_SITES_AVAILABLE/$domain.pre-deploy" "$NGINX_SITES_AVAILABLE/$domain"
@@ -132,9 +170,309 @@ restore_instance_config() {
 
 discard_instance_snapshot() {
     local instance_dir="$1" domain="$2"
-    rm -f "$instance_dir/docker-compose.yaml.pre-deploy" \
+    rm -f "$(compose_snapshot_path "$domain")" \
           "$NGINX_SITES_AVAILABLE/$domain.pre-deploy"
     return 0
+}
+
+# -----------------
+# Per-instance options: memory profile, web server, build network
+# -----------------
+
+# Memory profile. The numbers below used to be computed once per run from the
+# domains typed in that run. They are now chosen per instance:
+#   auto          the original sizing, from RAM divided by the instances in
+#                 this run (3 tiers; a strategy gets 256, 512 or 1024 MB)
+#   unrestricted  for hosts running many or large strategy scripts: each
+#                 strategy may use up to STRATEGY_MEM_LIMIT_MB (default 3072),
+#                 shm at its 1024 MB ceiling, threads from the core count
+#                 alone, and no container memory limit
+# STRATEGY_MEMORY_LIMIT_MB is an address-space cap (RLIMIT_AS) on each Python
+# strategy process, not on the container; the container itself has no memory
+# limit in either profile unless OPENALGO_CONTAINER_MEM_MB is set.
+DEFAULT_UNRESTRICTED_STRATEGY_MB=3072
+
+compute_resources() {
+    local profile="$1" total_ram="$2" cores="$3" instances="$4"
+    local per_instance cores_per
+    [ "$instances" -lt 1 ] && instances=1
+    per_instance=$((total_ram / instances))
+    RAM_PER_INSTANCE=$per_instance
+
+    SHM_SIZE_MB=$((per_instance / 4))
+    [ $SHM_SIZE_MB -lt 128 ] && SHM_SIZE_MB=128
+    [ $SHM_SIZE_MB -gt 1024 ] && SHM_SIZE_MB=1024
+
+    if [ "$profile" = "unrestricted" ]; then
+        SHM_SIZE_MB=1024
+        THREAD_LIMIT=$cores
+        [ $THREAD_LIMIT -lt 2 ] && THREAD_LIMIT=2
+        [ $THREAD_LIMIT -gt 4 ] && THREAD_LIMIT=4
+        STRATEGY_MEM_LIMIT=${STRATEGY_MEM_LIMIT_MB:-$DEFAULT_UNRESTRICTED_STRATEGY_MB}
+        return 0
+    fi
+
+    # auto: <2GB: 1 thread | 2-4GB: 2 threads | 4GB+: max(2, min(4, cores/instances))
+    if [ $per_instance -lt 2000 ]; then
+        THREAD_LIMIT=1
+        STRATEGY_MEM_LIMIT=256
+    elif [ $per_instance -lt 4000 ]; then
+        THREAD_LIMIT=2
+        STRATEGY_MEM_LIMIT=512
+    else
+        cores_per=$((cores / instances))
+        THREAD_LIMIT=$((cores_per < 2 ? 2 : cores_per))
+        [ $THREAD_LIMIT -gt 4 ] && THREAD_LIMIT=4
+        STRATEGY_MEM_LIMIT=1024
+    fi
+}
+
+valid_memory_profile() { [ "$1" = "auto" ] || [ "$1" = "unrestricted" ]; }
+valid_worker_class() { [ "$1" = "eventlet" ] || [ "$1" = "gthread" ]; }
+
+# The installer keeps its own per-instance choices out of .env, which the
+# application reads.
+INSTALLER_CONF_NAME=".installer.conf"
+
+read_instance_profile() {
+    local conf="$INSTALL_BASE/$1/$INSTALLER_CONF_NAME" value=""
+    [ -f "$conf" ] && value=$(sed -n 's/^MEMORY_PROFILE=//p' "$conf" | head -1)
+    valid_memory_profile "$value" && echo "$value" || echo "auto"
+}
+
+write_instance_profile() {
+    local conf="$1/$INSTALLER_CONF_NAME"
+    printf 'MEMORY_PROFILE=%s\n' "$2" > "$conf"
+}
+
+# The web server an instance's .env asks for. OpenAlgo runs eventlet unless
+# OPENALGO_WORKER_CLASS = 'gthread' is set (docs/gthread/README.md).
+read_worker_class() {
+    local env_file="$1" value=""
+    [ -f "$env_file" ] && value=$(grep -E "^[[:space:]]*OPENALGO_WORKER_CLASS[[:space:]]*=" "$env_file" | tail -1 | cut -d= -f2- | tr -d " '\"")
+    valid_worker_class "$value" && echo "$value" || echo "eventlet"
+}
+
+# Idempotent: drops any active OPENALGO_WORKER_CLASS line (the commented-out
+# one in .sample.env stays as documentation) and appends one. Written through
+# cat so the file keeps its owner and mode.
+set_env_value() {
+    local env_file="$1" key="$2" value="$3" tmp
+    tmp=$(mktemp)
+    grep -vE "^[[:space:]]*${key}[[:space:]]*=" "$env_file" > "$tmp"
+    printf "%s = '%s'\n" "$key" "$value" >> "$tmp"
+    cat "$tmp" > "$env_file"
+    rm -f "$tmp"
+}
+
+set_worker_class() {
+    set_env_value "$1" OPENALGO_WORKER_CLASS "$2"
+}
+
+# The diagnostics page reports the commit and branch the instance was built
+# from (issue #1388). .git/ is dockerignored, so the container cannot read
+# them itself; they are refreshed on every run from the checkout the image was
+# just built from.
+set_git_info() {
+    local instance_dir="$1" env_file="$2" branch commit
+    branch=$(cd "$instance_dir" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    commit=$(cd "$instance_dir" && git rev-parse --short HEAD 2>/dev/null || echo "")
+    set_env_value "$env_file" OPENALGO_GIT_BRANCH "$branch"
+    set_env_value "$env_file" OPENALGO_GIT_COMMIT "$commit"
+}
+
+# Switching restarts the container: strategies and market data pause for up to
+# a minute. The gthread guide says to switch after 23:30 IST and before 09:00.
+# OPENALGO_NOW_HHMM lets tests set the clock.
+in_trading_hours() {
+    local hhmm="${OPENALGO_NOW_HHMM:-$(TZ=Asia/Kolkata date +%H%M)}"
+    hhmm=$((10#$hhmm))
+    [ "$hhmm" -ge 900 ] && [ "$hhmm" -lt 2330 ]
+}
+
+# Ask which web server an instance should use. Echoes the choice. Reads the
+# answer from stdin; Enter keeps the current one. A change inside trading
+# hours needs an explicit yes (FORCE_WORKER_SWITCH=1 skips the question).
+choose_worker_class() {
+    local domain="$1" current="$2" mode="${3:-existing}" answer confirm
+    answer="${INSTALL_WORKER_CLASS:-}"
+    if [ -z "$answer" ]; then
+        read -r -p "Web server for $domain [eventlet/gthread] (current: $current, Enter keeps it): " answer </dev/stdin
+    fi
+    answer="${answer:-$current}"
+    if ! valid_worker_class "$answer"; then
+        log "Unknown web server '$answer'; keeping $current." "$YELLOW" >&2
+        echo "$current"; return 0
+    fi
+    if [ "$mode" != "new" ] && [ "$answer" != "$current" ] && in_trading_hours && [ "${FORCE_WORKER_SWITCH:-0}" != "1" ]; then
+        log "Switching $domain from $current to $answer restarts it; strategies and market data pause for up to a minute." "$YELLOW" >&2
+        log "The gthread guide asks for 23:30-09:00 IST. It is trading time now." "$YELLOW" >&2
+        read -r -p "Switch now anyway? (yes/no): " confirm </dev/stdin
+        if [ "$confirm" != "yes" ]; then
+            log "Keeping $current for $domain." "$YELLOW" >&2
+            echo "$current"; return 0
+        fi
+    fi
+    echo "$answer"
+}
+
+choose_memory_profile() {
+    local domain="$1" current="$2" answer
+    answer="${INSTALL_MEMORY_PROFILE:-}"
+    if [ -z "$answer" ]; then
+        read -r -p "Memory profile for $domain [auto/unrestricted] (current: $current, Enter keeps it): " answer </dev/stdin
+    fi
+    answer="${answer:-$current}"
+    if ! valid_memory_profile "$answer"; then
+        log "Unknown memory profile '$answer'; keeping $current." "$YELLOW" >&2
+        echo "$current"; return 0
+    fi
+    echo "$answer"
+}
+
+# Optional pin of files.pythonhosted.org to one CDN edge, written into the
+# build's extra_hosts. PyPI is served by Fastly; from some networks one edge is
+# fast and the others crawl (a 16 MB wheel at 20 KB/s timed the build out).
+#   PYPI_EDGE_IP=<address>  pin to that address
+#   PYPI_EDGE_IP=auto       time each known edge and pin the fastest, only when
+#                           the DNS answer is slow; otherwise do nothing
+# Unset leaves DNS alone. A pin is a workaround: remove it when routing heals.
+PYPI_EDGE_CANDIDATES="151.101.0.223 151.101.64.223 151.101.128.223 151.101.192.223"
+
+# Bytes per second for the first ~2 MB of one PyPI file through one address.
+# $2 empty means "use DNS as the machine does".
+probe_pypi_speed() {
+    local url="$1" ip="$2" resolve=()
+    [ -n "$ip" ] && resolve=(--resolve "files.pythonhosted.org:443:$ip")
+    curl -4 -s -o /dev/null -r 0-2000000 -m 10 -w '%{speed_download}' "${resolve[@]}" "$url" 2>/dev/null | cut -d. -f1
+}
+
+pypi_probe_url() {
+    curl -4 -s -m 15 https://pypi.org/pypi/uv/json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    urls = json.load(sys.stdin)['urls']
+    print(next(u['url'] for u in urls if u['filename'].endswith('.whl')))
+except Exception:
+    pass
+"
+}
+
+select_pypi_edge() {
+    local setting="${PYPI_EDGE_IP:-}" url base ip speed best_ip="" best=0
+    case "$setting" in
+        "") return 0 ;;
+        auto) ;;
+        *) echo "$setting"; return 0 ;;
+    esac
+    url=$(pypi_probe_url)
+    [ -n "$url" ] || return 0
+    base=$(probe_pypi_speed "$url" "")
+    # DNS is fine: leave it alone.
+    if [ "${base:-0}" -ge 500000 ]; then return 0; fi
+    for ip in $PYPI_EDGE_CANDIDATES; do
+        speed=$(probe_pypi_speed "$url" "$ip")
+        if [ "${speed:-0}" -gt "$best" ]; then best=$speed; best_ip=$ip; fi
+    done
+    # Pin only for a clear win, so a transient blip does not pin a bad edge.
+    if [ -n "$best_ip" ] && [ "$best" -ge $((${base:-0} * 5)) ] && [ "$best" -ge 500000 ]; then
+        echo "$best_ip"
+    fi
+}
+
+# Writes an instance's compose file from the variables set by the deploy loop:
+# PROJECT_NAME FLASK_PORT WS_PORT THREAD_LIMIT STRATEGY_MEM_LIMIT SHM_SIZE_MB,
+# plus the optional PYPI_EDGE_PIN and OPENALGO_CONTAINER_MEM_MB.
+write_instance_compose() {
+    local target="$1"
+    BUILD_EXTRA_HOSTS_YAML=""
+    if [ -n "${PYPI_EDGE_PIN:-}" ]; then
+        BUILD_EXTRA_HOSTS_YAML="      extra_hosts:
+        - \"files.pythonhosted.org:${PYPI_EDGE_PIN}\"
+"
+    fi
+    MEM_LIMIT_YAML=""
+    if [ -n "${OPENALGO_CONTAINER_MEM_MB:-}" ]; then
+        MEM_LIMIT_YAML="    mem_limit: ${OPENALGO_CONTAINER_MEM_MB}m
+"
+    fi
+    cat <<EOF > "$target"
+services:
+  openalgo:
+    image: ${PROJECT_NAME}:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+${BUILD_EXTRA_HOSTS_YAML}    container_name: ${PROJECT_NAME}-web
+    ports:
+      - "127.0.0.1:${FLASK_PORT}:5000"
+      - "127.0.0.1:${WS_PORT}:8765"
+    volumes:
+      - openalgo_db:/app/db
+      - openalgo_log:/app/log
+      - openalgo_strategies:/app/strategies
+      - openalgo_keys:/app/keys
+      - openalgo_tmp:/app/tmp
+      - ./.env:/app/.env
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+      - APP_MODE=standalone
+      - TZ=Asia/Kolkata
+      # Resource limits auto-calculated for multi-instance deployment
+      # See: https://github.com/marketcalls/openalgo/issues/822
+      - OPENBLAS_NUM_THREADS=${THREAD_LIMIT}
+      - OMP_NUM_THREADS=${THREAD_LIMIT}
+      - MKL_NUM_THREADS=${THREAD_LIMIT}
+      - NUMEXPR_NUM_THREADS=${THREAD_LIMIT}
+      - NUMBA_NUM_THREADS=${THREAD_LIMIT}
+      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEM_LIMIT}
+    shm_size: '${SHM_SIZE_MB}m'
+${MEM_LIMIT_YAML}    # Required for gthread: a stop gives open requests up to 30 s to finish and
+    # Docker kills the container after 10 s by default. Harmless on eventlet.
+    # See docs/gthread/README.md.
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  openalgo_db:
+    driver: local
+  openalgo_log:
+    driver: local
+  openalgo_strategies:
+    driver: local
+  openalgo_keys:
+    driver: local
+  openalgo_tmp:
+    driver: local
+EOF
+}
+
+# After `up`, confirm the container started on the web server the instance's
+# .env asks for. start.sh quietly falls back to eventlet when the image has no
+# launcher (an older image or fork), so a gthread request must be checked
+# against the log rather than assumed. Returns 0 when it matches, 1 when the
+# other server started, 2 when the log never said (container still starting).
+verify_worker_started() {
+    local instance_dir="$1" expected="$2" waited=0 limit="${3:-120}" logs
+    while [ "$waited" -le "$limit" ]; do
+        logs=$(cd "$instance_dir" && docker compose logs --no-log-prefix --tail 300 2>/dev/null)
+        if echo "$logs" | grep -q "Starting application on port .* with $expected"; then
+            return 0
+        fi
+        if echo "$logs" | grep -q "Starting application on port .* with [a-z]*"; then
+            return 1
+        fi
+        sleep "${VERIFY_POLL_SECONDS:-5}"
+        waited=$((waited + ${VERIFY_POLL_SECONDS:-5}))
+    done
+    return 2
 }
 
 # Tests source this script to exercise the helpers above in isolation:
@@ -289,6 +627,9 @@ declare -a CONF_MARKET_SECRETS
 declare -a CONF_SSL_CERTS
 declare -a CONF_SSL_KEYS
 declare -a UPDATE_MODE  # Track update vs fresh install per domain
+declare -a CONF_PROFILES      # Memory profile per instance: auto | unrestricted
+declare -a CONF_WORKERS       # Web server per instance: eventlet | gthread
+declare -a CONF_PREV_WORKERS  # Web server the instance's .env asked for before this run
 
 # Helper function to extract value from .env file
 extract_env_value() {
@@ -343,6 +684,12 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
                     fi
                     
                     log "Loaded: Broker=$EXISTING_BROKER" "$GREEN"
+
+                    # Per-instance options (Enter keeps what the instance has)
+                    PREV_WORKER=$(read_worker_class "$EXISTING_ENV")
+                    CONF_PREV_WORKERS+=("$PREV_WORKER")
+                    CONF_WORKERS+=("$(choose_worker_class "$DOMAIN" "$PREV_WORKER")")
+                    CONF_PROFILES+=("$(choose_memory_profile "$DOMAIN" "$(read_instance_profile "$DOMAIN")")")
                     continue  # Skip interactive prompts for this domain
                 else
                     log "Warning: No .env found, treating as fresh install" "$YELLOW"
@@ -473,6 +820,11 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
              CONF_SSL_KEYS+=("$KEY_PATH")
          fi
     fi
+
+    # Per-instance options for a new instance
+    CONF_PREV_WORKERS+=("eventlet")
+    CONF_WORKERS+=("$(choose_worker_class "$DOMAIN" "eventlet" new)")
+    CONF_PROFILES+=("$(choose_memory_profile "$DOMAIN" "auto")")
 done
 
 # -----------------
@@ -485,40 +837,14 @@ log "\n=== Starting Deployment ===" "$BLUE"
 TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
 CPU_CORES=$(nproc 2>/dev/null || echo 2)
 NUM_INSTANCES=${#CONF_DOMAINS[@]}
+[ "$NUM_INSTANCES" -lt 1 ] && NUM_INSTANCES=1
 
 # Calculate per-instance RAM (divide total by number of instances)
 RAM_PER_INSTANCE=$((TOTAL_RAM_MB / NUM_INSTANCES))
 log "System: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} cores, ${NUM_INSTANCES} instances" "$BLUE"
-log "Per-instance allocation: ~${RAM_PER_INSTANCE}MB" "$BLUE"
+log "Per-instance share (auto profile): ~${RAM_PER_INSTANCE}MB" "$BLUE"
 
-# shm_size: 25% of per-instance RAM (min 128MB, max 1GB for multi-instance)
-SHM_SIZE_MB=$((RAM_PER_INSTANCE / 4))
-[ $SHM_SIZE_MB -lt 128 ] && SHM_SIZE_MB=128
-[ $SHM_SIZE_MB -gt 1024 ] && SHM_SIZE_MB=1024
-
-# Thread limits based on per-instance RAM (conservative)
-# <2GB: 1 thread | 2-4GB: 2 threads | 4GB+: max(2, min(4, cores/instances))
-if [ $RAM_PER_INSTANCE -lt 2000 ]; then
-    THREAD_LIMIT=1
-elif [ $RAM_PER_INSTANCE -lt 4000 ]; then
-    THREAD_LIMIT=2
-else
-    CORES_PER_INSTANCE=$((CPU_CORES / NUM_INSTANCES))
-    THREAD_LIMIT=$((CORES_PER_INSTANCE < 2 ? 2 : CORES_PER_INSTANCE))
-    [ $THREAD_LIMIT -gt 4 ] && THREAD_LIMIT=4
-fi
-
-# Strategy memory limit based on per-instance RAM
-# <2GB: 256MB | 2-4GB: 512MB | 4GB+: 1024MB
-if [ $RAM_PER_INSTANCE -lt 2000 ]; then
-    STRATEGY_MEM_LIMIT=256
-elif [ $RAM_PER_INSTANCE -lt 4000 ]; then
-    STRATEGY_MEM_LIMIT=512
-else
-    STRATEGY_MEM_LIMIT=1024
-fi
-
-log "Config: shm=${SHM_SIZE_MB}MB, threads=${THREAD_LIMIT}, strategy_mem=${STRATEGY_MEM_LIMIT}MB" "$BLUE"
+# Resource limits are chosen per instance (memory profile) inside the loop below.
 
 # Base Dir
 mkdir -p "$INSTALL_BASE"
@@ -764,6 +1090,12 @@ fi
 # not abort the others, and so the final banner can tell the truth.
 FAILED_DOMAINS=()
 
+# Optional pin of the PyPI download host to a fast CDN edge (PYPI_EDGE_IP).
+PYPI_EDGE_PIN=$(select_pypi_edge)
+if [ -n "$PYPI_EDGE_PIN" ]; then
+    log "PyPI downloads pinned to edge $PYPI_EDGE_PIN for this build (PYPI_EDGE_IP)." "$YELLOW"
+fi
+
 for i in "${!CONF_DOMAINS[@]}"; do
     DOMAIN="${CONF_DOMAINS[$i]}"
     BROKER="${CONF_BROKERS[$i]}"
@@ -778,13 +1110,23 @@ for i in "${!CONF_DOMAINS[@]}"; do
 
     # 1. Allocation
     INSTANCE_DIR="$INSTALL_BASE/$DOMAIN"
-    PORTS=($(get_next_ports))
+    PORTS=($(resolve_instance_ports "$DOMAIN"))
     FLASK_PORT=${PORTS[0]}
     WS_PORT=${PORTS[1]}
     SANITIZED_NAME=$(sanitize_domain "$DOMAIN")
     PROJECT_NAME="openalgo-${SANITIZED_NAME}"
 
+    PROFILE="${CONF_PROFILES[$i]:-auto}"
+    WORKER="${CONF_WORKERS[$i]:-eventlet}"
+    PREV_WORKER="${CONF_PREV_WORKERS[$i]:-eventlet}"
+    compute_resources "$PROFILE" "$TOTAL_RAM_MB" "$CPU_CORES" "$NUM_INSTANCES"
+
     log " -> Ports: Flask=$FLASK_PORT, WS=$WS_PORT" "$GREEN"
+    log " -> Memory profile: $PROFILE (strategy cap ${STRATEGY_MEM_LIMIT}MB, shm ${SHM_SIZE_MB}MB, ${THREAD_LIMIT} threads)" "$GREEN"
+    log " -> Web server: $WORKER" "$GREEN"
+    if [ "$WORKER" = "gthread" ] && [ "$RAM_PER_INSTANCE" -lt 2000 ]; then
+        log "    Note: gthread uses 64 request threads per instance; this host has about ${RAM_PER_INSTANCE}MB per instance." "$YELLOW"
+    fi
     log " -> Dir: $INSTANCE_DIR" "$GREEN"
 
     # 3. SSL Setup
@@ -826,6 +1168,12 @@ for i in "${!CONF_DOMAINS[@]}"; do
     chmod 600 "$SSL_DIR/privkey.pem"
     chmod 644 "$SSL_DIR/fullchain.pem"
     
+    # Snapshot the generated compose file and vhost BEFORE the repository sync:
+    # docker-compose.yaml is a tracked file, so `git reset --hard` below
+    # replaces the generated one with the repository's own, and a snapshot
+    # taken afterwards would "restore" the wrong file after a failed build.
+    snapshot_instance_config "$INSTANCE_DIR" "$DOMAIN"
+
     # 4. Clone/Update Repo
     if [ ! -d "$INSTANCE_DIR/.git" ]; then
         if [ -d "$INSTANCE_DIR" ]; then
@@ -902,13 +1250,8 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$PEPPER|g" "$ENV_FILE"
 
-        # Capture build-time git info for the diagnostics page (issue #1388).
-        # .git/ is dockerignored, so the running container has no .git/HEAD;
-        # surface the values via env from the cloned source instead.
-        GIT_BRANCH=$(cd "$INSTANCE_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-        GIT_COMMIT=$(cd "$INSTANCE_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "")
-        echo "OPENALGO_GIT_BRANCH = '${GIT_BRANCH}'" >> "$ENV_FILE"
-        echo "OPENALGO_GIT_COMMIT = '${GIT_COMMIT}'" >> "$ENV_FILE"
+        # OPENALGO_GIT_BRANCH / OPENALGO_GIT_COMMIT are written after the image
+        # builds, for new and updated instances alike (see set_git_info).
         # Each instance is published only on 127.0.0.1 with nginx in front;
         # trust the proxy's X-Forwarded-For / X-Real-IP.
         sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
@@ -943,63 +1286,11 @@ for i in "${!CONF_DOMAINS[@]}"; do
     fi
 
     # 6. Docker Compose
-    # Both files below are about to be regenerated, possibly onto new ports.
-    # Keep a copy so a failed build can hand the instance back its working
-    # routing before the shared Nginx reload at the end of the run.
-    snapshot_instance_config "$INSTANCE_DIR" "$DOMAIN"
-
-    cat <<EOF > "$INSTANCE_DIR/docker-compose.yaml"
-services:
-  openalgo:
-    image: ${PROJECT_NAME}:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ${PROJECT_NAME}-web
-    ports:
-      - "127.0.0.1:${FLASK_PORT}:5000"
-      - "127.0.0.1:${WS_PORT}:8765"
-    volumes:
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log
-      - openalgo_strategies:/app/strategies
-      - openalgo_keys:/app/keys
-      - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env
-    environment:
-      - FLASK_ENV=production
-      - FLASK_DEBUG=0
-      - APP_MODE=standalone
-      - TZ=Asia/Kolkata
-      # Resource limits auto-calculated for multi-instance deployment
-      # See: https://github.com/marketcalls/openalgo/issues/822
-      - OPENBLAS_NUM_THREADS=${THREAD_LIMIT}
-      - OMP_NUM_THREADS=${THREAD_LIMIT}
-      - MKL_NUM_THREADS=${THREAD_LIMIT}
-      - NUMEXPR_NUM_THREADS=${THREAD_LIMIT}
-      - NUMBA_NUM_THREADS=${THREAD_LIMIT}
-      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEM_LIMIT}
-    shm_size: '${SHM_SIZE_MB}m'
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-volumes:
-  openalgo_db:
-    driver: local
-  openalgo_log:
-    driver: local
-  openalgo_strategies:
-    driver: local
-  openalgo_keys:
-    driver: local
-  openalgo_tmp:
-    driver: local
-EOF
+    # Both files below are about to be regenerated. A copy was taken before the
+    # repository sync (see above) so a failed build can hand the instance back
+    # its working routing before the shared Nginx reload at the end of the run.
+    write_instance_compose "$INSTANCE_DIR/docker-compose.yaml"
+    write_instance_profile "$INSTANCE_DIR" "$PROFILE"
 
     # 7. Nginx Config
     cat <<EOF > "$NGINX_SITES_AVAILABLE/$DOMAIN"
@@ -1139,7 +1430,18 @@ EOF
     # so a container may exist -- stopped, or partially recreated -- on the new
     # ports. Reverting Nginx alone would guarantee a mismatch, and we cannot
     # claim the previous image is still serving.
-    if ! docker compose up -d; then
+    # The web server is written to .env only now that the image has built, so a
+    # failed build never leaves .env asking for a server the running image may
+    # not have. .env is bind-mounted, so changing it does not restart a running
+    # container; a change of web server therefore forces a recreate.
+    set_worker_class "$ENV_FILE" "$WORKER"
+    set_git_info "$INSTANCE_DIR" "$ENV_FILE"
+    UP_FLAGS=""
+    if [ "$WORKER" != "$PREV_WORKER" ]; then
+        UP_FLAGS="--force-recreate"
+        log "Web server changes from $PREV_WORKER to $WORKER: recreating the container." "$YELLOW"
+    fi
+    if ! docker compose up -d $UP_FLAGS; then
         discard_instance_snapshot "$INSTANCE_DIR" "$DOMAIN"
         log "Error: Container failed to start for $DOMAIN." "$RED"
         log "       Check: cd $INSTANCE_DIR && docker compose logs" "$RED"
@@ -1147,6 +1449,27 @@ EOF
         continue
     fi
     discard_instance_snapshot "$INSTANCE_DIR" "$DOMAIN"
+
+    # Confirm the container is on the web server .env asks for. Only when it
+    # matters: gthread requested, or the web server just changed.
+    if [ "$WORKER" = "gthread" ] || [ "$WORKER" != "$PREV_WORKER" ]; then
+        verify_worker_started "$INSTANCE_DIR" "$WORKER"
+        VERIFY_RC=$?
+    else
+        VERIFY_RC=skip
+    fi
+    case $VERIFY_RC in
+        skip) ;;
+        0) log "Verified: $DOMAIN is running on $WORKER." "$GREEN" ;;
+        1)
+            log "Error: $DOMAIN was asked to run $WORKER but started on the other web server." "$RED"
+            if [ "$WORKER" = "gthread" ]; then
+                log "       The image has no gthread launcher (an older OpenAlgo version or fork). Update the code and re-run." "$RED"
+            fi
+            FAILED_DOMAINS+=("$DOMAIN")
+            ;;
+        *) log "Warning: could not confirm the web server for $DOMAIN yet. Check: openalgo-ctl logs $DOMAIN" "$YELLOW" ;;
+    esac
     
 done
 
@@ -1191,6 +1514,25 @@ usage() {
     echo "  restart <domain>  - Restart specific instance"
     echo "  logs <domain>     - Show logs for instance"
     echo "  status <domain>   - Show status"
+    echo "  worker <domain> [gthread|eventlet]"
+    echo "                    - Show the web server, or switch it (recreates the container)"
+}
+
+# Web server an instance is actually running, from the gunicorn process in its
+# container. The start-up log line scrolls away on a container that has been up
+# for days; the command line does not.
+running_worker() {
+    local cid
+    cid=$(cd "$1" && docker compose ps -q 2>/dev/null | head -1)
+    [ -n "$cid" ] || return 0
+    docker top "$cid" -eo pid,args 2>/dev/null | grep -o -- '--worker-class [a-z]*' | head -1 | awk '{print $2}'
+}
+
+# Web server of an instance, as its .env asks for it
+worker_of() {
+    local v
+    v=$(grep -E "^[[:space:]]*OPENALGO_WORKER_CLASS[[:space:]]*=" "$1/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d " '\"")
+    echo "${v:-eventlet}"
 }
 
 if [ "$cmd" == "list" ]; then
@@ -1224,6 +1566,48 @@ case "$cmd" in
         ;;
     start)
         cd "$TARGET_DIR" && docker compose start
+        ;;
+    worker)
+        wanted=$3
+        asked=$(worker_of "$TARGET_DIR")
+        running=$(running_worker "$TARGET_DIR")
+        if [ -z "$wanted" ]; then
+            echo "$target: .env asks for $asked; running on ${running:-unknown}"
+            exit 0
+        fi
+        if [ "$wanted" != "gthread" ] && [ "$wanted" != "eventlet" ]; then
+            echo "Error: choose gthread or eventlet."
+            exit 1
+        fi
+        if [ "$wanted" == "$asked" ] && [ "$wanted" == "$running" ]; then
+            echo "$target already runs on $wanted."
+            exit 0
+        fi
+        if ! grep -q "stop_grace_period" "$TARGET_DIR/docker-compose.yaml"; then
+            echo "Error: this instance's compose file has no stop_grace_period (required for gthread)."
+            echo "       Re-run the installer for $target to regenerate it."
+            exit 1
+        fi
+        hhmm=$((10#${OPENALGO_NOW_HHMM:-$(TZ=Asia/Kolkata date +%H%M)}))
+        if [ "$hhmm" -ge 900 ] && [ "$hhmm" -lt 2330 ] && [ "$FORCE_WORKER_SWITCH" != "1" ]; then
+            echo "It is trading time (09:00-23:30 IST). Switching restarts $target; strategies and market data pause for up to a minute."
+            read -p "Switch anyway? (yes/no): " confirm
+            [ "$confirm" == "yes" ] || { echo "Cancelled."; exit 0; }
+        fi
+        tmp=$(mktemp)
+        grep -vE "^[[:space:]]*OPENALGO_WORKER_CLASS[[:space:]]*=" "$TARGET_DIR/.env" > "$tmp"
+        printf "OPENALGO_WORKER_CLASS = '%s'\n" "$wanted" >> "$tmp"
+        cat "$tmp" > "$TARGET_DIR/.env"
+        rm -f "$tmp"
+        cd "$TARGET_DIR" && docker compose up -d --force-recreate
+        echo "Waiting for $target to start..."
+        for _ in $(seq 1 24); do
+            now=$(running_worker "$TARGET_DIR")
+            [ -n "$now" ] && break
+            sleep 5
+        done
+        echo "$target is now running on ${now:-unknown} (asked for $wanted)."
+        [ "$now" == "$wanted" ] || exit 1
         ;;
     *)
         usage

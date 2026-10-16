@@ -1813,7 +1813,9 @@ def is_within_schedule_time(strategy_id: str) -> bool:
             except (ValueError, AttributeError):
                 user_end_ms = midnight_ms + 86_399_000
         else:
-            user_end_ms = midnight_ms + 86_399_000
+            # No stop time: the window runs to midnight, so a 24/7 crypto
+            # strategy is never outside it, not even in the last second.
+            user_end_ms = midnight_ms + 86_400_000
 
         # Exchange-aware: intersect with today's effective session window
         if exch in CRYPTO_EXCHANGES:
@@ -2230,9 +2232,12 @@ def new_strategy():
             exchange = normalize_exchange(request.form.get("exchange"))
             is_crypto = exchange in CRYPTO_EXCHANGES
 
-            # Get mandatory schedule fields with exchange-aware defaults
+            # Schedule fields with exchange-aware defaults. A crypto strategy
+            # with no stop time runs 24/7: no stop job is created, and the
+            # 00:00 start brings it back if the script ever exits. A 23:59
+            # default stopped it every night for a minute (issue #1557).
             default_start = "00:00" if is_crypto else "09:00"
-            default_stop = "23:59" if is_crypto else "16:00"
+            default_stop = None if is_crypto else "16:00"
             default_days = (
                 ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
                 if is_crypto
@@ -2240,7 +2245,7 @@ def new_strategy():
             )
 
             schedule_start = request.form.get("schedule_start") or default_start
-            schedule_stop = request.form.get("schedule_stop") or default_stop
+            schedule_stop = (request.form.get("schedule_stop") or "").strip() or default_stop
             schedule_days_json = request.form.get("schedule_days", json.dumps(default_days))
 
             # Parse schedule days from JSON
@@ -2495,12 +2500,27 @@ def schedule_strategy_route(strategy_id):
 
     data = request.json
     start_time = data.get("start_time")
-    stop_time = data.get("stop_time")
+    # Blank and null both mean no stop time, which only a crypto strategy
+    # should have: it then runs 24/7.
+    stop_time = data.get("stop_time") or None
     days = data.get("days", ["mon", "tue", "wed", "thu", "fri"])
     exchange_in = data.get("exchange")
 
     if not start_time:
         return jsonify({"status": "error", "message": "Start time is required"}), 400
+    target_exchange = normalize_exchange(exchange_in or config.get("exchange"))
+    if target_exchange in CRYPTO_EXCHANGES and stop_time and stop_time == start_time:
+        # A crypto window of no length: the start and the stop fire in the
+        # same minute, and the Start button is refused all day. Run 24/7 (no
+        # stop time) is what such a schedule was reaching for. Indian
+        # exchanges are left exactly as they were.
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Start and stop time cannot be the same. "
+                "For a crypto strategy that should never stop, choose Run 24/7.",
+            }
+        ), 400
 
     try:
         # Update exchange first if provided so smart-default behavior applies
@@ -2514,6 +2534,8 @@ def schedule_strategy_route(strategy_id):
         schedule_info = f"[{exch}] Scheduled at {start_time} IST"
         if stop_time:
             schedule_info += f" - {stop_time} IST"
+        elif exch in CRYPTO_EXCHANGES:
+            schedule_info += ", runs 24/7"
         return jsonify({"status": "success", "message": schedule_info})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -2887,6 +2909,14 @@ def get_schedule_status(config):
             next_days += "..."
         return "scheduled", f"Next: {next_days} at {schedule_start} IST"
 
+    # No stop time: a crypto strategy left to run around the clock
+    if not schedule_stop:
+        if schedule_start and current_time < schedule_start:
+            return "scheduled", f"Starts today at {schedule_start} IST, no stop time"
+        if len(set(schedule_days_lower)) == 7 and schedule_start in (None, "", "00:00"):
+            return "scheduled", "Runs 24/7"
+        return "scheduled", f"Active from {schedule_start} IST, no stop time"
+
     # Today is a scheduled day - check time
     if schedule_start and schedule_stop:
         if current_time < schedule_start:
@@ -2916,6 +2946,19 @@ STRATEGY_EXCHANGE_NAMES = [
 ]
 
 
+def _broker_type() -> str | None:
+    """The logged-in broker's `broker_type` from its plugin.json.
+
+    "crypto" or "IN_stock"; None when the plugin does not say, in which case
+    every exchange is offered as before.
+    """
+    from utils.plugin_loader import get_broker_capabilities
+
+    broker = session.get("broker")
+    capabilities = get_broker_capabilities(broker) if broker else None
+    return (capabilities or {}).get("broker_type")
+
+
 @python_strategy_bp.route("/api/exchanges")
 @check_session_validity
 def api_get_exchanges():
@@ -2931,11 +2974,24 @@ def api_get_exchanges():
         logger.exception(f"Error loading market timings for exchange list: {e}")
         timings = {}
 
-    exchanges = []
-    for code, description in STRATEGY_EXCHANGE_NAMES:
-        if code not in SUPPORTED_EXCHANGES:
-            continue
+    # Split by the broker's plugin.json `broker_type`: a crypto broker offers
+    # the crypto exchanges alone, and a stock broker keeps every Indian
+    # exchange it was offered before, less CRYPTO. Without that a Delta
+    # Exchange strategy defaulted to NSE and was paused on every NSE holiday
+    # and weekend. The Indian list is deliberately not narrowed further by
+    # `supported_exchanges`: that would take options away from stock brokers.
+    broker_type = _broker_type()
+    offered = [
+        (code, description)
+        for code, description in STRATEGY_EXCHANGE_NAMES
+        if code in SUPPORTED_EXCHANGES
+        and (broker_type is None or (code in CRYPTO_EXCHANGES) == (broker_type == "crypto"))
+    ]
+    if not offered:
+        offered = [(c, d) for c, d in STRATEGY_EXCHANGE_NAMES if c in SUPPORTED_EXCHANGES]
 
+    exchanges = []
+    for code, description in offered:
         is_crypto = code in CRYPTO_EXCHANGES
         timing = timings.get(code)
         start_time = None if is_crypto else (timing or {}).get("start_time")
@@ -2963,7 +3019,9 @@ def api_get_exchanges():
             }
         )
 
-    return jsonify({"exchanges": exchanges, "default": DEFAULT_STRATEGY_EXCHANGE})
+    codes = [item["value"] for item in exchanges]
+    default = DEFAULT_STRATEGY_EXCHANGE if DEFAULT_STRATEGY_EXCHANGE in codes else codes[0]
+    return jsonify({"exchanges": exchanges, "default": default})
 
 
 @python_strategy_bp.route("/api/strategies")

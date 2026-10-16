@@ -121,7 +121,7 @@ def start() -> bool:
         bus.subscribe("order.update", _on_order_update, name="StrategyOrderUpdates", critical=True)
         _started = True
         atexit.register(_shutdown_pool)
-        logger.info("Strategy module subscribed to order updates")
+        logger.debug("Strategy module subscribed to order updates")
         return True
 
 

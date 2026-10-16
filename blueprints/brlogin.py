@@ -999,6 +999,15 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "rupeezy":
+        # Rupeezy Vortex SSO redirects back with the auth code in `auth`
+        # (https://vortex.rupeezy.in/docs/latest/authentication/), which the
+        # generic branch below would drop.
+        code = request.args.get("auth") or request.args.get("code")
+        logger.debug(f"Rupeezy broker - auth code present: {bool(code)}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "hdfcsky":
         # HDFC Sky's docs describe the redirect only as carrying "a Request
         # Token" without naming the query parameter, so accept every plausible

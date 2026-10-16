@@ -37,6 +37,7 @@ BROKERS = [
     "paytm",
     "pocketful",
     "rmoney",
+    "rupeezy",
     "samco",
     "shoonya",
     "tradejini",

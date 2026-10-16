@@ -207,6 +207,50 @@ describe('SymbolSearchDialog', () => {
     expect(box.value).toBe('NIFTY100EW+NSE_INDEX:NIFTY100QUALTY30')
     expect(picked).toHaveLength(0)
   })
+
+  it('reads CE, PE and FUT from the symbol only where OpenAlgo symbology puts them (#2136)', async () => {
+    const TEST_ROWS: SearchRow[] = [
+      // Cash: plain names that end in CE by chance.
+      { symbol: 'ACE', exchange: 'NSE', name: 'ACTION CONST EQ', instrumenttype: 'EQ' },
+      { symbol: 'BAJFINANCE', exchange: 'BSE', name: 'BAJAJ FINANCE', instrumenttype: 'EQ' },
+      // F&O, currency and commodity contracts.
+      { symbol: 'NIFTY28MAR2420800CE', exchange: 'NFO', name: 'NIFTY' },
+      { symbol: 'SENSEX24APR24FUT', exchange: 'BFO', name: 'SENSEX' },
+      { symbol: 'USDINR19APR2482PE', exchange: 'CDS', name: 'USDINR' },
+      { symbol: 'CRUDEOILM20MAY24FUT', exchange: 'MCX', name: 'CRUDEOILM' },
+      // Crypto reuses the same forms; the venue's own types must not leak out.
+      { symbol: 'BTCUSDFUT', exchange: 'CRYPTO', name: 'BTCUSD', instrumenttype: 'PERPFUT' },
+      { symbol: 'BTC28FEB2562000CE', exchange: 'CRYPTO', name: 'BTC', instrumenttype: 'TCE' },
+    ]
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async () => TEST_ROWS}
+        onPick={() => {}}
+      />
+    )
+
+    const box = await focusedBox()
+    await userEvent.type(box, 'A')
+    await waitFor(() => expect(screen.getByText('BAJFINANCE')).toBeInTheDocument())
+
+    const getBadge = (symbol: string) => {
+      const row = Array.from(document.querySelectorAll('button[data-idx]')).find(
+        (btn) => btn.querySelector('span:first-child')?.textContent === symbol
+      )
+      return row?.querySelector('span:nth-child(3) > span:first-child')?.textContent
+    }
+
+    expect(getBadge('ACE')).toBe('EQ')
+    expect(getBadge('BAJFINANCE')).toBe('EQ')
+    expect(getBadge('NIFTY28MAR2420800CE')).toBe('CE')
+    expect(getBadge('SENSEX24APR24FUT')).toBe('FUT')
+    expect(getBadge('USDINR19APR2482PE')).toBe('PE')
+    expect(getBadge('CRUDEOILM20MAY24FUT')).toBe('FUT')
+    expect(getBadge('BTCUSDFUT')).toBe('FUT')
+    expect(getBadge('BTC28FEB2562000CE')).toBe('CE')
+  })
 })
 
 /**

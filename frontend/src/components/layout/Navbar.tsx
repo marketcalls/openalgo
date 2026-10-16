@@ -1,7 +1,13 @@
-import { BookOpen, Menu } from 'lucide-react'
-import { useState } from 'react'
+import { BookOpen, ChevronDown, Menu } from 'lucide-react'
+import { useCallback, useState, useSyncExternalStore } from 'react'
 import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Sheet,
   SheetContent,
@@ -14,6 +20,32 @@ import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'
 import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { AccountControls } from './AccountControls'
+
+// Desktop tab: full bar height so the current-page underline lands on the
+// navbar's bottom border. bg-primary is the foreground in Live and the violet
+// accent in Analyze.
+const TAB =
+  'relative flex items-center whitespace-nowrap px-2.5 xl:px-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+const TAB_IDLE = 'text-muted-foreground hover:text-foreground'
+const TAB_CURRENT =
+  'text-foreground after:absolute after:inset-x-2.5 xl:after:inset-x-3 after:-bottom-px after:h-0.5 after:rounded-t-full after:bg-primary'
+
+// Literal class names, so Tailwind sees them when it scans this file.
+const COLLAPSE = { lg: 'hidden lg:flex', xl: 'hidden xl:flex' } as const
+// Tailwind v4's lg and xl breakpoints.
+const BREAKPOINT_QUERY = { lg: '(min-width: 64rem)', xl: '(min-width: 80rem)' } as const
+
+function useMediaQuery(query: string) {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const mql = window.matchMedia(query)
+      mql.addEventListener('change', onChange)
+      return () => mql.removeEventListener('change', onChange)
+    },
+    [query]
+  )
+  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches)
+}
 
 interface NavbarProps {
   /**
@@ -37,6 +69,13 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
   const filteredProfileMenuItems = useProfileMenuItems()
 
   const isActive = (href: string) => isActiveRoute(location.pathname, href)
+
+  const shown = {
+    lg: useMediaQuery(BREAKPOINT_QUERY.lg),
+    xl: useMediaQuery(BREAKPOINT_QUERY.xl),
+  }
+  const overflowItems = navItems.filter((item) => item.collapseBelow && !shown[item.collapseBelow])
+  const moreActive = overflowItems.some((item) => isActive(item.href))
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -155,39 +194,30 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
           <span className="hidden font-semibold sm:inline-block">OpenAlgo</span>
         </Link>
 
-        {/* Desktop Navigation.
-            Icon-only between md and xl so all 9 items fit portrait monitors
-            and small laptops (768-1280px wide) without squashing or pushing
-            the profile menu off-screen; full labels from xl up (issue #1384).
+        {/* Desktop Navigation: text tabs, the current page underlined on the
+            bar's bottom edge.
 
-            From xl the labels appear but the bar does not grow to match: inside
-            Layout it shares the page `container`, which Tailwind caps at 1280px
-            for every viewport from 1280px to 1535px. Nine labelled items are
-            986px and the logo plus the right-hand controls take 394px, so the
-            row needed 1412px and had 1248px (issue #1507). Below 2xl the items
-            therefore use px-1.5 with tighter gaps, and the right-hand controls
-            keep their tighter gap and the short mode wording already used below
-            lg (203px instead of 255px). The padding is deliberately tighter
-            than it needs to be on the fonts we develop against: this row is
-            laid out with fixed spacing but rendered in whatever the OS resolves
-            for `system-ui`, and the widest common face (DejaVu Sans, a Linux
-            default) runs ~7% wider than macOS. px-2 left only 2px of slack
-            there; px-1.5 leaves ~38px. At 2xl and above nothing changes, and
-            e2e/navbar-fit.spec.ts asserts the row never overflows. */}
-        <nav className="hidden md:flex items-center gap-0.5 2xl:gap-1">
+            Labels only, no icons. Nine icon-and-label items were 986px and
+            overflowed twice (issues #1384 and #1507); before that the bar fell
+            back to bare icons below xl, which nobody could tell apart. Instead
+            each item names the breakpoint it needs (`collapseBelow` in
+            config/navigation.ts) and below that it moves under More: three
+            items from md, five from lg, all nine from xl, where More goes away.
+
+            Inside Layout the bar shares the page `container`, which Tailwind
+            caps at 1280px for every viewport from 1280px to 1535px, so xl is
+            the tightest case. The row is laid out with fixed spacing but
+            rendered in whatever the OS resolves for `system-ui`, and the widest
+            common face (DejaVu Sans, a Linux default) runs ~7% wider than
+            macOS; keep slack for it. e2e/navbar-fit.spec.ts asserts the row
+            never overflows. */}
+        <nav className="hidden md:flex self-stretch">
           {navItems.map((item) => {
             const active = isActive(item.href)
             const className = cn(
-              'flex items-center gap-1.5 2xl:gap-2 rounded-md px-1.5 2xl:px-3 py-2 text-sm font-medium transition-colors',
-              active
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-            )
-            const content = (
-              <>
-                <item.icon className="h-4 w-4 shrink-0" />
-                <span className="hidden xl:inline">{item.label}</span>
-              </>
+              TAB,
+              item.collapseBelow && COLLAPSE[item.collapseBelow],
+              active ? TAB_CURRENT : TAB_IDLE
             )
             // Flask-served pages (e.g. /trading) need a full page load,
             // not client-side routing.
@@ -195,24 +225,59 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
               <a
                 key={item.href}
                 href={item.href}
-                title={item.label}
                 className={className}
                 aria-current={active ? 'page' : undefined}
               >
-                {content}
+                {item.label}
               </a>
             ) : (
               <Link
                 key={item.href}
                 to={item.href}
-                title={item.label}
                 className={className}
                 aria-current={active ? 'page' : undefined}
               >
-                {content}
+                {item.label}
               </Link>
             )
           })}
+
+          {/* Hidden by CSS from xl, where every item is in the bar. Its list is
+              worked out from the same breakpoints in script, so the menu never
+              holds an entry that is also showing in the bar. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(TAB, 'gap-1 xl:hidden', moreActive ? TAB_CURRENT : TAB_IDLE)}
+              >
+                More
+                <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              {overflowItems.map((item) => {
+                const active = isActive(item.href)
+                const className = cn(
+                  'cursor-pointer',
+                  active && 'bg-accent font-medium text-accent-foreground'
+                )
+                return (
+                  <DropdownMenuItem key={item.href} asChild className={className}>
+                    {item.external ? (
+                      <a href={item.href} aria-current={active ? 'page' : undefined}>
+                        {item.label}
+                      </a>
+                    ) : (
+                      <Link to={item.href} aria-current={active ? 'page' : undefined}>
+                        {item.label}
+                      </Link>
+                    )}
+                  </DropdownMenuItem>
+                )
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </nav>
 
         {/* Right Side: shared with the charting terminal's toolbar row. */}

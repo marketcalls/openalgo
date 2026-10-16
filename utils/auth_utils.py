@@ -345,6 +345,42 @@ def _run_claimed_download(broker: str):
         _release_master_contract_download(broker)
 
 
+def try_start_cached_master_contract_load(broker: str) -> bool:
+    """Load today's saved master contract in the background unless a download runs.
+
+    The cached load resets the status row, marks it ready and loads the symbol
+    cache from the table. While a download runs, that table is being deleted
+    and rewritten and the download owns the row, so a login taking this path
+    then (a forced re-download in flight) reset the row, reported the contract
+    ready and cached a partial universe. It claims the broker like a download
+    does, so the two never overlap, and when refused it does nothing: the
+    running download marks the contract ready and loads the cache itself.
+
+    Returns:
+        True if the load was started, False if a download for ``broker`` was
+        already running (nothing is started and the status row is untouched).
+    """
+    if not _claim_master_contract_download(broker):
+        logger.info(f"Master contract download for {broker} running; not loading the saved copy")
+        return False
+    try:
+        init_broker_status(broker)
+        thread = Thread(target=_run_claimed_cached_load, args=(broker,), daemon=True)
+        thread.start()
+    except BaseException:
+        _release_master_contract_download(broker)
+        raise
+    return True
+
+
+def _run_claimed_cached_load(broker: str):
+    """Run a cached load whose claim the caller already holds, then release it."""
+    try:
+        return load_existing_master_contract(broker)
+    finally:
+        _release_master_contract_download(broker)
+
+
 def async_master_contract_download(broker):
     """
     Asynchronously download the master contract and emit a WebSocket event upon completion,
@@ -535,12 +571,10 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
             # download had already reported success.
             try_start_master_contract_download(broker, reset_status=True)
         else:
-            # Initialize master contract status for this broker, then use
-            # cached data - load existing master contract
-            init_broker_status(broker)
+            # Use cached data - load the existing master contract - unless a
+            # download for this broker is running, for the same reason as above.
             logger.info(f"Skipping download for {broker}: {reason}")
-            thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
-            thread.start()
+            try_start_cached_master_contract_load(broker)
 
         # Return JSON for AJAX requests (React), redirect for OAuth callbacks
         if is_ajax_request():
