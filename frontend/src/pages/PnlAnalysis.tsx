@@ -1,6 +1,6 @@
 // frontend/src/pages/PnlAnalysis.tsx
 /**
- * P&L Analysis (fork-only, SKYSHIELD_PATCHES.md): one page for the P&L report
+ * P&L Analysis: one page for the P&L report
  * and the P&L curve. One fetch, one set of filters, one model: the summary,
  * strategies, curve, calendar and the Day / Week / Month / Scrip views are all
  * computed from the same data, so they cannot disagree. The old /pnl-history

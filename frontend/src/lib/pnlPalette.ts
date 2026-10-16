@@ -1,6 +1,6 @@
 // frontend/src/lib/pnlPalette.ts
 /**
- * Colours for the P&L page's canvases (fork-only). A canvas cannot read CSS
+ * Colours for the P&L page's canvases. A canvas cannot read CSS
  * tokens, so the values are literal. Strategies keep a colour by position in
  * the sorted name list and never cycle; Other and Untagged are neutral.
  */

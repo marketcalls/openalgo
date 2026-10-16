@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlBreakdown.tsx
 /**
- * Day / Week / Month / Scrip views of the P&L page (fork-only), each as bars or
+ * Day / Week / Month / Scrip views of the P&L page, each as bars or
  * as a table, with a CSV export of the table. The time views sum the model's
  * daily series, so they follow the P&L type, the filters and the strategy
  * selection like everything else on the page.
@@ -383,7 +383,6 @@ export function PnlBreakdown({
                     <TableCell className="font-medium">{row.year}</TableCell>
                     {row.months.map((value, i) => (
                       <TableCell
-                        // biome-ignore lint/suspicious/noArrayIndexKey: the index is the month
                         key={i}
                         className={cn(
                           'text-right',

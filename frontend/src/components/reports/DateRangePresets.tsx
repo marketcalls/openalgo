@@ -1,6 +1,6 @@
 // frontend/src/components/reports/DateRangePresets.tsx
 /**
- * Shared quick date-range chip row (fork-only) for the P&L History and
+ * Shared quick date-range chip row for the P&L History and
  * Trade Book filter rows - see lib/dateRangePresets.ts for the actual
  * range math. Renders below the Start/End date inputs; picking a chip
  * fills both dates and fetches immediately (one click), and the active

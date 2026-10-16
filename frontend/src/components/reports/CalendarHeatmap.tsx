@@ -1,7 +1,6 @@
 // frontend/src/components/reports/CalendarHeatmap.tsx
 /**
- * Shared calendar heat map (fork-only, see openalgo's SKYSHIELD_PATCHES.md
- * and docs/design/56-pnl-history). Modeled on Zerodha Console's own two
+ * Shared calendar heat map. Modeled on Zerodha Console's own two
  * report heat maps: the P&L report's green/red-by-realized-P&L map and the
  * Tradebook report's blue-by-trade-count map. Both are the same layout
  * with a different value + color function, so the layout lives here once

@@ -1,6 +1,6 @@
 // frontend/src/components/reports/PnlFilterBar.tsx
 /**
- * One filter bar for the merged P&L page (fork-only): Segment, P&L type, date
+ * One filter bar for the merged P&L page: Segment, P&L type, date
  * range with presets, and Fetch. Segment and P&L type have no default.
  */
 import { RefreshCw } from 'lucide-react'

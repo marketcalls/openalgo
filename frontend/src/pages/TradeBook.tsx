@@ -68,7 +68,7 @@ interface SortConfig {
   direction: 'asc' | 'desc'
 }
 
-// Fork-only historical view (SKYSHIELD_PATCHES.md): mirrors
+// Historical view: mirrors
 // database/pnl_db.py's derive_segment()/_EXCHANGE_SEGMENT_MAP exactly.
 // Kept in sync by hand since the frontend has no import path into that
 // Python module; if that mapping changes, update this one too. Live-today
@@ -201,7 +201,7 @@ export default function TradeBook() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // P&L history CSV import (fork-only feature - SKYSHIELD_PATCHES.md)
+  // P&L history CSV import
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [importFiles, setImportFiles] = useState<File[]>([])
   const [isImporting, setIsImporting] = useState(false)
@@ -211,7 +211,7 @@ export default function TradeBook() {
     null
   )
 
-  // Historical view (fork-only - SKYSHIELD_PATCHES.md). Default date range
+  // Historical view. Default date range
   // is the last 7 days, matching the Zerodha Console reference this filter
   // row is modeled on - end date defaults to today, so isHistorical is true
   // by default and fetchTrades starts on the ledger-backed
@@ -226,17 +226,16 @@ export default function TradeBook() {
   // row, same as Segment's own exchange-derived fallback simply not
   // applying to strategy (there's no way to derive a strategy from
   // exchange). Options come from the account's own strategy book
-  // (database/strategy_book_db.py, SKYSHIELD_PATCHES.md), same source and
-  // pattern as PnlHistory.tsx's Strategy filter.
+  // (database/strategy_book_db.py).
   // Multi-select: empty array means every strategy.
   const [strategyFilters, setStrategyFilters] = useState<string[]>([])
   const [strategyOptions, setStrategyOptions] = useState<string[]>([])
-  // Manual strategy-tag fallback (SKYSHIELD_PATCHES.md) - which historical
+  // Manual strategy tag - which historical
   // row, if any, currently has its inline editor open.
   const [editingTradeId, setEditingTradeId] = useState<number | null>(null)
   const [editingValue, setEditingValue] = useState('')
   const [isSavingTag, setIsSavingTag] = useState(false)
-  // Fold the fills of one order into a single row (fork-only). Off by
+  // Fold the fills of one order into a single row. Off by
   // default so the table matches the broker's own tradebook until asked.
   const [groupByOrder, setGroupByOrder] = useState(false)
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
@@ -473,8 +472,7 @@ export default function TradeBook() {
     }
   }
 
-  // P&L history CSV import (fork-only feature, backfills the consolidated
-  // multi-day P&L ledger - see openalgo's SKYSHIELD_PATCHES.md). Distinct
+  // P&L history CSV import. Distinct
   // from exportToCSV above: this uploads a broker-exported tradebook CSV
   // rather than downloading the currently-filtered view.
   //
@@ -548,8 +546,7 @@ export default function TradeBook() {
     }
   }
 
-  // Manual strategy-tag fallback for one historical row (fork-only -
-  // SKYSHIELD_PATCHES.md) - for CSV-imported history and anything placed
+  // Manual strategy-tag fallback for one historical row - for CSV-imported history and anything placed
   // with no orderid to automatically join against the strategy book.
   // Updates local state in place rather than a full refetch, since the
   // PATCH already returns the saved value.
@@ -621,7 +618,7 @@ export default function TradeBook() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* P&L history CSV import (fork-only) */}
+          {/* P&L history CSV import */}
           <Dialog
             open={importDialogOpen}
             onOpenChange={(open) => {
@@ -715,7 +712,7 @@ export default function TradeBook() {
         </div>
       </div>
 
-      {/* Segment / Date range (fork-only - SKYSHIELD_PATCHES.md). Same layout
+      {/* Segment / Date range. Same layout
           as PnlHistory.tsx's fetch row. Symbol and Strategy live in the Filters
           popup above the table, since they only narrow the rows already
           fetched. Leaving the date range at today keeps this page on the

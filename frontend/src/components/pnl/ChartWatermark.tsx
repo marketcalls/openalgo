@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/ChartWatermark.tsx
 /**
- * The OpenAlgo watermark, as on the intraday P&L Tracker plot (fork-only):
+ * The OpenAlgo watermark, as on the intraday P&L Tracker plot:
  * faint, centred, and behind the plot. Put it first inside a `relative`
  * wrapper and give the plot itself `relative z-[1]`; the chart canvases are
  * transparent, so it shows through under the lines and bars.

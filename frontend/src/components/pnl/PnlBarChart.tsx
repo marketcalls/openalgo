@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlBarChart.tsx
 /**
- * Bars of a day / week / month P&L series (fork-only), green above zero and
+ * Bars of a day / week / month P&L series, green above zero and
  * red below, on the same chart library, theme and crosshair as the curve.
  */
 import { ColorType, CrosshairMode, createChart, HistogramSeries } from 'lightweight-charts'

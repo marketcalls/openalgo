@@ -1,6 +1,6 @@
 // frontend/src/hooks/usePnlFilters.ts
 /**
- * Shared filters for the merged P&L page (fork-only, SKYSHIELD_PATCHES.md):
+ * Shared filters for the merged P&L page:
  * segment, P&L type and the date range live in the URL query, so a
  * refresh or a shared link opens the same view. Segment and P&L type start
  * empty on purpose: nothing is fetched until both are chosen.

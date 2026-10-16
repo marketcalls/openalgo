@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlScripBars.tsx
 /**
- * Horizontal bars per symbol (fork-only): biggest winners at the top, biggest
+ * Horizontal bars per symbol: biggest winners at the top, biggest
  * losers at the bottom, realized as a solid bar and the open unrealized as a
  * lighter bar next to it. Plain HTML, no chart library: symbols are not a
  * time axis.

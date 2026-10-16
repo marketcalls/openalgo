@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlCurvePanel.tsx
 /**
- * The cumulative curve of the P&L page (fork-only): total, strategies and, for
+ * The cumulative curve of the P&L page: total, strategies and, for
  * the combined view, the realized and unrealized parts, with the drawdown in
  * its own pane. Line toggles on the plot, a table view, a PNG download. It
  * draws from the model only; resetting is driven by `resetSignal`.
@@ -109,7 +109,6 @@ export function PnlCurvePanel({
   }, [series, totalCum, model.strategyNames, model.coloured, model.splitLines, isDark, ink.total])
 
   // A reset from the page puts the scale back; the toggles stay as they are.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only the signal matters
   useEffect(() => {
     if (resetSignal === 0) return
     setTooltip(null)

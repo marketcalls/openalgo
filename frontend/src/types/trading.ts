@@ -25,6 +25,9 @@ export interface Order {
   timestamp: string
 }
 
+// One of database.pnl_db.VALID_SEGMENTS.
+export type Segment = 'equity' | 'fno' | 'currency' | 'commodity' | 'mutual_fund'
+
 export interface Trade {
   symbol: string
   exchange: string
@@ -35,6 +38,15 @@ export interface Trade {
   product: string
   orderid: string
   timestamp: string
+  // Broker per-fill trade ID; absent for brokers that do not map it.
+  tradeid?: string
+  // The fields below are only present on rows from GET /api/v1/pnl/trades.
+  // Segment stored on the row; the live tradebook falls back to deriving it from exchange.
+  segment?: string
+  // Ledger row id, the target of PATCH /api/v1/pnl/trades/<id>/strategy.
+  id?: number
+  // Strategy that placed the trade (strategy-book order tag or a manual tag).
+  strategy?: string | null
 }
 
 export interface Holding {

@@ -1,7 +1,7 @@
 // frontend/src/lib/pnlBuckets.ts
 /**
  * Day, week and month buckets of a daily P&L series, for the bar charts and
- * tables of the P&L page (fork-only, SKYSHIELD_PATCHES.md). Pure: dates are
+ * tables of the P&L page. Pure: dates are
  * YYYY-MM-DD strings and all calendar maths is done in UTC, so the result never
  * depends on the viewer's time zone.
  */

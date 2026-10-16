@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlSummary.tsx
 /**
- * The headline numbers of the P&L page (fork-only): Net P&L split into realized
+ * The headline numbers of the P&L page: Net P&L split into realized
  * and unrealized, then the statistics. Always above the tabs, and a function of
  * the model only, so they follow the filters and the P&L type.
  */

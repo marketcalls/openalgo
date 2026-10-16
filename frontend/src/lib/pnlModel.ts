@@ -1,7 +1,7 @@
 // frontend/src/lib/pnlModel.ts
 /**
  * Everything the P&L page shows, derived from one fetch and one set of filters
- * (fork-only, SKYSHIELD_PATCHES.md). Pure, so the summary, strategies, curve,
+ *. Pure, so the summary, strategies, curve,
  * calendar and the Day / Week / Month / Scrip views cannot disagree.
  *
  * Two sources feed it:

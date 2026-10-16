@@ -1,6 +1,6 @@
 // frontend/src/components/reports/PnlTableFiltersDialog.tsx
 /**
- * The Filters button of the merged P&L page (fork-only). It sits above the
+ * The Filters button of the merged P&L page. It sits above the
  * Report / Curve tabs and narrows both: symbol, strategy, exchange, product.
  */
 import { Settings2 } from 'lucide-react'

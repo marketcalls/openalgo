@@ -1,7 +1,7 @@
 // frontend/src/lib/dateRangePresets.ts
 /**
  * Shared quick date-range presets for the P&L History and Trade Book
- * filter rows (fork-only). Used via <DateRangePresets> below.
+ * filter rows. Used via <DateRangePresets> below.
  *
  * "Current week" is Monday of this week through today (not a rolling
  * 7-day window - that's the separate "Last 7 Days" preset). "Current

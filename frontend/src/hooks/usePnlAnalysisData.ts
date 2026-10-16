@@ -1,6 +1,6 @@
 // frontend/src/hooks/usePnlAnalysisData.ts
 /**
- * The one fetch behind the P&L page (fork-only): closed lots and open positions
+ * The one fetch behind the P&L page: closed lots and open positions
  * for every segment, plus the daily realized / unrealized curve for Equity.
  * It runs when Fetch is clicked, and again (debounced) when the symbol filter
  * changes, because the equity curve narrows by symbol on the server.

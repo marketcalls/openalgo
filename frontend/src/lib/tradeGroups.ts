@@ -1,6 +1,5 @@
 /**
- * Group tradebook fills by the order they belong to (fork-only, see
- * SKYSHIELD_PATCHES.md).
+ * Group tradebook fills by the order they belong to.
  *
  * One order is filled by the exchange in many pieces and the broker returns
  * every piece as its own trade with its own trade id. The Tradebook shows

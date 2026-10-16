@@ -32,9 +32,7 @@ export interface DepthLevel {
 }
 
 /**
- * Response shape of GET /pnl/history (fork-only feature, see
- * openalgo's SKYSHIELD_PATCHES.md). Mirrors
- * services/pnl_history_service.py::get_pnl_history's response exactly.
+ * Response shape of GET /pnl/history (services/pnl_history_service.py::get_pnl_history).
  */
 export interface PnlHistoryDailyRow {
   date: string
@@ -84,12 +82,7 @@ export interface PnlHistoryData {
   total_unrealized_pnl: number | null
 }
 
-/**
- * One tracked leg from database/strategy_book_db.py's already-running
- * strategy book (SKYSHIELD_PATCHES.md) - "holdings, per strategy",
- * already computed server-side, not derived from the pnl_trades ledger.
- * Mirrors services/pnl_history_service.py::get_strategy_legs exactly.
- */
+/** One leg of the strategy book (database/strategy_book_db.py), from GET /pnl/strategy-legs. */
 export interface StrategyLeg {
   strategy: string
   symbol: string
@@ -101,50 +94,6 @@ export interface StrategyLeg {
   today_realized_pnl: number
   updated_at: string | null
 }
-
-/** One strategy's share of a broker position or holding. `strategy` is "Unattributed" for the remainder no leg explains. */
-export interface StrategySlice {
-  strategy: string
-  quantity: number
-  average_price: number
-  /** Realized today by this strategy on this contract (positions only); a flat slice carries just this. */
-  today_realized_pnl: number
-  attributed: boolean
-}
-
-/** A broker row (position or holding) split into strategy slices (services/strategy_attribution.py). */
-export interface AttributedRow {
-  symbol: string
-  exchange: string
-  product: string
-  quantity: number
-  average_price: number
-  slices: StrategySlice[]
-  mismatch: boolean
-  mismatch_reason: string | null
-  /** For a flat row only: the one strategy the book still shows holding it, owner of any unexplained realized P&L. */
-  leftover_owner: string | null
-  /** Positions with m2m requested only: today's M2M (services/position_m2m.py). */
-  m2m_available?: boolean
-  m2m_reason?: string | null
-  /** M2M independent of the live price; m2m = m2m_fixed + quantity * LTP. */
-  m2m_fixed?: number | null
-  m2m?: number | null
-  overnight_quantity?: number | null
-  prev_close?: number | null
-  /** The broker's own P&L on this carried row is already the day's M2M (Kotak). */
-  pnl_equals_m2m?: boolean
-}
-
-export interface StrategyAttribution {
-  kind: 'positions' | 'holdings'
-  rows: AttributedRow[]
-  strategies: string[]
-  /** Set when M2M was requested but today's trades or previous closes could not be fetched. */
-  m2m_error?: string | null
-}
-
-export const UNATTRIBUTED = 'Unattributed'
 
 export interface DepthData {
   asks: DepthLevel[]
@@ -299,7 +248,7 @@ export const tradingApi = {
 
   /**
    * Backfill the consolidated multi-day P&L ledger from an exported broker
-   * tradebook CSV. Fork-only endpoint - see openalgo's SKYSHIELD_PATCHES.md.
+   * tradebook CSV.
    *
    * A FormData body, not JSON. apiClient sets a default `Content-Type:
    * application/json` header on the axios instance - that default headers
@@ -331,7 +280,7 @@ export const tradingApi = {
 
   /**
    * Realized P&L for a date range, from the consolidated multi-day P&L
-   * ledger (fork-only feature - see openalgo's SKYSHIELD_PATCHES.md).
+   * ledger .
    * FIFO-matched fresh on every call - nothing is precomputed server-side.
    */
   getPnlHistory: async (
@@ -357,8 +306,7 @@ export const tradingApi = {
   },
 
   /**
-   * Daily realized and unrealized P&L per strategy for equity (fork-only, see
-   * SKYSHIELD_PATCHES.md). basis "range_start" values lots carried into the
+   * Daily realized and unrealized P&L per strategy for equity. basis "range_start" values lots carried into the
    * range from the close before it; "actual_cost" uses the fill price.
    */
   getPnlCurve: async (
@@ -385,7 +333,7 @@ export const tradingApi = {
 
   /**
    * Raw fills for a date range from the consolidated multi-day P&L ledger
-   * (fork-only - see openalgo's SKYSHIELD_PATCHES.md) - no FIFO matching,
+   *  - no FIFO matching,
    * just the ledger rows. Backs TradeBook.tsx's historical view; the live
    * "today" view keeps using getTrades() above, since today's trades
    * aren't in the ledger yet (the daily capture job runs after close).
@@ -410,11 +358,8 @@ export const tradingApi = {
   },
 
   /**
-   * Every currently-tracked strategy leg for this account - a thin read
-   * over the already-running strategy book (database/strategy_book_db.py,
-   * SKYSHIELD_PATCHES.md). Not date-ranged: this is current open legs
-   * (quantity/average_price/cumulative realized P&L), not historical
-   * trades.
+   * Every currently tracked strategy leg for this account, from the strategy
+   * book (database/strategy_book_db.py). Not date-ranged.
    */
   getStrategyLegs: async (
     apiKey: string,
@@ -427,33 +372,9 @@ export const tradingApi = {
   },
 
   /**
-   * Live positions or holdings split into per-strategy slices (fork-only,
-   * services/strategy_attribution.py). Whatever no strategy leg explains comes
-   * back as an "Unattributed" slice. Fails (503) when the strategy book is
-   * unavailable - callers should treat that as "no strategy view", not "all
-   * unattributed".
-   */
-  getStrategyAttribution: async (
-    apiKey: string,
-    kind: 'positions' | 'holdings',
-    m2m = false
-  ): Promise<ApiResponse<StrategyAttribution>> => {
-    const response = await apiClient.post<ApiResponse<StrategyAttribution>>('/pnl/attribution', {
-      apikey: apiKey,
-      kind,
-      // M2M exists for positions only; the server ignores it for holdings, so it is
-      // not sent there.
-      m2m: kind === 'positions' && m2m,
-    })
-    return response.data
-  },
-
-  /**
-   * Manual strategy-tag fallback for one historical trade row (fork-only -
-   * SKYSHIELD_PATCHES.md) - for CSV-imported history and any trade with no
-   * orderid to automatically join against the strategy book. `tradeId` is
-   * the row's pnl_trades.id (Trade.id), only present on rows returned by
-   * getPnlTrades above.
+   * Tag one historical fill with a strategy, for CSV-imported history and fills
+   * with no order id to join against the strategy book. `tradeId` is the row's
+   * Trade.id, present on rows returned by getPnlTrades above.
    */
   setTradeStrategy: async (
     apiKey: string,

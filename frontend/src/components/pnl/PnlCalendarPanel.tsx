@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlCalendarPanel.tsx
 /**
- * The calendar heat map of the P&L page (fork-only): one square per day,
+ * The calendar heat map of the P&L page: one square per day,
  * coloured by that day's realized P&L for the current selection. Collapsible.
  */
 import { ChevronDown, ChevronRight } from 'lucide-react'

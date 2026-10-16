@@ -1,6 +1,6 @@
 // frontend/src/lib/pnlCurve.ts
 /**
- * Pure maths for the P&L Curve page (fork-only, see SKYSHIELD_PATCHES.md):
+ * Pure maths for the P&L Curve page:
  * daily and cumulative realized P&L, drawdown, summary statistics and the
  * monthly table, from the closed lots GET /api/v1/pnl/history returns. No I/O
  * and no React, so every figure on the page is covered by tests.

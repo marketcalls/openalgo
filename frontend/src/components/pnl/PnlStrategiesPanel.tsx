@@ -1,6 +1,6 @@
 // frontend/src/components/pnl/PnlStrategiesPanel.tsx
 /**
- * Strategies pane of the P&L page (fork-only): one row per strategy that the
+ * Strategies pane of the P&L page: one row per strategy that the
  * Filters button has let through, with its realized, unrealized, net, max
  * drawdown and current drawdown. It does not filter anything itself: the
  * strategy filter lives in the Filters dialog and this pane shows the result.
