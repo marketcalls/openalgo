@@ -16,18 +16,29 @@ def _f(value):
         return 0.0
 
 
-def _open_positions_mtm(auth_token):
-    """Sum of open-position P&L at live prices. 0 if positions or prices
-    cannot be read, so funds still load."""
+def _positions_pnl(auth_token):
+    """(realized, unrealized) summed over the position book at live prices,
+    so the two always add up to the book's net P&L. A position whose split is
+    unknown (no price) is left out of both. None if positions cannot be read."""
     from broker.rupeezy.api.order_api import get_positions
-    from broker.rupeezy.mapping.order_data import map_position_data, position_pnl
+    from broker.rupeezy.mapping.order_data import map_position_data, position_pnl_split
 
     try:
-        rows = map_position_data(get_positions(auth_token))
-        return sum(position_pnl(p) or 0.0 for p in rows if _f(p.get("quantity")))
+        payload = get_positions(auth_token)
+        if not isinstance(payload, dict) or payload.get("status") == "error":
+            return None
+        realized = unrealized = 0.0
+        for row in map_position_data(payload):
+            split = position_pnl_split(row)
+            if split is None:
+                logger.warning(f"Rupeezy funds P&L leaves out {row.get('_symbol')}: no live price")
+                continue
+            realized += split[0]
+            unrealized += split[1]
+        return realized, unrealized
     except Exception:
-        logger.exception("Could not compute Rupeezy unrealised MTM")
-        return 0.0
+        logger.exception("Could not compute Rupeezy P&L from positions")
+        return None
 
 
 def get_margin_data(auth_token):
@@ -55,13 +66,21 @@ def get_margin_data(auth_token):
     def total(key):
         return sum(_f(b.get(key)) for b in buckets)
 
+    # Vortex's funds call has no unrealised figure. Both P&L fields come from
+    # the position book instead: taking realized from the funds buckets and
+    # unrealized from positions counted a partially closed position's booked
+    # part twice. The buckets are the fallback only when positions can't be read.
+    pnl = _positions_pnl(auth_token)
+    if pnl is None:
+        realized, unrealized = total("booked_profit") + total("mtm_and_booked_loss"), 0.0
+    else:
+        realized, unrealized = pnl
+
     # total_utilization is reported negative (a debit); OpenAlgo shows it positive.
     return {
         "availablecash": f"{total('net_available'):.2f}",
         "collateral": f"{total('collateral'):.2f}",
-        # Vortex's funds call has no unrealised figure; it is the live P&L of
-        # the open positions, priced from batched quotes.
-        "m2munrealized": f"{_open_positions_mtm(auth_token):.2f}",
-        "m2mrealized": f"{total('booked_profit') + total('mtm_and_booked_loss'):.2f}",
+        "m2munrealized": f"{unrealized:.2f}",
+        "m2mrealized": f"{realized:.2f}",
         "utiliseddebits": f"{abs(total('total_utilization')):.2f}",
     }

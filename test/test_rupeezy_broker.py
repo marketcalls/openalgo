@@ -267,6 +267,8 @@ def test_funds_sum_nse_and_mcx(monkeypatch):
         "net_available": 1000,
     }
     monkeypatch.setattr(funds, "request_json", lambda *a, **k: {"nse": bucket, "mcx": bucket})
+    # Positions unreadable: realized falls back to the funds buckets.
+    monkeypatch.setattr(funds, "_positions_pnl", lambda auth: None)
     assert funds.get_margin_data("tok") == {
         "availablecash": "2000.00",
         "collateral": "200.00",
@@ -1195,8 +1197,10 @@ def test_funds_report_unrealised_mtm_from_open_positions(monkeypatch):
     monkeypatch.setattr(
         funds, "request_json", lambda *a, **k: {"exchange_combined": {"net_available": 100}}
     )
-    monkeypatch.setattr(funds, "_open_positions_mtm", lambda auth: 40.0)
-    assert funds.get_margin_data("tok")["m2munrealized"] == "40.00"
+    monkeypatch.setattr(funds, "_positions_pnl", lambda auth: (15.0, 40.0))
+    body = funds.get_margin_data("tok")
+    assert body["m2munrealized"] == "40.00"
+    assert body["m2mrealized"] == "15.00"
 
 
 def test_authenticated_calls_send_the_api_key(monkeypatch):
@@ -1370,3 +1374,115 @@ def test_expired_token_reconnects_with_the_token_from_a_new_login(monkeypatch):
     assert urls[0].endswith("auth_token=old-token")
     assert urls[1].endswith("auth_token=new-token")
     assert client.access_token == "new-token"
+
+
+# Bought 10 at 100, sold 5 at 110, 5 still open at 100, now 105:
+# realized 5 x 10 = 50, unrealized 5 x 5 = 25, net 75.
+_PARTLY_CLOSED = {
+    "ticker": "NSE:SBIN",
+    "exchange": "NSE_EQ",
+    "product": "INTRADAY",
+    "quantity": 5,
+    "buy_value": 1000,
+    "sell_value": 550,
+    "average_price": 100,
+    "lot_size": 1,
+    "ltp": 105,
+}
+
+
+def test_partly_closed_position_splits_into_realized_and_unrealized():
+    from broker.rupeezy.mapping.order_data import position_pnl, position_pnl_split
+
+    realized, unrealized = position_pnl_split(dict(_PARTLY_CLOSED))
+    assert (realized, unrealized) == (50, 25)
+    assert realized + unrealized == position_pnl(dict(_PARTLY_CLOSED)) == 75
+
+
+def test_position_split_is_unknown_without_a_price():
+    from broker.rupeezy.mapping.order_data import position_pnl_split
+
+    assert position_pnl_split({**_PARTLY_CLOSED, "ltp": 0}) is None
+    assert position_pnl_split({**_PARTLY_CLOSED, "average_price": 0}) is None
+    # A flat position is all realized and needs no price.
+    assert position_pnl_split({**_PARTLY_CLOSED, "quantity": 0, "ltp": 0}) == (-450, 0.0)
+
+
+def test_funds_pnl_reconciles_with_the_position_book(monkeypatch):
+    """Realized + unrealized in funds equals the net P&L of the position book,
+    with no double count of a partially closed position's booked part."""
+    import broker.rupeezy.api.funds as funds
+    import broker.rupeezy.api.order_api as oa
+    from broker.rupeezy.mapping.order_data import map_position_data, transform_positions_data
+
+    flat = {
+        "ticker": "NSE:INFY",
+        "exchange": "NSE_EQ",
+        "product": "INTRADAY",
+        "quantity": 0,
+        "buy_value": 1000,
+        "sell_value": 1025,
+        "lot_size": 1,
+    }
+    mcx = {
+        "ticker": "MCX:GOLDPETAL26OCTFUT",
+        "exchange": "MCX_FO",
+        "product": "DELIVERY",
+        "quantity": 2,
+        "buy_value": 29860,
+        "sell_value": 0,
+        "average_price": 14930,
+        "lot_size": 1,
+        "multiplier": 1,
+        "ltp": 14935,
+    }
+    book = {"status": "success", "data": {"net": [dict(_PARTLY_CLOSED), flat, mcx], "day": []}}
+    monkeypatch.setattr(oa, "get_positions", lambda auth, with_ltp=True: book)
+    monkeypatch.setattr(oa, "get_oa_symbol", lambda brsymbol, exchange: brsymbol)
+    monkeypatch.setattr(
+        funds,
+        "request_json",
+        # Buckets deliberately disagree: they must not be added on top.
+        lambda *a, **k: {"exchange_combined": {"net_available": 100, "booked_profit": 999}},
+    )
+
+    body = funds.get_margin_data("tok")
+    realized, unrealized = float(body["m2mrealized"]), float(body["m2munrealized"])
+    assert (realized, unrealized) == (75.0, 35.0)  # 50 + 25 ; 25 + 10
+
+    net = sum(p["pnl"] for p in transform_positions_data(map_position_data(book)))
+    assert realized + unrealized == net == 110.0
+
+
+def test_feed_logs_never_carry_the_access_token():
+    """The feed URL carries the token (?auth_token=...). Whatever the feed logs,
+    message or traceback, passes OpenAlgo's redacting filter first."""
+    import logging
+
+    import broker.rupeezy.streaming.rupeezy_websocket as rw
+    from utils.logging import SensitiveDataFilter
+
+    lines = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            lines.append(self.format(record))
+
+    handler = _Capture()
+    handler.addFilter(SensitiveDataFilter())
+    rw.logger.addHandler(handler)
+    try:
+        ws = rw.RupeezyWebSocket("SECRET-TOKEN-123")
+        ws._on_error(None, Exception(f"Handshake failed for {ws._url()}"))
+        ws._on_close(None, 1006, f"closed {ws._url()}")
+        try:
+            raise RuntimeError(f"connect failed: {ws._url()}")
+        except RuntimeError:
+            rw.logger.exception("Rupeezy websocket run_forever error")
+    finally:
+        rw.logger.removeHandler(handler)
+
+    text = "\n".join(lines)
+    assert len(lines) == 3
+    assert "SECRET-TOKEN-123" not in text
+    assert text.count("auth_token=[REDACTED]") >= 3

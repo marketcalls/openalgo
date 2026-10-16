@@ -215,15 +215,41 @@ def position_pnl(position):
     as a real zero.
     """
     booked = _f(position.get("sell_value")) - _f(position.get("buy_value"))
-    qty = _f(position.get("quantity"))
+    qty = _open_units(position)
     if not qty:
         return booked
     ltp = _f(position.get("ltp"))
     if not ltp:
         return None
-    if position.get("exchange") in ("MCX_FO", "NSE_CUR"):
-        qty *= _f(position.get("lot_size") or 1) * _f(position.get("multiplier") or 1)
     return booked + qty * ltp
+
+
+def _open_units(position):
+    qty = _f(position.get("quantity"))
+    if qty and position.get("exchange") in ("MCX_FO", "NSE_CUR"):
+        qty *= _f(position.get("lot_size") or 1) * _f(position.get("multiplier") or 1)
+    return qty
+
+
+def position_pnl_split(position):
+    """(realized, unrealized) for one net position, summing to position_pnl.
+
+    position_pnl is the whole P&L, so for a partially closed position it
+    already holds the booked part. Unrealized is the open quantity marked from
+    its average price to `ltp`; realized is the remainder. Returns None when
+    the split is unknown: an open position with no price or no average price.
+    """
+    total = position_pnl(position)
+    if total is None:
+        return None
+    qty = _open_units(position)
+    if not qty:
+        return total, 0.0
+    avg = _f(position.get("average_price"))
+    if not avg:
+        return None
+    unrealized = qty * (_f(position.get("ltp")) - avg)
+    return total - unrealized, unrealized
 
 
 def transform_positions_data(positions_data):
