@@ -66,6 +66,7 @@ jobs:
             test/test_precompress_assets.py \
             test/test_broker_credential_logging.py \
             test/test_option_symbol_service_validation.py \
+            test/test_fyers_hsm_price_precision.py \
             test/test_graceful_shutdown.py \
             test/test_flattrade_data_silence_watchdog.py \
             test/test_requirements_parity.py \
