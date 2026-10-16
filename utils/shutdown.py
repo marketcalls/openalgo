@@ -582,6 +582,14 @@ def install_signal_handlers() -> None:
     On Windows, Ctrl+C delivers SIGINT and Ctrl+Break delivers SIGBREAK; SIGTERM
     exists but is not what a console sends, so all three are registered where the
     platform defines them.
+
+    SIGHUP is the one a closed terminal sends, not Ctrl+C, and it does not
+    exist on Windows so ``getattr`` skips it there. Its default disposition
+    terminates the process outright: nothing here runs, ``atexit`` never
+    fires, and the websocket proxy child (a separate PID, not a child thread)
+    is orphaned holding port 8765 for as long as it keeps running — which
+    silently breaks the *next* start, not this one, so a user closing the tab
+    they started the server in never sees the failure land on them.
     """
     global _handlers_installed
 
@@ -589,7 +597,7 @@ def install_signal_handlers() -> None:
         return
     _handlers_installed = True
 
-    names = ["SIGINT", "SIGTERM"]
+    names = ["SIGINT", "SIGTERM", "SIGHUP"]
     if sys.platform == "win32":
         names.append("SIGBREAK")
 

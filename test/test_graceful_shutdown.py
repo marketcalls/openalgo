@@ -395,3 +395,23 @@ def test_installing_handlers_is_idempotent(monkeypatch):
 
     assert registered == first, "second install should be a no-op"
     assert first, "at least SIGINT should have been registered"
+
+
+def test_a_closed_terminal_is_covered_not_just_ctrl_c(monkeypatch):
+    """SIGHUP -- what a closed terminal tab sends, not Ctrl+C -- must be
+    registered too. Its default disposition terminates the process outright:
+    nothing here runs, atexit never fires, and the websocket proxy child (a
+    separate PID, not a thread) is orphaned holding its port for as long as
+    it keeps running, which breaks the *next* start rather than this one."""
+    registered = []
+
+    def _fake_signal(signum, handler):
+        registered.append(signum)
+        return None
+
+    monkeypatch.setattr(shutdown_mod.signal, "signal", _fake_signal)
+    monkeypatch.setattr(shutdown_mod, "_handlers_installed", False)
+
+    shutdown_mod.install_signal_handlers()
+
+    assert shutdown_mod.signal.SIGHUP in registered
