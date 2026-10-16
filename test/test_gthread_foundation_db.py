@@ -681,6 +681,69 @@ def test_a_login_on_a_fresh_cache_resets_the_row_and_loads_it_as_before(monkeypa
     assert status_row.resets == ["zerodha"]
 
 
+def test_a_login_on_a_fresh_cache_during_a_download_leaves_it_alone(
+    monkeypatch, status_row, download_in_its_tail
+):
+    """The cached path reset the row and loaded the table while it was rewritten.
+
+    With today's download already done, a forced re-download in flight and a
+    login taking the cached path reset the running download's row to pending,
+    then marked the contract ready and loaded the symbol cache from a table the
+    download had half rebuilt (issue #2111).
+    """
+    loads = []
+    monkeypatch.setattr(auth_utils, "load_existing_master_contract", loads.append)
+    assert auth_utils.try_start_master_contract_download("zerodha", reset_status=True) is True
+    assert download_in_its_tail.in_tail.wait(5)
+    status_row.resets.clear()
+
+    status, body = _log_in(monkeypatch, should_download=False)
+    assert status == 200 and body["status"] == "success"
+    assert status_row.resets == [], "the login reset the running download's row"
+    assert loads == [], "the login loaded the saved copy during the download"
+    assert status_row.row == {"status": "success", "is_ready": True}
+    assert len(download_in_its_tail.runs) == 1
+
+
+def test_a_download_is_refused_while_the_saved_copy_loads(monkeypatch, status_row):
+    started = threading.Event()
+    release = threading.Event()
+    downloads = []
+
+    def slow_load(broker):
+        started.set()
+        release.wait(10)
+        return True
+
+    monkeypatch.setattr(auth_utils, "load_existing_master_contract", slow_load)
+    monkeypatch.setattr(auth_utils, "_download_master_contract", downloads.append)
+    monkeypatch.setattr(auth_utils, "_master_contract_running", set())
+    try:
+        assert auth_utils.try_start_cached_master_contract_load("zerodha") is True
+        assert started.wait(5)
+        assert auth_utils.try_start_master_contract_download("zerodha", reset_status=True) is False
+        assert status_row.resets == ["zerodha"]
+    finally:
+        release.set()
+    assert _wait_until_idle("zerodha")
+    assert downloads == []
+    assert auth_utils.try_start_master_contract_download("zerodha") is True
+    assert _wait_until_idle("zerodha")
+    assert downloads == ["zerodha"]
+
+
+def test_a_failed_cached_load_releases_its_claim(monkeypatch, status_row):
+    def broken_load(broker):
+        raise RuntimeError("cache load crashed")
+
+    monkeypatch.setattr(auth_utils, "load_existing_master_contract", broken_load)
+    monkeypatch.setattr(auth_utils, "_master_contract_running", set())
+    assert auth_utils._claim_master_contract_download("zerodha") is True
+    with pytest.raises(RuntimeError):
+        auth_utils._run_claimed_cached_load("zerodha")
+    assert auth_utils.is_master_contract_download_running("zerodha") is False
+
+
 # --- .env writes and the version check ---------------------------------------
 
 
