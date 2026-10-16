@@ -8,6 +8,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 
 from database.market_calendar_db import (
     DEFAULT_MARKET_TIMINGS,
+    IST,
     SUPPORTED_EXCHANGES,
     Holiday,
     HolidayExchange,
@@ -487,8 +488,8 @@ def api_timings_list():
         # Convert epoch to readable time for today's timings (for display)
         today_timings_formatted = []
         for t in today_timings:
-            start_dt = datetime.fromtimestamp(t["start_time"] / 1000)
-            end_dt = datetime.fromtimestamp(t["end_time"] / 1000)
+            start_dt = datetime.fromtimestamp(t["start_time"] / 1000, IST)
+            end_dt = datetime.fromtimestamp(t["end_time"] / 1000, IST)
             today_timings_formatted.append(
                 {
                     "exchange": t["exchange"],
@@ -571,8 +572,8 @@ def api_timings_check():
         # Convert epoch to readable time
         result_timings = []
         for t in check_timings:
-            start_dt = datetime.fromtimestamp(t["start_time"] / 1000)
-            end_dt = datetime.fromtimestamp(t["end_time"] / 1000)
+            start_dt = datetime.fromtimestamp(t["start_time"] / 1000, IST)
+            end_dt = datetime.fromtimestamp(t["end_time"] / 1000, IST)
             result_timings.append(
                 {
                     "exchange": t["exchange"],
